@@ -14,6 +14,12 @@ opencode attach http://localhost:4096
 
 The password is optional but recommended. Without it, the server accepts any connection on port 4096.
 
+## Versioning
+
+Tool versions are declared as `ARG` blocks at the top of the `Dockerfile`. Each `ARG` line is preceded by a `# renovate:` comment that tells Renovate bot which datasource and package to track. Renovate reads these annotations and opens PRs to bump versions automatically.
+
+To pin a specific version, edit the corresponding `ARG` value in the `Dockerfile` directly. The `renovate.json` file contains the custom regex manager config that teaches Renovate how to parse these annotations.
+
 ## Security
 
 ### What IS isolated
