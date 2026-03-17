@@ -21,7 +21,7 @@ ARG YARN_VERSION=4.12.0
 FROM ubuntu:24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates wget gnupg2 unzip \
+    curl ca-certificates wget gnupg2 unzip xz-utils \
     build-essential make gcc g++ python3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -67,7 +67,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git openssh-client sudo \
     python3 python3-pip python3-venv \
-    ripgrep fd-find jq fzf vim less unzip iptables \
+    ripgrep fd-find jq fzf vim less unzip xz-utils iptables \
     && rm -rf /var/lib/apt/lists/*
 
 # Node runtime (no build-essential)
