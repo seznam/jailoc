@@ -1,0 +1,38 @@
+services:
+  opencode:
+    build: .
+    ports:
+      - "4096:4096"
+    volumes:
+      # Project workspace (mount CWD or specific project)
+      - ./workspace:/workspace
+      # Docker socket for DinD (host daemon)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # OpenCode config (providers, plugins, MCPs, rules, skills)
+      - ${HOME}/.config/opencode:/home/agent/.config/opencode:ro
+      # OpenCode project-level plugins/agents/skills
+      - ${HOME}/.opencode:/home/agent/.opencode:ro
+      # Claude hooks and skills (contains symlinks to ~/.agents)
+      - ${HOME}/.claude:/home/agent/.claude:ro
+      # Agent skills (symlink targets from ~/.claude/skills/)
+      - ${HOME}/.agents:/home/agent/.agents:ro
+      # Isolated data volume (DB, auth, plugin installs)
+      - opencode-data:/home/agent/.local/share/opencode
+    environment:
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    stdin_open: true
+    tty: true
+    mem_limit: 4g
+    memswap_limit: 4g
+    mem_reservation: 512m
+    cpus: 2.0
+    pids_limit: 256
+
+volumes:
+  opencode-data:
