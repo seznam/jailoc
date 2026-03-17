@@ -6,8 +6,6 @@ services:
     volumes:
       # Project workspace (mount CWD or specific project)
       - ./workspace:/workspace
-      # Docker socket for DinD (host daemon)
-      - /var/run/docker.sock:/var/run/docker.sock
       # OpenCode config (providers, plugins, MCPs, rules, skills)
       - ${HOME}/.config/opencode:/home/agent/.config/opencode:ro
       # OpenCode project-level plugins/agents/skills
@@ -18,14 +16,23 @@ services:
       - ${HOME}/.agents:/home/agent/.agents:ro
       # Isolated data volume (DB, auth, plugin installs)
       - opencode-data:/home/agent/.local/share/opencode
+      # DinD TLS certs (shared with dind service)
+      - dind-certs-client:/certs/client:ro
     environment:
       - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
+      - DOCKER_HOST=tcp://dind:2376
+      - DOCKER_TLS_CERTDIR=/certs
+      - DOCKER_CERT_PATH=/certs/client
+      - DOCKER_TLS_VERIFY=1
     cap_drop:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
-    security_opt:
-      - no-new-privileges:true
+      - NET_ADMIN
+      - SETUID
+      - SETGID
+      - CHOWN
+      - FOWNER
     stdin_open: true
     tty: true
     mem_limit: 4g
@@ -33,6 +40,34 @@ services:
     mem_reservation: 512m
     cpus: 2.0
     pids_limit: 256
+    networks:
+      - dind
+      - egress
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
+    command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
+
+  dind:
+    image: docker:dind
+    privileged: true
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+      - DOCKER_TLS_SAN=DNS:dind
+    volumes:
+      - dind-certs-ca:/certs/ca
+      - dind-certs-client:/certs/client
+      - dind-data:/var/lib/docker
+    networks:
+      - dind
+    expose:
+      - "2376"
 
 volumes:
   opencode-data:
+  dind-certs-ca:
+  dind-certs-client:
+  dind-data:
+
+networks:
+  dind:
+    internal: true
+  egress:
