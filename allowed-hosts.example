@@ -1,0 +1,10 @@
+# Hostnames allowed through the private-network firewall.
+# One hostname per line. Lines starting with # are comments.
+# These are resolved at container startup and added as iptables ACCEPT rules
+# BEFORE the private-network DROP rules.
+#
+# Place your actual file at ~/.config/jailoc/allowed-hosts
+#
+# Example: internal MCP servers
+# document-search.asistent.ftxt.dszn.cz
+# mcp.ai.iszn.cz

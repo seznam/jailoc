@@ -1,24 +1,29 @@
+name: jailoc
+
 services:
   opencode:
     build: .
     ports:
       - "4096:4096"
     volumes:
-      # Project workspace (mount CWD or specific project)
-      - ./workspace:/workspace
+      # Project workspace
+      - ${HOME}/jailoc:/workspace
       # OpenCode config (providers, plugins, MCPs, rules, skills)
       - ${HOME}/.config/opencode:/home/agent/.config/opencode:ro
       # OpenCode project-level plugins/agents/skills
       - ${HOME}/.opencode:/home/agent/.opencode:ro
       # Claude hooks and skills (contains symlinks to ~/.agents)
-      - ${HOME}/.claude:/home/agent/.claude:ro
+      - ${HOME}/.claude:/home/agent/.claude
       # Agent skills (symlink targets from ~/.claude/skills/)
       - ${HOME}/.agents:/home/agent/.agents:ro
+      - ${HOME}/.config/jailoc:/etc/jailoc:ro
       # Isolated data volume (DB, auth, plugin installs)
       - opencode-data:/home/agent/.local/share/opencode
+      - opencode-cache:/home/agent/.cache
       # DinD TLS certs (shared with dind service)
       - dind-certs-client:/certs/client:ro
     environment:
+      - OPENCODE_LOG=debug
       - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
       - DOCKER_HOST=tcp://dind:2376
       - DOCKER_TLS_CERTDIR=/certs
@@ -44,7 +49,7 @@ services:
       - dind
       - egress
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
-    command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
+    command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "DEBUG"]
 
   dind:
     image: docker:dind
@@ -63,6 +68,7 @@ services:
 
 volumes:
   opencode-data:
+  opencode-cache:
   dind-certs-ca:
   dind-certs-client:
   dind-data:

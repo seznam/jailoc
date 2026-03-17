@@ -59,12 +59,14 @@ Production-grade isolation would add gVisor or Firecracker, a credential proxy, 
 
 | Mount | Container Path | Read-Only | Purpose |
 |-------|---------------|-----------|---------|
-| `./workspace` | `/workspace` | No | Project files |
+| `~/jailoc` | `/workspace` | No | Project files |
 | `~/.config/opencode` | `/home/agent/.config/opencode` | Yes | OpenCode config (providers, plugins, MCPs, rules) |
 | `~/.opencode` | `/home/agent/.opencode` | Yes | OpenCode project agents/skills/plugins |
-| `~/.claude` | `/home/agent/.claude` | Yes | Claude hooks, CLAUDE.md, skill symlinks |
+| `~/.claude` | `/home/agent/.claude` | No | Claude hooks, CLAUDE.md, skill symlinks, transcripts |
 | `~/.agents` | `/home/agent/.agents` | Yes | Agent skill targets (symlink resolution) |
+| `~/.config/jailoc` | `/etc/jailoc` | Yes | Firewall allowed-hosts config |
 | `opencode-data` (named volume) | `/home/agent/.local/share/opencode` | No | Isolated DB, auth tokens, plugin state |
+| `opencode-cache` (named volume) | `/home/agent/.cache` | No | Plugin cache (bun installs) |
 | `dind-certs-client` (named volume) | `/certs/client` | Yes | TLS certs for DinD communication |
 | `dind-data` (named volume) | `/var/lib/docker` | No | DinD daemon storage |
 
@@ -91,3 +93,14 @@ On startup, iptables rules block egress to private/internal networks:
 - `169.254.0.0/16` (link-local), `100.64.0.0/10` (CGNAT)
 
 Public internet access remains open (required for git, npm, pip, `go get`, MCP calls). The DinD sidecar communicates via an internal Docker network not subject to these rules.
+
+### Allowing Internal Hosts
+
+To allow specific internal hostnames through the firewall (e.g., internal MCP servers), create `~/.config/jailoc/allowed-hosts`:
+
+```
+document-search.asistent.ftxt.dszn.cz
+mcp.ai.iszn.cz
+```
+
+One hostname per line. Lines starting with `#` are comments. Hostnames are resolved at container startup and added as iptables ACCEPT rules before the DROP rules. See `allowed-hosts.example` for reference.
