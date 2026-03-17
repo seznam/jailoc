@@ -14,24 +14,6 @@ opencode attach http://localhost:4096
 
 The password is optional but recommended. Without it, the server accepts any connection on port 4096.
 
-## What's Inside
-
-| Tool | Version |
-|------|---------|
-| Ubuntu | 24.04 |
-| Python | 3.12 (system) |
-| Go | 1.24.1 |
-| Node.js | 22 LTS |
-| Bun | latest |
-| Yarn | via corepack |
-| Docker CLI + Compose plugin | latest stable (via DinD sidecar) |
-| oh-my-openagent | 3.11.2 |
-| ripgrep, fd-find, jq, fzf, git | apt latest |
-| yaml-language-server | npm latest |
-| jsonnet-language-server | 0.17.0 |
-| helm_ls | 0.2.1 |
-| opencode | 1.2.27 |
-
 ## Security
 
 ### What IS isolated
