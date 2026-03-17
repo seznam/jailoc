@@ -65,7 +65,7 @@ RUN npm install -g oh-my-openagent@${OMOA_VERSION}
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates git openssh-client sudo \
+    curl ca-certificates gnupg2 git openssh-client sudo \
     python3 python3-pip python3-venv \
     ripgrep fd-find jq fzf vim less unzip xz-utils iptables \
     && rm -rf /var/lib/apt/lists/*
