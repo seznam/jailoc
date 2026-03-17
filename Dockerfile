@@ -1,3 +1,22 @@
+# renovate: datasource=golang-version depName=go versioning=semver
+ARG GO_VERSION=1.24.1
+# renovate: datasource=node-version depName=node versioning=node
+ARG NODE_VERSION=22.14.0
+# renovate: datasource=github-releases depName=oven-sh/bun extractVersion=^bun-v(?<version>.*)$
+ARG BUN_VERSION=1.3.10
+# renovate: datasource=npm depName=oh-my-openagent
+ARG OMOA_VERSION=3.11.2
+# renovate: datasource=npm depName=yaml-language-server
+ARG YAML_LS_VERSION=1.21.0
+# renovate: datasource=github-releases depName=grafana/jsonnet-language-server
+ARG JSONNET_LS_VERSION=v0.17.0
+# renovate: datasource=github-releases depName=mrjosh/helm-ls
+ARG HELM_LS_VERSION=v0.2.1
+# renovate: datasource=github-releases depName=sst/opencode
+ARG OPENCODE_VERSION=v1.2.27
+# renovate: datasource=npm depName=yarn
+ARG YARN_VERSION=4.12.0
+
 # ── Stage 1: build ──────────────────────────────────────────────
 FROM ubuntu:24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
@@ -6,34 +25,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential make gcc g++ python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Node 22 (needed for npm install -g with native addons)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Node
+ARG NODE_VERSION
+RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
+    && curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz \
+    | tar -xJC /usr/local --strip-components=1
 
 # Bun
+ARG BUN_VERSION
 ENV BUN_INSTALL="/usr/local/bun"
-RUN curl -fsSL https://bun.sh/install | bash
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
 
-# Go 1.24.1
+# Go
+ARG GO_VERSION
 RUN GOARCH=$(dpkg --print-architecture) \
-    && wget -q https://go.dev/dl/go1.24.1.linux-${GOARCH}.tar.gz \
-    && tar -C /usr/local -xzf go1.24.1.linux-${GOARCH}.tar.gz \
-    && rm go1.24.1.linux-${GOARCH}.tar.gz
+    && wget -q https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz \
+    && tar -C /usr/local -xzf go${GO_VERSION}.linux-${GOARCH}.tar.gz \
+    && rm go${GO_VERSION}.linux-${GOARCH}.tar.gz
 
 # LSP servers
-RUN npm install -g yaml-language-server
+ARG YAML_LS_VERSION
+RUN npm install -g yaml-language-server@${YAML_LS_VERSION}
+ARG JSONNET_LS_VERSION
 RUN ARCH=$(dpkg --print-architecture) \
     && curl -Lo /usr/local/bin/jsonnet-language-server \
-    https://github.com/grafana/jsonnet-language-server/releases/download/v0.17.0/jsonnet-language-server_0.17.0_linux_${ARCH} \
+    https://github.com/grafana/jsonnet-language-server/releases/download/${JSONNET_LS_VERSION}/jsonnet-language-server_${JSONNET_LS_VERSION#v}_linux_${ARCH} \
     && chmod +x /usr/local/bin/jsonnet-language-server
+ARG HELM_LS_VERSION
 RUN ARCH=$(dpkg --print-architecture) \
     && curl -Lo /usr/local/bin/helm_ls \
-    https://github.com/mrjosh/helm-ls/releases/download/v0.2.1/helm_ls_linux_${ARCH} \
+    https://github.com/mrjosh/helm-ls/releases/download/${HELM_LS_VERSION}/helm_ls_linux_${ARCH} \
     && chmod +x /usr/local/bin/helm_ls
 
 # oh-my-openagent (installs platform binary via postinstall)
-RUN npm install -g oh-my-openagent@3.11.2
+ARG OMOA_VERSION
+RUN npm install -g oh-my-openagent@${OMOA_VERSION}
 
 # ── Stage 2: runtime ───────────────────────────────────────────
 FROM ubuntu:24.04
@@ -44,12 +70,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep fd-find jq fzf vim less unzip iptables \
     && rm -rf /var/lib/apt/lists/*
 
-# Node 22 runtime (no build-essential)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Node runtime (no build-essential)
+ARG NODE_VERSION
+RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
+    && curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz \
+    | tar -xJC /usr/local --strip-components=1
 
-# Docker CLI + Compose plugin
+# Docker CLI + Compose plugin (unpinned — stable channel, low drift risk)
 RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list \
     && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
@@ -61,16 +88,18 @@ COPY --from=builder /usr/local/bun /usr/local/bun
 COPY --from=builder /usr/local/bin/jsonnet-language-server /usr/local/bin/jsonnet-language-server
 COPY --from=builder /usr/local/bin/helm_ls /usr/local/bin/helm_ls
 
-# Copy npm global modules (NodeSource uses /usr prefix)
-COPY --from=builder /usr/lib/node_modules/yaml-language-server /usr/lib/node_modules/yaml-language-server
-COPY --from=builder /usr/lib/node_modules/oh-my-openagent /usr/lib/node_modules/oh-my-openagent
+# Copy npm global modules (official Node tarball uses /usr/local prefix)
+COPY --from=builder /usr/local/lib/node_modules/yaml-language-server /usr/local/lib/node_modules/yaml-language-server
+COPY --from=builder /usr/local/lib/node_modules/oh-my-openagent /usr/local/lib/node_modules/oh-my-openagent
 
 # Link npm global bin stubs (oh-my-openagent JS wrapper has a bug — link platform binary directly)
-RUN ln -sf ../lib/node_modules/yaml-language-server/bin/yaml-language-server /usr/bin/yaml-language-server \
+RUN ln -sf /usr/local/lib/node_modules/yaml-language-server/bin/yaml-language-server /usr/local/bin/yaml-language-server \
     && ARCH=$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') \
-    && ln -sf ../lib/node_modules/oh-my-openagent/node_modules/oh-my-openagent-linux-${ARCH}/bin/oh-my-opencode /usr/bin/oh-my-opencode
+    && ln -sf /usr/local/lib/node_modules/oh-my-openagent/node_modules/oh-my-openagent-linux-${ARCH}/bin/oh-my-opencode /usr/local/bin/oh-my-opencode
 
-RUN corepack enable && corepack prepare yarn@stable --activate
+# Yarn
+ARG YARN_VERSION
+RUN corepack enable && corepack prepare yarn@${YARN_VERSION} --activate
 
 # Entrypoint (runs as root for iptables, drops to agent)
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -85,8 +114,9 @@ RUN (userdel -r ubuntu || true) \
     && chown -R agent:agent /home/agent/.local
 
 # Install opencode as agent user
+ARG OPENCODE_VERSION
 USER agent
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --version 1.2.27
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${OPENCODE_VERSION#v}
 USER root
 RUN cp /home/agent/.opencode/bin/opencode /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode
 
