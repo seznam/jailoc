@@ -7,6 +7,7 @@ import (
 )
 
 var workspaceFlag string
+var appVersion string
 
 var rootCmd = &cobra.Command{
 	Use:   "jailoc",
@@ -23,6 +24,7 @@ func init() {
 
 // Execute is the entrypoint for the CLI. Version info is passed from main via ldflags.
 func Execute(version, commit, date string) error {
+	appVersion = version
 	rootCmd.Version = fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date)
 	return rootCmd.Execute()
 }
