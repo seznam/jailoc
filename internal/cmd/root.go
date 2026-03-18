@@ -69,7 +69,10 @@ var rootCmd = &cobra.Command{
 		client := docker.NewClient(composePath, "", ws.Name)
 		running, err := client.IsRunning(ctx)
 		if err != nil {
-			return fmt.Errorf("check workspace %q running status: %w", ws.Name, err)
+			if !isComposeFileMissing(err) {
+				return fmt.Errorf("check workspace %q running status: %w", ws.Name, err)
+			}
+			running = false
 		}
 
 		if !running {
