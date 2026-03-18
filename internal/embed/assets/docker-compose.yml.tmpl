@@ -7,25 +7,20 @@ services:
     ports:
       - "{{.Port}}:4096"
     volumes:
-      # Project workspace
-      - ${HOME}/jailoc:/workspace
-      # OpenCode config (providers, plugins, MCPs, rules, skills)
+{{- range .Paths}}
+      - {{.}}:/workspace/{{base .}}
+{{- end}}
       - ${HOME}/.config/opencode:/home/agent/.config/opencode:ro
-      # OpenCode project-level plugins/agents/skills
       - ${HOME}/.opencode:/home/agent/.opencode:ro
-      # Claude hooks and skills (contains symlinks to ~/.agents)
       - ${HOME}/.claude:/home/agent/.claude
-      # Agent skills (symlink targets from ~/.claude/skills/)
       - ${HOME}/.agents:/home/agent/.agents:ro
       - ${HOME}/.config/jailoc:/etc/jailoc:ro
-      # Isolated data volume (DB, auth, plugin installs)
-      - opencode-data:/home/agent/.local/share/opencode
-      - opencode-cache:/home/agent/.cache
-      # DinD TLS certs (shared with dind service)
+      - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode
+      - opencode-cache-{{.WorkspaceName}}:/home/agent/.cache
       - dind-certs-client:/certs/client:ro
     environment:
       - OPENCODE_LOG=debug
-      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
+      - OPENCODE_SERVER_PASSWORD={{.OpenCodePassword}}
       - DOCKER_HOST=tcp://dind:2376
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_CERT_PATH=/certs/client
@@ -68,8 +63,8 @@ services:
       - "2376"
 
 volumes:
-  opencode-data:
-  opencode-cache:
+  opencode-data-{{.WorkspaceName}}:
+  opencode-cache-{{.WorkspaceName}}:
   dind-certs-ca:
   dind-certs-client:
   dind-data:
