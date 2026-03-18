@@ -30,6 +30,26 @@ paths = []
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+var forbiddenMountPrefixes = []string{
+	"/home/agent",
+	"/usr",
+	"/etc",
+	"/var",
+	"/bin",
+	"/sbin",
+	"/lib",
+	"/lib64",
+	"/opt",
+	"/root",
+	"/proc",
+	"/sys",
+	"/dev",
+	"/run",
+	"/tmp",
+	"/certs",
+	"/workspace",
+}
+
 type Config struct {
 	Image      ImageConfig          `toml:"image"`
 	Workspaces map[string]Workspace `toml:"workspaces"`
@@ -169,6 +189,12 @@ func Validate(cfg *Config) error {
 		for _, p := range ws.Paths {
 			if strings.TrimSpace(p) == "" {
 				return fmt.Errorf("workspace %q has empty path value %q", name, p)
+			}
+
+			for _, prefix := range forbiddenMountPrefixes {
+				if p == prefix || strings.HasPrefix(p, prefix+"/") {
+					return fmt.Errorf("workspace %q: path %q conflicts with container-internal directory %q", name, p, prefix)
+				}
 			}
 
 			if owner, ok := pathOwners[p]; ok && owner != name {

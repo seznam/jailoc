@@ -30,7 +30,7 @@ func TestLoadFullConfig(t *testing.T) {
 repository = "ghcr.io/seznam/jailoc-custom"
 
 [workspaces.default]
-paths = ["/workspace"]
+paths = ["/data/workspace"]
 allowed_hosts = ["foo.com", "bar.com"]
 allowed_networks = ["172.20.0.0/16"]
 build_context = "/tmp/context"
@@ -46,7 +46,7 @@ build_context = "/tmp/context"
 	}
 
 	ws := cfg.Workspaces["default"]
-	if len(ws.Paths) != 1 || ws.Paths[0] != "/workspace" {
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/workspace" {
 		t.Fatalf("unexpected paths: %#v", ws.Paths)
 	}
 	if !reflect.DeepEqual(ws.AllowedHosts, []string{"foo.com", "bar.com"}) {
@@ -65,7 +65,7 @@ func TestLoadMinimalConfig(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	writeFile(t, path, `
 [workspaces.default]
-paths = ["/workspace"]
+paths = ["/data/workspace"]
 `)
 
 	cfg, err := LoadFrom(path)
@@ -78,7 +78,7 @@ paths = ["/workspace"]
 	}
 
 	ws := cfg.Workspaces["default"]
-	if len(ws.Paths) != 1 || ws.Paths[0] != "/workspace" {
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/workspace" {
 		t.Fatalf("unexpected paths: %#v", ws.Paths)
 	}
 	if len(ws.AllowedHosts) != 0 {
@@ -100,7 +100,7 @@ func TestRoundTrip(t *testing.T) {
 repository = "ghcr.io/seznam/jailoc"
 
 [workspaces.default]
-paths = ["/workspace", "/work2"]
+paths = ["/data/workspace", "/work2"]
 allowed_hosts = ["foo.com"]
 allowed_networks = ["10.0.0.0/8"]
 build_context = "/tmp/context"
@@ -132,7 +132,7 @@ build_context = "/tmp/context"
 func TestValidateRejectsUppercaseName(t *testing.T) {
 	cfg := &Config{
 		Workspaces: map[string]Workspace{
-			"My Project": {Paths: []string{"/workspace"}},
+			"My Project": {Paths: []string{"/data/workspace"}},
 		},
 	}
 
@@ -161,7 +161,7 @@ func TestValidateRejectsInvalidCIDR(t *testing.T) {
 	cfg := &Config{
 		Workspaces: map[string]Workspace{
 			"default": {
-				Paths:           []string{"/workspace"},
+				Paths:           []string{"/data/workspace"},
 				AllowedNetworks: []string{"999.0.0.0/99"},
 			},
 		},
@@ -180,7 +180,7 @@ func TestValidateAcceptsValidCIDR(t *testing.T) {
 	cfg := &Config{
 		Workspaces: map[string]Workspace{
 			"default": {
-				Paths:           []string{"/workspace"},
+				Paths:           []string{"/data/workspace"},
 				AllowedNetworks: []string{"172.20.0.0/16"},
 			},
 		},
@@ -240,7 +240,7 @@ func TestAddPathPersists(t *testing.T) {
 		t.Fatalf("CreateDefault failed: %v", err)
 	}
 
-	if err := AddPath("default", "/tmp/test"); err != nil {
+	if err := AddPath("default", "/data/mywork"); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 
@@ -250,7 +250,7 @@ func TestAddPathPersists(t *testing.T) {
 	}
 
 	ws := cfg.Workspaces["default"]
-	if len(ws.Paths) != 1 || ws.Paths[0] != "/tmp/test" {
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/mywork" {
 		t.Fatalf("expected persisted path, got %#v", ws.Paths)
 	}
 }
@@ -300,12 +300,13 @@ func TestAllowedNetworksContent(t *testing.T) {
 }
 
 func TestTildeExpansion(t *testing.T) {
-	home := t.TempDir()
+	// Use a safe temp directory outside of /var (macOS puts tmp in /var/folders)
+	home := "/data/home_test_" + strings.ReplaceAll(t.Name(), "/", "_")
 	t.Setenv("HOME", home)
 
 	cfg := &Config{Workspaces: map[string]Workspace{
 		"default": {
-			Paths:        []string{"~/foo"},
+			Paths:        []string{"~/mywork"},
 			BuildContext: "~/ctx",
 		},
 	}}
@@ -315,7 +316,7 @@ func TestTildeExpansion(t *testing.T) {
 	}
 
 	ws := cfg.Workspaces["default"]
-	if ws.Paths[0] != filepath.Join(home, "foo") {
+	if ws.Paths[0] != filepath.Join(home, "mywork") {
 		t.Fatalf("expected expanded path, got %q", ws.Paths[0])
 	}
 	if ws.BuildContext != filepath.Join(home, "ctx") {
@@ -344,7 +345,7 @@ func TestCreateDefault(t *testing.T) {
 func TestValidateErrorIncludesValue(t *testing.T) {
 	cfg := &Config{Workspaces: map[string]Workspace{
 		"default": {
-			Paths:           []string{"/workspace"},
+			Paths:           []string{"/data/workspace"},
 			AllowedNetworks: []string{"999.0.0.0/99"},
 		},
 	}}
@@ -355,5 +356,67 @@ func TestValidateErrorIncludesValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "999.0.0.0/99") {
 		t.Fatalf("expected error to include invalid value, got: %v", err)
+	}
+}
+
+func TestValidateRejectsDangerousPaths(t *testing.T) {
+	dangerousPaths := []string{
+		"/home/agent/foo",
+		"/usr/local",
+		"/etc",
+		"/home/agent",
+		"/var/lib",
+		"/bin/sh",
+		"/sbin/mount",
+		"/lib",
+		"/lib64",
+		"/opt",
+		"/opt/app",
+		"/root/secrets",
+		"/proc/sys",
+		"/sys/kernel",
+		"/dev/null",
+		"/run/docker",
+		"/tmp/test",
+		"/certs/ca",
+		"/workspace/data",
+	}
+
+	for _, path := range dangerousPaths {
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"default": {Paths: []string{path}},
+			},
+		}
+
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatalf("expected validation error for dangerous path %q", path)
+		}
+		if !strings.Contains(err.Error(), "conflicts with container-internal directory") {
+			t.Fatalf("expected error to mention conflict for %q, got: %v", path, err)
+		}
+	}
+}
+
+func TestValidateAllowsSafePaths(t *testing.T) {
+	safePaths := []string{
+		"/Users/josef/projects",
+		"/data/workspace",
+		"/home/user/work",
+		"/mnt/data",
+		"/mnt/storage",
+	}
+
+	for _, path := range safePaths {
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"default": {Paths: []string{path}},
+			},
+		}
+
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("expected no error for safe path %q, got: %v", path, err)
+		}
 	}
 }
