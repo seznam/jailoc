@@ -14,7 +14,7 @@ Requires Docker with Compose V2 (`docker compose`, not `docker-compose`).
 go install github.com/seznam/jailoc/cmd/jailoc@latest
 ```
 
-Alternatively, download a pre-built binary from [GitLab Releases](https://github.com/seznam/jailoc/-/releases) (built by GoReleaser for Linux and macOS, amd64 and arm64).
+Alternatively, download a pre-built binary from [GitLab Releases](https://github.com/seznam/jailoc/releases) (built by GoReleaser for Linux and macOS, amd64 and arm64).
 
 ## Quick Start
 
@@ -45,8 +45,8 @@ Config lives at `~/.config/jailoc/config.toml`. It's created automatically on fi
 
 ```toml
 [image]
-# Override the base image registry (default: registry.github.com/seznam/jailoc)
-# repository = "registry.github.com/seznam/jailoc"
+# Override the base image registry (default: ghcr.io/seznam/jailoc)
+# repository = "ghcr.io/seznam/jailoc"
 
 [workspaces.default]
 paths = ["/home/you/projects/myproject"]

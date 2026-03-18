@@ -27,7 +27,7 @@ func TestLoadFullConfig(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	writeFile(t, path, `
 [image]
-repository = "registry.github.com/seznam/jailoc-custom"
+repository = "ghcr.io/seznam/jailoc-custom"
 
 [workspaces.default]
 paths = ["/workspace"]
@@ -41,7 +41,7 @@ build_context = "/tmp/context"
 		t.Fatalf("LoadFrom failed: %v", err)
 	}
 
-	if cfg.Image.Repository != "registry.github.com/seznam/jailoc-custom" {
+	if cfg.Image.Repository != "ghcr.io/seznam/jailoc-custom" {
 		t.Fatalf("unexpected image repository: %q", cfg.Image.Repository)
 	}
 
@@ -97,7 +97,7 @@ func TestRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	writeFile(t, path, `
 [image]
-repository = "registry.github.com/seznam/jailoc"
+repository = "ghcr.io/seznam/jailoc"
 
 [workspaces.default]
 paths = ["/workspace", "/work2"]

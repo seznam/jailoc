@@ -13,12 +13,12 @@ import (
 )
 
 const (
-	defaultImageRepository = "registry.github.com/seznam/jailoc"
+	defaultImageRepository = "ghcr.io/seznam/jailoc"
 	defaultConfigContent   = `# jailoc configuration
 # See: https://github.com/seznam/jailoc
 
 [image]
-# repository = "registry.github.com/seznam/jailoc"  # default registry
+# repository = "ghcr.io/seznam/jailoc"  # default registry
 
 [workspaces.default]
 paths = []

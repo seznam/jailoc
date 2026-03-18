@@ -11,7 +11,7 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	params := ComposeParams{
 		WorkspaceName:    "alpha",
 		Port:             4111,
-		Image:            "registry.github.com/seznam/jailoc:test",
+		Image:            "ghcr.io/seznam/jailoc:test",
 		Paths:            []string{"/Users/test/work/project"},
 		OpenCodePassword: "secret",
 	}
@@ -24,7 +24,7 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	rendered := string(out)
 
 	assertContains(t, rendered, "name: jailoc-alpha")
-	assertContains(t, rendered, "image: registry.github.com/seznam/jailoc:test")
+	assertContains(t, rendered, "image: ghcr.io/seznam/jailoc:test")
 	assertContains(t, rendered, "- \"4111:4096\"")
 	assertContains(t, rendered, "- /Users/test/work/project:/workspace/project")
 	assertContains(t, rendered, "- OPENCODE_SERVER_PASSWORD=secret")
@@ -38,7 +38,7 @@ func TestGenerateComposeMultiplePaths(t *testing.T) {
 	params := ComposeParams{
 		WorkspaceName: "beta",
 		Port:          4222,
-		Image:         "registry.github.com/seznam/jailoc:latest",
+		Image:         "ghcr.io/seznam/jailoc:latest",
 		Paths: []string{
 			"/repos/api",
 			"/repos/web-app",
@@ -62,7 +62,7 @@ func TestGenerateComposeEmptyPasswordRendersEmptyValue(t *testing.T) {
 	params := ComposeParams{
 		WorkspaceName: "gamma",
 		Port:          4333,
-		Image:         "registry.github.com/seznam/jailoc:dev",
+		Image:         "ghcr.io/seznam/jailoc:dev",
 		Paths:         []string{"/tmp/work"},
 	}
 
@@ -85,7 +85,7 @@ func TestGenerateComposeVolumeNamesIncludeWorkspaceName(t *testing.T) {
 	params := ComposeParams{
 		WorkspaceName: "delta",
 		Port:          4444,
-		Image:         "registry.github.com/seznam/jailoc:main",
+		Image:         "ghcr.io/seznam/jailoc:main",
 		Paths:         []string{"/tmp/repo"},
 	}
 
