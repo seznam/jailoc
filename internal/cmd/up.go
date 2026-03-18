@@ -55,7 +55,7 @@ func runUp(ctx context.Context) error {
 
 	finalImage, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve image for workspace %q: %w", ws.Name, err)
 	}
 
 	cacheDir := ComposeCacheDir(ws.Name)
@@ -101,7 +101,7 @@ func preflightDocker(ctx context.Context, workspaceName string) error {
 
 	checkClient := docker.NewClient(tmpComposePath, "", workspaceName)
 	if _, err := checkClient.IsRunning(ctx); err != nil {
-		return err
+		return fmt.Errorf("docker preflight check: %w", err)
 	}
 
 	return nil

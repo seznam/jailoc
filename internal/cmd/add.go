@@ -24,7 +24,7 @@ var addCmd = &cobra.Command{
 func runAdd(cmd *cobra.Command, args []string) error {
 	targetDir, err := resolveTargetDir(args)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve target directory: %w", err)
 	}
 
 	cfg, err := config.Load()
