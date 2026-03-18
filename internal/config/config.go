@@ -166,10 +166,6 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("workspace %q: expand paths: %w", name, err)
 		}
 
-		if len(ws.Paths) < 1 {
-			return fmt.Errorf("workspace %q has no paths configured", name)
-		}
-
 		for _, p := range ws.Paths {
 			if strings.TrimSpace(p) == "" {
 				return fmt.Errorf("workspace %q has empty path value %q", name, p)

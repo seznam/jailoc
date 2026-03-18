@@ -261,6 +261,11 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 		return "", fmt.Errorf("write embedded Dockerfile to %q: %w", dockerfilePath, err)
 	}
 
+	entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
+	if err := os.WriteFile(entrypointPath, embed.Entrypoint(), 0o755); err != nil {
+		return "", fmt.Errorf("write embedded entrypoint.sh to %q: %w", entrypointPath, err)
+	}
+
 	const embeddedTag = "jailoc-base:embedded"
 	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {

@@ -1,0 +1,51 @@
+include:
+  - component: $CI_SERVER_FQDN/cdnko/tbc/golang/gitlab-ci-golang@4.15.0
+    inputs:
+      ci-lint-args: -E gosec,staticcheck,gocritic ./...
+      semgrep-disabled: true
+      sbom-disabled: true
+
+  - component: "$CI_SERVER_FQDN/cdnko/tbc/semantic-release/gitlab-ci-semrel@3.14.2"
+    inputs:
+      auto-release-enabled: true
+      commit-message: "chore(semantic-release): release ${nextRelease.version} - [ci skip on prod]"
+
+  - component: "$CI_SERVER_FQDN/cdnko/tbc/cdnko-defaults/gitlab-ci-cdnko-defaults@1.1.4"
+    inputs:
+      go-image: docker.ops.iszn.cz/upstream/golang/golang:1.26.0-bookworm
+      go-ci-lint-image: docker.ops.iszn.cz/upstream/golangci/golangci-lint:v2.4.0-alpine
+
+  - project: "cdnko/tbc/cdnko-defaults"
+    ref: "master"
+    file: "/fixups/tbc-go-gitlab-auth.yml"
+
+go-mod-outdated:
+  rules:
+    - when: never
+
+goreleaser:
+  image: docker.ops.iszn.cz/upstream/golang/golang:1.26.0-bookworm
+  stage: publish
+  extends: .go-base
+
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_MERGE_REQUEST_IID
+
+  script:
+    - go install github.com/goreleaser/goreleaser/v2@latest
+    # no validate to ignore reports/cache/bin artifacts from pipelines
+    # https://goreleaser.com/errors/dirty/
+    - export ARGS="release --verbose --skip=validate"
+    # add --snapshot if is MR or branch build
+    - if [ -z "$CI_COMMIT_TAG" ]; then ARGS="$ARGS --snapshot"; fi
+    - goreleaser $ARGS
+
+  artifacts:
+    paths:
+      - dist/*
+
+  variables:
+    # Disable shallow cloning so that goreleaser can diff between tags to
+    # generate a changelog.
+    GIT_DEPTH: 0

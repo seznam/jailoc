@@ -2,10 +2,6 @@ version: 2
 
 project_name: jailoc
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - id: jailoc
     main: ./cmd/jailoc
@@ -34,7 +30,6 @@ checksum:
   algorithm: sha256
 
 changelog:
-  use: gitlab
   sort: asc
   filters:
     exclude:
@@ -43,9 +38,17 @@ changelog:
       - "^chore:"
 
 release:
+  disable: false
   gitlab:
-    owner: "cdnko/tools"
-    name: "jailoc"
+    owner: cdnko/tools
+    name: jailoc
+
+gitlab_urls:
+  api: https://gitlab.seznam.net/api/v4/
+  download: https://github.com/seznam/jailoc.git
+  use_package_registry: true
+  use_job_token: true
+  skip_tls_verify: true
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"

@@ -145,19 +145,15 @@ func TestValidateRejectsUppercaseName(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsEmptyPaths(t *testing.T) {
+func TestValidateAllowsEmptyPaths(t *testing.T) {
 	cfg := &Config{
 		Workspaces: map[string]Workspace{
 			"default": {Paths: []string{}},
 		},
 	}
 
-	err := Validate(cfg)
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-	if !strings.Contains(err.Error(), "default") {
-		t.Fatalf("expected error to contain workspace name, got: %v", err)
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected no error for empty paths, got: %v", err)
 	}
 }
 
@@ -217,7 +213,7 @@ func TestLoadMissingFileAutoCreates(t *testing.T) {
 	}
 }
 
-func TestLoadExistingEmptyPathsFails(t *testing.T) {
+func TestLoadExistingEmptyPathsOk(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -226,12 +222,13 @@ func TestLoadExistingEmptyPathsFails(t *testing.T) {
 paths = []
 `)
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected validation error for existing config with empty paths")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error for empty paths, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "default") {
-		t.Fatalf("expected error to mention workspace name, got: %v", err)
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 0 {
+		t.Fatalf("expected empty paths, got %#v", ws.Paths)
 	}
 }
 

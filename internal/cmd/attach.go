@@ -55,8 +55,8 @@ func runAttach(cmd *cobra.Command, args []string) error {
 }
 
 func attachOnHost(ws *workspace.Resolved) error {
-	serverArg := fmt.Sprintf("localhost:%d", ws.Port)
-	args := []string{"attach", "--server", serverArg}
+	serverArg := fmt.Sprintf("http://localhost:%d", ws.Port)
+	args := []string{"attach", serverArg}
 
 	if password := os.Getenv("OPENCODE_SERVER_PASSWORD"); password != "" {
 		args = append(args, "--password", password)
