@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -17,6 +18,9 @@ const (
 	defaultConfigContent   = `# jailoc configuration
 # See: https://github.com/seznam/jailoc
 
+# Access mode: "remote" (host opencode attach), "exec" (docker exec opencode), or "" (auto-detect)
+# mode = ""
+
 [image]
 # repository = "ghcr.io/seznam/jailoc"  # default registry
 
@@ -26,6 +30,11 @@ paths = []
 # allowed_networks = []
 # build_context = ""
 `
+)
+
+const (
+	ModeRemote = "remote"
+	ModeExec   = "exec"
 )
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -51,6 +60,7 @@ var forbiddenMountPrefixes = []string{
 }
 
 type Config struct {
+	Mode       string               `toml:"mode"`
 	Image      ImageConfig          `toml:"image"`
 	Workspaces map[string]Workspace `toml:"workspaces"`
 }
@@ -168,6 +178,10 @@ func Validate(cfg *Config) error {
 		cfg.Image.Repository = defaultImageRepository
 	}
 
+	if cfg.Mode != "" && cfg.Mode != ModeRemote && cfg.Mode != ModeExec {
+		return fmt.Errorf("invalid mode %q: must be %q, %q, or empty (auto-detect)", cfg.Mode, ModeRemote, ModeExec)
+	}
+
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
 		names = append(names, name)
@@ -214,6 +228,21 @@ func Validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+var lookPath = exec.LookPath
+
+// ResolveMode returns the effective access mode.
+// If configured is non-empty, it is returned directly.
+// Otherwise auto-detect: returns ModeRemote if opencode is on PATH, ModeExec otherwise.
+func ResolveMode(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if _, err := lookPath("opencode"); err == nil {
+		return ModeRemote
+	}
+	return ModeExec
 }
 
 func AddPath(workspace, path string) error {
