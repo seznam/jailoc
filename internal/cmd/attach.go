@@ -16,8 +16,6 @@ import (
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
-var inDocker bool
-
 var attachCmd = &cobra.Command{
 	Use:   "attach [workspace]",
 	Short: "Attach to a running workspace (host opencode attach by default)",
@@ -47,11 +45,13 @@ func runAttach(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workspace %q is not running; run 'jailoc up' first", ws.Name)
 	}
 
-	if inDocker {
-		return attachInDocker(ctx, client)
+	mode := resolveFromFlags(cmd, cfg)
+	switch mode {
+	case config.ModeExec:
+		return attachExec(ctx, client)
+	default:
+		return attachOnHost(ws)
 	}
-
-	return attachOnHost(ws)
 }
 
 func attachOnHost(ws *workspace.Resolved) error {
@@ -70,7 +70,7 @@ func attachOnHost(ws *workspace.Resolved) error {
 	return cmd.Run()
 }
 
-func attachInDocker(ctx context.Context, client *docker.Client) error {
+func attachExec(ctx context.Context, client *docker.Client) error {
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -90,10 +90,9 @@ func attachInDocker(ctx context.Context, client *docker.Client) error {
 		close(sigCh)
 	}()
 
-	return client.Exec(ctx, []string{"/bin/bash"}, os.Stdin, os.Stdout, os.Stderr)
+	return client.Exec(ctx, []string{"opencode"}, os.Stdin, os.Stdout, os.Stderr)
 }
 
 func init() {
-	attachCmd.Flags().BoolVar(&inDocker, "in-docker", false, "Run attach inside the container via exec instead of host opencode attach")
 	rootCmd.AddCommand(attachCmd)
 }

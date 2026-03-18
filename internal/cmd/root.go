@@ -15,6 +15,7 @@ import (
 
 var workspaceFlag string
 var appVersion string
+var remoteFlag, execFlag bool
 
 var rootCmd = &cobra.Command{
 	Use:   "jailoc",
@@ -82,8 +83,16 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		if err := attachOnHost(ws); err != nil {
-			return fmt.Errorf("attach to workspace %q: %w", ws.Name, err)
+		mode := resolveFromFlags(cmd, cfg)
+		var attachErr error
+		switch mode {
+		case config.ModeExec:
+			attachErr = attachExec(ctx, client)
+		default:
+			attachErr = attachOnHost(ws)
+		}
+		if attachErr != nil {
+			return fmt.Errorf("attach to workspace %q: %w", ws.Name, attachErr)
 		}
 
 		return nil
@@ -92,6 +101,21 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&workspaceFlag, "workspace", "w", "default", "workspace name")
+	rootCmd.PersistentFlags().BoolVar(&remoteFlag, "remote", false, "Use remote mode (host-side opencode attach)")
+	rootCmd.PersistentFlags().BoolVar(&execFlag, "exec", false, "Use exec mode (docker exec opencode inside container)")
+	rootCmd.MarkFlagsMutuallyExclusive("remote", "exec")
+}
+
+// resolveFromFlags returns the effective access mode based on CLI flags and config.
+// Priority: --remote/--exec flag → config mode → auto-detect via LookPath.
+func resolveFromFlags(cmd *cobra.Command, cfg *config.Config) string {
+	if remoteFlag {
+		return config.ModeRemote
+	}
+	if execFlag {
+		return config.ModeExec
+	}
+	return config.ResolveMode(cfg.Mode)
 }
 
 // Execute is the entrypoint for the CLI. Version info is passed from main via ldflags.
