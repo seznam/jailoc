@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,83 +30,45 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-func TestIsRunningParsing(t *testing.T) {
+func TestWriterLogConsumer(t *testing.T) {
 	t.Parallel()
 
-	t.Run("running service returns true", func(t *testing.T) {
+	t.Run("Log writes message with newline", func(t *testing.T) {
 		t.Parallel()
 
-		input := []byte("{\"Service\":\"opencode\",\"State\":\"running\"}\n")
+		buf := &bytes.Buffer{}
+		consumer := &writerLogConsumer{w: buf}
 
-		got, err := parseServiceState(input, "opencode")
-		if err != nil {
-			t.Fatalf("parseServiceState returned error: %v", err)
-		}
-		if !got {
-			t.Fatal("expected running=true")
+		consumer.Log("svc", "hello")
+
+		if buf.String() != "hello\n" {
+			t.Fatalf("unexpected output: got %q, want %q", buf.String(), "hello\n")
 		}
 	})
 
-	t.Run("different service returns false", func(t *testing.T) {
+	t.Run("Err writes message with newline", func(t *testing.T) {
 		t.Parallel()
 
-		input := []byte("{\"Service\":\"other\",\"State\":\"running\"}\n")
+		buf := &bytes.Buffer{}
+		consumer := &writerLogConsumer{w: buf}
 
-		got, err := parseServiceState(input, "opencode")
-		if err != nil {
-			t.Fatalf("parseServiceState returned error: %v", err)
-		}
-		if got {
-			t.Fatal("expected running=false")
+		consumer.Err("svc", "err msg")
+
+		if buf.String() != "err msg\n" {
+			t.Fatalf("unexpected output: got %q, want %q", buf.String(), "err msg\n")
 		}
 	})
 
-	t.Run("not running returns false", func(t *testing.T) {
+	t.Run("Status is a no-op", func(t *testing.T) {
 		t.Parallel()
 
-		input := []byte("{\"Service\":\"opencode\",\"State\":\"exited\"}\n")
+		buf := &bytes.Buffer{}
+		consumer := &writerLogConsumer{w: buf}
 
-		got, err := parseServiceState(input, "opencode")
-		if err != nil {
-			t.Fatalf("parseServiceState returned error: %v", err)
-		}
-		if got {
-			t.Fatal("expected running=false")
-		}
-	})
+		consumer.Status("svc", "status")
 
-	t.Run("empty output returns false", func(t *testing.T) {
-		t.Parallel()
-
-		got, err := parseServiceState(nil, "opencode")
-		if err != nil {
-			t.Fatalf("parseServiceState returned error: %v", err)
-		}
-		if got {
-			t.Fatal("expected running=false")
-		}
-	})
-
-	t.Run("invalid json returns error", func(t *testing.T) {
-		t.Parallel()
-
-		_, err := parseServiceState([]byte("{not-json}\n"), "opencode")
-		if err == nil {
-			t.Fatal("expected parsing error")
-		}
-	})
-
-	t.Run("ndjson checks all lines", func(t *testing.T) {
-		t.Parallel()
-
-		input := []byte("{\"Service\":\"db\",\"State\":\"running\"}\n{\"Service\":\"opencode\",\"State\":\"running\"}\n")
-
-		got, err := parseServiceState(input, "opencode")
-		if err != nil {
-			t.Fatalf("parseServiceState returned error: %v", err)
-		}
-		if !got {
-			t.Fatal("expected running=true")
+		if buf.String() != "" {
+			t.Fatalf("expected empty buffer, got %q", buf.String())
 		}
 	})
 }

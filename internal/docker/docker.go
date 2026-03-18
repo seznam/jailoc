@@ -1,16 +1,22 @@
 package docker
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/flags"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/docker/compose/v5/pkg/compose"
+	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/image"
+	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/archive"
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/embed"
@@ -20,6 +26,9 @@ type Client struct {
 	composeFile string
 	workDir     string
 	workspace   string
+	svcOnce     sync.Once
+	svcErr      error
+	svc         api.Compose
 }
 
 func NewClient(composeFile, workDir, workspace string) *Client {
@@ -31,7 +40,19 @@ func NewClient(composeFile, workDir, workspace string) *Client {
 }
 
 func (c *Client) Up(ctx context.Context) error {
-	if err := c.runCompose(ctx, nil, nil, nil, "up", "-d"); err != nil {
+	if err := c.initComposeSvc(); err != nil {
+		return err
+	}
+
+	project, err := c.svc.LoadProject(ctx, api.ProjectLoadOptions{
+		ConfigPaths: []string{c.composeFile},
+		ProjectName: "jailoc-" + c.workspace,
+	})
+	if err != nil {
+		return fmt.Errorf("load compose project for workspace %q: %w", c.workspace, err)
+	}
+
+	if err := c.svc.Up(ctx, project, api.UpOptions{Start: api.StartOptions{}}); err != nil {
 		return fmt.Errorf("compose up for workspace %q: %w", c.workspace, err)
 	}
 
@@ -39,7 +60,11 @@ func (c *Client) Up(ctx context.Context) error {
 }
 
 func (c *Client) Down(ctx context.Context) error {
-	if err := c.runCompose(ctx, nil, nil, nil, "down"); err != nil {
+	if err := c.initComposeSvc(); err != nil {
+		return err
+	}
+
+	if err := c.svc.Down(ctx, "jailoc-"+c.workspace, api.DownOptions{}); err != nil {
 		return fmt.Errorf("compose down for workspace %q: %w", c.workspace, err)
 	}
 
@@ -47,27 +72,43 @@ func (c *Client) Down(ctx context.Context) error {
 }
 
 func (c *Client) IsRunning(ctx context.Context) (bool, error) {
-	var out bytes.Buffer
+	if err := c.initComposeSvc(); err != nil {
+		return false, err
+	}
 
-	if err := c.runCompose(ctx, nil, &out, os.Stderr, "ps", "--format", "json"); err != nil {
+	containers, err := c.svc.Ps(ctx, "jailoc-"+c.workspace, api.PsOptions{All: true})
+	if err != nil {
 		return false, fmt.Errorf("compose ps for workspace %q: %w", c.workspace, err)
 	}
 
-	running, err := parseServiceState(out.Bytes(), "opencode")
-	if err != nil {
-		return false, fmt.Errorf("parse compose ps output for workspace %q: %w", c.workspace, err)
+	for _, ct := range containers {
+		if ct.Service == "opencode" && ct.State == "running" {
+			return true, nil
+		}
 	}
 
-	return running, nil
+	return false, nil
 }
 
+type writerLogConsumer struct{ w io.Writer }
+
+func (wlc *writerLogConsumer) Log(name, msg string) {
+	fmt.Fprintf(wlc.w, "%s\n", msg)
+}
+
+func (wlc *writerLogConsumer) Err(name, msg string) {
+	fmt.Fprintf(wlc.w, "%s\n", msg)
+}
+
+func (wlc *writerLogConsumer) Status(name, msg string) {}
+
 func (c *Client) Logs(ctx context.Context, follow bool, w io.Writer) error {
-	args := []string{"logs"}
-	if follow {
-		args = append(args, "-f")
+	if err := c.initComposeSvc(); err != nil {
+		return err
 	}
 
-	if err := c.runCompose(ctx, nil, w, os.Stderr, args...); err != nil {
+	consumer := &writerLogConsumer{w: w}
+	if err := c.svc.Logs(ctx, "jailoc-"+c.workspace, consumer, api.LogOptions{Follow: follow}); err != nil {
 		return fmt.Errorf("compose logs for workspace %q: %w", c.workspace, err)
 	}
 
@@ -75,14 +116,75 @@ func (c *Client) Logs(ctx context.Context, follow bool, w io.Writer) error {
 }
 
 func (c *Client) Exec(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	composeArgs := []string{"exec", "opencode"}
-	composeArgs = append(composeArgs, args...)
+	var stdinRC io.ReadCloser
+	if stdin != nil {
+		if rc, ok := stdin.(io.ReadCloser); ok {
+			stdinRC = rc
+		} else {
+			stdinRC = io.NopCloser(stdin)
+		}
+	}
 
-	if err := c.runCompose(ctx, stdin, stdout, stderr, composeArgs...); err != nil {
+	cliOpts := []command.CLIOption{
+		command.WithOutputStream(stdout),
+		command.WithErrorStream(stderr),
+	}
+	if stdinRC != nil {
+		cliOpts = append(cliOpts, command.WithInputStream(stdinRC))
+	}
+
+	dockerCLI, err := command.NewDockerCli(cliOpts...)
+	if err != nil {
+		return fmt.Errorf("create Docker CLI for exec: %w", err)
+	}
+
+	if err := dockerCLI.Initialize(&flags.ClientOptions{}); err != nil {
+		return fmt.Errorf("initialize Docker CLI for exec: %w", err)
+	}
+
+	svc, err := compose.NewComposeService(dockerCLI)
+	if err != nil {
+		return fmt.Errorf("create Compose service for exec: %w", err)
+	}
+
+	exitCode, err := svc.Exec(ctx, "jailoc-"+c.workspace, api.RunOptions{
+		Service:     "opencode",
+		Command:     args,
+		Tty:         true,
+		Interactive: stdin != nil,
+		Index:       1,
+	})
+	if err != nil {
 		return fmt.Errorf("compose exec for workspace %q: %w", c.workspace, err)
 	}
 
+	if exitCode != 0 {
+		return fmt.Errorf("exec exited with code %d", exitCode)
+	}
+
 	return nil
+}
+
+func (c *Client) initComposeSvc() error {
+	c.svcOnce.Do(func() {
+		dockerCLI, err := command.NewDockerCli()
+		if err != nil {
+			c.svcErr = fmt.Errorf("create Docker CLI: %w", err)
+			return
+		}
+		if err := dockerCLI.Initialize(&flags.ClientOptions{}); err != nil {
+			c.svcErr = fmt.Errorf("initialize Docker CLI: %w", err)
+			return
+		}
+		svc, err := compose.NewComposeService(dockerCLI)
+		if err != nil {
+			c.svcErr = fmt.Errorf("create Compose service: %w", err)
+			return
+		}
+		c.svc = svc
+	})
+
+	return c.svcErr
 }
 
 func ResolveImage(ctx context.Context, cfg *config.Config, version string) (string, error) {
@@ -96,8 +198,29 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 
 	if hasBaseOverride {
 		const localTag = "jailoc-base:local"
-		if err := runDockerCommand(ctx, configDir, nil, nil, nil, "build", "-t", localTag, configDir); err != nil {
+		engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+		if err != nil {
+			return "", fmt.Errorf("create Docker Engine client: %w", err)
+		}
+		defer engineCli.Close()
+
+		buildCtx, err := archive.TarWithOptions(configDir, &archive.TarOptions{})
+		if err != nil {
+			return "", fmt.Errorf("create build context tar for %q: %w", configDir, err)
+		}
+		defer buildCtx.Close()
+
+		resp, err := engineCli.ImageBuild(ctx, buildCtx, dockertypes.ImageBuildOptions{
+			Tags:   []string{localTag},
+			Remove: true,
+		})
+		if err != nil {
 			return "", fmt.Errorf("build local base image from %q: %w", configDir, err)
+		}
+		defer resp.Body.Close()
+
+		if _, err := io.Copy(os.Stderr, resp.Body); err != nil {
+			return "", fmt.Errorf("read build output: %w", err)
 		}
 
 		return localTag, nil
@@ -105,11 +228,26 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 
 	if cfg != nil && strings.TrimSpace(cfg.Image.Repository) != "" {
 		tag := fmt.Sprintf("%s:%s", cfg.Image.Repository, version)
-		if err := runDockerCommand(ctx, "", nil, nil, nil, "pull", tag); err == nil {
-			return tag, nil
+		engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to create Docker Engine client to pull image %q: %v\n", tag, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "warning: failed to pull image %q: %v\n", tag, err)
+			defer engineCli.Close()
+
+			reader, err := engineCli.ImagePull(ctx, tag, image.PullOptions{})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to pull image %q: %v\n", tag, err)
+			} else {
+				defer reader.Close()
+
+				if _, err := io.Copy(os.Stderr, reader); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to read pull output for image %q: %v\n", tag, err)
+				} else {
+					return tag, nil
+				}
+			}
 		}
+
 	}
 
 	tmpDir, err := os.MkdirTemp("", "jailoc-embedded-dockerfile-")
@@ -124,8 +262,29 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 	}
 
 	const embeddedTag = "jailoc-base:embedded"
-	if err := runDockerCommand(ctx, tmpDir, nil, nil, nil, "build", "-t", embeddedTag, "."); err != nil {
+	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return "", fmt.Errorf("create Docker Engine client: %w", err)
+	}
+	defer engineCli.Close()
+
+	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
+	if err != nil {
+		return "", fmt.Errorf("create build context tar for %q: %w", tmpDir, err)
+	}
+	defer buildCtx.Close()
+
+	resp, err := engineCli.ImageBuild(ctx, buildCtx, dockertypes.ImageBuildOptions{
+		Tags:   []string{embeddedTag},
+		Remove: true,
+	})
+	if err != nil {
 		return "", fmt.Errorf("build embedded base image in %q: %w", tmpDir, err)
+	}
+	defer resp.Body.Close()
+
+	if _, err := io.Copy(os.Stderr, resp.Body); err != nil {
+		return "", fmt.Errorf("read build output: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "warning: using embedded Dockerfile fallback image %q\n", embeddedTag)
@@ -155,85 +314,34 @@ func ApplyWorkspaceLayer(ctx context.Context, base, workspaceName string) (strin
 	configDir := config.ConfigDir()
 	workspaceTag := fmt.Sprintf("jailoc-%s:latest", workspaceName)
 
-	if err := runDockerCommand(
-		ctx,
-		configDir,
-		nil,
-		nil,
-		nil,
-		"build",
-		"--build-arg",
-		fmt.Sprintf("BASE=%s", base),
-		"-t",
-		workspaceTag,
-		configDir,
-	); err != nil {
+	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return "", fmt.Errorf("create Docker Engine client: %w", err)
+	}
+	defer engineCli.Close()
+
+	buildCtx, err := archive.TarWithOptions(configDir, &archive.TarOptions{})
+	if err != nil {
+		return "", fmt.Errorf("create build context tar for %q: %w", configDir, err)
+	}
+	defer buildCtx.Close()
+
+	resp, err := engineCli.ImageBuild(ctx, buildCtx, dockertypes.ImageBuildOptions{
+		Tags:       []string{workspaceTag},
+		BuildArgs:  map[string]*string{"BASE": &base},
+		Dockerfile: workspaceName + ".Dockerfile",
+		Remove:     true,
+	})
+	if err != nil {
 		return "", fmt.Errorf("build workspace image %q from %q: %w", workspaceTag, configDir, err)
+	}
+	defer resp.Body.Close()
+
+	if _, err := io.Copy(os.Stderr, resp.Body); err != nil {
+		return "", fmt.Errorf("read build output: %w", err)
 	}
 
 	return workspaceTag, nil
-}
-
-func (c *Client) runCompose(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, composeArgs ...string) error {
-	args := []string{"compose", "-f", c.composeFile}
-	args = append(args, composeArgs...)
-
-	if err := runDockerCommand(ctx, c.workDir, stdin, stdout, stderr, args...); err != nil {
-		return fmt.Errorf("run docker compose command %q: %w", strings.Join(composeArgs, " "), err)
-	}
-
-	return nil
-}
-
-func runDockerCommand(ctx context.Context, dir string, stdin io.Reader, stdout, stderr io.Writer, args ...string) error {
-	if stdout == nil {
-		stdout = os.Stdout
-	}
-	if stderr == nil {
-		stderr = os.Stderr
-	}
-
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Dir = dir
-	cmd.Stdin = stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run docker %s: %w", strings.Join(args, " "), err)
-	}
-
-	return nil
-}
-
-func parseServiceState(data []byte, service string) (bool, error) {
-	type composeService struct {
-		Service string `json:"Service"`
-		State   string `json:"State"`
-	}
-
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		var item composeService
-		if err := json.Unmarshal([]byte(line), &item); err != nil {
-			return false, fmt.Errorf("decode compose ps line %q: %w", line, err)
-		}
-
-		if item.Service == service && item.State == "running" {
-			return true, nil
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return false, fmt.Errorf("scan compose ps output: %w", err)
-	}
-
-	return false, nil
 }
 
 func fileExists(path string) (bool, error) {
