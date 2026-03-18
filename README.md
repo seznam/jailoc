@@ -39,8 +39,6 @@ jailoc up
 jailoc attach
 ```
 
-The password is optional but recommended. Without it, the server accepts any connection on the assigned port.
-
 ## Configuration
 
 Config lives at `~/.config/jailoc/config.toml`. It's created automatically on first run with a `default` workspace.
