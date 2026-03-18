@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -418,5 +419,76 @@ func TestValidateAllowsSafePaths(t *testing.T) {
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("expected no error for safe path %q, got: %v", path, err)
 		}
+	}
+}
+
+func TestValidateAcceptsValidModes(t *testing.T) {
+	for _, mode := range []string{"", ModeRemote, ModeExec} {
+		cfg := &Config{Mode: mode, Workspaces: map[string]Workspace{"default": {Paths: []string{"/data/workspace"}}}}
+		if err := Validate(cfg); err != nil {
+			t.Errorf("mode %q: unexpected error: %v", mode, err)
+		}
+	}
+}
+
+func TestValidateRejectsInvalidMode(t *testing.T) {
+	cfg := &Config{Mode: "banana", Workspaces: map[string]Workspace{"default": {Paths: []string{"/data/workspace"}}}}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid mode, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid mode") {
+		t.Errorf("error %q does not contain 'invalid mode'", err.Error())
+	}
+}
+
+func TestResolveModeWithOpenCodeOnPath(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) { return "/usr/local/bin/opencode", nil }
+	if got := ResolveMode(""); got != ModeRemote {
+		t.Errorf("got %q, want %q", got, ModeRemote)
+	}
+}
+
+func TestResolveModeWithoutOpenCode(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) { return "", fmt.Errorf("not found") }
+	if got := ResolveMode(""); got != ModeExec {
+		t.Errorf("got %q, want %q", got, ModeExec)
+	}
+}
+
+func TestResolveModeExplicitOverridesDetection(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) { return "", fmt.Errorf("not found") }
+	if got := ResolveMode(ModeRemote); got != ModeRemote {
+		t.Errorf("explicit remote: got %q, want %q", got, ModeRemote)
+	}
+	if got := ResolveMode(ModeExec); got != ModeExec {
+		t.Errorf("explicit exec: got %q, want %q", got, ModeExec)
+	}
+}
+
+func TestConfigRoundTripWithMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `
+mode = "exec"
+
+[workspaces.default]
+paths = ["/data/workspace"]
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.Mode != ModeExec {
+		t.Fatalf("expected mode %q, got %q", ModeExec, cfg.Mode)
 	}
 }
