@@ -12,7 +12,7 @@ include:
 
   - component: "$CI_SERVER_FQDN/cdnko/tbc/cdnko-defaults/gitlab-ci-cdnko-defaults@1.1.4"
     inputs:
-      go-image: docker.ops.iszn.cz/upstream/golang/golang:1.26.0-bookworm
+      go-image: docker.ops.iszn.cz/upstream/golang/golang:1.26.1-bookworm
       go-ci-lint-image: docker.ops.iszn.cz/upstream/golangci/golangci-lint:v2.4.0-alpine
 
   - project: "cdnko/tbc/cdnko-defaults"
@@ -24,7 +24,7 @@ go-mod-outdated:
     - when: never
 
 goreleaser:
-  image: docker.ops.iszn.cz/upstream/golang/golang:1.26.0-bookworm
+  image: docker.ops.iszn.cz/upstream/golang/golang:1.26.1-bookworm
   stage: publish
   extends: .go-base
 

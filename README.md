@@ -24,7 +24,7 @@ The simplest way to get going is to run `jailoc` with no arguments from your pro
 
 ```bash
 cd ~/myproject
-OPENCODE_SERVER_PASSWORD=secret jailoc
+jailoc
 ```
 
 On first run, this creates `~/.config/jailoc/config.toml`. If the current directory isn't in any workspace yet, jailoc asks whether to add it. Then it starts the Docker Compose environment and attaches via `opencode attach`.
@@ -33,10 +33,10 @@ For explicit control, use the subcommands directly:
 
 ```bash
 # Start the environment in the background
-OPENCODE_SERVER_PASSWORD=secret jailoc up
+jailoc up
 
 # Attach your local opencode TUI to it
-OPENCODE_SERVER_PASSWORD=secret jailoc attach
+jailoc attach
 ```
 
 The password is optional but recommended. Without it, the server accepts any connection on the assigned port.
