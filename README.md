@@ -1,3 +1,5 @@
+![jailoc](docs/hero.jpeg)
+
 # jailoc
 
 Manage sandboxed Docker Compose environments for headless OpenCode coding agents.
