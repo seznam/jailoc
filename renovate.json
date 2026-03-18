@@ -1,5 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
   "customManagers": [
     {
       "customType": "regex",
@@ -17,6 +18,12 @@
       ],
       "extractVersionTemplate": "^bun-v(?<version>.*)$",
       "versioningTemplate": "semver-coerced"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "go-deps"
     }
   ]
 }
