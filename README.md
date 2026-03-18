@@ -71,7 +71,7 @@ allowed_networks = ["172.20.0.0/16"]
 
 **Port allocation:** workspace names are sorted alphabetically, then ports are assigned starting at 4096. So with workspaces `api` and `frontend`, `api` gets port 4096 and `frontend` gets 4097. The `default` workspace is typically alone and gets 4096.
 
-**`paths`** — directories to mount into `/workspace` inside the container. Supports `~` expansion.
+**`paths`** — directories to mount into the container at their original absolute path (e.g. `/home/you/projects/api` on the host becomes `/home/you/projects/api` inside the container). Paths under system directories (`/usr`, `/etc`, `/var`, `/home/agent`, …) are rejected to prevent conflicts with the container runtime. Supports `~` expansion.
 
 **`allowed_hosts`** — hostnames resolved at container startup and added as iptables ACCEPT rules before the private-network DROP rules.
 
@@ -149,7 +149,7 @@ When you run any jailoc command, it reads `~/.config/jailoc/config.toml`, creati
 
 **Entrypoint** — the container starts as root so it can set up iptables rules and chown the data volume. It then drops to UID 1000 (`agent`) via `setpriv --inh-caps=-all --no-new-privs` before executing the OpenCode server process.
 
-**Volume mounts** — workspace paths are bind-mounted into `/workspace`. OpenCode config directories (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) are mounted read-only. An isolated named volume holds the OpenCode data directory, keeping the agent's database and auth tokens separate from the host.
+**Volume mounts** — workspace paths are bind-mounted at their original absolute path (host path = container path). OpenCode config directories (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) are mounted read-only. An isolated named volume holds the OpenCode data directory, keeping the agent's database and auth tokens separate from the host.
 
 ## Security
 

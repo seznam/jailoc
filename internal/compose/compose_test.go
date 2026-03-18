@@ -26,7 +26,7 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	assertContains(t, rendered, "name: jailoc-alpha")
 	assertContains(t, rendered, "image: ghcr.io/seznam/jailoc:test")
 	assertContains(t, rendered, "- \"4111:4096\"")
-	assertContains(t, rendered, "- /Users/test/work/project:/workspace/project")
+	assertContains(t, rendered, "- /Users/test/work/project:/Users/test/work/project")
 	assertContains(t, rendered, "- OPENCODE_SERVER_PASSWORD=secret")
 	assertContains(t, rendered, "opencode-data-alpha")
 	assertContains(t, rendered, "opencode-cache-alpha")
@@ -52,8 +52,8 @@ func TestGenerateComposeMultiplePaths(t *testing.T) {
 
 	rendered := string(out)
 
-	assertContains(t, rendered, "- /repos/api:/workspace/api")
-	assertContains(t, rendered, "- /repos/web-app:/workspace/web-app")
+	assertContains(t, rendered, "- /repos/api:/repos/api")
+	assertContains(t, rendered, "- /repos/web-app:/repos/web-app")
 }
 
 func TestGenerateComposeEmptyPasswordRendersEmptyValue(t *testing.T) {
