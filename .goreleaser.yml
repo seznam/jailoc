@@ -44,8 +44,8 @@ changelog:
 
 release:
   gitlab:
-    owner: "TODO-group"  # TODO: Set GitLab group/namespace
-    name: "oc-jail"
+    owner: "cdnko/tools"
+    name: "jailoc"
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
