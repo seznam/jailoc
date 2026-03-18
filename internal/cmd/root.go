@@ -6,6 +6,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var workspaceFlag string
+
 var rootCmd = &cobra.Command{
 	Use:   "jailoc",
 	Short: "Manage sandboxed OpenCode Docker environments",
@@ -13,6 +15,10 @@ var rootCmd = &cobra.Command{
 		// TODO T8: detect CWD workspace, prompt to add if unknown, auto-up, attach
 		return fmt.Errorf("not implemented yet")
 	},
+}
+
+func init() {
+	rootCmd.PersistentFlags().StringVarP(&workspaceFlag, "workspace", "w", "default", "workspace name")
 }
 
 // Execute is the entrypoint for the CLI. Version info is passed from main via ldflags.
