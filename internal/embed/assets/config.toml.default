@@ -1,0 +1,11 @@
+# jailoc configuration
+# See: https://github.com/seznam/jailoc
+
+[image]
+# repository = "registry.github.com/seznam/jailoc"  # default registry
+
+[workspaces.default]
+paths = []
+# allowed_hosts = []
+# allowed_networks = []
+# build_context = ""
