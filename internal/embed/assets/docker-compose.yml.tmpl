@@ -57,8 +57,12 @@ services:
       - dind-certs-ca:/certs/ca
       - dind-certs-client:/certs/client
       - dind-data:/var/lib/docker
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     networks:
       - dind
+      - egress
     expose:
       - "2376"
 
