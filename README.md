@@ -92,6 +92,31 @@ Use `--workspace` / `-w` to target a specific workspace (default: `default`).
 | `jailoc config` | Print the current resolved config. |
 | `jailoc add` | Add the current directory to a workspace's paths. |
 
+## Access Modes
+
+jailoc supports two modes for connecting to the OpenCode server inside the container:
+
+- **remote** (default when `opencode` is installed): Runs `opencode attach` on the host, connecting over the exposed port.
+- **exec**: Runs `docker exec` into the container and launches `opencode` TUI directly inside.
+
+Auto-detect selects `remote` if `opencode` is found on your PATH, otherwise falls back to `exec`.
+
+Set in config for a permanent default:
+
+```toml
+# mode = ""        # auto-detect (default)
+# mode = "remote"  # always use host opencode attach
+# mode = "exec"    # always use docker exec
+```
+
+Or override per-run with flags:
+
+```bash
+jailoc              # auto-detect
+jailoc --remote     # force remote mode
+jailoc --exec       # force exec mode
+```
+
 ## Custom Images
 
 There are three levels of image customization:
