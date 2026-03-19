@@ -1,0 +1,78 @@
+/* jailoc docs — custom theme polish */
+
+/* ─── Typography ─────────────────────────────────────────────── */
+:root {
+  --md-text-font: "Inter", sans-serif;
+  --md-code-font: "JetBrains Mono", monospace;
+}
+
+/* ─── Hero image ─────────────────────────────────────────────── */
+.md-content img[alt="jailoc"] {
+  display: block;
+  margin: 2rem auto 2.5rem;
+  max-width: 360px;
+  width: 100%;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+/* ─── Code blocks ─────────────────────────────────────────────── */
+.md-typeset pre > code {
+  font-size: 0.82em;
+  line-height: 1.6;
+}
+
+/* Slightly more contrast on inline code */
+.md-typeset code {
+  background-color: color-mix(in srgb, var(--md-accent-fg-color) 8%, var(--md-code-bg-color));
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.85em;
+}
+
+/* ─── Tables ─────────────────────────────────────────────────── */
+.md-typeset table:not([class]) {
+  font-size: 0.85em;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: color-mix(in srgb, var(--md-primary-fg-color) 12%, transparent);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-size: 0.78em;
+}
+
+.md-typeset table:not([class]) tr:hover td {
+  background-color: color-mix(in srgb, var(--md-accent-fg-color) 5%, transparent);
+}
+
+/* ─── Navigation ─────────────────────────────────────────────── */
+.md-nav__title {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* ─── Page title ─────────────────────────────────────────────── */
+.md-typeset h1 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.md-typeset h2 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* ─── Downloads page — highlight the binary table ───────────── */
+.md-typeset td a[href$=".tar.gz"] {
+  font-family: var(--md-code-font);
+  font-size: 0.9em;
+}
+
+/* ─── Footer ─────────────────────────────────────────────────── */
+.md-footer {
+  opacity: 0.8;
+}

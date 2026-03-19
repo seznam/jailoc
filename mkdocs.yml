@@ -1,0 +1,44 @@
+site_name: jailoc
+site_url: https://zensical.org/
+site_description: Sandboxed Docker Compose environments for headless OpenCode coding agents
+site_dir: public
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Configuration: configuration.md
+  - CLI Reference: cli-reference.md
+  - Custom Images: custom-images.md
+  - Network Isolation: network-isolation.md
+  - Architecture: architecture.md
+  - Development: development.md
+  - Downloads: downloads.md
