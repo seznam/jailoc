@@ -269,7 +269,7 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 	}
 
 	entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
-	if err := os.WriteFile(entrypointPath, embed.Entrypoint(), 0o755); err != nil {
+	if err := os.WriteFile(entrypointPath, embed.Entrypoint(), 0o700); err != nil {
 		return "", fmt.Errorf("write embedded entrypoint.sh to %q: %w", entrypointPath, err)
 	}
 

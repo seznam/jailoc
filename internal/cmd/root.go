@@ -156,7 +156,7 @@ func waitForReady(ctx context.Context, port int) error {
 			if err != nil {
 				return fmt.Errorf("create readiness request: %w", err)
 			}
-			resp, err := client.Do(req)
+			resp, err := client.Do(req) //nolint:gosec // URL is localhost with controlled port
 			if err != nil {
 				continue
 			}

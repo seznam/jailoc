@@ -38,15 +38,14 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
 
-		fmt.Fprintf(os.Stdout, "Workspace: %s\n", name)
+		_, _ = fmt.Fprintf(os.Stdout, "Workspace: %s\n", name)
 
-		// Paths
-		fmt.Fprintf(os.Stdout, "  Paths:\n")
+		_, _ = fmt.Fprintf(os.Stdout, "  Paths:\n")
 		if len(ws.Paths) == 0 {
-			fmt.Fprintf(os.Stdout, "    (none)\n")
+			_, _ = fmt.Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, path := range ws.Paths {
-				fmt.Fprintf(os.Stdout, "    - %s\n", path)
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", path)
 			}
 		}
 
