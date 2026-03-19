@@ -1,0 +1,9 @@
+include:
+  - local: .gitlab-ci.tbc.yml
+  - project: "cdnko/tbc/cdnko-defaults"
+    ref: "master"
+    file: "/fixups/tbc-go-gitlab-auth.yml"
+
+variables:
+  GITLAB_USER: gitlab-ci-token
+  GITLAB_TOKEN: ${CI_JOB_TOKEN}

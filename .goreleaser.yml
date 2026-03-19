@@ -1,0 +1,54 @@
+version: 2
+
+project_name: jailoc
+
+builds:
+  - id: jailoc
+    main: ./cmd/jailoc
+    binary: jailoc
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: jailoc
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  disable: false
+  gitlab:
+    owner: cdnko/tools
+    name: jailoc
+
+gitlab_urls:
+  api: https://gitlab.seznam.net/api/v4/
+  download: https://github.com/seznam/jailoc.git
+  use_package_registry: true
+  use_job_token: true
+  skip_tls_verify: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
