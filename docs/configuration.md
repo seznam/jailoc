@@ -35,3 +35,13 @@ allowed_networks = ["172.20.0.0/16"]
 **`allowed_networks`** 🔗 — CIDR rozsahy, které explicitně povolíš (např. `10.10.5.0/24`).
 
 **`build_context`** 🏗️ — cesta použitá jako Docker build context při sestavování workspace-specific images. Defaultně `~/.config/jailoc`.
+
+**`mode`** 🔌 — výchozí režim připojení k OpenCode serveru uvnitř kontejneru. Možné hodnoty:
+
+```toml
+# mode = ""        # auto-detect (default)
+# mode = "remote"  # vždy opencode attach na hostu
+# mode = "exec"    # vždy docker exec do kontejneru
+```
+
+Auto-detect zvolí `remote`, pokud najde `opencode` na PATH, jinak použije `exec`. Lze přepsat per-run pomocí `--remote` / `--exec` flagů.
