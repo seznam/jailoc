@@ -1,9 +1,16 @@
-# 📥 Stažení
+# 📥 Instalace
 
-Předem sestavené bináry se publikují pro každé vydání přes [GoReleaser](https://goreleaser.com/) — Sisyphus nikdy nepřestane točit vydání.
-Stáhni binárku pro svou platformu, nastav ji jako spustitelnou a přesuň na `PATH`.
+## ⚡ go install
+
+Nejrychlejší cesta — potřebuješ jen Go toolchain:
+
+```bash
+go install github.com/seznam/jailoc/cmd/jailoc@latest
+```
 
 ## 🗂️ Předem sestavené bináry
+
+Případně stáhni předem sestavenou binárku — Sisyphus nikdy nepřestane točit vydání.
 
 | Platforma | Architektura | Stažení |
 |-----------|-------------|---------|
@@ -13,8 +20,6 @@ Stáhni binárku pro svou platformu, nastav ji jako spustitelnou a přesuň na `
 | macOS | arm64 | [jailoc_darwin_arm64.tar.gz](downloads/jailoc_darwin_arm64.tar.gz) |
 
 🔐 [checksums.txt](downloads/checksums.txt) — SHA-256 checksums pro všechny archivy.
-
-## ⚡ Instalace
 
 Rozbal binárku a přesuň ji na `PATH`:
 
