@@ -1,6 +1,6 @@
 # 📥 Stažení
 
-Předem sestavené bináry se publikují pro každé vydání přes [GoReleaser](https://goreleaser.com/) — rychle jako Mercurius.
+Předem sestavené bináry se publikují pro každé vydání přes [GoReleaser](https://goreleaser.com/) — Sisyphus nikdy nepřestane točit vydání.
 Stáhni binárku pro svou platformu, nastav ji jako spustitelnou a přesuň na `PATH`.
 
 ## 🗂️ Předem sestavené bináry

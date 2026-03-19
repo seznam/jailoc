@@ -26,11 +26,11 @@ paths = ["/home/you/projects/frontend"]
 allowed_networks = ["172.20.0.0/16"]
 ```
 
-**Přidělování portů:** názvy workspaců se seřadí abecedně, pak se přiřazují porty od 4096 — každý workspace dostane svou bránu, jak by si přál Janus. Takže s workspacy `api` a `frontend` dostane `api` port 4096 a `frontend` port 4097. Workspace `default` je obvykle sám a dostane 4096.
+**Přidělování portů:** názvy workspaců se seřadí abecedně, pak se přiřazují porty od 4096 — Prometheus naplánoval každou bránu předem. Takže s workspacy `api` a `frontend` dostane `api` port 4096 a `frontend` port 4097. Workspace `default` je obvykle sám a dostane 4096.
 
 **`paths`** 📂 — adresáře, které se mountují do kontejneru na jejich původní absolutní cestě (např. `/home/you/projects/api` na hostu se stane `/home/you/projects/api` uvnitř kontejneru). Cesty pod systémovými adresáři (`/usr`, `/etc`, `/var`, `/home/agent`, …) jsou odmítnuté, aby nedošlo ke konfliktům s container runtime. Podporuje rozvinutí `~`.
 
-**`allowed_hosts`** 🌐 — hostname resolvované při startu kontejneru a přidané jako iptables ACCEPT pravidla před DROP pravidly privátní sítě. Mercurius by řekl, že resolver je fakt rychlej.
+**`allowed_hosts`** 🌐 — hostname resolvované při startu kontejneru a přidané jako iptables ACCEPT pravidla před DROP pravidly privátní sítě. Oracle by řekl, že resolver zná odpověď ještě než se zeptáš.
 
 **`allowed_networks`** 🔗 — CIDR rozsahy, které explicitně povolíš (např. `10.10.5.0/24`).
 
