@@ -260,3 +260,34 @@ func TestMatchesCWD(t *testing.T) {
 		t.Fatal("expected exact path to match")
 	}
 }
+
+func TestPortForWorkspaceUnknown(t *testing.T) {
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"alpha": {},
+			"beta":  {},
+		},
+	}
+
+	got := workspace.PortForWorkspace(cfg, "unknown-workspace")
+	if got != -1 {
+		t.Fatalf("expected -1 for unknown workspace, got %d", got)
+	}
+}
+
+func TestResolveNilConfig(t *testing.T) {
+	_, err := workspace.Resolve(nil, "somename")
+	if err == nil {
+		t.Fatal("expected error for nil config")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestMatchesCWDNilWorkspace(t *testing.T) {
+	got := workspace.MatchesCWD(nil, "/some/path")
+	if got {
+		t.Fatal("expected false for nil workspace")
+	}
+}

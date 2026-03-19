@@ -2,6 +2,7 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -107,4 +108,50 @@ func TestResolveImageConfigPath(t *testing.T) {
 	if !exists {
 		t.Fatalf("expected file at %q", overridePath)
 	}
+}
+
+func TestApplyWorkspaceLayerInputValidation(t *testing.T) {
+	t.Run("empty base image", func(t *testing.T) {
+		ctx := context.Background()
+		_, err := ApplyWorkspaceLayer(ctx, "", "workspace")
+		if err == nil {
+			t.Fatal("expected error for empty base image")
+		}
+		if err.Error() != "base image is empty" {
+			t.Fatalf("unexpected error: got %q, want %q", err.Error(), "base image is empty")
+		}
+	})
+
+	t.Run("empty workspace name", func(t *testing.T) {
+		ctx := context.Background()
+		_, err := ApplyWorkspaceLayer(ctx, "image:tag", "")
+		if err == nil {
+			t.Fatal("expected error for empty workspace name")
+		}
+		if err.Error() != "workspace name is empty" {
+			t.Fatalf("unexpected error: got %q, want %q", err.Error(), "workspace name is empty")
+		}
+	})
+
+	t.Run("whitespace-only base image", func(t *testing.T) {
+		ctx := context.Background()
+		_, err := ApplyWorkspaceLayer(ctx, "   ", "workspace")
+		if err == nil {
+			t.Fatal("expected error for whitespace-only base image")
+		}
+		if err.Error() != "base image is empty" {
+			t.Fatalf("unexpected error: got %q, want %q", err.Error(), "base image is empty")
+		}
+	})
+
+	t.Run("whitespace-only workspace name", func(t *testing.T) {
+		ctx := context.Background()
+		_, err := ApplyWorkspaceLayer(ctx, "image:tag", "   ")
+		if err == nil {
+			t.Fatal("expected error for whitespace-only workspace name")
+		}
+		if err.Error() != "workspace name is empty" {
+			t.Fatalf("unexpected error: got %q, want %q", err.Error(), "workspace name is empty")
+		}
+	})
 }
