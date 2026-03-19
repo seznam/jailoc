@@ -1,6 +1,6 @@
 # 🔒 Network Isolation
 
-Při startu kontejneru zablokují `iptables` pravidla odchozí provoz do privátních a interních adresních rozsahů:
+Při startu kontejneru zablokují `iptables` pravidla odchozí provoz do privátních a interních adresních rozsahů — Mars hlídá hradby líp než celá legie:
 
 - `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918)
 - `169.254.0.0/16` (link-local)
@@ -21,7 +21,7 @@ DinD sidecar komunikuje přes interní Docker network, na kterou se tato iptable
 - 📏 Resource limity: 4 GB RAM, 2 CPU, 256 PID
 - 🔒 Konfigurační adresáře OpenCode mountované read-only
 - 💾 Izolovaný datový volume: agentova SQLite databáze a auth tokeny se nedotknou `~/.local/share/opencode` na hostu
-- 🐳 Docker-in-Docker: žádný mount hostitelského socketu; kontejnery, které agent spustí, běží výhradně uvnitř DinD daemona
+- 🐳 Docker-in-Docker: žádný mount hostitelského socketu; kontejnery, které agent spustí, běží výhradně uvnitř DinD daemona — hluboko jako v Neptunových hlubinách
 - 🌐 Síťový egress do privátních/interních rozsahů blokovaný iptables
 
 ### ⚠️ Co NENÍ izolované

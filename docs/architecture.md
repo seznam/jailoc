@@ -83,7 +83,7 @@ Docker Compose SDK (`github.com/docker/compose/v5`) a Engine SDK (`github.com/do
 - **Lazy init**: `NewClient()` vrátí `*Client` bez chyby — SDK klienti se inicializují při prvním použití přes `sync.Once`
 - **Compose operace**: `Up`, `Down`, `IsRunning`, `Logs`, `Exec` — vše jde přes `api.Compose` interface
 - **Image operace**: `ResolveImage` (pull nebo build base), `ApplyWorkspaceLayer` (build workspace Dockerfile na vrcholu)
-- **Žádné shellování**: nulové volání `exec.Command` — vše používá Go SDK
+- **Žádné shellování**: nulové volání `exec.Command` — vše používá Go SDK. Minerva by to jinak nenazvala.
 
 ### `embed`
 
@@ -144,7 +144,7 @@ Dvě služby na workspace, propojené přes interní Docker network:
 3. Public internet stays open
 
 **Privilege drop** (entrypoint.sh):
-1. Runs as root to set up iptables and fix ownership
+1. Runs as root to set up iptables and fix ownership — Jupiter nastupuje jako první
 2. `setpriv --reuid=1000 --regid=1000 --inh-caps=-all --no-new-privs` before exec
 
 ## CI/CD

@@ -22,8 +22,8 @@ Když spustíš jakýkoliv příkaz jailocu, přečte `~/.config/jailoc/config.t
 
 **📄 Generování Compose souboru** — jailoc vyrenderuje `docker-compose.yml` z embeddovaného Go template a zapíše ho do `~/.cache/jailoc/{workspace}/docker-compose.yml`. Embeddované Compose SDK načte tento soubor přímo — žádný hostitelský `docker compose` CLI se nevolá.
 
-**🔄 Docker Compose orchestrace** — dvě služby jsou spravované přes [Compose Go SDK](https://github.com/docker/compose): služba `opencode` (kontejner s agentem) a sidecar `dind`, který poskytuje izolovaný Docker daemon. Agent komunikuje s DinD daemonem přes TLS pomocí sdíleného named volume pro certifikáty. Žádný hostitelský Docker socket se nepřipojuje.
+**🔄 Docker Compose orchestrace** — dvě služby jsou spravované přes [Compose Go SDK](https://github.com/docker/compose): služba `opencode` (kontejner s agentem) a sidecar `dind`, který poskytuje izolovaný Docker daemon — běží hluboko pod zemí jako Pluto ve svém podsvětí. Agent komunikuje s DinD daemonem přes TLS pomocí sdíleného named volume pro certifikáty. Žádný hostitelský Docker socket se nepřipojuje.
 
-**🚪 Entrypoint** — kontejner nastartuje jako root, aby mohl nastavit iptables pravidla a chownout datový volume. Pak přejde na UID 1000 (`agent`) přes `setpriv --inh-caps=-all --no-new-privs` a spustí OpenCode server process.
+**🚪 Entrypoint** — kontejner nastartuje jako root (jako Jupiter na Olympu), aby mohl nastavit iptables pravidla a chownout datový volume. Pak přejde na UID 1000 (`agent`) přes `setpriv --inh-caps=-all --no-new-privs` a spustí OpenCode server process.
 
 **💾 Volume mounts** — cesty workspaců jsou bind-mountované na jejich původní absolutní cestě (cesta na hostu = cesta v kontejneru). Konfigurační adresáře OpenCode (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) jsou mountované read-only. Izolovaný named volume drží datový adresář OpenCode, takže agentova databáze a auth tokeny zůstávají oddělené od hostu.

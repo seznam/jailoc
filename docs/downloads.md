@@ -1,6 +1,6 @@
 # 📥 Stažení
 
-Předem sestavené bináry se publikují pro každé vydání přes [GoReleaser](https://goreleaser.com/).
+Předem sestavené bináry se publikují pro každé vydání přes [GoReleaser](https://goreleaser.com/) — rychle jako Mercurius.
 Stáhni binárku pro svou platformu, nastav ji jako spustitelnou a přesuň na `PATH`.
 
 ## 🗂️ Předem sestavené bináry

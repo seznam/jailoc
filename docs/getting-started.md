@@ -19,7 +19,7 @@ cd ~/myproject
 jailoc
 ```
 
-Při prvním spuštění se vytvoří `~/.config/jailoc/config.toml`. Pokud aktuální adresář ještě není v žádném workspacu, jailoc se zeptá, jestli ho přidat. Pak nastartuje Docker Compose prostředí a připojí se přes `opencode attach`. ✨
+Při prvním spuštění se vytvoří `~/.config/jailoc/config.toml` — Janus otevírá dveře, config vznikne sám. Pokud aktuální adresář ještě není v žádném workspacu, jailoc se zeptá, jestli ho přidat. Pak nastartuje Docker Compose prostředí a připojí se přes `opencode attach`. ✨
 
 Chceš mít explicitní kontrolu? Použij subcommands přímo:
 
