@@ -110,7 +110,7 @@ func pathMatchesCWD(base, cwd string) bool {
 	sep := string(filepath.Separator)
 	p := base
 	if !strings.HasSuffix(p, sep) {
-		p = p + sep
+		p += sep
 	}
 	return strings.HasPrefix(cwd+sep, p) || cwd == strings.TrimSuffix(p, sep)
 }

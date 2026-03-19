@@ -25,7 +25,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 
 	// Print image info
-	fmt.Fprintf(os.Stdout, "Image: %s:%s\n\n", cfg.Image.Repository, appVersion)
+	_, _ = fmt.Fprintf(os.Stdout, "Image: %s:%s\n\n", cfg.Image.Repository, appVersion)
 
 	// Sort workspace names alphabetically
 	names := make([]string, 0, len(cfg.Workspaces))

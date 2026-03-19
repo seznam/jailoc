@@ -92,7 +92,7 @@ func TestResolveImageConfigPath(t *testing.T) {
 	}
 
 	configDir := filepath.Dir(overridePath)
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
 		t.Fatalf("create config dir %q: %v", configDir, err)
 	}
 

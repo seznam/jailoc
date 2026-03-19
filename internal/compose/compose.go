@@ -42,7 +42,7 @@ func WriteComposeFile(params ComposeParams, destPath string) error {
 		return fmt.Errorf("generate compose file content: %w", err)
 	}
 
-	if err := os.WriteFile(destPath, composeBytes, 0o644); err != nil {
+	if err := os.WriteFile(destPath, composeBytes, 0o600); err != nil {
 		return fmt.Errorf("write compose file to %q: %w", destPath, err)
 	}
 

@@ -20,9 +20,7 @@ var attachCmd = &cobra.Command{
 	Use:   "attach [workspace]",
 	Short: "Attach to a running workspace (host opencode attach by default)",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runAttach(cmd, args)
-	},
+	RunE:  runAttach,
 }
 
 func runAttach(cmd *cobra.Command, args []string) error {
@@ -62,7 +60,7 @@ func attachOnHost(ws *workspace.Resolved) error {
 		args = append(args, "--password", password)
 	}
 
-	cmd := exec.Command("opencode", args...)
+	cmd := exec.Command("opencode", args...) //nolint:gosec // binary name is hardcoded, args are controlled
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -71,12 +69,12 @@ func attachOnHost(ws *workspace.Resolved) error {
 }
 
 func attachExec(ctx context.Context, client *docker.Client) error {
-	fd := int(os.Stdin.Fd())
+	fd := int(os.Stdin.Fd()) //nolint:gosec // Fd() fits in int on all supported platforms
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
 		return fmt.Errorf("set raw terminal: %w", err)
 	}
-	defer term.Restore(fd, oldState)
+	defer func() { _ = term.Restore(fd, oldState) }()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGWINCH)

@@ -91,7 +91,7 @@ func preflightDocker(ctx context.Context, workspaceName string) error {
 	if err != nil {
 		return fmt.Errorf("create preflight temp directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	tmpComposePath := filepath.Join(tmpDir, "docker-compose.yml")
 	content := []byte("services:\n  opencode:\n    image: busybox\n")

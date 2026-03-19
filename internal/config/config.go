@@ -154,11 +154,11 @@ func CreateDefault() error {
 }
 
 func createDefaultAt(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create config directory for %q: %w", path, err)
 	}
 
-	if err := os.WriteFile(path, []byte(defaultConfigContent), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(defaultConfigContent), 0o600); err != nil {
 		return fmt.Errorf("write default config to %q: %w", path, err)
 	}
 
@@ -263,11 +263,11 @@ func AddPath(workspace, path string) error {
 	ws.Paths = append(ws.Paths, path)
 	cfg.Workspaces[workspace] = ws
 
-	f, err := os.Create(configPath)
+	f, err := os.Create(configPath) //nolint:gosec // configPath is derived from ConfigPath(), not user input
 	if err != nil {
 		return fmt.Errorf("open config for write: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
 		return fmt.Errorf("encode updated config: %w", err)
