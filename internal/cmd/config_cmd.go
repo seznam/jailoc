@@ -49,34 +49,31 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Allowed Hosts
-		fmt.Fprintf(os.Stdout, "  Allowed Hosts:\n")
+		_, _ = fmt.Fprintf(os.Stdout, "  Allowed Hosts:\n")
 		if len(ws.AllowedHosts) == 0 {
-			fmt.Fprintf(os.Stdout, "    (none)\n")
+			_, _ = fmt.Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, host := range ws.AllowedHosts {
-				fmt.Fprintf(os.Stdout, "    - %s\n", host)
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", host)
 			}
 		}
 
-		// Allowed Networks
-		fmt.Fprintf(os.Stdout, "  Allowed Networks:\n")
+		_, _ = fmt.Fprintf(os.Stdout, "  Allowed Networks:\n")
 		if len(ws.AllowedNetworks) == 0 {
-			fmt.Fprintf(os.Stdout, "    (none)\n")
+			_, _ = fmt.Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, network := range ws.AllowedNetworks {
-				fmt.Fprintf(os.Stdout, "    - %s\n", network)
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", network)
 			}
 		}
 
-		// Build Context
 		buildContext := ws.BuildContext
 		if buildContext == "" {
 			buildContext = "(none)"
 		}
-		fmt.Fprintf(os.Stdout, "  Build Context: %s\n", buildContext)
+		_, _ = fmt.Fprintf(os.Stdout, "  Build Context: %s\n", buildContext)
 
-		fmt.Fprintf(os.Stdout, "\n")
+		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}
 
 	_ = ctx // silence unused variable warning
