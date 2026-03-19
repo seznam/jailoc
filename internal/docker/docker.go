@@ -13,14 +13,21 @@ import (
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/docker/compose/v5/pkg/compose"
-	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/archive"
+	"github.com/docker/docker/pkg/jsonmessage"
+	archive "github.com/moby/go-archive"
+	"github.com/moby/term"
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/embed"
 )
+
+func displayStream(r io.Reader) error {
+	fd, isTerminal := term.GetFdInfo(os.Stderr)
+	return jsonmessage.DisplayJSONMessagesStream(r, os.Stderr, fd, isTerminal, nil)
+}
 
 type Client struct {
 	composeFile string
@@ -93,11 +100,11 @@ func (c *Client) IsRunning(ctx context.Context) (bool, error) {
 type writerLogConsumer struct{ w io.Writer }
 
 func (wlc *writerLogConsumer) Log(name, msg string) {
-	fmt.Fprintf(wlc.w, "%s\n", msg)
+	_, _ = fmt.Fprintf(wlc.w, "%s\n", msg)
 }
 
 func (wlc *writerLogConsumer) Err(name, msg string) {
-	fmt.Fprintf(wlc.w, "%s\n", msg)
+	_, _ = fmt.Fprintf(wlc.w, "%s\n", msg)
 }
 
 func (wlc *writerLogConsumer) Status(name, msg string) {}
@@ -202,24 +209,24 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 		if err != nil {
 			return "", fmt.Errorf("create Docker Engine client: %w", err)
 		}
-		defer engineCli.Close()
+		defer func() { _ = engineCli.Close() }()
 
 		buildCtx, err := archive.TarWithOptions(configDir, &archive.TarOptions{})
 		if err != nil {
 			return "", fmt.Errorf("create build context tar for %q: %w", configDir, err)
 		}
-		defer buildCtx.Close()
+		defer func() { _ = buildCtx.Close() }()
 
-		resp, err := engineCli.ImageBuild(ctx, buildCtx, dockertypes.ImageBuildOptions{
+		resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 			Tags:   []string{localTag},
 			Remove: true,
 		})
 		if err != nil {
 			return "", fmt.Errorf("build local base image from %q: %w", configDir, err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
-		if _, err := io.Copy(os.Stderr, resp.Body); err != nil {
+		if err := displayStream(resp.Body); err != nil {
 			return "", fmt.Errorf("read build output: %w", err)
 		}
 
@@ -230,18 +237,18 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 		tag := fmt.Sprintf("%s:%s", cfg.Image.Repository, version)
 		engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to create Docker Engine client to pull image %q: %v\n", tag, err)
+			_, _ = fmt.Fprintf(os.Stderr, "warning: failed to create Docker Engine client to pull image %q: %v\n", tag, err)
 		} else {
-			defer engineCli.Close()
+			defer func() { _ = engineCli.Close() }()
 
 			reader, err := engineCli.ImagePull(ctx, tag, image.PullOptions{})
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to pull image %q: %v\n", tag, err)
+				_, _ = fmt.Fprintf(os.Stderr, "warning: failed to pull image %q: %v\n", tag, err)
 			} else {
-				defer reader.Close()
+				defer func() { _ = reader.Close() }()
 
-				if _, err := io.Copy(os.Stderr, reader); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to read pull output for image %q: %v\n", tag, err)
+				if err := displayStream(reader); err != nil {
+					_, _ = fmt.Fprintf(os.Stderr, "warning: failed to read pull output for image %q: %v\n", tag, err)
 				} else {
 					return tag, nil
 				}
@@ -254,10 +261,10 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 	if err != nil {
 		return "", fmt.Errorf("create temp directory for embedded Dockerfile: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
-	if err := os.WriteFile(dockerfilePath, embed.Dockerfile(), 0o644); err != nil {
+	if err := os.WriteFile(dockerfilePath, embed.Dockerfile(), 0o600); err != nil {
 		return "", fmt.Errorf("write embedded Dockerfile to %q: %w", dockerfilePath, err)
 	}
 
@@ -271,28 +278,28 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 	if err != nil {
 		return "", fmt.Errorf("create Docker Engine client: %w", err)
 	}
-	defer engineCli.Close()
+	defer func() { _ = engineCli.Close() }()
 
 	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
 	if err != nil {
 		return "", fmt.Errorf("create build context tar for %q: %w", tmpDir, err)
 	}
-	defer buildCtx.Close()
+	defer func() { _ = buildCtx.Close() }()
 
-	resp, err := engineCli.ImageBuild(ctx, buildCtx, dockertypes.ImageBuildOptions{
+	resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:   []string{embeddedTag},
 		Remove: true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("build embedded base image in %q: %w", tmpDir, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	if _, err := io.Copy(os.Stderr, resp.Body); err != nil {
+	if err := displayStream(resp.Body); err != nil {
 		return "", fmt.Errorf("read build output: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "warning: using embedded Dockerfile fallback image %q\n", embeddedTag)
+	_, _ = fmt.Fprintf(os.Stderr, "warning: using embedded Dockerfile fallback image %q\n", embeddedTag)
 
 	return embeddedTag, nil
 }
@@ -323,15 +330,15 @@ func ApplyWorkspaceLayer(ctx context.Context, base, workspaceName string) (strin
 	if err != nil {
 		return "", fmt.Errorf("create Docker Engine client: %w", err)
 	}
-	defer engineCli.Close()
+	defer func() { _ = engineCli.Close() }()
 
 	buildCtx, err := archive.TarWithOptions(configDir, &archive.TarOptions{})
 	if err != nil {
 		return "", fmt.Errorf("create build context tar for %q: %w", configDir, err)
 	}
-	defer buildCtx.Close()
+	defer func() { _ = buildCtx.Close() }()
 
-	resp, err := engineCli.ImageBuild(ctx, buildCtx, dockertypes.ImageBuildOptions{
+	resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:       []string{workspaceTag},
 		BuildArgs:  map[string]*string{"BASE": &base},
 		Dockerfile: workspaceName + ".Dockerfile",
@@ -340,9 +347,9 @@ func ApplyWorkspaceLayer(ctx context.Context, base, workspaceName string) (strin
 	if err != nil {
 		return "", fmt.Errorf("build workspace image %q from %q: %w", workspaceTag, configDir, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	if _, err := io.Copy(os.Stderr, resp.Body); err != nil {
+	if err := displayStream(resp.Body); err != nil {
 		return "", fmt.Errorf("read build output: %w", err)
 	}
 
