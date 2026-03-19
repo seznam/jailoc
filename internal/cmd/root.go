@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/config"
@@ -81,6 +84,10 @@ var rootCmd = &cobra.Command{
 			if err := runUp(ctx); err != nil {
 				return fmt.Errorf("start workspace %q: %w", ws.Name, err)
 			}
+			fmt.Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
+			if err := waitForReady(ctx, ws.Port); err != nil {
+				return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
+			}
 		}
 
 		mode := resolveFromFlags(cmd, cfg)
@@ -123,4 +130,38 @@ func Execute(version, commit, date string) error {
 	appVersion = version
 	rootCmd.Version = fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date)
 	return rootCmd.Execute()
+}
+
+const (
+	readyPollInterval = 200 * time.Millisecond
+	readyPollTimeout  = 60 * time.Second
+)
+
+func waitForReady(ctx context.Context, port int) error {
+	url := fmt.Sprintf("http://localhost:%d", port)
+
+	ctx, cancel := context.WithTimeout(ctx, readyPollTimeout)
+	defer cancel()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	ticker := time.NewTicker(readyPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out after %s waiting for %s", readyPollTimeout, url)
+		case <-ticker.C:
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return fmt.Errorf("create readiness request: %w", err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			_ = resp.Body.Close()
+			return nil
+		}
+	}
 }
