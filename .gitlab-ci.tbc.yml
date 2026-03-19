@@ -52,9 +52,6 @@ goreleaser:
 
 pages:
   image: python:3.12-slim
-  needs:
-    - job: goreleaser
-      optional: true
   script:
     - pip install zensical
     - zensical build --clean
