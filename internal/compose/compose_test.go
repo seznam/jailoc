@@ -122,7 +122,7 @@ func TestWriteComposeFileHappyPath(t *testing.T) {
 		t.Fatalf("WriteComposeFile returned error: %v", err)
 	}
 
-	content, err := os.ReadFile(destPath)
+	content, err := os.ReadFile(destPath) //nolint:gosec
 	if err != nil {
 		t.Fatalf("failed to read written file: %v", err)
 	}

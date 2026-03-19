@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -104,12 +105,11 @@ func TestResolveTargetDir(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var args []string
 
-			if tc.name == "valid existing path as argument" {
+			switch tc.name {
+			case "valid existing path as argument":
 				tmpDir := t.TempDir()
 				args = []string{tmpDir}
-			} else if tc.name == "nonexistent path" {
-				args = tc.args
-			} else if tc.name == "no arguments uses current working directory" {
+			case "nonexistent path", "no arguments uses current working directory":
 				args = tc.args
 			}
 
@@ -182,7 +182,7 @@ func TestAddComposePath(t *testing.T) {
 			t.Fatalf("expected absolute path, got %q", got)
 		}
 
-		if !filepath.HasPrefix(got, os.TempDir()) {
+		if !strings.HasPrefix(got, os.TempDir()) {
 			t.Errorf("expected path to start with TempDir %q, got %q", os.TempDir(), got)
 		}
 
