@@ -10,7 +10,7 @@ Manage sandboxed Docker Compose environments for headless OpenCode coding agents
 
 ## Installation
 
-Requires Docker with Compose V2 (`docker compose`, not `docker-compose`).
+Requires Docker Engine (the daemon). jailoc embeds the Compose SDK — no `docker compose` CLI plugin needed.
 
 ```bash
 go install github.com/seznam/jailoc/cmd/jailoc@latest
@@ -166,9 +166,9 @@ When you run any jailoc command, it reads `~/.config/jailoc/config.toml`, creati
 3. If the pull fails, build from the embedded fallback Dockerfile (baked into the binary at compile time).
 4. If `~/.config/jailoc/{workspace}.Dockerfile` exists, build a workspace layer on top of whichever base was resolved.
 
-**Compose file generation** — jailoc renders a `docker-compose.yml` from an embedded Go template and writes it to `~/.cache/jailoc/{workspace}/docker-compose.yml`. This cached file is what `docker compose` commands use.
+**Compose file generation** — jailoc renders a `docker-compose.yml` from an embedded Go template and writes it to `~/.cache/jailoc/{workspace}/docker-compose.yml`. The embedded Compose SDK loads this file directly — no host `docker compose` CLI is invoked.
 
-**Docker Compose orchestration** — two services run: the `opencode` service (the agent container) and a `dind` sidecar that provides an isolated Docker daemon. The agent communicates with the DinD daemon over TLS using a shared named volume for certificates. No host Docker socket is mounted.
+**Docker Compose orchestration** — two services are managed via the [Compose Go SDK](https://github.com/docker/compose): the `opencode` service (the agent container) and a `dind` sidecar that provides an isolated Docker daemon. The agent communicates with the DinD daemon over TLS using a shared named volume for certificates. No host Docker socket is mounted.
 
 **Entrypoint** — the container starts as root so it can set up iptables rules and chown the data volume. It then drops to UID 1000 (`agent`) via `setpriv --inh-caps=-all --no-new-privs` before executing the OpenCode server process.
 
@@ -206,3 +206,18 @@ go test ./...
 # Run integration tests (requires Docker)
 go test -tags=integration ./...
 ```
+
+## What's in the default container
+
+The default base image (Ubuntu 24.04) ships with:
+
+| Category | Tools |
+|----------|-------|
+| Runtimes | Go, Node.js, Bun, Python 3 + uv |
+| Package managers | npm, Yarn (via corepack), Homebrew |
+| Language servers | gopls, typescript-language-server, pyright, yaml-language-server, bash-language-server, jsonnet-language-server, helm-ls |
+| CLI tools | Docker CLI, ripgrep, fd, fzf, jq, vim, git, openssh-client |
+| Agent stack | OpenCode, oh-my-openagent |
+
+Exact versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile) and tracked by Renovate.
+
