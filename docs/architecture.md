@@ -1,8 +1,8 @@
-# Architecture
+# Architektura
 
-This document describes the internal structure of jailoc for contributors and anyone curious about how it works under the hood.
+Tento dokument popisuje interní strukturu jailocu pro přispěvatele a každého, kdo je zvědavý, jak to funguje pod kapotou.
 
-## Package Overview
+## Přehled balíčků
 
 ```
 cmd/jailoc/main.go          Entry point — passes ldflags (version, commit, date) to cmd.Execute()
@@ -15,11 +15,11 @@ internal/
   embed/                     go:embed assets (Dockerfile, compose template, entrypoint.sh, default config)
 ```
 
-All packages live under `internal/` — nothing is exported.
+Všechny balíčky jsou pod `internal/` — nic se neexportuje.
 
-## Data Flow
+## Tok dat
 
-A typical `jailoc up` follows this path:
+Typické `jailoc up` prochází touto cestou:
 
 ```
                       ┌─────────────┐
@@ -50,70 +50,70 @@ A typical `jailoc up` follows this path:
                       └─────────────┘
 ```
 
-## Key Packages
+## Klíčové balíčky
 
 ### `config`
 
-Reads and writes `~/.config/jailoc/config.toml`. Auto-creates with defaults on first run.
+Čte a zapisuje `~/.config/jailoc/config.toml`. Při prvním spuštění ho automaticky vytvoří s výchozími hodnotami.
 
-- **`Config`** struct: `Image.Repository` (registry URL) + `Workspaces` map (name → paths, allowed hosts/networks, build context)
-- **Validation**: workspace names must match `[a-z0-9-]+`, paths must be non-empty, CIDR ranges validated with `net.ParseCIDR`
-- **Mutation**: `AddPath()` appends a directory to a workspace's path list and re-encodes the TOML
+- **`Config`** struct: `Image.Repository` (registry URL) + `Workspaces` mapa (název → cesty, allowed hosts/networks, build context)
+- **Validace**: názvy workspaců musí odpovídat `[a-z0-9-]+`, cesty nesmí být prázdné, CIDR rozsahy se validují přes `net.ParseCIDR`
+- **Mutace**: `AddPath()` přidá adresář do seznamu cest workspacu a překóduje TOML
 
 ### `workspace`
 
-Resolves a workspace name into a `Resolved` struct with expanded absolute paths, computed port, and network config.
+Přeloží název workspacu na `Resolved` struct s rozvinutými absolutními cestami, vypočítaným portem a konfigurací sítě.
 
-- **Port assignment**: all workspace names sorted alphabetically, port = `4096 + index`
-- **CWD matching**: `ResolveFromCWD()` finds which workspace owns the current directory (used by bare `jailoc` command)
-- **Path expansion**: `~` is expanded to `$HOME`
+- **Přidělování portů**: všechny názvy workspaců seřazené abecedně, port = `4096 + index`
+- **CWD matching**: `ResolveFromCWD()` najde, kterému workspacu patří aktuální adresář (používá se příkazem `jailoc` bez argumentů)
+- **Rozvinutí cest**: `~` se rozvine na `$HOME`
 
 ### `compose`
 
-Renders `docker-compose.yml` from an embedded Go template (`internal/embed/assets/docker-compose.yml.tmpl`).
+Vyrenderuje `docker-compose.yml` z embeddovaného Go template (`internal/embed/assets/docker-compose.yml.tmpl`).
 
-Template variables: workspace name, port, image tag, mount paths, allowed hosts/networks, OpenCode password.
+Proměnné template: název workspacu, port, tag image, cesty mountů, allowed hosts/networks, heslo OpenCode.
 
-The generated file goes to `~/.cache/jailoc/{workspace}/docker-compose.yml` — this is what the Docker Compose SDK reads.
+Vygenerovaný soubor jde do `~/.cache/jailoc/{workspace}/docker-compose.yml` — to je to, co Docker Compose SDK načítá.
 
 ### `docker`
 
-Docker Compose SDK (`github.com/docker/compose/v5`) and Engine SDK (`github.com/docker/docker/client`).
+Docker Compose SDK (`github.com/docker/compose/v5`) a Engine SDK (`github.com/docker/docker/client`).
 
-- **Lazy init**: `NewClient()` returns `*Client` with no error — SDK clients initialize on first use via `sync.Once`
-- **Compose operations**: `Up`, `Down`, `IsRunning`, `Logs`, `Exec` — all go through `api.Compose` interface
-- **Image operations**: `ResolveImage` (pull or build base), `ApplyWorkspaceLayer` (build workspace Dockerfile on top)
-- **No shelling out**: zero `exec.Command` calls — everything uses Go SDK
+- **Lazy init**: `NewClient()` vrátí `*Client` bez chyby — SDK klienti se inicializují při prvním použití přes `sync.Once`
+- **Compose operace**: `Up`, `Down`, `IsRunning`, `Logs`, `Exec` — vše jde přes `api.Compose` interface
+- **Image operace**: `ResolveImage` (pull nebo build base), `ApplyWorkspaceLayer` (build workspace Dockerfile na vrcholu)
+- **Žádné shellování**: nulové volání `exec.Command` — vše používá Go SDK
 
 ### `embed`
 
-`go:embed` directives for assets baked into the binary:
+`go:embed` direktivy pro assets zapečené do binárky:
 
-| Asset | Purpose |
-|-------|---------|
-| `Dockerfile` | Fallback base image when registry pull fails |
-| `docker-compose.yml.tmpl` | Go template for compose file generation |
-| `entrypoint.sh` | Container entrypoint: iptables setup → chown → drop to UID 1000 |
-| `config.toml.default` | Default config written on first run |
+| Asset | Účel |
+|-------|------|
+| `Dockerfile` | Fallback base image při selhání pullu z registry |
+| `docker-compose.yml.tmpl` | Go template pro generování compose souboru |
+| `entrypoint.sh` | Container entrypoint: nastavení iptables → chown → přechod na UID 1000 |
+| `config.toml.default` | Výchozí config zapsaný při prvním spuštění |
 
 ### `cmd`
 
-Cobra commands. Each file registers a single command in `init()`.
+Cobra příkazy. Každý soubor registruje jeden příkaz v `init()`.
 
-| File | Command | Key behavior |
-|------|---------|------|
-| `root.go` | `jailoc` (bare) | CWD detection → prompt to add → start if not running → attach |
-| `up.go` | `jailoc up` | Image resolution → compose generation → SDK up |
+| Soubor | Příkaz | Klíčové chování |
+|--------|--------|-----------------|
+| `root.go` | `jailoc` (bez argumentů) | Detekce CWD → výzva k přidání → start pokud neběží → připojení |
+| `up.go` | `jailoc up` | Image resolution → generování compose → SDK up |
 | `down.go` | `jailoc down` | SDK down |
-| `attach.go` | `jailoc attach` | Runs `opencode attach` on the host (exec, not SDK) |
-| `logs.go` | `jailoc logs` | SDK logs with `writerLogConsumer` |
-| `status.go` | `jailoc status` | Iterates all workspaces, checks running status |
-| `add.go` | `jailoc add` | Adds CWD to workspace path list via `config.AddPath` |
-| `config_cmd.go` | `jailoc config` | Prints resolved config |
+| `attach.go` | `jailoc attach` | Spustí `opencode attach` na hostu (exec, ne SDK) |
+| `logs.go` | `jailoc logs` | SDK logs s `writerLogConsumer` |
+| `status.go` | `jailoc status` | Projde všechny workspacy, zkontroluje stav |
+| `add.go` | `jailoc add` | Přidá CWD do seznamu cest workspacu přes `config.AddPath` |
+| `config_cmd.go` | `jailoc config` | Vypíše vyřešenou konfiguraci |
 
-## Container Architecture
+## Architektura kontejnerů
 
-Two services per workspace, connected via an internal Docker network:
+Dvě služby na workspace, propojené přes interní Docker network:
 
 ```
 ┌────────────────────────────────────────────────────┐
@@ -151,45 +151,45 @@ Two services per workspace, connected via an internal Docker network:
 
 GitLab CI (`.gitlab-ci.yml`):
 
-| Stage | Job | Trigger |
-|-------|-----|---------|
-| build | `build` | Every branch/tag — `go build` with ldflags |
-| test | `test` | Every branch/tag — `go test` + `go vet` |
-| test | `integration-test` | Tags matching `v*` — `go test -tags=integration` with DinD |
-| release | `release` | Tags matching `v*` — GoReleaser → GitLab Release |
-| image-push | `push-base-image` | Tags matching `v*` — Build + push base Docker image to registry |
+| Stage | Job | Spouštěč |
+|-------|-----|----------|
+| build | `build` | Každá branch/tag — `go build` s ldflags |
+| test | `test` | Každá branch/tag — `go test` + `go vet` |
+| test | `integration-test` | Tagy odpovídající `v*` — `go test -tags=integration` s DinD |
+| release | `release` | Tagy odpovídající `v*` — GoReleaser → GitLab Release |
+| image-push | `push-base-image` | Tagy odpovídající `v*` — build + push base Docker image do registry |
 
-GoReleaser (`.goreleaser.yml`): builds for linux/darwin × amd64/arm64, static binaries (`CGO_ENABLED=0`), changelog from GitLab.
+GoReleaser (`.goreleaser.yml`): buildí pro linux/darwin × amd64/arm64, statické binárky (`CGO_ENABLED=0`), changelog z GitLabu.
 
-## Contributing
+## Přispívání
 
-### Prerequisites
+### Předpoklady
 
 - Go 1.24+
-- Docker with Compose V2
+- Docker s Compose V2
 
-### Development
+### Vývoj
 
 ```bash
 # Build
 go build ./cmd/jailoc
 
-# Unit tests
+# Unit testy
 go test ./...
 
-# Integration tests (requires Docker)
+# Integration testy (vyžaduje Docker)
 go test -tags=integration ./internal/...
 
 # Lint
 go vet ./...
 ```
 
-### Project Conventions
+### Konvence projektu
 
-- **Module**: `github.com/seznam/jailoc`
-- **Commits**: `type(scope): description` — types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`
-- **Error wrapping**: always `fmt.Errorf("context: %w", err)`, never bare `err`
-- **No custom error types** — `fmt.Errorf` wrapping throughout
-- **No logging library** — `fmt.Printf` for user output, errors propagate up
-- **Single file per package concern** — `docker.go`, `compose.go`, `workspace.go`, `config.go`
-- **Tests**: `*_test.go` next to source, `integration_test.go` uses build tag `integration`
+- **Modul**: `github.com/seznam/jailoc`
+- **Commity**: `type(scope): description` — typy: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`
+- **Wrapping chyb**: vždy `fmt.Errorf("context: %w", err)`, nikdy holé `err`
+- **Žádné vlastní typy chyb** — wrapping přes `fmt.Errorf` všude
+- **Žádná logovací knihovna** — `fmt.Printf` pro výstup uživateli, chyby se propagují nahoru
+- **Jeden soubor na zájem balíčku** — `docker.go`, `compose.go`, `workspace.go`, `config.go`
+- **Testy**: `*_test.go` vedle zdrojového kódu, `integration_test.go` používá build tag `integration`

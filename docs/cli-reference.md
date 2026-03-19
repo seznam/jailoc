@@ -1,30 +1,30 @@
 # 💻 CLI Reference
 
-## 🔧 Commands
+## 🔧 Příkazy
 
-Use `--workspace` / `-w` to target a specific workspace (default: `default`).
+Pomocí `--workspace` / `-w` cílíš na konkrétní workspace (výchozí: `default`).
 
-| Command | Description |
-|---------|-------------|
-| `jailoc` | Auto-detect workspace from CWD, prompt to add if missing, start if not running, then attach. |
-| `jailoc up` | Start the Docker Compose environment for the workspace. No-op if already running. |
-| `jailoc down` | Stop and remove the containers for the workspace. |
-| `jailoc attach` | Attach to a running workspace using `opencode attach` on the host. |
-| `jailoc status` | Show running status and port for each configured workspace. |
-| `jailoc logs` | Stream container logs from the workspace environment. |
-| `jailoc config` | Print the current resolved config. |
-| `jailoc add` | Add the current directory to a workspace's paths. |
+| Příkaz | Popis |
+|--------|-------|
+| `jailoc` | Automaticky detekuje workspace z CWD, zeptá se, jestli ho přidat, pokud chybí, nastartuje pokud neběží, pak se připojí. |
+| `jailoc up` | Nastartuje Docker Compose prostředí pro workspace. Pokud už běží, nic nedělá. |
+| `jailoc down` | Zastaví a odstraní kontejnery pro workspace. |
+| `jailoc attach` | Připojí se k běžícímu workspacu pomocí `opencode attach` na hostu. |
+| `jailoc status` | Zobrazí stav a port každého nakonfigurovaného workspacu. |
+| `jailoc logs` | Streamuje logy kontejnerů z prostředí workspacu. |
+| `jailoc config` | Vypíše aktuální vyřešenou konfiguraci. |
+| `jailoc add` | Přidá aktuální adresář do cest workspacu. |
 
 ## 🔌 Access Modes
 
-jailoc supports two modes for connecting to the OpenCode server inside the container:
+jailoc podporuje dva módy pro připojení k OpenCode serveru uvnitř kontejneru:
 
-- **remote** (default when `opencode` is installed): Runs `opencode attach` on the host, connecting over the exposed port.
-- **exec**: Runs `docker exec` into the container and launches `opencode` TUI directly inside.
+- **remote** (výchozí, pokud je `opencode` nainstalovaný): Spustí `opencode attach` na hostu a připojí se přes exponovaný port.
+- **exec**: Spustí `docker exec` do kontejneru a spustí `opencode` TUI přímo uvnitř.
 
-Auto-detect selects `remote` if `opencode` is found on your PATH, otherwise falls back to `exec`.
+Auto-detect zvolí `remote`, pokud najde `opencode` na tvém PATH, jinak padne zpět na `exec`.
 
-Set in config for a permanent default:
+Nastav v configu pro trvalý výchozí mód:
 
 ```toml
 # mode = ""        # auto-detect (default)
@@ -32,10 +32,10 @@ Set in config for a permanent default:
 # mode = "exec"    # always use docker exec
 ```
 
-Or override per-run with flags:
+Nebo přepiš per-run pomocí flagů:
 
 ```bash
 jailoc              # auto-detect
-jailoc --remote     # force remote mode
-jailoc --exec       # force exec mode
+jailoc --remote     # vynutit remote mode
+jailoc --exec       # vynutit exec mode
 ```

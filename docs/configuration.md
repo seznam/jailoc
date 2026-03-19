@@ -1,6 +1,6 @@
-# ⚙️ Configuration
+# ⚙️ Konfigurace
 
-Config lives at `~/.config/jailoc/config.toml` 📁. It's created automatically on first run with a `default` workspace.
+Config je na `~/.config/jailoc/config.toml` 📁. Při prvním spuštění se automaticky vytvoří s workspacem `default`.
 
 ```toml
 [image]
@@ -14,7 +14,7 @@ paths = ["/home/you/projects/myproject"]
 # build_context = "~/.config/jailoc"
 ```
 
-You can define multiple workspaces. Each runs on a separate port:
+Můžeš definovat víc workspaců. Každý běží na samostatném portu:
 
 ```toml
 [workspaces.api]
@@ -26,12 +26,12 @@ paths = ["/home/you/projects/frontend"]
 allowed_networks = ["172.20.0.0/16"]
 ```
 
-**Port allocation:** workspace names are sorted alphabetically, then ports are assigned starting at 4096. So with workspaces `api` and `frontend`, `api` gets port 4096 and `frontend` gets 4097. The `default` workspace is typically alone and gets 4096.
+**Přidělování portů:** názvy workspaců se seřadí abecedně, pak se přiřazují porty od 4096. Takže s workspacy `api` a `frontend` dostane `api` port 4096 a `frontend` port 4097. Workspace `default` je obvykle sám a dostane 4096.
 
-**`paths`** 📂 — directories to mount into the container at their original absolute path (e.g. `/home/you/projects/api` on the host becomes `/home/you/projects/api` inside the container). Paths under system directories (`/usr`, `/etc`, `/var`, `/home/agent`, …) are rejected to prevent conflicts with the container runtime. Supports `~` expansion.
+**`paths`** 📂 — adresáře, které se mountují do kontejneru na jejich původní absolutní cestě (např. `/home/you/projects/api` na hostu se stane `/home/you/projects/api` uvnitř kontejneru). Cesty pod systémovými adresáři (`/usr`, `/etc`, `/var`, `/home/agent`, …) jsou odmítnuté, aby nedošlo ke konfliktům s container runtime. Podporuje rozvinutí `~`.
 
-**`allowed_hosts`** 🌐 — hostnames resolved at container startup and added as iptables ACCEPT rules before the private-network DROP rules.
+**`allowed_hosts`** 🌐 — hostname resolvované při startu kontejneru a přidané jako iptables ACCEPT pravidla před DROP pravidly privátní sítě.
 
-**`allowed_networks`** 🔗 — CIDR ranges to allow explicitly (e.g. `10.10.5.0/24`).
+**`allowed_networks`** 🔗 — CIDR rozsahy, které explicitně povolíš (např. `10.10.5.0/24`).
 
-**`build_context`** 🏗️ — path used as the Docker build context when building workspace-specific images. Defaults to `~/.config/jailoc`.
+**`build_context`** 🏗️ — cesta použitá jako Docker build context při sestavování workspace-specific images. Defaultně `~/.config/jailoc`.

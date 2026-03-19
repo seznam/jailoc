@@ -7,6 +7,7 @@ repo_name: cdnko/tools/jailoc
 
 theme:
   name: material
+  language: cs
   palette:
     - scheme: slate
       primary: deep purple
@@ -35,12 +36,12 @@ extra_css:
   - stylesheets/extra.css
 
 nav:
-  - Home: index.md
-  - Getting Started: getting-started.md
-  - Configuration: configuration.md
-  - CLI Reference: cli-reference.md
-  - Custom Images: custom-images.md
-  - Network Isolation: network-isolation.md
-  - Architecture: architecture.md
-  - Development: development.md
-  - Downloads: downloads.md
+  - Domů: index.md
+  - Začínáme: getting-started.md
+  - Konfigurace: configuration.md
+  - CLI příkazy: cli-reference.md
+  - Vlastní image: custom-images.md
+  - Síťová izolace: network-isolation.md
+  - Architektura: architecture.md
+  - Vývoj: development.md
+  - Ke stažení: downloads.md

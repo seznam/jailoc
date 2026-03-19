@@ -1,22 +1,22 @@
-# 📥 Downloads
+# 📥 Stažení
 
-Pre-built binaries are published for each release via [GoReleaser](https://goreleaser.com/).
-Download the binary for your platform, make it executable, and place it on your `PATH`.
+Předem sestavené bináry se publikují pro každé vydání přes [GoReleaser](https://goreleaser.com/).
+Stáhni binárku pro svou platformu, nastav ji jako spustitelnou a přesuň na `PATH`.
 
-## 🗂️ Pre-built Binaries
+## 🗂️ Předem sestavené bináry
 
-| Platform | Architecture | Download |
-|----------|-------------|---------|
+| Platforma | Architektura | Stažení |
+|-----------|-------------|---------|
 | Linux | amd64 | [jailoc_linux_amd64.tar.gz](downloads/jailoc_linux_amd64.tar.gz) |
 | Linux | arm64 | [jailoc_linux_arm64.tar.gz](downloads/jailoc_linux_arm64.tar.gz) |
 | macOS | amd64 | [jailoc_darwin_amd64.tar.gz](downloads/jailoc_darwin_amd64.tar.gz) |
 | macOS | arm64 | [jailoc_darwin_arm64.tar.gz](downloads/jailoc_darwin_arm64.tar.gz) |
 
-🔐 [checksums.txt](downloads/checksums.txt) — SHA-256 checksums for all archives.
+🔐 [checksums.txt](downloads/checksums.txt) — SHA-256 checksums pro všechny archivy.
 
-## ⚡ Installation
+## ⚡ Instalace
 
-Extract the binary and place it on your `PATH`:
+Rozbal binárku a přesuň ji na `PATH`:
 
 ```bash
 tar -xzf jailoc_linux_amd64.tar.gz
@@ -24,13 +24,13 @@ chmod +x jailoc
 sudo mv jailoc /usr/local/bin/
 ```
 
-Verify the checksum before installing 🔍:
+Před instalací ověř checksum 🔍:
 
 ```bash
 sha256sum -c checksums.txt
 ```
 
-## 📋 Requirements
+## 📋 Požadavky
 
-Requires Docker Engine (the daemon) to be running 🐳.
-jailoc embeds the Compose SDK — no `docker compose` CLI plugin needed.
+Musí běžet Docker Engine (daemon) 🐳.
+jailoc embedduje Compose SDK — žádný `docker compose` CLI plugin nepotřebuješ.

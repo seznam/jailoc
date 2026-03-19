@@ -2,28 +2,28 @@
 
 # jailoc
 
-Manage sandboxed Docker Compose environments for headless OpenCode coding agents.
+Spravuj sandboxovaná Docker Compose prostředí pro headless OpenCode coding agenty.
 
-## 🤔 What is this?
+## 🤔 Co to je?
 
-`jailoc` wraps OpenCode agents in isolated Docker containers so they can run autonomously without touching your host system. Each workspace gets its own sandboxed environment with network isolation that blocks private networks by default, letting you control exactly which internal services the agent can reach. You configure which directories to mount as workspaces, which hosts to allowlist, and the agent runs inside with your OpenCode config available read-only.
+`jailoc` zabalí OpenCode agenty do izolovaných Docker kontejnerů, takže můžou běžet autonomně bez toho, aby se dotýkaly tvého hostitelského systému. Každý workspace dostane vlastní sandboxované prostředí s network isolation, která defaultně blokuje privátní sítě — ty pak přesně určíš, na které interní služby agent dosáhne. Nakonfiguruješ, které adresáře se mountují jako workspacy, které hosty jsou na allowlistu, a agent běží uvnitř s tvou OpenCode konfigurací připojenou read-only.
 
-## ⚙️ How it works
+## ⚙️ Jak to funguje
 
-When you run any jailoc command, it reads `~/.config/jailoc/config.toml`, creating it with defaults if it doesn't exist yet.
+Když spustíš jakýkoliv příkaz jailocu, přečte `~/.config/jailoc/config.toml` — pokud ještě neexistuje, vytvoří ho s výchozími hodnotami.
 
-**🗂️ Workspace resolution** matches workspace paths against the current working directory. Port numbers are computed by sorting all workspace names alphabetically and assigning `4096 + index`.
+**🗂️ Workspace resolution** porovná cesty workspaců s aktuálním pracovním adresářem. Čísla portů se vypočítají seřazením všech názvů workspaců abecedně a přiřazením `4096 + index`.
 
-**🐳 Image resolution** follows four steps in order:
-1. If `~/.config/jailoc/Dockerfile` exists, build it as the base.
-2. Otherwise, try pulling `{repository}:{version}` from the registry.
-3. If the pull fails, build from the embedded fallback Dockerfile (baked into the binary at compile time).
-4. If `~/.config/jailoc/{workspace}.Dockerfile` exists, build a workspace layer on top of whichever base was resolved.
+**🐳 Image resolution** probíhá ve čtyřech krocích v tomto pořadí:
+1. Pokud existuje `~/.config/jailoc/Dockerfile`, sestaví ho jako base.
+2. Jinak zkusí pullnout `{repository}:{version}` z registry.
+3. Pokud pull selže, sestaví z embeddovaného fallback Dockerfile (zapečeného do binárky při kompilaci).
+4. Pokud existuje `~/.config/jailoc/{workspace}.Dockerfile`, sestaví workspace vrstvu na vyřešeném base.
 
-**📄 Compose file generation** — jailoc renders a `docker-compose.yml` from an embedded Go template and writes it to `~/.cache/jailoc/{workspace}/docker-compose.yml`. The embedded Compose SDK loads this file directly — no host `docker compose` CLI is invoked.
+**📄 Generování Compose souboru** — jailoc vyrenderuje `docker-compose.yml` z embeddovaného Go template a zapíše ho do `~/.cache/jailoc/{workspace}/docker-compose.yml`. Embeddované Compose SDK načte tento soubor přímo — žádný hostitelský `docker compose` CLI se nevolá.
 
-**🔄 Docker Compose orchestration** — two services are managed via the [Compose Go SDK](https://github.com/docker/compose): the `opencode` service (the agent container) and a `dind` sidecar that provides an isolated Docker daemon. The agent communicates with the DinD daemon over TLS using a shared named volume for certificates. No host Docker socket is mounted.
+**🔄 Docker Compose orchestrace** — dvě služby jsou spravované přes [Compose Go SDK](https://github.com/docker/compose): služba `opencode` (kontejner s agentem) a sidecar `dind`, který poskytuje izolovaný Docker daemon. Agent komunikuje s DinD daemonem přes TLS pomocí sdíleného named volume pro certifikáty. Žádný hostitelský Docker socket se nepřipojuje.
 
-**🚪 Entrypoint** — the container starts as root so it can set up iptables rules and chown the data volume. It then drops to UID 1000 (`agent`) via `setpriv --inh-caps=-all --no-new-privs` before executing the OpenCode server process.
+**🚪 Entrypoint** — kontejner nastartuje jako root, aby mohl nastavit iptables pravidla a chownout datový volume. Pak přejde na UID 1000 (`agent`) přes `setpriv --inh-caps=-all --no-new-privs` a spustí OpenCode server process.
 
-**💾 Volume mounts** — workspace paths are bind-mounted at their original absolute path (host path = container path). OpenCode config directories (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) are mounted read-only. An isolated named volume holds the OpenCode data directory, keeping the agent's database and auth tokens separate from the host.
+**💾 Volume mounts** — cesty workspaců jsou bind-mountované na jejich původní absolutní cestě (cesta na hostu = cesta v kontejneru). Konfigurační adresáře OpenCode (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) jsou mountované read-only. Izolovaný named volume drží datový adresář OpenCode, takže agentova databáze a auth tokeny zůstávají oddělené od hostu.
