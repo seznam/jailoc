@@ -19,4 +19,4 @@ jailoc předá tag base image jako `--build-arg BASE=...` a výsledek otaguje ja
 
 **3. Výchozí chování (žádné vlastní soubory)** — jailoc pullne verzovaný image z nakonfigurované registry. Pokud pull selže, padne zpět na embeddovaný Dockerfile zapečený do binárky a sestaví `jailoc-base:embedded` lokálně.
 
-Workspace vrstva (krok 1) se vždy aplikuje na vrcholu jakéhokoliv base, který se vyřešil.
+Workspace vrstva (krok 1) se vždy aplikuje nad jakýkoliv base image, který se vyřešil.
