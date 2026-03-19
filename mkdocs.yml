@@ -2,6 +2,8 @@ site_name: jailoc
 site_url: https://zensical.org/
 site_description: Sandboxed Docker Compose environments for headless OpenCode coding agents
 site_dir: public
+repo_url: https://github.com/seznam/jailoc
+repo_name: cdnko/tools/jailoc
 
 theme:
   name: material
