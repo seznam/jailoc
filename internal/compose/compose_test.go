@@ -1,6 +1,8 @@
 package compose
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -100,6 +102,69 @@ func TestGenerateComposeVolumeNamesIncludeWorkspaceName(t *testing.T) {
 	assertContains(t, rendered, "- opencode-cache-delta:/home/agent/.cache")
 	assertContains(t, rendered, "opencode-data-delta:")
 	assertContains(t, rendered, "opencode-cache-delta:")
+}
+
+func TestWriteComposeFileHappyPath(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName:    "test-ws",
+		Port:             4500,
+		Image:            "ghcr.io/seznam/jailoc:test",
+		Paths:            []string{"/tmp/workspace"},
+		OpenCodePassword: "testpass",
+	}
+
+	destPath := filepath.Join(t.TempDir(), "docker-compose.yml")
+
+	err := WriteComposeFile(params, destPath)
+	if err != nil {
+		t.Fatalf("WriteComposeFile returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(destPath) //nolint:gosec
+	if err != nil {
+		t.Fatalf("failed to read written file: %v", err)
+	}
+
+	if len(content) == 0 {
+		t.Fatal("written compose file is empty")
+	}
+
+	rendered := string(content)
+	assertContains(t, rendered, "name: jailoc-test-ws")
+	assertContains(t, rendered, "image: ghcr.io/seznam/jailoc:test")
+	assertContains(t, rendered, "- \"4500:4096\"")
+
+	stat, err := os.Stat(destPath)
+	if err != nil {
+		t.Fatalf("failed to stat file: %v", err)
+	}
+	if stat.Mode().Perm() != 0o600 {
+		t.Fatalf("expected file permissions 0o600, got %#o", stat.Mode().Perm())
+	}
+}
+
+func TestWriteComposeFileErrorPath(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "test-ws",
+		Port:          4500,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/workspace"},
+	}
+
+	destPath := "/nonexistent/directory/docker-compose.yml"
+
+	err := WriteComposeFile(params, destPath)
+	if err == nil {
+		t.Fatal("expected WriteComposeFile to return error for invalid destination, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "write compose file") {
+		t.Fatalf("expected error message to contain 'write compose file', got: %v", err)
+	}
 }
 
 func assertContains(t *testing.T, haystack, needle string) {

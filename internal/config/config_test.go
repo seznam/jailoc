@@ -492,3 +492,118 @@ paths = ["/data/workspace"]
 		t.Fatalf("expected mode %q, got %q", ModeExec, cfg.Mode)
 	}
 }
+
+func TestValidateNilConfig(t *testing.T) {
+	err := Validate(nil)
+	if err == nil {
+		t.Fatal("expected validation error for nil config")
+	}
+	if !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("expected error to mention nil, got: %v", err)
+	}
+}
+
+func TestAllowedHostsFileContentNilConfig(t *testing.T) {
+	got := AllowedHostsFileContent("default", nil)
+	if got != "" {
+		t.Fatalf("expected empty string for nil config, got %q", got)
+	}
+}
+
+func TestAllowedHostsFileContentMissingWorkspace(t *testing.T) {
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"default": {AllowedHosts: []string{"foo.com"}},
+	}}
+
+	got := AllowedHostsFileContent("nonexistent", cfg)
+	if got != "" {
+		t.Fatalf("expected empty string for missing workspace, got %q", got)
+	}
+}
+
+func TestAllowedNetworksFileContentNilConfig(t *testing.T) {
+	got := AllowedNetworksFileContent("default", nil)
+	if got != "" {
+		t.Fatalf("expected empty string for nil config, got %q", got)
+	}
+}
+
+func TestAllowedNetworksFileContentMissingWorkspace(t *testing.T) {
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"default": {AllowedNetworks: []string{"10.0.0.0/8"}},
+	}}
+
+	got := AllowedNetworksFileContent("nonexistent", cfg)
+	if got != "" {
+		t.Fatalf("expected empty string for missing workspace, got %q", got)
+	}
+}
+
+func TestAddPathToNonexistentWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := CreateDefault(); err != nil {
+		t.Fatalf("CreateDefault failed: %v", err)
+	}
+
+	err := AddPath("nonexistent", "/data/mywork")
+	if err == nil {
+		t.Fatal("expected error when adding path to nonexistent workspace")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("expected error to mention nonexistent workspace, got: %v", err)
+	}
+}
+
+func TestLoadFromInvalidTOML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "invalid.toml")
+	writeFile(t, path, `
+[invalid toml syntax {{{
+paths = ["/data/workspace"
+`)
+
+	_, err := LoadFrom(path)
+	if err == nil {
+		t.Fatal("expected error when loading invalid TOML")
+	}
+}
+
+func TestValidateRejectsEmptyPathString(t *testing.T) {
+	cfg := &Config{
+		Workspaces: map[string]Workspace{
+			"default": {Paths: []string{"/data/workspace", "", "/data/other"}},
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error for empty path string")
+	}
+	if !strings.Contains(err.Error(), "empty path") {
+		t.Fatalf("expected error to mention empty path, got: %v", err)
+	}
+}
+
+func TestAllowedHostsFileContentEmptyList(t *testing.T) {
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"default": {AllowedHosts: []string{}},
+	}}
+
+	got := AllowedHostsFileContent("default", cfg)
+	if got != "" {
+		t.Fatalf("expected empty string for empty hosts list, got %q", got)
+	}
+}
+
+func TestAllowedNetworksFileContentEmptyList(t *testing.T) {
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"default": {AllowedNetworks: []string{}},
+	}}
+
+	got := AllowedNetworksFileContent("default", cfg)
+	if got != "" {
+		t.Fatalf("expected empty string for empty networks list, got %q", got)
+	}
+}
