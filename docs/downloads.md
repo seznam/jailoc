@@ -10,7 +10,7 @@ go install github.com/seznam/jailoc/cmd/jailoc@latest
 
 ## 🗂️ Předem sestavené bináry
 
-Případně stáhni předem sestavenou binárku — Sisyphus nikdy nepřestane točit vydání.
+Případně stáhni předem sestavenou binárku — Sisyphus zajistí každé vydání.
 
 | Platforma | Architektura | Stažení |
 |-----------|-------------|---------|

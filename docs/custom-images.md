@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 jailoc předá tag base image jako `--build-arg BASE=...` a výsledek otaguje jako `jailoc-{name}:latest`.
 
-**2. Plná náhrada base** — vytvoř `~/.config/jailoc/Dockerfile`. Tohle nahradí celý base image. jailoc ho sestaví jako `jailoc-base:local` — Hephaestus u kovadliny — a použije místo pullování z registry. Sáhni po tomhle, pokud potřebuješ base úplně vyměnit.
+**2. Plná náhrada base** — vytvoř `~/.config/jailoc/Dockerfile`. Toto nahradí celý base image. jailoc ho sestaví jako `jailoc-base:local` — Hephaestus u kovadliny — a použije místo pullování z registry. Použij, pokud potřebuješ base úplně vyměnit.
 
-**3. Výchozí chování (žádné vlastní soubory)** — jailoc pullne verzovaný image z nakonfigurované registry. Pokud pull selže, padne zpět na embeddovaný Dockerfile zapečený do binárky a sestaví `jailoc-base:embedded` lokálně.
+**3. Výchozí chování (žádné vlastní soubory)** — jailoc pullne verzovaný image z nakonfigurované registry. Pokud pull selže, použije embeddovaný Dockerfile zapečený do binárky a sestaví `jailoc-base:embedded` lokálně.
 
 Workspace vrstva (krok 1) se vždy aplikuje nad jakýkoliv base image, který byl určen.

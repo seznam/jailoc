@@ -19,9 +19,9 @@ cd ~/myproject
 jailoc
 ```
 
-Při prvním spuštění se vytvoří `~/.config/jailoc/config.toml` — Prometheus měl plán dopředu, config vznikne sám. Pokud aktuální adresář ještě není v žádném workspacu, jailoc se zeptá, jestli ho přidat. Pak nastartuje Docker Compose prostředí a připojí se přes `opencode attach`. ✨
+Při prvním spuštění se vytvoří `~/.config/jailoc/config.toml` — Prometheus měl plán dopředu. Pokud aktuální adresář ještě není v žádném workspacu, jailoc se zeptá, jestli ho přidat. Pak nastartuje Docker Compose prostředí a připojí se přes `opencode attach`. ✨
 
-Chceš mít explicitní kontrolu? Použij subcommands přímo:
+Pro explicitní kontrolu použij subcommands přímo:
 
 ```bash
 # Nastartuj prostředí na pozadí
