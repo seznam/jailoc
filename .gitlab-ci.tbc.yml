@@ -8,6 +8,7 @@ include:
   - component: "$CI_SERVER_FQDN/cdnko/tbc/semantic-release/gitlab-ci-semrel@3.14.2"
     inputs:
       auto-release-enabled: true
+      changelog-enabled: true
       commit-message: "chore(semantic-release): release ${nextRelease.version} - [ci skip on prod]"
 
   - component: "$CI_SERVER_FQDN/cdnko/tbc/cdnko-defaults/gitlab-ci-cdnko-defaults@1.1.4"
@@ -51,9 +52,9 @@ goreleaser:
     GIT_DEPTH: 0
 
 pages:
-  image: python:3.12-slim
+  image: docker.ops.iszn.cz/upstream/python/python:3.12-slim
   script:
-    - pip install zensical
+    - pip install zensical mkdocs-macros-plugin
     - zensical build --clean
     - |
       if [ -d dist ]; then
