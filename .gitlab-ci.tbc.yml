@@ -52,7 +52,7 @@ goreleaser:
     GIT_DEPTH: 0
 
 pages:
-  image: docker.ops.iszn.cz/upstream/python/python:3.12-slim
+  image: docker.ops.iszn.cz/upstream/library/python:3.12-slim
   script:
     - pip install .
     - zensical build --clean
