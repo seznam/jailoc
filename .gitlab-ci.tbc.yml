@@ -10,7 +10,7 @@ include:
       auto-release-enabled: true
       commit-message: "chore(semantic-release): release ${nextRelease.version} - [ci skip on prod]"
 
-  - component: "$CI_SERVER_FQDN/cdnko/tbc/cdnko-defaults/gitlab-ci-cdnko-defaults@1.1.4"
+  - component: "$CI_SERVER_FQDN/cdnko/tbc/cdnko-defaults/gitlab-ci-cdnko-defaults@1.5.0"
     inputs:
       go-image: docker.ops.iszn.cz/upstream/golang/golang:1.26.1-bookworm
       go-ci-lint-image: docker.ops.iszn.cz/upstream/golangci/golangci-lint:v2.10.1-alpine
