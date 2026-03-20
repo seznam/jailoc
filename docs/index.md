@@ -10,20 +10,25 @@ Spravuj sandboxovaná Docker Compose prostředí pro headless OpenCode coding ag
 
 ## ⚙️ Jak to funguje
 
-Když spustíš jakýkoliv příkaz jailocu, přečte `~/.config/jailoc/config.toml` — pokud ještě neexistuje, vytvoří ho s výchozími hodnotami.
+```mermaid
+flowchart TB
+    subgraph host["🖥️ Host"]
+        cli["<b>jailoc</b> CLI"]
 
-**🗂️ Workspace resolution** porovná cesty workspaců s aktuálním pracovním adresářem. Čísla portů se vypočítají seřazením všech názvů workspaců abecedně a přiřazením `4096 + index`.
+        subgraph compose["Docker Compose · jailoc-workspace"]
+            subgraph oc["opencode kontejner"]
+                ocd["opencode serve :4096 · UID 1000<br><small>📂 workspace paths (rw) · OC config (ro)</small>"]
+            end
+            subgraph dind["dind kontejner (privileged)"]
+                dd["Docker daemon :2376<br><small>🔒 TLS certy · docker data</small>"]
+            end
+        end
+    end
 
-**🐳 Image resolution** probíhá ve čtyřech krocích v tomto pořadí:
-1. Pokud existuje `~/.config/jailoc/Dockerfile`, sestaví ho jako base.
-2. Jinak zkusí pullnout `{repository}:{version}` z registry.
-3. Pokud pull selže, sestaví z embeddovaného fallback Dockerfile (zapečeného do binárky při kompilaci).
-4. Pokud existuje `~/.config/jailoc/{workspace}.Dockerfile`, sestaví workspace vrstvu na vyřešeném base.
+    cli --> compose
+    oc <-.->|"TLS (named volume)"| dind
+```
 
-**📄 Generování Compose souboru** — jailoc vyrenderuje `docker-compose.yml` z embeddovaného Go template a zapíše ho do `~/.cache/jailoc/{workspace}/docker-compose.yml`. Embeddované Compose SDK načte tento soubor přímo — žádný hostitelský `docker compose` CLI se nevolá.
-
-**🔄 Docker Compose orchestrace** — dvě služby spravované přes [Compose Go SDK](https://github.com/docker/compose): služba `opencode` (kontejner s agentem) a sidecar `dind` poskytující izolovaný Docker daemon — Hephaestova kovárna pod hladinou. Agent komunikuje s DinD daemonem přes TLS pomocí sdíleného named volume pro certifikáty. Žádný hostitelský Docker socket se nepřipojuje.
-
-**🚪 Entrypoint** — kontejner nastartuje jako root (Sisyphus na startu), nastaví iptables pravidla a provede chown datového volume. Pak přejde na UID 1000 (`agent`) přes `setpriv --inh-caps=-all --no-new-privs` a spustí OpenCode server.
+**🚪 Entrypoint** — kontejner nastartuje jako root, nastaví iptables pravidla a provede chown datového volume. Pak přejde na UID 1000 (`agent`) přes `setpriv --inh-caps=-all --no-new-privs` a spustí OpenCode server.
 
 **💾 Volume mounts** — cesty workspaců jsou bind-mountované na původní absolutní cestě (cesta na hostu = cesta v kontejneru). Konfigurační adresáře OpenCode (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) jsou mountované read-only. Izolovaný named volume obsahuje datový adresář OpenCode, takže agentova databáze a auth tokeny zůstávají oddělené od hostu.

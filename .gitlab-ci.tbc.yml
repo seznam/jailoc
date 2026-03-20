@@ -54,7 +54,7 @@ goreleaser:
 pages:
   image: docker.ops.iszn.cz/upstream/python/python:3.12-slim
   script:
-    - pip install zensical mkdocs-macros-plugin
+    - pip install .
     - zensical build --clean
     - |
       if [ -d dist ]; then

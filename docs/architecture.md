@@ -66,7 +66,7 @@ Přeloží název workspacu na `Resolved` struct s rozvinutými absolutními ces
 
 - **Přidělování portů**: všechny názvy workspaců seřazené abecedně, port = `4096 + index`
 - **CWD matching**: `ResolveFromCWD()` najde, kterému workspacu patří aktuální adresář (používá se příkazem `jailoc` bez argumentů)
-- **Rozvinutí cest**: `~` se rozvine na `$HOME`
+- **Expanze cest**: `~` se rozvine na `$HOME`
 
 ### `compose`
 

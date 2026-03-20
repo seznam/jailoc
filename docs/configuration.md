@@ -28,7 +28,7 @@ allowed_networks = ["172.20.0.0/16"]
 
 **Přidělování portů:** názvy workspaců se seřadí abecedně, pak se přiřazují porty od 4096 — každá brána naplánovaná předem jako u Promethea. Takže s workspacy `api` a `frontend` dostane `api` port 4096 a `frontend` port 4097. Workspace `default` je obvykle sám a dostane 4096.
 
-**`paths`** 📂 — adresáře, které se mountují do kontejneru na jejich původní absolutní cestě (např. `/home/you/projects/api` na hostu se stane `/home/you/projects/api` uvnitř kontejneru). Cesty pod systémovými adresáři (`/usr`, `/etc`, `/var`, `/home/agent`, …) jsou odmítnuté, aby nedošlo ke konfliktům s container runtime. Podporuje rozvinutí `~`.
+**`paths`** 📂 — adresáře, které se mountují do kontejneru na jejich původní absolutní cestě (např. `/home/you/projects/api` na hostu se stane `/home/you/projects/api` uvnitř kontejneru). Cesty pod systémovými adresáři (`/usr`, `/etc`, `/var`, `/home/agent`, …) jsou odmítnuté, aby nedošlo ke konfliktům s container runtime. Podporuje expanzi `~`.
 
 **`allowed_hosts`** 🌐 — hostname resolvované při startu kontejneru a přidané jako iptables ACCEPT pravidla před DROP pravidly privátní sítě — Oracle zná odpověď ještě před otázkou.
 
@@ -36,12 +36,29 @@ allowed_networks = ["172.20.0.0/16"]
 
 **`build_context`** 🏗️ — cesta použitá jako Docker build context při sestavování workspace-specific images. Defaultně `~/.config/jailoc`.
 
-**`mode`** 🔌 — výchozí režim připojení k OpenCode serveru uvnitř kontejneru. Možné hodnoty:
+**`mode`** 🔌 — režim připojení k OpenCode serveru uvnitř kontejneru:
 
-```toml
-# mode = ""        # auto-detect (default)
-# mode = "remote"  # vždy opencode attach na hostu
-# mode = "exec"    # vždy docker exec do kontejneru
+```mermaid
+flowchart TB
+    subgraph remote["mode = remote"]
+        subgraph rh["🖥️ Host"]
+            ra["opencode attach :port"]
+        end
+        subgraph rc["🐳 Kontejner"]
+            rs["opencode serve"]
+        end
+        ra <-->|TCP| rs
+    end
+
+    subgraph exec["mode = exec"]
+        subgraph eh["🖥️ Host"]
+            ea["docker exec -it"]
+        end
+        subgraph ec["🐳 Kontejner"]
+            es["shell (opencode)"]
+        end
+        ea -->|stdin/stdout| es
+    end
 ```
 
 Auto-detect zvolí `remote`, pokud najde `opencode` na PATH, jinak použije `exec`. Lze přepsat per-run pomocí `--remote` / `--exec` flagů.

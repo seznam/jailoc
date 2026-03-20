@@ -5,7 +5,7 @@
 Potřebuješ Docker Engine (daemon) 🐳. jailoc embedduje Compose SDK — žádný `docker compose` CLI plugin nepotřebuješ.
 
 ```bash
-go install github.com/seznam/jailoc/cmd/jailoc@latest
+go install github.com/seznam/jailoc/cmd/jailoc@{{ version }}
 ```
 
 Nebo si stáhni předem sestavený binár z [GitLab Releases](https://github.com/seznam/jailoc/releases) 📥 (GoReleaser ho buildí pro Linux a macOS, amd64 i arm64).
