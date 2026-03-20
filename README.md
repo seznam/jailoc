@@ -4,7 +4,7 @@
 
 Manage sandboxed Docker Compose environments for headless OpenCode coding agents.
 
-📖 **[Full documentation](https://zensical.org/)**
+📖 **[Full documentation](https://seznam.github.io/jailoc/)**
 
 ## What is this?
 
