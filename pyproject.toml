@@ -10,3 +10,6 @@ dependencies = [
 
 [project.scripts]
 docs = "mkdocs.__main__:cli"
+
+[tool.setuptools]
+packages = []
