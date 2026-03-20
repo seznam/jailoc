@@ -55,6 +55,10 @@ pages:
   image: docker.ops.iszn.cz/upstream/python:3.12-slim
   script:
     - pip install .
+    # Workaround: substitute {{ version }} in docs — zensical doesn't support
+    # the macros plugin yet (https://github.com/zensical/backlog/issues/16,
+    # module system: https://github.com/zensical/backlog/issues/41).
+    - sed -i "s/{{ version }}/${CI_COMMIT_TAG:-${CI_COMMIT_REF_NAME:-latest}}/g" docs/*.md
     - zensical build --clean
     - |
       if [ -d dist ]; then
