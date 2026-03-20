@@ -70,3 +70,6 @@ pages:
     publish: public
   rules:
     - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH
+      when: manual
+      allow_failure: true
