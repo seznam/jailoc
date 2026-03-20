@@ -1,6 +1,6 @@
 ![jailoc](hero.jpeg)
 
-# jailoc
+# jailOC
 
 Spravuj sandboxovaná Docker Compose prostředí pro headless OpenCode coding agenty.
 

@@ -17,25 +17,4 @@ Pomocí `--workspace` / `-w` cílíš na konkrétní workspace (výchozí: `defa
 
 ## 🔌 Access Modes
 
-jailoc podporuje dva módy pro připojení k OpenCode serveru uvnitř kontejneru — Oracle zná cestu v obou případech:
-
-- **remote** (výchozí, pokud je `opencode` nainstalovaný): Spustí `opencode attach` na hostu a připojí se přes exponovaný port.
-- **exec**: Spustí `docker exec` do kontejneru a spustí `opencode` TUI přímo uvnitř.
-
-Auto-detect zvolí `remote`, pokud najde `opencode` na PATH, jinak použije `exec`.
-
-Nastav v configu pro trvalý výchozí mód:
-
-```toml
-# mode = ""        # auto-detect (default)
-# mode = "remote"  # always use host opencode attach
-# mode = "exec"    # always use docker exec
-```
-
-Nebo přepiš per-run pomocí flagů:
-
-```bash
-jailoc              # auto-detect
-jailoc --remote     # vynutit remote mode
-jailoc --exec       # vynutit exec mode
-```
+jailoc podporuje dva módy pro připojení k OpenCode serveru: `remote` a `exec`. Detaily, výhody a nevýhody viz [Access Modes](access-modes.md).

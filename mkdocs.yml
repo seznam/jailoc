@@ -1,4 +1,4 @@
-site_name: jailoc
+site_name: jailOC
 site_url: https://zensical.org/
 site_description: Sandboxed Docker Compose environments for headless OpenCode coding agents
 site_dir: public
@@ -10,14 +10,14 @@ theme:
   language: cs
   palette:
     - scheme: slate
-      primary: deep purple
-      accent: cyan
+      primary: deep orange
+      accent: red
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
     - scheme: default
-      primary: deep purple
-      accent: cyan
+      primary: deep orange
+      accent: red
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
@@ -50,11 +50,12 @@ extra_css:
 
 nav:
   - Domů: index.md
-  - Začínáme: getting-started.md
+  - Jak začít: getting-started.md
+  - Instalace: downloads.md
   - Konfigurace: configuration.md
   - CLI příkazy: cli-reference.md
+  - Access Modes: access-modes.md
   - Vlastní image: custom-images.md
   - Síťová izolace: network-isolation.md
   - Architektura: architecture.md
   - Vývoj: development.md
-  - Instalace: downloads.md
