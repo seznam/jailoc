@@ -152,7 +152,6 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV PATH="/home/agent/.local/bin:/home/agent/.opencode/bin:/usr/local/go/bin:/usr/local/bun/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
-WORKDIR /workspace
 EXPOSE 4096
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]

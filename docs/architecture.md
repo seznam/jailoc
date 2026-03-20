@@ -127,7 +127,7 @@ Dvě služby na workspace, propojené přes interní Docker network:
 │  │  :4096 → host port    │  │                    │  │
 │  │                       │  │  Shared volumes:   │  │
 │  │  Mounts:              │  │  - certs (TLS)     │  │
-│  │  - /workspace/* (rw)  │  │  - docker data     │  │
+│  │  - paths/* (rw)       │  │  - docker data     │  │
 │  │  - ~/.config/oc (ro)  │  │                    │  │
 │  │  - /etc/jailoc (ro)   │  │                    │  │
 │  └──────────┬────────────┘  └────────────────────┘  │
