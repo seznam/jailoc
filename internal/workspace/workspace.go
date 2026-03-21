@@ -17,6 +17,7 @@ type Resolved struct {
 	AllowedHosts    []string
 	AllowedNetworks []string
 	BuildContext    string
+	Dockerfile      string
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -62,6 +63,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		AllowedHosts:    ws.AllowedHosts,
 		AllowedNetworks: ws.AllowedNetworks,
 		BuildContext:    buildContext,
+		Dockerfile:      ws.Dockerfile,
 	}, nil
 }
 

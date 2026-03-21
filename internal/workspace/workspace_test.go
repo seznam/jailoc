@@ -291,3 +291,39 @@ func TestMatchesCWDNilWorkspace(t *testing.T) {
 		t.Fatal("expected false for nil workspace")
 	}
 }
+
+func TestDockerfileSet(t *testing.T) {
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Dockerfile: "https://example.com/Dockerfile",
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved.Dockerfile != "https://example.com/Dockerfile" {
+		t.Fatalf("dockerfile mismatch: got %q", resolved.Dockerfile)
+	}
+}
+
+func TestDockerfileEmpty(t *testing.T) {
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Dockerfile: "",
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved.Dockerfile != "" {
+		t.Fatalf("expected empty dockerfile, got %q", resolved.Dockerfile)
+	}
+}
