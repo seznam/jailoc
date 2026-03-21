@@ -24,12 +24,14 @@ const (
 
 [image]
 # repository = "ghcr.io/seznam/jailoc"  # default registry
+# dockerfile = ""
 
 [workspaces.default]
 paths = []
 # allowed_hosts = []
 # allowed_networks = []
 # build_context = ""
+# dockerfile = ""
 `
 )
 
