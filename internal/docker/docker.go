@@ -325,6 +325,28 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 	return embeddedTag, nil
 }
 
+func ResolvePresetImage(ctx context.Context, rawURL string) (string, error) {
+	fmt.Printf("Building preset base image from %s...\n", rawURL)
+
+	content, err := fetchDockerfile(ctx, rawURL)
+	if err != nil {
+		return "", fmt.Errorf("fetch preset dockerfile from %s: %w", rawURL, err)
+	}
+
+	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return "", fmt.Errorf("create Docker Engine client for preset build: %w", err)
+	}
+	defer func() { _ = engineCli.Close() }()
+
+	tag, err := buildPresetImage(ctx, engineCli, content)
+	if err != nil {
+		return "", fmt.Errorf("build preset image: %w", err)
+	}
+
+	return tag, nil
+}
+
 func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfileContent []byte) (string, error) {
 	if len(dockerfileContent) == 0 {
 		return "", fmt.Errorf("dockerfile content is empty")
