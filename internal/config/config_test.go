@@ -664,6 +664,59 @@ func TestValidateAcceptsDockerfileEmpty(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsDockerfileEmptyHost(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		image string
+	}{
+		{
+			name:  "global image",
+			image: "http:///Dockerfile",
+		},
+		{
+			name:  "workspace image",
+			image: "https:///ws.Dockerfile",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var cfg *Config
+			if tt.name == "global image" {
+				cfg = &Config{
+					Image: ImageConfig{
+						Dockerfile: tt.image,
+					},
+					Workspaces: map[string]Workspace{
+						"default": {
+							Paths: []string{"/data/workspace"},
+						},
+					},
+				}
+			} else {
+				cfg = &Config{
+					Workspaces: map[string]Workspace{
+						"default": {
+							Paths:      []string{"/data/workspace"},
+							Dockerfile: tt.image,
+						},
+					},
+				}
+			}
+
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatal("expected error for empty host")
+			}
+			if !strings.Contains(err.Error(), "scheme must be http or https") {
+				t.Fatalf("expected scheme validation error, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsDockerfileFTPScheme(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{

@@ -188,7 +188,7 @@ func Validate(cfg *Config) error {
 
 	if cfg.Image.Dockerfile != "" {
 		u, err := url.Parse(cfg.Image.Dockerfile)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			scheme := ""
 			if err == nil {
 				scheme = u.Scheme
@@ -241,7 +241,7 @@ func Validate(cfg *Config) error {
 
 		if ws.Dockerfile != "" {
 			u, err := url.Parse(ws.Dockerfile)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 				scheme := ""
 				if err == nil {
 					scheme = u.Scheme

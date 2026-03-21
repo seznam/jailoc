@@ -197,8 +197,9 @@ func (c *Client) initComposeSvc() error {
 
 func ResolveImage(ctx context.Context, cfg *config.Config, version string) (string, error) {
 	if cfg != nil && strings.TrimSpace(cfg.Image.Dockerfile) != "" {
-		fmt.Printf("Building preset base image from %s...\n", cfg.Image.Dockerfile)
-		content, err := fetchDockerfile(ctx, cfg.Image.Dockerfile)
+		rawURL := strings.TrimSpace(cfg.Image.Dockerfile)
+		fmt.Printf("Building preset base image from %s...\n", rawURL)
+		content, err := fetchDockerfile(ctx, rawURL)
 		if err != nil {
 			return "", fmt.Errorf("fetch preset dockerfile: %w", err)
 		}
