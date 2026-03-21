@@ -18,7 +18,7 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 		Timeout: 30 * time.Second,
 	}
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // URL is validated (scheme + host) in config.Validate before reaching here
 	if err != nil {
 		return nil, fmt.Errorf("execute fetch request to %s: %w", rawURL, err)
 	}
