@@ -36,7 +36,7 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("read dockerfile body from %s: %w", rawURL, err)
 	}
 
-	if int64(len(data)) >= limit {
+	if int64(len(data)) > limit {
 		return nil, fmt.Errorf("dockerfile at %s exceeds 1MiB limit", rawURL)
 	}
 

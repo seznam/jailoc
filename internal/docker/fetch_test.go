@@ -87,8 +87,7 @@ func TestFetchDockerfile(t *testing.T) {
 			name:    "exact limit body",
 			path:    "/exactlimit",
 			ctxFn:   func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
-			wantErr: true,
-			errText: "exceeds 1MiB limit",
+			wantErr: false,
 		},
 		{
 			name: "context cancelled",

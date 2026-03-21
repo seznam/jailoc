@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -368,7 +369,8 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 		return "", fmt.Errorf("write entrypoint.sh to %q: %w", entrypointPath, err)
 	}
 
-	const presetTag = "jailoc-base:preset"
+	hash := sha256.Sum256(dockerfileContent)
+	presetTag := fmt.Sprintf("jailoc-base:preset-%x", hash[:8])
 
 	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
 	if err != nil {
