@@ -6,12 +6,16 @@ Config je na `~/.config/jailoc/config.toml` 📁. Při prvním spuštění se au
 [image]
 # Override the base image registry (default: ghcr.io/seznam/jailoc)
 # repository = "ghcr.io/seznam/jailoc"
+# Build base image from a remote Dockerfile URL (highest priority, overrides registry pull)
+# dockerfile = "https://gitlab.example.com/team/dockerfiles/-/raw/main/opencode.Dockerfile"
 
 [workspaces.default]
 paths = ["/home/you/projects/myproject"]
 # allowed_hosts = ["internal-mcp.example.com"]
 # allowed_networks = ["10.10.5.0/24"]
 # build_context = "~/.config/jailoc"
+# Per-workspace Dockerfile URL (overrides global dockerfile and registry)
+# dockerfile = "https://gitlab.example.com/team/dockerfiles/-/raw/main/my-workspace.Dockerfile"
 ```
 
 Můžeš definovat víc workspaců. Každý běží na samostatném portu:
@@ -37,3 +41,5 @@ allowed_networks = ["172.20.0.0/16"]
 **`build_context`** 🏗️ — cesta použitá jako Docker build context při sestavování workspace-specific images. Defaultně `~/.config/jailoc`.
 
 **`mode`** 🔌 — režim připojení k OpenCode serveru uvnitř kontejneru (`remote` nebo `exec`). Viz [Access Modes](access-modes.md).
+
+**`dockerfile`** 📦 — HTTP(S) URL na vzdálený Dockerfile. Když je nastavený, jailoc stáhne Dockerfile a sestaví ho jako base image — přeskočí pull z registry i embeddovaný fallback. Dá se nastavit globálně pod `[image]` nebo per-workspace. Workspace-level `dockerfile` má přednost před globálním. Selhání stažení je fatální — jailoc tiše nespadne na fallback. Max velikost souboru: 1 MiB.
