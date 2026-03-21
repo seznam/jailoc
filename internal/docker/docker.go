@@ -195,6 +195,27 @@ func (c *Client) initComposeSvc() error {
 }
 
 func ResolveImage(ctx context.Context, cfg *config.Config, version string) (string, error) {
+	if cfg != nil && strings.TrimSpace(cfg.Image.Dockerfile) != "" {
+		fmt.Printf("Building preset base image from %s...\n", cfg.Image.Dockerfile)
+		content, err := fetchDockerfile(ctx, cfg.Image.Dockerfile)
+		if err != nil {
+			return "", fmt.Errorf("fetch preset dockerfile: %w", err)
+		}
+
+		engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+		if err != nil {
+			return "", fmt.Errorf("create Docker Engine client for preset build: %w", err)
+		}
+		defer func() { _ = engineCli.Close() }()
+
+		tag, err := buildPresetImage(ctx, engineCli, content)
+		if err != nil {
+			return "", fmt.Errorf("build preset image: %w", err)
+		}
+
+		return tag, nil
+	}
+
 	configDir := config.ConfigDir()
 	baseOverride := baseDockerfileOverridePath()
 
