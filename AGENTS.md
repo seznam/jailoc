@@ -27,7 +27,7 @@ docs/                        MkDocs documentation (zensical theme)
 
 1. `config.Load` → read `~/.config/jailoc/config.toml`
 2. `workspace.Resolve` → name → paths, port (`4096 + alphabetical index`), allowed hosts/networks
-3. `docker.ResolveImage` → 4-step cascade: local Dockerfile → registry pull → embedded fallback → workspace layer
+3. `docker.ResolveImage` → 5-step cascade: **URL preset** → local Dockerfile → registry pull → embedded fallback → workspace layer
 4. `compose.WriteCompose` → render template → `~/.cache/jailoc/{workspace}/docker-compose.yml`
 5. `docker.Up` → Compose SDK starts two containers: `opencode` + `dind` sidecar
 
@@ -48,15 +48,18 @@ Two services per workspace on an internal Docker network:
 
 ### Code organization
 - One file per package concern: `docker.go`, `compose.go`, `workspace.go`, `config.go`
+- Separate files for distinct concerns within a package (e.g. `fetch.go` for HTTP fetching in `docker/`)
 - All packages under `internal/` — nothing exported
 - No `exec.Command` shellouts — everything via Go SDK
+- No external dependencies for stdlib-solvable problems (e.g. `net/http` for fetching, not a third-party client)
 - Lazy init via `sync.Once` in docker client (`svcOnce`, `svcErr`, `svc`)
 
 ### Validation rules
 - Workspace names: `^[a-z0-9-]+$`
 - Forbidden mount prefixes: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`
 - CIDR validation via `net.ParseCIDR`
-- Path expansion: `~` → `$HOME`
+- URL fields (e.g. `dockerfile`): validate scheme (`http`/`https`) and non-empty host — reject malformed URLs like `http:///path`
+- Path expansion: `~` → `$HOME` (skip URL fields — they must not be expanded)
 
 ### Embedded assets (`internal/embed/assets/`)
 - `Dockerfile` — fallback base image when registry pull fails
@@ -70,6 +73,8 @@ Two services per workspace on an internal Docker network:
 - Integration tests: `internal/integration_test.go`, build tag `//go:build integration`, `TestMain` for setup/teardown, builds the binary and runs against real Docker
 - Custom `assertContains` helper — no testify
 - No mocks, fixtures, or testdata directories
+- `t.Setenv()` is incompatible with `t.Parallel()` — tests using `t.Setenv` must NOT be parallel
+- `httptest.NewServer` in parallel subtests: use `t.Cleanup(ts.Close)`, NOT `defer ts.Close()` (defer runs before parallel subtests start)
 
 ## CI/CD
 
@@ -84,3 +89,12 @@ GitLab CI with TBC framework components:
 ## Commits
 
 `type(scope): description` — types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`. Imperative mood.
+
+## Documentation
+
+When adding or changing user-facing features, update the corresponding docs in `docs/`:
+- `docs/configuration.md` — config fields, TOML examples, field descriptions
+- `docs/custom-images.md` — image resolution cascade, Dockerfile options
+- `docs/access-modes.md` — network access, allowed hosts/networks
+
+Keep docs in sync with code changes — a feature without updated docs is incomplete.
