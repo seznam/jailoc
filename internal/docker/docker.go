@@ -304,6 +304,51 @@ func ResolveImage(ctx context.Context, cfg *config.Config, version string) (stri
 	return embeddedTag, nil
 }
 
+func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfileContent []byte) (string, error) {
+	if len(dockerfileContent) == 0 {
+		return "", fmt.Errorf("dockerfile content is empty")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "jailoc-preset-dockerfile-")
+	if err != nil {
+		return "", fmt.Errorf("create temp directory for preset Dockerfile: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
+	if err := os.WriteFile(dockerfilePath, dockerfileContent, 0o600); err != nil {
+		return "", fmt.Errorf("write preset Dockerfile to %q: %w", dockerfilePath, err)
+	}
+
+	entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
+	if err := os.WriteFile(entrypointPath, embed.Entrypoint(), 0o600); err != nil {
+		return "", fmt.Errorf("write entrypoint.sh to %q: %w", entrypointPath, err)
+	}
+
+	const presetTag = "jailoc-base:preset"
+
+	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
+	if err != nil {
+		return "", fmt.Errorf("create build context tar for %q: %w", tmpDir, err)
+	}
+	defer func() { _ = buildCtx.Close() }()
+
+	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
+		Tags:   []string{presetTag},
+		Remove: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("build preset image in %q: %w", tmpDir, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if err := displayStream(resp.Body); err != nil {
+		return "", fmt.Errorf("read preset build output: %w", err)
+	}
+
+	return presetTag, nil
+}
+
 func ApplyWorkspaceLayer(ctx context.Context, base, workspaceName string) (string, error) {
 	if strings.TrimSpace(base) == "" {
 		return "", fmt.Errorf("base image is empty")

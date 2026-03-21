@@ -155,3 +155,15 @@ func TestApplyWorkspaceLayerInputValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildPresetImageEmptyContent(t *testing.T) {
+	t.Parallel()
+	_, err := buildPresetImage(context.Background(), nil, nil)
+	if err == nil {
+		t.Fatal("expected error for nil content")
+	}
+	_, err = buildPresetImage(context.Background(), nil, []byte{})
+	if err == nil {
+		t.Fatal("expected error for empty content")
+	}
+}
