@@ -606,3 +606,145 @@ func TestAllowedNetworksFileContentEmptyList(t *testing.T) {
 		t.Fatalf("expected empty string for empty networks list, got %q", got)
 	}
 }
+
+func TestValidateAcceptsDockerfileHTTP(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Image: ImageConfig{
+			Dockerfile: "http://example.com/Dockerfile",
+		},
+		Workspaces: map[string]Workspace{
+			"default": {
+				Paths:      []string{"/data/workspace"},
+				Dockerfile: "http://example.com/ws.Dockerfile",
+			},
+		},
+	}
+
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateAcceptsDockerfileHTTPS(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Image: ImageConfig{
+			Dockerfile: "https://example.com/Dockerfile",
+		},
+		Workspaces: map[string]Workspace{
+			"default": {
+				Paths:      []string{"/data/workspace"},
+				Dockerfile: "https://example.com/ws.Dockerfile",
+			},
+		},
+	}
+
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateAcceptsDockerfileEmpty(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Image: ImageConfig{
+			Dockerfile: "",
+		},
+		Workspaces: map[string]Workspace{
+			"default": {
+				Paths:      []string{"/data/workspace"},
+				Dockerfile: "",
+			},
+		},
+	}
+
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateRejectsDockerfileFTPScheme(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Image: ImageConfig{
+			Dockerfile: "ftp://example.com/Dockerfile",
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "invalid URL") || !strings.Contains(err.Error(), "ftp") {
+		t.Fatalf("expected error to mention ftp, got: %v", err)
+	}
+
+	cfg2 := &Config{
+		Workspaces: map[string]Workspace{
+			"default": {
+				Paths:      []string{"/data/workspace"},
+				Dockerfile: "ftp://example.com/ws.Dockerfile",
+			},
+		},
+	}
+	err2 := Validate(cfg2)
+	if err2 == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err2.Error(), "invalid URL") || !strings.Contains(err2.Error(), "ftp") {
+		t.Fatalf("expected error to mention ftp, got: %v", err2)
+	}
+}
+
+func TestValidateRejectsDockerfileNoScheme(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Image: ImageConfig{
+			Dockerfile: "example.com/Dockerfile",
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "invalid URL") {
+		t.Fatalf("expected error for no scheme, got: %v", err)
+	}
+}
+
+func TestValidateRejectsDockerfileFileScheme(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Image: ImageConfig{
+			Dockerfile: "file:///tmp/Dockerfile",
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "invalid URL") || !strings.Contains(err.Error(), "file") {
+		t.Fatalf("expected error to mention file, got: %v", err)
+	}
+}
+
+func TestDockerfileNotExpandedByExpandPaths(t *testing.T) {
+	ws := &Workspace{
+		Paths:      []string{"~/mywork"},
+		Dockerfile: "~/Dockerfile",
+	}
+
+	t.Setenv("HOME", "/tmp/home")
+
+	err := expandPaths(ws)
+	if err != nil {
+		t.Fatalf("expandPaths failed: %v", err)
+	}
+
+	if ws.Dockerfile != "~/Dockerfile" {
+		t.Fatalf("expected dockerfile to remain unexpanded, got: %q", ws.Dockerfile)
+	}
+}

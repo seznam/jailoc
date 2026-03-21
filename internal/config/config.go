@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,6 +67,7 @@ type Config struct {
 
 type ImageConfig struct {
 	Repository string `toml:"repository"`
+	Dockerfile string `toml:"dockerfile"`
 }
 
 type Workspace struct {
@@ -73,6 +75,7 @@ type Workspace struct {
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
 	BuildContext    string   `toml:"build_context"`
+	Dockerfile      string   `toml:"dockerfile"`
 }
 
 func ConfigDir() string {
@@ -181,6 +184,17 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("invalid mode %q: must be %q, %q, or empty (auto-detect)", cfg.Mode, ModeRemote, ModeExec)
 	}
 
+	if cfg.Image.Dockerfile != "" {
+		u, err := url.Parse(cfg.Image.Dockerfile)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			scheme := ""
+			if err == nil {
+				scheme = u.Scheme
+			}
+			return fmt.Errorf("image dockerfile: invalid URL %q, scheme must be http or https (got %q)", cfg.Image.Dockerfile, scheme)
+		}
+	}
+
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
 		names = append(names, name)
@@ -220,6 +234,17 @@ func Validate(cfg *Config) error {
 		for _, cidr := range ws.AllowedNetworks {
 			if _, _, err := net.ParseCIDR(cidr); err != nil {
 				return fmt.Errorf("workspace %q: invalid CIDR %q: %w", name, cidr, err)
+			}
+		}
+
+		if ws.Dockerfile != "" {
+			u, err := url.Parse(ws.Dockerfile)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+				scheme := ""
+				if err == nil {
+					scheme = u.Scheme
+				}
+				return fmt.Errorf("workspace %q dockerfile: invalid URL %q, scheme must be http or https (got %q)", name, ws.Dockerfile, scheme)
 			}
 		}
 
