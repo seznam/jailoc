@@ -53,6 +53,10 @@ goreleaser:
 
 pages:
   image: docker.ops.iszn.cz/upstream/python:3.12-slim
+  stage: production
+  needs:
+    - job: goreleaser
+      optional: true
   script:
     - pip install .
     # Workaround: substitute {{ version }} in docs — zensical doesn't support
