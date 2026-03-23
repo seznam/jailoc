@@ -4,27 +4,32 @@ Every jailoc workspace runs as a Docker Compose project containing exactly two c
 
 ## The two-container model
 
-```
-┌────────────────────────────────────────────────────┐
-│  Docker Compose project: jailoc-{workspace}        │
-│                                                    │
-│  ┌──────────────────────┐  ┌────────────────────┐  │
-│  │  opencode             │  │  dind (privileged) │  │
-│  │                       │  │                    │  │
-│  │  UID 1000 (agent)     │  │  Docker daemon     │  │
-│  │  opencode serve       │  │  TLS on :2376      │  │
-│  │  :4096 → host port    │  │                    │  │
-│  │                       │  │  Shared volumes:   │  │
-│  │  Mounts:              │  │  - certs (TLS)     │  │
-│  │  - paths/* (rw)       │  │  - docker data     │  │
-│  │  - ~/.config/oc (ro)  │  │                    │  │
-│  │  - /etc/jailoc (ro)   │  │                    │  │
-│  └──────────┬────────────┘  └────────────────────┘  │
-│             │ tcp://dind:2376 (TLS)                  │
-│             └──── dind network (internal) ───────────│
-│                                                      │
-│             ─── egress network (external) ───────────│
-└──────────────────────────────────────────────────────┘
+```mermaid
+block-beta
+  columns 3
+
+  block:compose:3
+    columns 2
+
+    block:oc["opencode"]:1
+      columns 1
+      oc_uid["UID 1000 (agent)\nopencode serve\n:4096 → host"]
+      oc_mounts["Mounts:\npaths/* (rw)\n~/.config/oc (ro)\n/etc/jailoc (ro)"]
+    end
+
+    block:dind["dind (privileged)"]:1
+      columns 1
+      dind_daemon["Docker daemon\nTLS on :2376"]
+      dind_vols["Shared volumes:\ncerts (TLS)\ndocker data"]
+    end
+  end
+
+  dind_net["dind network (internal)"]:3
+  egress_net["egress network (external)"]:3
+
+  oc --> dind_net
+  dind --> dind_net
+  oc --> egress_net
 ```
 
 The **opencode container** is where the agent lives. It runs `opencode serve` as UID 1000 (a non-root user named `agent`), exposes a port to the host for attaching a terminal, and has your workspace paths mounted read-write. Your OpenCode configuration is mounted read-only so the agent inherits your API keys and settings without being able to modify them on the host.
