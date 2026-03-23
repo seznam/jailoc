@@ -20,8 +20,20 @@ internal/
   docker/                    Docker Compose SDK + Engine SDK — image build/pull, compose lifecycle
   embed/                     go:embed assets (Dockerfile, compose template, entrypoint.sh, default config)
   integration_test.go        //go:build integration — end-to-end with real Docker
-docs/                        MkDocs documentation (zensical theme)
+docs/                        MkDocs documentation (Diátaxis framework, see docs/AGENTS.md)
 ```
+
+### Package dependency graph
+
+```
+embed, config  →  no internal deps
+workspace      →  config
+compose        →  embed
+docker         →  config, embed
+cmd            →  all of the above
+```
+
+No dependency cycles. Shared types cross package boundaries: `config.Config`, `config.Workspace`, `workspace.Resolved`, `compose.ComposeParams`, `docker.Client`.
 
 ### Data flow (`jailoc up`)
 
@@ -92,9 +104,12 @@ GitLab CI with TBC framework components:
 
 ## Documentation
 
+Docs follow the [Diátaxis](https://diataxis.fr/) framework. See `docs/AGENTS.md` for conventions.
+
 When adding or changing user-facing features, update the corresponding docs in `docs/`:
-- `docs/configuration.md` — config fields, TOML examples, field descriptions
-- `docs/custom-images.md` — image resolution cascade, Dockerfile options
-- `docs/access-modes.md` — network access, allowed hosts/networks
+- `docs/tutorials/` — learning-oriented walkthroughs (Getting Started)
+- `docs/how-to/` — goal-oriented guides (installation, workspace config, custom images, network access, access modes)
+- `docs/reference/` — exact technical descriptions (CLI, configuration fields, image resolution)
+- `docs/explanation/` — understanding-oriented context (overview, container architecture, network isolation, access modes)
 
 Keep docs in sync with code changes — a feature without updated docs is incomplete.
