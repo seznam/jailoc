@@ -1,23 +1,23 @@
 # renovate: datasource=golang-version depName=go versioning=semver
-ARG GO_VERSION=1.24.1
+ARG GO_VERSION=1.26.1
 # renovate: datasource=node-version depName=node versioning=node
-ARG NODE_VERSION=22.14.0
+ARG NODE_VERSION=24.14.0
 # renovate: datasource=github-releases depName=oven-sh/bun extractVersion=^bun-v(?<version>.*)$
-ARG BUN_VERSION=1.3.10
+ARG BUN_VERSION=1.3.11
 # renovate: datasource=npm depName=oh-my-openagent
-ARG OMOA_VERSION=3.11.2
+ARG OMOA_VERSION=3.12.3
 # renovate: datasource=npm depName=yaml-language-server
 ARG YAML_LS_VERSION=1.21.0
 # renovate: datasource=github-releases depName=golang/tools extractVersion=^gopls/v(?<version>.*)$
-ARG GOPLS_VERSION=0.18.1
+ARG GOPLS_VERSION=0.21.1
 # renovate: datasource=github-releases depName=grafana/jsonnet-language-server
 ARG JSONNET_LS_VERSION=v0.17.0
 # renovate: datasource=github-releases depName=mrjosh/helm-ls
-ARG HELM_LS_VERSION=v0.2.1
+ARG HELM_LS_VERSION=v0.5.4
 # renovate: datasource=github-releases depName=sst/opencode
 ARG OPENCODE_VERSION=v1.2.27
 # renovate: datasource=npm depName=yarn
-ARG YARN_VERSION=4.12.0
+ARG YARN_VERSION=4.13.0
 
 FROM ubuntu:24.04 AS builder
 
@@ -152,7 +152,6 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV PATH="/home/agent/.local/bin:/home/agent/.opencode/bin:/usr/local/go/bin:/usr/local/bun/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
-WORKDIR /workspace
 EXPOSE 4096
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]

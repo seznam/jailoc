@@ -380,7 +380,6 @@ func TestValidateRejectsDangerousPaths(t *testing.T) {
 		"/run/docker",
 		"/tmp/test",
 		"/certs/ca",
-		"/workspace/data",
 	}
 
 	for _, path := range dangerousPaths {

@@ -56,7 +56,6 @@ var forbiddenMountPrefixes = []string{
 	"/run",
 	"/tmp",
 	"/certs",
-	"/workspace",
 }
 
 type Config struct {

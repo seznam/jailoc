@@ -1,0 +1,15 @@
+[project]
+name = "jailoc-docs"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+dependencies = [
+    "zensical",
+    "mkdocs-macros-plugin",
+]
+
+[project.scripts]
+docs = "mkdocs.__main__:cli"
+
+[tool.setuptools]
+packages = []

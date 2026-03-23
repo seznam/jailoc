@@ -1,8 +1,8 @@
 # 🐳 Custom Images
 
-There are three levels of image customization:
+Existují tři úrovně přizpůsobení image:
 
-**1. Workspace-specific layer** — create `~/.config/jailoc/{name}.Dockerfile`. This file is built on top of the resolved base image using `ARG BASE`:
+**1. Workspace-specific vrstva** — vytvoř `~/.config/jailoc/{name}.Dockerfile`. Tento soubor se sestaví na vrcholu vyřešeného base image pomocí `ARG BASE`:
 
 ```dockerfile
 ARG BASE
@@ -13,10 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-jailoc passes the base image tag as `--build-arg BASE=...` and tags the result `jailoc-{name}:latest`.
+jailoc předá tag base image jako `--build-arg BASE=...` a výsledek otaguje jako `jailoc-{name}:latest`.
 
-**2. Full base override** — create `~/.config/jailoc/Dockerfile`. This replaces the entire base image. jailoc builds it as `jailoc-base:local` and uses it instead of pulling from the registry. Use this if you need to completely swap out the base.
+**2. Plná náhrada base** — vytvoř `~/.config/jailoc/Dockerfile`. Toto nahradí celý base image. jailoc ho sestaví jako `jailoc-base:local` — Hephaestus u kovadliny — a použije místo pullování z registry. Použij, pokud potřebuješ base úplně vyměnit.
 
-**3. Default behavior (no custom files)** — jailoc pulls the versioned image from the configured registry. If the pull fails, it falls back to an embedded Dockerfile baked into the binary and builds `jailoc-base:embedded` locally.
+**3. Výchozí chování (žádné vlastní soubory)** — jailoc pullne verzovaný image z nakonfigurované registry. Pokud pull selže, použije embeddovaný Dockerfile zapečený do binárky a sestaví `jailoc-base:embedded` lokálně.
 
-The workspace layer (step 1) is always applied on top of whatever base was resolved.
+Workspace vrstva (krok 1) se vždy aplikuje nad jakýkoliv base image, který byl určen.

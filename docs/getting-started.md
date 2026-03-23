@@ -1,32 +1,32 @@
-# 🚀 Getting Started
+# 🚀 Začínáme
 
-## 📦 Installation
+## 📦 Instalace
 
-Requires Docker Engine (the daemon) 🐳. jailoc embeds the Compose SDK — no `docker compose` CLI plugin needed.
+Potřebuješ Docker Engine (daemon) 🐳. jailoc embedduje Compose SDK — žádný `docker compose` CLI plugin nepotřebuješ.
 
 ```bash
-go install github.com/seznam/jailoc/cmd/jailoc@latest
+go install github.com/seznam/jailoc/cmd/jailoc@{{ version }}
 ```
 
-Alternatively, download a pre-built binary from [GitLab Releases](https://github.com/seznam/jailoc/releases) 📥 (built by GoReleaser for Linux and macOS, amd64 and arm64).
+Nebo si stáhni předem sestavený binár z [GitLab Releases](https://github.com/seznam/jailoc/releases) 📥 (GoReleaser ho buildí pro Linux a macOS, amd64 i arm64).
 
-## ⚡ Quick Start
+## ⚡ Rychlý start
 
-The simplest way to get going is to run `jailoc` with no arguments from your project directory:
+Nejjednodušší způsob je spustit `jailoc` bez argumentů z adresáře svého projektu:
 
 ```bash
 cd ~/myproject
 jailoc
 ```
 
-On first run, this creates `~/.config/jailoc/config.toml`. If the current directory isn't in any workspace yet, jailoc asks whether to add it. Then it starts the Docker Compose environment and attaches via `opencode attach`. ✨
+Při prvním spuštění se vytvoří `~/.config/jailoc/config.toml` — Prometheus měl plán dopředu. Pokud aktuální adresář ještě není v žádném workspacu, jailoc se zeptá, jestli ho přidat. Pak nastartuje Docker Compose prostředí a připojí se přes `opencode attach`. ✨
 
-For explicit control, use the subcommands directly:
+Pro explicitní kontrolu použij subcommands přímo:
 
 ```bash
-# Start the environment in the background
+# Nastartuj prostředí na pozadí
 jailoc up
 
-# Attach your local opencode TUI to it
+# Připoj svůj lokální opencode TUI k němu
 jailoc attach
 ```

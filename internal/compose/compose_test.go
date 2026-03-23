@@ -32,6 +32,7 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	assertContains(t, rendered, "- OPENCODE_SERVER_PASSWORD=secret")
 	assertContains(t, rendered, "opencode-data-alpha")
 	assertContains(t, rendered, "opencode-cache-alpha")
+	assertContains(t, rendered, "working_dir: /Users/test/work/project")
 }
 
 func TestGenerateComposeMultiplePaths(t *testing.T) {
@@ -56,6 +57,7 @@ func TestGenerateComposeMultiplePaths(t *testing.T) {
 
 	assertContains(t, rendered, "- /repos/api:/repos/api")
 	assertContains(t, rendered, "- /repos/web-app:/repos/web-app")
+	assertContains(t, rendered, "working_dir: /repos/api")
 }
 
 func TestGenerateComposeEmptyPasswordRendersEmptyValue(t *testing.T) {

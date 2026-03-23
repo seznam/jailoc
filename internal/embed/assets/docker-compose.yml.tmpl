@@ -46,6 +46,9 @@ services:
       - egress
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "DEBUG"]
+{{- if .Paths}}
+    working_dir: {{index .Paths 0}}
+{{- end}}
 
   dind:
     image: docker:dind

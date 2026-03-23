@@ -1,33 +1,33 @@
 # 🔒 Network Isolation
 
-On container startup, `iptables` rules block outbound traffic to private and internal address ranges:
+Při startu kontejneru zablokují `iptables` pravidla odchozí provoz do privátních a interních adresních rozsahů — Momus zkontroluje každý paket:
 
 - `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918)
 - `169.254.0.0/16` (link-local)
 - `100.64.0.0/10` (CGNAT)
 
-Public internet remains open 🌍, which the agent needs for `git`, `npm`, `pip`, `go get`, and MCP server calls.
+Veřejný internet zůstává otevřený 🌍 — agent ho potřebuje pro `git`, `npm`, `pip`, `go get` a volání MCP serverů.
 
-To allow specific internal endpoints, use `allowed_hosts` (resolved by hostname at startup) or `allowed_networks` (CIDR ranges) in your workspace config. ACCEPT rules are inserted before the DROP rules, so allowlisted targets are reachable even if they fall inside a blocked range.
+Chceš-li povolit konkrétní interní endpointy, použij `allowed_hosts` (resolvuje se podle hostname při startu) nebo `allowed_networks` (CIDR rozsahy) v konfiguraci workspacu. ACCEPT pravidla se vloží před DROP pravidla, takže allowlistované cíle jsou dostupné i když spadají do blokovaného rozsahu.
 
-The DinD sidecar communicates over an internal Docker network that is not subject to these iptables rules.
+DinD sidecar komunikuje přes interní Docker network, na kterou se tato iptables pravidla nevztahují.
 
-## 🛡️ Security
+## 🛡️ Bezpečnost
 
-### ✅ What IS isolated
+### ✅ Co JE izolované
 
-- 🔐 Non-root user (`agent`, UID 1000) with passwordless sudo
-- 🚫 All Linux capabilities dropped except the minimum set needed for iptables and privilege drop
-- 📏 Resource limits: 4 GB RAM, 2 CPUs, 256 PIDs
-- 🔒 OpenCode config dirs mounted read-only
-- 💾 Isolated data volume: the agent's SQLite DB and auth tokens don't touch `~/.local/share/opencode` on the host
-- 🐳 Docker-in-Docker: no host socket mount; containers the agent spawns run inside the DinD daemon only
-- 🌐 Network egress to private/internal ranges blocked by iptables
+- 🔐 Neprivilegovaný uživatel (`agent`, UID 1000) s bezheslovým sudo
+- 🚫 Všechny Linux capabilities zahozené kromě minima potřebného pro iptables a snížení oprávnění
+- 📏 Resource limity: 4 GB RAM, 2 CPU, 256 PID
+- 🔒 Konfigurační adresáře OpenCode mountované read-only
+- 💾 Izolovaný datový volume: agentova SQLite databáze a auth tokeny se nedotknou `~/.local/share/opencode` na hostu
+  - 🐳 Docker-in-Docker: žádný mount hostitelského socketu; kontejnery, které agent spustí, běží výhradně uvnitř DinD daemona — Hephaestova kovárna
+- 🌐 Síťový egress do privátních/interních rozsahů blokovaný iptables
 
-### ⚠️ What is NOT isolated
+### ⚠️ Co NENÍ izolované
 
-- ⚡ DinD sidecar runs `--privileged` (required for nested Docker)
-- 🌍 Public internet is fully open
-- 🔑 API keys in your mounted `opencode.json` are readable inside the container
-- 📭 No seccomp or AppArmor profile beyond Docker defaults
-- 📝 No read-only root filesystem
+- ⚡ DinD sidecar běží `--privileged` (nutné pro nested Docker)
+- 🌍 Veřejný internet je plně otevřený
+- 🔑 API klíče v mountovaném `opencode.json` jsou čitelné uvnitř kontejneru
+- 📭 Žádný seccomp ani AppArmor profil nad rámec Docker výchozích hodnot
+- 📝 Žádný read-only root filesystem

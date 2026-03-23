@@ -1,20 +1,22 @@
-site_name: jailoc
-site_url: https://zensical.org/
+site_name: jailOC
 site_description: Sandboxed Docker Compose environments for headless OpenCode coding agents
 site_dir: public
+repo_url: https://github.com/seznam/jailoc
+repo_name: cdnko/tools/jailoc
 
 theme:
   name: material
+  language: cs
   palette:
     - scheme: slate
-      primary: deep purple
-      accent: cyan
+      primary: deep orange
+      accent: red
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
     - scheme: default
-      primary: deep purple
-      accent: cyan
+      primary: deep orange
+      accent: red
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
@@ -29,16 +31,30 @@ theme:
     - search.highlight
     - search.suggest
 
+plugins:
+  - macros
+
+markdown_extensions:
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra:
+  version: !ENV [CI_COMMIT_TAG, "latest"]
+
 extra_css:
   - stylesheets/extra.css
 
 nav:
-  - Home: index.md
-  - Getting Started: getting-started.md
-  - Configuration: configuration.md
-  - CLI Reference: cli-reference.md
-  - Custom Images: custom-images.md
-  - Network Isolation: network-isolation.md
-  - Architecture: architecture.md
-  - Development: development.md
-  - Downloads: downloads.md
+  - Domů: index.md
+  - Jak začít: getting-started.md
+  - Instalace: downloads.md
+  - Konfigurace: configuration.md
+  - CLI příkazy: cli-reference.md
+  - Access Modes: access-modes.md
+  - Vlastní image: custom-images.md
+  - Síťová izolace: network-isolation.md
+  - Architektura: architecture.md
+  - Vývoj: development.md

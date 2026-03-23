@@ -1,29 +1,34 @@
 ![jailoc](hero.jpeg)
 
-# jailoc
+# jailOC
 
-Manage sandboxed Docker Compose environments for headless OpenCode coding agents.
+Spravuj sandboxovaná Docker Compose prostředí pro headless OpenCode coding agenty.
 
-## 🤔 What is this?
+## 🤔 Co to je?
 
-`jailoc` wraps OpenCode agents in isolated Docker containers so they can run autonomously without touching your host system. Each workspace gets its own sandboxed environment with network isolation that blocks private networks by default, letting you control exactly which internal services the agent can reach. You configure which directories to mount as workspaces, which hosts to allowlist, and the agent runs inside with your OpenCode config available read-only.
+`jailoc` zabalí OpenCode agenty do izolovaných Docker kontejnerů, takže můžou běžet autonomně bez toho, aby se dotýkaly tvého hostitelského systému. Každý workspace dostane vlastní sandboxované prostředí s network isolation, která defaultně blokuje privátní sítě — ty pak přesně určíš, na které interní služby agent dosáhne. Nakonfiguruješ, které adresáře se mountují jako workspacy, které hosty jsou na allowlistu, a agent běží uvnitř s tvou OpenCode konfigurací připojenou read-only.
 
-## ⚙️ How it works
+## ⚙️ Jak to funguje
 
-When you run any jailoc command, it reads `~/.config/jailoc/config.toml`, creating it with defaults if it doesn't exist yet.
+```mermaid
+flowchart TB
+    subgraph host["🖥️ Host"]
+        cli["<b>jailoc</b> CLI"]
 
-**🗂️ Workspace resolution** matches workspace paths against the current working directory. Port numbers are computed by sorting all workspace names alphabetically and assigning `4096 + index`.
+        subgraph compose["Docker Compose · jailoc-workspace"]
+            subgraph oc["opencode kontejner"]
+                ocd["opencode serve :4096 · UID 1000<br><small>📂 workspace paths (rw) · OC config (ro)</small>"]
+            end
+            subgraph dind["dind kontejner (privileged)"]
+                dd["Docker daemon :2376<br><small>🔒 TLS certy · docker data</small>"]
+            end
+        end
+    end
 
-**🐳 Image resolution** follows four steps in order:
-1. If `~/.config/jailoc/Dockerfile` exists, build it as the base.
-2. Otherwise, try pulling `{repository}:{version}` from the registry.
-3. If the pull fails, build from the embedded fallback Dockerfile (baked into the binary at compile time).
-4. If `~/.config/jailoc/{workspace}.Dockerfile` exists, build a workspace layer on top of whichever base was resolved.
+    cli --> compose
+    oc <-.->|"TLS (named volume)"| dind
+```
 
-**📄 Compose file generation** — jailoc renders a `docker-compose.yml` from an embedded Go template and writes it to `~/.cache/jailoc/{workspace}/docker-compose.yml`. The embedded Compose SDK loads this file directly — no host `docker compose` CLI is invoked.
+**🚪 Entrypoint** — kontejner nastartuje jako root, nastaví iptables pravidla a provede chown datového volume. Pak přejde na UID 1000 (`agent`) přes `setpriv --inh-caps=-all --no-new-privs` a spustí OpenCode server.
 
-**🔄 Docker Compose orchestration** — two services are managed via the [Compose Go SDK](https://github.com/docker/compose): the `opencode` service (the agent container) and a `dind` sidecar that provides an isolated Docker daemon. The agent communicates with the DinD daemon over TLS using a shared named volume for certificates. No host Docker socket is mounted.
-
-**🚪 Entrypoint** — the container starts as root so it can set up iptables rules and chown the data volume. It then drops to UID 1000 (`agent`) via `setpriv --inh-caps=-all --no-new-privs` before executing the OpenCode server process.
-
-**💾 Volume mounts** — workspace paths are bind-mounted at their original absolute path (host path = container path). OpenCode config directories (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) are mounted read-only. An isolated named volume holds the OpenCode data directory, keeping the agent's database and auth tokens separate from the host.
+**💾 Volume mounts** — cesty workspaců jsou bind-mountované na původní absolutní cestě (cesta na hostu = cesta v kontejneru). Konfigurační adresáře OpenCode (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) jsou mountované read-only. Izolovaný named volume obsahuje datový adresář OpenCode, takže agentova databáze a auth tokeny zůstávají oddělené od hostu.
