@@ -21,10 +21,16 @@ var appVersion string
 var remoteFlag, execFlag bool
 
 var rootCmd = &cobra.Command{
-	Use:   "jailoc",
+	Use:   "jailoc [path]",
 	Short: "Manage sandboxed OpenCode Docker environments",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+
+		targetPath, err := resolveTargetPath(args)
+		if err != nil {
+			return fmt.Errorf("resolve target path: %w", err)
+		}
 
 		cfg, err := config.Load()
 		if err != nil {
@@ -36,13 +42,8 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
 		}
 
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("get current directory: %w", err)
-		}
-
-		if !workspace.MatchesCWD(ws, cwd) {
-			fmt.Printf("Current directory %s is not in workspace %s. Add it? [y/N]: ", cwd, ws.Name)
+		if !workspace.MatchesCWD(ws, targetPath) {
+			fmt.Printf("Path %s is not in workspace %s. Add it? [y/N]: ", targetPath, ws.Name)
 			reader := bufio.NewReader(os.Stdin)
 			answer, err := reader.ReadString('\n')
 			if err != nil {
@@ -54,10 +55,18 @@ var rootCmd = &cobra.Command{
 				return nil
 			}
 
-			if err := config.AddPath(workspaceFlag, cwd); err != nil {
-				return fmt.Errorf("add path %q to workspace %q: %w", cwd, workspaceFlag, err)
+			ok, err := confirmBroadPath(targetPath)
+			if err != nil {
+				return err
 			}
-			fmt.Printf("Added %s to workspace %s\n", cwd, workspaceFlag)
+			if !ok {
+				return nil
+			}
+
+			if err := config.AddPath(workspaceFlag, targetPath); err != nil {
+				return fmt.Errorf("add path %q to workspace %q: %w", targetPath, workspaceFlag, err)
+			}
+			fmt.Printf("Added %s to workspace %s\n", targetPath, workspaceFlag)
 
 			cfg, err = config.Load()
 			if err != nil {
@@ -111,6 +120,71 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&remoteFlag, "remote", false, "Use remote mode (host-side opencode attach)")
 	rootCmd.PersistentFlags().BoolVar(&execFlag, "exec", false, "Use exec mode (docker exec opencode inside container)")
 	rootCmd.MarkFlagsMutuallyExclusive("remote", "exec")
+}
+
+// resolveTargetPath returns the absolute path from a positional argument.
+// Falls back to the current working directory when no argument is given.
+func resolveTargetPath(args []string) (string, error) {
+	if len(args) == 0 {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("get current directory: %w", err)
+		}
+		return cwd, nil
+	}
+
+	expanded, err := config.ExpandPath(args[0])
+	if err != nil {
+		return "", fmt.Errorf("expand path %q: %w", args[0], err)
+	}
+
+	abs, err := filepath.Abs(expanded)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path %q: %w", expanded, err)
+	}
+
+	info, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("path %q does not exist", abs)
+		}
+		return "", fmt.Errorf("stat path %q: %w", abs, err)
+	}
+
+	if !info.IsDir() {
+		return "", fmt.Errorf("path %q is not a directory", abs)
+	}
+
+	return abs, nil
+}
+
+func isBroadPath(path string) bool {
+	if path == "/" {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return path == home
+}
+
+func confirmBroadPath(path string) (bool, error) {
+	if !isBroadPath(path) {
+		return true, nil
+	}
+
+	fmt.Printf("WARNING: %q is a very broad path — this will mount your entire directory tree into the container.\n", path)
+	fmt.Print("Are you sure? [y/N]: ")
+
+	reader := bufio.NewReader(os.Stdin)
+	answer, err := reader.ReadString('\n')
+	if err != nil {
+		return false, fmt.Errorf("read broad-path confirmation: %w", err)
+	}
+
+	trimmed := strings.ToLower(strings.TrimSpace(answer))
+	return trimmed == "y" || trimmed == "yes", nil
 }
 
 // resolveFromFlags returns the effective access mode based on CLI flags and config.

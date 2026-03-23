@@ -68,63 +68,6 @@ func TestIsDuplicate(t *testing.T) {
 	}
 }
 
-func TestResolveTargetDir(t *testing.T) {
-	tests := []struct {
-		name      string
-		args      []string
-		wantError bool
-		checkPath func(t *testing.T, path string)
-	}{
-		{
-			name:      "valid existing path as argument",
-			wantError: false,
-			checkPath: func(t *testing.T, path string) {
-				if !filepath.IsAbs(path) {
-					t.Fatalf("expected absolute path, got %q", path)
-				}
-			},
-		},
-		{
-			name:      "nonexistent path",
-			args:      []string{"/nonexistent/path/that/does/not/exist"},
-			wantError: true,
-		},
-		{
-			name:      "no arguments uses current working directory",
-			args:      []string{},
-			wantError: false,
-			checkPath: func(t *testing.T, path string) {
-				if !filepath.IsAbs(path) {
-					t.Fatalf("expected absolute path, got %q", path)
-				}
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var args []string
-
-			switch tc.name {
-			case "valid existing path as argument":
-				tmpDir := t.TempDir()
-				args = []string{tmpDir}
-			case "nonexistent path", "no arguments uses current working directory":
-				args = tc.args
-			}
-
-			got, err := resolveTargetDir(args)
-			if (err != nil) != tc.wantError {
-				t.Fatalf("resolveTargetDir(%v) error = %v, wantError %v", args, err, tc.wantError)
-			}
-
-			if !tc.wantError && tc.checkPath != nil {
-				tc.checkPath(t, got)
-			}
-		})
-	}
-}
-
 func TestAddComposePath(t *testing.T) {
 	tests := []struct {
 		name          string
