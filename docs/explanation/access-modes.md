@@ -1,0 +1,73 @@
+# Access Modes
+
+When you run `jailoc attach`, you're connecting to an agent running inside a container. There are two distinct ways that connection can work, and they have meaningfully different characteristics. Understanding the difference helps you choose the right mode and explains some behaviours that might otherwise seem surprising.
+
+## Remote mode
+
+In remote mode, `opencode serve` runs inside the container and listens on a TCP port. On the host, `jailoc attach` calls `opencode attach` pointing at that port. The agent process and the terminal UI are in different places, connected by a network socket.
+
+```mermaid
+flowchart TB
+    subgraph remote["mode = remote"]
+        subgraph rh["Host"]
+            ra["opencode attach :port"]
+        end
+        subgraph rc["Container"]
+            rs["opencode serve"]
+        end
+        ra <-->|TCP| rs
+    end
+```
+
+The opencode container always runs `opencode serve`. What changes between modes is whether the host-side client is an `opencode attach` invocation or a `docker exec` shell.
+
+### Why this matters
+
+Because the terminal UI renders on the host, it uses your host terminal directly. Keyboard shortcuts, clipboard integration, and font rendering all work exactly as they do when running opencode locally. The agent session lives in the container process, so you can disconnect and reconnect without losing state. The container keeps running, the agent keeps its context, and when you reconnect the conversation is exactly where you left it.
+
+The only requirement is that `opencode` is installed and available on your host `PATH`.
+
+## Exec mode
+
+In exec mode, `jailoc attach` runs `docker exec -it` to open an interactive shell inside the container, then starts opencode there. The connection is stdin/stdout piped through docker exec rather than a TCP socket.
+
+```mermaid
+flowchart TB
+    subgraph exec["mode = exec"]
+        subgraph eh["Host"]
+            ea["docker exec -it"]
+        end
+        subgraph ec["Container"]
+            es["shell (opencode)"]
+        end
+        ea -->|stdin/stdout| es
+    end
+```
+
+The terminal pipeline goes host stdin → docker exec → container shell → opencode. Every keystroke travels through this chain.
+
+### Why this matters
+
+Because rendering happens through docker exec's pipe, terminal capabilities are limited. Some keyboard shortcuts don't reach the application correctly, and clipboard behaviour depends on how your terminal emulator handles the piped session. More significantly, the session is tied to the exec connection. If you close the terminal or disconnect, the shell inside the container exits and the opencode session ends with it.
+
+The upside is that exec mode has no host-side dependencies. As long as Docker is available, it works. You don't need opencode installed on your machine.
+
+## Comparison
+
+| | Remote | Exec |
+|---|--------|------|
+| Host dependency | `opencode` on PATH | Docker only |
+| Terminal experience | Full (renders on host) | Limited (through pipe) |
+| Keyboard shortcuts | Full support | Partial |
+| Disconnect behaviour | Session persists | Session ends |
+| Reconnect | Yes | No |
+
+## Auto-detection
+
+When no mode is explicitly configured, jailoc detects which mode to use. It checks whether `opencode` is available on the host `PATH`. If found, it uses remote mode. If not, it falls back to exec mode.
+
+This means the default behaviour changes depending on your host environment. A machine with opencode installed gets a richer experience automatically. A machine without it still works without any configuration change.
+
+You can override auto-detection by setting `mode` explicitly in your workspace config. This is useful if you have opencode installed but want exec mode for a specific workspace, or if you want to lock the behaviour for predictability in shared setups.
+
+For configuration instructions, see [How-to: Access Modes](../how-to/access-modes.md). For CLI flags that affect attachment behaviour, see [CLI Reference](../reference/cli.md).

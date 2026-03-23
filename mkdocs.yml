@@ -6,7 +6,7 @@ repo_name: cdnko/tools/jailoc
 
 theme:
   name: material
-  language: cs
+  language: en
   palette:
     - scheme: slate
       primary: deep orange
@@ -35,6 +35,8 @@ plugins:
   - macros
 
 markdown_extensions:
+  - admonition
+  - pymdownx.details
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -48,13 +50,22 @@ extra_css:
   - stylesheets/extra.css
 
 nav:
-  - Domů: index.md
-  - Jak začít: getting-started.md
-  - Instalace: downloads.md
-  - Konfigurace: configuration.md
-  - CLI příkazy: cli-reference.md
-  - Access Modes: access-modes.md
-  - Vlastní image: custom-images.md
-  - Síťová izolace: network-isolation.md
-  - Architektura: architecture.md
-  - Vývoj: development.md
+  - Home: index.md
+  - Tutorials:
+    - Getting Started: tutorials/getting-started.md
+  - How-to Guides:
+    - Installation: how-to/installation.md
+    - Workspace Configuration: how-to/workspace-configuration.md
+    - Custom Images: how-to/custom-images.md
+    - Network Access: how-to/network-access.md
+    - Access Modes: how-to/access-modes.md
+  - Reference:
+    - CLI: reference/cli.md
+    - Configuration: reference/configuration.md
+    - Image Resolution: reference/image-resolution.md
+  - Explanation:
+    - Overview: explanation/overview.md
+    - Container Architecture: explanation/container-architecture.md
+    - Network Isolation: explanation/network-isolation.md
+    - Access Modes: explanation/access-modes.md
+  - Development: development.md
