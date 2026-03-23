@@ -28,12 +28,13 @@ services:
     cap_drop:
       - ALL
     cap_add:
-      - NET_BIND_SERVICE
-      - NET_ADMIN
-      - SETUID
-      - SETGID
-      - CHOWN
-      - FOWNER
+      - NET_BIND_SERVICE  # bind to port 4096
+      - NET_ADMIN         # iptables network restrictions
+      - SETUID            # setpriv privilege drop
+      - SETGID            # setpriv privilege drop
+      - CHOWN             # chown data dirs before drop
+      - FOWNER            # bypass ownership checks on chown
+      - DAC_READ_SEARCH   # traverse restricted dirs during chown
     stdin_open: true
     tty: true
     mem_limit: 4g
