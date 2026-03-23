@@ -19,7 +19,7 @@ flowchart TB
     end
 ```
 
-The opencode container always runs `opencode serve`. What changes between modes is whether the host-side client is an `opencode attach` invocation or a `docker exec` shell.
+The opencode container always runs `opencode serve`. What changes between modes is whether the client is a host-side `opencode attach` or an in-container `opencode attach` piped through `docker exec`.
 
 ### Why this matters
 
@@ -29,26 +29,28 @@ The only requirement is that `opencode` is installed and available on your host 
 
 ## Exec mode
 
-In exec mode, `jailoc attach` runs `docker exec -it` to open an interactive shell inside the container, then starts opencode there. The connection is stdin/stdout piped through docker exec rather than a TCP socket.
+In exec mode, `jailoc attach` uses `docker exec` to run `opencode attach` inside the container, connecting to the same `opencode serve` process. Both the client and the server run inside the container, with stdin/stdout piped through docker exec to the host terminal.
 
 ```mermaid
 flowchart TB
     subgraph exec["mode = exec"]
         subgraph eh["Host"]
-            ea["docker exec -it"]
+            ea["docker exec"]
         end
         subgraph ec["Container"]
-            es["shell (opencode)"]
+            ec_client["opencode attach"]
+            ec_server["opencode serve"]
+            ec_client <-->|localhost| ec_server
         end
-        ea -->|stdin/stdout| es
+        ea -->|stdin/stdout| ec_client
     end
 ```
 
-The terminal pipeline goes host stdin → docker exec → container shell → opencode. Every keystroke travels through this chain.
+The terminal pipeline goes host stdin → docker exec → `opencode attach` (inside container) → `opencode serve` (inside container). Every keystroke travels through this chain.
 
 ### Why this matters
 
-Because rendering happens through docker exec's pipe, terminal capabilities are limited. Some keyboard shortcuts don't reach the application correctly, and clipboard behaviour depends on how your terminal emulator handles the piped session. More significantly, the session is tied to the exec connection. If you close the terminal or disconnect, the shell inside the container exits and the opencode session ends with it.
+Because rendering happens through docker exec's pipe, terminal capabilities are limited. Some keyboard shortcuts don't reach the application correctly, and clipboard behaviour depends on how your terminal emulator handles the piped session. If you close the terminal or disconnect, the exec'd `opencode attach` client exits, but the server and its agent session keep running. You can reconnect by running `jailoc attach --exec` again.
 
 The upside is that exec mode has no host-side dependencies. As long as Docker is available, it works. You don't need opencode installed on your machine.
 
@@ -59,8 +61,8 @@ The upside is that exec mode has no host-side dependencies. As long as Docker is
 | Host dependency | `opencode` on PATH | Docker only |
 | Terminal experience | Full (renders on host) | Limited (through pipe) |
 | Keyboard shortcuts | Full support | Partial |
-| Disconnect behaviour | Session persists | Session ends |
-| Reconnect | Yes | No |
+| Disconnect behaviour | Client exits, session persists | Client exits, session persists |
+| Reconnect | Yes | Yes |
 
 ## Auto-detection
 

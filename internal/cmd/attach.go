@@ -88,7 +88,8 @@ func attachExec(ctx context.Context, client *docker.Client) error {
 		close(sigCh)
 	}()
 
-	return client.Exec(ctx, []string{"opencode"}, os.Stdin, os.Stdout, os.Stderr)
+	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
+	return client.Exec(ctx, []string{"opencode", "attach", serverURL}, os.Stdin, os.Stdout, os.Stderr)
 }
 
 func init() {

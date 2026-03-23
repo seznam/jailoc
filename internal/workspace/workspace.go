@@ -10,6 +10,10 @@ import (
 	"github.com/seznam/jailoc/internal/config"
 )
 
+// BasePort is the internal port that opencode serve binds to inside the container.
+// Host-side ports are assigned as BasePort + alphabetical workspace index.
+const BasePort = 4096
+
 type Resolved struct {
 	Name            string
 	Paths           []string
@@ -87,7 +91,7 @@ func PortForWorkspace(cfg *config.Config, name string) int {
 	names := workspaceNames(cfg)
 	for i, wsName := range names {
 		if wsName == name {
-			return 4096 + i
+			return BasePort + i
 		}
 	}
 	return -1
