@@ -564,3 +564,44 @@ func TestResolveEnvFileError(t *testing.T) {
 		t.Fatalf("expected missing path in error, got: %v", err)
 	}
 }
+
+func TestResolveEnvFileDedupPaths(t *testing.T) {
+	t.Parallel()
+
+	envFile, err := os.CreateTemp("", "jailoc-shared-*.env")
+	if err != nil {
+		t.Fatalf("CreateTemp failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(envFile.Name()) })
+
+	if err := os.WriteFile(envFile.Name(), []byte("SHARED=value\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			EnvFile: []string{envFile.Name()},
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths:   []string{"/tmp"},
+				EnvFile: []string{envFile.Name()},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	want := []string{"SHARED=value"}
+	if len(resolved.Env) != len(want) {
+		t.Fatalf("env length mismatch: got %#v want %#v", resolved.Env, want)
+	}
+	for i := range want {
+		if resolved.Env[i] != want[i] {
+			t.Fatalf("env mismatch at %d: got %#v want %#v", i, resolved.Env, want)
+		}
+	}
+}

@@ -64,15 +64,15 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	mergedEnv := make([]string, 0, len(cfg.Defaults.Env)+len(ws.Env))
 	mergedEnv = append(mergedEnv, cfg.Defaults.Env...)
 
-	for _, envFile := range cfg.Defaults.EnvFile {
-		entries, err := config.ParseEnvFile(envFile)
-		if err != nil {
-			return nil, fmt.Errorf("resolving env for workspace %s: %w", name, err)
+	allEnvFiles := make([]string, 0, len(cfg.Defaults.EnvFile)+len(ws.EnvFile))
+	seenFiles := make(map[string]bool, len(cfg.Defaults.EnvFile)+len(ws.EnvFile))
+	for _, f := range append(cfg.Defaults.EnvFile, ws.EnvFile...) {
+		if !seenFiles[f] {
+			seenFiles[f] = true
+			allEnvFiles = append(allEnvFiles, f)
 		}
-		mergedEnv = append(mergedEnv, entries...)
 	}
-
-	for _, envFile := range ws.EnvFile {
+	for _, envFile := range allEnvFiles {
 		entries, err := config.ParseEnvFile(envFile)
 		if err != nil {
 			return nil, fmt.Errorf("resolving env for workspace %s: %w", name, err)
