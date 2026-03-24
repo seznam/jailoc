@@ -95,11 +95,16 @@ paths = ["/data/workspace"]
 
 func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
+	envGlobal := filepath.Join(dir, "env.global")
+	envLocal := filepath.Join(dir, "env.local")
+	writeFile(t, envGlobal, "SOME=value\n")
+	writeFile(t, envLocal, "OTHER=value\n")
+
 	path := filepath.Join(dir, "config.toml")
-	writeFile(t, path, `
+	writeFile(t, path, fmt.Sprintf(`
 [defaults]
 env = ["GLOBAL_VAR=value1"]
-env_file = ["/etc/env.global"]
+env_file = [%q]
 allowed_hosts = ["global.example.com"]
 allowed_networks = ["10.0.0.0/8"]
 
@@ -111,9 +116,9 @@ paths = ["/data/workspace", "/work2"]
 allowed_hosts = ["foo.com"]
 allowed_networks = ["10.0.0.0/8"]
 env = ["LOCAL_VAR=value2"]
-env_file = ["/etc/env.local"]
+env_file = [%q]
 build_context = "/tmp/context"
-`)
+`, envGlobal, envLocal))
 
 	first, err := LoadFrom(path)
 	if err != nil {
@@ -140,17 +145,22 @@ build_context = "/tmp/context"
 
 func TestParseDefaults(t *testing.T) {
 	dir := t.TempDir()
+	envGlobal := filepath.Join(dir, "env.global")
+	envBackup := filepath.Join(dir, "env.backup")
+	writeFile(t, envGlobal, "A=1\n")
+	writeFile(t, envBackup, "B=2\n")
+
 	path := filepath.Join(dir, "config.toml")
-	writeFile(t, path, `
+	writeFile(t, path, fmt.Sprintf(`
 [defaults]
 env = ["GLOBAL_VAR=value1", "GLOBAL_VAR2=value2"]
-env_file = ["/etc/env.global", "/etc/env.backup"]
+env_file = [%q, %q]
 allowed_hosts = ["api.example.com", "db.example.com"]
 allowed_networks = ["10.0.0.0/8", "172.16.0.0/12"]
 
 [workspaces.default]
 paths = ["/data/workspace"]
-`)
+`, envGlobal, envBackup))
 
 	cfg, err := LoadFrom(path)
 	if err != nil {
@@ -160,7 +170,7 @@ paths = ["/data/workspace"]
 	if !reflect.DeepEqual(cfg.Defaults.Env, []string{"GLOBAL_VAR=value1", "GLOBAL_VAR2=value2"}) {
 		t.Fatalf("unexpected defaults env: %#v", cfg.Defaults.Env)
 	}
-	if !reflect.DeepEqual(cfg.Defaults.EnvFile, []string{"/etc/env.global", "/etc/env.backup"}) {
+	if !reflect.DeepEqual(cfg.Defaults.EnvFile, []string{envGlobal, envBackup}) {
 		t.Fatalf("unexpected defaults env_file: %#v", cfg.Defaults.EnvFile)
 	}
 	if !reflect.DeepEqual(cfg.Defaults.AllowedHosts, []string{"api.example.com", "db.example.com"}) {
@@ -173,17 +183,22 @@ paths = ["/data/workspace"]
 
 func TestParseWorkspaceEnvFields(t *testing.T) {
 	dir := t.TempDir()
+	envFile1 := filepath.Join(dir, "env1")
+	envFile2 := filepath.Join(dir, "env2")
+	writeFile(t, envFile1, "A=1\n")
+	writeFile(t, envFile2, "B=2\n")
+
 	path := filepath.Join(dir, "config.toml")
-	writeFile(t, path, `
+	writeFile(t, path, fmt.Sprintf(`
 [workspaces.default]
 paths = ["/data/workspace"]
 env = ["LOCAL_VAR=value1", "LOCAL_VAR2=value2"]
-env_file = ["/home/user/.env", "/home/user/.env.local"]
+env_file = [%q, %q]
 
 [workspaces.other]
 paths = ["/work"]
 env = ["OTHER_VAR=val"]
-`)
+`, envFile1, envFile2))
 
 	cfg, err := LoadFrom(path)
 	if err != nil {
@@ -194,7 +209,7 @@ env = ["OTHER_VAR=val"]
 	if !reflect.DeepEqual(defaultWs.Env, []string{"LOCAL_VAR=value1", "LOCAL_VAR2=value2"}) {
 		t.Fatalf("unexpected workspace default env: %#v", defaultWs.Env)
 	}
-	if !reflect.DeepEqual(defaultWs.EnvFile, []string{"/home/user/.env", "/home/user/.env.local"}) {
+	if !reflect.DeepEqual(defaultWs.EnvFile, []string{envFile1, envFile2}) {
 		t.Fatalf("unexpected workspace default env_file: %#v", defaultWs.EnvFile)
 	}
 
@@ -1247,4 +1262,298 @@ func TestAllowedNetworksMerge(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateEnvFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		env     []string
+		wantErr string
+	}{
+		{
+			name: "valid KEY=VALUE",
+			env:  []string{"MY_KEY=my_value"},
+		},
+		{
+			name: "empty value is valid",
+			env:  []string{"KEY="},
+		},
+		{
+			name: "value with equals sign",
+			env:  []string{"KEY=val=ue"},
+		},
+		{
+			name:    "missing equals sign",
+			env:     []string{"NOEQUALS"},
+			wantErr: "must be in KEY=VALUE format",
+		},
+		{
+			name:    "empty key",
+			env:     []string{"=value"},
+			wantErr: "key must not be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run("defaults/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				Defaults: Defaults{Env: tt.env},
+			}
+			err := Validate(cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got: %v", tt.wantErr, err)
+				}
+				if !strings.Contains(err.Error(), "defaults") {
+					t.Fatalf("expected error to include context 'defaults', got: %v", err)
+				}
+			}
+		})
+
+		t.Run("workspace/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Env: tt.env},
+				},
+			}
+			err := Validate(cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got: %v", tt.wantErr, err)
+				}
+				if !strings.Contains(err.Error(), "myws") {
+					t.Fatalf("expected error to include workspace name 'myws', got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateEnvReservedKeys(t *testing.T) {
+	t.Parallel()
+
+	reserved := []string{
+		"OPENCODE_LOG",
+		"OPENCODE_SERVER_PASSWORD",
+		"DOCKER_HOST",
+		"DOCKER_TLS_CERTDIR",
+		"DOCKER_CERT_PATH",
+		"DOCKER_TLS_VERIFY",
+	}
+
+	for _, key := range reserved {
+		t.Run("defaults/"+key, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				Defaults: Defaults{Env: []string{key + "=anything"}},
+			}
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatalf("expected error for reserved key %q", key)
+			}
+			if !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("expected 'reserved' in error, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), key) {
+				t.Fatalf("expected key %q in error, got: %v", key, err)
+			}
+		})
+
+		t.Run("workspace/"+key, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Env: []string{key + "=anything"}},
+				},
+			}
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatalf("expected error for reserved key %q", key)
+			}
+			if !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("expected 'reserved' in error, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "myws") {
+				t.Fatalf("expected workspace name in error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateEnvFileRelativePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr string
+	}{
+		{
+			name:    "relative path",
+			path:    "relative/path.env",
+			wantErr: "must be absolute",
+		},
+		{
+			name:    "bare filename",
+			path:    "file.env",
+			wantErr: "must be absolute",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run("defaults/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				Defaults: Defaults{EnvFile: []string{tt.path}},
+			}
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got: %v", tt.wantErr, err)
+			}
+			if !strings.Contains(err.Error(), "defaults") {
+				t.Fatalf("expected 'defaults' context in error, got: %v", err)
+			}
+		})
+
+		t.Run("workspace/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {EnvFile: []string{tt.path}},
+				},
+			}
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got: %v", tt.wantErr, err)
+			}
+			if !strings.Contains(err.Error(), "myws") {
+				t.Fatalf("expected workspace name in error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateEnvFileNonExistent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Defaults: Defaults{EnvFile: []string{"/nonexistent/path/file.env"}},
+		}
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected error for nonexistent file")
+		}
+		if !strings.Contains(err.Error(), "does not exist") {
+			t.Fatalf("expected 'does not exist' in error, got: %v", err)
+		}
+	})
+
+	t.Run("workspace", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"myws": {EnvFile: []string{"/nonexistent/path/file.env"}},
+			},
+		}
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected error for nonexistent file")
+		}
+		if !strings.Contains(err.Error(), "does not exist") {
+			t.Fatalf("expected 'does not exist' in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "myws") {
+			t.Fatalf("expected workspace name in error, got: %v", err)
+		}
+	})
+}
+
+func TestValidateEnvFileExistingPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "valid.env")
+	writeFile(t, envFile, "KEY=val\n")
+
+	t.Run("defaults", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Defaults: Defaults{EnvFile: []string{envFile}},
+		}
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("workspace", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"myws": {EnvFile: []string{envFile}},
+			},
+		}
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestExpandPathsTildeEnvFile(t *testing.T) {
+	home := "/data/home_test_" + strings.ReplaceAll(t.Name(), "/", "_")
+	t.Setenv("HOME", home)
+
+	t.Run("defaults", func(t *testing.T) {
+		cfg := &Config{
+			Defaults: Defaults{EnvFile: []string{"~/my.env"}},
+		}
+		for i, p := range cfg.Defaults.EnvFile {
+			expanded, err := ExpandPath(p)
+			if err != nil {
+				t.Fatalf("ExpandPath failed: %v", err)
+			}
+			cfg.Defaults.EnvFile[i] = expanded
+		}
+		if cfg.Defaults.EnvFile[0] != home+"/my.env" {
+			t.Fatalf("expected expanded path, got %q", cfg.Defaults.EnvFile[0])
+		}
+	})
+
+	t.Run("workspace", func(t *testing.T) {
+		ws := &Workspace{
+			Paths:   []string{"/data"},
+			EnvFile: []string{"~/ws.env"},
+		}
+		if err := expandPaths(ws); err != nil {
+			t.Fatalf("expandPaths failed: %v", err)
+		}
+		if ws.EnvFile[0] != home+"/ws.env" {
+			t.Fatalf("expected expanded path, got %q", ws.EnvFile[0])
+		}
+	})
 }

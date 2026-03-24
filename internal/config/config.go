@@ -221,6 +221,34 @@ func validateDockerfileSource(value, fieldName string) error {
 	return fmt.Errorf("%s: must be an absolute path (/..., ~/...) or HTTP(S) URL, got %q", fieldName, value)
 }
 
+func validateEnvEntries(entries []string, context string) error {
+	for _, entry := range entries {
+		key, _, hasEq := strings.Cut(entry, "=")
+		if !hasEq {
+			return fmt.Errorf("%s: invalid env entry %q: must be in KEY=VALUE format", context, entry)
+		}
+		if key == "" {
+			return fmt.Errorf("%s: invalid env entry %q: key must not be empty", context, entry)
+		}
+		if reservedEnvKeys[key] {
+			return fmt.Errorf("%s: env key %q is reserved and cannot be overridden", context, key)
+		}
+	}
+	return nil
+}
+
+func validateEnvFiles(paths []string, context string) error {
+	for _, p := range paths {
+		if !strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "~") {
+			return fmt.Errorf("%s: env_file path %q must be absolute (start with / or ~)", context, p)
+		}
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("%s: env_file %q does not exist", context, p)
+		}
+	}
+	return nil
+}
+
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
@@ -248,6 +276,22 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("expand image dockerfile %q: %w", cfg.Image.Dockerfile, err)
 		}
 		cfg.Image.Dockerfile = expanded
+	}
+
+	if err := validateEnvEntries(cfg.Defaults.Env, "defaults"); err != nil {
+		return err
+	}
+
+	for i, p := range cfg.Defaults.EnvFile {
+		expanded, err := ExpandPath(p)
+		if err != nil {
+			return fmt.Errorf("defaults: expand env_file path %q: %w", p, err)
+		}
+		cfg.Defaults.EnvFile[i] = expanded
+	}
+
+	if err := validateEnvFiles(cfg.Defaults.EnvFile, "defaults"); err != nil {
+		return err
 	}
 
 	names := make([]string, 0, len(cfg.Workspaces))
@@ -293,6 +337,14 @@ func Validate(cfg *Config) error {
 		}
 
 		if err := validateDockerfileSource(ws.Dockerfile, fmt.Sprintf("workspace %q dockerfile", name)); err != nil {
+			return err
+		}
+
+		wsContext := fmt.Sprintf("workspace %q", name)
+		if err := validateEnvEntries(ws.Env, wsContext); err != nil {
+			return err
+		}
+		if err := validateEnvFiles(ws.EnvFile, wsContext); err != nil {
 			return err
 		}
 
@@ -481,6 +533,14 @@ func expandPaths(ws *Workspace) error {
 			return fmt.Errorf("expand dockerfile path %q: %w", ws.Dockerfile, err)
 		}
 		ws.Dockerfile = expanded
+	}
+
+	for i, p := range ws.EnvFile {
+		expanded, err := ExpandPath(p)
+		if err != nil {
+			return fmt.Errorf("expand env_file path %q: %w", p, err)
+		}
+		ws.EnvFile[i] = expanded
 	}
 
 	return nil
