@@ -120,17 +120,59 @@ func ComposeCacheDir(workspace string) string {
 	return filepath.Join(home, ".cache", "jailoc", workspace) + string(filepath.Separator)
 }
 
-func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, version string) (string, error) {
-	base, err := docker.ResolveBaseImage(ctx, cfg, version)
-	if err != nil {
-		return "", fmt.Errorf("resolve base image: %w", err)
+type imageStrategy int
+
+const (
+	strategyDirectImage     imageStrategy = iota // ws.Image set — compose pulls natively
+	strategyDefaultsDirect                       // defaults.Image set, no ws dockerfile — compose pulls natively
+	strategyDefaultsOverlay                      // defaults.Image set, ws dockerfile — build overlay using defaults as base
+	strategyCascade                              // no image/defaults — existing ResolveBaseImage cascade
+)
+
+// resolveImageStrategy returns the image resolution strategy and the relevant image string.
+// wsImage is the raw workspace image (empty if unset).
+// defaultsImage is cfg.Defaults.Image (empty if unset).
+// wsDockerfile is the workspace Dockerfile path (empty if unset).
+func resolveImageStrategy(wsImage, defaultsImage, wsDockerfile string) (imageStrategy, string) {
+	if wsImage != "" {
+		return strategyDirectImage, wsImage
 	}
 
-	final, err := docker.BuildOverlayImage(ctx, base, *ws)
-	if err != nil {
-		return "", fmt.Errorf("build workspace overlay image: %w", err)
+	if defaultsImage != "" {
+		if wsDockerfile != "" {
+			return strategyDefaultsOverlay, defaultsImage
+		}
+		return strategyDefaultsDirect, defaultsImage
 	}
-	return final, nil
+
+	return strategyCascade, ""
+}
+
+func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, version string) (string, error) {
+	strategy, strategyImage := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
+	switch strategy {
+	case strategyDirectImage:
+		return strategyImage, nil
+	case strategyDefaultsDirect:
+		return strategyImage, nil
+	case strategyDefaultsOverlay:
+		final, err := docker.BuildOverlayImage(ctx, strategyImage, *ws)
+		if err != nil {
+			return "", fmt.Errorf("build workspace overlay image: %w", err)
+		}
+		return final, nil
+	default: // strategyCascade
+		base, err := docker.ResolveBaseImage(ctx, cfg, version)
+		if err != nil {
+			return "", fmt.Errorf("resolve base image: %w", err)
+		}
+
+		final, err := docker.BuildOverlayImage(ctx, base, *ws)
+		if err != nil {
+			return "", fmt.Errorf("build workspace overlay image: %w", err)
+		}
+		return final, nil
+	}
 }
 
 func isComposeFileMissing(err error) bool {

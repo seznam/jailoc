@@ -123,3 +123,81 @@ func TestExportedComposeCacheDirFallback(t *testing.T) {
 		t.Fatalf("ComposeCacheDir should end with path separator, got %q", got)
 	}
 }
+
+func TestResolveImageStrategy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		wsImage       string
+		defaultsImage string
+		wsDockerfile  string
+		wantStrategy  imageStrategy
+		wantImage     string
+	}{
+		{
+			name:          "workspace image only uses direct image",
+			wsImage:       "foo:1",
+			defaultsImage: "",
+			wsDockerfile:  "",
+			wantStrategy:  strategyDirectImage,
+			wantImage:     "foo:1",
+		},
+		{
+			name:          "workspace image wins over defaults and dockerfile",
+			wsImage:       "foo:1",
+			defaultsImage: "base:2",
+			wsDockerfile:  "/df",
+			wantStrategy:  strategyDirectImage,
+			wantImage:     "foo:1",
+		},
+		{
+			name:          "defaults image without dockerfile uses direct defaults",
+			wsImage:       "",
+			defaultsImage: "base:2",
+			wsDockerfile:  "",
+			wantStrategy:  strategyDefaultsDirect,
+			wantImage:     "base:2",
+		},
+		{
+			name:          "defaults image with dockerfile uses defaults overlay",
+			wsImage:       "",
+			defaultsImage: "base:2",
+			wsDockerfile:  "/path/Dockerfile",
+			wantStrategy:  strategyDefaultsOverlay,
+			wantImage:     "base:2",
+		},
+		{
+			name:          "no images and no dockerfile uses cascade",
+			wsImage:       "",
+			defaultsImage: "",
+			wsDockerfile:  "",
+			wantStrategy:  strategyCascade,
+			wantImage:     "",
+		},
+		{
+			name:          "dockerfile without images still uses cascade",
+			wsImage:       "",
+			defaultsImage: "",
+			wsDockerfile:  "/path",
+			wantStrategy:  strategyCascade,
+			wantImage:     "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotStrategy, gotImage := resolveImageStrategy(tc.wsImage, tc.defaultsImage, tc.wsDockerfile)
+
+			if gotStrategy != tc.wantStrategy {
+				t.Fatalf("resolveImageStrategy(%q, %q, %q) strategy = %v, want %v", tc.wsImage, tc.defaultsImage, tc.wsDockerfile, gotStrategy, tc.wantStrategy)
+			}
+
+			if gotImage != tc.wantImage {
+				t.Fatalf("resolveImageStrategy(%q, %q, %q) image = %q, want %q", tc.wsImage, tc.defaultsImage, tc.wsDockerfile, gotImage, tc.wantImage)
+			}
+		})
+	}
+}
