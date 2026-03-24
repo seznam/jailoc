@@ -6,27 +6,25 @@ The file is auto-created with defaults on first run. All fields are optional unl
 
 ---
 
-## `[image]`
+## `[base]`
 
-Global image settings applied to all workspaces unless overridden at the workspace level.
+Global base image settings. Controls the fallback image used when no workspace-level `image` is set.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `repository` | string | `ghcr.io/seznam/jailoc` | Base image registry URL used for registry pull when no `dockerfile` is set. |
-| `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for the base image. When set, takes priority over `repository` and the embedded fallback. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. Supports `~` expansion for local paths. |
+| `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for the base image. When set, takes priority over the embedded fallback. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. Supports `~` expansion for local paths. |
 
 ### Example
 
 ```toml
-[image]
-repository = "registry.example.com/myorg/jailoc"
+[base]
 dockerfile = "https://example.com/Dockerfiles/custom"
 ```
 
 Or with a local Dockerfile:
 
 ```toml
-[image]
+[base]
 dockerfile = "/opt/myorg/base.Dockerfile"
 ```
 
@@ -38,6 +36,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `image` | string | (none) | Pre-built Docker image used as the base for workspace Dockerfile builds, or pulled directly when no workspace `dockerfile` is set. |
 | `env` | string[] | `[]` | Environment variables applied to all workspaces. Each entry must be in `KEY=VALUE` format. Workspace `env` entries take precedence over defaults with the same key. |
 | `env_file` | string[] | `[]` | Paths to `.env` files loaded for all workspaces. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Parsed before workspace-level `env_file` entries. |
 | `allowed_hosts` | string[] | `[]` | Hostnames allowed through the firewall for all workspaces. Merged with per-workspace `allowed_hosts`. |
@@ -47,6 +46,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 
 ```toml
 [defaults]
+image = "ubuntu:22.04"
 env = ["GOPRIVATE=*.example.com", "NPM_REGISTRY=https://npm.example.com"]
 env_file = ["~/.config/jailoc/shared.env"]
 allowed_hosts = ["internal-registry.example.com"]
@@ -66,11 +66,15 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `paths` | string[] | (required) | Directories bind-mounted into the container at their original absolute paths. The first path becomes the container's working directory. Supports `~` expansion. |
 | `allowed_hosts` | string[] | `[]` | Hostnames resolved at container start and added as iptables `ACCEPT` rules before the private-range `DROP` rules. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
+| `image` | string | (none) | Pre-built Docker image to use directly for this workspace, bypassing all build steps. Compose pulls the image natively at startup. Cannot be combined with `dockerfile` or `build_context`. |
 | `build_context` | string | (none) | Docker build context directory for the workspace overlay build. When empty and `dockerfile` is a local path, defaults to the parent directory of the Dockerfile. When empty and `dockerfile` is an HTTP URL, a temporary directory is used. Supports `~` expansion. |
 | `mode` | string | `""` | Connection mode for `jailoc attach` and the root `jailoc` command. Accepted values: `"remote"`, `"exec"`, `""` (auto-detect). |
-| `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for a workspace-specific overlay image. Builds on top of the base image resolved by `[image]` settings. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. Supports `~` expansion for local paths. |
+| `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for a workspace-specific overlay image. Builds on top of the base image resolved by `[base]` settings. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. Supports `~` expansion for local paths. |
 | `env` | string[] | `[]` | Environment variables for this workspace. Each entry in `KEY=VALUE` format. These override any global `defaults.env` entry with the same key. Reserved keys are rejected (see Validation Rules). |
 | `env_file` | string[] | `[]` | Paths to `.env` files for this workspace. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Loaded after global `defaults.env_file` entries. |
+
+!!! note
+    `image` is mutually exclusive with `dockerfile` and `build_context`. Setting `image` alongside either of those fields is a validation error.
 
 ### Example
 
@@ -112,6 +116,13 @@ Each entry is validated against a list of forbidden path prefixes. Paths startin
 ### `allowed_networks`
 
 Each entry must be a valid CIDR notation string as accepted by Go's `net.ParseCIDR`. Invalid CIDR values are rejected at config load time.
+
+### Workspace `image`
+
+The workspace `image` field is mutually exclusive with `dockerfile` and `build_context`. The following combinations are rejected at config load time:
+
+- `image` set together with `dockerfile`
+- `image` set together with `build_context`
 
 ### `dockerfile` fields
 

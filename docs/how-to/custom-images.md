@@ -1,36 +1,72 @@
 # How to use a custom Docker image
 
-By default, jailoc pulls a versioned base image from the configured registry. This guide shows how to replace or extend that image at each level of customization. For the full resolution rules, see [Image resolution reference](../reference/image-resolution.md).
+By default, jailoc builds a base image from the Dockerfile embedded in the binary. This guide shows how to replace or extend that image at each level of customization. For the full resolution rules, see [Image resolution reference](../reference/image-resolution.md).
+
+---
+
+## Use a pre-built image directly
+
+Set `image` in the workspace block to skip all build steps. Compose pulls the image from its registry at container startup.
+
+```toml
+[workspaces.myproject]
+paths = ["~/projects/myproject"]
+image = "myregistry.example.com/myteam/myapp:v1.2.3"
+```
+
+!!! warning
+    `image` cannot be combined with `dockerfile` or `build_context` in the same workspace block. Setting both is a validation error.
+
+---
+
+## Set a default base image
+
+Set `image` in `[defaults]` to use a pre-built image as the starting point for all workspaces. Workspaces that have their own `dockerfile` will use this as the `BASE` build argument; workspaces without a `dockerfile` will use it directly.
+
+```toml
+[defaults]
+image = "ubuntu:22.04"
+```
+
+With this set, a workspace that adds its own `dockerfile` builds on top of `ubuntu:22.04`:
+
+```toml
+[workspaces.myproject]
+paths = ["~/projects/myproject"]
+dockerfile = "~/projects/myproject/overlay.Dockerfile"
+```
+
+A workspace without a `dockerfile` receives `ubuntu:22.04` as-is.
 
 ---
 
 ## Use a local Dockerfile as the base image
 
-Set `dockerfile` in the global `[image]` section to an absolute path on your host. jailoc reads the file, builds it locally, and tags the result with a content-based hash (`jailoc-base:preset-<hash>`).
+Set `dockerfile` in the global `[base]` section to an absolute path on your host. jailoc reads the file, builds it locally, and tags the result with a content-based hash (`jailoc-base:preset-<hash>`).
 
 ```toml
-[image]
+[base]
 dockerfile = "/opt/myorg/base.Dockerfile"
 ```
 
 Tilde paths work too:
 
 ```toml
-[image]
+[base]
 dockerfile = "~/dockerfiles/base.Dockerfile"
 ```
 
 !!! warning
-    If the file doesn't exist or the build fails, jailoc aborts. There is no fallback to the registry or embedded image.
+    If the file doesn't exist or the build fails, jailoc aborts. There is no fallback to the embedded image.
 
 ---
 
 ## Use a remote Dockerfile URL as the base image
 
-Set `dockerfile` in `[image]` to an HTTP(S) URL. jailoc downloads the file, builds it locally, and tags the result with a content-based hash.
+Set `dockerfile` in `[base]` to an HTTP(S) URL. jailoc downloads the file, builds it locally, and tags the result with a content-based hash.
 
 ```toml
-[image]
+[base]
 dockerfile = "https://gitlab.example.com/team/dockerfiles/-/raw/main/opencode.Dockerfile"
 ```
 
@@ -41,7 +77,7 @@ dockerfile = "https://gitlab.example.com/team/dockerfiles/-/raw/main/opencode.Do
 
 ## Add a workspace-specific layer
 
-Set `dockerfile` in a `[workspaces.<name>]` block. jailoc builds this Dockerfile on top of whatever base image was resolved by the `[image]` settings, passing the base tag as a build argument.
+Set `dockerfile` in a `[workspaces.<name>]` block. jailoc builds this Dockerfile on top of whatever base image was resolved (from `[base]` settings, or `defaults.image` if set), passing the base tag as a build argument.
 
 ```toml
 [workspaces.myproject]
@@ -170,6 +206,6 @@ For the full compatibility matrix, see [Overlay compatibility reference](../refe
 
 ## Default behavior (no customization)
 
-When no `dockerfile` is configured in `[image]`, jailoc checks `[image].repository`. If a repository is set, it pulls `{repository}:{version}` from the registry — and a pull failure is fatal. If no repository is set either, jailoc builds from the Dockerfile embedded in the jailoc binary itself, tagging the result `jailoc-base:embedded`.
+When no `image` or `dockerfile` is configured at any level, jailoc builds from the Dockerfile embedded in the jailoc binary itself, tagging the result `jailoc-base:embedded`.
 
 You don't need to do anything to get this behavior. It's the starting point before any of the customization steps above.
