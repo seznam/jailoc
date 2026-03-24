@@ -116,24 +116,14 @@ func ComposeCacheDir(workspace string) string {
 }
 
 func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, version string) (string, error) {
-	var base string
-	var err error
-
-	if ws.Dockerfile != "" {
-		base, err = docker.ResolvePresetImage(ctx, ws.Dockerfile)
-		if err != nil {
-			return "", fmt.Errorf("resolve workspace preset image: %w", err)
-		}
-	} else {
-		base, err = docker.ResolveImage(ctx, cfg, version)
-		if err != nil {
-			return "", fmt.Errorf("resolve base image: %w", err)
-		}
+	base, err := docker.ResolveBaseImage(ctx, cfg, version)
+	if err != nil {
+		return "", fmt.Errorf("resolve base image: %w", err)
 	}
 
-	final, err := docker.ApplyWorkspaceLayer(ctx, base, ws.Name)
+	final, err := docker.BuildOverlayImage(ctx, base, *ws)
 	if err != nil {
-		return "", fmt.Errorf("apply workspace image layer: %w", err)
+		return "", fmt.Errorf("build workspace overlay image: %w", err)
 	}
 	return final, nil
 }
