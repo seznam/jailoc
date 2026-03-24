@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,16 +45,22 @@ func runAttach(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workspace %q is not running; run 'jailoc up' first", ws.Name)
 	}
 
+	attachCtx, stop, err := startAttachWatch(ctx, client, ws.Name)
+	if err != nil {
+		return err
+	}
+	defer stop()
+
 	mode := resolveFromFlags(cmd, cfg)
 	switch mode {
 	case config.ModeExec:
-		return attachExec(ctx, client)
+		return attachExec(attachCtx, client)
 	default:
-		return attachOnHost(ctx, client, ws)
+		return attachOnHost(attachCtx, ws)
 	}
 }
 
-func attachOnHost(ctx context.Context, client *docker.Client, ws *workspace.Resolved) error {
+func attachOnHost(ctx context.Context, ws *workspace.Resolved) error {
 	serverArg := fmt.Sprintf("http://localhost:%d", ws.Port)
 	args := []string{"attach", serverArg}
 
@@ -61,31 +68,18 @@ func attachOnHost(ctx context.Context, client *docker.Client, ws *workspace.Reso
 		args = append(args, "--password", password)
 	}
 
-	cmd := exec.CommandContext(ctx, "opencode", args...) //nolint:gosec // binary name is hardcoded, args are controlled
+	cmd := exec.Command("opencode", args...) //nolint:gosec // binary name is hardcoded, args are controlled
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start opencode attach: %w", err)
-	}
-
-	// Watchdog: poll workspace health every 3s, kill process when it stops.
-	died := make(chan struct{})
-	go watchWorkspace(ctx, client, died)
-
-	// Wait for either process exit or watchdog signal.
-	waitErr := make(chan error, 1)
-	go func() { waitErr <- cmd.Wait() }()
-
-	select {
-	case err := <-waitErr:
-		return err
-	case <-died:
-		_ = cmd.Process.Kill()
-		<-waitErr // reap the process
-		return fmt.Errorf("workspace stopped — detached")
-	}
+	err := runCommandWithContext(ctx, cmd, func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}, attachWaitDelay)
+	return attachResult(ctx, err)
 }
 
 func attachExec(ctx context.Context, client *docker.Client) error {
@@ -108,24 +102,42 @@ func attachExec(ctx context.Context, client *docker.Client) error {
 		close(sigCh)
 	}()
 
-	// Cancel context when workspace stops so the exec stream disconnects.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	died := make(chan struct{})
-	go watchWorkspace(ctx, client, died)
-	go func() {
-		<-died
-		cancel()
-	}()
-
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
-	return client.Exec(ctx, []string{"opencode", "attach", serverURL}, os.Stdin, os.Stdout, os.Stderr)
+	err = client.Exec(ctx, []string{"opencode", "attach", serverURL}, os.Stdin, os.Stdout, os.Stderr)
+	return attachResult(ctx, err)
 }
 
-const watchdogInterval = 3 * time.Second
+const (
+	attachPollInterval = 500 * time.Millisecond
+	attachWaitDelay    = 2 * time.Second
+)
 
-func watchWorkspace(ctx context.Context, client *docker.Client, died chan<- struct{}) {
-	ticker := time.NewTicker(watchdogInterval)
+func startAttachWatch(parent context.Context, client *docker.Client, workspaceName string) (context.Context, func(), error) {
+	containerID, err := client.CurrentContainerID(parent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve opencode container: %w", err)
+	}
+	if containerID == "" {
+		return nil, nil, fmt.Errorf("workspace %q is not running; run 'jailoc up' first", workspaceName)
+	}
+
+	attachCtx, cancel := context.WithCancelCause(parent)
+	go monitorAttach(attachCtx, cancel, client.CurrentContainerID, containerID, attachPollInterval)
+
+	return attachCtx, func() { cancel(nil) }, nil
+}
+
+func attachResult(ctx context.Context, err error) error {
+	cause := context.Cause(ctx)
+	if cause != nil && !errors.Is(cause, context.Canceled) {
+		return cause
+	}
+
+	return err
+}
+
+func monitorAttach(ctx context.Context, cancel context.CancelCauseFunc, currentContainerID func(context.Context) (string, error), expectedContainerID string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -133,11 +145,57 @@ func watchWorkspace(ctx context.Context, client *docker.Client, died chan<- stru
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			running, err := client.IsRunning(ctx)
-			if err != nil || !running {
-				close(died)
+			containerID, err := currentContainerID(ctx)
+			if err != nil {
+				cancel(fmt.Errorf("monitor opencode container: %w", err))
 				return
 			}
+			if containerID == "" {
+				cancel(fmt.Errorf("opencode container stopped during attach"))
+				return
+			}
+			if containerID != expectedContainerID {
+				cancel(fmt.Errorf("opencode container restarted during attach"))
+				return
+			}
+		}
+	}
+}
+
+func runCommandWithContext(ctx context.Context, cmd *exec.Cmd, terminate func() error, waitDelay time.Duration) error {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start command %q: %w", cmd.Path, err)
+	}
+
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-resultCh:
+		return err
+	case <-ctx.Done():
+		if terminate != nil {
+			if err := terminate(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				return fmt.Errorf("cancel command %q: %w", cmd.Path, err)
+			}
+		}
+
+		if waitDelay <= 0 {
+			return <-resultCh
+		}
+
+		select {
+		case err := <-resultCh:
+			return err
+		case <-time.After(waitDelay):
+			if cmd.Process != nil {
+				if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					return fmt.Errorf("kill command %q: %w", cmd.Path, err)
+				}
+			}
+			return <-resultCh
 		}
 	}
 }

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -100,12 +102,18 @@ var rootCmd = &cobra.Command{
 		}
 
 		mode := resolveFromFlags(cmd, cfg)
+		attachCtx, stop, err := startAttachWatch(ctx, client, ws.Name)
+		if err != nil {
+			return err
+		}
+		defer stop()
+
 		var attachErr error
 		switch mode {
 		case config.ModeExec:
-			attachErr = attachExec(ctx, client)
+			attachErr = attachExec(attachCtx, client)
 		default:
-			attachErr = attachOnHost(ctx, client, ws)
+			attachErr = attachOnHost(attachCtx, ws)
 		}
 		if attachErr != nil {
 			return fmt.Errorf("attach to workspace %q: %w", ws.Name, attachErr)
@@ -189,7 +197,7 @@ func confirmBroadPath(path string) (bool, error) {
 
 // resolveFromFlags returns the effective access mode based on CLI flags and config.
 // Priority: --remote/--exec flag → config mode → auto-detect via LookPath.
-func resolveFromFlags(cmd *cobra.Command, cfg *config.Config) string {
+func resolveFromFlags(_ *cobra.Command, cfg *config.Config) string {
 	if remoteFlag {
 		return config.ModeRemote
 	}
@@ -203,6 +211,11 @@ func resolveFromFlags(cmd *cobra.Command, cfg *config.Config) string {
 func Execute(version, commit, date string) error {
 	appVersion = version
 	rootCmd.Version = fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	rootCmd.SetContext(ctx)
+
 	return rootCmd.Execute()
 }
 
