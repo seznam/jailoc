@@ -24,9 +24,8 @@ var (
 )
 
 type integrationConfig struct {
-	Image struct {
-		Repository string `toml:"repository"`
-	} `toml:"image"`
+	Base struct {
+	} `toml:"base"`
 	Workspaces map[string]struct {
 		Paths   []string `toml:"paths"`
 		Env     []string `toml:"env"`
@@ -243,8 +242,7 @@ func TestEnvVarsReachContainer(t *testing.T) {
 	workspaceDir := t.TempDir()
 
 	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
-	content := fmt.Sprintf(`[image]
-repository = "registry.example.com/jailoc-base"
+	content := fmt.Sprintf(`[base]
 
 [workspaces.default]
 paths = [%q]
@@ -299,8 +297,7 @@ func TestEnvFileVarsReachContainer(t *testing.T) {
 	}
 
 	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
-	content := fmt.Sprintf(`[image]
-repository = "registry.example.com/jailoc-base"
+	content := fmt.Sprintf(`[base]
 
 [workspaces.default]
 paths = [%q]
@@ -411,8 +408,7 @@ func runJailoc(ctx context.Context, home string, args ...string) (string, error)
 
 func writeMinimalConfig(home, workspacePath string) error {
 	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
-	content := fmt.Sprintf(`[image]
-repository = "registry.example.com/jailoc-base"
+	content := fmt.Sprintf(`[base]
 
 [workspaces.default]
 paths = [%q]

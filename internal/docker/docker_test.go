@@ -156,9 +156,8 @@ func TestResolveBaseImageDockerfilePrecedence(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		Image: config.ImageConfig{
+		Base: config.BaseConfig{
 			Dockerfile: tempFile.Name(),
-			Repository: "registry.example.com/test/repo",
 		},
 	}
 
@@ -195,7 +194,7 @@ func TestResolveBaseImageDockerfileLoadError(t *testing.T) {
 
 	nonExistentPath := filepath.Join(t.TempDir(), "does-not-exist.Dockerfile")
 	cfg := &config.Config{
-		Image: config.ImageConfig{Dockerfile: nonExistentPath},
+		Base: config.BaseConfig{Dockerfile: nonExistentPath},
 	}
 
 	_, err := ResolveBaseImage(context.Background(), cfg, "v0.0.0-test")
