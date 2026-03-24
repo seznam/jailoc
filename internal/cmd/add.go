@@ -107,6 +107,10 @@ func maybeRestartWorkspace(ws *workspace.Resolved) error {
 		OpenCodePassword: password,
 	}
 
+	if err := config.WriteAllowedFiles(ws2.Name, cfg); err != nil {
+		return fmt.Errorf("write allowed files for workspace %q: %w", ws2.Name, err)
+	}
+
 	if err := compose.WriteComposeFile(params, compPath); err != nil {
 		return fmt.Errorf("regenerate compose file: %w", err)
 	}

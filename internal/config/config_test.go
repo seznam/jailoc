@@ -585,6 +585,107 @@ func TestAllowedNetworksFileContentEmptyList(t *testing.T) {
 	}
 }
 
+func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"myws": {
+			AllowedHosts:    []string{"foo.com", "bar.com"},
+			AllowedNetworks: []string{"10.0.0.0/8", "172.16.0.0/12"},
+		},
+	}}
+
+	if err := WriteAllowedFiles("myws", cfg); err != nil {
+		t.Fatalf("WriteAllowedFiles returned error: %v", err)
+	}
+
+	dir := ConfigDir()
+
+	hostsData, err := os.ReadFile(filepath.Join(dir, "allowed-hosts"))
+	if err != nil {
+		t.Fatalf("read allowed-hosts: %v", err)
+	}
+	if string(hostsData) != "foo.com\nbar.com\n" {
+		t.Fatalf("unexpected allowed-hosts content: %q", string(hostsData))
+	}
+
+	networksData, err := os.ReadFile(filepath.Join(dir, "allowed-networks"))
+	if err != nil {
+		t.Fatalf("read allowed-networks: %v", err)
+	}
+	if string(networksData) != "10.0.0.0/8\n172.16.0.0/12\n" {
+		t.Fatalf("unexpected allowed-networks content: %q", string(networksData))
+	}
+}
+
+func TestWriteAllowedFilesRemovesStaleFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := ConfigDir()
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "allowed-hosts"), []byte("old.com\n"), 0o600); err != nil {
+		t.Fatalf("write stale allowed-hosts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "allowed-networks"), []byte("192.168.0.0/16\n"), 0o600); err != nil {
+		t.Fatalf("write stale allowed-networks: %v", err)
+	}
+
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"myws": {AllowedHosts: []string{}, AllowedNetworks: []string{}},
+	}}
+
+	if err := WriteAllowedFiles("myws", cfg); err != nil {
+		t.Fatalf("WriteAllowedFiles returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "allowed-hosts")); !os.IsNotExist(err) {
+		t.Fatal("expected allowed-hosts to be removed for empty list")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "allowed-networks")); !os.IsNotExist(err) {
+		t.Fatal("expected allowed-networks to be removed for empty list")
+	}
+}
+
+func TestWriteAllowedFilesNilConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := WriteAllowedFiles("whatever", nil); err != nil {
+		t.Fatalf("WriteAllowedFiles with nil config returned error: %v", err)
+	}
+
+	dir := ConfigDir()
+	if _, err := os.Stat(filepath.Join(dir, "allowed-hosts")); !os.IsNotExist(err) {
+		t.Fatal("expected no allowed-hosts file for nil config")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "allowed-networks")); !os.IsNotExist(err) {
+		t.Fatal("expected no allowed-networks file for nil config")
+	}
+}
+
+func TestWriteAllowedFilesMissingWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"other": {AllowedHosts: []string{"foo.com"}},
+	}}
+
+	if err := WriteAllowedFiles("nonexistent", cfg); err != nil {
+		t.Fatalf("WriteAllowedFiles with missing workspace returned error: %v", err)
+	}
+
+	dir := ConfigDir()
+	if _, err := os.Stat(filepath.Join(dir, "allowed-hosts")); !os.IsNotExist(err) {
+		t.Fatal("expected no allowed-hosts file for missing workspace")
+	}
+}
+
 func TestValidateAcceptsDockerfileHTTP(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{

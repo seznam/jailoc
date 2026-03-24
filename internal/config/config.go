@@ -329,6 +329,37 @@ func AddPath(workspace, path string) error {
 	return nil
 }
 
+func WriteAllowedFiles(workspace string, cfg *Config) error {
+	dir := ConfigDir()
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("create config directory %q: %w", dir, err)
+	}
+
+	hostsPath := filepath.Join(dir, "allowed-hosts")
+	if content := AllowedHostsFileContent(workspace, cfg); content != "" {
+		if err := os.WriteFile(hostsPath, []byte(content), 0o600); err != nil {
+			return fmt.Errorf("write allowed-hosts file: %w", err)
+		}
+	} else {
+		if err := os.Remove(hostsPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale allowed-hosts file: %w", err)
+		}
+	}
+
+	networksPath := filepath.Join(dir, "allowed-networks")
+	if content := AllowedNetworksFileContent(workspace, cfg); content != "" {
+		if err := os.WriteFile(networksPath, []byte(content), 0o600); err != nil {
+			return fmt.Errorf("write allowed-networks file: %w", err)
+		}
+	} else {
+		if err := os.Remove(networksPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale allowed-networks file: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func AllowedHostsFileContent(workspace string, cfg *Config) string {
 	if cfg == nil {
 		return ""

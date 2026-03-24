@@ -227,11 +227,10 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 		}
 		defer func() { _ = engineCli.Close() }()
 
-		if err := pullImage(ctx, engineCli, tag); err != nil {
-			return "", fmt.Errorf("pull base image %q: %w", tag, err)
+		if err := pullImage(ctx, engineCli, tag); err == nil {
+			return tag, nil
 		}
-
-		return tag, nil
+		fmt.Printf("registry pull failed for %s, falling back to embedded build\n", tag)
 	}
 
 	const embeddedTag = "jailoc-base:embedded"
