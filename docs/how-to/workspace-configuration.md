@@ -125,3 +125,36 @@ mode = "remote"   # or "exec", or omit for auto-detect
 ```
 
 See [How to switch between remote and exec mode](access-modes.md) for details.
+
+---
+
+## Set environment variables
+
+Pass environment variables to the agent container using the `env` field:
+
+```toml
+[workspaces.api]
+paths = ["/home/you/projects/api"]
+env = ["MY_TOKEN=abc123", "LOG_LEVEL=debug"]
+```
+
+To load variables from a file, use `env_file`. The file must exist at config load time and follow Docker `.env` format (KEY=VALUE, `#` comments, quoted values):
+
+```toml
+[workspaces.api]
+paths = ["/home/you/projects/api"]
+env_file = ["~/.config/jailoc/api.env"]
+```
+
+Both can be combined. `env` entries override `env_file` entries with the same key.
+
+To apply env vars to all workspaces, use the `[defaults]` section:
+
+```toml
+[defaults]
+env = ["GOPRIVATE=*.example.com"]
+env_file = ["~/.config/jailoc/shared.env"]
+```
+
+!!! note
+    Several keys are reserved and cannot be set: `OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`. Setting any of these causes a config validation error.

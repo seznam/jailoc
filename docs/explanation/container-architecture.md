@@ -55,6 +55,8 @@ The opencode container mounts several things at startup:
 
 Two named volumes are shared between both containers: one for TLS certificates (so the opencode container can authenticate to the dind daemon) and one for Docker's data directory. A third named volume holds the agent's own data — its SQLite history database and auth tokens. This last volume is intentionally isolated from your host's `~/.local/share/opencode`, so the agent's session history never touches your personal history.
 
+Environment variables configured via `env` or `env_file` in the workspace config or the `[defaults]` section are passed to the opencode container alongside the system variables required for dind connectivity. Values are literal strings — no host environment variable expansion is performed.
+
 ## The entrypoint sequence
 
 The container image's entrypoint script runs as root and performs three distinct phases before handing off to the agent process.

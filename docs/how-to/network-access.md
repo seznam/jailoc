@@ -67,3 +67,17 @@ allowed_networks = ["10.10.5.0/24"]
 ```
 
 All resolved host IPs and all listed CIDRs get `ACCEPT` rules. Everything else in the RFC 1918, link-local, and CGNAT ranges is blocked.
+
+---
+
+## Apply rules to all workspaces
+
+To allow a host or network for every workspace, use the `[defaults]` section instead of repeating it in each workspace:
+
+```toml
+[defaults]
+allowed_hosts = ["internal-registry.example.com"]
+allowed_networks = ["10.0.0.0/8"]
+```
+
+Per-workspace rules are merged with defaults — both lists are combined (duplicates removed). Workspace-level rules do not override defaults; they add to them.

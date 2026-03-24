@@ -32,6 +32,29 @@ dockerfile = "/opt/myorg/base.Dockerfile"
 
 ---
 
+## `[defaults]`
+
+Global defaults applied to all workspaces. All fields are optional and default to empty.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `env` | string[] | `[]` | Environment variables applied to all workspaces. Each entry must be in `KEY=VALUE` format. Workspace `env` entries take precedence over defaults with the same key. |
+| `env_file` | string[] | `[]` | Paths to `.env` files loaded for all workspaces. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Parsed before workspace-level `env_file` entries. |
+| `allowed_hosts` | string[] | `[]` | Hostnames allowed through the firewall for all workspaces. Merged with per-workspace `allowed_hosts`. |
+| `allowed_networks` | string[] | `[]` | CIDR ranges allowed through the firewall for all workspaces. Merged with per-workspace `allowed_networks`. |
+
+### Example
+
+```toml
+[defaults]
+env = ["GOPRIVATE=*.example.com", "NPM_REGISTRY=https://npm.example.com"]
+env_file = ["~/.config/jailoc/shared.env"]
+allowed_hosts = ["internal-registry.example.com"]
+allowed_networks = ["10.0.0.0/8"]
+```
+
+---
+
 ## `[workspaces.<name>]`
 
 Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
@@ -46,6 +69,8 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `build_context` | string | (none) | Docker build context directory for the workspace overlay build. When empty and `dockerfile` is a local path, defaults to the parent directory of the Dockerfile. When empty and `dockerfile` is an HTTP URL, a temporary directory is used. Supports `~` expansion. |
 | `mode` | string | `""` | Connection mode for `jailoc attach` and the root `jailoc` command. Accepted values: `"remote"`, `"exec"`, `""` (auto-detect). |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for a workspace-specific overlay image. Builds on top of the base image resolved by `[image]` settings. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. Supports `~` expansion for local paths. |
+| `env` | string[] | `[]` | Environment variables for this workspace. Each entry in `KEY=VALUE` format. These override any global `defaults.env` entry with the same key. Reserved keys are rejected (see Validation Rules). |
+| `env_file` | string[] | `[]` | Paths to `.env` files for this workspace. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Loaded after global `defaults.env_file` entries. |
 
 ### Example
 
@@ -97,6 +122,42 @@ Accepted values:
 - **HTTP(S) URLs**: must have an `http` or `https` scheme and a non-empty host component. Paths like `http:///path` are rejected.
 
 Relative paths and other URL schemes (e.g. `ftp://`, `file://`) are not accepted.
+
+### `env`
+
+Each entry must be in `KEY=VALUE` format (key cannot be empty, must contain `=`). The following keys are reserved and cannot be set by users:
+
+| Reserved key | Reason |
+|---|---|
+| `OPENCODE_LOG` | opencode runtime config |
+| `OPENCODE_SERVER_PASSWORD` | opencode server auth |
+| `DOCKER_HOST` | DinD TLS connection |
+| `DOCKER_TLS_CERTDIR` | DinD TLS certs |
+| `DOCKER_CERT_PATH` | DinD TLS certs |
+| `DOCKER_TLS_VERIFY` | DinD TLS verification |
+
+### `env_file`
+
+Each path must be absolute (starting with `/`) or start with `~` (expanded to `$HOME`). Files must exist at config load time. The file format is Docker `.env` compatible:
+
+- Lines in `KEY=VALUE` format
+- Lines starting with `#` are comments
+- Empty lines are ignored
+- Values may be quoted (`KEY="value with spaces"`)
+- Inline comments after values are stripped
+
+Values are treated as literal strings — no host environment variable expansion is performed.
+
+### Merge semantics
+
+Environment variables from multiple sources are merged in this order (later entries win for the same key):
+
+1. `[defaults].env` — global inline values
+2. `[defaults].env_file` — global file values (in list order)
+3. Workspace `env_file` — per-workspace file values (in list order)
+4. Workspace `env` — per-workspace inline values (highest priority)
+
+`allowed_hosts` and `allowed_networks` use union deduplication: the global list is merged with the workspace list, with duplicates removed, preserving order.
 
 ---
 
