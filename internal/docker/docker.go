@@ -459,10 +459,13 @@ func fileExists(path string) (bool, error) {
 	return true, nil
 }
 
+// Stub implementations (config functions removed in Task 4, these will be deleted in Task 9)
 func baseDockerfileOverridePath() string {
-	return config.BaseDockerfileOverridePath()
+	// Deprecated: these functions will be removed when ResolveImage and ApplyWorkspaceLayer are deleted in Task 9
+	return filepath.Join(config.ConfigDir(), "Dockerfile")
 }
 
 func workspaceDockerfilePath(workspace string) string {
-	return config.WorkspaceDockerfilePath(workspace)
+	// Deprecated: these functions will be removed when ResolveImage and ApplyWorkspaceLayer are deleted in Task 9
+	return filepath.Join(config.ConfigDir(), workspace+".Dockerfile")
 }
