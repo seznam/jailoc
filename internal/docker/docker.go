@@ -81,22 +81,50 @@ func (c *Client) Down(ctx context.Context) error {
 }
 
 func (c *Client) IsRunning(ctx context.Context) (bool, error) {
-	if err := c.initComposeSvc(); err != nil {
+	container, err := c.opencodeContainer(ctx)
+	if err != nil {
 		return false, err
+	}
+
+	return container.ID != "", nil
+}
+
+func (c *Client) CurrentContainerID(ctx context.Context) (string, error) {
+	container, err := c.opencodeContainer(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return container.ID, nil
+}
+
+func (c *Client) opencodeContainer(ctx context.Context) (api.ContainerSummary, error) {
+	if err := c.initComposeSvc(); err != nil {
+		return api.ContainerSummary{}, err
 	}
 
 	containers, err := c.svc.Ps(ctx, "jailoc-"+c.workspace, api.PsOptions{All: true})
 	if err != nil {
-		return false, fmt.Errorf("compose ps for workspace %q: %w", c.workspace, err)
+		return api.ContainerSummary{}, fmt.Errorf("compose ps for workspace %q: %w", c.workspace, err)
 	}
 
+	return currentOpencodeContainer(containers), nil
+}
+
+func currentOpencodeContainer(containers []api.ContainerSummary) api.ContainerSummary {
+	var selected api.ContainerSummary
+
 	for _, ct := range containers {
-		if ct.Service == "opencode" && ct.State == "running" {
-			return true, nil
+		if ct.Service != "opencode" || ct.State != "running" {
+			continue
+		}
+
+		if selected.ID == "" || ct.Created > selected.Created {
+			selected = ct
 		}
 	}
 
-	return false, nil
+	return selected
 }
 
 type writerLogConsumer struct{ w io.Writer }

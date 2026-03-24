@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/compose/v5/pkg/api"
+	containertypes "github.com/moby/moby/api/types/container"
+
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -74,6 +77,50 @@ func TestWriterLogConsumer(t *testing.T) {
 
 		if buf.String() != "" {
 			t.Fatalf("expected empty buffer, got %q", buf.String())
+		}
+	})
+}
+
+func TestCurrentOpencodeContainer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("selects newest running opencode container", func(t *testing.T) {
+		t.Parallel()
+
+		got := currentOpencodeContainer([]api.ContainerSummary{
+			{ID: "old", Service: "opencode", State: containertypes.StateRunning, Created: 100},
+			{ID: "new", Service: "opencode", State: containertypes.StateRunning, Created: 200},
+			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 300},
+		})
+
+		if got.ID != "new" {
+			t.Fatalf("got container %q, want %q", got.ID, "new")
+		}
+	})
+
+	t.Run("ignores non-running opencode containers", func(t *testing.T) {
+		t.Parallel()
+
+		got := currentOpencodeContainer([]api.ContainerSummary{
+			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200},
+			{ID: "running", Service: "opencode", State: containertypes.StateRunning, Created: 100},
+		})
+
+		if got.ID != "running" {
+			t.Fatalf("got container %q, want %q", got.ID, "running")
+		}
+	})
+
+	t.Run("returns zero value when no running opencode container exists", func(t *testing.T) {
+		t.Parallel()
+
+		got := currentOpencodeContainer([]api.ContainerSummary{
+			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 100},
+			{ID: "stopped", Service: "opencode", State: containertypes.StateExited, Created: 200},
+		})
+
+		if got.ID != "" {
+			t.Fatalf("got container %q, want empty ID", got.ID)
 		}
 	})
 }
