@@ -27,6 +27,8 @@ Because the terminal UI renders on the host, it uses your host terminal directly
 
 The only requirement is that `opencode` is installed and available on your host `PATH`.
 
+If the `opencode` container stops or is recreated while you are attached, `jailoc` now cancels the host-side attach process instead of waiting indefinitely. This matters most during rebuilds or bakes that replace the container while your UI is still connected.
+
 ## Exec mode
 
 In exec mode, `jailoc attach` uses `docker exec` to run `opencode attach` inside the container, connecting to the same `opencode serve` process. Both the client and the server run inside the container, with stdin/stdout piped through docker exec to the host terminal.
@@ -54,6 +56,8 @@ Because rendering happens through docker exec's pipe, terminal capabilities are 
 
 The upside is that exec mode has no host-side dependencies. As long as Docker is available, it works. You don't need opencode installed on your machine.
 
+Because exec mode puts your terminal into raw mode before entering `docker exec`, an interrupted container used to leave the session looking frozen until the exec call returned. `jailoc` now watches the specific `opencode` container instance during attach and aborts the session as soon as that container stops or is replaced, so the terminal can be restored promptly.
+
 ## Comparison
 
 | | Remote | Exec |
@@ -62,6 +66,7 @@ The upside is that exec mode has no host-side dependencies. As long as Docker is
 | Terminal experience | Full (renders on host) | Limited (through pipe) |
 | Keyboard shortcuts | Full support | Partial |
 | Disconnect behaviour | Client exits, session persists | Client exits, session persists |
+| Container stop/restart during attach | Attach exits instead of hanging | Attach exits instead of hanging |
 | Reconnect | Yes | Yes |
 
 ## Auto-detection

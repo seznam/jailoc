@@ -49,3 +49,14 @@ jailoc attach --exec     # force exec mode for this run
 ```
 
 The flag takes precedence over both the config value and auto-detection.
+
+---
+
+## Understand attach behavior during rebuilds or restarts
+
+Both modes now fail fast if the `opencode` container stops or is replaced while you are attached.
+
+- In **remote** mode, jailoc terminates the host-side `opencode attach` process instead of leaving it blocked against a dead container.
+- In **exec** mode, jailoc cancels the `docker exec` session so your terminal is restored instead of staying stuck in a hung interactive session.
+
+This is most noticeable when you rebuild, bake, or otherwise replace the workspace container while an attach session is active. After the attach command exits, run `jailoc attach` again to reconnect to the new container.

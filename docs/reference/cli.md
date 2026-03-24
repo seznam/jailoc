@@ -72,6 +72,8 @@ jailoc attach [flags]
 
 The workspace must already be running. See [access modes explanation](../explanation/access-modes.md) for the difference between `--remote` and `--exec`.
 
+If the `opencode` container stops or is replaced while attachment is active, `jailoc attach` exits instead of waiting indefinitely for the underlying client session to recover.
+
 ---
 
 ### `jailoc status`
