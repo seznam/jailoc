@@ -602,7 +602,7 @@ func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
 
 	dir := ConfigDir()
 
-	hostsData, err := os.ReadFile(filepath.Join(dir, "allowed-hosts"))
+	hostsData, err := os.ReadFile(filepath.Join(dir, "allowed-hosts")) //nolint:gosec // test reads from t.TempDir()
 	if err != nil {
 		t.Fatalf("read allowed-hosts: %v", err)
 	}
@@ -610,7 +610,7 @@ func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
 		t.Fatalf("unexpected allowed-hosts content: %q", string(hostsData))
 	}
 
-	networksData, err := os.ReadFile(filepath.Join(dir, "allowed-networks"))
+	networksData, err := os.ReadFile(filepath.Join(dir, "allowed-networks")) //nolint:gosec // test reads from t.TempDir()
 	if err != nil {
 		t.Fatalf("read allowed-networks: %v", err)
 	}
