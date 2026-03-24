@@ -78,3 +78,15 @@ The three-phase sequence matters because iptables manipulation and `chown` both 
 Nested Docker requires the `--privileged` flag because it needs to mount cgroups, load kernel modules, and use `overlay2` as a storage driver. There's no way around this with current Linux kernel capabilities. The tradeoff is accepted deliberately: the dind container is privileged, but it's on an internal network, has no access to host paths, and its daemon is only reachable from the opencode container over mutual TLS.
 
 For instructions on configuring which hosts the agent can reach, see [How-to: Network Access](../how-to/network-access.md).
+
+## Image resolution
+
+Before any containers start, jailoc resolves which image to run. Resolution happens in two tiers.
+
+**Tier 1** determines the base image. Three sources are considered in priority order: a Dockerfile configured in `[image]` (either a local file path or an HTTP URL), a registry pull of `[image].repository`, or the Dockerfile embedded in the jailoc binary. Whichever source applies first wins. If a Dockerfile or repository is explicitly configured, failure is fatal — there is no silent fallback.
+
+**Tier 2** optionally stacks a workspace-specific layer on top of the base. If a workspace has `dockerfile` set, jailoc builds an additional image using that file, passing the tier-1 result as a build argument (`BASE`). The workspace Dockerfile inherits everything from the base and can install workspace-specific tools on top. If no workspace Dockerfile is set, the base image is used directly.
+
+The two-tier split makes the concern separation explicit: the `[image]` block controls the shared base that every workspace starts from, and per-workspace `dockerfile` settings control what gets added on top. Each tier is independent — you can customize either, both, or neither.
+
+For the precise resolution rules and image tag naming, see [Image Resolution Reference](../reference/image-resolution.md).

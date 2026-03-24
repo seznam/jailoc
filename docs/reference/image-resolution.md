@@ -1,84 +1,84 @@
 # Image Resolution Reference
 
-During `jailoc up`, the container image is resolved through a five-step cascade. Steps are evaluated in priority order. Each step either produces a resolved image or falls through to the next. Step 5 (workspace layer) always executes on top of whichever base image was resolved in steps 1 through 4.
+During `jailoc up`, the container image is resolved in two independent tiers. Tier 1 produces the base image. Tier 2 optionally builds a workspace-specific layer on top of it.
 
 ---
 
-## Resolution Cascade
+## Tier 1: Base Image
+
+Three steps are evaluated in priority order. The first step that applies wins; later steps are skipped.
 
 ```
 jailoc up
     │
     ▼
-[1] dockerfile set (workspace or global)?
-    ├── yes → download URL, build → tag jailoc-base:preset-<hash>  ← STOP (failure is fatal)
+[1] image.dockerfile set?
+    ├── yes → load (local path or HTTP URL), build → tag jailoc-base:preset-<hash>  ← STOP (failure is fatal)
     └── no
          │
          ▼
-    [2] ~/.config/jailoc/Dockerfile exists?
-         ├── yes → build → tag jailoc-base:local  ← STOP
+    [2] image.repository set?
+         ├── yes → pull {repository}:{version} from registry  ← STOP
+         │         (failure is fatal)
          └── no
               │
               ▼
-         [3] pull {repository}:{version} from registry
-              ├── success → use pulled image  ← STOP
-              └── failure
-                   │
-                   ▼
-              [4] build from embedded Dockerfile → tag jailoc-base:embedded  ← STOP
-                   │
-                   ▼
-              [5] ~/.config/jailoc/{name}.Dockerfile exists?
-                   ├── yes → build on top of base → tag jailoc-{name}:latest
-                   └── no  → use resolved base as-is
+         [3] build from embedded Dockerfile → tag jailoc-base:embedded  ← STOP
 ```
+
+---
+
+## Tier 2: Workspace Overlay
+
+After tier 1 resolves a base image, tier 2 checks whether the workspace has its own Dockerfile configured.
+
+```
+base image (from tier 1)
+    │
+    ▼
+workspace.dockerfile set?
+    ├── yes → load (local path or HTTP URL), build with --build-arg BASE=<base>
+    │         tag jailoc-{name}:<hash>  ← result used as final image
+    └── no  → use base image as-is
+```
+
+Tier 2 is completely independent of which tier-1 step resolved the base. It always runs after tier 1 completes.
 
 ---
 
 ## Step Details
 
-### Step 1: Remote Dockerfile URL (preset)
+### Tier 1, Step 1: Dockerfile (base image)
 
-**Trigger:** `dockerfile` field is set in `[workspaces.<name>]` or `[image]`. Workspace-level takes priority over the global `[image].dockerfile`.
+**Trigger:** `dockerfile` is set in `[image]`.
 
 **Behavior:**
-- Downloads the Dockerfile from the specified HTTP(S) URL.
-- Builds a local image using the downloaded Dockerfile.
-- Tags the result as `jailoc-base:preset-<content-hash>`, where `<content-hash>` is derived from the Dockerfile content.
+- Loads the Dockerfile from the specified source (local path or HTTP URL).
+- Builds a local image from the loaded content.
+- Tags the result as `jailoc-base:preset-<content-hash>`, where `<content-hash>` is the first 8 characters of the SHA-256 hash of the Dockerfile content.
 
 **Constraints:**
-- Maximum download size: 1 MiB. Files exceeding this limit cause a fatal error.
-- Download failure is fatal. There is no fallback to subsequent steps.
-- URL must have an `http` or `https` scheme and a non-empty host. See [Configuration Reference](configuration.md#dockerfile-url-fields) for URL validation rules.
+- Accepted sources: absolute local paths (`/...`), tilde paths (`~/...`), HTTP(S) URLs.
+- Maximum download size for HTTP sources: 1 MiB. Files exceeding this limit cause a fatal error.
+- Load or build failure is fatal. There is no fallback to subsequent steps.
+- See [Configuration Reference](configuration.md#dockerfile-fields) for accepted formats and validation rules.
 
 ---
 
-### Step 2: Local Dockerfile Override
+### Tier 1, Step 2: Registry Pull
 
-**Trigger:** File `~/.config/jailoc/Dockerfile` exists on the host.
-
-**Behavior:**
-- Builds a local image using that Dockerfile.
-- Tags the result as `jailoc-base:local`.
-- Replaces the entire base image. Registry pull (step 3) is skipped.
-
----
-
-### Step 3: Registry Pull
-
-**Trigger:** Neither step 1 nor step 2 resolved an image.
+**Trigger:** `dockerfile` is not set in `[image]`, and `repository` is set.
 
 **Behavior:**
-- Pulls `{repository}:{version}` from the registry configured in `[image].repository`.
+- Pulls `{repository}:{version}` from the registry.
 - `{version}` is the jailoc binary version at runtime.
-
-**On failure:** Falls through to step 4. Registry pull failure is not fatal.
+- Pull failure is fatal. There is no fallback to step 3 if a repository is explicitly configured.
 
 ---
 
-### Step 4: Embedded Fallback
+### Tier 1, Step 3: Embedded Fallback
 
-**Trigger:** Registry pull (step 3) failed.
+**Trigger:** Neither `dockerfile` nor `repository` is set in `[image]`.
 
 **Behavior:**
 - Builds an image from the Dockerfile embedded in the jailoc binary at compile time.
@@ -88,13 +88,14 @@ This step always succeeds (assuming a functional Docker daemon), as the Dockerfi
 
 ---
 
-### Step 5: Workspace Layer
+### Tier 2: Workspace Overlay
 
-**Trigger:** File `~/.config/jailoc/{name}.Dockerfile` exists on the host, where `{name}` is the workspace name.
+**Trigger:** `dockerfile` is set in `[workspaces.<name>]`.
 
 **Behavior:**
-- Builds an additional layer on top of the base image resolved in steps 1 through 4.
-- The base image reference is passed via the `BASE` build argument.
+- Loads the Dockerfile from the specified source (local path or HTTP URL).
+- Builds an additional image layer on top of the base resolved in tier 1.
+- The base image tag is passed via the `BASE` build argument.
 - The workspace Dockerfile must begin with:
 
   ```dockerfile
@@ -102,9 +103,12 @@ This step always succeeds (assuming a functional Docker daemon), as the Dockerfi
   FROM ${BASE}
   ```
 
-- Tags the result as `jailoc-{name}:latest`.
+- Tags the result as `jailoc-{name}:<content-hash>`, where `<content-hash>` is the first 8 characters of the SHA-256 hash of the Dockerfile content.
 
-This step is independent of which step resolved the base. It always runs last, on top of the resolved base.
+**Build context:**
+- If `build_context` is set in the workspace, that directory is used.
+- If `build_context` is empty and `dockerfile` is a local path, the parent directory of the Dockerfile is used.
+- If `build_context` is empty and `dockerfile` is an HTTP URL, a temporary directory is used.
 
 ---
 
@@ -112,12 +116,11 @@ This step is independent of which step resolved the base. It always runs last, o
 
 | Source | Tag |
 |--------|-----|
-| Remote Dockerfile URL | `jailoc-base:preset-<content-hash>` |
-| Local `~/.config/jailoc/Dockerfile` | `jailoc-base:local` |
-| Registry pull | `{repository}:{version}` (unchanged) |
+| `[image].dockerfile` (local or HTTP) | `jailoc-base:preset-<content-hash>` |
+| `[image].repository` (registry pull) | `{repository}:{version}` (unchanged) |
 | Embedded fallback | `jailoc-base:embedded` |
-| Workspace layer | `jailoc-{name}:latest` |
+| Workspace overlay | `jailoc-{name}:<content-hash>` |
 
 ---
 
-See the [custom images how-to](../how-to/custom-images.md) for practical instructions on using each resolution step.
+See the [custom images how-to](../how-to/custom-images.md) for practical instructions on each resolution step.
