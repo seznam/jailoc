@@ -42,6 +42,15 @@ const (
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+var reservedEnvKeys = map[string]bool{
+	"OPENCODE_LOG":             true,
+	"OPENCODE_SERVER_PASSWORD": true,
+	"DOCKER_HOST":              true,
+	"DOCKER_TLS_CERTDIR":       true,
+	"DOCKER_CERT_PATH":         true,
+	"DOCKER_TLS_VERIFY":        true,
+}
+
 var forbiddenMountPrefixes = []string{
 	"/home/agent",
 	"/usr",
@@ -370,17 +379,52 @@ func WriteAllowedFiles(workspace string, cfg *Config) error {
 	return nil
 }
 
+// mergeDedup combines two string slices into one, removing duplicates.
+// Order is preserved: items from `a` appear first, followed by items from `b` that weren't in `a`.
+func mergeDedup(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(a)+len(b))
+
+	for _, item := range a {
+		if !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+
+	for _, item := range b {
+		if !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+
+	return result
+}
+
 func AllowedHostsFileContent(workspace string, cfg *Config) string {
 	if cfg == nil {
 		return ""
 	}
 
 	ws, ok := cfg.Workspaces[workspace]
-	if !ok || len(ws.AllowedHosts) == 0 {
+	if !ok {
 		return ""
 	}
 
-	return strings.Join(ws.AllowedHosts, "\n") + "\n"
+	merged := mergeDedup(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
+	if len(merged) == 0 {
+		return ""
+	}
+
+	return strings.Join(merged, "\n") + "\n"
 }
 
 func AllowedNetworksFileContent(workspace string, cfg *Config) string {
@@ -389,11 +433,16 @@ func AllowedNetworksFileContent(workspace string, cfg *Config) string {
 	}
 
 	ws, ok := cfg.Workspaces[workspace]
-	if !ok || len(ws.AllowedNetworks) == 0 {
+	if !ok {
 		return ""
 	}
 
-	return strings.Join(ws.AllowedNetworks, "\n") + "\n"
+	merged := mergeDedup(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
+	if len(merged) == 0 {
+		return ""
+	}
+
+	return strings.Join(merged, "\n") + "\n"
 }
 
 func ExpandPath(path string) (string, error) {

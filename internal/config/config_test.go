@@ -1110,3 +1110,141 @@ func TestImageDockerfileLocalPathExpandsTilde(t *testing.T) {
 		t.Fatalf("expected %q, got: %q", expected, cfg.Image.Dockerfile)
 	}
 }
+
+func TestAllowedHostsMerge(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaults     []string
+		workspace    []string
+		expectedRepr string
+	}{
+		{
+			name:         "global only (no workspace hosts)",
+			defaults:     []string{"api.example.com", "db.example.com"},
+			workspace:    []string{},
+			expectedRepr: "api.example.com\ndb.example.com\n",
+		},
+		{
+			name:         "workspace only (no defaults)",
+			defaults:     []string{},
+			workspace:    []string{"foo.com", "bar.com"},
+			expectedRepr: "foo.com\nbar.com\n",
+		},
+		{
+			name:         "both with overlap",
+			defaults:     []string{"api.example.com", "shared.com"},
+			workspace:    []string{"shared.com", "local.com"},
+			expectedRepr: "api.example.com\nshared.com\nlocal.com\n",
+		},
+		{
+			name:         "both with no overlap",
+			defaults:     []string{"api.example.com", "db.example.com"},
+			workspace:    []string{"foo.com", "bar.com"},
+			expectedRepr: "api.example.com\ndb.example.com\nfoo.com\nbar.com\n",
+		},
+		{
+			name:         "empty defaults (backward compatible)",
+			defaults:     []string{},
+			workspace:    []string{"foo.com", "bar.com"},
+			expectedRepr: "foo.com\nbar.com\n",
+		},
+		{
+			name:         "all empty",
+			defaults:     []string{},
+			workspace:    []string{},
+			expectedRepr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Defaults: struct {
+					Env             []string `toml:"env"`
+					EnvFile         []string `toml:"env_file"`
+					AllowedHosts    []string `toml:"allowed_hosts"`
+					AllowedNetworks []string `toml:"allowed_networks"`
+				}{
+					AllowedHosts: tt.defaults,
+				},
+				Workspaces: map[string]Workspace{
+					"test": {AllowedHosts: tt.workspace},
+				},
+			}
+
+			got := AllowedHostsFileContent("test", cfg)
+			if got != tt.expectedRepr {
+				t.Fatalf("expected %q, got %q", tt.expectedRepr, got)
+			}
+		})
+	}
+}
+
+func TestAllowedNetworksMerge(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaults     []string
+		workspace    []string
+		expectedRepr string
+	}{
+		{
+			name:         "global only (no workspace networks)",
+			defaults:     []string{"10.0.0.0/8", "172.16.0.0/12"},
+			workspace:    []string{},
+			expectedRepr: "10.0.0.0/8\n172.16.0.0/12\n",
+		},
+		{
+			name:         "workspace only (no defaults)",
+			defaults:     []string{},
+			workspace:    []string{"192.168.0.0/16"},
+			expectedRepr: "192.168.0.0/16\n",
+		},
+		{
+			name:         "both with overlap",
+			defaults:     []string{"10.0.0.0/8", "172.20.0.0/16"},
+			workspace:    []string{"172.20.0.0/16", "192.168.0.0/16"},
+			expectedRepr: "10.0.0.0/8\n172.20.0.0/16\n192.168.0.0/16\n",
+		},
+		{
+			name:         "both with no overlap",
+			defaults:     []string{"10.0.0.0/8", "172.16.0.0/12"},
+			workspace:    []string{"192.168.0.0/16", "172.20.0.0/16"},
+			expectedRepr: "10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16\n172.20.0.0/16\n",
+		},
+		{
+			name:         "empty defaults (backward compatible)",
+			defaults:     []string{},
+			workspace:    []string{"192.168.0.0/16"},
+			expectedRepr: "192.168.0.0/16\n",
+		},
+		{
+			name:         "all empty",
+			defaults:     []string{},
+			workspace:    []string{},
+			expectedRepr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Defaults: struct {
+					Env             []string `toml:"env"`
+					EnvFile         []string `toml:"env_file"`
+					AllowedHosts    []string `toml:"allowed_hosts"`
+					AllowedNetworks []string `toml:"allowed_networks"`
+				}{
+					AllowedNetworks: tt.defaults,
+				},
+				Workspaces: map[string]Workspace{
+					"test": {AllowedNetworks: tt.workspace},
+				},
+			}
+
+			got := AllowedNetworksFileContent("test", cfg)
+			if got != tt.expectedRepr {
+				t.Fatalf("expected %q, got %q", tt.expectedRepr, got)
+			}
+		})
+	}
+}
