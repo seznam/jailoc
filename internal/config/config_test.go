@@ -1557,3 +1557,105 @@ func TestExpandPathsTildeEnvFile(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateImageAndDockerfileMutualExclusivity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		image       string
+		dockerfile  string
+		buildCtx    string
+		shouldError bool
+		errorText   string
+	}{
+		{
+			name:        "image + dockerfile conflict",
+			image:       "nginx:latest",
+			dockerfile:  "/Dockerfile",
+			buildCtx:    "",
+			shouldError: true,
+			errorText:   "cannot set both \"image\" and \"dockerfile\"",
+		},
+		{
+			name:        "image + build_context conflict",
+			image:       "nginx:latest",
+			dockerfile:  "",
+			buildCtx:    "/build",
+			shouldError: true,
+			errorText:   "cannot set both \"image\" and \"build_context\"",
+		},
+		{
+			name:        "image only is valid",
+			image:       "nginx:latest",
+			dockerfile:  "",
+			buildCtx:    "",
+			shouldError: false,
+			errorText:   "",
+		},
+		{
+			name:        "dockerfile only is valid",
+			image:       "",
+			dockerfile:  "/Dockerfile",
+			buildCtx:    "",
+			shouldError: false,
+			errorText:   "",
+		},
+		{
+			name:        "build_context only is valid",
+			image:       "",
+			dockerfile:  "",
+			buildCtx:    "/build",
+			shouldError: false,
+			errorText:   "",
+		},
+		{
+			name:        "all three set triggers dockerfile+image error first",
+			image:       "nginx:latest",
+			dockerfile:  "/Dockerfile",
+			buildCtx:    "/build",
+			shouldError: true,
+			errorText:   "cannot set both \"image\" and \"dockerfile\"",
+		},
+		{
+			name:        "dockerfile + build_context is valid",
+			image:       "",
+			dockerfile:  "/Dockerfile",
+			buildCtx:    "/build",
+			shouldError: false,
+			errorText:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths:        []string{"/data"},
+						Image:        tt.image,
+						Dockerfile:   tt.dockerfile,
+						BuildContext: tt.buildCtx,
+					},
+				},
+			}
+
+			err := Validate(cfg)
+
+			if tt.shouldError {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				if !strings.Contains(err.Error(), tt.errorText) {
+					t.Fatalf("expected error to contain %q, got: %v", tt.errorText, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}

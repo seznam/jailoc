@@ -31,6 +31,20 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 	sort.Strings(names)
 
+	// Print global settings
+	baseDockerfile := cfg.Base.Dockerfile
+	if baseDockerfile == "" {
+		baseDockerfile = "(embedded)"
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "Base Dockerfile: %s\n", baseDockerfile)
+
+	defaultsImage := cfg.Defaults.Image
+	if defaultsImage == "" {
+		defaultsImage = "(not set)"
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Image: %s\n", defaultsImage)
+	_, _ = fmt.Fprintf(os.Stdout, "\n")
+
 	// Print each workspace
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
@@ -69,6 +83,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			buildContext = "(none)"
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "  Build Context: %s\n", buildContext)
+
+		wsImage := ws.Image
+		if wsImage == "" {
+			wsImage = "(not set)"
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "  Image: %s\n", wsImage)
 
 		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}

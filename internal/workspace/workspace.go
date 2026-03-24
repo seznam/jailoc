@@ -22,6 +22,7 @@ type Resolved struct {
 	AllowedNetworks []string
 	BuildContext    string
 	Dockerfile      string
+	Image           string
 	Env             []string
 }
 
@@ -91,6 +92,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		AllowedNetworks: ws.AllowedNetworks,
 		BuildContext:    buildContext,
 		Dockerfile:      ws.Dockerfile,
+		Image:           ws.Image,
 		Env:             mergedEnv,
 	}, nil
 }

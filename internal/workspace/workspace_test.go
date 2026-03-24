@@ -608,3 +608,64 @@ func TestResolveEnvFileDedupPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveImagePropagation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		workspaceImage    string
+		defaultsImage     string
+		expectedImage     string
+		expectedImageDesc string
+	}{
+		{
+			name:              "workspace_image_set",
+			workspaceImage:    "ws:1",
+			defaultsImage:     "default:2",
+			expectedImage:     "ws:1",
+			expectedImageDesc: "raw workspace value",
+		},
+		{
+			name:              "workspace_image_empty_defaults_set",
+			workspaceImage:    "",
+			defaultsImage:     "default:2",
+			expectedImage:     "",
+			expectedImageDesc: "empty (defaults NOT applied in Resolve)",
+		},
+		{
+			name:              "both_empty",
+			workspaceImage:    "",
+			defaultsImage:     "",
+			expectedImage:     "",
+			expectedImageDesc: "both empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{
+					Image: tt.defaultsImage,
+				},
+				Workspaces: map[string]config.Workspace{
+					"test": {
+						Paths: []string{"/tmp"},
+						Image: tt.workspaceImage,
+					},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "test")
+			if err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+
+			if resolved.Image != tt.expectedImage {
+				t.Fatalf("image mismatch (%s): got %q want %q", tt.expectedImageDesc, resolved.Image, tt.expectedImage)
+			}
+		})
+	}
+}

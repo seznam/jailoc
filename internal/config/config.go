@@ -25,6 +25,7 @@ const (
 # dockerfile = ""
 
 [defaults]
+# image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
 # allowed_hosts = ["example.com"]
@@ -32,6 +33,7 @@ const (
 
 [workspaces.default]
 paths = []
+# image = ""
 # allowed_hosts = []
 # allowed_networks = []
 # env = ["KEY=VALUE"]
@@ -92,6 +94,7 @@ type Defaults struct {
 	EnvFile         []string `toml:"env_file"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
+	Image           string   `toml:"image"`
 }
 
 type Workspace struct {
@@ -102,6 +105,7 @@ type Workspace struct {
 	EnvFile         []string `toml:"env_file"`
 	BuildContext    string   `toml:"build_context"`
 	Dockerfile      string   `toml:"dockerfile"`
+	Image           string   `toml:"image"`
 }
 
 func ConfigDir() string {
@@ -336,6 +340,13 @@ func Validate(cfg *Config) error {
 
 		if err := validateDockerfileSource(ws.Dockerfile, fmt.Sprintf("workspace %q dockerfile", name)); err != nil {
 			return err
+		}
+
+		if ws.Image != "" && ws.Dockerfile != "" {
+			return fmt.Errorf("workspace %q: cannot set both \"image\" and \"dockerfile\"", name)
+		}
+		if ws.Image != "" && ws.BuildContext != "" {
+			return fmt.Errorf("workspace %q: cannot set both \"image\" and \"build_context\"", name)
 		}
 
 		wsContext := fmt.Sprintf("workspace %q", name)
