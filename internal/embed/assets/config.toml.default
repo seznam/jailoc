@@ -1,11 +1,24 @@
 # jailoc configuration
 # See: https://github.com/seznam/jailoc
 
+# Access mode: "remote" (host opencode attach), "exec" (docker exec opencode), or "" (auto-detect)
+# mode = ""
+
 [image]
 # repository = "ghcr.io/seznam/jailoc"  # default registry
+# dockerfile = ""
+
+[defaults]
+# env = ["KEY=VALUE"]
+# env_file = ["/path/to/.env"]
+# allowed_hosts = ["example.com"]
+# allowed_networks = ["10.0.0.0/8"]
 
 [workspaces.default]
 paths = []
 # allowed_hosts = []
 # allowed_networks = []
+# env = ["KEY=VALUE"]
+# env_file = ["/path/to/.env"]
 # build_context = ""
+# dockerfile = ""

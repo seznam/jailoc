@@ -26,10 +26,18 @@ const (
 # repository = "ghcr.io/seznam/jailoc"  # default registry
 # dockerfile = ""
 
+[defaults]
+# env = ["KEY=VALUE"]
+# env_file = ["/path/to/.env"]
+# allowed_hosts = ["example.com"]
+# allowed_networks = ["10.0.0.0/8"]
+
 [workspaces.default]
 paths = []
 # allowed_hosts = []
 # allowed_networks = []
+# env = ["KEY=VALUE"]
+# env_file = ["/path/to/.env"]
 # build_context = ""
 # dockerfile = ""
 `
