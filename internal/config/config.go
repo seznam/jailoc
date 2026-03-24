@@ -348,6 +348,9 @@ func Validate(cfg *Config) error {
 		if ws.Image != "" && ws.BuildContext != "" {
 			return fmt.Errorf("workspace %q: cannot set both \"image\" and \"build_context\"", name)
 		}
+		if strings.TrimSpace(ws.Image) == "" && ws.Image != "" {
+			return fmt.Errorf("workspace %q: \"image\" must not be empty", name)
+		}
 
 		wsContext := fmt.Sprintf("workspace %q", name)
 		if err := validateEnvEntries(ws.Env, wsContext); err != nil {

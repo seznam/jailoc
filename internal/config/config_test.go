@@ -102,6 +102,7 @@ func TestRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	writeFile(t, path, fmt.Sprintf(`
 [defaults]
+image = "ubuntu:22.04"
 env = ["GLOBAL_VAR=value1"]
 env_file = [%q]
 allowed_hosts = ["global.example.com"]
@@ -110,12 +111,12 @@ allowed_networks = ["10.0.0.0/8"]
 [base]
 
 [workspaces.default]
+image = "alpine:latest"
 paths = ["/data/workspace", "/work2"]
 allowed_hosts = ["foo.com"]
 allowed_networks = ["10.0.0.0/8"]
 env = ["LOCAL_VAR=value2"]
 env_file = [%q]
-build_context = "/tmp/context"
 `, envGlobal, envLocal))
 
 	first, err := LoadFrom(path)
@@ -138,6 +139,22 @@ build_context = "/tmp/context"
 
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("round-trip mismatch:\nfirst=%#v\nsecond=%#v", first, second)
+	}
+
+	if first.Defaults.Image != "ubuntu:22.04" {
+		t.Fatalf("expected defaults.image to be 'ubuntu:22.04', got %q", first.Defaults.Image)
+	}
+	if second.Defaults.Image != "ubuntu:22.04" {
+		t.Fatalf("expected second.defaults.image to be 'ubuntu:22.04', got %q", second.Defaults.Image)
+	}
+
+	ws := first.Workspaces["default"]
+	if ws.Image != "alpine:latest" {
+		t.Fatalf("expected workspace.image to be 'alpine:latest', got %q", ws.Image)
+	}
+	ws2 := second.Workspaces["default"]
+	if ws2.Image != "alpine:latest" {
+		t.Fatalf("expected second.workspace.image to be 'alpine:latest', got %q", ws2.Image)
 	}
 }
 
@@ -1613,6 +1630,14 @@ func TestValidateImageAndDockerfileMutualExclusivity(t *testing.T) {
 			shouldError: false,
 			errorText:   "",
 		},
+		{
+			name:        "image_whitespace_only",
+			image:       "   ",
+			dockerfile:  "",
+			buildCtx:    "",
+			shouldError: true,
+			errorText:   "\"image\" must not be empty",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1644,6 +1669,106 @@ func TestValidateImageAndDockerfileMutualExclusivity(t *testing.T) {
 					t.Fatalf("unexpected error: %v", err)
 				}
 			}
+		})
+	}
+}
+
+func TestLoadImageFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		tomlContent    string
+		checkDefaults  func(*testing.T, *Config)
+		checkWorkspace func(*testing.T, *Config)
+	}{
+		{
+			name: "defaults.image loads correctly",
+			tomlContent: `
+[defaults]
+image = "ubuntu:22.04"
+
+[base]
+
+[workspaces.test]
+paths = ["/data"]
+`,
+			checkDefaults: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.Image != "ubuntu:22.04" {
+					t.Fatalf("expected defaults.image = 'ubuntu:22.04', got %q", cfg.Defaults.Image)
+				}
+			},
+			checkWorkspace: func(t *testing.T, cfg *Config) {
+				ws := cfg.Workspaces["test"]
+				if ws.Image != "" {
+					t.Fatalf("expected workspace.image to be empty, got %q", ws.Image)
+				}
+			},
+		},
+		{
+			name: "workspace.image loads correctly",
+			tomlContent: `
+[defaults]
+
+[base]
+
+[workspaces.test]
+paths = ["/data"]
+image = "alpine:latest"
+`,
+			checkDefaults: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.Image != "" {
+					t.Fatalf("expected defaults.image to be empty, got %q", cfg.Defaults.Image)
+				}
+			},
+			checkWorkspace: func(t *testing.T, cfg *Config) {
+				ws := cfg.Workspaces["test"]
+				if ws.Image != "alpine:latest" {
+					t.Fatalf("expected workspace.image = 'alpine:latest', got %q", ws.Image)
+				}
+			},
+		},
+		{
+			name: "defaults and workspace images are independent",
+			tomlContent: `
+[defaults]
+image = "ubuntu:22.04"
+
+[base]
+
+[workspaces.test]
+paths = ["/data"]
+image = "alpine:latest"
+`,
+			checkDefaults: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.Image != "ubuntu:22.04" {
+					t.Fatalf("expected defaults.image = 'ubuntu:22.04', got %q", cfg.Defaults.Image)
+				}
+			},
+			checkWorkspace: func(t *testing.T, cfg *Config) {
+				ws := cfg.Workspaces["test"]
+				if ws.Image != "alpine:latest" {
+					t.Fatalf("expected workspace.image = 'alpine:latest', got %q", ws.Image)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			writeFile(t, path, tt.tomlContent)
+
+			cfg, err := LoadFrom(path)
+			if err != nil {
+				t.Fatalf("LoadFrom failed: %v", err)
+			}
+
+			tt.checkDefaults(t, cfg)
+			tt.checkWorkspace(t, cfg)
 		})
 	}
 }
