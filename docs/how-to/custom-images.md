@@ -89,9 +89,6 @@ With this configuration, files from `~/projects/myproject` are accessible via `C
 
 ## Default behavior (no customization)
 
-When no `dockerfile` is configured, jailoc:
-
-1. Pulls the versioned image from the registry configured in `[image].repository`.
-2. If the pull fails, builds from the Dockerfile embedded in the jailoc binary itself, tagging the result `jailoc-base:embedded`.
+When no `dockerfile` is configured in `[image]`, jailoc checks `[image].repository`. If a repository is set, it pulls `{repository}:{version}` from the registry — and a pull failure is fatal. If no repository is set either, jailoc builds from the Dockerfile embedded in the jailoc binary itself, tagging the result `jailoc-base:embedded`.
 
 You don't need to do anything to get this behavior. It's the starting point before any of the customization steps above.

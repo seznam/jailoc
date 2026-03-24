@@ -104,7 +104,7 @@ See [How to use a custom Docker image](custom-images.md) for all image customiza
 
 ## Set a build context
 
-When building a workspace-specific image layer, jailoc uses `~/.config/jailoc` as the Docker build context by default. Override it with `build_context`:
+When building a workspace-specific image layer, jailoc uses the parent directory of the workspace `dockerfile` as the Docker build context by default. Override it with `build_context`:
 
 ```toml
 [workspaces.myproject]
