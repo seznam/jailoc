@@ -11,7 +11,7 @@ import (
 // Comments, empty lines, and bare keys (no = sign) are skipped.
 // Quoted values have their outer quotes stripped. Inline comments are removed.
 func ParseEnvFile(path string) ([]string, error) {
-	f, err := os.Open(path) //nolint:gosec // path is validated (absolute, exists) in config.Validate before reaching here
+	f, err := os.Open(path) //nolint:gosec // path comes from validated config, not user input
 	if err != nil {
 		return nil, fmt.Errorf("reading env file %s: %w", path, err)
 	}

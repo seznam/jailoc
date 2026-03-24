@@ -234,4 +234,20 @@ func TestGenerateComposeEmptyEnv(t *testing.T) {
 	assertContains(t, rendered, "- OPENCODE_LOG=debug")
 	assertContains(t, rendered, "- DOCKER_HOST=tcp://dind:2376")
 	assertContains(t, rendered, "- DOCKER_TLS_VERIFY=1")
+
+	// Verify no extra blank entries are added when Env is nil
+	lines := strings.Split(rendered, "\n")
+	environmentIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "environment:") {
+			environmentIdx = i
+			break
+		}
+	}
+	if environmentIdx >= 0 {
+		afterEnv := lines[environmentIdx+1]
+		if !strings.HasPrefix(afterEnv, "      -") {
+			t.Errorf("expected environment entry starting with '      -', got: %q", afterEnv)
+		}
+	}
 }
