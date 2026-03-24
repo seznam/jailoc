@@ -83,12 +83,10 @@ For instructions on configuring which hosts the agent can reach, see [How-to: Ne
 
 ## Image resolution
 
-Before any containers start, jailoc resolves which image to run. Resolution happens in two tiers.
+Before any containers start, jailoc resolves which image to run through a five-step cascade evaluated in priority order. The first step that applies wins.
 
-**Tier 1** determines the base image. Three sources are considered in priority order: a Dockerfile configured in `[image]` (either a local file path or an HTTP URL), a registry pull of `[image].repository`, or the Dockerfile embedded in the jailoc binary. Whichever source applies first wins. If a Dockerfile or repository is explicitly configured, failure is fatal — there is no silent fallback.
+A workspace `image` field short-circuits the entire cascade — Compose uses the specified image directly with no build steps. When `defaults.image` is set, it serves as the base for any workspace `dockerfile` overlay, or is used directly when no workspace Dockerfile is configured. If neither is set, jailoc falls back to a `[base].dockerfile` (local path or HTTP URL), and finally to the Dockerfile embedded in the binary.
 
-**Tier 2** optionally stacks a workspace-specific layer on top of the base. If a workspace has `dockerfile` set, jailoc builds an additional image using that file, passing the tier-1 result as a build argument (`BASE`). The workspace Dockerfile inherits everything from the base and can install workspace-specific tools on top. If no workspace Dockerfile is set, the base image is used directly.
-
-The two-tier split makes the concern separation explicit: the `[image]` block controls the shared base that every workspace starts from, and per-workspace `dockerfile` settings control what gets added on top. Each tier is independent — you can customize either, both, or neither.
+Per-workspace `dockerfile` settings add a layer on top of the resolved base image (except when the workspace sets `image` directly, which bypasses all build steps). The workspace Dockerfile receives the base image tag as a `BASE` build argument and inherits everything from it.
 
 For the precise resolution rules and image tag naming, see [Image Resolution Reference](../reference/image-resolution.md). For which Dockerfile instructions carry forward into overlay layers and which changes are incompatible, see [Overlay Compatibility](../reference/overlay-compatibility.md).
