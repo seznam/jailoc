@@ -169,6 +169,39 @@ func createDefaultAt(path string) error {
 	return nil
 }
 
+func validateDockerfileSource(value, fieldName string) error {
+	// Empty string is allowed (optional field)
+	if value == "" {
+		return nil
+	}
+
+	// Absolute local paths starting with / are allowed
+	if strings.HasPrefix(value, "/") {
+		return nil
+	}
+
+	// Tilde paths (home directory) are allowed
+	if strings.HasPrefix(value, "~") {
+		return nil
+	}
+
+	// HTTP and HTTPS URLs are allowed
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		u, err := url.Parse(value)
+		if err != nil || u.Host == "" {
+			scheme := ""
+			if err == nil {
+				scheme = u.Scheme
+			}
+			return fmt.Errorf("%s: invalid URL %q, scheme must be http or https (got %q)", fieldName, value, scheme)
+		}
+		return nil
+	}
+
+	// Anything else is invalid
+	return fmt.Errorf("%s: must be an absolute path (/..., ~/...) or HTTP(S) URL, got %q", fieldName, value)
+}
+
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
@@ -186,15 +219,16 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("invalid mode %q: must be %q, %q, or empty (auto-detect)", cfg.Mode, ModeRemote, ModeExec)
 	}
 
-	if cfg.Image.Dockerfile != "" {
-		u, err := url.Parse(cfg.Image.Dockerfile)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			scheme := ""
-			if err == nil {
-				scheme = u.Scheme
-			}
-			return fmt.Errorf("image dockerfile: invalid URL %q, scheme must be http or https (got %q)", cfg.Image.Dockerfile, scheme)
+	if err := validateDockerfileSource(cfg.Image.Dockerfile, "image dockerfile"); err != nil {
+		return err
+	}
+
+	if strings.HasPrefix(cfg.Image.Dockerfile, "~") {
+		expanded, err := ExpandPath(cfg.Image.Dockerfile)
+		if err != nil {
+			return fmt.Errorf("expand image dockerfile %q: %w", cfg.Image.Dockerfile, err)
 		}
+		cfg.Image.Dockerfile = expanded
 	}
 
 	names := make([]string, 0, len(cfg.Workspaces))
@@ -239,15 +273,8 @@ func Validate(cfg *Config) error {
 			}
 		}
 
-		if ws.Dockerfile != "" {
-			u, err := url.Parse(ws.Dockerfile)
-			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-				scheme := ""
-				if err == nil {
-					scheme = u.Scheme
-				}
-				return fmt.Errorf("workspace %q dockerfile: invalid URL %q, scheme must be http or https (got %q)", name, ws.Dockerfile, scheme)
-			}
+		if err := validateDockerfileSource(ws.Dockerfile, fmt.Sprintf("workspace %q dockerfile", name)); err != nil {
+			return err
 		}
 
 		cfg.Workspaces[name] = ws
@@ -300,14 +327,6 @@ func AddPath(workspace, path string) error {
 	}
 
 	return nil
-}
-
-func WorkspaceDockerfilePath(workspace string) string {
-	return ConfigDir() + workspace + ".Dockerfile"
-}
-
-func BaseDockerfileOverridePath() string {
-	return ConfigDir() + "Dockerfile"
 }
 
 func AllowedHostsFileContent(workspace string, cfg *Config) string {
@@ -364,6 +383,14 @@ func expandPaths(ws *Workspace) error {
 			return fmt.Errorf("expand build context %q: %w", ws.BuildContext, err)
 		}
 		ws.BuildContext = expanded
+	}
+
+	if ws.Dockerfile != "" && strings.HasPrefix(ws.Dockerfile, "~") {
+		expanded, err := ExpandPath(ws.Dockerfile)
+		if err != nil {
+			return fmt.Errorf("expand dockerfile path %q: %w", ws.Dockerfile, err)
+		}
+		ws.Dockerfile = expanded
 	}
 
 	return nil
