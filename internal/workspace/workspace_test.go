@@ -454,9 +454,9 @@ func TestResolveEnvFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp failed: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Remove(envFile.Name()) })
+	t.Cleanup(func() { _ = os.Remove(envFile.Name()) }) //nolint:gosec // cleaning up temp file created in this test
 
-	if err := os.WriteFile(envFile.Name(), []byte("FROM_FILE=ok\nOTHER=two\n"), 0o600); err != nil {
+	if err := os.WriteFile(envFile.Name(), []byte("FROM_FILE=ok\nOTHER=two\n"), 0o600); err != nil { //nolint:gosec // writing to temp file created in this test
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -494,15 +494,15 @@ func TestResolveEnvFullPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp global env failed: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Remove(globalFile.Name()) })
+	t.Cleanup(func() { _ = os.Remove(globalFile.Name()) }) //nolint:gosec // cleaning up temp file created in this test
 
 	workspaceFile, err := os.CreateTemp("", "jailoc-workspace-*.env")
 	if err != nil {
 		t.Fatalf("CreateTemp workspace env failed: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Remove(workspaceFile.Name()) })
+	t.Cleanup(func() { _ = os.Remove(workspaceFile.Name()) }) //nolint:gosec // cleaning up temp file created in this test
 
-	if err := os.WriteFile(globalFile.Name(), []byte("B=global-file\nC=global-file\n"), 0o600); err != nil {
+	if err := os.WriteFile(globalFile.Name(), []byte("B=global-file\nC=global-file\n"), 0o600); err != nil { //nolint:gosec // writing to temp file created in this test
 		t.Fatalf("WriteFile global env failed: %v", err)
 	}
 	if err := os.WriteFile(workspaceFile.Name(), []byte("C=workspace-file\nD=workspace-file\n"), 0o600); err != nil {
@@ -572,9 +572,9 @@ func TestResolveEnvFileDedupPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp failed: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Remove(envFile.Name()) })
+	t.Cleanup(func() { _ = os.Remove(envFile.Name()) }) //nolint:gosec // cleaning up temp file created in this test
 
-	if err := os.WriteFile(envFile.Name(), []byte("SHARED=value\n"), 0o600); err != nil {
+	if err := os.WriteFile(envFile.Name(), []byte("SHARED=value\n"), 0o600); err != nil { //nolint:gosec // writing to temp file created in this test
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
