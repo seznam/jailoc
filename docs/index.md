@@ -56,6 +56,7 @@ Complete technical descriptions of CLI commands and configuration options.
 - [CLI Reference](reference/cli.md)
 - [Configuration Reference](reference/configuration.md)
 - [Image Resolution](reference/image-resolution.md)
+- [Overlay Compatibility](reference/overlay-compatibility.md)
 
 ### Explanation
 

@@ -87,6 +87,87 @@ With this configuration, files from `~/projects/myproject` are accessible via `C
 
 ---
 
+## Write a good overlay Dockerfile
+
+### Keep layers small and cache-friendly
+
+Order instructions from least to most volatile. Put package installs before copying project files, and copy files before running project-specific setup. Build tools and package managers should come last.
+
+Combine related `RUN` commands into a single layer:
+
+```dockerfile
+ARG BASE
+FROM ${BASE}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    redis-tools \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+For pip, suppress the cache directory:
+
+```dockerfile
+RUN pip install --no-cache-dir -r requirements.txt
+```
+
+For npm, use `--prefer-offline` or clean the cache in the same layer:
+
+```dockerfile
+RUN npm ci --prefer-offline && npm cache clean --force
+```
+
+For apk (Alpine-derived layers):
+
+```dockerfile
+RUN apk add --no-cache curl jq
+```
+
+### Use multi-stage builds for compiled tools
+
+If you need a compiled binary, build it in a separate stage and copy only the output:
+
+```dockerfile
+ARG BASE
+FROM golang:1.24 AS builder
+WORKDIR /src
+COPY tool/ .
+RUN CGO_ENABLED=0 go build -o /bin/mytool .
+
+FROM ${BASE}
+COPY --from=builder /bin/mytool /usr/local/bin/mytool
+```
+
+This keeps the final image free of compilers and intermediate artifacts.
+
+### What to avoid
+
+!!! danger "Fatal: breaks the container entirely"
+    These changes cause the container to fail at startup or make the agent unusable:
+
+    - **Deleting `/usr/local/bin/entrypoint.sh`** — the compose template sets this as the container entrypoint; removing it prevents the container from starting.
+    - **Deleting `/home/agent` or removing UID 1000** — the entrypoint drops privileges to UID 1000 and all agent tools run as this user; without it, startup fails.
+    - **Removing `iptables`** — the entrypoint uses iptables to enforce network isolation rules; without it, the container exits immediately.
+    - **Removing `setpriv`** — the entrypoint calls `setpriv` to drop capabilities and switch to UID 1000; without it, the agent runs as root or the container fails to start.
+
+!!! warning "Breaking: causes silent misbehaviour"
+    These changes don't prevent the container from starting, but they break expected behaviour in non-obvious ways:
+
+    - **Overriding `ENV PATH` without including `/home/agent/.local/bin` and `/home/agent/.opencode/bin`** — the agent's local pip tools and opencode plugins won't be found.
+    - **Adding `VOLUME` on workspace mount paths** — Docker volumes shadow bind mounts, so your project files won't appear inside the container.
+
+!!! warning "Degraded: reduces functionality"
+    - **Removing `sudo`** — the entrypoint uses sudo to set up iptables rules before dropping privileges. Removing it degrades the network isolation setup.
+
+### ENTRYPOINT, CMD, and WORKDIR overrides are harmless
+
+The compose template hardcodes `entrypoint`, `command`, and `working_dir` for every container. Any `ENTRYPOINT`, `CMD`, or `WORKDIR` instructions in your overlay Dockerfile are silently overridden at runtime. They won't cause failures, but they're also ignored, so don't rely on them.
+
+For the full compatibility matrix, see [Overlay compatibility reference](../reference/overlay-compatibility.md).
+
+---
+
 ## Default behavior (no customization)
 
 When no `dockerfile` is configured in `[image]`, jailoc checks `[image].repository`. If a repository is set, it pulls `{repository}:{version}` from the registry — and a pull failure is fatal. If no repository is set either, jailoc builds from the Dockerfile embedded in the jailoc binary itself, tagging the result `jailoc-base:embedded`.

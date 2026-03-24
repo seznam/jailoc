@@ -89,4 +89,4 @@ Before any containers start, jailoc resolves which image to run. Resolution happ
 
 The two-tier split makes the concern separation explicit: the `[image]` block controls the shared base that every workspace starts from, and per-workspace `dockerfile` settings control what gets added on top. Each tier is independent — you can customize either, both, or neither.
 
-For the precise resolution rules and image tag naming, see [Image Resolution Reference](../reference/image-resolution.md).
+For the precise resolution rules and image tag naming, see [Image Resolution Reference](../reference/image-resolution.md). For which Dockerfile instructions carry forward into overlay layers and which changes are incompatible, see [Overlay Compatibility](../reference/overlay-compatibility.md).

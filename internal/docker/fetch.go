@@ -30,7 +30,7 @@ func detectSourceType(value string) (sourceType, error) {
 func readLocalDockerfile(path string) ([]byte, error) {
 	limit := int64(1 << 20)
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path is validated (absolute or tilde-expanded) in config.Validate before reaching here
 	if err != nil {
 		return nil, fmt.Errorf("open dockerfile %q: %w", path, err)
 	}

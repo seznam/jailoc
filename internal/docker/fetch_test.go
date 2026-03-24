@@ -54,7 +54,7 @@ func TestReadLocalDockerfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) }) //nolint:gosec // cleaning up temp file created in this test
 	if _, err := f.Write(content); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestReadLocalDockerfileTooLarge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) }) //nolint:gosec // cleaning up temp file created in this test
 	data := make([]byte, (1<<20)+1)
 	for i := range data {
 		data[i] = 'A'
@@ -111,7 +111,7 @@ func TestLoadDockerfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) }) //nolint:gosec // cleaning up temp file created in this test
 	if _, err := f.Write(content); err != nil {
 		t.Fatal(err)
 	}

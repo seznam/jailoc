@@ -103,7 +103,7 @@ func TestResolveBaseImageDockerfilePrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create temp dockerfile: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Remove(tempFile.Name()) })
+	t.Cleanup(func() { _ = os.Remove(tempFile.Name()) }) //nolint:gosec // cleaning up temp file created in this test
 	if err := tempFile.Close(); err != nil {
 		t.Fatalf("close temp dockerfile: %v", err)
 	}
