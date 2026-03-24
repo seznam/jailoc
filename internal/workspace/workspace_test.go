@@ -505,7 +505,7 @@ func TestResolveEnvFullPipeline(t *testing.T) {
 	if err := os.WriteFile(globalFile.Name(), []byte("B=global-file\nC=global-file\n"), 0o600); err != nil { //nolint:gosec // writing to temp file created in this test
 		t.Fatalf("WriteFile global env failed: %v", err)
 	}
-	if err := os.WriteFile(workspaceFile.Name(), []byte("C=workspace-file\nD=workspace-file\n"), 0o600); err != nil {
+	if err := os.WriteFile(workspaceFile.Name(), []byte("C=workspace-file\nD=workspace-file\n"), 0o600); err != nil { //nolint:gosec // writing to temp file created in this test
 		t.Fatalf("WriteFile workspace env failed: %v", err)
 	}
 
