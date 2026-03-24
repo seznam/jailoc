@@ -57,6 +57,18 @@ services:
   dind:
     image: docker:dind
     privileged: true
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Clean stale containerd state from prior unclean shutdown to prevent
+        # "containerd is still running" crash loop (PID file persists on volume).
+        # See: https://github.com/moby/moby/blob/v28.1.1/cmd/dockerd/daemon.go#L146-L160
+        rm -f /var/lib/docker/containerd/containerd.pid \
+              /var/lib/docker/containerd/containerd.sock \
+              /var/lib/docker/containerd/containerd-debug.sock
+        exec dockerd-entrypoint.sh "$$@"
+      - --
     environment:
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_TLS_SAN=DNS:dind
