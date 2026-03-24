@@ -5,8 +5,65 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
+
+type sourceType int
+
+const (
+	sourceLocal sourceType = iota
+	sourceHTTP
+)
+
+func detectSourceType(value string) (sourceType, error) {
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") {
+		return sourceLocal, nil
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return sourceHTTP, nil
+	}
+	return 0, fmt.Errorf("unsupported dockerfile source %q: must be an absolute local path (/..., ~/...) or HTTP(S) URL", value)
+}
+
+func readLocalDockerfile(path string) ([]byte, error) {
+	limit := int64(1 << 20)
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open dockerfile %q: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	lr := io.LimitReader(f, limit+1)
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, fmt.Errorf("read dockerfile %q: %w", path, err)
+	}
+
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("dockerfile at %q exceeds 1MiB limit", path)
+	}
+
+	return data, nil
+}
+
+func loadDockerfile(ctx context.Context, source string) ([]byte, error) {
+	st, err := detectSourceType(source)
+	if err != nil {
+		return nil, fmt.Errorf("load dockerfile: %w", err)
+	}
+
+	switch st {
+	case sourceLocal:
+		return readLocalDockerfile(source)
+	case sourceHTTP:
+		return fetchDockerfile(ctx, source)
+	default:
+		return nil, fmt.Errorf("load dockerfile: unknown source type for %q", source)
+	}
+}
 
 func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
