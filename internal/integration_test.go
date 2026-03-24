@@ -28,7 +28,9 @@ type integrationConfig struct {
 		Repository string `toml:"repository"`
 	} `toml:"image"`
 	Workspaces map[string]struct {
-		Paths []string `toml:"paths"`
+		Paths   []string `toml:"paths"`
+		Env     []string `toml:"env"`
+		EnvFile []string `toml:"env_file"`
 	} `toml:"workspaces"`
 }
 
@@ -226,6 +228,109 @@ func TestUpIdempotent(t *testing.T) {
 	downOut, downErr := runJailoc(ctx, home, "down")
 	if downErr != nil {
 		t.Fatalf("run jailoc down: %v\noutput:\n%s", downErr, downOut)
+	}
+}
+
+func TestEnvVarsReachContainer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if !dockerAvailable(ctx) {
+		t.Skip("requires Docker daemon")
+	}
+
+	home := testHome(t)
+	workspaceDir := t.TempDir()
+
+	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
+	content := fmt.Sprintf(`[image]
+repository = "registry.example.com/jailoc-base"
+
+[workspaces.default]
+paths = [%q]
+env = ["TEST_CUSTOM_VAR=hello_from_jailoc"]
+`, workspaceDir)
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	upOut, upErr := runJailoc(ctx, home, "up")
+	if upErr != nil {
+		if isImagePullOrAuthFailure(upOut) {
+			t.Skip("requires accessible image registry")
+		}
+		t.Fatalf("jailoc up: %v\noutput:\n%s", upErr, upOut)
+	}
+
+	containerName := "jailoc-default-opencode-1"
+	execOut, execErr := exec.CommandContext(ctx, "docker", "exec", containerName, "sh", "-c", "echo $TEST_CUSTOM_VAR").CombinedOutput()
+	if execErr != nil {
+		t.Fatalf("docker exec: %v\noutput:\n%s", execErr, string(execOut))
+	}
+	got := strings.TrimSpace(string(execOut))
+	if got != "hello_from_jailoc" {
+		t.Errorf("TEST_CUSTOM_VAR: got %q, want %q", got, "hello_from_jailoc")
+	}
+
+	downOut, downErr := runJailoc(ctx, home, "down")
+	if downErr != nil {
+		t.Fatalf("jailoc down: %v\noutput:\n%s", downErr, downOut)
+	}
+}
+
+func TestEnvFileVarsReachContainer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if !dockerAvailable(ctx) {
+		t.Skip("requires Docker daemon")
+	}
+
+	home := testHome(t)
+	workspaceDir := t.TempDir()
+
+	envFile, err := os.CreateTemp("", "jailoc-integration-*.env")
+	if err != nil {
+		t.Fatalf("create temp env file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(envFile.Name()) })
+	if err := os.WriteFile(envFile.Name(), []byte("FILE_VAR=from_file\n"), 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
+	content := fmt.Sprintf(`[image]
+repository = "registry.example.com/jailoc-base"
+
+[workspaces.default]
+paths = [%q]
+env_file = [%q]
+`, workspaceDir, envFile.Name())
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	upOut, upErr := runJailoc(ctx, home, "up")
+	if upErr != nil {
+		if isImagePullOrAuthFailure(upOut) {
+			t.Skip("requires accessible image registry")
+		}
+		t.Fatalf("jailoc up: %v\noutput:\n%s", upErr, upOut)
+	}
+
+	containerName := "jailoc-default-opencode-1"
+	execOut, execErr := exec.CommandContext(ctx, "docker", "exec", containerName, "sh", "-c", "echo $FILE_VAR").CombinedOutput()
+	if execErr != nil {
+		t.Fatalf("docker exec: %v\noutput:\n%s", execErr, string(execOut))
+	}
+	got := strings.TrimSpace(string(execOut))
+	if got != "from_file" {
+		t.Errorf("FILE_VAR: got %q, want %q", got, "from_file")
+	}
+
+	downOut, downErr := runJailoc(ctx, home, "down")
+	if downErr != nil {
+		t.Fatalf("jailoc down: %v\noutput:\n%s", downErr, downOut)
 	}
 }
 
