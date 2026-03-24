@@ -105,7 +105,7 @@ var rootCmd = &cobra.Command{
 		case config.ModeExec:
 			attachErr = attachExec(ctx, client)
 		default:
-			attachErr = attachOnHost(ws)
+			attachErr = attachOnHost(ctx, client, ws)
 		}
 		if attachErr != nil {
 			return fmt.Errorf("attach to workspace %q: %w", ws.Name, attachErr)
