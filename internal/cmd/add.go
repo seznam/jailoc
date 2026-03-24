@@ -105,6 +105,7 @@ func maybeRestartWorkspace(ws *workspace.Resolved) error {
 		AllowedHosts:     ws2.AllowedHosts,
 		AllowedNetworks:  ws2.AllowedNetworks,
 		OpenCodePassword: password,
+		Env:              ws2.Env,
 	}
 
 	if err := config.WriteAllowedFiles(ws2.Name, cfg); err != nil {

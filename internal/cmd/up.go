@@ -75,6 +75,7 @@ func runUp(ctx context.Context) error {
 		AllowedHosts:     ws.AllowedHosts,
 		AllowedNetworks:  ws.AllowedNetworks,
 		OpenCodePassword: os.Getenv("OPENCODE_SERVER_PASSWORD"),
+		Env:              ws.Env,
 	}
 
 	if err := compose.WriteComposeFile(params, composePath); err != nil {
