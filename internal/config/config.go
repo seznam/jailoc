@@ -64,6 +64,7 @@ var forbiddenMountPrefixes = []string{
 type Config struct {
 	Mode       string               `toml:"mode"`
 	Image      ImageConfig          `toml:"image"`
+	Defaults   Defaults             `toml:"defaults"`
 	Workspaces map[string]Workspace `toml:"workspaces"`
 }
 
@@ -72,10 +73,19 @@ type ImageConfig struct {
 	Dockerfile string `toml:"dockerfile"`
 }
 
+type Defaults struct {
+	Env             []string `toml:"env"`
+	EnvFile         []string `toml:"env_file"`
+	AllowedHosts    []string `toml:"allowed_hosts"`
+	AllowedNetworks []string `toml:"allowed_networks"`
+}
+
 type Workspace struct {
 	Paths           []string `toml:"paths"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
+	Env             []string `toml:"env"`
+	EnvFile         []string `toml:"env_file"`
 	BuildContext    string   `toml:"build_context"`
 	Dockerfile      string   `toml:"dockerfile"`
 }

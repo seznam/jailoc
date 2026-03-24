@@ -97,6 +97,12 @@ func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	writeFile(t, path, `
+[defaults]
+env = ["GLOBAL_VAR=value1"]
+env_file = ["/etc/env.global"]
+allowed_hosts = ["global.example.com"]
+allowed_networks = ["10.0.0.0/8"]
+
 [image]
 repository = "ghcr.io/seznam/jailoc"
 
@@ -104,6 +110,8 @@ repository = "ghcr.io/seznam/jailoc"
 paths = ["/data/workspace", "/work2"]
 allowed_hosts = ["foo.com"]
 allowed_networks = ["10.0.0.0/8"]
+env = ["LOCAL_VAR=value2"]
+env_file = ["/etc/env.local"]
 build_context = "/tmp/context"
 `)
 
@@ -127,6 +135,75 @@ build_context = "/tmp/context"
 
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("round-trip mismatch:\nfirst=%#v\nsecond=%#v", first, second)
+	}
+}
+
+func TestParseDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `
+[defaults]
+env = ["GLOBAL_VAR=value1", "GLOBAL_VAR2=value2"]
+env_file = ["/etc/env.global", "/etc/env.backup"]
+allowed_hosts = ["api.example.com", "db.example.com"]
+allowed_networks = ["10.0.0.0/8", "172.16.0.0/12"]
+
+[workspaces.default]
+paths = ["/data/workspace"]
+`)
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if !reflect.DeepEqual(cfg.Defaults.Env, []string{"GLOBAL_VAR=value1", "GLOBAL_VAR2=value2"}) {
+		t.Fatalf("unexpected defaults env: %#v", cfg.Defaults.Env)
+	}
+	if !reflect.DeepEqual(cfg.Defaults.EnvFile, []string{"/etc/env.global", "/etc/env.backup"}) {
+		t.Fatalf("unexpected defaults env_file: %#v", cfg.Defaults.EnvFile)
+	}
+	if !reflect.DeepEqual(cfg.Defaults.AllowedHosts, []string{"api.example.com", "db.example.com"}) {
+		t.Fatalf("unexpected defaults allowed_hosts: %#v", cfg.Defaults.AllowedHosts)
+	}
+	if !reflect.DeepEqual(cfg.Defaults.AllowedNetworks, []string{"10.0.0.0/8", "172.16.0.0/12"}) {
+		t.Fatalf("unexpected defaults allowed_networks: %#v", cfg.Defaults.AllowedNetworks)
+	}
+}
+
+func TestParseWorkspaceEnvFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `
+[workspaces.default]
+paths = ["/data/workspace"]
+env = ["LOCAL_VAR=value1", "LOCAL_VAR2=value2"]
+env_file = ["/home/user/.env", "/home/user/.env.local"]
+
+[workspaces.other]
+paths = ["/work"]
+env = ["OTHER_VAR=val"]
+`)
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	defaultWs := cfg.Workspaces["default"]
+	if !reflect.DeepEqual(defaultWs.Env, []string{"LOCAL_VAR=value1", "LOCAL_VAR2=value2"}) {
+		t.Fatalf("unexpected workspace default env: %#v", defaultWs.Env)
+	}
+	if !reflect.DeepEqual(defaultWs.EnvFile, []string{"/home/user/.env", "/home/user/.env.local"}) {
+		t.Fatalf("unexpected workspace default env_file: %#v", defaultWs.EnvFile)
+	}
+
+	otherWs := cfg.Workspaces["other"]
+	if !reflect.DeepEqual(otherWs.Env, []string{"OTHER_VAR=val"}) {
+		t.Fatalf("unexpected workspace other env: %#v", otherWs.Env)
+	}
+	if len(otherWs.EnvFile) != 0 {
+		t.Fatalf("expected empty env_file for other workspace, got %#v", otherWs.EnvFile)
 	}
 }
 
