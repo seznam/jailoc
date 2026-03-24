@@ -225,8 +225,8 @@ func (c *Client) initComposeSvc() error {
 }
 
 func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (string, error) {
-	if cfg != nil && strings.TrimSpace(cfg.Image.Dockerfile) != "" {
-		source := strings.TrimSpace(cfg.Image.Dockerfile)
+	if cfg != nil && strings.TrimSpace(cfg.Base.Dockerfile) != "" {
+		source := strings.TrimSpace(cfg.Base.Dockerfile)
 		content, err := loadDockerfile(ctx, source)
 		if err != nil {
 			return "", fmt.Errorf("load dockerfile from %q: %w", source, err)
@@ -244,21 +244,6 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 		}
 
 		return tag, nil
-	}
-
-	if cfg != nil && strings.TrimSpace(cfg.Image.Repository) != "" {
-		tag := fmt.Sprintf("%s:%s", strings.TrimSpace(cfg.Image.Repository), version)
-
-		engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
-		if err != nil {
-			return "", fmt.Errorf("create Docker Engine client for pull: %w", err)
-		}
-		defer func() { _ = engineCli.Close() }()
-
-		if err := pullImage(ctx, engineCli, tag); err == nil {
-			return tag, nil
-		}
-		fmt.Printf("registry pull failed for %s, falling back to embedded build\n", tag)
 	}
 
 	const embeddedTag = "jailoc-base:embedded"

@@ -15,15 +15,13 @@ import (
 )
 
 const (
-	defaultImageRepository = "ghcr.io/seznam/jailoc"
-	defaultConfigContent   = `# jailoc configuration
+	defaultConfigContent = `# jailoc configuration
 # See: https://github.com/seznam/jailoc
 
 # Access mode: "remote" (host opencode attach), "exec" (docker exec opencode), or "" (auto-detect)
 # mode = ""
 
-[image]
-# repository = "ghcr.io/seznam/jailoc"  # default registry
+[base]
 # dockerfile = ""
 
 [defaults]
@@ -80,13 +78,12 @@ var forbiddenMountPrefixes = []string{
 
 type Config struct {
 	Mode       string               `toml:"mode"`
-	Image      ImageConfig          `toml:"image"`
+	Base       BaseConfig           `toml:"base"`
 	Defaults   Defaults             `toml:"defaults"`
 	Workspaces map[string]Workspace `toml:"workspaces"`
 }
 
-type ImageConfig struct {
-	Repository string `toml:"repository"`
+type BaseConfig struct {
 	Dockerfile string `toml:"dockerfile"`
 }
 
@@ -170,9 +167,6 @@ func decode(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse TOML %q: %w", path, err)
 	}
 
-	if cfg.Image.Repository == "" {
-		cfg.Image.Repository = defaultImageRepository
-	}
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = map[string]Workspace{}
 	}
@@ -266,24 +260,20 @@ func Validate(cfg *Config) error {
 		cfg.Workspaces = map[string]Workspace{}
 	}
 
-	if cfg.Image.Repository == "" {
-		cfg.Image.Repository = defaultImageRepository
-	}
-
 	if cfg.Mode != "" && cfg.Mode != ModeRemote && cfg.Mode != ModeExec {
 		return fmt.Errorf("invalid mode %q: must be %q, %q, or empty (auto-detect)", cfg.Mode, ModeRemote, ModeExec)
 	}
 
-	if err := validateDockerfileSource(cfg.Image.Dockerfile, "image dockerfile"); err != nil {
+	if err := validateDockerfileSource(cfg.Base.Dockerfile, "base dockerfile"); err != nil {
 		return err
 	}
 
-	if strings.HasPrefix(cfg.Image.Dockerfile, "~") {
-		expanded, err := ExpandPath(cfg.Image.Dockerfile)
+	if strings.HasPrefix(cfg.Base.Dockerfile, "~") {
+		expanded, err := ExpandPath(cfg.Base.Dockerfile)
 		if err != nil {
-			return fmt.Errorf("expand image dockerfile %q: %w", cfg.Image.Dockerfile, err)
+			return fmt.Errorf("expand base dockerfile %q: %w", cfg.Base.Dockerfile, err)
 		}
-		cfg.Image.Dockerfile = expanded
+		cfg.Base.Dockerfile = expanded
 	}
 
 	if err := validateEnvEntries(cfg.Defaults.Env, "defaults"); err != nil {
