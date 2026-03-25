@@ -80,6 +80,7 @@ func runUp(ctx context.Context) error {
 		Env:              ws.Env,
 	}
 
+	fmt.Printf("Generating compose configuration...\n")
 	if err := compose.WriteComposeFile(params, composePath); err != nil {
 		return fmt.Errorf("write compose file for workspace %q: %w", ws.Name, err)
 	}
@@ -155,16 +156,20 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 	strategy, strategyImage := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
 	switch strategy {
 	case strategyDirectImage:
+		fmt.Printf("Using workspace image %s\n", strategyImage)
 		return strategyImage, nil
 	case strategyDefaultsDirect:
+		fmt.Printf("Using default image %s\n", strategyImage)
 		return strategyImage, nil
 	case strategyDefaultsOverlay:
+		fmt.Printf("Building overlay on default image %s...\n", strategyImage)
 		final, err := docker.BuildOverlayImage(ctx, strategyImage, *ws)
 		if err != nil {
 			return "", fmt.Errorf("build workspace overlay image: %w", err)
 		}
 		return final, nil
 	default: // strategyCascade
+		fmt.Printf("Resolving base image...\n")
 		base, err := docker.ResolveBaseImage(ctx, cfg, version)
 		if err != nil {
 			return "", fmt.Errorf("resolve base image: %w", err)

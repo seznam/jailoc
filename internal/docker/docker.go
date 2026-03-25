@@ -30,6 +30,24 @@ func displayStream(r io.Reader) error {
 	return jsonmessage.DisplayJSONMessagesStream(r, os.Stderr, fd, isTerminal, nil)
 }
 
+// progressEventProcessor filters compose SDK events to show only important state changes.
+// It prints completion (Done) and error events, skipping intermediate progress ticks.
+type progressEventProcessor struct{}
+
+func (p *progressEventProcessor) Start(_ context.Context, _ string) {}
+func (p *progressEventProcessor) Done(_ string, _ bool)             {}
+
+func (p *progressEventProcessor) On(events ...api.Resource) {
+	for _, e := range events {
+		switch e.Status {
+		case api.Done:
+			fmt.Printf("  %s %s\n", e.ID, e.Text)
+		case api.Error:
+			fmt.Printf("  %s %s: %s\n", e.ID, e.Text, e.Details)
+		}
+	}
+}
+
 type Client struct {
 	composeFile string
 	workDir     string
@@ -52,6 +70,7 @@ func (c *Client) Up(ctx context.Context) error {
 		return err
 	}
 
+	fmt.Printf("Loading compose project...\n")
 	project, err := c.svc.LoadProject(ctx, api.ProjectLoadOptions{
 		ConfigPaths: []string{c.composeFile},
 		ProjectName: "jailoc-" + c.workspace,
@@ -212,7 +231,7 @@ func (c *Client) initComposeSvc() error {
 			c.svcErr = fmt.Errorf("initialize Docker CLI: %w", err)
 			return
 		}
-		svc, err := compose.NewComposeService(dockerCLI)
+		svc, err := compose.NewComposeService(dockerCLI, compose.WithEventProcessor(&progressEventProcessor{}))
 		if err != nil {
 			c.svcErr = fmt.Errorf("create Compose service: %w", err)
 			return
@@ -226,6 +245,7 @@ func (c *Client) initComposeSvc() error {
 func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (string, error) {
 	if cfg != nil && strings.TrimSpace(cfg.Base.Dockerfile) != "" {
 		source := strings.TrimSpace(cfg.Base.Dockerfile)
+		fmt.Printf("Loading preset Dockerfile from %s...\n", source)
 		content, err := loadDockerfile(ctx, source)
 		if err != nil {
 			return "", fmt.Errorf("load dockerfile from %q: %w", source, err)
@@ -237,6 +257,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 		}
 		defer func() { _ = engineCli.Close() }()
 
+		fmt.Printf("Building preset base image...\n")
 		tag, err := buildPresetImage(ctx, engineCli, content)
 		if err != nil {
 			return "", fmt.Errorf("build preset image: %w", err)
@@ -252,6 +273,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 	}
 	defer func() { _ = engineCli.Close() }()
 
+	fmt.Printf("Building embedded base image...\n")
 	if err := buildEmbeddedImage(ctx, engineCli, embeddedTag); err != nil {
 		return "", fmt.Errorf("build embedded base image: %w", err)
 	}
@@ -353,6 +375,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		return base, nil
 	}
 
+	fmt.Printf("Loading workspace Dockerfile from %s...\n", ws.Dockerfile)
 	dockerfileContent, err := loadDockerfile(ctx, ws.Dockerfile)
 	if err != nil {
 		return "", fmt.Errorf("load workspace dockerfile from %q: %w", ws.Dockerfile, err)
@@ -396,6 +419,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	defer func() { _ = buildCtx.Close() }()
 
 	baseArg := base
+	fmt.Printf("Building workspace overlay image...\n")
 	resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:       []string{overlayTag},
 		BuildArgs:  map[string]*string{"BASE": &baseArg},

@@ -32,6 +32,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	sort.Strings(names)
 
 	// Print global settings
+	mode := cfg.Mode
+	if mode == "" {
+		mode = "(auto-detect)"
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "Mode: %s\n", mode)
+
 	baseDockerfile := cfg.Base.Dockerfile
 	if baseDockerfile == "" {
 		baseDockerfile = "(embedded)"
@@ -43,6 +49,43 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		defaultsImage = "(not set)"
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "Defaults Image: %s\n", defaultsImage)
+
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Allowed Hosts:\n")
+	if len(cfg.Defaults.AllowedHosts) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
+	} else {
+		for _, host := range cfg.Defaults.AllowedHosts {
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", host)
+		}
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Allowed Networks:\n")
+	if len(cfg.Defaults.AllowedNetworks) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
+	} else {
+		for _, network := range cfg.Defaults.AllowedNetworks {
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", network)
+		}
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Env:\n")
+	if len(cfg.Defaults.Env) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
+	} else {
+		for _, env := range cfg.Defaults.Env {
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", env)
+		}
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Env Files:\n")
+	if len(cfg.Defaults.EnvFile) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
+	} else {
+		for _, f := range cfg.Defaults.EnvFile {
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", f)
+		}
+	}
+
 	_, _ = fmt.Fprintf(os.Stdout, "\n")
 
 	// Print each workspace
@@ -89,6 +132,30 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			wsImage = "(not set)"
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "  Image: %s\n", wsImage)
+
+		wsDockerfile := ws.Dockerfile
+		if wsDockerfile == "" {
+			wsDockerfile = "(not set)"
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "  Dockerfile: %s\n", wsDockerfile)
+
+		_, _ = fmt.Fprintf(os.Stdout, "  Env:\n")
+		if len(ws.Env) == 0 {
+			_, _ = fmt.Fprintf(os.Stdout, "    (none)\n")
+		} else {
+			for _, env := range ws.Env {
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", env)
+			}
+		}
+
+		_, _ = fmt.Fprintf(os.Stdout, "  Env Files:\n")
+		if len(ws.EnvFile) == 0 {
+			_, _ = fmt.Fprintf(os.Stdout, "    (none)\n")
+		} else {
+			for _, f := range ws.EnvFile {
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", f)
+			}
+		}
 
 		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}
