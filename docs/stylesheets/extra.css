@@ -19,9 +19,16 @@
   width: auto;
 }
 
-.md-header__topic {
-  font-size: 1.2rem;
+.md-header__topic:first-child {
+  display: none;
+}
+
+.md-header__topic + .md-header__topic {
   font-weight: 700;
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: initial;
+  position: static;
 }
 
 /* ─── Hero image ─────────────────────────────────────────────── */
@@ -73,10 +80,8 @@
   letter-spacing: 0.02em;
 }
 
-/* ─── Page title ─────────────────────────────────────────────── */
 .md-typeset h1 {
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  display: none;
 }
 
 .md-typeset h2 {

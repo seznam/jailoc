@@ -8,22 +8,29 @@ theme:
   name: material
   language: en
   palette:
-    - scheme: slate
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
       primary: deep orange
       accent: red
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
-    - scheme: default
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
       primary: deep orange
       accent: red
       toggle:
         icon: material/brightness-7
-        name: Switch to dark mode
+        name: Switch to automatic mode
   font:
     text: Inter
     code: JetBrains Mono
   logo: logo.png
+  favicon: favicon-light.png
   features:
     - content.code.copy
     - navigation.sections
@@ -48,6 +55,9 @@ copyright: Made with ❤️ in <a href="https://o-seznam.cz/kariera/it/">Seznam.
 
 extra:
   version: !ENV [CI_COMMIT_TAG, "latest"]
+
+extra_javascript:
+  - javascripts/favicon-switch.js
 
 extra_css:
   - stylesheets/extra.css
