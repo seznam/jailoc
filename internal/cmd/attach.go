@@ -54,8 +54,10 @@ func runAttach(cmd *cobra.Command, args []string) error {
 	mode := resolveFromFlags(cmd, cfg)
 	switch mode {
 	case config.ModeExec:
+		fmt.Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
 		return attachExec(attachCtx, client)
 	default:
+		fmt.Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
 		return attachOnHost(attachCtx, ws)
 	}
 }

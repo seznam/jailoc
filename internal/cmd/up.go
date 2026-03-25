@@ -35,6 +35,7 @@ func runUp(ctx context.Context) error {
 		return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
 	}
 
+	fmt.Printf("Checking Docker availability...\n")
 	if err := preflightDocker(ctx, ws.Name); err != nil {
 		return fmt.Errorf("docker is not running or not accessible: %w", err)
 	}
@@ -53,6 +54,7 @@ func runUp(ctx context.Context) error {
 		return nil
 	}
 
+	fmt.Printf("Resolving image for workspace %s...\n", ws.Name)
 	finalImage, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
 	if err != nil {
 		return fmt.Errorf("resolve image for workspace %q: %w", ws.Name, err)
@@ -82,6 +84,7 @@ func runUp(ctx context.Context) error {
 		return fmt.Errorf("write compose file for workspace %q: %w", ws.Name, err)
 	}
 
+	fmt.Printf("Starting workspace %s...\n", ws.Name)
 	startClient := docker.NewClient(composePath, "", ws.Name)
 	if err := startClient.Up(ctx); err != nil {
 		return fmt.Errorf("start workspace %q: %w", ws.Name, err)

@@ -116,6 +116,7 @@ func maybeRestartWorkspace(ws *workspace.Resolved) error {
 		return fmt.Errorf("regenerate compose file: %w", err)
 	}
 
+	fmt.Printf("Restarting workspace %s with updated mounts...\n", ws.Name)
 	if err := client.Up(ctx); err != nil {
 		return fmt.Errorf("restart workspace: %w", err)
 	}

@@ -111,8 +111,10 @@ var rootCmd = &cobra.Command{
 		var attachErr error
 		switch mode {
 		case config.ModeExec:
+			fmt.Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
 			attachErr = attachExec(attachCtx, client)
 		default:
+			fmt.Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
 			attachErr = attachOnHost(attachCtx, ws)
 		}
 		if attachErr != nil {

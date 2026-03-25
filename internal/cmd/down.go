@@ -47,6 +47,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	fmt.Printf("Stopping workspace %s...\n", ws.Name)
 	if err := client.Down(context.Background()); err != nil {
 		return fmt.Errorf("stop workspace: %w", err)
 	}
