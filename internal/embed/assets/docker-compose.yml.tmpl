@@ -14,7 +14,7 @@ services:
       - ${HOME}/.opencode:/home/agent/.opencode:ro
       - ${HOME}/.claude:/home/agent/.claude
       - ${HOME}/.agents:/home/agent/.agents:ro
-      - ${HOME}/.config/jailoc:/etc/jailoc:ro
+      - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
       - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode
       - opencode-cache-{{.WorkspaceName}}:/home/agent/.cache
       - dind-certs-client:/certs/client:ro
@@ -26,7 +26,7 @@ services:
       - DOCKER_CERT_PATH=/certs/client
       - DOCKER_TLS_VERIFY=1
 {{- range .Env}}
-      - {{.}}
+      - "{{.}}"
 {{- end}}
     cap_drop:
       - ALL

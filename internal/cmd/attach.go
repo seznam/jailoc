@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -36,7 +37,7 @@ func runAttach(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
-	composePath := composeCacheDir(ws.Name) + "docker-compose.yml"
+	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 	client := docker.NewClient(composePath, "", ws.Name)
 
 	ctx := cmd.Context()
@@ -147,6 +148,9 @@ func monitorAttach(ctx context.Context, cancel context.CancelCauseFunc, currentC
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if ctx.Err() != nil {
+				return
+			}
 			containerID, err := currentContainerID(ctx)
 			if err != nil {
 				cancel(fmt.Errorf("monitor opencode container: %w", err))

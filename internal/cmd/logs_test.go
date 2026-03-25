@@ -46,28 +46,22 @@ func TestLogsComposePath(t *testing.T) {
 			home := tc.setupHome(t)
 			expectedPath := filepath.Join(home, ".cache", "jailoc", tc.workspaceName, "docker-compose.yml")
 
-			got := logsComposePath(tc.workspaceName)
+			got := filepath.Join(ComposeCacheDir(tc.workspaceName), "docker-compose.yml")
 
 			if got != expectedPath {
-				t.Errorf("logsComposePath(%q) = %q, want %q", tc.workspaceName, got, expectedPath)
+				t.Errorf("ComposeCacheDir(%q) compose path = %q, want %q", tc.workspaceName, got, expectedPath)
 			}
 		})
 	}
 }
 
 func TestLogsComposePathFallback(t *testing.T) {
-	oldHome, homeWasSet := os.LookupEnv("HOME")
-	t.Cleanup(func() {
-		if homeWasSet {
-			t.Setenv("HOME", oldHome)
-		}
-	})
 	t.Setenv("HOME", "")
 
-	got := logsComposePath("testworkspace")
+	got := filepath.Join(ComposeCacheDir("testworkspace"), "docker-compose.yml")
 
 	expectedPath := filepath.Join(os.TempDir(), "jailoc", "testworkspace", "docker-compose.yml")
 	if got != expectedPath {
-		t.Errorf("logsComposePath fallback = %q, want %q", got, expectedPath)
+		t.Errorf("ComposeCacheDir fallback compose path = %q, want %q", got, expectedPath)
 	}
 }

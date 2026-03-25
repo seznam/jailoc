@@ -707,7 +707,7 @@ func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
 		t.Fatalf("WriteAllowedFiles returned error: %v", err)
 	}
 
-	dir := ConfigDir()
+	dir := filepath.Join(ConfigDir(), "workspaces", "myws")
 
 	hostsData, err := os.ReadFile(filepath.Join(dir, "allowed-hosts")) //nolint:gosec // test reads from t.TempDir()
 	if err != nil {
@@ -730,9 +730,9 @@ func TestWriteAllowedFilesRemovesStaleFiles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	dir := ConfigDir()
+	dir := filepath.Join(ConfigDir(), "workspaces", "myws")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatalf("create config dir: %v", err)
+		t.Fatalf("create workspace config dir: %v", err)
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "allowed-hosts"), []byte("old.com\n"), 0o600); err != nil {
@@ -766,12 +766,9 @@ func TestWriteAllowedFilesNilConfig(t *testing.T) {
 		t.Fatalf("WriteAllowedFiles with nil config returned error: %v", err)
 	}
 
-	dir := ConfigDir()
-	if _, err := os.Stat(filepath.Join(dir, "allowed-hosts")); !os.IsNotExist(err) {
-		t.Fatal("expected no allowed-hosts file for nil config")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "allowed-networks")); !os.IsNotExist(err) {
-		t.Fatal("expected no allowed-networks file for nil config")
+	dir := filepath.Join(ConfigDir(), "workspaces", "whatever")
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("expected no workspace directory for nil config")
 	}
 }
 
@@ -787,9 +784,9 @@ func TestWriteAllowedFilesMissingWorkspace(t *testing.T) {
 		t.Fatalf("WriteAllowedFiles with missing workspace returned error: %v", err)
 	}
 
-	dir := ConfigDir()
-	if _, err := os.Stat(filepath.Join(dir, "allowed-hosts")); !os.IsNotExist(err) {
-		t.Fatal("expected no allowed-hosts file for missing workspace")
+	dir := filepath.Join(ConfigDir(), "workspaces", "nonexistent")
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("expected no workspace directory for missing workspace")
 	}
 }
 
@@ -1636,7 +1633,7 @@ func TestValidateImageAndDockerfileMutualExclusivity(t *testing.T) {
 			dockerfile:  "",
 			buildCtx:    "",
 			shouldError: true,
-			errorText:   "\"image\" must not be empty",
+			errorText:   "\"image\" must not be empty or whitespace-only",
 		},
 	}
 

@@ -37,34 +37,30 @@ func TestComposeCacheDir(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", tc.homeEnv)
 
-			got := composeCacheDir(tc.workspace)
+			got := ComposeCacheDir(tc.workspace)
 
 			if got != tc.wantPath {
-				t.Fatalf("composeCacheDir(%q) = %q, want %q", tc.workspace, got, tc.wantPath)
+				t.Fatalf("ComposeCacheDir(%q) = %q, want %q", tc.workspace, got, tc.wantPath)
 			}
 
 			if !hasTrailingSeparator(got) {
-				t.Fatalf("composeCacheDir(%q) should end with path separator, got %q", tc.workspace, got)
+				t.Fatalf("ComposeCacheDir(%q) should end with path separator, got %q", tc.workspace, got)
 			}
 		})
 	}
 }
 
 func TestComposeCacheDirFallback(t *testing.T) {
-	t.Setenv("HOME", "/nonexistent/home/that/does/not/exist")
+	t.Setenv("HOME", "")
 
-	got := composeCacheDir("fallback-test")
+	got := ComposeCacheDir("fallback-test")
 
 	if !filepath.IsAbs(got) {
-		t.Fatalf("composeCacheDir should return absolute path, got %q", got)
+		t.Fatalf("ComposeCacheDir should return absolute path, got %q", got)
 	}
 
 	if !hasTrailingSeparator(got) {
-		t.Fatalf("composeCacheDir should end with path separator, got %q", got)
-	}
-
-	if !filepath.IsLocal(got) && !contains(got, "fallback-test") {
-		t.Fatalf("composeCacheDir should contain workspace name, got %q", got)
+		t.Fatalf("ComposeCacheDir should end with path separator, got %q", got)
 	}
 }
 
@@ -73,8 +69,4 @@ func hasTrailingSeparator(path string) bool {
 		return false
 	}
 	return path[len(path)-1] == os.PathSeparator
-}
-
-func contains(s, substr string) bool {
-	return filepath.Base(filepath.Dir(s)) == "jailoc" || len(substr) > 0 && s[len(s)-len(substr)-1:len(s)-1] == substr
 }

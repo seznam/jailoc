@@ -69,7 +69,7 @@ func isDuplicate(paths []string, target string) bool {
 }
 
 func maybeRestartWorkspace(ws *workspace.Resolved) error {
-	compPath := addComposePath(ws.Name)
+	compPath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 	if _, err := os.Stat(compPath); err != nil {
 		return nil
 	}
@@ -123,14 +123,6 @@ func maybeRestartWorkspace(ws *workspace.Resolved) error {
 
 	fmt.Printf("Workspace %q restarted with updated mounts\n", ws.Name)
 	return nil
-}
-
-func addComposePath(workspace string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "jailoc", workspace, "docker-compose.yml")
-	}
-	return filepath.Join(home, ".cache", "jailoc", workspace, "docker-compose.yml")
 }
 
 func init() {

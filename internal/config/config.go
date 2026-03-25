@@ -245,8 +245,8 @@ func validateEnvEntries(entries []string, context string) error {
 
 func validateEnvFiles(paths []string, context string) error {
 	for _, p := range paths {
-		if !strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "~") {
-			return fmt.Errorf("%s: env_file path %q must be absolute (start with / or ~)", context, p)
+		if !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("%s: env_file path %q must be absolute (start with /)", context, p)
 		}
 		if _, err := os.Stat(p); err != nil {
 			return fmt.Errorf("%s: env_file %q does not exist", context, p)
@@ -342,14 +342,15 @@ func Validate(cfg *Config) error {
 			return err
 		}
 
+		if ws.Image != "" && strings.TrimSpace(ws.Image) == "" {
+			return fmt.Errorf("workspace %q: \"image\" must not be empty or whitespace-only", name)
+		}
+
 		if ws.Image != "" && ws.Dockerfile != "" {
 			return fmt.Errorf("workspace %q: cannot set both \"image\" and \"dockerfile\"", name)
 		}
 		if ws.Image != "" && ws.BuildContext != "" {
 			return fmt.Errorf("workspace %q: cannot set both \"image\" and \"build_context\"", name)
-		}
-		if strings.TrimSpace(ws.Image) == "" && ws.Image != "" {
-			return fmt.Errorf("workspace %q: \"image\" must not be empty", name)
 		}
 
 		wsContext := fmt.Sprintf("workspace %q", name)
@@ -413,9 +414,16 @@ func AddPath(workspace, path string) error {
 }
 
 func WriteAllowedFiles(workspace string, cfg *Config) error {
-	dir := ConfigDir()
+	if cfg == nil {
+		return nil
+	}
+	if _, ok := cfg.Workspaces[workspace]; !ok {
+		return nil
+	}
+
+	dir := filepath.Join(ConfigDir(), "workspaces", workspace)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create config directory %q: %w", dir, err)
+		return fmt.Errorf("create workspace config directory %q: %w", dir, err)
 	}
 
 	hostsPath := filepath.Join(dir, "allowed-hosts")

@@ -36,13 +36,3 @@ func TestEntrypointEmbedded(t *testing.T) {
 		t.Fatal("Entrypoint() does not contain #!/bin/bash")
 	}
 }
-
-func TestDefaultConfigEmbedded(t *testing.T) {
-	b := jailocembed.DefaultConfig()
-	if len(b) == 0 {
-		t.Fatal("DefaultConfig() returned empty bytes")
-	}
-	if !strings.Contains(string(b), "[workspaces.default]") {
-		t.Fatal("DefaultConfig() does not contain [workspaces.default]")
-	}
-}

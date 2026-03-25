@@ -3,7 +3,6 @@ package cmd
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -70,30 +69,20 @@ func TestIsDuplicate(t *testing.T) {
 
 func TestAddComposePath(t *testing.T) {
 	tests := []struct {
-		name          string
-		workspace     string
-		expectedRegex func(home string) string
+		name      string
+		workspace string
 	}{
 		{
 			name:      "default workspace",
 			workspace: "default",
-			expectedRegex: func(home string) string {
-				return filepath.Join(home, ".cache", "jailoc", "default", "docker-compose.yml")
-			},
 		},
 		{
 			name:      "api workspace",
 			workspace: "api",
-			expectedRegex: func(home string) string {
-				return filepath.Join(home, ".cache", "jailoc", "api", "docker-compose.yml")
-			},
 		},
 		{
 			name:      "custom workspace name",
 			workspace: "my-production-env",
-			expectedRegex: func(home string) string {
-				return filepath.Join(home, ".cache", "jailoc", "my-production-env", "docker-compose.yml")
-			},
 		},
 	}
 
@@ -102,11 +91,11 @@ func TestAddComposePath(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
-			got := addComposePath(tc.workspace)
-			expected := tc.expectedRegex(home)
+			got := filepath.Join(ComposeCacheDir(tc.workspace), "docker-compose.yml")
+			expected := filepath.Join(home, ".cache", "jailoc", tc.workspace, "docker-compose.yml")
 
 			if got != expected {
-				t.Errorf("addComposePath(%q) = %q, want %q", tc.workspace, got, expected)
+				t.Errorf("ComposeCacheDir(%q) compose path = %q, want %q", tc.workspace, got, expected)
 			}
 
 			if !filepath.IsAbs(got) {
@@ -116,19 +105,17 @@ func TestAddComposePath(t *testing.T) {
 	}
 
 	t.Run("fallback to TempDir when UserHomeDir fails", func(t *testing.T) {
-		home := t.TempDir()
 		t.Setenv("HOME", "")
 
-		got := addComposePath("test-workspace")
+		got := filepath.Join(ComposeCacheDir("test-workspace"), "docker-compose.yml")
 
 		if !filepath.IsAbs(got) {
 			t.Fatalf("expected absolute path, got %q", got)
 		}
 
-		if !strings.HasPrefix(got, os.TempDir()) {
-			t.Errorf("expected path to start with TempDir %q, got %q", os.TempDir(), got)
+		expected := filepath.Join(os.TempDir(), "jailoc", "test-workspace", "docker-compose.yml")
+		if got != expected {
+			t.Errorf("fallback compose path = %q, want %q", got, expected)
 		}
-
-		_ = home
 	})
 }

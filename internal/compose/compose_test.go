@@ -201,9 +201,9 @@ func TestGenerateComposeEnv(t *testing.T) {
 
 	rendered := string(out)
 
-	// Check that user env vars are present
-	assertContains(t, rendered, "- MY_VAR=hello")
-	assertContains(t, rendered, "- OTHER=world")
+	// Check that user env vars are present (double-quoted in YAML)
+	assertContains(t, rendered, `- "MY_VAR=hello"`)
+	assertContains(t, rendered, `- "OTHER=world"`)
 
 	// Check that system env vars are still present
 	assertContains(t, rendered, "- OPENCODE_LOG=debug")
