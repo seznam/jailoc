@@ -57,6 +57,13 @@ pages:
   needs:
     - job: goreleaser
       optional: true
+  before_script:
+    - |
+      certs="${CUSTOM_CA_CERTS:-$DEFAULT_CA_CERTS}"
+      if [ -n "$certs" ]; then
+        echo "$certs" >> /etc/ssl/certs/ca-certificates.crt
+        echo "$certs" >> /etc/ssl/cert.pem
+      fi
   script:
     - pip install .
     # Workaround: substitute {{ version }} in docs — zensical doesn't support
