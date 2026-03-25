@@ -15,7 +15,6 @@ import (
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/docker/compose/v5/pkg/compose"
 	"github.com/docker/docker/api/types/build"
-	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
 	archive "github.com/moby/go-archive"
@@ -258,20 +257,6 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 	}
 
 	return embeddedTag, nil
-}
-
-func pullImage(ctx context.Context, cli dockerclient.APIClient, tag string) error {
-	reader, err := cli.ImagePull(ctx, tag, image.PullOptions{})
-	if err != nil {
-		return fmt.Errorf("pull image %q: %w", tag, err)
-	}
-	defer func() { _ = reader.Close() }()
-
-	if err := displayStream(reader); err != nil {
-		return fmt.Errorf("read pull output for image %q: %w", tag, err)
-	}
-
-	return nil
 }
 
 func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag string) error {

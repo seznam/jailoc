@@ -1664,10 +1664,8 @@ func TestValidateImageAndDockerfileMutualExclusivity(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.errorText) {
 					t.Fatalf("expected error to contain %q, got: %v", tt.errorText, err)
 				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}
