@@ -2,46 +2,19 @@
 
 # jailoc
 
-`jailoc` manages sandboxed Docker Compose environments for headless OpenCode coding agents. Each workspace gets its own isolated container with network restrictions and privilege dropping, so agents run autonomously without touching your host system.
-
-## How it works
-
-```mermaid
-flowchart TB
-    subgraph host["Host"]
-        cli["jailoc CLI"]
-
-        subgraph compose["Docker Compose · jailoc-workspace"]
-            subgraph oc["opencode container"]
-                ocd["opencode serve :4096 · UID 1000<br><small>workspace paths (rw) · OC config (ro)</small>"]
-            end
-            subgraph dind["dind container (privileged)"]
-                dd["Docker daemon :2376<br><small>TLS certs · docker data</small>"]
-            end
-        end
-    end
-
-    cli --> compose
-    oc <-.->|"TLS (named volume)"| dind
-```
-
-**Entrypoint** — the container starts as root, applies iptables rules, and chowns the data volume. It then drops to UID 1000 (`agent`) via `setpriv --inh-caps=-all --no-new-privs` and starts the OpenCode server.
-
-**Volume mounts** — workspace paths are bind-mounted at the same absolute path as on the host. OpenCode config directories (`~/.config/opencode`, `~/.opencode`, `~/.claude`, `~/.agents`) are mounted read-only. A named volume holds the OpenCode data directory, so the agent's database and auth tokens stay isolated from the host.
-
-**Network isolation** — iptables rules block all RFC 1918, link-local, and CGNAT ranges by default. You explicitly allow the specific internal hosts or networks the agent needs to reach.
+`jailoc` wraps OpenCode agents in isolated Docker containers so they can run autonomously without touching your host system. Each workspace gets its own sandboxed environment with network restrictions and privilege dropping, letting you control exactly which directories and internal services the agent can reach.
 
 ## Documentation
 
 ### Get started
 
-New to jailoc? Start here.
+New to jailoc? Start here and run your first workspace in minutes.
 
 - [Getting Started](tutorials/getting-started.md) — install jailoc and run your first workspace
 
 ### How-to guides
 
-Task-oriented guides for common operations.
+Step-by-step guides for specific tasks once you're up and running.
 
 - [Installation](how-to/installation.md)
 - [Workspace Configuration](how-to/workspace-configuration.md)
@@ -51,7 +24,7 @@ Task-oriented guides for common operations.
 
 ### Reference
 
-Complete technical descriptions of CLI commands and configuration options.
+Complete technical descriptions of every CLI command and configuration field.
 
 - [CLI Reference](reference/cli.md)
 - [Configuration Reference](reference/configuration.md)
@@ -60,7 +33,7 @@ Complete technical descriptions of CLI commands and configuration options.
 
 ### Explanation
 
-Background reading on how jailoc works and why it's designed the way it is.
+Background on how jailoc works and why it's designed the way it is.
 
 - [Overview](explanation/overview.md)
 - [Container Architecture](explanation/container-architecture.md)
