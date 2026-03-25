@@ -12,7 +12,7 @@ When you run `jailoc up`, five things happen in order:
 
 **2. Workspace resolution.** `workspace.Resolve` turns a workspace name into everything needed to describe a running environment: the mount paths, the host port (derived as `4096 + alphabetical index` among all workspaces), and the list of allowed hosts and networks the agent may reach.
 
-**3. Image resolution.** `docker.ResolveBaseImage` and `docker.BuildOverlayImage` decide what container image to use. Resolution works in two tiers: tier 1 resolves a base image (from a configured Dockerfile, a registry pull, or an embedded fallback), and tier 2 optionally overlays a workspace-specific Dockerfile on top. See [Image Resolution](../reference/image-resolution.md) for the full rules.
+**3. Image resolution.** `docker.ResolveBaseImage` and `docker.BuildOverlayImage` decide what container image to use. If a workspace sets `image`, that value is used directly and all build steps are skipped. If `defaults.image` is set, it serves as the base for any workspace `dockerfile` overlay, or is used directly when no workspace Dockerfile exists. Otherwise, resolution falls back to a `[base].dockerfile` (local path or HTTP URL), and finally to the Dockerfile embedded in the binary. See [Image Resolution](../reference/image-resolution.md) for the full rules.
 
 **4. Compose generation.** `compose.WriteCompose` renders a `docker-compose.yml` from a Go template and writes it to `~/.cache/jailoc/{workspace}/docker-compose.yml`. The rendered file captures everything workspace-specific: mount paths, port bindings, image reference, environment variables, resource limits.
 

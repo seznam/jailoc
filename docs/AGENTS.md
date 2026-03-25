@@ -52,6 +52,8 @@ docs/
 - Second person for tutorials and how-to ("you"), third person for reference and explanation
 - Imperative mood for how-to headings ("Configure network access", not "Configuring network access")
 - No filler sentences ("In this section we will…") — get to the point
+- No temporal language — describe behaviour as timeless fact, not as a change from a previous state. Avoid "now", "used to", "no longer", "previously", "newly", "has been added", "was replaced". Write as if the reader has no knowledge of prior versions.
+- Do not document what is safe or harmless — only document restrictions, warnings, and breaking changes. Assume anything not mentioned is acceptable.
 
 ### Formatting
 - `#` for page title, `##` for main sections, `###` for subsections — no deeper than `####`

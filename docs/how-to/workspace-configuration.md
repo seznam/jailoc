@@ -90,7 +90,15 @@ See [How to allow specific hosts or networks](network-access.md) for step-by-ste
 
 ## Set a custom image
 
-You can point a workspace at a remote Dockerfile instead of using the default registry image:
+To use a pre-built image directly, set `image` in the workspace block:
+
+```toml
+[workspaces.myproject]
+paths = ["/home/you/projects/myproject"]
+image = "myregistry.example.com/myteam/myimage:v1.2.3"
+```
+
+To build from a custom Dockerfile instead, use `dockerfile`:
 
 ```toml
 [workspaces.myproject]

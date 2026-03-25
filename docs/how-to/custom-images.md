@@ -196,16 +196,4 @@ This keeps the final image free of compilers and intermediate artifacts.
 !!! warning "Degraded: reduces functionality"
     - **Removing `sudo`** — the entrypoint uses sudo to set up iptables rules before dropping privileges. Removing it degrades the network isolation setup.
 
-### ENTRYPOINT, CMD, and WORKDIR overrides are harmless
-
-The compose template hardcodes `entrypoint`, `command`, and `working_dir` for every container. Any `ENTRYPOINT`, `CMD`, or `WORKDIR` instructions in your overlay Dockerfile are silently overridden at runtime. They won't cause failures, but they're also ignored, so don't rely on them.
-
 For the full compatibility matrix, see [Overlay compatibility reference](../reference/overlay-compatibility.md).
-
----
-
-## Default behavior (no customization)
-
-When no `image` or `dockerfile` is configured at any level, jailoc builds from the Dockerfile embedded in the jailoc binary itself, tagging the result `jailoc-base:embedded`.
-
-You don't need to do anything to get this behavior. It's the starting point before any of the customization steps above.

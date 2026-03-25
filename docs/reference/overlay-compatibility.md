@@ -45,9 +45,6 @@ The table below lists overlay actions that affect runtime behaviour. Severity le
 | Override `ENV PATH` without `/home/agent/.local/bin` | Breaking | OpenCode and installed tools are not found on `PATH` |
 | Add `VOLUME` on workspace mount paths | Breaking | Docker named volumes shadow the bind-mount; workspace writes do not reach the host |
 | Remove `sudo` package | Degraded | Agent cannot install packages at runtime; existing functionality unaffected |
-| Override `ENTRYPOINT` | Safe | Compose template overrides at runtime; Dockerfile declaration is ignored |
-| Override `CMD` | Safe | Compose template overrides at runtime; Dockerfile declaration is ignored |
-| Override `WORKDIR` | Safe | Compose template sets `working_dir` at runtime; Dockerfile declaration is ignored |
 
 **Severity definitions:**
 
@@ -56,7 +53,6 @@ The table below lists overlay actions that affect runtime behaviour. Severity le
 | Fatal | Container fails to start or exits immediately |
 | Breaking | Container starts but core functionality is unavailable |
 | Degraded | Container starts; partial functionality is lost |
-| Safe | No runtime effect; jailoc overrides the declaration |
 
 ## Related pages
 

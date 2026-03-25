@@ -4,7 +4,7 @@ This page is for contributors. It covers how to build and test the project local
 
 ## Prerequisites
 
-- Go 1.24+
+- Go 1.26+
 - Docker with Compose V2
 
 ## Building and testing
