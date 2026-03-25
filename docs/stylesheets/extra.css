@@ -6,6 +6,24 @@
   --md-code-font: "JetBrains Mono", monospace;
 }
 
+/* ─── Header logo (dynamic light/dark) ───────────────────────── */
+[data-md-color-scheme="default"] .md-header__button.md-logo img {
+  content: url("../logo.png");
+  height: 2.4rem;
+  width: auto;
+}
+
+[data-md-color-scheme="slate"] .md-header__button.md-logo img {
+  content: url("../logo-dark.png");
+  height: 2.4rem;
+  width: auto;
+}
+
+.md-header__topic {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
 /* ─── Hero image ─────────────────────────────────────────────── */
 .md-content img[alt="jailoc"] {
   display: block;

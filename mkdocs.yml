@@ -1,4 +1,4 @@
-site_name: jailOC
+site_name: jailoc
 site_description: Sandboxed Docker Compose environments for headless OpenCode coding agents
 site_dir: public
 repo_url: https://github.com/seznam/jailoc
@@ -23,6 +23,7 @@ theme:
   font:
     text: Inter
     code: JetBrains Mono
+  logo: logo.png
   features:
     - content.code.copy
     - navigation.sections
@@ -42,6 +43,8 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
+
+copyright: Made with ❤️ in <a href="https://o-seznam.cz/kariera/it/">Seznam.cz</a>
 
 extra:
   version: !ENV [CI_COMMIT_TAG, "latest"]
