@@ -39,6 +39,7 @@ changelog:
 
 release:
   disable: false
+  draft: true
   github:
     owner: seznam
     name: jailoc
