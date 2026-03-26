@@ -10,7 +10,7 @@
     { "type": "perf", "section": "Performance Improvements" },
     { "type": "deps", "section": "Dependencies" },
     { "type": "docs", "section": "Documentation" },
-    { "type": "chore", "section": "Miscellaneous" },
+    { "type": "chore", "section": "Miscellaneous", "hidden": true },
     { "type": "test", "section": "Tests" }
   ],
   "packages": {
