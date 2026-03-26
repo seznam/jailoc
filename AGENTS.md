@@ -92,8 +92,9 @@ Two services per workspace on an internal Docker network:
 
 GitHub Actions workflows:
 - **CI** (`.github/workflows/ci.yml`): runs on push/PR to master — `go build`, `go test`, `go vet`, and golangci-lint v2.10.1 (gosec, staticcheck, gocritic)
-- **Release** (`.github/workflows/release.yml`): runs on `v*` tags — GoReleaser publishes GitHub Releases (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`); base Docker image build + push to registry
-- **Docs** (`.github/workflows/docs.yml`): runs on `v*` tags — zensical + mkdocs-macros-plugin → GitHub Pages
+- **Release** (`.github/workflows/release-please.yml`): runs on push to master — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, then GoReleaser publishes binaries (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`)
+- **Re-release** (`.github/workflows/release.yml`): manual `workflow_dispatch` fallback — re-runs GoReleaser for an existing tag
+- **Docs** (`.github/workflows/release-please.yml`): runs as part of the release process — zensical + mkdocs-macros-plugin → GitHub Pages
 
 ## Commits
 
