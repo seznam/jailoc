@@ -40,7 +40,7 @@ go test ./...
 
 CI runs `go build`, `go test`, `go vet`, and `golangci-lint` (gosec, staticcheck, gocritic) on every push and PR. A failing lint or test blocks merge.
 
-## Commit messages
+## Semantic commits
 
 Single line, imperative mood:
 
