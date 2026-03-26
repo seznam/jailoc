@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: pip install .
       - name: Substitute version
-        run: sed -i "s|{{ version }}|${{ needs.release-please.outputs.tag_name }}|g" docs/*.md
+        run: find docs -name '*.md' -exec sed -i "s|{{ version }}|${{ needs.release-please.outputs.tag_name }}|g" {} +
       - name: Build docs
         run: zensical build --clean
       - name: Upload Pages artifact
