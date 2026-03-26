@@ -6,33 +6,17 @@ During `jailoc up`, the container image is resolved through a cascade of up to f
 
 ## Resolution Cascade
 
-```
-jailoc up
-    │
-    ▼
-[1] workspace.image set?
-    ├── yes → use image directly (Compose pulls natively)  ← STOP
-    └── no
-         │
-         ▼
-    [2] defaults.image set AND workspace.dockerfile set?
-         ├── yes → build workspace overlay using defaults.image as base  ← STOP
-         │         (build failure is fatal)
-         └── no
-              │
-              ▼
-         [3] defaults.image set (no workspace dockerfile)?
-              ├── yes → use defaults.image directly (Compose pulls natively)  ← STOP
-              └── no
-                   │
-                   ▼
-              [4] base.dockerfile set?
-                   ├── yes → load (local path or HTTP URL), build → tag jailoc-base:preset-<hash>  ← STOP
-                   │         (failure is fatal)
-                   └── no
-                        │
-                        ▼
-                   [5] build from embedded Dockerfile → tag jailoc-base:embedded  ← STOP
+```mermaid
+flowchart TD
+  start(["jailoc up"]) --> s1{"[1] workspace.image set?"}
+  s1 -- yes --> r1["Use image directly<br>(Compose pulls natively)"]
+  s1 -- no --> s2{"[2] defaults.image set<br>AND workspace.dockerfile set?"}
+  s2 -- yes --> r2["Build workspace overlay<br>using defaults.image as base<br>(build failure is fatal)"]
+  s2 -- no --> s3{"[3] defaults.image set<br>(no workspace dockerfile)?"}
+  s3 -- yes --> r3["Use defaults.image directly<br>(Compose pulls natively)"]
+  s3 -- no --> s4{"[4] base.dockerfile set?"}
+  s4 -- yes --> r4["Load (local path or HTTP URL)<br>build → tag jailoc-base:preset-hash<br>(failure is fatal)"]
+  s4 -- no --> r5["Build from embedded Dockerfile<br>tag jailoc-base:embedded"]
 ```
 
 ---
@@ -128,14 +112,11 @@ After this step, a workspace `dockerfile` (if set) is applied as an overlay on t
 
 When the cascade reaches step 4 or 5, a workspace `dockerfile` is applied as an additional layer on top of the resolved base image. Steps 1, 2, and 3 handle the workspace Dockerfile themselves (or bypass it entirely) and do not reach this stage.
 
-```
-base image (from step 4 or 5)
-    │
-    ▼
-workspace.dockerfile set?
-    ├── yes → load (local path or HTTP URL), build with --build-arg BASE=<base>
-    │         tag jailoc-{name}:<hash>  ← result used as final image
-    └── no  → use base image as-is
+```mermaid
+flowchart TD
+  base["Base image<br>(from step 4 or 5)"] --> check{"workspace.dockerfile set?"}
+  check -- yes --> build["Load (local path or HTTP URL)<br>build with --build-arg BASE=base<br>tag jailoc-name:hash"]
+  check -- no --> asis["Use base image as-is"]
 ```
 
 ---

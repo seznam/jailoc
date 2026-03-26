@@ -5,31 +5,24 @@ Every jailoc workspace runs as a Docker Compose project containing exactly two c
 ## The two-container model
 
 ```mermaid
-block-beta
-  columns 3
-
-  block:compose:3
-    columns 2
-
-    block:oc["opencode"]:1
-      columns 1
-      oc_uid["UID 1000 (agent)\nopencode serve\n:4096 → host"]
-      oc_mounts["Mounts:\npaths/* (rw)\n~/.config/oc (ro)\n/etc/jailoc (ro)"]
+flowchart TB
+  subgraph compose["Docker Compose project"]
+    direction LR
+    subgraph oc["opencode"]
+      direction TB
+      oc_uid["UID 1000 (agent)<br>opencode serve<br>:4096 → host"]
+      oc_mounts["Mounts:<br>paths/* (rw)<br>~/.config/oc (ro)<br>/etc/jailoc (ro)"]
     end
-
-    block:dind["dind (privileged)"]:1
-      columns 1
-      dind_daemon["Docker daemon\nTLS on :2376"]
-      dind_vols["Shared volumes:\ncerts (TLS)\ndocker data"]
+    subgraph dind["dind (privileged)"]
+      direction TB
+      dind_daemon["Docker daemon<br>TLS on :2376"]
+      dind_vols["Shared volumes:<br>certs (TLS)<br>docker data"]
     end
   end
 
-  dind_net["dind network (internal)"]:3
-  egress_net["egress network (external)"]:3
-
-  oc --> dind_net
-  dind --> dind_net
-  oc --> egress_net
+  oc -.- dind_net["dind network (internal)"]
+  dind -.- dind_net
+  oc -.- egress_net["egress network (external)"]
 ```
 
 The **opencode container** is where the agent lives. It runs `opencode serve` as UID 1000 (a non-root user named `agent`), exposes a port to the host for attaching a terminal, and has your workspace paths mounted read-write. Your OpenCode configuration is mounted read-only so the agent inherits your API keys and settings without being able to modify them on the host.

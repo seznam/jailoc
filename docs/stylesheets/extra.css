@@ -49,7 +49,6 @@
 
 /* Slightly more contrast on inline code */
 .md-typeset code {
-  background-color: color-mix(in srgb, var(--md-accent-fg-color) 8%, var(--md-code-bg-color));
   border-radius: 4px;
   padding: 0.1em 0.35em;
   font-size: 0.85em;
