@@ -1,0 +1,36 @@
+name: Docs
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  pages: write
+  id-token: write
+
+jobs:
+  docs:
+    name: Build and Deploy Docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install .
+      - name: Substitute version
+        run: sed -i "s|{{ version }}|${GITHUB_REF_NAME}|g" docs/*.md
+      - name: Build docs
+        run: zensical build --clean
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
