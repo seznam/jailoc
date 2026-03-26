@@ -39,16 +39,9 @@ changelog:
 
 release:
   disable: false
-  gitlab:
-    owner: cdnko/tools
+  github:
+    owner: seznam
     name: jailoc
-
-gitlab_urls:
-  api: https://gitlab.seznam.net/api/v4/
-  download: https://github.com/seznam/jailoc.git
-  use_package_registry: true
-  use_job_token: true
-  skip_tls_verify: true
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
