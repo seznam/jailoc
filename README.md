@@ -2,6 +2,9 @@
 
 # jailoc
 
+[![CI](https://github.com/seznam/jailoc/actions/workflows/ci.yml/badge.svg)](https://github.com/seznam/jailoc/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/seznam/jailoc)](https://github.com/seznam/jailoc/releases/latest)
+
 Manage sandboxed Docker Compose environments for headless OpenCode coding agents.
 
 📖 **[Full documentation](https://seznam.github.io/jailoc/)**
@@ -12,10 +15,10 @@ Manage sandboxed Docker Compose environments for headless OpenCode coding agents
 
 ## Why jailoc
 
-- **File isolation** — the agent only sees directories you explicitly mount. SSH keys, browser profiles, and other projects are invisible. It runs as UID 1000 with all Linux capabilities dropped and `no_new_privs` set.
-- **Network isolation** — private networks (RFC 1918, link-local, CGNAT) are blocked by default via iptables. You allowlist only what the agent needs. No pivoting to internal infrastructure.
-- **Sandboxed Docker** — each workspace gets its own Docker daemon via a DinD sidecar. No host socket mounting, no sandbox escape through container breakout.
-- **Zero config to start** — `jailoc up` handles image resolution, compose generation, firewall setup, and privilege dropping automatically.
+- 📁 **File isolation** — the agent only sees directories you explicitly mount. SSH keys, browser profiles, and other projects are invisible. It runs as UID 1000 with all Linux capabilities dropped and `no_new_privs` set.
+- 🌐 **Network isolation** — private networks (RFC 1918, link-local, CGNAT) are blocked by default via iptables. You allowlist only what the agent needs. No pivoting to internal infrastructure.
+- 🐳 **Sandboxed Docker** — each workspace gets its own Docker daemon via a DinD sidecar. No host socket mounting, no sandbox escape through container breakout.
+- ⚡ **Zero config to start** — `jailoc up` handles image resolution, compose generation, firewall setup, and privilege dropping automatically.
 
 ## Installation
 
@@ -33,7 +36,7 @@ Make sure `$GOPATH/bin` (default `$HOME/go/bin`) is on your `PATH`.
 
 Download the archive for your platform from [GitHub Releases](https://github.com/seznam/jailoc/releases) (Linux/macOS × amd64/arm64), extract, and place the `jailoc` binary on your `PATH`.
 
-## Development
+## 🛠️ Development
 
 ```bash
 # Build from source
@@ -46,7 +49,7 @@ go test ./...
 go test -tags=integration ./...
 ```
 
-## What's in the default container
+## 📦 What's in the default container
 
 The default base image (Ubuntu 24.04) ships with:
 
