@@ -22,7 +22,7 @@ var addCmd = &cobra.Command{
 }
 
 func runAdd(cmd *cobra.Command, args []string) error {
-	targetDir, err := resolveTargetDir(args)
+	targetDir, err := resolveTargetPath(args)
 	if err != nil {
 		return fmt.Errorf("resolve target directory: %w", err)
 	}
@@ -42,6 +42,14 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	ok, err := confirmBroadPath(targetDir)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
 	if err := config.AddPath(workspaceFlag, targetDir); err != nil {
 		return fmt.Errorf("add path to config: %w", err)
 	}
@@ -49,35 +57,6 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Added %q to workspace %q\n", targetDir, workspaceFlag)
 
 	return maybeRestartWorkspace(ws)
-}
-
-func resolveTargetDir(args []string) (string, error) {
-	if len(args) == 0 {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("get current working directory: %w", err)
-		}
-		return cwd, nil
-	}
-
-	expanded, err := config.ExpandPath(args[0])
-	if err != nil {
-		return "", fmt.Errorf("expand path %q: %w", args[0], err)
-	}
-
-	abs, err := filepath.Abs(expanded)
-	if err != nil {
-		return "", fmt.Errorf("resolve absolute path %q: %w", expanded, err)
-	}
-
-	if _, err := os.Stat(abs); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("directory %q does not exist", abs)
-		}
-		return "", fmt.Errorf("stat directory %q: %w", abs, err)
-	}
-
-	return abs, nil
 }
 
 func isDuplicate(paths []string, target string) bool {
@@ -90,7 +69,7 @@ func isDuplicate(paths []string, target string) bool {
 }
 
 func maybeRestartWorkspace(ws *workspace.Resolved) error {
-	compPath := addComposePath(ws.Name)
+	compPath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 	if _, err := os.Stat(compPath); err != nil {
 		return nil
 	}
@@ -126,26 +105,24 @@ func maybeRestartWorkspace(ws *workspace.Resolved) error {
 		AllowedHosts:     ws2.AllowedHosts,
 		AllowedNetworks:  ws2.AllowedNetworks,
 		OpenCodePassword: password,
+		Env:              ws2.Env,
+	}
+
+	if err := config.WriteAllowedFiles(ws2.Name, cfg); err != nil {
+		return fmt.Errorf("write allowed files for workspace %q: %w", ws2.Name, err)
 	}
 
 	if err := compose.WriteComposeFile(params, compPath); err != nil {
 		return fmt.Errorf("regenerate compose file: %w", err)
 	}
 
+	fmt.Printf("Restarting workspace %s with updated mounts...\n", ws.Name)
 	if err := client.Up(ctx); err != nil {
 		return fmt.Errorf("restart workspace: %w", err)
 	}
 
 	fmt.Printf("Workspace %q restarted with updated mounts\n", ws.Name)
 	return nil
-}
-
-func addComposePath(workspace string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "jailoc", workspace, "docker-compose.yml")
-	}
-	return filepath.Join(home, ".cache", "jailoc", workspace, "docker-compose.yml")
 }
 
 func init() {

@@ -30,7 +30,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
-	composePath := composeCacheDir(ws.Name) + "docker-compose.yml"
+	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 
 	if _, err := os.Stat(composePath); err != nil {
 		if os.IsNotExist(err) {
@@ -47,20 +47,13 @@ func runDown(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	fmt.Printf("Stopping workspace %s...\n", ws.Name)
 	if err := client.Down(context.Background()); err != nil {
 		return fmt.Errorf("stop workspace: %w", err)
 	}
 
 	fmt.Printf("Workspace %s stopped\n", ws.Name)
 	return nil
-}
-
-func composeCacheDir(workspace string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "jailoc", workspace) + string(os.PathSeparator)
-	}
-	return filepath.Join(home, ".cache", "jailoc", workspace) + string(os.PathSeparator)
 }
 
 func init() {

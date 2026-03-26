@@ -24,15 +24,69 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Print image info
-	_, _ = fmt.Fprintf(os.Stdout, "Image: %s:%s\n\n", cfg.Image.Repository, appVersion)
-
 	// Sort workspace names alphabetically
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+
+	// Print global settings
+	mode := cfg.Mode
+	if mode == "" {
+		mode = "(auto-detect)"
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "Mode: %s\n", mode)
+
+	baseDockerfile := cfg.Base.Dockerfile
+	if baseDockerfile == "" {
+		baseDockerfile = "(embedded)"
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "Base Dockerfile: %s\n", baseDockerfile)
+
+	defaultsImage := cfg.Defaults.Image
+	if defaultsImage == "" {
+		defaultsImage = "(not set)"
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Image: %s\n", defaultsImage)
+
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Allowed Hosts:\n")
+	if len(cfg.Defaults.AllowedHosts) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
+	} else {
+		for _, host := range cfg.Defaults.AllowedHosts {
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", host)
+		}
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Allowed Networks:\n")
+	if len(cfg.Defaults.AllowedNetworks) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
+	} else {
+		for _, network := range cfg.Defaults.AllowedNetworks {
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", network)
+		}
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Env:\n")
+	if len(cfg.Defaults.Env) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
+	} else {
+		for _, env := range cfg.Defaults.Env {
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", env)
+		}
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Defaults Env Files:\n")
+	if len(cfg.Defaults.EnvFile) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
+	} else {
+		for _, f := range cfg.Defaults.EnvFile {
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", f)
+		}
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "\n")
 
 	// Print each workspace
 	for _, name := range names {
@@ -72,6 +126,36 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			buildContext = "(none)"
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "  Build Context: %s\n", buildContext)
+
+		wsImage := ws.Image
+		if wsImage == "" {
+			wsImage = "(not set)"
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "  Image: %s\n", wsImage)
+
+		wsDockerfile := ws.Dockerfile
+		if wsDockerfile == "" {
+			wsDockerfile = "(not set)"
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "  Dockerfile: %s\n", wsDockerfile)
+
+		_, _ = fmt.Fprintf(os.Stdout, "  Env:\n")
+		if len(ws.Env) == 0 {
+			_, _ = fmt.Fprintf(os.Stdout, "    (none)\n")
+		} else {
+			for _, env := range ws.Env {
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", env)
+			}
+		}
+
+		_, _ = fmt.Fprintf(os.Stdout, "  Env Files:\n")
+		if len(ws.EnvFile) == 0 {
+			_, _ = fmt.Fprintf(os.Stdout, "    (none)\n")
+		} else {
+			for _, f := range ws.EnvFile {
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", f)
+			}
+		}
 
 		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}

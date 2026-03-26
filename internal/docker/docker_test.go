@@ -5,7 +5,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/docker/compose/v5/pkg/api"
+	containertypes "github.com/moby/moby/api/types/container"
+
+	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestNewClient(t *testing.T) {
@@ -74,84 +81,255 @@ func TestWriterLogConsumer(t *testing.T) {
 	})
 }
 
-func TestResolveImageConfigPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+func TestCurrentOpencodeContainer(t *testing.T) {
+	t.Parallel()
 
-	overridePath := baseDockerfileOverridePath()
-	want := filepath.Join(home, ".config", "jailoc", "Dockerfile")
-	if overridePath != want {
-		t.Fatalf("unexpected base dockerfile path: got %q, want %q", overridePath, want)
-	}
+	t.Run("selects newest running opencode container", func(t *testing.T) {
+		t.Parallel()
 
-	exists, err := fileExists(overridePath)
-	if err != nil {
-		t.Fatalf("fileExists returned error: %v", err)
-	}
-	if exists {
-		t.Fatalf("expected no file at %q", overridePath)
-	}
+		got := currentOpencodeContainer([]api.ContainerSummary{
+			{ID: "old", Service: "opencode", State: containertypes.StateRunning, Created: 100},
+			{ID: "new", Service: "opencode", State: containertypes.StateRunning, Created: 200},
+			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 300},
+		})
 
-	configDir := filepath.Dir(overridePath)
-	if err := os.MkdirAll(configDir, 0o750); err != nil {
-		t.Fatalf("create config dir %q: %v", configDir, err)
-	}
+		if got.ID != "new" {
+			t.Fatalf("got container %q, want %q", got.ID, "new")
+		}
+	})
 
-	if err := os.WriteFile(overridePath, []byte("FROM alpine:3.22\n"), 0o600); err != nil {
-		t.Fatalf("create override dockerfile %q: %v", overridePath, err)
-	}
+	t.Run("ignores non-running opencode containers", func(t *testing.T) {
+		t.Parallel()
 
-	exists, err = fileExists(overridePath)
-	if err != nil {
-		t.Fatalf("fileExists returned error: %v", err)
+		got := currentOpencodeContainer([]api.ContainerSummary{
+			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200},
+			{ID: "running", Service: "opencode", State: containertypes.StateRunning, Created: 100},
+		})
+
+		if got.ID != "running" {
+			t.Fatalf("got container %q, want %q", got.ID, "running")
+		}
+	})
+
+	t.Run("returns zero value when no running opencode container exists", func(t *testing.T) {
+		t.Parallel()
+
+		got := currentOpencodeContainer([]api.ContainerSummary{
+			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 100},
+			{ID: "stopped", Service: "opencode", State: containertypes.StateExited, Created: 200},
+		})
+
+		if got.ID != "" {
+			t.Fatalf("got container %q, want empty ID", got.ID)
+		}
+	})
+}
+
+func TestBuildPresetImageEmptyContent(t *testing.T) {
+	t.Parallel()
+	_, err := buildPresetImage(context.Background(), nil, nil)
+	if err == nil {
+		t.Fatal("expected error for nil content")
 	}
-	if !exists {
-		t.Fatalf("expected file at %q", overridePath)
+	if !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("unexpected error message: got %q, want message containing \"empty\"", err.Error())
+	}
+	_, err = buildPresetImage(context.Background(), nil, []byte{})
+	if err == nil {
+		t.Fatal("expected error for empty content")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("unexpected error message: got %q, want message containing \"empty\"", err.Error())
 	}
 }
 
-func TestApplyWorkspaceLayerInputValidation(t *testing.T) {
-	t.Run("empty base image", func(t *testing.T) {
-		ctx := context.Background()
-		_, err := ApplyWorkspaceLayer(ctx, "", "workspace")
-		if err == nil {
-			t.Fatal("expected error for empty base image")
-		}
-		if err.Error() != "base image is empty" {
-			t.Fatalf("unexpected error: got %q, want %q", err.Error(), "base image is empty")
-		}
-	})
+func TestResolveBaseImageDockerfilePrecedence(t *testing.T) {
+	t.Parallel()
 
-	t.Run("empty workspace name", func(t *testing.T) {
-		ctx := context.Background()
-		_, err := ApplyWorkspaceLayer(ctx, "image:tag", "")
-		if err == nil {
-			t.Fatal("expected error for empty workspace name")
-		}
-		if err.Error() != "workspace name is empty" {
-			t.Fatalf("unexpected error: got %q, want %q", err.Error(), "workspace name is empty")
-		}
-	})
+	tempFile, err := os.CreateTemp("", "jailoc-empty-dockerfile-*")
+	if err != nil {
+		t.Fatalf("create temp dockerfile: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(tempFile.Name()) }) //nolint:gosec // cleaning up temp file created in this test
+	if err := tempFile.Close(); err != nil {
+		t.Fatalf("close temp dockerfile: %v", err)
+	}
 
-	t.Run("whitespace-only base image", func(t *testing.T) {
-		ctx := context.Background()
-		_, err := ApplyWorkspaceLayer(ctx, "   ", "workspace")
-		if err == nil {
-			t.Fatal("expected error for whitespace-only base image")
-		}
-		if err.Error() != "base image is empty" {
-			t.Fatalf("unexpected error: got %q, want %q", err.Error(), "base image is empty")
-		}
-	})
+	cfg := &config.Config{
+		Base: config.BaseConfig{
+			Dockerfile: tempFile.Name(),
+		},
+	}
 
-	t.Run("whitespace-only workspace name", func(t *testing.T) {
-		ctx := context.Background()
-		_, err := ApplyWorkspaceLayer(ctx, "image:tag", "   ")
-		if err == nil {
-			t.Fatal("expected error for whitespace-only workspace name")
+	_, err = ResolveBaseImage(context.Background(), cfg, "v0.0.0-test")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "build preset image") {
+		t.Fatalf("unexpected error message: got %q, want message containing %q", err.Error(), "build preset image")
+	}
+	if !strings.Contains(err.Error(), "dockerfile content is empty") {
+		t.Fatalf("unexpected error message: got %q, want message containing %q", err.Error(), "dockerfile content is empty")
+	}
+}
+
+func TestResolveBaseImageNilCfg(t *testing.T) {
+	t.Parallel()
+
+	tag, err := ResolveBaseImage(context.Background(), nil, "v0.0.0-test")
+	if err == nil {
+		if tag != "jailoc-base:embedded" {
+			t.Fatalf("unexpected tag on nil cfg without error: got %q, want %q", tag, "jailoc-base:embedded")
 		}
-		if err.Error() != "workspace name is empty" {
-			t.Fatalf("unexpected error: got %q, want %q", err.Error(), "workspace name is empty")
+		return
+	}
+
+	if tag != "" {
+		t.Fatalf("expected empty tag on error, got %q", tag)
+	}
+}
+
+func TestResolveBaseImageDockerfileLoadError(t *testing.T) {
+	t.Parallel()
+
+	nonExistentPath := filepath.Join(t.TempDir(), "does-not-exist.Dockerfile")
+	cfg := &config.Config{
+		Base: config.BaseConfig{Dockerfile: nonExistentPath},
+	}
+
+	_, err := ResolveBaseImage(context.Background(), cfg, "v0.0.0-test")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), nonExistentPath) {
+		t.Fatalf("unexpected error message: got %q, want message containing path %q", err.Error(), nonExistentPath)
+	}
+	if !strings.Contains(err.Error(), "load dockerfile") {
+		t.Fatalf("unexpected error message: got %q, want message containing %q", err.Error(), "load dockerfile")
+	}
+}
+
+func TestResolveBaseImageEmbeddedFallbackWhenNoImageConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	tag, err := ResolveBaseImage(context.Background(), cfg, "v0.0.0-test")
+	if err == nil {
+		if tag != "jailoc-base:embedded" {
+			t.Fatalf("unexpected tag without error: got %q, want %q", tag, "jailoc-base:embedded")
 		}
+		return
+	}
+
+	if strings.Contains(err.Error(), "load dockerfile") {
+		t.Fatalf("unexpected dockerfile load error for empty image config: %v", err)
+	}
+	if tag != "" {
+		t.Fatalf("expected empty tag on error, got %q", tag)
+	}
+}
+
+func TestBuildOverlayImageNoDockerfile(t *testing.T) {
+	t.Parallel()
+
+	base := "registry.example.com/base:v1"
+	tag, err := BuildOverlayImage(context.Background(), base, workspace.Resolved{
+		Name:       "ws-a",
+		Dockerfile: "",
 	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if tag != base {
+		t.Fatalf("unexpected tag: got %q, want %q", tag, base)
+	}
+}
+
+func TestBuildOverlayImageEmptyBase(t *testing.T) {
+	t.Parallel()
+
+	wsDockerfile := filepath.Join(t.TempDir(), "overlay.Dockerfile")
+	if err := os.WriteFile(wsDockerfile, []byte("ARG BASE\nFROM ${BASE}\n"), 0o600); err != nil {
+		t.Fatalf("write workspace dockerfile: %v", err)
+	}
+
+	_, err := BuildOverlayImage(context.Background(), "", workspace.Resolved{
+		Name:       "ws-a",
+		Dockerfile: wsDockerfile,
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "base image is empty") {
+		t.Fatalf("unexpected error: got %q, want substring %q", err.Error(), "base image is empty")
+	}
+}
+
+func TestBuildOverlayImageDockerfileLoadError(t *testing.T) {
+	t.Parallel()
+
+	nonExistentPath := filepath.Join(t.TempDir(), "does-not-exist.Dockerfile")
+	_, err := BuildOverlayImage(context.Background(), "registry.example.com/base:v1", workspace.Resolved{
+		Name:       "ws-a",
+		Dockerfile: nonExistentPath,
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "load workspace dockerfile") {
+		t.Fatalf("unexpected error: got %q, want substring %q", err.Error(), "load workspace dockerfile")
+	}
+	if !strings.Contains(err.Error(), nonExistentPath) {
+		t.Fatalf("unexpected error: got %q, want path %q", err.Error(), nonExistentPath)
+	}
+}
+
+func TestBuildOverlayImageDefaultBuildContext(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	wsDockerfile := filepath.Join(tmpDir, "overlay.Dockerfile")
+	if err := os.WriteFile(wsDockerfile, []byte("ARG BASE\nFROM ${BASE}\n"), 0o600); err != nil {
+		t.Fatalf("write workspace dockerfile: %v", err)
+	}
+
+	_, err := BuildOverlayImage(context.Background(), "registry.example.com/base:v1", workspace.Resolved{
+		Name:       "ws-default-ctx",
+		Dockerfile: wsDockerfile,
+	})
+	if err == nil {
+		t.Fatal("expected docker build error (daemon/build stage), got nil")
+	}
+	if strings.Contains(err.Error(), "determine build context") {
+		t.Fatalf("unexpected build context resolution error: %v", err)
+	}
+	if strings.Contains(err.Error(), "write temporary workspace Dockerfile") {
+		t.Fatalf("unexpected Dockerfile temp write error: %v", err)
+	}
+}
+
+func TestBuildOverlayImageExplicitBuildContext(t *testing.T) {
+	t.Parallel()
+
+	dockerfileDir := t.TempDir()
+	buildContextDir := t.TempDir()
+	wsDockerfile := filepath.Join(dockerfileDir, "overlay.Dockerfile")
+	if err := os.WriteFile(wsDockerfile, []byte("ARG BASE\nFROM ${BASE}\n"), 0o600); err != nil {
+		t.Fatalf("write workspace dockerfile: %v", err)
+	}
+
+	_, err := BuildOverlayImage(context.Background(), "registry.example.com/base:v1", workspace.Resolved{
+		Name:         "ws-explicit-ctx",
+		Dockerfile:   wsDockerfile,
+		BuildContext: buildContextDir,
+	})
+	if err == nil {
+		t.Fatal("expected docker build error (daemon/build stage), got nil")
+	}
+	if strings.Contains(err.Error(), "determine build context") {
+		t.Fatalf("unexpected build context resolution error: %v", err)
+	}
+	if strings.Contains(err.Error(), "write temporary workspace Dockerfile") {
+		t.Fatalf("unexpected Dockerfile temp write error: %v", err)
+	}
 }

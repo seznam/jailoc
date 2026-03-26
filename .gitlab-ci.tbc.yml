@@ -53,6 +53,17 @@ goreleaser:
 
 pages:
   image: docker.ops.iszn.cz/upstream/python:3.12-slim
+  stage: production
+  needs:
+    - job: goreleaser
+      optional: true
+  before_script:
+    - |
+      certs="${CUSTOM_CA_CERTS:-$DEFAULT_CA_CERTS}"
+      if [ -n "$certs" ]; then
+        echo "$certs" >> /etc/ssl/certs/ca-certificates.crt
+        echo "$certs" >> /etc/ssl/cert.pem
+      fi
   script:
     - pip install .
     # Workaround: substitute {{ version }} in docs — zensical doesn't support

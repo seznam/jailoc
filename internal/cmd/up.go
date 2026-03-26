@@ -35,6 +35,7 @@ func runUp(ctx context.Context) error {
 		return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
 	}
 
+	fmt.Printf("Checking Docker availability...\n")
 	if err := preflightDocker(ctx, ws.Name); err != nil {
 		return fmt.Errorf("docker is not running or not accessible: %w", err)
 	}
@@ -53,6 +54,7 @@ func runUp(ctx context.Context) error {
 		return nil
 	}
 
+	fmt.Printf("Resolving image for workspace %s...\n", ws.Name)
 	finalImage, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
 	if err != nil {
 		return fmt.Errorf("resolve image for workspace %q: %w", ws.Name, err)
@@ -63,6 +65,10 @@ func runUp(ctx context.Context) error {
 		return fmt.Errorf("create compose cache directory %q: %w", cacheDir, err)
 	}
 
+	if err := config.WriteAllowedFiles(ws.Name, cfg); err != nil {
+		return fmt.Errorf("write allowed files for workspace %q: %w", ws.Name, err)
+	}
+
 	params := compose.ComposeParams{
 		WorkspaceName:    ws.Name,
 		Port:             ws.Port,
@@ -71,12 +77,15 @@ func runUp(ctx context.Context) error {
 		AllowedHosts:     ws.AllowedHosts,
 		AllowedNetworks:  ws.AllowedNetworks,
 		OpenCodePassword: os.Getenv("OPENCODE_SERVER_PASSWORD"),
+		Env:              ws.Env,
 	}
 
+	fmt.Printf("Generating compose configuration...\n")
 	if err := compose.WriteComposeFile(params, composePath); err != nil {
 		return fmt.Errorf("write compose file for workspace %q: %w", ws.Name, err)
 	}
 
+	fmt.Printf("Starting workspace %s...\n", ws.Name)
 	startClient := docker.NewClient(composePath, "", ws.Name)
 	if err := startClient.Up(ctx); err != nil {
 		return fmt.Errorf("start workspace %q: %w", ws.Name, err)
@@ -115,16 +124,63 @@ func ComposeCacheDir(workspace string) string {
 	return filepath.Join(home, ".cache", "jailoc", workspace) + string(filepath.Separator)
 }
 
+type imageStrategy int
+
+const (
+	strategyDirectImage     imageStrategy = iota // ws.Image set — compose pulls natively
+	strategyDefaultsDirect                       // defaults.Image set, no ws dockerfile — compose pulls natively
+	strategyDefaultsOverlay                      // defaults.Image set, ws dockerfile — build overlay using defaults as base
+	strategyCascade                              // no image/defaults — existing ResolveBaseImage cascade
+)
+
+// resolveImageStrategy returns the image resolution strategy and the relevant image string.
+// wsImage is the raw workspace image (empty if unset).
+// defaultsImage is cfg.Defaults.Image (empty if unset).
+// wsDockerfile is the workspace Dockerfile path (empty if unset).
+func resolveImageStrategy(wsImage, defaultsImage, wsDockerfile string) (imageStrategy, string) {
+	if wsImage != "" {
+		return strategyDirectImage, wsImage
+	}
+
+	if defaultsImage != "" {
+		if wsDockerfile != "" {
+			return strategyDefaultsOverlay, defaultsImage
+		}
+		return strategyDefaultsDirect, defaultsImage
+	}
+
+	return strategyCascade, ""
+}
+
 func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, version string) (string, error) {
-	base, err := docker.ResolveImage(ctx, cfg, version)
-	if err != nil {
-		return "", fmt.Errorf("resolve base image: %w", err)
+	strategy, strategyImage := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
+	switch strategy {
+	case strategyDirectImage:
+		fmt.Printf("Using workspace image %s\n", strategyImage)
+		return strategyImage, nil
+	case strategyDefaultsDirect:
+		fmt.Printf("Using default image %s\n", strategyImage)
+		return strategyImage, nil
+	case strategyDefaultsOverlay:
+		fmt.Printf("Building overlay on default image %s...\n", strategyImage)
+		final, err := docker.BuildOverlayImage(ctx, strategyImage, *ws)
+		if err != nil {
+			return "", fmt.Errorf("build workspace overlay image: %w", err)
+		}
+		return final, nil
+	default: // strategyCascade
+		fmt.Printf("Resolving base image...\n")
+		base, err := docker.ResolveBaseImage(ctx, cfg, version)
+		if err != nil {
+			return "", fmt.Errorf("resolve base image: %w", err)
+		}
+
+		final, err := docker.BuildOverlayImage(ctx, base, *ws)
+		if err != nil {
+			return "", fmt.Errorf("build workspace overlay image: %w", err)
+		}
+		return final, nil
 	}
-	final, err := docker.ApplyWorkspaceLayer(ctx, base, ws.Name)
-	if err != nil {
-		return "", fmt.Errorf("apply workspace image layer: %w", err)
-	}
-	return final, nil
 }
 
 func isComposeFileMissing(err error) bool {

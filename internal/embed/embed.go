@@ -12,9 +12,6 @@ var composeTemplateStr string
 //go:embed assets/entrypoint.sh
 var entrypointBytes []byte
 
-//go:embed assets/config.toml.default
-var defaultConfigBytes []byte
-
 // Dockerfile returns the embedded fallback Dockerfile bytes.
 func Dockerfile() []byte { return dockerfileBytes }
 
@@ -23,6 +20,3 @@ func ComposeTemplate() string { return composeTemplateStr }
 
 // Entrypoint returns the embedded entrypoint.sh bytes.
 func Entrypoint() []byte { return entrypointBytes }
-
-// DefaultConfig returns the embedded default config template bytes.
-func DefaultConfig() []byte { return defaultConfigBytes }

@@ -11,6 +11,8 @@ import (
 )
 
 func TestResolveValidWorkspace(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"default": {
@@ -36,6 +38,8 @@ func TestResolveValidWorkspace(t *testing.T) {
 }
 
 func TestResolveNonexistentWorkspace(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{},
 	}
@@ -50,6 +54,8 @@ func TestResolveNonexistentWorkspace(t *testing.T) {
 }
 
 func TestResolveFromCWDMatches(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"default": {
@@ -71,6 +77,8 @@ func TestResolveFromCWDMatches(t *testing.T) {
 }
 
 func TestResolveFromCWDNoMatch(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"default": {
@@ -89,6 +97,8 @@ func TestResolveFromCWDNoMatch(t *testing.T) {
 }
 
 func TestPortAllocationAlphabetical(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"zebra": {},
@@ -105,6 +115,8 @@ func TestPortAllocationAlphabetical(t *testing.T) {
 }
 
 func TestPortAllocationSingleDefault(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"default": {},
@@ -117,6 +129,8 @@ func TestPortAllocationSingleDefault(t *testing.T) {
 }
 
 func TestTildeExpansionInPaths(t *testing.T) {
+	t.Parallel()
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("UserHomeDir failed: %v", err)
@@ -144,6 +158,8 @@ func TestTildeExpansionInPaths(t *testing.T) {
 }
 
 func TestPathWithSpaces(t *testing.T) {
+	t.Parallel()
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("UserHomeDir failed: %v", err)
@@ -171,6 +187,8 @@ func TestPathWithSpaces(t *testing.T) {
 }
 
 func TestBuildContextExpanded(t *testing.T) {
+	t.Parallel()
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("UserHomeDir failed: %v", err)
@@ -198,6 +216,8 @@ func TestBuildContextExpanded(t *testing.T) {
 }
 
 func TestBuildContextEmpty(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"default": {
@@ -216,6 +236,8 @@ func TestBuildContextEmpty(t *testing.T) {
 }
 
 func TestCWDSubdirectoryMatches(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"default": {
@@ -234,6 +256,8 @@ func TestCWDSubdirectoryMatches(t *testing.T) {
 }
 
 func TestCWDDoesNotMatchPrefix(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"default": {
@@ -249,6 +273,8 @@ func TestCWDDoesNotMatchPrefix(t *testing.T) {
 }
 
 func TestMatchesCWD(t *testing.T) {
+	t.Parallel()
+
 	ws := &workspace.Resolved{Paths: []string{"/home/user/projects"}}
 	if !workspace.MatchesCWD(ws, "/home/user/projects/x") {
 		t.Fatal("expected subdirectory to match")
@@ -262,6 +288,8 @@ func TestMatchesCWD(t *testing.T) {
 }
 
 func TestPortForWorkspaceUnknown(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		Workspaces: map[string]config.Workspace{
 			"alpha": {},
@@ -276,6 +304,8 @@ func TestPortForWorkspaceUnknown(t *testing.T) {
 }
 
 func TestResolveNilConfig(t *testing.T) {
+	t.Parallel()
+
 	_, err := workspace.Resolve(nil, "somename")
 	if err == nil {
 		t.Fatal("expected error for nil config")
@@ -286,8 +316,356 @@ func TestResolveNilConfig(t *testing.T) {
 }
 
 func TestMatchesCWDNilWorkspace(t *testing.T) {
+	t.Parallel()
+
 	got := workspace.MatchesCWD(nil, "/some/path")
 	if got {
 		t.Fatal("expected false for nil workspace")
+	}
+}
+
+func TestDockerfileSet(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Dockerfile: "https://example.com/Dockerfile",
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved.Dockerfile != "https://example.com/Dockerfile" {
+		t.Fatalf("dockerfile mismatch: got %q", resolved.Dockerfile)
+	}
+}
+
+func TestDockerfileEmpty(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Dockerfile: "",
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved.Dockerfile != "" {
+		t.Fatalf("expected empty dockerfile, got %q", resolved.Dockerfile)
+	}
+}
+
+func TestResolveEnvGlobalOnly(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Env: []string{"GLOBAL_A=1", "GLOBAL_B=2"},
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths: []string{"/tmp"},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	if len(resolved.Env) != 2 {
+		t.Fatalf("env length mismatch: got %#v", resolved.Env)
+	}
+	if resolved.Env[0] != "GLOBAL_A=1" || resolved.Env[1] != "GLOBAL_B=2" {
+		t.Fatalf("env mismatch: got %#v", resolved.Env)
+	}
+}
+
+func TestResolveEnvWorkspaceOnly(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths: []string{"/tmp"},
+				Env:   []string{"WS_A=1", "WS_B=2"},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	if len(resolved.Env) != 2 {
+		t.Fatalf("env length mismatch: got %#v", resolved.Env)
+	}
+	if resolved.Env[0] != "WS_A=1" || resolved.Env[1] != "WS_B=2" {
+		t.Fatalf("env mismatch: got %#v", resolved.Env)
+	}
+}
+
+func TestResolveEnvMergeOverride(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Env: []string{"SHARED=global", "GLOBAL_ONLY=1"},
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths: []string{"/tmp"},
+				Env:   []string{"SHARED=workspace", "WS_ONLY=1"},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	want := []string{"SHARED=workspace", "GLOBAL_ONLY=1", "WS_ONLY=1"}
+	if len(resolved.Env) != len(want) {
+		t.Fatalf("env length mismatch: got %#v want %#v", resolved.Env, want)
+	}
+	for i := range want {
+		if resolved.Env[i] != want[i] {
+			t.Fatalf("env mismatch at %d: got %#v want %#v", i, resolved.Env, want)
+		}
+	}
+}
+
+func TestResolveEnvFile(t *testing.T) {
+	t.Parallel()
+
+	envFile, err := os.CreateTemp("", "jailoc-default-*.env")
+	if err != nil {
+		t.Fatalf("CreateTemp failed: %v", err)
+	}
+	envFilePath := envFile.Name()
+	t.Cleanup(func() { _ = os.Remove(envFilePath) })
+
+	if err := os.WriteFile(envFilePath, []byte("FROM_FILE=ok\nOTHER=two\n"), 0o600); err != nil { //nolint:gosec // test temp file
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			EnvFile: []string{envFilePath},
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths: []string{"/tmp"},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	want := []string{"FROM_FILE=ok", "OTHER=two"}
+	if len(resolved.Env) != len(want) {
+		t.Fatalf("env length mismatch: got %#v want %#v", resolved.Env, want)
+	}
+	for i := range want {
+		if resolved.Env[i] != want[i] {
+			t.Fatalf("env mismatch at %d: got %#v want %#v", i, resolved.Env, want)
+		}
+	}
+}
+
+func TestResolveEnvFullPipeline(t *testing.T) {
+	t.Parallel()
+
+	globalFile, err := os.CreateTemp("", "jailoc-global-*.env")
+	if err != nil {
+		t.Fatalf("CreateTemp global env failed: %v", err)
+	}
+	globalFilePath := globalFile.Name()
+	t.Cleanup(func() { _ = os.Remove(globalFilePath) })
+
+	workspaceFile, err := os.CreateTemp("", "jailoc-workspace-*.env")
+	if err != nil {
+		t.Fatalf("CreateTemp workspace env failed: %v", err)
+	}
+	workspaceFilePath := workspaceFile.Name()
+	t.Cleanup(func() { _ = os.Remove(workspaceFilePath) })
+
+	if err := os.WriteFile(globalFilePath, []byte("B=global-file\nC=global-file\n"), 0o600); err != nil { //nolint:gosec // test temp file
+		t.Fatalf("WriteFile global env failed: %v", err)
+	}
+	if err := os.WriteFile(workspaceFilePath, []byte("C=workspace-file\nD=workspace-file\n"), 0o600); err != nil { //nolint:gosec // test temp file
+		t.Fatalf("WriteFile workspace env failed: %v", err)
+	}
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Env:     []string{"A=global", "B=global-inline"},
+			EnvFile: []string{globalFilePath},
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths:   []string{"/tmp"},
+				EnvFile: []string{workspaceFilePath},
+				Env:     []string{"D=workspace-inline", "A=workspace-inline"},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	want := []string{"A=workspace-inline", "B=global-file", "C=workspace-file", "D=workspace-inline"}
+	if len(resolved.Env) != len(want) {
+		t.Fatalf("env length mismatch: got %#v want %#v", resolved.Env, want)
+	}
+	for i := range want {
+		if resolved.Env[i] != want[i] {
+			t.Fatalf("env mismatch at %d: got %#v want %#v", i, resolved.Env, want)
+		}
+	}
+}
+
+func TestResolveEnvFileError(t *testing.T) {
+	t.Parallel()
+
+	missingPath := filepath.Join("/tmp", "jailoc-missing-env-file-do-not-create.env")
+
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths:   []string{"/tmp"},
+				EnvFile: []string{missingPath},
+			},
+		},
+	}
+
+	_, err := workspace.Resolve(cfg, "default")
+	if err == nil {
+		t.Fatal("expected error for missing env_file")
+	}
+	if !strings.Contains(err.Error(), "resolving env for workspace default") {
+		t.Fatalf("unexpected error context: %v", err)
+	}
+	if !strings.Contains(err.Error(), missingPath) {
+		t.Fatalf("expected missing path in error, got: %v", err)
+	}
+}
+
+func TestResolveEnvFileDedupPaths(t *testing.T) {
+	t.Parallel()
+
+	envFile, err := os.CreateTemp("", "jailoc-shared-*.env")
+	if err != nil {
+		t.Fatalf("CreateTemp failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(envFile.Name()) }) //nolint:gosec // cleaning up temp file created in this test
+
+	if err := os.WriteFile(envFile.Name(), []byte("SHARED=value\n"), 0o600); err != nil { //nolint:gosec // writing to temp file created in this test
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			EnvFile: []string{envFile.Name()},
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths:   []string{"/tmp"},
+				EnvFile: []string{envFile.Name()},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	want := []string{"SHARED=value"}
+	if len(resolved.Env) != len(want) {
+		t.Fatalf("env length mismatch: got %#v want %#v", resolved.Env, want)
+	}
+	for i := range want {
+		if resolved.Env[i] != want[i] {
+			t.Fatalf("env mismatch at %d: got %#v want %#v", i, resolved.Env, want)
+		}
+	}
+}
+
+func TestResolveImagePropagation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		workspaceImage    string
+		defaultsImage     string
+		expectedImage     string
+		expectedImageDesc string
+	}{
+		{
+			name:              "workspace_image_set",
+			workspaceImage:    "ws:1",
+			defaultsImage:     "default:2",
+			expectedImage:     "ws:1",
+			expectedImageDesc: "raw workspace value",
+		},
+		{
+			name:              "workspace_image_empty_defaults_set",
+			workspaceImage:    "",
+			defaultsImage:     "default:2",
+			expectedImage:     "",
+			expectedImageDesc: "empty (defaults NOT applied in Resolve)",
+		},
+		{
+			name:              "both_empty",
+			workspaceImage:    "",
+			defaultsImage:     "",
+			expectedImage:     "",
+			expectedImageDesc: "both empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{
+					Image: tt.defaultsImage,
+				},
+				Workspaces: map[string]config.Workspace{
+					"test": {
+						Paths: []string{"/tmp"},
+						Image: tt.workspaceImage,
+					},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "test")
+			if err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+
+			if resolved.Image != tt.expectedImage {
+				t.Fatalf("image mismatch (%s): got %q want %q", tt.expectedImageDesc, resolved.Image, tt.expectedImage)
+			}
+		})
 	}
 }

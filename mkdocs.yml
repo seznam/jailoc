@@ -1,4 +1,4 @@
-site_name: jailOC
+site_name: jailoc
 site_description: Sandboxed Docker Compose environments for headless OpenCode coding agents
 site_dir: public
 repo_url: https://github.com/seznam/jailoc
@@ -6,23 +6,31 @@ repo_name: cdnko/tools/jailoc
 
 theme:
   name: material
-  language: cs
+  language: en
   palette:
-    - scheme: slate
-      primary: deep orange
-      accent: red
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: amber
+      accent: orange
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
-    - scheme: default
-      primary: deep orange
-      accent: red
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: amber
+      accent: orange
       toggle:
         icon: material/brightness-7
-        name: Switch to dark mode
+        name: Switch to automatic mode
   font:
     text: Inter
     code: JetBrains Mono
+  logo: logo.png
+  favicon: favicon-light.png
   features:
     - content.code.copy
     - navigation.sections
@@ -35,26 +43,44 @@ plugins:
   - macros
 
 markdown_extensions:
+  - admonition
+  - pymdownx.details
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
 
+copyright: Made with ❤️ in <a href="https://o-seznam.cz/kariera/it/">Seznam.cz</a>
+
 extra:
   version: !ENV [CI_COMMIT_TAG, "latest"]
+
+extra_javascript:
+  - javascripts/favicon-switch.js
 
 extra_css:
   - stylesheets/extra.css
 
 nav:
-  - Domů: index.md
-  - Jak začít: getting-started.md
-  - Instalace: downloads.md
-  - Konfigurace: configuration.md
-  - CLI příkazy: cli-reference.md
-  - Access Modes: access-modes.md
-  - Vlastní image: custom-images.md
-  - Síťová izolace: network-isolation.md
-  - Architektura: architecture.md
-  - Vývoj: development.md
+  - Home: index.md
+  - Tutorials:
+    - Getting Started: tutorials/getting-started.md
+  - How-to Guides:
+    - Installation: how-to/installation.md
+    - Workspace Configuration: how-to/workspace-configuration.md
+    - Custom Images: how-to/custom-images.md
+    - Network Access: how-to/network-access.md
+    - Access Modes: how-to/access-modes.md
+  - Reference:
+    - CLI: reference/cli.md
+    - Configuration: reference/configuration.md
+    - Image Resolution: reference/image-resolution.md
+    - Overlay Compatibility: reference/overlay-compatibility.md
+  - Explanation:
+    - Overview: explanation/overview.md
+    - Threat Model: explanation/threat-model.md
+    - Container Architecture: explanation/container-architecture.md
+    - Network Isolation: explanation/network-isolation.md
+    - Access Modes: explanation/access-modes.md
+  - Development: development.md

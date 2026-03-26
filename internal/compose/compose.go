@@ -18,6 +18,7 @@ type ComposeParams struct {
 	AllowedHosts     []string
 	AllowedNetworks  []string
 	OpenCodePassword string
+	Env              []string
 }
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {

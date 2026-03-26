@@ -6,6 +6,31 @@
   --md-code-font: "JetBrains Mono", monospace;
 }
 
+/* ─── Header logo (dynamic light/dark) ───────────────────────── */
+[data-md-color-scheme="default"] .md-header__button.md-logo img {
+  content: url("../logo.png");
+  height: 2.4rem;
+  width: auto;
+}
+
+[data-md-color-scheme="slate"] .md-header__button.md-logo img {
+  content: url("../logo-dark.png");
+  height: 2.4rem;
+  width: auto;
+}
+
+.md-header__topic:first-child {
+  display: none;
+}
+
+.md-header__topic + .md-header__topic {
+  font-weight: 700;
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: initial;
+  position: static;
+}
+
 /* ─── Hero image ─────────────────────────────────────────────── */
 .md-content img[alt="jailoc"] {
   display: block;
@@ -24,7 +49,6 @@
 
 /* Slightly more contrast on inline code */
 .md-typeset code {
-  background-color: color-mix(in srgb, var(--md-accent-fg-color) 8%, var(--md-code-bg-color));
   border-radius: 4px;
   padding: 0.1em 0.35em;
   font-size: 0.85em;
@@ -55,10 +79,8 @@
   letter-spacing: 0.02em;
 }
 
-/* ─── Page title ─────────────────────────────────────────────── */
 .md-typeset h1 {
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  display: none;
 }
 
 .md-typeset h2 {

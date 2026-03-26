@@ -40,7 +40,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
-	composePath := logsComposePath(ws.Name)
+	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 
 	// Check if compose file exists (workspace running)
 	if _, err := os.Stat(composePath); err != nil {
@@ -68,14 +68,6 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func logsComposePath(workspaceName string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "jailoc", workspaceName, "docker-compose.yml")
-	}
-	return filepath.Join(home, ".cache", "jailoc", workspaceName, "docker-compose.yml")
 }
 
 func init() {

@@ -3,7 +3,6 @@ package cmd
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -68,89 +67,22 @@ func TestIsDuplicate(t *testing.T) {
 	}
 }
 
-func TestResolveTargetDir(t *testing.T) {
-	tests := []struct {
-		name      string
-		args      []string
-		wantError bool
-		checkPath func(t *testing.T, path string)
-	}{
-		{
-			name:      "valid existing path as argument",
-			wantError: false,
-			checkPath: func(t *testing.T, path string) {
-				if !filepath.IsAbs(path) {
-					t.Fatalf("expected absolute path, got %q", path)
-				}
-			},
-		},
-		{
-			name:      "nonexistent path",
-			args:      []string{"/nonexistent/path/that/does/not/exist"},
-			wantError: true,
-		},
-		{
-			name:      "no arguments uses current working directory",
-			args:      []string{},
-			wantError: false,
-			checkPath: func(t *testing.T, path string) {
-				if !filepath.IsAbs(path) {
-					t.Fatalf("expected absolute path, got %q", path)
-				}
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var args []string
-
-			switch tc.name {
-			case "valid existing path as argument":
-				tmpDir := t.TempDir()
-				args = []string{tmpDir}
-			case "nonexistent path", "no arguments uses current working directory":
-				args = tc.args
-			}
-
-			got, err := resolveTargetDir(args)
-			if (err != nil) != tc.wantError {
-				t.Fatalf("resolveTargetDir(%v) error = %v, wantError %v", args, err, tc.wantError)
-			}
-
-			if !tc.wantError && tc.checkPath != nil {
-				tc.checkPath(t, got)
-			}
-		})
-	}
-}
-
 func TestAddComposePath(t *testing.T) {
 	tests := []struct {
-		name          string
-		workspace     string
-		expectedRegex func(home string) string
+		name      string
+		workspace string
 	}{
 		{
 			name:      "default workspace",
 			workspace: "default",
-			expectedRegex: func(home string) string {
-				return filepath.Join(home, ".cache", "jailoc", "default", "docker-compose.yml")
-			},
 		},
 		{
 			name:      "api workspace",
 			workspace: "api",
-			expectedRegex: func(home string) string {
-				return filepath.Join(home, ".cache", "jailoc", "api", "docker-compose.yml")
-			},
 		},
 		{
 			name:      "custom workspace name",
 			workspace: "my-production-env",
-			expectedRegex: func(home string) string {
-				return filepath.Join(home, ".cache", "jailoc", "my-production-env", "docker-compose.yml")
-			},
 		},
 	}
 
@@ -159,11 +91,11 @@ func TestAddComposePath(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
-			got := addComposePath(tc.workspace)
-			expected := tc.expectedRegex(home)
+			got := filepath.Join(ComposeCacheDir(tc.workspace), "docker-compose.yml")
+			expected := filepath.Join(home, ".cache", "jailoc", tc.workspace, "docker-compose.yml")
 
 			if got != expected {
-				t.Errorf("addComposePath(%q) = %q, want %q", tc.workspace, got, expected)
+				t.Errorf("ComposeCacheDir(%q) compose path = %q, want %q", tc.workspace, got, expected)
 			}
 
 			if !filepath.IsAbs(got) {
@@ -173,19 +105,17 @@ func TestAddComposePath(t *testing.T) {
 	}
 
 	t.Run("fallback to TempDir when UserHomeDir fails", func(t *testing.T) {
-		home := t.TempDir()
 		t.Setenv("HOME", "")
 
-		got := addComposePath("test-workspace")
+		got := filepath.Join(ComposeCacheDir("test-workspace"), "docker-compose.yml")
 
 		if !filepath.IsAbs(got) {
 			t.Fatalf("expected absolute path, got %q", got)
 		}
 
-		if !strings.HasPrefix(got, os.TempDir()) {
-			t.Errorf("expected path to start with TempDir %q, got %q", os.TempDir(), got)
+		expected := filepath.Join(os.TempDir(), "jailoc", "test-workspace", "docker-compose.yml")
+		if got != expected {
+			t.Errorf("fallback compose path = %q, want %q", got, expected)
 		}
-
-		_ = home
 	})
 }

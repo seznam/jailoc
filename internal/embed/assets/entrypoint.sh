@@ -34,6 +34,19 @@ if [ -f "$ALLOWED_HOSTS" ]; then
   done < "$ALLOWED_HOSTS"
 fi
 
+# --- Allow CIDR networks from config ---
+ALLOWED_NETWORKS="/etc/jailoc/allowed-networks"
+if [ -f "$ALLOWED_NETWORKS" ]; then
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="${line// /}"
+    [ -z "$line" ] && continue
+
+    iptables -I OUTPUT -d "$line" -j ACCEPT
+    echo "jailoc: allow network $line"
+  done < "$ALLOWED_NETWORKS"
+fi
+
 # --- Block private/internal networks ---
 iptables -A OUTPUT -d 10.0.0.0/8 -j DROP
 iptables -A OUTPUT -d 172.16.0.0/12 -j DROP

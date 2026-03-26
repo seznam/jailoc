@@ -14,7 +14,7 @@ services:
       - ${HOME}/.opencode:/home/agent/.opencode:ro
       - ${HOME}/.claude:/home/agent/.claude
       - ${HOME}/.agents:/home/agent/.agents:ro
-      - ${HOME}/.config/jailoc:/etc/jailoc:ro
+      - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
       - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode
       - opencode-cache-{{.WorkspaceName}}:/home/agent/.cache
       - dind-certs-client:/certs/client:ro
@@ -25,15 +25,19 @@ services:
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_CERT_PATH=/certs/client
       - DOCKER_TLS_VERIFY=1
+{{- range .Env}}
+      - "{{.}}"
+{{- end}}
     cap_drop:
       - ALL
     cap_add:
-      - NET_BIND_SERVICE
-      - NET_ADMIN
-      - SETUID
-      - SETGID
-      - CHOWN
-      - FOWNER
+      - NET_BIND_SERVICE  # bind to port 4096
+      - NET_ADMIN         # iptables network restrictions
+      - SETUID            # setpriv privilege drop
+      - SETGID            # setpriv privilege drop
+      - CHOWN             # chown data dirs before drop
+      - FOWNER            # bypass ownership checks on chown
+      - DAC_READ_SEARCH   # traverse restricted dirs during chown
     stdin_open: true
     tty: true
     mem_limit: 4g
@@ -53,6 +57,18 @@ services:
   dind:
     image: docker:dind
     privileged: true
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Clean stale containerd state from prior unclean shutdown to prevent
+        # "containerd is still running" crash loop (PID file persists on volume).
+        # See: https://github.com/moby/moby/blob/v28.1.1/cmd/dockerd/daemon.go#L146-L160
+        rm -f /var/lib/docker/containerd/containerd.pid \
+              /var/lib/docker/containerd/containerd.sock \
+              /var/lib/docker/containerd/containerd-debug.sock
+        exec dockerd-entrypoint.sh "$$@"
+      - --
     environment:
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_TLS_SAN=DNS:dind
