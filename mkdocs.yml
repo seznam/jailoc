@@ -79,6 +79,7 @@ nav:
     - Overlay Compatibility: reference/overlay-compatibility.md
   - Explanation:
     - Overview: explanation/overview.md
+    - Threat Model: explanation/threat-model.md
     - Container Architecture: explanation/container-architecture.md
     - Network Isolation: explanation/network-isolation.md
     - Access Modes: explanation/access-modes.md

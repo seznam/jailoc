@@ -2,6 +2,8 @@
 
 jailoc's network model is built around a simple premise: a coding agent needs the public internet to do its job (fetching packages, cloning repos, calling APIs), but it should never be able to reach your internal infrastructure. The isolation isn't about locking the agent in a box with no network. It's about making a specific cut between "things an agent legitimately needs" and "things it shouldn't touch".
 
+For the security rationale behind why network controls matter for AI agents specifically, see [Threat Model](threat-model.md).
+
 ## What gets blocked and why
 
 The iptables rules installed during container startup drop traffic to three address ranges:

@@ -6,11 +6,19 @@
 
 ## Why jailoc
 
-**Your agent can read anything you can.** Running an agent directly on your host means trusting it with every file, credential, and network endpoint your user account can reach. jailoc draws a hard boundary — the agent runs unprivileged in its own container with dropped capabilities and `no_new_privs`, only seeing directories you explicitly mount.
+AI coding agents are powerful — and dangerous when unsandboxed. An agent running directly on your host inherits your user account: every file, every credential, every network endpoint you can reach. A single [prompt injection](explanation/threat-model.md) hidden in a GitHub issue, a web page, or a package README can instruct the agent to read sensitive data and send it somewhere it shouldn't go. This is the [lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/): private data access + untrusted content + external communication = data theft.
 
-**Your internal network is one `curl` away.** Agents routinely fetch packages and call APIs over the public internet, but without isolation they can also reach your Kubernetes clusters, databases, and cloud metadata endpoints. jailoc blocks all private networks (RFC 1918, link-local, CGNAT) by default via iptables — you allowlist only what the agent actually needs.
+jailoc cannot break the trifecta entirely — the agent still processes untrusted content from the public internet, because that's its job. What jailoc does is **shrink the blast radius** by tightening the other two legs:
 
-**Sharing the Docker socket is a sandbox escape.** Agents often need Docker for building and testing, but mounting `/var/run/docker.sock` lets them break out by starting privileged containers on your host. jailoc gives each workspace its own isolated Docker daemon via a DinD sidecar — agent-started containers stay inside the sandbox.
+**Your files stay out of reach.** The agent only sees directories you explicitly mount as workspaces. Your SSH keys, browser profiles, other projects, and anything else on the host filesystem are invisible inside the container. The agent runs as an unprivileged user (UID 1000) with all Linux capabilities dropped and `no_new_privs` set.
+
+**Your internal network is walled off.** Agents fetch packages and call APIs over the public internet, but without isolation they can also reach your Kubernetes clusters, databases, and cloud metadata endpoints. jailoc blocks all private networks (RFC 1918, link-local, CGNAT) by default via iptables — you allowlist only what the agent actually needs. A compromised agent cannot pivot to internal infrastructure.
+
+**The Docker socket stays untouched.** Agents often need Docker for building and testing, but mounting `/var/run/docker.sock` lets them escape the sandbox by starting privileged containers on your host. jailoc gives each workspace its own isolated Docker daemon via a DinD sidecar — agent-started containers stay inside the sandbox.
+
+!!! warning "What jailoc does not protect against"
+
+    The agent can still make outbound requests to the **public internet**. If a prompt injection attack instructs the agent to exfiltrate workspace source code to an attacker-controlled public server, jailoc's network rules will not block it. jailoc protects your internal infrastructure and limits file access — it is not a complete defense against the [lethal trifecta](explanation/threat-model.md).
 
 ## Documentation
 
@@ -44,6 +52,7 @@ Complete technical descriptions of every CLI command and configuration field.
 Background on how jailoc works and why it's designed the way it is.
 
 - [Overview](explanation/overview.md)
+- [Threat Model](explanation/threat-model.md)
 - [Container Architecture](explanation/container-architecture.md)
 - [Network Isolation](explanation/network-isolation.md)
 - [Access Modes](explanation/access-modes.md)
