@@ -25,17 +25,15 @@ go vet ./...
 
 ## CI/CD pipeline
 
-The pipeline runs on GitLab CI. Most jobs trigger on every branch and tag; release jobs are gated on version tags (`v*`).
+The pipeline runs on GitHub Actions. Most workflows trigger on every branch and pull request; release workflows are gated on version tags (`v*`).
 
-| Stage | Job | Trigger |
-|-------|-----|---------|
-| build | build | Every branch/tag — `go build` with ldflags |
-| test | test | Every branch/tag — `go test` + `go vet` |
-| test | integration-test | Tags matching `v*` — `go test -tags=integration` with DinD |
-| release | release | Tags matching `v*` — GoReleaser publishes a GitLab Release |
-| image-push | push-base-image | Tags matching `v*` — builds and pushes the base Docker image to the registry |
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| CI | Every branch/PR — runs on `push` and `pull_request` events | Build (`go build` with ldflags), test (`go test` + `go vet`), and lint with golangci-lint |
+| Release | Tags matching `v*` — runs on `push` with `v*` ref | GoReleaser publishes static binaries and generates a GitHub Release with changelog |
+| Docs | Tags matching `v*` — runs on `push` with `v*` ref | Builds documentation with MkDocs and deploys to GitHub Pages |
 
-GoReleaser builds static binaries (`CGO_ENABLED=0`) for `linux/darwin` x `amd64/arm64` and generates a changelog from GitLab. Config lives in `.goreleaser.yml`.
+Integration tests run as part of the CI workflow on `v*` tags with `go test -tags=integration`. GoReleaser builds static binaries (`CGO_ENABLED=0`) for `linux/darwin` x `amd64/arm64`. Configs live in `.goreleaser.yml` and `.github/workflows/`.
 
 ## Default container contents
 

@@ -7,7 +7,7 @@
 - **Plugins**: `macros` (template variables like `{{ version }}`)
 - **Extensions**: `admonition`, `pymdownx.details`, `pymdownx.superfences` (with Mermaid custom fence)
 - **Custom CSS**: `stylesheets/extra.css` — hero image, code block, table, and typography overrides
-- **Build**: `zensical` + `mkdocs-macros-plugin` → GitLab Pages on `v*` tags
+- **Build**: `zensical` + `mkdocs-macros-plugin` → GitHub Pages on `v*` tags
 
 ## Diátaxis Structure
 
@@ -64,7 +64,7 @@ docs/
 - Internal cross-references use relative paths: `[text](../how-to/network-access.md)`
 
 ### Template variables
-- `{{ version }}` expands to `$CI_COMMIT_TAG` or `"latest"` — use it in install commands
+- `{{ version }}` expands to `$GITHUB_REF_NAME` or `"latest"` — use it in install commands
 - Provided by the `macros` plugin via `extra.version` in `mkdocs.yml`
 
 ### Adding a new page

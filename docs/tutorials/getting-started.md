@@ -20,7 +20,7 @@ Install the latest release with `go install`:
 go install github.com/seznam/jailoc/cmd/jailoc@{{ version }}
 ```
 
-Alternatively, download a pre-built binary from GitLab Releases. GoReleaser produces binaries for Linux and macOS on both amd64 and arm64.
+Alternatively, download a pre-built binary from [GitHub Releases](https://github.com/seznam/jailoc/releases). GoReleaser produces binaries for Linux and macOS on both amd64 and arm64.
 
 After installation, confirm it's on your `PATH`:
 

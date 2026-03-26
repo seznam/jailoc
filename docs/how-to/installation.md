@@ -23,4 +23,4 @@ The binary lands in `$GOPATH/bin` (or `$HOME/go/bin` by default). Make sure that
 
 ## Pre-built binaries
 
-Pre-built archives for Linux and macOS (amd64/arm64) are published with every release. Download the one matching your platform from the [GitLab Releases page](https://github.com/seznam/jailoc/releases), extract, and place the binary on your `PATH`.
+Pre-built archives for Linux and macOS (amd64/arm64) are published with every release. Download the one matching your platform from the [GitHub Releases page](https://github.com/seznam/jailoc/releases), extract, and place the binary on your `PATH`.

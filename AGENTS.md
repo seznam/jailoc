@@ -90,13 +90,10 @@ Two services per workspace on an internal Docker network:
 
 ## CI/CD
 
-GitLab CI with TBC framework components:
-- **Build**: `go build` with ldflags (version, commit, date)
-- **Test**: `go test` + `go vet`; integration tests on `v*` tags with DinD
-- **Lint**: golangci-lint v2.10.1 (gosec, staticcheck, gocritic)
-- **Release**: GoReleaser on `v*` tags → Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`
-- **Image**: build + push base Docker image to registry on `v*` tags
-- **Docs**: zensical + mkdocs-macros-plugin → GitLab Pages on tags
+GitHub Actions workflows:
+- **CI** (`.github/workflows/ci.yml`): runs on push/PR to master — `go build`, `go test`, `go vet`, and golangci-lint v2.10.1 (gosec, staticcheck, gocritic)
+- **Release** (`.github/workflows/release.yml`): runs on `v*` tags — GoReleaser publishes GitHub Releases (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`); base Docker image build + push to registry
+- **Docs** (`.github/workflows/docs.yml`): runs on `v*` tags — zensical + mkdocs-macros-plugin → GitHub Pages
 
 ## Commits
 
