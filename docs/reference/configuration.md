@@ -46,7 +46,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 
 ```toml
 [defaults]
-image = "ubuntu:22.04"
+image = "myregistry.example.com/myteam/opencode-base:v1.2.3"
 env = ["GOPRIVATE=*.example.com", "NPM_REGISTRY=https://npm.example.com"]
 env_file = ["~/.config/jailoc/shared.env"]
 allowed_hosts = ["internal-registry.example.com"]

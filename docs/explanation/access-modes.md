@@ -25,7 +25,7 @@ The opencode container always runs `opencode serve`. What changes between modes 
 
 Because the terminal UI renders on the host, it uses your host terminal directly. Keyboard shortcuts, clipboard integration, and font rendering all work exactly as they do when running opencode locally. The agent session lives in the container process, so you can disconnect and reconnect without losing state. The container keeps running, the agent keeps its context, and when you reconnect the conversation is exactly where you left it.
 
-The only requirement is that `opencode` is installed and available on your host `PATH`.
+The only requirement is that `opencode` (or `opencode-cli`) is installed and available on your host `PATH`.
 
 If the `opencode` container stops or is recreated while you are attached, `jailoc` cancels the host-side attach process instead of waiting indefinitely. This matters most during rebuilds or bakes that replace the container while your UI is still connected.
 
@@ -62,7 +62,7 @@ Because exec mode puts your terminal into raw mode before entering `docker exec`
 
 | | Remote | Exec |
 |---|--------|------|
-| Host dependency | `opencode` on PATH | Docker only |
+| Host dependency | `opencode` or `opencode-cli` on PATH | Docker only |
 | Terminal experience | Full (renders on host) | Limited (through pipe) |
 | Keyboard shortcuts | Full support | Partial |
 | Disconnect behaviour | Client exits, session persists | Client exits, session persists |
@@ -71,7 +71,7 @@ Because exec mode puts your terminal into raw mode before entering `docker exec`
 
 ## Auto-detection
 
-When no mode is explicitly configured, jailoc detects which mode to use. It checks whether `opencode` is available on the host `PATH`. If found, it uses remote mode. If not, it falls back to exec mode.
+When no mode is explicitly configured, jailoc detects which mode to use. It checks whether `opencode` is available on the host `PATH`, falling back to `opencode-cli` if not found. If either binary is found, it uses remote mode. If neither is found, it falls back to exec mode.
 
 This means the default behaviour changes depending on your host environment. A machine with opencode installed gets a richer experience automatically. A machine without it still works without any configuration change.
 

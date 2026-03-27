@@ -25,10 +25,12 @@ Set `image` in `[defaults]` to use a pre-built image as the starting point for a
 
 ```toml
 [defaults]
-image = "ubuntu:22.04"
+image = "myregistry.example.com/myteam/opencode-base:v1.2.3"
 ```
 
-With this set, a workspace that adds its own `dockerfile` builds on top of `ubuntu:22.04`:
+The image must contain OpenCode and the required agent tooling (entrypoint, iptables, setpriv). A plain OS image like `ubuntu:22.04` cannot be used here — the container would fail to start. When `defaults.image` is not set, jailoc builds from its embedded Dockerfile automatically.
+
+With this set, a workspace that adds its own `dockerfile` builds on top of the specified image:
 
 ```toml
 [workspaces.myproject]
@@ -36,7 +38,7 @@ paths = ["~/projects/myproject"]
 dockerfile = "~/projects/myproject/overlay.Dockerfile"
 ```
 
-A workspace without a `dockerfile` receives `ubuntu:22.04` as-is.
+A workspace without a `dockerfile` receives the specified image as-is.
 
 ---
 

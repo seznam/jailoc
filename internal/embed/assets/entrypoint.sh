@@ -54,6 +54,6 @@ iptables -A OUTPUT -d 192.168.0.0/16 -j DROP
 iptables -A OUTPUT -d 169.254.0.0/16 -j DROP
 iptables -A OUTPUT -d 100.64.0.0/10 -j DROP
 
-chown -R 1000:1000 /home/agent/.local /home/agent/.cache
+chown -R 1000:1000 /home/agent/.local /home/agent/.cache /home/agent/.claude
 
 exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --no-new-privs -- env HOME=/home/agent "$@"

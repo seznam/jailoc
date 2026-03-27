@@ -6,10 +6,10 @@ jailoc supports two ways to attach to a running workspace container. This guide 
 
 ## Let jailoc auto-detect (default)
 
-By default, jailoc checks whether `opencode` is on your `PATH`:
+By default, jailoc checks whether `opencode` or `opencode-cli` is on your `PATH`:
 
-- If found, it uses **remote** mode (`opencode attach`).
-- If not found, it falls back to **exec** mode (`docker exec` into the container).
+- If found, it uses **remote** mode (runs whichever binary was found with `attach`).
+- If neither is found, it falls back to **exec** mode (`docker exec` into the container).
 
 You don't need any config for this. Just run:
 

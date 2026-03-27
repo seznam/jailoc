@@ -11,7 +11,7 @@ flowchart TB
     subgraph oc["opencode"]
       direction TB
       oc_uid["UID 1000 (agent)<br>opencode serve<br>:4096 → host"]
-      oc_mounts["Mounts:<br>paths/* (rw)<br>~/.config/oc (ro)<br>/etc/jailoc (ro)"]
+      oc_mounts["Mounts:<br>paths/* (rw)<br>~/.config/oc (ro)<br>~/.claude/transcripts (rw)<br>/etc/jailoc (ro)"]
     end
     subgraph dind["dind (privileged)"]
       direction TB
@@ -44,6 +44,7 @@ The opencode container mounts several things at startup:
 |-------|-----------|---------|
 | Workspace paths | read-write | The directories the agent is working in |
 | `~/.config/opencode` | read-only | Your API keys, model config, provider settings |
+| `~/.claude/transcripts` | read-write | Claude Code session transcripts, persisted back to the host |
 | `/etc/jailoc` | read-only | jailoc's own runtime config, including allowed hosts |
 
 Two named volumes are shared between both containers: one for TLS certificates (so the opencode container can authenticate to the dind daemon) and one for Docker's data directory. A third named volume holds the agent's own data — its SQLite history database and auth tokens. This last volume is intentionally isolated from your host's `~/.local/share/opencode`, so the agent's session history never touches your personal history.

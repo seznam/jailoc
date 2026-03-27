@@ -535,6 +535,20 @@ func TestResolveModeWithOpenCodeOnPath(t *testing.T) {
 	}
 }
 
+func TestResolveModeWithOpenCodeCLIFallback(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) {
+		if file == "opencode-cli" {
+			return "/usr/local/bin/opencode-cli", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	if got := ResolveMode(""); got != ModeRemote {
+		t.Errorf("got %q, want %q", got, ModeRemote)
+	}
+}
+
 func TestResolveModeWithoutOpenCode(t *testing.T) {
 	orig := lookPath
 	t.Cleanup(func() { lookPath = orig })
@@ -553,6 +567,47 @@ func TestResolveModeExplicitOverridesDetection(t *testing.T) {
 	}
 	if got := ResolveMode(ModeExec); got != ModeExec {
 		t.Errorf("explicit exec: got %q, want %q", got, ModeExec)
+	}
+}
+
+func TestResolveBinaryPrefersOpenCode(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) { return "/usr/local/bin/" + file, nil }
+	got, err := ResolveBinary()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "/usr/local/bin/opencode" {
+		t.Errorf("got %q, want %q", got, "/usr/local/bin/opencode")
+	}
+}
+
+func TestResolveBinaryFallsBackToOpenCodeCLI(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) {
+		if file == "opencode-cli" {
+			return "/usr/local/bin/opencode-cli", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	got, err := ResolveBinary()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "/usr/local/bin/opencode-cli" {
+		t.Errorf("got %q, want %q", got, "/usr/local/bin/opencode-cli")
+	}
+}
+
+func TestResolveBinaryNeitherFound(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) { return "", fmt.Errorf("not found") }
+	_, err := ResolveBinary()
+	if err == nil {
+		t.Fatal("expected error when neither binary is found")
 	}
 }
 
