@@ -26,8 +26,10 @@ func main() {
 			for _, s := range bi.Settings {
 				switch s.Key {
 				case "vcs.revision":
-					if len(s.Value) >= 12 {
+					if len(s.Value) > 12 {
 						commit = s.Value[:12]
+					} else if s.Value != "" {
+						commit = s.Value
 					}
 				case "vcs.time":
 					date = s.Value
