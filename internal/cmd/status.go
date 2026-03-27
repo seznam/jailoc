@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,7 +40,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	client := docker.NewClient(composePath, "", ws.Name)
-	running, err := client.IsRunning(context.Background())
+
+	ctx := cmd.Context()
+	running, err := client.IsRunning(ctx)
 	if err != nil {
 		return fmt.Errorf("check running status: %w", err)
 	}
@@ -54,7 +55,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Workspace: %s\n", ws.Name)
 	fmt.Printf("Port:      %d\n", ws.Port)
 
-	health, err := client.HealthStatus(context.Background())
+	health, err := client.HealthStatus(ctx)
 	if err != nil {
 		return fmt.Errorf("check health status: %w", err)
 	}
