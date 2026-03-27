@@ -95,7 +95,7 @@ var rootCmd = &cobra.Command{
 				return fmt.Errorf("start workspace %q: %w", ws.Name, err)
 			}
 			fmt.Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
-			if err := waitForReady(ctx, ws.Port); err != nil {
+			if err := waitForReady(ctx, ws.Port, client); err != nil {
 				return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
 			}
 		}
@@ -250,26 +250,40 @@ const (
 	readyPollTimeout  = 60 * time.Second
 )
 
-func waitForReady(ctx context.Context, port int) error {
+func waitForReady(ctx context.Context, port int, dc *docker.Client) error {
 	url := fmt.Sprintf("http://localhost:%d", port)
 
 	ctx, cancel := context.WithTimeout(ctx, readyPollTimeout)
 	defer cancel()
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	httpClient := &http.Client{Timeout: 2 * time.Second}
 	ticker := time.NewTicker(readyPollInterval)
 	defer ticker.Stop()
+
+	// Check container state every ~1s (every 5th tick at 200ms interval)
+	// to detect early exits without waiting for the full 60s timeout.
+	const stateCheckInterval = 5
+	tick := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out after %s waiting for %s", readyPollTimeout, url)
 		case <-ticker.C:
+			tick++
+
+			if tick%stateCheckInterval == 0 {
+				state, exitCode, err := dc.ContainerState(ctx)
+				if err == nil && state == "exited" {
+					return fmt.Errorf("container exited with code %d before becoming ready", exitCode)
+				}
+			}
+
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				return fmt.Errorf("create readiness request: %w", err)
 			}
-			resp, err := client.Do(req) //nolint:gosec // URL is localhost with controlled port
+			resp, err := httpClient.Do(req) //nolint:gosec // URL is localhost with controlled port
 			if err != nil {
 				continue
 			}
