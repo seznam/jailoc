@@ -15,18 +15,10 @@
 
 # Pinned versions — Renovate comments tell the bot which datasource to poll
 # for automated version-bump PRs.
-# renovate: datasource=golang-version depName=go versioning=semver
-ARG GO_VERSION=1.26.1
 # renovate: datasource=node-version depName=node versioning=node
 ARG NODE_VERSION=24.14.0
 # renovate: datasource=npm depName=yaml-language-server
 ARG YAML_LS_VERSION=1.21.0
-# renovate: datasource=github-releases depName=golang/tools extractVersion=^gopls/v(?<version>.*)$
-ARG GOPLS_VERSION=0.21.1
-# renovate: datasource=github-releases depName=grafana/jsonnet-language-server
-ARG JSONNET_LS_VERSION=v0.17.0
-# renovate: datasource=github-releases depName=mrjosh/helm-ls
-ARG HELM_LS_VERSION=v0.5.4
 # renovate: datasource=github-releases depName=sst/opencode
 ARG OPENCODE_VERSION=v1.2.27
 
@@ -38,9 +30,9 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Build-time dependencies: compilers for native npm addons (node-gyp),
-# curl/wget for downloading tarballs, xz-utils for .tar.xz extraction.
+# curl for downloading tarballs, xz-utils for .tar.xz extraction.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates wget gnupg2 unzip xz-utils \
+    curl ca-certificates gnupg2 unzip xz-utils \
     build-essential make gcc g++ python3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -51,17 +43,6 @@ RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
     && curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz \
     | tar -xJC /usr/local --strip-components=1
 
-# Go — needed here only to `go install gopls`. The Go toolchain is NOT copied
-# to the final image; preset overlays bring their own Go if workspaces need it.
-ARG GO_VERSION
-RUN GOARCH=$(dpkg --print-architecture) \
-    && wget -q https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz \
-    && tar -C /usr/local -xzf go${GO_VERSION}.linux-${GOARCH}.tar.gz \
-    && rm go${GO_VERSION}.linux-${GOARCH}.tar.gz
-
-ENV GOPATH=/root/go
-ENV PATH="/usr/local/go/bin:${GOPATH}/bin:${PATH}"
-
 # Language servers (npm) — OpenCode uses these for code intelligence
 # (go-to-definition, diagnostics, completions) across languages.
 ARG YAML_LS_VERSION
@@ -71,24 +52,6 @@ RUN npm install -g \
     typescript \
     pyright \
     bash-language-server
-
-# gopls — Go language server, compiled from source via `go install`.
-ARG GOPLS_VERSION
-RUN go install golang.org/x/tools/gopls@latest
-
-# jsonnet-language-server — pre-built binary from GitHub Releases.
-ARG JSONNET_LS_VERSION
-RUN ARCH=$(dpkg --print-architecture) \
-    && curl -Lo /usr/local/bin/jsonnet-language-server \
-      https://github.com/grafana/jsonnet-language-server/releases/download/${JSONNET_LS_VERSION}/jsonnet-language-server_${JSONNET_LS_VERSION#v}_linux_${ARCH} \
-    && chmod +x /usr/local/bin/jsonnet-language-server
-
-# helm-ls — Helm chart language server, pre-built binary from GitHub Releases.
-ARG HELM_LS_VERSION
-RUN ARCH=$(dpkg --print-architecture) \
-    && curl -Lo /usr/local/bin/helm_ls \
-      https://github.com/mrjosh/helm-ls/releases/download/${HELM_LS_VERSION}/helm_ls_linux_${ARCH} \
-    && chmod +x /usr/local/bin/helm_ls
 
 # =============================================================================
 # Final stage — minimal runtime image with only what the agent needs.
@@ -101,7 +64,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   git, openssh-client    — repo operations (clone, push over SSH)
 #   sudo                   — agent user has passwordless sudo for apt installs
 #   python3                — Python runtime for pyright and user scripts
-#   ripgrep, fd-find, jq   — fast search/filter tools used by OpenCode
+#   ripgrep (rg), fd-find, jq — fast search/filter tools used by OpenCode
 #   unzip, xz-utils        — archive extraction for runtime downloads
 #   iptables               — network isolation: entrypoint.sh blocks RFC 1918
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -116,11 +79,6 @@ ARG NODE_VERSION
 RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
     && curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz \
     | tar -xJC /usr/local --strip-components=1
-
-# Copy only the compiled binaries from builder — no compilers, no source.
-COPY --from=builder /usr/local/bin/jsonnet-language-server /usr/local/bin/jsonnet-language-server
-COPY --from=builder /usr/local/bin/helm_ls /usr/local/bin/helm_ls
-COPY --from=builder /root/go/bin/gopls /usr/local/bin/gopls
 
 # Copy npm global modules — these were `npm install -g`'d in builder.
 # Copied as directories because npm global modules are not standalone binaries.

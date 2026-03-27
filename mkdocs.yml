@@ -76,6 +76,7 @@ nav:
     - CLI: reference/cli.md
     - Configuration: reference/configuration.md
     - Image Resolution: reference/image-resolution.md
+    - Default Image Contents: reference/default-image.md
     - Overlay Compatibility: reference/overlay-compatibility.md
   - Explanation:
     - Overview: explanation/overview.md

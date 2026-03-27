@@ -45,6 +45,7 @@ Complete technical descriptions of every CLI command and configuration field.
 - [CLI Reference](reference/cli.md)
 - [Configuration Reference](reference/configuration.md)
 - [Image Resolution](reference/image-resolution.md)
+- [Default Image Contents](reference/default-image.md)
 - [Overlay Compatibility](reference/overlay-compatibility.md)
 
 ### Explanation
