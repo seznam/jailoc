@@ -21,12 +21,12 @@ func skipWithoutDocker(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cli, err := dockerclient.New()
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		t.Skip("Docker client not available: ", err)
 	}
 	defer func() { _ = cli.Close() }()
-	if _, err := cli.Ping(ctx, dockerclient.PingOptions{}); err != nil {
+	if _, err := cli.Ping(ctx); err != nil {
 		t.Skip("Docker daemon not reachable: ", err)
 	}
 }
