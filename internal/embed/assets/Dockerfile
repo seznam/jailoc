@@ -32,7 +32,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Build-time dependencies: compilers for native npm addons (node-gyp),
 # curl for downloading tarballs, xz-utils for .tar.xz extraction.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates gnupg2 unzip xz-utils \
+    curl ca-certificates xz-utils \
     build-essential make gcc g++ python3 \
     && rm -rf /var/lib/apt/lists/*
 

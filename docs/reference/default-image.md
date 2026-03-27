@@ -2,7 +2,7 @@
 
 The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below. This is the image used when no custom `image`, `defaults.image`, or `base.dockerfile` is configured — [step 5 of image resolution](image-resolution.md#step-5-embedded-fallback).
 
-Versions are pinned as `ARG` declarations at the top of the Dockerfile and tracked by Renovate.
+Core tool versions (Node.js, yaml-language-server, OpenCode) are pinned as `ARG` declarations at the top of the Dockerfile and tracked by Renovate. Other npm-installed language servers use the latest version at build time.
 
 ---
 
