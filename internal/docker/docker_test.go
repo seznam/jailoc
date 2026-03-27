@@ -151,6 +151,64 @@ func TestCurrentOpencodeContainer(t *testing.T) {
 	})
 }
 
+func TestAnyOpencodeContainer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("prefers running over exited", func(t *testing.T) {
+		t.Parallel()
+
+		got := anyOpencodeContainer([]api.ContainerSummary{
+			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200, ExitCode: 1},
+			{ID: "running", Service: "opencode", State: containertypes.StateRunning, Created: 100},
+		})
+
+		if got.ID != "running" {
+			t.Fatalf("got container %q, want %q", got.ID, "running")
+		}
+	})
+
+	t.Run("returns exited container when no running exists", func(t *testing.T) {
+		t.Parallel()
+
+		got := anyOpencodeContainer([]api.ContainerSummary{
+			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 300},
+			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200, ExitCode: 1},
+		})
+
+		if got.ID != "exited" {
+			t.Fatalf("got container %q, want %q", got.ID, "exited")
+		}
+		if got.ExitCode != 1 {
+			t.Fatalf("got exit code %d, want 1", got.ExitCode)
+		}
+	})
+
+	t.Run("selects newest among same state", func(t *testing.T) {
+		t.Parallel()
+
+		got := anyOpencodeContainer([]api.ContainerSummary{
+			{ID: "old-exit", Service: "opencode", State: containertypes.StateExited, Created: 100},
+			{ID: "new-exit", Service: "opencode", State: containertypes.StateExited, Created: 200},
+		})
+
+		if got.ID != "new-exit" {
+			t.Fatalf("got container %q, want %q", got.ID, "new-exit")
+		}
+	})
+
+	t.Run("returns zero value when no opencode container exists", func(t *testing.T) {
+		t.Parallel()
+
+		got := anyOpencodeContainer([]api.ContainerSummary{
+			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 100},
+		})
+
+		if got.ID != "" {
+			t.Fatalf("got container %q, want empty ID", got.ID)
+		}
+	})
+}
+
 func TestBuildPresetImageEmptyContent(t *testing.T) {
 	t.Parallel()
 	_, err := buildPresetImage(context.Background(), nil, nil)

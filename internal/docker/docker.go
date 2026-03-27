@@ -126,6 +126,22 @@ func (c *Client) HealthStatus(ctx context.Context) (string, error) {
 	return string(container.Health), nil
 }
 
+// ContainerState returns the state and exit code of the opencode container,
+// regardless of whether it is running. Returns empty state if no container exists.
+func (c *Client) ContainerState(ctx context.Context) (state string, exitCode int, err error) {
+	if err := c.initComposeSvc(); err != nil {
+		return "", 0, err
+	}
+
+	containers, err := c.svc.Ps(ctx, "jailoc-"+c.workspace, api.PsOptions{All: true})
+	if err != nil {
+		return "", 0, fmt.Errorf("compose ps for workspace %q: %w", c.workspace, err)
+	}
+
+	ct := anyOpencodeContainer(containers)
+	return string(ct.State), ct.ExitCode, nil
+}
+
 func (c *Client) opencodeContainer(ctx context.Context) (api.ContainerSummary, error) {
 	if err := c.initComposeSvc(); err != nil {
 		return api.ContainerSummary{}, err
@@ -148,6 +164,39 @@ func currentOpencodeContainer(containers []api.ContainerSummary) api.ContainerSu
 		}
 
 		if selected.ID == "" || ct.Created > selected.Created {
+			selected = ct
+		}
+	}
+
+	return selected
+}
+
+// anyOpencodeContainer returns the opencode container regardless of state.
+// It prefers running containers; if none are running, it returns the most recently created one.
+func anyOpencodeContainer(containers []api.ContainerSummary) api.ContainerSummary {
+	var selected api.ContainerSummary
+
+	for _, ct := range containers {
+		if ct.Service != "opencode" {
+			continue
+		}
+
+		if selected.ID == "" {
+			selected = ct
+			continue
+		}
+
+		// Prefer running over non-running.
+		if ct.State == "running" && selected.State != "running" {
+			selected = ct
+			continue
+		}
+		if ct.State != "running" && selected.State == "running" {
+			continue
+		}
+
+		// Same state class — prefer newest.
+		if ct.Created > selected.Created {
 			selected = ct
 		}
 	}

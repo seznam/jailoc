@@ -40,14 +40,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	client := docker.NewClient(composePath, "", ws.Name)
-
 	ctx := cmd.Context()
-	running, err := client.IsRunning(ctx)
+
+	state, exitCode, err := client.ContainerState(ctx)
 	if err != nil {
-		return fmt.Errorf("check running status: %w", err)
+		return fmt.Errorf("check container state: %w", err)
 	}
 
-	if !running {
+	if state == "" {
 		fmt.Printf("Workspace %s is not running\n", ws.Name)
 		return nil
 	}
@@ -55,19 +55,27 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Workspace: %s\n", ws.Name)
 	fmt.Printf("Port:      %d\n", ws.Port)
 
-	health, err := client.HealthStatus(ctx)
-	if err != nil {
-		return fmt.Errorf("check health status: %w", err)
+	switch state {
+	case "running":
+		health, err := client.HealthStatus(ctx)
+		if err != nil {
+			return fmt.Errorf("check health status: %w", err)
+		}
+
+		switch health {
+		case "unhealthy":
+			fmt.Printf("Status:    running (unhealthy)\n")
+		case "starting":
+			fmt.Printf("Status:    running (starting)\n")
+		default:
+			fmt.Printf("Status:    running\n")
+		}
+	case "exited":
+		fmt.Printf("Status:    exited (code %d)\n", exitCode)
+	default:
+		fmt.Printf("Status:    %s\n", state)
 	}
 
-	switch health {
-	case "unhealthy":
-		fmt.Printf("Status:    running (unhealthy)\n")
-	case "starting":
-		fmt.Printf("Status:    running (starting)\n")
-	default:
-		fmt.Printf("Status:    running\n")
-	}
 	return nil
 }
 
