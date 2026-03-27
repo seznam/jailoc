@@ -6,11 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 var addCmd = &cobra.Command{
@@ -42,7 +42,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	ok, err := confirmBroadPath(targetDir)
+	ok, err := confirmBroadPath(cmd.Context(), targetDir)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Added %q to workspace %q\n", targetDir, workspaceFlag)
 
-	return maybeRestartWorkspace(ws)
+	return maybeRestartWorkspace(cmd.Context(), ws)
 }
 
 func isDuplicate(paths []string, target string) bool {
@@ -68,13 +68,12 @@ func isDuplicate(paths []string, target string) bool {
 	return false
 }
 
-func maybeRestartWorkspace(ws *workspace.Resolved) error {
+func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 	compPath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 	if _, err := os.Stat(compPath); err != nil {
 		return nil
 	}
 
-	ctx := context.Background()
 	client := docker.NewClient(compPath, "", ws.Name)
 
 	running, err := client.IsRunning(ctx)

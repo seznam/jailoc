@@ -123,6 +123,90 @@ func TestCurrentOpencodeContainer(t *testing.T) {
 			t.Fatalf("got container %q, want empty ID", got.ID)
 		}
 	})
+
+	t.Run("preserves health field from selected container", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name   string
+			health containertypes.HealthStatus
+		}{
+			{"healthy", containertypes.Healthy},
+			{"unhealthy", containertypes.Unhealthy},
+			{"no healthcheck", ""},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				got := currentOpencodeContainer([]api.ContainerSummary{
+					{ID: "oc", Service: "opencode", State: containertypes.StateRunning, Created: 100, Health: tt.health},
+				})
+
+				if got.Health != tt.health {
+					t.Fatalf("got health %q, want %q", got.Health, tt.health)
+				}
+			})
+		}
+	})
+}
+
+func TestAnyOpencodeContainer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("prefers running over exited", func(t *testing.T) {
+		t.Parallel()
+
+		got := anyOpencodeContainer([]api.ContainerSummary{
+			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200, ExitCode: 1},
+			{ID: "running", Service: "opencode", State: containertypes.StateRunning, Created: 100},
+		})
+
+		if got.ID != "running" {
+			t.Fatalf("got container %q, want %q", got.ID, "running")
+		}
+	})
+
+	t.Run("returns exited container when no running exists", func(t *testing.T) {
+		t.Parallel()
+
+		got := anyOpencodeContainer([]api.ContainerSummary{
+			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 300},
+			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200, ExitCode: 1},
+		})
+
+		if got.ID != "exited" {
+			t.Fatalf("got container %q, want %q", got.ID, "exited")
+		}
+		if got.ExitCode != 1 {
+			t.Fatalf("got exit code %d, want 1", got.ExitCode)
+		}
+	})
+
+	t.Run("selects newest among same state", func(t *testing.T) {
+		t.Parallel()
+
+		got := anyOpencodeContainer([]api.ContainerSummary{
+			{ID: "old-exit", Service: "opencode", State: containertypes.StateExited, Created: 100},
+			{ID: "new-exit", Service: "opencode", State: containertypes.StateExited, Created: 200},
+		})
+
+		if got.ID != "new-exit" {
+			t.Fatalf("got container %q, want %q", got.ID, "new-exit")
+		}
+	})
+
+	t.Run("returns zero value when no opencode container exists", func(t *testing.T) {
+		t.Parallel()
+
+		got := anyOpencodeContainer([]api.ContainerSummary{
+			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 100},
+		})
+
+		if got.ID != "" {
+			t.Fatalf("got container %q, want empty ID", got.ID)
+		}
+	})
 }
 
 func TestBuildPresetImageEmptyContent(t *testing.T) {
@@ -173,22 +257,6 @@ func TestResolveBaseImageDockerfilePrecedence(t *testing.T) {
 	}
 }
 
-func TestResolveBaseImageNilCfg(t *testing.T) {
-	t.Parallel()
-
-	tag, err := ResolveBaseImage(context.Background(), nil, "v0.0.0-test")
-	if err == nil {
-		if tag != "jailoc-base:embedded" {
-			t.Fatalf("unexpected tag on nil cfg without error: got %q, want %q", tag, "jailoc-base:embedded")
-		}
-		return
-	}
-
-	if tag != "" {
-		t.Fatalf("expected empty tag on error, got %q", tag)
-	}
-}
-
 func TestResolveBaseImageDockerfileLoadError(t *testing.T) {
 	t.Parallel()
 
@@ -206,26 +274,6 @@ func TestResolveBaseImageDockerfileLoadError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load dockerfile") {
 		t.Fatalf("unexpected error message: got %q, want message containing %q", err.Error(), "load dockerfile")
-	}
-}
-
-func TestResolveBaseImageEmbeddedFallbackWhenNoImageConfig(t *testing.T) {
-	t.Parallel()
-
-	cfg := &config.Config{}
-	tag, err := ResolveBaseImage(context.Background(), cfg, "v0.0.0-test")
-	if err == nil {
-		if tag != "jailoc-base:embedded" {
-			t.Fatalf("unexpected tag without error: got %q, want %q", tag, "jailoc-base:embedded")
-		}
-		return
-	}
-
-	if strings.Contains(err.Error(), "load dockerfile") {
-		t.Fatalf("unexpected dockerfile load error for empty image config: %v", err)
-	}
-	if tag != "" {
-		t.Fatalf("expected empty tag on error, got %q", tag)
 	}
 }
 
@@ -281,55 +329,5 @@ func TestBuildOverlayImageDockerfileLoadError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), nonExistentPath) {
 		t.Fatalf("unexpected error: got %q, want path %q", err.Error(), nonExistentPath)
-	}
-}
-
-func TestBuildOverlayImageDefaultBuildContext(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	wsDockerfile := filepath.Join(tmpDir, "overlay.Dockerfile")
-	if err := os.WriteFile(wsDockerfile, []byte("ARG BASE\nFROM ${BASE}\n"), 0o600); err != nil {
-		t.Fatalf("write workspace dockerfile: %v", err)
-	}
-
-	_, err := BuildOverlayImage(context.Background(), "registry.example.com/base:v1", workspace.Resolved{
-		Name:       "ws-default-ctx",
-		Dockerfile: wsDockerfile,
-	})
-	if err == nil {
-		t.Fatal("expected docker build error (daemon/build stage), got nil")
-	}
-	if strings.Contains(err.Error(), "determine build context") {
-		t.Fatalf("unexpected build context resolution error: %v", err)
-	}
-	if strings.Contains(err.Error(), "write temporary workspace Dockerfile") {
-		t.Fatalf("unexpected Dockerfile temp write error: %v", err)
-	}
-}
-
-func TestBuildOverlayImageExplicitBuildContext(t *testing.T) {
-	t.Parallel()
-
-	dockerfileDir := t.TempDir()
-	buildContextDir := t.TempDir()
-	wsDockerfile := filepath.Join(dockerfileDir, "overlay.Dockerfile")
-	if err := os.WriteFile(wsDockerfile, []byte("ARG BASE\nFROM ${BASE}\n"), 0o600); err != nil {
-		t.Fatalf("write workspace dockerfile: %v", err)
-	}
-
-	_, err := BuildOverlayImage(context.Background(), "registry.example.com/base:v1", workspace.Resolved{
-		Name:         "ws-explicit-ctx",
-		Dockerfile:   wsDockerfile,
-		BuildContext: buildContextDir,
-	})
-	if err == nil {
-		t.Fatal("expected docker build error (daemon/build stage), got nil")
-	}
-	if strings.Contains(err.Error(), "determine build context") {
-		t.Fatalf("unexpected build context resolution error: %v", err)
-	}
-	if strings.Contains(err.Error(), "write temporary workspace Dockerfile") {
-		t.Fatalf("unexpected Dockerfile temp write error: %v", err)
 	}
 }

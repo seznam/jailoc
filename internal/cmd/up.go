@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 var upCmd = &cobra.Command{

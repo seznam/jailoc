@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -116,6 +117,31 @@ func (c *Client) CurrentContainerID(ctx context.Context) (string, error) {
 	return container.ID, nil
 }
 
+func (c *Client) HealthStatus(ctx context.Context) (string, error) {
+	container, err := c.opencodeContainer(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return string(container.Health), nil
+}
+
+// ContainerState returns the state and exit code of the opencode container,
+// regardless of whether it is running. Returns empty state if no container exists.
+func (c *Client) ContainerState(ctx context.Context) (state string, exitCode int, err error) {
+	if err := c.initComposeSvc(); err != nil {
+		return "", 0, err
+	}
+
+	containers, err := c.svc.Ps(ctx, "jailoc-"+c.workspace, api.PsOptions{All: true})
+	if err != nil {
+		return "", 0, fmt.Errorf("compose ps for workspace %q: %w", c.workspace, err)
+	}
+
+	ct := anyOpencodeContainer(containers)
+	return string(ct.State), ct.ExitCode, nil
+}
+
 func (c *Client) opencodeContainer(ctx context.Context) (api.ContainerSummary, error) {
 	if err := c.initComposeSvc(); err != nil {
 		return api.ContainerSummary{}, err
@@ -145,6 +171,39 @@ func currentOpencodeContainer(containers []api.ContainerSummary) api.ContainerSu
 	return selected
 }
 
+// anyOpencodeContainer returns the opencode container regardless of state.
+// It prefers running containers; if none are running, it returns the most recently created one.
+func anyOpencodeContainer(containers []api.ContainerSummary) api.ContainerSummary {
+	var selected api.ContainerSummary
+
+	for _, ct := range containers {
+		if ct.Service != "opencode" {
+			continue
+		}
+
+		if selected.ID == "" {
+			selected = ct
+			continue
+		}
+
+		// Prefer running over non-running.
+		if ct.State == "running" && selected.State != "running" {
+			selected = ct
+			continue
+		}
+		if ct.State != "running" && selected.State == "running" {
+			continue
+		}
+
+		// Same state class — prefer newest.
+		if ct.Created > selected.Created {
+			selected = ct
+		}
+	}
+
+	return selected
+}
+
 type writerLogConsumer struct{ w io.Writer }
 
 func (wlc *writerLogConsumer) Log(name, msg string) {
@@ -165,6 +224,19 @@ func (c *Client) Logs(ctx context.Context, follow bool, w io.Writer) error {
 	consumer := &writerLogConsumer{w: w}
 	if err := c.svc.Logs(ctx, "jailoc-"+c.workspace, consumer, api.LogOptions{Follow: follow}); err != nil {
 		return fmt.Errorf("compose logs for workspace %q: %w", c.workspace, err)
+	}
+
+	return nil
+}
+
+func (c *Client) TailLogs(ctx context.Context, n int, w io.Writer) error {
+	if err := c.initComposeSvc(); err != nil {
+		return err
+	}
+
+	consumer := &writerLogConsumer{w: w}
+	if err := c.svc.Logs(ctx, "jailoc-"+c.workspace, consumer, api.LogOptions{Tail: strconv.Itoa(n)}); err != nil {
+		return fmt.Errorf("tail compose logs for workspace %q: %w", c.workspace, err)
 	}
 
 	return nil

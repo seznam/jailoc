@@ -1,15 +1,14 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 var followLogs bool
@@ -22,7 +21,7 @@ var logsCmd = &cobra.Command{
 }
 
 func runLogs(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -42,7 +41,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 
 	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 
-	// Check if compose file exists (workspace running)
+	// Check if compose file exists (workspace was started at some point)
 	if _, err := os.Stat(composePath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("workspace %q is not running; start it with 'jailoc up'", ws.Name)
@@ -51,16 +50,6 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	client := docker.NewClient(composePath, "", ws.Name)
-
-	// Check if workspace is actually running
-	running, err := client.IsRunning(ctx)
-	if err != nil {
-		return fmt.Errorf("check if workspace is running: %w", err)
-	}
-
-	if !running {
-		return fmt.Errorf("workspace %q is not running; start it with 'jailoc up'", ws.Name)
-	}
 
 	// Stream logs
 	if err := client.Logs(ctx, followLogs, os.Stdout); err != nil {

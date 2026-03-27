@@ -1,13 +1,12 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"sort"
 
-	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/spf13/cobra"
 )
 
 var configCmd = &cobra.Command{
@@ -17,7 +16,7 @@ var configCmd = &cobra.Command{
 }
 
 func runConfig(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	cfg, err := config.Load()
 	if err != nil {

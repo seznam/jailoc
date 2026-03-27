@@ -369,14 +369,29 @@ func Validate(cfg *Config) error {
 
 var lookPath = exec.LookPath
 
+// opencodeBinaries is the ordered list of binary names to search for on PATH.
+var opencodeBinaries = []string{"opencode", "opencode-cli"}
+
+// ResolveBinary returns the first opencode binary found on PATH.
+// It checks "opencode" first, then "opencode-cli" as a fallback.
+// Returns ("", error) if neither is found.
+func ResolveBinary() (string, error) {
+	for _, name := range opencodeBinaries {
+		if path, err := lookPath(name); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("neither opencode nor opencode-cli found on PATH")
+}
+
 // ResolveMode returns the effective access mode.
 // If configured is non-empty, it is returned directly.
-// Otherwise auto-detect: returns ModeRemote if opencode is on PATH, ModeExec otherwise.
+// Otherwise auto-detect: returns ModeRemote if opencode or opencode-cli is on PATH, ModeExec otherwise.
 func ResolveMode(configured string) string {
 	if configured != "" {
 		return configured
 	}
-	if _, err := lookPath("opencode"); err == nil {
+	if _, err := ResolveBinary(); err == nil {
 		return ModeRemote
 	}
 	return ModeExec
