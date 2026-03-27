@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -33,7 +34,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	if _, err := os.Stat(composePath); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Printf("Workspace %s is not running\n", ws.Name)
+			color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
 			return nil
 		}
 		return fmt.Errorf("stat compose file: %w", err)
@@ -48,12 +49,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	if state == "" {
-		fmt.Printf("Workspace %s is not running\n", ws.Name)
+		color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
 		return nil
 	}
 
-	fmt.Printf("Workspace: %s\n", ws.Name)
-	fmt.Printf("Port:      %d\n", ws.Port)
+	color.New(color.FgCyan).Printf("Workspace: %s\n", ws.Name)
+	color.New(color.FgCyan).Printf("Port:      %d\n", ws.Port)
 
 	switch state {
 	case "running":
@@ -64,16 +65,21 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 		switch health {
 		case "unhealthy":
-			fmt.Printf("Status:    running (unhealthy)\n")
+			color.New(color.FgCyan).Printf("Status:    ")
+			color.New(color.FgRed).Printf("running (unhealthy)\n")
 		case "starting":
-			fmt.Printf("Status:    running (starting)\n")
+			color.New(color.FgCyan).Printf("Status:    ")
+			color.New(color.FgYellow).Printf("running (starting)\n")
 		default:
-			fmt.Printf("Status:    running\n")
+			color.New(color.FgCyan).Printf("Status:    ")
+			color.New(color.FgGreen).Printf("running\n")
 		}
 	case "exited":
-		fmt.Printf("Status:    exited (code %d)\n", exitCode)
+		color.New(color.FgCyan).Printf("Status:    ")
+		color.New(color.FgRed).Printf("exited (code %d)\n", exitCode)
 	default:
-		fmt.Printf("Status:    %s\n", state)
+		color.New(color.FgCyan).Printf("Status:    ")
+		color.New(color.FgYellow).Printf("%s\n", state)
 	}
 
 	return nil

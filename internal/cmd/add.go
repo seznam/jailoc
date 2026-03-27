@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
@@ -38,7 +39,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	if isDuplicate(ws.Paths, targetDir) {
-		fmt.Printf("Path %q is already in workspace %q\n", targetDir, ws.Name)
+		color.New(color.FgYellow).Printf("Path %q is already in workspace %q\n", targetDir, ws.Name)
 		return nil
 	}
 
@@ -54,7 +55,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("add path to config: %w", err)
 	}
 
-	fmt.Printf("Added %q to workspace %q\n", targetDir, workspaceFlag)
+	color.New(color.FgGreen).Printf("Added %q to workspace %q\n", targetDir, workspaceFlag)
 
 	return maybeRestartWorkspace(cmd.Context(), ws)
 }
@@ -115,12 +116,12 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return fmt.Errorf("regenerate compose file: %w", err)
 	}
 
-	fmt.Printf("Restarting workspace %s with updated mounts...\n", ws.Name)
+	color.New(color.FgCyan).Printf("Restarting workspace %s with updated mounts...\n", ws.Name)
 	if err := client.Up(ctx); err != nil {
 		return fmt.Errorf("restart workspace: %w", err)
 	}
 
-	fmt.Printf("Workspace %q restarted with updated mounts\n", ws.Name)
+	color.New(color.FgGreen).Printf("Workspace %q restarted with updated mounts\n", ws.Name)
 	return nil
 }
 
