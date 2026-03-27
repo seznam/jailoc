@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 var workspaceFlag string
@@ -46,8 +46,7 @@ var rootCmd = &cobra.Command{
 
 		if !workspace.MatchesCWD(ws, targetPath) {
 			fmt.Printf("Path %s is not in workspace %s. Add it? [y/N]: ", targetPath, ws.Name)
-			reader := bufio.NewReader(os.Stdin)
-			answer, err := reader.ReadString('\n')
+			answer, err := readLineCtx(ctx)
 			if err != nil {
 				return fmt.Errorf("read add-to-workspace prompt response: %w", err)
 			}
@@ -57,7 +56,7 @@ var rootCmd = &cobra.Command{
 				return nil
 			}
 
-			ok, err := confirmBroadPath(targetPath)
+			ok, err := confirmBroadPath(ctx, targetPath)
 			if err != nil {
 				return err
 			}
@@ -179,7 +178,7 @@ func isBroadPath(path string) bool {
 	return path == home
 }
 
-func confirmBroadPath(path string) (bool, error) {
+func confirmBroadPath(ctx context.Context, path string) (bool, error) {
 	if !isBroadPath(path) {
 		return true, nil
 	}
@@ -187,14 +186,39 @@ func confirmBroadPath(path string) (bool, error) {
 	fmt.Printf("WARNING: %q is a very broad path — this will mount your entire directory tree into the container.\n", path)
 	fmt.Print("Are you sure? [y/N]: ")
 
-	reader := bufio.NewReader(os.Stdin)
-	answer, err := reader.ReadString('\n')
+	answer, err := readLineCtx(ctx)
 	if err != nil {
 		return false, fmt.Errorf("read broad-path confirmation: %w", err)
 	}
 
 	trimmed := strings.ToLower(strings.TrimSpace(answer))
 	return trimmed == "y" || trimmed == "yes", nil
+}
+
+// readLineCtx reads a line from stdin, returning ctx.Err() on cancellation.
+// Uses SetReadDeadline to interrupt the blocked read — no goroutine leak.
+// Pattern from encoredev/encore (cli/internal/login/deviceauth.go).
+func readLineCtx(ctx context.Context) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		reader := bufio.NewReader(os.Stdin)
+		line, err := reader.ReadString('\n')
+		ch <- result{line, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		os.Stdin.SetReadDeadline(time.Now())
+		<-ch
+		os.Stdin.SetReadDeadline(time.Time{})
+		return "", ctx.Err()
+	case r := <-ch:
+		return r.line, r.err
+	}
 }
 
 // resolveFromFlags returns the effective access mode based on CLI flags and config.

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +21,7 @@ var logsCmd = &cobra.Command{
 }
 
 func runLogs(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	cfg, err := config.Load()
 	if err != nil {

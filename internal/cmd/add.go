@@ -6,11 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 var addCmd = &cobra.Command{
@@ -42,7 +42,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	ok, err := confirmBroadPath(targetDir)
+	ok, err := confirmBroadPath(cmd.Context(), targetDir)
 	if err != nil {
 		return err
 	}
