@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/fatih/color"
 )
 
 const (
@@ -326,7 +327,7 @@ func Validate(cfg *Config) error {
 			}
 
 			if owner, ok := pathOwners[p]; ok && owner != name {
-				fmt.Fprintf(os.Stderr, "warning: path %q is configured in multiple workspaces: %q and %q\n", p, owner, name)
+				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "warning: path %q is configured in multiple workspaces: %q and %q\n", p, owner, name)
 			} else {
 				pathOwners[p] = name
 			}
