@@ -22,6 +22,7 @@ func main() {
 			if bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 				version = bi.Main.Version
 			}
+			var modified bool
 			for _, s := range bi.Settings {
 				switch s.Key {
 				case "vcs.revision":
@@ -30,7 +31,12 @@ func main() {
 					}
 				case "vcs.time":
 					date = s.Value
+				case "vcs.modified":
+					modified = s.Value == "true"
 				}
+			}
+			if modified {
+				commit += "-dirty"
 			}
 		}
 	}
