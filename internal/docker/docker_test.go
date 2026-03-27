@@ -7,13 +7,29 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/docker/compose/v5/pkg/api"
 	containertypes "github.com/moby/moby/api/types/container"
+	dockerclient "github.com/moby/moby/client"
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
+
+func skipWithoutDocker(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cli, err := dockerclient.New()
+	if err != nil {
+		t.Skip("Docker client not available: ", err)
+	}
+	defer func() { _ = cli.Close() }()
+	if _, err := cli.Ping(ctx, dockerclient.PingOptions{}); err != nil {
+		t.Skip("Docker daemon not reachable: ", err)
+	}
+}
 
 func TestNewClient(t *testing.T) {
 	t.Parallel()
@@ -259,6 +275,7 @@ func TestResolveBaseImageDockerfilePrecedence(t *testing.T) {
 
 func TestResolveBaseImageNilCfg(t *testing.T) {
 	t.Parallel()
+	skipWithoutDocker(t)
 
 	tag, err := ResolveBaseImage(context.Background(), nil, "v0.0.0-test")
 	if err == nil {
@@ -295,6 +312,7 @@ func TestResolveBaseImageDockerfileLoadError(t *testing.T) {
 
 func TestResolveBaseImageEmbeddedFallbackWhenNoImageConfig(t *testing.T) {
 	t.Parallel()
+	skipWithoutDocker(t)
 
 	cfg := &config.Config{}
 	tag, err := ResolveBaseImage(context.Background(), cfg, "v0.0.0-test")
@@ -370,6 +388,7 @@ func TestBuildOverlayImageDockerfileLoadError(t *testing.T) {
 
 func TestBuildOverlayImageDefaultBuildContext(t *testing.T) {
 	t.Parallel()
+	skipWithoutDocker(t)
 
 	tmpDir := t.TempDir()
 	wsDockerfile := filepath.Join(tmpDir, "overlay.Dockerfile")
@@ -394,6 +413,7 @@ func TestBuildOverlayImageDefaultBuildContext(t *testing.T) {
 
 func TestBuildOverlayImageExplicitBuildContext(t *testing.T) {
 	t.Parallel()
+	skipWithoutDocker(t)
 
 	dockerfileDir := t.TempDir()
 	buildContextDir := t.TempDir()
