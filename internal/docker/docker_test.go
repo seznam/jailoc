@@ -123,6 +123,32 @@ func TestCurrentOpencodeContainer(t *testing.T) {
 			t.Fatalf("got container %q, want empty ID", got.ID)
 		}
 	})
+
+	t.Run("preserves health field from selected container", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name   string
+			health containertypes.HealthStatus
+		}{
+			{"healthy", containertypes.Healthy},
+			{"unhealthy", containertypes.Unhealthy},
+			{"no healthcheck", ""},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				got := currentOpencodeContainer([]api.ContainerSummary{
+					{ID: "oc", Service: "opencode", State: containertypes.StateRunning, Created: 100, Health: tt.health},
+				})
+
+				if got.Health != tt.health {
+					t.Fatalf("got health %q, want %q", got.Health, tt.health)
+				}
+			})
+		}
+	})
 }
 
 func TestBuildPresetImageEmptyContent(t *testing.T) {

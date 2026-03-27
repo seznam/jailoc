@@ -53,14 +53,27 @@ func runAttach(cmd *cobra.Command, args []string) error {
 	defer stop()
 
 	mode := resolveFromFlags(cmd, cfg)
+	var attachErr error
 	switch mode {
 	case config.ModeExec:
 		fmt.Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-		return attachExec(attachCtx, client)
+		attachErr = attachExec(attachCtx, client)
 	default:
 		fmt.Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
-		return attachOnHost(attachCtx, ws)
+		attachErr = attachOnHost(attachCtx, ws)
 	}
+
+	if errors.Is(attachErr, errUnhealthy) {
+		fmt.Fprintf(os.Stderr, "\n--- last %d log lines ---\n", tailLogLines)
+		logCtx, logCancel := context.WithTimeout(context.Background(), tailLogTimeout)
+		defer logCancel()
+		if logErr := client.TailLogs(logCtx, tailLogLines, os.Stderr); logErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to retrieve logs: %v\n", logErr)
+		}
+		fmt.Fprintf(os.Stderr, "--- opencode process died inside container ---\n")
+	}
+
+	return attachErr
 }
 
 func attachOnHost(ctx context.Context, ws *workspace.Resolved) error {
@@ -113,7 +126,11 @@ func attachExec(ctx context.Context, client *docker.Client) error {
 const (
 	attachPollInterval = 500 * time.Millisecond
 	attachWaitDelay    = 2 * time.Second
+	tailLogLines       = 50
+	tailLogTimeout     = 10 * time.Second
 )
+
+var errUnhealthy = errors.New("opencode process unhealthy inside container")
 
 func startAttachWatch(parent context.Context, client *docker.Client, workspaceName string) (context.Context, func(), error) {
 	containerID, err := client.CurrentContainerID(parent)
@@ -125,7 +142,7 @@ func startAttachWatch(parent context.Context, client *docker.Client, workspaceNa
 	}
 
 	attachCtx, cancel := context.WithCancelCause(parent)
-	go monitorAttach(attachCtx, cancel, client.CurrentContainerID, containerID, attachPollInterval)
+	go monitorAttach(attachCtx, cancel, client.CurrentContainerID, client.HealthStatus, containerID, attachPollInterval)
 
 	return attachCtx, func() { cancel(nil) }, nil
 }
@@ -139,7 +156,7 @@ func attachResult(ctx context.Context, err error) error {
 	return err
 }
 
-func monitorAttach(ctx context.Context, cancel context.CancelCauseFunc, currentContainerID func(context.Context) (string, error), expectedContainerID string, interval time.Duration) {
+func monitorAttach(ctx context.Context, cancel context.CancelCauseFunc, currentContainerID func(context.Context) (string, error), healthStatus func(context.Context) (string, error), expectedContainerID string, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -162,6 +179,14 @@ func monitorAttach(ctx context.Context, cancel context.CancelCauseFunc, currentC
 			}
 			if containerID != expectedContainerID {
 				cancel(fmt.Errorf("opencode container restarted during attach"))
+				return
+			}
+			health, err := healthStatus(ctx)
+			if err != nil {
+				continue // transient health check failure — ignore
+			}
+			if health == "unhealthy" {
+				cancel(errUnhealthy)
 				return
 			}
 		}

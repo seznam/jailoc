@@ -34,6 +34,9 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	assertContains(t, rendered, "opencode-data-alpha")
 	assertContains(t, rendered, "opencode-cache-alpha")
 	assertContains(t, rendered, "working_dir: /Users/test/work/project")
+	assertContains(t, rendered, "healthcheck:")
+	assertContains(t, rendered, "$$OPENCODE_SERVER_PASSWORD")
+	assertContains(t, rendered, "/global/health")
 }
 
 func TestGenerateComposeMultiplePaths(t *testing.T) {

@@ -13,6 +13,8 @@ import (
 func TestMonitorAttach(t *testing.T) {
 	t.Parallel()
 
+	noHealth := func(context.Context) (string, error) { return "", nil }
+
 	t.Run("cancels when container stops", func(t *testing.T) {
 		t.Parallel()
 
@@ -21,7 +23,7 @@ func TestMonitorAttach(t *testing.T) {
 
 		go monitorAttach(ctx, cancel, func(context.Context) (string, error) {
 			return "", nil
-		}, "original", time.Millisecond)
+		}, noHealth, "original", time.Millisecond)
 
 		cause := waitForCause(t, ctx)
 		if cause == nil || !strings.Contains(cause.Error(), "stopped") {
@@ -37,7 +39,7 @@ func TestMonitorAttach(t *testing.T) {
 
 		go monitorAttach(ctx, cancel, func(context.Context) (string, error) {
 			return "replacement", nil
-		}, "original", time.Millisecond)
+		}, noHealth, "original", time.Millisecond)
 
 		cause := waitForCause(t, ctx)
 		if cause == nil || !strings.Contains(cause.Error(), "restarted") {
@@ -53,12 +55,88 @@ func TestMonitorAttach(t *testing.T) {
 
 		go monitorAttach(ctx, cancel, func(context.Context) (string, error) {
 			return "", errors.New("boom")
-		}, "original", time.Millisecond)
+		}, noHealth, "original", time.Millisecond)
 
 		cause := waitForCause(t, ctx)
 		if cause == nil || !strings.Contains(cause.Error(), "monitor opencode container") {
 			t.Fatalf("got cause %v, want monitor error", cause)
 		}
+	})
+
+	t.Run("cancels when unhealthy", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+
+		go monitorAttach(ctx, cancel, func(context.Context) (string, error) {
+			return "original", nil
+		}, func(context.Context) (string, error) {
+			return "unhealthy", nil
+		}, "original", time.Millisecond)
+
+		cause := waitForCause(t, ctx)
+		if !errors.Is(cause, errUnhealthy) {
+			t.Fatalf("got cause %v, want errUnhealthy", cause)
+		}
+	})
+
+	t.Run("continues when healthy", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+
+		go monitorAttach(ctx, cancel, func(context.Context) (string, error) {
+			return "original", nil
+		}, func(context.Context) (string, error) {
+			return "healthy", nil
+		}, "original", time.Millisecond)
+
+		assertNotCanceled(t, ctx, 50*time.Millisecond)
+	})
+
+	t.Run("continues when no healthcheck", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+
+		go monitorAttach(ctx, cancel, func(context.Context) (string, error) {
+			return "original", nil
+		}, noHealth, "original", time.Millisecond)
+
+		assertNotCanceled(t, ctx, 50*time.Millisecond)
+	})
+
+	t.Run("continues when starting", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+
+		go monitorAttach(ctx, cancel, func(context.Context) (string, error) {
+			return "original", nil
+		}, func(context.Context) (string, error) {
+			return "starting", nil
+		}, "original", time.Millisecond)
+
+		assertNotCanceled(t, ctx, 50*time.Millisecond)
+	})
+
+	t.Run("ignores transient health errors", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+
+		go monitorAttach(ctx, cancel, func(context.Context) (string, error) {
+			return "original", nil
+		}, func(context.Context) (string, error) {
+			return "", errors.New("transient failure")
+		}, "original", time.Millisecond)
+
+		assertNotCanceled(t, ctx, 50*time.Millisecond)
 	})
 }
 
@@ -127,5 +205,15 @@ func waitForCause(t *testing.T, ctx context.Context) error {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for context cancellation")
 		return nil
+	}
+}
+
+func assertNotCanceled(t *testing.T, ctx context.Context, wait time.Duration) {
+	t.Helper()
+
+	select {
+	case <-ctx.Done():
+		t.Fatalf("context was canceled unexpectedly: %v", context.Cause(ctx))
+	case <-time.After(wait):
 	}
 }

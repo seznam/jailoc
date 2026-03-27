@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -116,6 +117,15 @@ func (c *Client) CurrentContainerID(ctx context.Context) (string, error) {
 	return container.ID, nil
 }
 
+func (c *Client) HealthStatus(ctx context.Context) (string, error) {
+	container, err := c.opencodeContainer(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return string(container.Health), nil
+}
+
 func (c *Client) opencodeContainer(ctx context.Context) (api.ContainerSummary, error) {
 	if err := c.initComposeSvc(); err != nil {
 		return api.ContainerSummary{}, err
@@ -165,6 +175,19 @@ func (c *Client) Logs(ctx context.Context, follow bool, w io.Writer) error {
 	consumer := &writerLogConsumer{w: w}
 	if err := c.svc.Logs(ctx, "jailoc-"+c.workspace, consumer, api.LogOptions{Follow: follow}); err != nil {
 		return fmt.Errorf("compose logs for workspace %q: %w", c.workspace, err)
+	}
+
+	return nil
+}
+
+func (c *Client) TailLogs(ctx context.Context, n int, w io.Writer) error {
+	if err := c.initComposeSvc(); err != nil {
+		return err
+	}
+
+	consumer := &writerLogConsumer{w: w}
+	if err := c.svc.Logs(ctx, "jailoc-"+c.workspace, consumer, api.LogOptions{Tail: strconv.Itoa(n)}); err != nil {
+		return fmt.Errorf("tail compose logs for workspace %q: %w", c.workspace, err)
 	}
 
 	return nil

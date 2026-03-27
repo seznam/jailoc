@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 var statusCmd = &cobra.Command{
@@ -53,7 +53,20 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Workspace: %s\n", ws.Name)
 	fmt.Printf("Port:      %d\n", ws.Port)
-	fmt.Printf("Status:    running\n")
+
+	health, err := client.HealthStatus(context.Background())
+	if err != nil {
+		return fmt.Errorf("check health status: %w", err)
+	}
+
+	switch health {
+	case "unhealthy":
+		fmt.Printf("Status:    running (unhealthy)\n")
+	case "starting":
+		fmt.Printf("Status:    running (starting)\n")
+	default:
+		fmt.Printf("Status:    running\n")
+	}
 	return nil
 }
 
