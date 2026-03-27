@@ -578,8 +578,8 @@ func TestResolveBinaryPrefersOpenCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "opencode" {
-		t.Errorf("got %q, want %q", got, "opencode")
+	if got != "/usr/local/bin/opencode" {
+		t.Errorf("got %q, want %q", got, "/usr/local/bin/opencode")
 	}
 }
 
@@ -596,8 +596,8 @@ func TestResolveBinaryFallsBackToOpenCodeCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "opencode-cli" {
-		t.Errorf("got %q, want %q", got, "opencode-cli")
+	if got != "/usr/local/bin/opencode-cli" {
+		t.Errorf("got %q, want %q", got, "/usr/local/bin/opencode-cli")
 	}
 }
 

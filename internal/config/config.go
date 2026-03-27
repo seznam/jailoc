@@ -377,8 +377,8 @@ var opencodeBinaries = []string{"opencode", "opencode-cli"}
 // Returns ("", error) if neither is found.
 func ResolveBinary() (string, error) {
 	for _, name := range opencodeBinaries {
-		if _, err := lookPath(name); err == nil {
-			return name, nil
+		if path, err := lookPath(name); err == nil {
+			return path, nil
 		}
 	}
 	return "", fmt.Errorf("neither opencode nor opencode-cli found on PATH")
