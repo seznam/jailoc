@@ -12,7 +12,7 @@ services:
 {{- end}}
       - ${HOME}/.config/opencode:/home/agent/.config/opencode:ro
       - ${HOME}/.opencode:/home/agent/.opencode:ro
-      - ${HOME}/.claude:/home/agent/.claude
+      - ${HOME}/.claude/transcripts:/home/agent/.claude/transcripts
       - ${HOME}/.agents:/home/agent/.agents:ro
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
       - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode
