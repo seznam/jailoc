@@ -54,7 +54,7 @@ services:
     working_dir: {{index .Paths 0}}
 {{- end}}
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -u opencode:$$OPENCODE_SERVER_PASSWORD http://localhost:4096/global/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf -u \"opencode:$$OPENCODE_SERVER_PASSWORD\" http://localhost:4096/global/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3

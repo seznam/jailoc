@@ -70,7 +70,7 @@ func runAttach(cmd *cobra.Command, args []string) error {
 		if logErr := client.TailLogs(logCtx, tailLogLines, os.Stderr); logErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to retrieve logs: %v\n", logErr)
 		}
-		fmt.Fprintf(os.Stderr, "--- opencode process died inside container ---\n")
+		fmt.Fprintf(os.Stderr, "--- container reported unhealthy; see logs above ---\n")
 	}
 
 	return attachErr
