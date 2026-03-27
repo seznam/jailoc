@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -27,6 +28,11 @@ var rootCmd = &cobra.Command{
 	Short:        "Manage sandboxed OpenCode Docker environments",
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		if noColor, _ := cmd.Flags().GetBool("no-color"); noColor {
+			color.NoColor = true
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
@@ -129,6 +135,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&workspaceFlag, "workspace", "w", "default", "workspace name")
 	rootCmd.PersistentFlags().BoolVar(&remoteFlag, "remote", false, "Use remote mode (host-side opencode attach)")
 	rootCmd.PersistentFlags().BoolVar(&execFlag, "exec", false, "Use exec mode (docker exec opencode inside container)")
+	rootCmd.PersistentFlags().Bool("no-color", false, "disable colored output")
 	rootCmd.MarkFlagsMutuallyExclusive("remote", "exec")
 }
 
