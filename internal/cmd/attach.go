@@ -64,6 +64,11 @@ func runAttach(cmd *cobra.Command, args []string) error {
 }
 
 func attachOnHost(ctx context.Context, ws *workspace.Resolved) error {
+	binary, err := config.ResolveBinary()
+	if err != nil {
+		return fmt.Errorf("resolve opencode binary: %w", err)
+	}
+
 	serverArg := fmt.Sprintf("http://localhost:%d", ws.Port)
 	args := []string{"attach", serverArg}
 
@@ -71,12 +76,12 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved) error {
 		args = append(args, "--password", password)
 	}
 
-	cmd := exec.Command("opencode", args...) //nolint:gosec // binary name is hardcoded, args are controlled
+	cmd := exec.Command(binary, args...) //nolint:gosec // binary name is from ResolveBinary, args are controlled
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	err := runCommandWithContext(ctx, cmd, func() error {
+	err = runCommandWithContext(ctx, cmd, func() error {
 		if cmd.Process == nil {
 			return nil
 		}
