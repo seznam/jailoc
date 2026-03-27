@@ -43,9 +43,9 @@ func (p *progressEventProcessor) On(events ...api.Resource) {
 	for _, e := range events {
 		switch e.Status {
 		case api.Done:
-			color.New(color.FgGreen).Printf("  %s %s\n", e.ID, e.Text)
+			_, _ = color.New(color.FgGreen).Printf("  %s %s\n", e.ID, e.Text)
 		case api.Error:
-			color.New(color.FgRed).Printf("  %s %s: %s\n", e.ID, e.Text, e.Details)
+			_, _ = color.New(color.FgRed).Printf("  %s %s: %s\n", e.ID, e.Text, e.Details)
 		}
 	}
 }
@@ -72,7 +72,7 @@ func (c *Client) Up(ctx context.Context) error {
 		return err
 	}
 
-	color.New(color.FgCyan).Printf("Loading compose project...\n")
+	_, _ = color.New(color.FgCyan).Printf("Loading compose project...\n")
 	project, err := c.svc.LoadProject(ctx, api.ProjectLoadOptions{
 		ConfigPaths: []string{c.composeFile},
 		ProjectName: "jailoc-" + c.workspace,
@@ -318,7 +318,7 @@ func (c *Client) initComposeSvc() error {
 func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (string, error) {
 	if cfg != nil && strings.TrimSpace(cfg.Base.Dockerfile) != "" {
 		source := strings.TrimSpace(cfg.Base.Dockerfile)
-		color.New(color.FgCyan).Printf("Loading preset Dockerfile from %s...\n", source)
+		_, _ = color.New(color.FgCyan).Printf("Loading preset Dockerfile from %s...\n", source)
 		content, err := loadDockerfile(ctx, source)
 		if err != nil {
 			return "", fmt.Errorf("load dockerfile from %q: %w", source, err)
@@ -330,7 +330,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 		}
 		defer func() { _ = engineCli.Close() }()
 
-		color.New(color.FgCyan).Printf("Building preset base image...\n")
+		_, _ = color.New(color.FgCyan).Printf("Building preset base image...\n")
 		tag, err := buildPresetImage(ctx, engineCli, content)
 		if err != nil {
 			return "", fmt.Errorf("build preset image: %w", err)
@@ -346,7 +346,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 	}
 	defer func() { _ = engineCli.Close() }()
 
-	color.New(color.FgCyan).Printf("Building embedded base image...\n")
+	_, _ = color.New(color.FgCyan).Printf("Building embedded base image...\n")
 	if err := buildEmbeddedImage(ctx, engineCli, embeddedTag); err != nil {
 		return "", fmt.Errorf("build embedded base image: %w", err)
 	}
@@ -448,7 +448,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		return base, nil
 	}
 
-	color.New(color.FgCyan).Printf("Loading workspace Dockerfile from %s...\n", ws.Dockerfile)
+	_, _ = color.New(color.FgCyan).Printf("Loading workspace Dockerfile from %s...\n", ws.Dockerfile)
 	dockerfileContent, err := loadDockerfile(ctx, ws.Dockerfile)
 	if err != nil {
 		return "", fmt.Errorf("load workspace dockerfile from %q: %w", ws.Dockerfile, err)
@@ -492,7 +492,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	defer func() { _ = buildCtx.Close() }()
 
 	baseArg := base
-	color.New(color.FgCyan).Printf("Building workspace overlay image...\n")
+	_, _ = color.New(color.FgCyan).Printf("Building workspace overlay image...\n")
 	resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:       []string{overlayTag},
 		BuildArgs:  map[string]*string{"BASE": &baseArg},

@@ -34,7 +34,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 
 	if _, err := os.Stat(composePath); err != nil {
 		if os.IsNotExist(err) {
-			color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
+			_, _ = color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
 			return nil
 		}
 		return fmt.Errorf("stat compose file: %w", err)
@@ -44,16 +44,16 @@ func runDown(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	running, err := client.IsRunning(ctx)
 	if err != nil || !running {
-		color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
+		_, _ = color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
 		return nil
 	}
 
-	color.New(color.FgCyan).Printf("Stopping workspace %s...\n", ws.Name)
+	_, _ = color.New(color.FgCyan).Printf("Stopping workspace %s...\n", ws.Name)
 	if err := client.Down(ctx); err != nil {
 		return fmt.Errorf("stop workspace: %w", err)
 	}
 
-	color.New(color.FgGreen).Printf("Workspace %s stopped\n", ws.Name)
+	_, _ = color.New(color.FgGreen).Printf("Workspace %s stopped\n", ws.Name)
 	return nil
 }
 

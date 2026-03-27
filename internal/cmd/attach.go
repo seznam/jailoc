@@ -57,21 +57,21 @@ func runAttach(cmd *cobra.Command, args []string) error {
 	var attachErr error
 	switch mode {
 	case config.ModeExec:
-		color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
+		_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
 		attachErr = attachExec(attachCtx, client)
 	default:
-		color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
+		_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
 		attachErr = attachOnHost(attachCtx, ws)
 	}
 
 	if errors.Is(attachErr, errUnhealthy) {
-		color.New(color.FgCyan).Fprintf(os.Stderr, "\n--- last %d log lines ---\n", tailLogLines)
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stderr, "\n--- last %d log lines ---\n", tailLogLines)
 		logCtx, logCancel := context.WithTimeout(ctx, tailLogTimeout)
 		defer logCancel()
 		if logErr := client.TailLogs(logCtx, tailLogLines, os.Stderr); logErr != nil {
-			color.New(color.FgYellow).Fprintf(os.Stderr, "failed to retrieve logs: %v\n", logErr)
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "failed to retrieve logs: %v\n", logErr)
 		}
-		color.New(color.FgRed).Fprintf(os.Stderr, "--- container reported unhealthy; see logs above ---\n")
+		_, _ = color.New(color.FgRed).Fprintf(os.Stderr, "--- container reported unhealthy; see logs above ---\n")
 	}
 
 	return attachErr

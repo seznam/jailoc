@@ -34,7 +34,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	if _, err := os.Stat(composePath); err != nil {
 		if os.IsNotExist(err) {
-			color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
+			_, _ = color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
 			return nil
 		}
 		return fmt.Errorf("stat compose file: %w", err)
@@ -49,12 +49,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	if state == "" {
-		color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
+		_, _ = color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
 		return nil
 	}
 
-	color.New(color.FgCyan).Printf("Workspace: %s\n", ws.Name)
-	color.New(color.FgCyan).Printf("Port:      %d\n", ws.Port)
+	_, _ = color.New(color.FgCyan).Printf("Workspace: %s\n", ws.Name)
+	_, _ = color.New(color.FgCyan).Printf("Port:      %d\n", ws.Port)
 
 	switch state {
 	case "running":
@@ -65,21 +65,21 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 		switch health {
 		case "unhealthy":
-			color.New(color.FgCyan).Printf("Status:    ")
-			color.New(color.FgRed).Printf("running (unhealthy)\n")
+			_, _ = color.New(color.FgCyan).Printf("Status:    ")
+			_, _ = color.New(color.FgRed).Printf("running (unhealthy)\n")
 		case "starting":
-			color.New(color.FgCyan).Printf("Status:    ")
-			color.New(color.FgYellow).Printf("running (starting)\n")
+			_, _ = color.New(color.FgCyan).Printf("Status:    ")
+			_, _ = color.New(color.FgYellow).Printf("running (starting)\n")
 		default:
-			color.New(color.FgCyan).Printf("Status:    ")
-			color.New(color.FgGreen).Printf("running\n")
+			_, _ = color.New(color.FgCyan).Printf("Status:    ")
+			_, _ = color.New(color.FgGreen).Printf("running\n")
 		}
 	case "exited":
-		color.New(color.FgCyan).Printf("Status:    ")
-		color.New(color.FgRed).Printf("exited (code %d)\n", exitCode)
+		_, _ = color.New(color.FgCyan).Printf("Status:    ")
+		_, _ = color.New(color.FgRed).Printf("exited (code %d)\n", exitCode)
 	default:
-		color.New(color.FgCyan).Printf("Status:    ")
-		color.New(color.FgYellow).Printf("%s\n", state)
+		_, _ = color.New(color.FgCyan).Printf("Status:    ")
+		_, _ = color.New(color.FgYellow).Printf("%s\n", state)
 	}
 
 	return nil
