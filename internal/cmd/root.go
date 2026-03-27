@@ -23,9 +23,10 @@ var appVersion string
 var remoteFlag, execFlag bool
 
 var rootCmd = &cobra.Command{
-	Use:   "jailoc [path]",
-	Short: "Manage sandboxed OpenCode Docker environments",
-	Args:  cobra.MaximumNArgs(1),
+	Use:          "jailoc [path]",
+	Short:        "Manage sandboxed OpenCode Docker environments",
+	SilenceUsage: true,
+	Args:         cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
@@ -260,25 +261,16 @@ func waitForReady(ctx context.Context, port int, dc *docker.Client) error {
 	ticker := time.NewTicker(readyPollInterval)
 	defer ticker.Stop()
 
-	// Check container state every ~1s (every 5th tick at 200ms interval)
-	// to detect early exits without waiting for the full 60s timeout.
-	const stateCheckInterval = 5
-	tick := 0
-
 	for {
+		state, exitCode, err := dc.ContainerState(ctx)
+		if err == nil && state == "exited" {
+			return fmt.Errorf("container exited with code %d before becoming ready", exitCode)
+		}
+
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out after %s waiting for %s", readyPollTimeout, url)
 		case <-ticker.C:
-			tick++
-
-			if tick%stateCheckInterval == 0 {
-				state, exitCode, err := dc.ContainerState(ctx)
-				if err == nil && state == "exited" {
-					return fmt.Errorf("container exited with code %d before becoming ready", exitCode)
-				}
-			}
-
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				return fmt.Errorf("create readiness request: %w", err)
