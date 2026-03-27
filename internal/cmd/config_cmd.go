@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -35,21 +36,21 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	if mode == "" {
 		mode = "(auto-detect)"
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "Mode: %s\n", mode)
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Mode: %s\n", mode)
 
 	baseDockerfile := cfg.Base.Dockerfile
 	if baseDockerfile == "" {
 		baseDockerfile = "(embedded)"
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "Base Dockerfile: %s\n", baseDockerfile)
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Base Dockerfile: %s\n", baseDockerfile)
 
 	defaultsImage := cfg.Defaults.Image
 	if defaultsImage == "" {
 		defaultsImage = "(not set)"
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "Defaults Image: %s\n", defaultsImage)
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Image: %s\n", defaultsImage)
 
-	_, _ = fmt.Fprintf(os.Stdout, "Defaults Allowed Hosts:\n")
+	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Allowed Hosts:\n")
 	if len(cfg.Defaults.AllowedHosts) == 0 {
 		_, _ = fmt.Fprintf(os.Stdout, "  (none)\n")
 	} else {
