@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.6.1](https://github.com/seznam/jailoc/compare/v1.6.0...v1.6.1) (2026-03-27)
+
+
+### Bug Fixes
+
+* **ci:** update workflow triggers from master to main ([#32](https://github.com/seznam/jailoc/issues/32)) ([d10cc8d](https://github.com/seznam/jailoc/commit/d10cc8db089f6c4021095397334328d51693c4c2))
+* **docs:** recurse into subdirectories when substituting version ([#29](https://github.com/seznam/jailoc/issues/29)) ([67a6e54](https://github.com/seznam/jailoc/commit/67a6e546e096bfc2d17107da8c4dfae96c81fff8))
+* **docs:** recurse into subdirectories when substituting version ([#30](https://github.com/seznam/jailoc/issues/30)) ([4ba6f4c](https://github.com/seznam/jailoc/commit/4ba6f4c55aa4f0799302d858382fc40e008aadd0))
+* narrow .claude mount to transcripts directory only ([#31](https://github.com/seznam/jailoc/issues/31)) ([b3fab09](https://github.com/seznam/jailoc/commit/b3fab092beff5f4c7e20230d446ed4f17b08bb96))
+
 ## [1.6.0](https://github.com/seznam/jailoc/compare/v1.5.0...v1.6.0) (2026-03-26)
 
 
