@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.1](https://github.com/seznam/jailoc/compare/v1.7.0...v1.7.1) (2026-03-27)
+
+
+### Bug Fixes
+
+* **docs:** align default container docs with actual Dockerfile ([#43](https://github.com/seznam/jailoc/issues/43)) ([70e8238](https://github.com/seznam/jailoc/commit/70e82381a181c72ef61ca7f9c8c18aa4caf486a3))
+* **test:** skip Docker-dependent tests when daemon is unavailable ([#42](https://github.com/seznam/jailoc/issues/42)) ([47f3ccb](https://github.com/seznam/jailoc/commit/47f3ccb0cc3ccba3dbe309b1faa64fae7a8705c4))
+
 ## [1.7.0](https://github.com/seznam/jailoc/compare/v1.6.0...v1.7.0) (2026-03-27)
 
 
