@@ -213,9 +213,10 @@ func readLineCtx(ctx context.Context) (string, error) {
 
 	select {
 	case <-ctx.Done():
-		_ = os.Stdin.SetReadDeadline(time.Now())
-		<-ch
-		_ = os.Stdin.SetReadDeadline(time.Time{})
+		if err := os.Stdin.SetReadDeadline(time.Now()); err == nil {
+			<-ch
+			_ = os.Stdin.SetReadDeadline(time.Time{})
+		}
 		return "", ctx.Err()
 	case r := <-ch:
 		return r.line, r.err

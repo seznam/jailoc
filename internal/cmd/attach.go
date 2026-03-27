@@ -65,7 +65,7 @@ func runAttach(cmd *cobra.Command, args []string) error {
 
 	if errors.Is(attachErr, errUnhealthy) {
 		fmt.Fprintf(os.Stderr, "\n--- last %d log lines ---\n", tailLogLines)
-		logCtx, logCancel := context.WithTimeout(context.Background(), tailLogTimeout)
+		logCtx, logCancel := context.WithTimeout(ctx, tailLogTimeout)
 		defer logCancel()
 		if logErr := client.TailLogs(logCtx, tailLogLines, os.Stderr); logErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to retrieve logs: %v\n", logErr)

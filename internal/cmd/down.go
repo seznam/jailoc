@@ -1,15 +1,14 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 var downCmd = &cobra.Command{
@@ -41,14 +40,15 @@ func runDown(cmd *cobra.Command, args []string) error {
 	}
 
 	client := docker.NewClient(composePath, "", ws.Name)
-	running, err := client.IsRunning(context.Background())
+	ctx := cmd.Context()
+	running, err := client.IsRunning(ctx)
 	if err != nil || !running {
 		fmt.Printf("Workspace %s is not running\n", ws.Name)
 		return nil
 	}
 
 	fmt.Printf("Stopping workspace %s...\n", ws.Name)
-	if err := client.Down(context.Background()); err != nil {
+	if err := client.Down(ctx); err != nil {
 		return fmt.Errorf("stop workspace: %w", err)
 	}
 
