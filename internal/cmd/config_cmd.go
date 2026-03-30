@@ -55,7 +55,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (none)\n")
 	} else {
 		for _, host := range cfg.Defaults.AllowedHosts {
-			_, _ = color.New(color.Reset).Fprintf(os.Stdout, "  - %s\n", host)
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", host)
 		}
 	}
 
@@ -64,7 +64,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (none)\n")
 	} else {
 		for _, network := range cfg.Defaults.AllowedNetworks {
-			_, _ = color.New(color.Reset).Fprintf(os.Stdout, "  - %s\n", network)
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", network)
 		}
 	}
 
@@ -73,7 +73,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (none)\n")
 	} else {
 		for _, env := range cfg.Defaults.Env {
-			_, _ = color.New(color.Reset).Fprintf(os.Stdout, "  - %s\n", env)
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", env)
 		}
 	}
 
@@ -82,11 +82,11 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (none)\n")
 	} else {
 		for _, f := range cfg.Defaults.EnvFile {
-			_, _ = color.New(color.Reset).Fprintf(os.Stdout, "  - %s\n", f)
+			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", f)
 		}
 	}
 
-	_, _ = color.New(color.Reset).Fprintf(os.Stdout, "\n")
+	_, _ = fmt.Fprintf(os.Stdout, "\n")
 
 	// Print each workspace
 	for _, name := range names {
@@ -99,7 +99,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, path := range ws.Paths {
-				_, _ = color.New(color.Reset).Fprintf(os.Stdout, "    - %s\n", path)
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", path)
 			}
 		}
 
@@ -108,7 +108,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, host := range ws.AllowedHosts {
-				_, _ = color.New(color.Reset).Fprintf(os.Stdout, "    - %s\n", host)
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", host)
 			}
 		}
 
@@ -117,7 +117,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, network := range ws.AllowedNetworks {
-				_, _ = color.New(color.Reset).Fprintf(os.Stdout, "    - %s\n", network)
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", network)
 			}
 		}
 
@@ -144,7 +144,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, env := range ws.Env {
-				_, _ = color.New(color.Reset).Fprintf(os.Stdout, "    - %s\n", env)
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", env)
 			}
 		}
 
@@ -153,11 +153,11 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, f := range ws.EnvFile {
-				_, _ = color.New(color.Reset).Fprintf(os.Stdout, "    - %s\n", f)
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", f)
 			}
 		}
 
-		_, _ = color.New(color.Reset).Fprintf(os.Stdout, "\n")
+		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}
 
 	_ = ctx // silence unused variable warning

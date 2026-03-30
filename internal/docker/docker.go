@@ -36,6 +36,11 @@ func displayStream(r io.Reader) error {
 // It prints completion (Done) and error events, skipping intermediate progress ticks.
 type progressEventProcessor struct{}
 
+var (
+	progressDoneColor  = color.New(color.FgGreen)
+	progressErrorColor = color.New(color.FgRed)
+)
+
 func (p *progressEventProcessor) Start(_ context.Context, _ string) {}
 func (p *progressEventProcessor) Done(_ string, _ bool)             {}
 
@@ -43,9 +48,9 @@ func (p *progressEventProcessor) On(events ...api.Resource) {
 	for _, e := range events {
 		switch e.Status {
 		case api.Done:
-			_, _ = color.New(color.FgGreen).Printf("  %s %s\n", e.ID, e.Text)
+			_, _ = progressDoneColor.Printf("  %s %s\n", e.ID, e.Text)
 		case api.Error:
-			_, _ = color.New(color.FgRed).Printf("  %s %s: %s\n", e.ID, e.Text, e.Details)
+			_, _ = progressErrorColor.Printf("  %s %s: %s\n", e.ID, e.Text, e.Details)
 		}
 	}
 }
