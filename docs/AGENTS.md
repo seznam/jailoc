@@ -77,3 +77,4 @@ docs/
 - When a code change affects user-facing behaviour, update **all** docs that describe it
 - Reference pages must stay in sync with code — field names, defaults, validation rules
 - If a how-to references a feature that changed, verify the steps still work
+- When adding, removing, or renaming a doc page, update `docs/llms.txt` — it lists all pages with descriptions following the [llmstxt.org](https://llmstxt.org/) spec

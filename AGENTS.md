@@ -111,3 +111,5 @@ When adding or changing user-facing features, update the corresponding docs in `
 - `docs/explanation/` — understanding-oriented context (overview, container architecture, network isolation, access modes)
 
 Keep docs in sync with code changes — a feature without updated docs is incomplete.
+
+`docs/llms.txt` is an [llmstxt.org](https://llmstxt.org/) file listing all doc pages with descriptions. When adding, removing, or renaming a doc page, update `llms.txt` to match.
