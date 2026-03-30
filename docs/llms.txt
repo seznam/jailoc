@@ -1,0 +1,40 @@
+# jailoc
+
+> jailoc is a Go CLI tool that manages sandboxed Docker Compose environments for headless OpenCode coding agents. Each workspace gets isolated containers with network restrictions, privilege dropping, and bind-mounted project paths.
+
+Key facts:
+
+- jailoc runs two containers per workspace: an `opencode` container (the agent, UID 1000, capabilities dropped) and a `dind` sidecar (isolated Docker daemon)
+- Private networks (RFC 1918, link-local, CGNAT) are blocked by default via iptables; you allowlist specific hosts and CIDR ranges
+- Image resolution follows a 5-step cascade: workspace image → defaults image + workspace overlay → defaults image direct → base Dockerfile → embedded fallback
+- Config lives at `~/.config/jailoc/config.toml` (TOML); compose files are generated to `~/.cache/jailoc/{workspace}/docker-compose.yml`
+- Port assignment: `4096 + alphabetical index` among all configured workspaces
+
+## Reference
+
+- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): All subcommands (`up`, `down`, `attach`, `logs`, `status`, `add`, `config`) with flags and usage
+- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field — `[base]`, `[defaults]`, `[workspaces.<name>]` — types, defaults, validation rules, merge semantics
+- [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): 5-step resolution cascade with step details, triggers, constraints, and image tag summary
+- [Default Image Contents](https://seznam.github.io/jailoc/reference/default-image/): Tools and runtimes shipped in the embedded base image
+- [Overlay Compatibility](https://seznam.github.io/jailoc/reference/overlay-compatibility/): Rules for workspace Dockerfile overlays
+
+## How-to Guides
+
+- [Installation](https://seznam.github.io/jailoc/how-to/installation/): go install and pre-built binaries
+- [Workspace Configuration](https://seznam.github.io/jailoc/how-to/workspace-configuration/): Add workspaces, set paths, per-workspace options
+- [Custom Images](https://seznam.github.io/jailoc/how-to/custom-images/): URL Dockerfile presets, local Dockerfiles, build context
+- [Network Access](https://seznam.github.io/jailoc/how-to/network-access/): allowed_hosts, allowed_networks, verifying firewall rules
+- [Access Modes](https://seznam.github.io/jailoc/how-to/access-modes/): Remote vs exec mode configuration
+
+## Explanation
+
+- [Overview](https://seznam.github.io/jailoc/explanation/overview/): Startup sequence, package layout, two-container rationale
+- [Threat Model](https://seznam.github.io/jailoc/explanation/threat-model/): What jailoc protects against and what it does not
+- [Container Architecture](https://seznam.github.io/jailoc/explanation/container-architecture/): Two-container design, volumes, entrypoint phases, DinD sidecar
+- [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): iptables rules, security model, allowed traffic flow
+
+## Optional
+
+- [Getting Started Tutorial](https://seznam.github.io/jailoc/tutorials/getting-started/): Step-by-step walkthrough for first-time users
+- [Development Guide](https://seznam.github.io/jailoc/development/): Build from source, run tests, CI pipeline, contribution conventions
+- [Access Modes Explanation](https://seznam.github.io/jailoc/explanation/access-modes/): Why two connection modes exist and how they differ
