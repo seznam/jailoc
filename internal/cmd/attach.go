@@ -27,6 +27,27 @@ var attachCmd = &cobra.Command{
 	RunE:  runAttach,
 }
 
+var attachDirFlag string
+
+func attachHostArgs(serverURL, password, dir string) []string {
+	args := []string{"attach", serverURL}
+	if password != "" {
+		args = append(args, "--password", password)
+	}
+	if dir != "" {
+		args = append(args, "--dir", dir)
+	}
+	return args
+}
+
+func attachExecArgs(serverURL, dir string) []string {
+	args := []string{"opencode", "attach", serverURL}
+	if dir != "" {
+		args = append(args, "--dir", dir)
+	}
+	return args
+}
+
 func runAttach(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -58,10 +79,10 @@ func runAttach(cmd *cobra.Command, args []string) error {
 	switch mode {
 	case config.ModeExec:
 		_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-		attachErr = attachExec(attachCtx, client)
+		attachErr = attachExec(attachCtx, client, attachDirFlag)
 	default:
 		_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
-		attachErr = attachOnHost(attachCtx, ws)
+		attachErr = attachOnHost(attachCtx, ws, attachDirFlag)
 	}
 
 	if errors.Is(attachErr, errUnhealthy) {
@@ -77,19 +98,15 @@ func runAttach(cmd *cobra.Command, args []string) error {
 	return attachErr
 }
 
-func attachOnHost(ctx context.Context, ws *workspace.Resolved) error {
+func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string) error {
 	binary, err := config.ResolveBinary()
 	if err != nil {
 		return fmt.Errorf("resolve opencode binary: %w", err)
 	}
 
 	serverArg := fmt.Sprintf("http://localhost:%d", ws.Port)
-	args := []string{"attach", serverArg}
-
-	if password := os.Getenv("OPENCODE_SERVER_PASSWORD"); password != "" {
-		args = append(args, "--password", password)
-	}
-
+	password := os.Getenv("OPENCODE_SERVER_PASSWORD")
+	args := attachHostArgs(serverArg, password, dir)
 	cmd := exec.Command(binary, args...) //nolint:gosec // binary name is from ResolveBinary, args are controlled
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -104,7 +121,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved) error {
 	return attachResult(ctx, err)
 }
 
-func attachExec(ctx context.Context, client *docker.Client) error {
+func attachExec(ctx context.Context, client *docker.Client, dir string) error {
 	fd := int(os.Stdin.Fd()) //nolint:gosec // Fd() fits in int on all supported platforms
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -125,7 +142,7 @@ func attachExec(ctx context.Context, client *docker.Client) error {
 	}()
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
-	err = client.Exec(ctx, []string{"opencode", "attach", serverURL}, os.Stdin, os.Stdout, os.Stderr)
+	err = client.Exec(ctx, attachExecArgs(serverURL, dir), os.Stdin, os.Stdout, os.Stderr)
 	return attachResult(ctx, err)
 }
 
@@ -239,4 +256,5 @@ func runCommandWithContext(ctx context.Context, cmd *exec.Cmd, terminate func() 
 
 func init() {
 	rootCmd.AddCommand(attachCmd)
+	attachCmd.Flags().StringVar(&attachDirFlag, "dir", "", "directory to open in opencode")
 }

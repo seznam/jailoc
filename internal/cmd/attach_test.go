@@ -10,6 +10,105 @@ import (
 	"time"
 )
 
+func TestAttachHostArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		serverURL string
+		password  string
+		dir       string
+		want      []string
+	}{
+		{
+			name:      "no dir no password",
+			serverURL: "http://localhost:4096",
+			password:  "",
+			dir:       "",
+			want:      []string{"attach", "http://localhost:4096"},
+		},
+		{
+			name:      "dir only",
+			serverURL: "http://localhost:4096",
+			password:  "",
+			dir:       "/home/user/project/sub",
+			want:      []string{"attach", "http://localhost:4096", "--dir", "/home/user/project/sub"},
+		},
+		{
+			name:      "password only",
+			serverURL: "http://localhost:4096",
+			password:  "secret",
+			dir:       "",
+			want:      []string{"attach", "http://localhost:4096", "--password", "secret"},
+		},
+		{
+			name:      "both dir and password",
+			serverURL: "http://localhost:4096",
+			password:  "secret",
+			dir:       "/path",
+			want:      []string{"attach", "http://localhost:4096", "--password", "secret", "--dir", "/path"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := attachHostArgs(tt.serverURL, tt.password, tt.dir)
+			if !slicesEqual(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAttachExecArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		serverURL string
+		dir       string
+		want      []string
+	}{
+		{
+			name:      "no dir",
+			serverURL: "http://localhost:4096",
+			dir:       "",
+			want:      []string{"opencode", "attach", "http://localhost:4096"},
+		},
+		{
+			name:      "with dir",
+			serverURL: "http://localhost:4096",
+			dir:       "/home/user/project",
+			want:      []string{"opencode", "attach", "http://localhost:4096", "--dir", "/home/user/project"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := attachExecArgs(tt.serverURL, tt.dir)
+			if !slicesEqual(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestMonitorAttach(t *testing.T) {
 	t.Parallel()
 
