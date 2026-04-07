@@ -52,6 +52,25 @@ The flag takes precedence over both the config value and auto-detection.
 
 ---
 
+## Open a specific directory
+
+By default, `opencode attach` opens the workspace root. Use `--dir` to open a subdirectory instead:
+
+```bash
+jailoc attach --dir /home/you/projects/myproject/src
+```
+
+The root `jailoc` command does this automatically — it resolves the current working directory and forwards it as `--dir`:
+
+```bash
+cd ~/projects/myproject/src
+jailoc    # attaches with --dir pointing at src/
+```
+
+Because workspace paths are identity-mounted (the host path and the container path are the same), the absolute host path works inside the container as-is.
+
+---
+
 ## Understand attach behavior during rebuilds or restarts
 
 Both modes fail fast if the `opencode` container stops or is replaced while you are attached.

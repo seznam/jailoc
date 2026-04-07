@@ -44,7 +44,7 @@ Here's what happens on first run:
 3. **Container start** — jailoc renders a `docker-compose.yml` from its embedded template and starts the `opencode` and `dind` containers.
 4. **Attach** — once the containers are healthy, jailoc attaches your local OpenCode TUI to the agent running inside.
 
-> **Tip:** Your project directory is bind-mounted at its original path inside the container. If your project lives at `/home/you/myproject`, the agent sees it at the same path.
+> **Tip:** Your project directory is bind-mounted at its original path inside the container. If your project lives at `/home/you/myproject`, the agent sees it at the same path. Running `jailoc` from a subdirectory (e.g. `~/myproject/src`) opens that subdirectory in the agent instead of the workspace root.
 
 ## Use subcommands directly
 
