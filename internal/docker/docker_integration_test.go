@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/image"
 	dockerclient "github.com/moby/moby/client"
 
 	"github.com/seznam/jailoc/internal/config"
@@ -90,6 +91,37 @@ func TestBuildOverlayImageDefaultBuildContext(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "write temporary workspace Dockerfile") {
 		t.Fatalf("unexpected Dockerfile temp write error: %v", err)
+	}
+}
+
+func TestBuildEmbeddedImage(t *testing.T) {
+	t.Parallel()
+	skipWithoutDocker(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	cli, err := dockerclient.New(dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatalf("create Docker client: %v", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	const tag = "jailoc-base:integration-test"
+	if err := buildEmbeddedImage(ctx, cli, tag); err != nil {
+		t.Fatalf("buildEmbeddedImage: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = cli.ImageRemove(context.Background(), tag, image.RemoveOptions{Force: true})
+	})
+
+	inspect, _, err := cli.ImageInspectWithRaw(ctx, tag)
+	if err != nil {
+		t.Fatalf("inspect built image %q: %v", tag, err)
+	}
+	if inspect.ID == "" {
+		t.Fatal("built image has empty ID")
 	}
 }
 
