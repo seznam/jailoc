@@ -5,6 +5,7 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -441,4 +442,69 @@ func isImagePullOrAuthFailure(output string) bool {
 		strings.Contains(lower, "unauthorized") ||
 		strings.Contains(lower, "denied") ||
 		strings.Contains(lower, "resolve base image")
+}
+
+func TestHealthEndpointAccessible(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if !dockerAvailable(ctx) {
+		t.Skip("requires Docker daemon")
+	}
+
+	home := testHome(t)
+	workspaceDir := t.TempDir()
+
+	content := fmt.Sprintf(`[base]
+
+[workspaces.default]
+paths = [%q]
+`, workspaceDir)
+	if err := os.WriteFile(filepath.Join(home, ".config", "jailoc", "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	t.Setenv("OPENCODE_SERVER_PASSWORD", "integration-test-password")
+
+	upOut, err := runJailoc(ctx, home, "up")
+	if err != nil {
+		if isImagePullOrAuthFailure(upOut) {
+			t.Skip("requires accessible image registry")
+		}
+		t.Fatalf("jailoc up: %v\noutput: %s", err, upOut)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := "http://localhost:4096/global/health"
+	var lastStatus int
+	var lastErr error
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if reqErr != nil {
+			t.Fatalf("create request: %v", reqErr)
+		}
+		req.SetBasicAuth("opencode", "integration-test-password")
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			lastErr = doErr
+			t.Logf("health check error (retrying): %v", doErr)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		_ = resp.Body.Close()
+		lastStatus = resp.StatusCode
+		if resp.StatusCode == http.StatusOK {
+			if dOut, dErr := runJailoc(ctx, home, "down"); dErr != nil {
+				t.Fatalf("jailoc down: %v\noutput:\n%s", dErr, dOut)
+			}
+			return
+		}
+		t.Logf("health check status %d (retrying)", resp.StatusCode)
+		time.Sleep(5 * time.Second)
+	}
+	if dOut, dErr := runJailoc(ctx, home, "down"); dErr != nil {
+		t.Fatalf("jailoc down: %v\noutput:\n%s", dErr, dOut)
+	}
+	t.Fatalf("health endpoint not accessible after 90s: last status %d, last error: %v", lastStatus, lastErr)
 }
