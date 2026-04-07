@@ -54,7 +54,12 @@ func runAttach(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	ws, err := workspace.Resolve(cfg, workspaceFlag)
+	name := workspaceFlag
+	if len(args) > 0 {
+		name = args[0]
+	}
+
+	ws, err := workspace.Resolve(cfg, name)
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
@@ -256,5 +261,5 @@ func runCommandWithContext(ctx context.Context, cmd *exec.Cmd, terminate func() 
 
 func init() {
 	rootCmd.AddCommand(attachCmd)
-	attachCmd.Flags().StringVar(&attachDirFlag, "dir", "", "directory to open in opencode")
+	attachCmd.Flags().StringVar(&attachDirFlag, "dir", "", "directory to open in opencode (forwarded as --dir to opencode attach)")
 }
