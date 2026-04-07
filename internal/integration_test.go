@@ -459,7 +459,6 @@ func TestHealthEndpointAccessible(t *testing.T) {
 
 [workspaces.default]
 paths = [%q]
-env = ["OPENCODE_SERVER_PASSWORD=integration-test-password"]
 `, workspaceDir)
 	if err := os.WriteFile(filepath.Join(home, ".config", "jailoc", "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
