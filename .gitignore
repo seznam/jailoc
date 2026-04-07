@@ -6,3 +6,5 @@ womething
 site/
 public/
 coverage.out
+.idea/
+iTerm2
