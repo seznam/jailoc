@@ -481,25 +481,31 @@ env = ["OPENCODE_SERVER_PASSWORD=integration-test-password"]
 	var lastErr error
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			t.Fatalf("create request: %v", err)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if reqErr != nil {
+			t.Fatalf("create request: %v", reqErr)
 		}
 		req.SetBasicAuth("opencode", "integration-test-password")
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			t.Logf("health check error (retrying): %v", err)
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			lastErr = doErr
+			t.Logf("health check error (retrying): %v", doErr)
 			time.Sleep(5 * time.Second)
 			continue
 		}
 		_ = resp.Body.Close()
 		lastStatus = resp.StatusCode
 		if resp.StatusCode == http.StatusOK {
+			if dOut, dErr := runJailoc(ctx, home, "down"); dErr != nil {
+				t.Fatalf("jailoc down: %v\noutput:\n%s", dErr, dOut)
+			}
 			return
 		}
 		t.Logf("health check status %d (retrying)", resp.StatusCode)
 		time.Sleep(5 * time.Second)
+	}
+	if dOut, dErr := runJailoc(ctx, home, "down"); dErr != nil {
+		t.Fatalf("jailoc down: %v\noutput:\n%s", dErr, dOut)
 	}
 	t.Fatalf("health endpoint not accessible after 90s: last status %d, last error: %v", lastStatus, lastErr)
 }
