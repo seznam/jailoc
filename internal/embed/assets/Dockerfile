@@ -16,11 +16,19 @@
 # Pinned versions — Renovate comments tell the bot which datasource to poll
 # for automated version-bump PRs.
 # renovate: datasource=node-version depName=node versioning=node
-ARG NODE_VERSION=24.14.0
+ARG NODE_VERSION=24.14.1
 # renovate: datasource=npm depName=yaml-language-server
 ARG YAML_LS_VERSION=1.21.0
+# renovate: datasource=npm depName=typescript-language-server
+ARG TS_LS_VERSION=5.1.3
+# renovate: datasource=npm depName=typescript
+ARG TS_VERSION=6.0.2
+# renovate: datasource=npm depName=pyright
+ARG PYRIGHT_VERSION=1.1.408
+# renovate: datasource=npm depName=bash-language-server
+ARG BASH_LS_VERSION=5.6.0
 # renovate: datasource=github-releases depName=sst/opencode
-ARG OPENCODE_VERSION=v1.2.27
+ARG OPENCODE_VERSION=v1.3.17
 
 # =============================================================================
 # Builder stage — compile language servers and install npm modules.
@@ -46,12 +54,16 @@ RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
 # Language servers (npm) — OpenCode uses these for code intelligence
 # (go-to-definition, diagnostics, completions) across languages.
 ARG YAML_LS_VERSION
+ARG TS_LS_VERSION
+ARG TS_VERSION
+ARG PYRIGHT_VERSION
+ARG BASH_LS_VERSION
 RUN npm install -g \
     yaml-language-server@${YAML_LS_VERSION} \
-    typescript-language-server \
-    typescript \
-    pyright \
-    bash-language-server
+    typescript-language-server@${TS_LS_VERSION} \
+    typescript@${TS_VERSION} \
+    pyright@${PYRIGHT_VERSION} \
+    bash-language-server@${BASH_LS_VERSION}
 
 # =============================================================================
 # Final stage — minimal runtime image with only what the agent needs.
