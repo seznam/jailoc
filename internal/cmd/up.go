@@ -11,6 +11,7 @@ import (
 	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
+	"github.com/seznam/jailoc/internal/embed"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -68,6 +69,13 @@ func runUp(ctx context.Context) error {
 
 	if err := config.WriteAllowedFiles(ws.Name, cfg); err != nil {
 		return fmt.Errorf("write allowed files for workspace %q: %w", ws.Name, err)
+	}
+
+	// Write entrypoint.sh to cache dir for bind-mount into container.
+	// Uses 0o755 (not the usual 0o600) because Docker bind-mounts preserve
+	// host permissions and the script must be executable inside the container.
+	if err := os.WriteFile(filepath.Join(cacheDir, "entrypoint.sh"), embed.Entrypoint(), 0o755); err != nil {
+		return fmt.Errorf("write entrypoint: %w", err)
 	}
 
 	params := compose.ComposeParams{

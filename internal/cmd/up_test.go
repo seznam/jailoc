@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/seznam/jailoc/internal/embed"
 )
 
 func TestIsComposeFileMissing(t *testing.T) {
@@ -199,5 +202,33 @@ func TestResolveImageStrategy(t *testing.T) {
 				t.Fatalf("resolveImageStrategy(%q, %q, %q) image = %q, want %q", tc.wsImage, tc.defaultsImage, tc.wsDockerfile, gotImage, tc.wantImage)
 			}
 		})
+	}
+}
+
+func TestWriteEntrypointToCache(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "entrypoint.sh"), embed.Entrypoint(), 0o755); err != nil {
+		t.Fatalf("os.WriteFile failed: %v", err)
+	}
+
+	entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
+	info, err := os.Stat(entrypointPath)
+	if err != nil {
+		t.Fatalf("os.Stat(%q) failed: %v", entrypointPath, err)
+	}
+
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("entrypoint.sh permissions %o should have at least one executable bit set", info.Mode()&0o777)
+	}
+
+	data, err := os.ReadFile(entrypointPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) failed: %v", entrypointPath, err)
+	}
+	if !bytes.Equal(data, embed.Entrypoint()) {
+		t.Fatalf("entrypoint.sh content does not match embedded asset")
 	}
 }
