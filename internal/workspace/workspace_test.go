@@ -96,6 +96,121 @@ func TestResolveFromCWDNoMatch(t *testing.T) {
 	}
 }
 
+func TestResolveFromCWD(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		cfg             *config.Config
+		cwd             string
+		wantWorkspace   string
+		wantMatchedPath string
+		wantErrContains string
+	}{
+		{
+			name: "overlapping paths uses longest prefix",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"broad": {
+						Paths: []string{"/a/b"},
+					},
+					"specific": {
+						Paths: []string{"/a/b/c"},
+					},
+				},
+			},
+			cwd:             "/a/b/c/d",
+			wantWorkspace:   "specific",
+			wantMatchedPath: "/a/b/c",
+		},
+		{
+			name: "multiple paths per workspace picks longest matched path",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"multi": {
+						Paths: []string{"/a/b", "/a/b/c/d"},
+					},
+				},
+			},
+			cwd:             "/a/b/c/d/e",
+			wantWorkspace:   "multi",
+			wantMatchedPath: "/a/b/c/d",
+		},
+		{
+			name: "equal length tiebreaker uses alphabetical workspace name",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"beta": {
+						Paths: []string{"/a/b"},
+					},
+					"alpha": {
+						Paths: []string{"/a/b"},
+					},
+				},
+			},
+			cwd:             "/a/b/c",
+			wantWorkspace:   "alpha",
+			wantMatchedPath: "/a/b",
+		},
+		{
+			name: "single match no overlap unchanged",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"alpha": {
+						Paths: []string{"/x/y"},
+					},
+					"beta": {
+						Paths: []string{"/a/b"},
+					},
+				},
+			},
+			cwd:             "/x/y/z",
+			wantWorkspace:   "alpha",
+			wantMatchedPath: "/x/y",
+		},
+		{
+			name: "no-match",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"default": {
+						Paths: []string{"/home/user/projects"},
+					},
+				},
+			},
+			cwd:             "/unrelated/path",
+			wantErrContains: "no workspace matches",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			resolved, matchedPath, err := workspace.ResolveFromCWD(tt.cfg, tt.cwd)
+
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q", tt.wantErrContains)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("ResolveFromCWD returned error: %v", err)
+			}
+			if resolved.Name != tt.wantWorkspace {
+				t.Fatalf("workspace mismatch: got %q want %q", resolved.Name, tt.wantWorkspace)
+			}
+			if matchedPath != tt.wantMatchedPath {
+				t.Fatalf("matched path mismatch: got %q want %q", matchedPath, tt.wantMatchedPath)
+			}
+		})
+	}
+}
+
 func TestPortAllocationAlphabetical(t *testing.T) {
 	t.Parallel()
 
