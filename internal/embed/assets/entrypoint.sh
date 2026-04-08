@@ -57,11 +57,11 @@ iptables -A OUTPUT -d 100.64.0.0/10 -j DROP
 chown -R 1000:1000 /home/agent/.local /home/agent/.cache /home/agent/.claude
 
 if [ -S /run/ssh-agent.sock ]; then
-  chown 1000:1000 /run/ssh-agent.sock
+  chown 1000:1000 /run/ssh-agent.sock 2>/dev/null || true
 fi
 
 if [ -d /home/agent/.ssh ]; then
-  chown -R 1000:1000 /home/agent/.ssh
+  chown 1000:1000 /home/agent/.ssh
 fi
 
 exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --no-new-privs -- env HOME=/home/agent "$@"
