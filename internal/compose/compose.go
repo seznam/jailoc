@@ -19,6 +19,9 @@ type ComposeParams struct {
 	AllowedNetworks  []string
 	OpenCodePassword string
 	Env              []string
+	SSHAuthSock      string // host socket path to mount, empty = disabled
+	GitConfig        string // host gitconfig path to mount, empty = disabled
+	SSHKnownHosts    string // host known_hosts path to mount, empty = disabled
 }
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {

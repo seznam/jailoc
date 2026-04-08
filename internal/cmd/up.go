@@ -84,6 +84,9 @@ func runUp(ctx context.Context) error {
 		AllowedNetworks:  ws.AllowedNetworks,
 		OpenCodePassword: os.Getenv("OPENCODE_SERVER_PASSWORD"),
 		Env:              ws.Env,
+		SSHAuthSock:      resolveSSHAuthSock(ws.SSHAuthSock),
+		GitConfig:        resolveGitConfig(ws.GitConfig),
+		SSHKnownHosts:    resolveSSHKnownHosts(ws.SSHKnownHosts),
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Generating compose configuration...\n")
@@ -211,6 +214,60 @@ func writeEntrypoint(cacheDir string) error {
 		return fmt.Errorf("chmod entrypoint: %w", err)
 	}
 	return nil
+}
+
+// dockerDesktopSSHSock is the magic socket path used by Docker Desktop and OrbStack.
+const dockerDesktopSSHSock = "/run/host-services/ssh-auth.sock"
+
+var osStat = os.Stat
+
+func resolveSSHAuthSock(enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	if _, err := osStat(dockerDesktopSSHSock); err == nil {
+		return dockerDesktopSSHSock
+	}
+	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+		if _, err := osStat(sock); err == nil {
+			return sock
+		}
+	}
+	return ""
+}
+
+func resolveGitConfig(enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Join(home, ".gitconfig")
+	if _, err := osStat(path); err == nil {
+		return path
+	}
+	path = filepath.Join(home, ".config", "git", "config")
+	if _, err := osStat(path); err == nil {
+		return path
+	}
+	return ""
+}
+
+func resolveSSHKnownHosts(enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Join(home, ".ssh", "known_hosts")
+	if _, err := osStat(path); err == nil {
+		return path
+	}
+	return ""
 }
 
 func init() {

@@ -19,6 +19,15 @@ services:
       - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode
       - opencode-cache-{{.WorkspaceName}}:/home/agent/.cache
       - dind-certs-client:/certs/client:ro
+{{- if .SSHAuthSock}}
+      - {{.SSHAuthSock}}:/run/ssh-agent.sock
+{{- end}}
+{{- if .GitConfig}}
+      - {{.GitConfig}}:/home/agent/.gitconfig:ro
+{{- end}}
+{{- if .SSHKnownHosts}}
+      - {{.SSHKnownHosts}}:/home/agent/.ssh/known_hosts:ro
+{{- end}}
     environment:
       - OPENCODE_LOG=debug
       - OPENCODE_SERVER_PASSWORD={{.OpenCodePassword}}
@@ -26,6 +35,9 @@ services:
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_CERT_PATH=/certs/client
       - DOCKER_TLS_VERIFY=1
+{{- if .SSHAuthSock}}
+      - SSH_AUTH_SOCK=/run/ssh-agent.sock
+{{- end}}
 {{- range .Env}}
       - "{{.}}"
 {{- end}}

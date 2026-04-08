@@ -31,6 +31,9 @@ const (
 # env_file = ["/path/to/.env"]
 # allowed_hosts = ["example.com"]
 # allowed_networks = ["10.0.0.0/8"]
+# ssh_auth_sock = false
+# git_config = false
+# ssh_known_hosts = false
 
 [workspaces.default]
 paths = []
@@ -41,6 +44,9 @@ paths = []
 # env_file = ["/path/to/.env"]
 # build_context = ""
 # dockerfile = ""
+# ssh_auth_sock = false
+# git_config = false
+# ssh_known_hosts = false
 `
 )
 
@@ -58,6 +64,7 @@ var reservedEnvKeys = map[string]bool{
 	"DOCKER_TLS_CERTDIR":       true,
 	"DOCKER_CERT_PATH":         true,
 	"DOCKER_TLS_VERIFY":        true,
+	"SSH_AUTH_SOCK":            true,
 }
 
 var forbiddenMountPrefixes = []string{
@@ -96,6 +103,9 @@ type Defaults struct {
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
 	Image           string   `toml:"image"`
+	SSHAuthSock     bool     `toml:"ssh_auth_sock"`
+	GitConfig       bool     `toml:"git_config"`
+	SSHKnownHosts   bool     `toml:"ssh_known_hosts"`
 }
 
 type Workspace struct {
@@ -107,6 +117,9 @@ type Workspace struct {
 	BuildContext    string   `toml:"build_context"`
 	Dockerfile      string   `toml:"dockerfile"`
 	Image           string   `toml:"image"`
+	SSHAuthSock     *bool    `toml:"ssh_auth_sock"`
+	GitConfig       *bool    `toml:"git_config"`
+	SSHKnownHosts   *bool    `toml:"ssh_known_hosts"`
 }
 
 func ConfigDir() string {

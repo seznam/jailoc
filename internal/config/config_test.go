@@ -1723,6 +1723,246 @@ func TestValidateImageAndDockerfileMutualExclusivity(t *testing.T) {
 	}
 }
 
+func TestValidateEnvReservedSSHAuthSock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Defaults: Defaults{Env: []string{"SSH_AUTH_SOCK=/tmp/sock"}},
+		}
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected error for reserved SSH_AUTH_SOCK key")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected 'reserved' in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "SSH_AUTH_SOCK") {
+			t.Fatalf("expected 'SSH_AUTH_SOCK' in error, got: %v", err)
+		}
+	})
+
+	t.Run("workspace", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"myws": {Env: []string{"SSH_AUTH_SOCK=/tmp/sock"}},
+			},
+		}
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected error for reserved SSH_AUTH_SOCK key")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected 'reserved' in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "myws") {
+			t.Fatalf("expected workspace name in error, got: %v", err)
+		}
+	})
+}
+
+func TestLoadSSHGitFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		tomlContent string
+		checkFn     func(*testing.T, *Config)
+	}{
+		{
+			name: "defaults ssh_auth_sock true",
+			tomlContent: `
+[defaults]
+ssh_auth_sock = true
+
+[workspaces.default]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if !cfg.Defaults.SSHAuthSock {
+					t.Fatal("expected defaults.ssh_auth_sock = true")
+				}
+			},
+		},
+		{
+			name: "defaults git_config true",
+			tomlContent: `
+[defaults]
+git_config = true
+
+[workspaces.default]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if !cfg.Defaults.GitConfig {
+					t.Fatal("expected defaults.git_config = true")
+				}
+			},
+		},
+		{
+			name: "defaults ssh_known_hosts true",
+			tomlContent: `
+[defaults]
+ssh_known_hosts = true
+
+[workspaces.default]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if !cfg.Defaults.SSHKnownHosts {
+					t.Fatal("expected defaults.ssh_known_hosts = true")
+				}
+			},
+		},
+		{
+			name: "defaults all false by default",
+			tomlContent: `
+[workspaces.default]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.SSHAuthSock {
+					t.Fatal("expected defaults.ssh_auth_sock = false by default")
+				}
+				if cfg.Defaults.GitConfig {
+					t.Fatal("expected defaults.git_config = false by default")
+				}
+				if cfg.Defaults.SSHKnownHosts {
+					t.Fatal("expected defaults.ssh_known_hosts = false by default")
+				}
+			},
+		},
+		{
+			name: "workspace ssh_auth_sock pointer set true",
+			tomlContent: `
+[workspaces.default]
+paths = ["/data"]
+ssh_auth_sock = true
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				ws := cfg.Workspaces["default"]
+				if ws.SSHAuthSock == nil || !*ws.SSHAuthSock {
+					t.Fatal("expected workspace.ssh_auth_sock = true")
+				}
+			},
+		},
+		{
+			name: "workspace ssh_auth_sock pointer set false",
+			tomlContent: `
+[workspaces.default]
+paths = ["/data"]
+ssh_auth_sock = false
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				ws := cfg.Workspaces["default"]
+				if ws.SSHAuthSock == nil {
+					t.Fatal("expected workspace.ssh_auth_sock to be non-nil")
+				}
+				if *ws.SSHAuthSock {
+					t.Fatal("expected workspace.ssh_auth_sock = false")
+				}
+			},
+		},
+		{
+			name: "workspace ssh_auth_sock pointer nil when omitted",
+			tomlContent: `
+[workspaces.default]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				ws := cfg.Workspaces["default"]
+				if ws.SSHAuthSock != nil {
+					t.Fatalf("expected workspace.ssh_auth_sock = nil, got %v", *ws.SSHAuthSock)
+				}
+				if ws.GitConfig != nil {
+					t.Fatalf("expected workspace.git_config = nil, got %v", *ws.GitConfig)
+				}
+				if ws.SSHKnownHosts != nil {
+					t.Fatalf("expected workspace.ssh_known_hosts = nil, got %v", *ws.SSHKnownHosts)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			writeFile(t, path, tt.tomlContent)
+
+			cfg, err := LoadFrom(path)
+			if err != nil {
+				t.Fatalf("LoadFrom failed: %v", err)
+			}
+
+			tt.checkFn(t, cfg)
+		})
+	}
+}
+
+func TestRoundTripSSHGitFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `
+[defaults]
+ssh_auth_sock = true
+git_config = true
+ssh_known_hosts = false
+
+[workspaces.default]
+paths = ["/data"]
+ssh_auth_sock = false
+git_config = true
+`)
+
+	first, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("initial LoadFrom failed: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(first); err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+
+	path2 := filepath.Join(dir, "config2.toml")
+	writeFile(t, path2, buf.String())
+
+	second, err := LoadFrom(path2)
+	if err != nil {
+		t.Fatalf("second LoadFrom failed: %v", err)
+	}
+
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("round-trip mismatch:\nfirst=%#v\nsecond=%#v", first, second)
+	}
+
+	if !first.Defaults.SSHAuthSock {
+		t.Fatal("expected defaults.ssh_auth_sock = true after round-trip")
+	}
+	if !first.Defaults.GitConfig {
+		t.Fatal("expected defaults.git_config = true after round-trip")
+	}
+	if first.Defaults.SSHKnownHosts {
+		t.Fatal("expected defaults.ssh_known_hosts = false after round-trip")
+	}
+
+	ws := first.Workspaces["default"]
+	if ws.SSHAuthSock == nil || *ws.SSHAuthSock {
+		t.Fatal("expected workspace.ssh_auth_sock = false after round-trip")
+	}
+	if ws.GitConfig == nil || !*ws.GitConfig {
+		t.Fatal("expected workspace.git_config = true after round-trip")
+	}
+	if ws.SSHKnownHosts != nil {
+		t.Fatal("expected workspace.ssh_known_hosts = nil after round-trip")
+	}
+}
+
 func TestLoadImageFields(t *testing.T) {
 	t.Parallel()
 

@@ -609,6 +609,159 @@ func TestResolveEnvFileDedupPaths(t *testing.T) {
 	}
 }
 
+func TestResolveSSHGitFieldsFromDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			SSHAuthSock:   true,
+			GitConfig:     true,
+			SSHKnownHosts: true,
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths: []string{"/tmp"},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	if !resolved.SSHAuthSock {
+		t.Fatal("expected SSHAuthSock = true from defaults")
+	}
+	if !resolved.GitConfig {
+		t.Fatal("expected GitConfig = true from defaults")
+	}
+	if !resolved.SSHKnownHosts {
+		t.Fatal("expected SSHKnownHosts = true from defaults")
+	}
+}
+
+func TestResolveSSHGitFieldsDefaultsFalse(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths: []string{"/tmp"},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	if resolved.SSHAuthSock {
+		t.Fatal("expected SSHAuthSock = false by default")
+	}
+	if resolved.GitConfig {
+		t.Fatal("expected GitConfig = false by default")
+	}
+	if resolved.SSHKnownHosts {
+		t.Fatal("expected SSHKnownHosts = false by default")
+	}
+}
+
+func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
+	t.Parallel()
+
+	boolTrue := true
+	boolFalse := false
+
+	tests := []struct {
+		name              string
+		defaultSSH        bool
+		workspaceSSH      *bool
+		expectedSSH       bool
+		defaultGit        bool
+		workspaceGit      *bool
+		expectedGit       bool
+		defaultKnownHosts bool
+		workspaceKnown    *bool
+		expectedKnown     bool
+	}{
+		{
+			name:              "workspace overrides defaults true to false",
+			defaultSSH:        true,
+			workspaceSSH:      &boolFalse,
+			expectedSSH:       false,
+			defaultGit:        true,
+			workspaceGit:      &boolFalse,
+			expectedGit:       false,
+			defaultKnownHosts: true,
+			workspaceKnown:    &boolFalse,
+			expectedKnown:     false,
+		},
+		{
+			name:              "workspace overrides defaults false to true",
+			defaultSSH:        false,
+			workspaceSSH:      &boolTrue,
+			expectedSSH:       true,
+			defaultGit:        false,
+			workspaceGit:      &boolTrue,
+			expectedGit:       true,
+			defaultKnownHosts: false,
+			workspaceKnown:    &boolTrue,
+			expectedKnown:     true,
+		},
+		{
+			name:              "workspace nil inherits defaults",
+			defaultSSH:        true,
+			workspaceSSH:      nil,
+			expectedSSH:       true,
+			defaultGit:        false,
+			workspaceGit:      nil,
+			expectedGit:       false,
+			defaultKnownHosts: true,
+			workspaceKnown:    nil,
+			expectedKnown:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{
+					SSHAuthSock:   tt.defaultSSH,
+					GitConfig:     tt.defaultGit,
+					SSHKnownHosts: tt.defaultKnownHosts,
+				},
+				Workspaces: map[string]config.Workspace{
+					"test": {
+						Paths:         []string{"/tmp"},
+						SSHAuthSock:   tt.workspaceSSH,
+						GitConfig:     tt.workspaceGit,
+						SSHKnownHosts: tt.workspaceKnown,
+					},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "test")
+			if err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+
+			if resolved.SSHAuthSock != tt.expectedSSH {
+				t.Fatalf("SSHAuthSock = %v, want %v", resolved.SSHAuthSock, tt.expectedSSH)
+			}
+			if resolved.GitConfig != tt.expectedGit {
+				t.Fatalf("GitConfig = %v, want %v", resolved.GitConfig, tt.expectedGit)
+			}
+			if resolved.SSHKnownHosts != tt.expectedKnown {
+				t.Fatalf("SSHKnownHosts = %v, want %v", resolved.SSHKnownHosts, tt.expectedKnown)
+			}
+		})
+	}
+}
+
 func TestResolveImagePropagation(t *testing.T) {
 	t.Parallel()
 

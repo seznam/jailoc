@@ -186,6 +186,174 @@ func assertContains(t *testing.T, haystack, needle string) {
 	}
 }
 
+func TestGenerateComposeSSHAuthSock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("enabled", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName:    "ssh-test",
+			Port:             4700,
+			Image:            "ghcr.io/seznam/jailoc:test",
+			Paths:            []string{"/tmp/work"},
+			OpenCodePassword: "secret",
+			SSHAuthSock:      "/run/host-services/ssh-auth.sock",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		assertContains(t, rendered, "/run/host-services/ssh-auth.sock:/run/ssh-agent.sock")
+		assertContains(t, rendered, "SSH_AUTH_SOCK=/run/ssh-agent.sock")
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName:    "no-ssh-test",
+			Port:             4701,
+			Image:            "ghcr.io/seznam/jailoc:test",
+			Paths:            []string{"/tmp/work"},
+			OpenCodePassword: "secret",
+			SSHAuthSock:      "",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		if strings.Contains(rendered, "ssh-agent.sock") {
+			t.Fatalf("expected no SSH agent socket mount when disabled, got:\n%s", rendered)
+		}
+		if strings.Contains(rendered, "SSH_AUTH_SOCK") {
+			t.Fatalf("expected no SSH_AUTH_SOCK env when disabled, got:\n%s", rendered)
+		}
+	})
+}
+
+func TestGenerateComposeGitConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("enabled", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName:    "git-test",
+			Port:             4702,
+			Image:            "ghcr.io/seznam/jailoc:test",
+			Paths:            []string{"/tmp/work"},
+			OpenCodePassword: "secret",
+			GitConfig:        "/home/user/.gitconfig",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		assertContains(t, rendered, "/home/user/.gitconfig:/home/agent/.gitconfig:ro")
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName:    "no-git-test",
+			Port:             4703,
+			Image:            "ghcr.io/seznam/jailoc:test",
+			Paths:            []string{"/tmp/work"},
+			OpenCodePassword: "secret",
+			GitConfig:        "",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		if strings.Contains(rendered, ".gitconfig") {
+			t.Fatalf("expected no gitconfig mount when disabled, got:\n%s", rendered)
+		}
+	})
+}
+
+func TestGenerateComposeSSHKnownHosts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("enabled", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName:    "known-hosts-test",
+			Port:             4704,
+			Image:            "ghcr.io/seznam/jailoc:test",
+			Paths:            []string{"/tmp/work"},
+			OpenCodePassword: "secret",
+			SSHKnownHosts:    "/home/user/.ssh/known_hosts",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		assertContains(t, rendered, "/home/user/.ssh/known_hosts:/home/agent/.ssh/known_hosts:ro")
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName:    "no-known-hosts-test",
+			Port:             4705,
+			Image:            "ghcr.io/seznam/jailoc:test",
+			Paths:            []string{"/tmp/work"},
+			OpenCodePassword: "secret",
+			SSHKnownHosts:    "",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		if strings.Contains(rendered, "known_hosts") {
+			t.Fatalf("expected no known_hosts mount when disabled, got:\n%s", rendered)
+		}
+	})
+}
+
+func TestGenerateComposeAllSSHGitEnabled(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName:    "all-ssh-git-test",
+		Port:             4706,
+		Image:            "ghcr.io/seznam/jailoc:test",
+		Paths:            []string{"/tmp/work"},
+		OpenCodePassword: "secret",
+		SSHAuthSock:      "/run/host-services/ssh-auth.sock",
+		GitConfig:        "/home/user/.gitconfig",
+		SSHKnownHosts:    "/home/user/.ssh/known_hosts",
+	}
+
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose returned error: %v", err)
+	}
+
+	rendered := string(out)
+	assertContains(t, rendered, "/run/host-services/ssh-auth.sock:/run/ssh-agent.sock")
+	assertContains(t, rendered, "SSH_AUTH_SOCK=/run/ssh-agent.sock")
+	assertContains(t, rendered, "/home/user/.gitconfig:/home/agent/.gitconfig:ro")
+	assertContains(t, rendered, "/home/user/.ssh/known_hosts:/home/agent/.ssh/known_hosts:ro")
+}
+
 func TestGenerateComposeEnv(t *testing.T) {
 	t.Parallel()
 

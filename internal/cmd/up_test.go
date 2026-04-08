@@ -205,6 +205,187 @@ func TestResolveImageStrategy(t *testing.T) {
 	}
 }
 
+func TestResolveSSHAuthSock(t *testing.T) {
+	t.Run("disabled returns empty", func(t *testing.T) {
+		got := resolveSSHAuthSock(false)
+		if got != "" {
+			t.Fatalf("expected empty when disabled, got %q", got)
+		}
+	})
+
+	t.Run("docker desktop magic socket found", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+		osStat = func(name string) (os.FileInfo, error) {
+			if name == dockerDesktopSSHSock {
+				return nil, nil
+			}
+			return nil, os.ErrNotExist
+		}
+
+		got := resolveSSHAuthSock(true)
+		if got != dockerDesktopSSHSock {
+			t.Fatalf("expected %q, got %q", dockerDesktopSSHSock, got)
+		}
+	})
+
+	t.Run("falls back to SSH_AUTH_SOCK env", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+
+		fakeSocket := "/tmp/fake-ssh-agent.sock"
+		osStat = func(name string) (os.FileInfo, error) {
+			if name == fakeSocket {
+				return nil, nil
+			}
+			return nil, os.ErrNotExist
+		}
+		t.Setenv("SSH_AUTH_SOCK", fakeSocket)
+
+		got := resolveSSHAuthSock(true)
+		if got != fakeSocket {
+			t.Fatalf("expected %q, got %q", fakeSocket, got)
+		}
+	})
+
+	t.Run("returns empty when nothing found", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+		osStat = func(name string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		}
+		t.Setenv("SSH_AUTH_SOCK", "")
+
+		got := resolveSSHAuthSock(true)
+		if got != "" {
+			t.Fatalf("expected empty when no socket found, got %q", got)
+		}
+	})
+
+	t.Run("returns empty when SSH_AUTH_SOCK env points to nonexistent file", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+		osStat = func(name string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		}
+		t.Setenv("SSH_AUTH_SOCK", "/nonexistent/agent.sock")
+
+		got := resolveSSHAuthSock(true)
+		if got != "" {
+			t.Fatalf("expected empty when socket file missing, got %q", got)
+		}
+	})
+}
+
+func TestResolveGitConfig(t *testing.T) {
+	t.Run("disabled returns empty", func(t *testing.T) {
+		got := resolveGitConfig(false)
+		if got != "" {
+			t.Fatalf("expected empty when disabled, got %q", got)
+		}
+	})
+
+	t.Run("finds home gitconfig", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		expected := filepath.Join(home, ".gitconfig")
+
+		osStat = func(name string) (os.FileInfo, error) {
+			if name == expected {
+				return nil, nil
+			}
+			return nil, os.ErrNotExist
+		}
+
+		got := resolveGitConfig(true)
+		if got != expected {
+			t.Fatalf("expected %q, got %q", expected, got)
+		}
+	})
+
+	t.Run("falls back to XDG git config", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		expected := filepath.Join(home, ".config", "git", "config")
+
+		osStat = func(name string) (os.FileInfo, error) {
+			if name == expected {
+				return nil, nil
+			}
+			return nil, os.ErrNotExist
+		}
+
+		got := resolveGitConfig(true)
+		if got != expected {
+			t.Fatalf("expected %q, got %q", expected, got)
+		}
+	})
+
+	t.Run("returns empty when nothing found", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+		osStat = func(name string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		}
+		t.Setenv("HOME", t.TempDir())
+
+		got := resolveGitConfig(true)
+		if got != "" {
+			t.Fatalf("expected empty when no gitconfig found, got %q", got)
+		}
+	})
+}
+
+func TestResolveSSHKnownHosts(t *testing.T) {
+	t.Run("disabled returns empty", func(t *testing.T) {
+		got := resolveSSHKnownHosts(false)
+		if got != "" {
+			t.Fatalf("expected empty when disabled, got %q", got)
+		}
+	})
+
+	t.Run("finds known_hosts", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		expected := filepath.Join(home, ".ssh", "known_hosts")
+
+		osStat = func(name string) (os.FileInfo, error) {
+			if name == expected {
+				return nil, nil
+			}
+			return nil, os.ErrNotExist
+		}
+
+		got := resolveSSHKnownHosts(true)
+		if got != expected {
+			t.Fatalf("expected %q, got %q", expected, got)
+		}
+	})
+
+	t.Run("returns empty when not found", func(t *testing.T) {
+		orig := osStat
+		t.Cleanup(func() { osStat = orig })
+		osStat = func(name string) (os.FileInfo, error) {
+			return nil, os.ErrNotExist
+		}
+		t.Setenv("HOME", t.TempDir())
+
+		got := resolveSSHKnownHosts(true)
+		if got != "" {
+			t.Fatalf("expected empty when no known_hosts found, got %q", got)
+		}
+	})
+}
+
 func TestWriteEntrypointToCache(t *testing.T) {
 	t.Parallel()
 
