@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.8.0](https://github.com/seznam/jailoc/compare/v1.7.1...v1.8.0) (2026-04-08)
+
+
+### Features
+
+* **cmd:** add colored terminal output ([#45](https://github.com/seznam/jailoc/issues/45)) ([26f3a75](https://github.com/seznam/jailoc/commit/26f3a752775cea22efdabe11d794846c917a32b8))
+* **cmd:** pass --dir to opencode attach for subdirectory targeting ([#47](https://github.com/seznam/jailoc/issues/47)) ([c381d96](https://github.com/seznam/jailoc/commit/c381d9603961242903d8120bf8d6fcae3a36260b))
+
+
+### Bug Fixes
+
+* **ci:** append goreleaser assets to release-please release instead of creating separate draft ([e44c23c](https://github.com/seznam/jailoc/commit/e44c23c87bdcef67d5f4c491f7cfea9a8b3c834e))
+
+
+### Code Refactoring
+
+* **docker:** bind-mount entrypoint.sh at runtime instead of baking into image ([#50](https://github.com/seznam/jailoc/issues/50)) ([c6a3351](https://github.com/seznam/jailoc/commit/c6a3351cf710c9f015cbbdb00d4799952908dd5c))
+
+
+### Documentation
+
+* add llms.txt for LLM-friendly documentation discovery ([#46](https://github.com/seznam/jailoc/issues/46)) ([d41ca62](https://github.com/seznam/jailoc/commit/d41ca623bf83f894d5caa4c5191aa2f7c6dbe902))
+
 ## [1.7.1](https://github.com/seznam/jailoc/compare/v1.7.0...v1.7.1) (2026-03-27)
 
 
