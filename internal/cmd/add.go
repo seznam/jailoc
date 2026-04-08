@@ -112,6 +112,10 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return fmt.Errorf("write allowed files for workspace %q: %w", ws2.Name, err)
 	}
 
+	if err := writeEntrypoint(filepath.Dir(compPath)); err != nil {
+		return err
+	}
+
 	if err := compose.WriteComposeFile(params, compPath); err != nil {
 		return fmt.Errorf("regenerate compose file: %w", err)
 	}

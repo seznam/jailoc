@@ -208,27 +208,53 @@ func TestResolveImageStrategy(t *testing.T) {
 func TestWriteEntrypointToCache(t *testing.T) {
 	t.Parallel()
 
-	tmpDir := t.TempDir()
+	t.Run("creates executable file with correct content", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
 
-	if err := os.WriteFile(filepath.Join(tmpDir, "entrypoint.sh"), embed.Entrypoint(), 0o755); err != nil { //nolint:gosec // mirrors production: 0o755 required for executable bind-mount
-		t.Fatalf("os.WriteFile failed: %v", err)
-	}
+		if err := writeEntrypoint(tmpDir); err != nil {
+			t.Fatalf("writeEntrypoint failed: %v", err)
+		}
 
-	entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
-	info, err := os.Stat(entrypointPath)
-	if err != nil {
-		t.Fatalf("os.Stat(%q) failed: %v", entrypointPath, err)
-	}
+		entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
+		info, err := os.Stat(entrypointPath)
+		if err != nil {
+			t.Fatalf("os.Stat(%q) failed: %v", entrypointPath, err)
+		}
 
-	if info.Mode()&0o111 == 0 {
-		t.Fatalf("entrypoint.sh permissions %o should have at least one executable bit set", info.Mode()&0o777)
-	}
+		if info.Mode()&0o111 == 0 {
+			t.Fatalf("entrypoint.sh permissions %o should have at least one executable bit set", info.Mode()&0o777)
+		}
 
-	data, err := os.ReadFile(entrypointPath) //nolint:gosec // path constructed from t.TempDir(), fully controlled
-	if err != nil {
-		t.Fatalf("os.ReadFile(%q) failed: %v", entrypointPath, err)
-	}
-	if !bytes.Equal(data, embed.Entrypoint()) {
-		t.Fatalf("entrypoint.sh content does not match embedded asset")
-	}
+		data, err := os.ReadFile(entrypointPath) //nolint:gosec // path constructed from t.TempDir(), fully controlled
+		if err != nil {
+			t.Fatalf("os.ReadFile(%q) failed: %v", entrypointPath, err)
+		}
+		if !bytes.Equal(data, embed.Entrypoint()) {
+			t.Fatalf("entrypoint.sh content does not match embedded asset")
+		}
+	})
+
+	t.Run("fixes permissions on existing file", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+
+		entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
+		if err := os.WriteFile(entrypointPath, []byte("old"), 0o600); err != nil { //nolint:gosec // test setup
+			t.Fatalf("setup WriteFile failed: %v", err)
+		}
+
+		if err := writeEntrypoint(tmpDir); err != nil {
+			t.Fatalf("writeEntrypoint failed: %v", err)
+		}
+
+		info, err := os.Stat(entrypointPath)
+		if err != nil {
+			t.Fatalf("os.Stat(%q) failed: %v", entrypointPath, err)
+		}
+
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("expected permissions 0o755, got %o", info.Mode().Perm())
+		}
+	})
 }
