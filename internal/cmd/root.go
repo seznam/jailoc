@@ -107,7 +107,7 @@ var rootCmd = &cobra.Command{
 
 		if !running {
 			_, _ = color.New(color.FgCyan).Printf("Starting workspace %s...\n", ws.Name)
-			if err := runUp(ctx); err != nil {
+			if err := runUp(ctx, nil); err != nil {
 				return fmt.Errorf("start workspace %q: %w", ws.Name, err)
 			}
 			_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
