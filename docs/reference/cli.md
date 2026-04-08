@@ -46,6 +46,8 @@ jailoc up [flags]
 
 Resolves the container image (see [Image Resolution](image-resolution.md)), generates a `docker-compose.yml` in `~/.cache/jailoc/{workspace}/`, and starts two containers: `opencode` and `dind`.
 
+When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
+
 ---
 
 ### `jailoc down`
@@ -57,6 +59,8 @@ jailoc down [flags]
 ```
 
 Equivalent to `docker compose down` on the generated compose file. Does not remove named volumes or the image.
+
+When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
 ---
 
@@ -78,6 +82,8 @@ The workspace must already be running. See [access modes explanation](../explana
 
 If the `opencode` container stops or is replaced while attachment is active, `jailoc attach` exits instead of waiting indefinitely for the underlying client session to recover.
 
+When no positional workspace argument and `--workspace` is not set, resolves the workspace from the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
+
 ---
 
 ### `jailoc status`
@@ -90,6 +96,8 @@ jailoc status [flags]
 
 Output lists all workspaces defined in configuration. For each workspace, shows the container state (running, stopped, or unknown) and the host port it is assigned.
 
+When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
+
 ---
 
 ### `jailoc logs`
@@ -101,6 +109,8 @@ jailoc logs [flags]
 ```
 
 Streams combined stdout and stderr from the `opencode` and `dind` containers. Follows log output until interrupted.
+
+When no positional workspace argument and `--workspace` is not set, resolves the workspace from the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
 ---
 
@@ -125,3 +135,5 @@ jailoc add [flags]
 ```
 
 Appends the current directory to `workspaces.<name>.paths` in `~/.config/jailoc/config.toml`. The path must not be under a forbidden system prefix. See the [configuration reference](configuration.md) for path validation rules.
+
+When `--workspace` is not set, resolves the workspace from the path being added (longest prefix). If `--workspace` is set explicitly and the path is not under any of that workspace's configured paths, `jailoc add` returns an error. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
