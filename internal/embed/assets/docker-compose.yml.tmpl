@@ -15,6 +15,7 @@ services:
       - ${HOME}/.claude/transcripts:/home/agent/.claude/transcripts
       - ${HOME}/.agents:/home/agent/.agents:ro
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
+      - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode
       - opencode-cache-{{.WorkspaceName}}:/home/agent/.cache
       - dind-certs-client:/certs/client:ro

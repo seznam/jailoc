@@ -37,6 +37,7 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	assertContains(t, rendered, "healthcheck:")
 	assertContains(t, rendered, "$$OPENCODE_SERVER_PASSWORD")
 	assertContains(t, rendered, "/global/health")
+	assertContains(t, rendered, "entrypoint.sh:/usr/local/bin/entrypoint.sh:ro")
 }
 
 func TestGenerateComposeMultiplePaths(t *testing.T) {
