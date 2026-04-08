@@ -34,6 +34,11 @@ if [ -f "$ALLOWED_HOSTS" ]; then
   done < "$ALLOWED_HOSTS"
 fi
 
+# --- Allow DNS resolvers ---
+while read -r key value _; do
+  [ "$key" = "nameserver" ] && iptables -I OUTPUT -d "$value" -j ACCEPT
+done < /etc/resolv.conf
+
 # --- Allow CIDR networks from config ---
 ALLOWED_NETWORKS="/etc/jailoc/allowed-networks"
 if [ -f "$ALLOWED_NETWORKS" ]; then
