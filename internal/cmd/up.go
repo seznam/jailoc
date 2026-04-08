@@ -74,7 +74,7 @@ func runUp(ctx context.Context) error {
 	// Write entrypoint.sh to cache dir for bind-mount into container.
 	// Uses 0o755 (not the usual 0o600) because Docker bind-mounts preserve
 	// host permissions and the script must be executable inside the container.
-	if err := os.WriteFile(filepath.Join(cacheDir, "entrypoint.sh"), embed.Entrypoint(), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(cacheDir, "entrypoint.sh"), embed.Entrypoint(), 0o755); err != nil { //nolint:gosec // 0o755 required: bind-mount preserves host perms, script must be executable in container
 		return fmt.Errorf("write entrypoint: %w", err)
 	}
 

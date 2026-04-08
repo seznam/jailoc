@@ -210,7 +210,7 @@ func TestWriteEntrypointToCache(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	if err := os.WriteFile(filepath.Join(tmpDir, "entrypoint.sh"), embed.Entrypoint(), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "entrypoint.sh"), embed.Entrypoint(), 0o755); err != nil { //nolint:gosec // mirrors production: 0o755 required for executable bind-mount
 		t.Fatalf("os.WriteFile failed: %v", err)
 	}
 
@@ -224,7 +224,7 @@ func TestWriteEntrypointToCache(t *testing.T) {
 		t.Fatalf("entrypoint.sh permissions %o should have at least one executable bit set", info.Mode()&0o777)
 	}
 
-	data, err := os.ReadFile(entrypointPath)
+	data, err := os.ReadFile(entrypointPath) //nolint:gosec // path constructed from t.TempDir(), fully controlled
 	if err != nil {
 		t.Fatalf("os.ReadFile(%q) failed: %v", entrypointPath, err)
 	}
