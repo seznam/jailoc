@@ -36,6 +36,7 @@ release:
   disable: false
   draft: false
   mode: append
+  use_existing_draft: true
   github:
     owner: seznam
     name: jailoc
