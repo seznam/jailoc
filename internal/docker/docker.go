@@ -371,11 +371,6 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 		return fmt.Errorf("write embedded Dockerfile to %q: %w", dockerfilePath, err)
 	}
 
-	entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
-	if err := os.WriteFile(entrypointPath, embed.Entrypoint(), 0o600); err != nil {
-		return fmt.Errorf("write embedded entrypoint.sh to %q: %w", entrypointPath, err)
-	}
-
 	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
 	if err != nil {
 		return fmt.Errorf("create build context tar for %q: %w", tmpDir, err)
@@ -412,11 +407,6 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
 	if err := os.WriteFile(dockerfilePath, dockerfileContent, 0o600); err != nil {
 		return "", fmt.Errorf("write preset Dockerfile to %q: %w", dockerfilePath, err)
-	}
-
-	entrypointPath := filepath.Join(tmpDir, "entrypoint.sh")
-	if err := os.WriteFile(entrypointPath, embed.Entrypoint(), 0o600); err != nil {
-		return "", fmt.Errorf("write entrypoint.sh to %q: %w", entrypointPath, err)
 	}
 
 	hash := sha256.Sum256(dockerfileContent)

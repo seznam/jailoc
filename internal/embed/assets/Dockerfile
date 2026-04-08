@@ -127,19 +127,10 @@ RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${OPENCODE_VER
 USER root
 RUN cp /home/agent/.opencode/bin/opencode /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode
 
-# Entrypoint — runs as root on container start to:
-#   1. Configure iptables (allow DinD sidecar + gateway + allowed hosts,
-#      block RFC 1918 / link-local / CGNAT private networks)
-#   2. chown data directories
-#   3. Drop privileges to agent (UID 1000) via setpriv --no-new-privs
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
 # PATH includes agent's local bin dirs for tools installed as the agent user
 # (e.g. uv from preset overlays goes to ~/.local/bin).
 ENV PATH="/home/agent/.local/bin:/home/agent/.opencode/bin:${PATH}"
 
 # Default OpenCode serve port — jailoc assigns ports starting at 4096.
 EXPOSE 4096
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
