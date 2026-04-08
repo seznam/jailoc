@@ -26,7 +26,6 @@ type Resolved struct {
 	Env             []string
 	SSHAuthSock     bool
 	GitConfig       bool
-	SSHKnownHosts   bool
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -98,8 +97,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Image:           ws.Image,
 		Env:             mergedEnv,
 		SSHAuthSock:     boolWithOverride(cfg.Defaults.SSHAuthSock, ws.SSHAuthSock),
-		GitConfig:       boolWithOverride(cfg.Defaults.GitConfig, ws.GitConfig),
-		SSHKnownHosts:   boolWithOverride(cfg.Defaults.SSHKnownHosts, ws.SSHKnownHosts),
+		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
 	}, nil
 }
 
@@ -209,4 +207,14 @@ func boolWithOverride(defaultVal bool, override *bool) bool {
 		return *override
 	}
 	return defaultVal
+}
+
+func boolPtrWithDefault(defaultVal *bool, override *bool, fallback bool) bool {
+	if override != nil {
+		return *override
+	}
+	if defaultVal != nil {
+		return *defaultVal
+	}
+	return fallback
 }

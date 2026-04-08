@@ -26,18 +26,28 @@ If no valid socket is found, the mount is silently skipped — the container sta
 
 The socket is mounted at `/run/ssh-agent.sock` inside the container and `SSH_AUTH_SOCK` is set automatically.
 
+When SSH agent forwarding is enabled, `~/.ssh/known_hosts` is also mounted read-only into the container (if the file exists on the host). This prevents SSH host verification prompts when connecting to known Git remotes.
+
 !!! warning
     `SSH_AUTH_SOCK` is a reserved environment variable. Setting it manually in `env` or `env_file` causes a validation error. Use `ssh_auth_sock = true` instead.
 
 ---
 
-## Mount Git configuration
+## Disable Git configuration mounting
 
-Set `git_config = true` to mount your host Git configuration read-only into the container:
+Git configuration (`~/.gitconfig` or `~/.config/git/config`) is mounted read-only into the container by default. To disable it for a specific workspace:
+
+```toml
+[workspaces.isolated]
+paths = ["~/projects/isolated"]
+git_config = false
+```
+
+Or globally:
 
 ```toml
 [defaults]
-git_config = true
+git_config = false
 ```
 
 jailoc checks for a Git config file in this order:
@@ -49,28 +59,13 @@ The first file found is mounted at `/home/agent/.gitconfig` inside the container
 
 ---
 
-## Mount SSH known hosts
-
-Set `ssh_known_hosts = true` to mount `~/.ssh/known_hosts` read-only into the container:
-
-```toml
-[defaults]
-ssh_known_hosts = true
-```
-
-This prevents SSH host verification prompts when the agent connects to known Git remotes. If `~/.ssh/known_hosts` does not exist on the host, the mount is skipped.
-
----
-
 ## Enable everything at once
 
-To forward all three for every workspace:
+To forward SSH agent and keep Git config mounted (the default) for every workspace:
 
 ```toml
 [defaults]
 ssh_auth_sock = true
-git_config = true
-ssh_known_hosts = true
 ```
 
 Individual workspaces can override any of these defaults:
@@ -79,6 +74,7 @@ Individual workspaces can override any of these defaults:
 [workspaces.public-only]
 paths = ["~/projects/public-only"]
 ssh_auth_sock = false
+git_config = false
 ```
 
 ---
@@ -98,9 +94,10 @@ paths = ["~/projects/private-repos"]
 [workspaces.isolated]
 paths = ["~/projects/isolated"]
 ssh_auth_sock = false  # disables SSH for this workspace only
+git_config = false     # disables Git config for this workspace only
 ```
 
-When a workspace does not set a field, it inherits the value from `[defaults]`. When set explicitly, the workspace value wins.
+When a workspace does not set a field, it inherits the value from `[defaults]`. For `git_config`, the fallback is `true` when neither the workspace nor defaults set it. When set explicitly, the workspace value wins.
 
 ---
 

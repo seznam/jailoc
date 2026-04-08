@@ -612,11 +612,11 @@ func TestResolveEnvFileDedupPaths(t *testing.T) {
 func TestResolveSSHGitFieldsFromDefaults(t *testing.T) {
 	t.Parallel()
 
+	boolTrue := true
 	cfg := &config.Config{
 		Defaults: config.Defaults{
-			SSHAuthSock:   true,
-			GitConfig:     true,
-			SSHKnownHosts: true,
+			SSHAuthSock: true,
+			GitConfig:   &boolTrue,
 		},
 		Workspaces: map[string]config.Workspace{
 			"default": {
@@ -636,15 +636,16 @@ func TestResolveSSHGitFieldsFromDefaults(t *testing.T) {
 	if !resolved.GitConfig {
 		t.Fatal("expected GitConfig = true from defaults")
 	}
-	if !resolved.SSHKnownHosts {
-		t.Fatal("expected SSHKnownHosts = true from defaults")
-	}
 }
 
 func TestResolveSSHGitFieldsDefaultsFalse(t *testing.T) {
 	t.Parallel()
 
+	boolFalse := false
 	cfg := &config.Config{
+		Defaults: config.Defaults{
+			GitConfig: &boolFalse,
+		},
 		Workspaces: map[string]config.Workspace{
 			"default": {
 				Paths: []string{"/tmp"},
@@ -661,10 +662,7 @@ func TestResolveSSHGitFieldsDefaultsFalse(t *testing.T) {
 		t.Fatal("expected SSHAuthSock = false by default")
 	}
 	if resolved.GitConfig {
-		t.Fatal("expected GitConfig = false by default")
-	}
-	if resolved.SSHKnownHosts {
-		t.Fatal("expected SSHKnownHosts = false by default")
+		t.Fatal("expected GitConfig = false when explicitly set false")
 	}
 }
 
@@ -675,52 +673,49 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 	boolFalse := false
 
 	tests := []struct {
-		name              string
-		defaultSSH        bool
-		workspaceSSH      *bool
-		expectedSSH       bool
-		defaultGit        bool
-		workspaceGit      *bool
-		expectedGit       bool
-		defaultKnownHosts bool
-		workspaceKnown    *bool
-		expectedKnown     bool
+		name         string
+		defaultSSH   bool
+		workspaceSSH *bool
+		expectedSSH  bool
+		defaultGit   *bool
+		workspaceGit *bool
+		expectedGit  bool
 	}{
 		{
-			name:              "workspace overrides defaults true to false",
-			defaultSSH:        true,
-			workspaceSSH:      &boolFalse,
-			expectedSSH:       false,
-			defaultGit:        true,
-			workspaceGit:      &boolFalse,
-			expectedGit:       false,
-			defaultKnownHosts: true,
-			workspaceKnown:    &boolFalse,
-			expectedKnown:     false,
+			name:         "workspace overrides defaults true to false",
+			defaultSSH:   true,
+			workspaceSSH: &boolFalse,
+			expectedSSH:  false,
+			defaultGit:   &boolTrue,
+			workspaceGit: &boolFalse,
+			expectedGit:  false,
 		},
 		{
-			name:              "workspace overrides defaults false to true",
-			defaultSSH:        false,
-			workspaceSSH:      &boolTrue,
-			expectedSSH:       true,
-			defaultGit:        false,
-			workspaceGit:      &boolTrue,
-			expectedGit:       true,
-			defaultKnownHosts: false,
-			workspaceKnown:    &boolTrue,
-			expectedKnown:     true,
+			name:         "workspace overrides defaults false to true",
+			defaultSSH:   false,
+			workspaceSSH: &boolTrue,
+			expectedSSH:  true,
+			defaultGit:   &boolFalse,
+			workspaceGit: &boolTrue,
+			expectedGit:  true,
 		},
 		{
-			name:              "workspace nil inherits defaults",
-			defaultSSH:        true,
-			workspaceSSH:      nil,
-			expectedSSH:       true,
-			defaultGit:        false,
-			workspaceGit:      nil,
-			expectedGit:       false,
-			defaultKnownHosts: true,
-			workspaceKnown:    nil,
-			expectedKnown:     true,
+			name:         "workspace nil inherits defaults",
+			defaultSSH:   true,
+			workspaceSSH: nil,
+			expectedSSH:  true,
+			defaultGit:   &boolFalse,
+			workspaceGit: nil,
+			expectedGit:  false,
+		},
+		{
+			name:         "git_config defaults to true when both nil",
+			defaultSSH:   false,
+			workspaceSSH: nil,
+			expectedSSH:  false,
+			defaultGit:   nil,
+			workspaceGit: nil,
+			expectedGit:  true,
 		},
 	}
 
@@ -730,16 +725,14 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 
 			cfg := &config.Config{
 				Defaults: config.Defaults{
-					SSHAuthSock:   tt.defaultSSH,
-					GitConfig:     tt.defaultGit,
-					SSHKnownHosts: tt.defaultKnownHosts,
+					SSHAuthSock: tt.defaultSSH,
+					GitConfig:   tt.defaultGit,
 				},
 				Workspaces: map[string]config.Workspace{
 					"test": {
-						Paths:         []string{"/tmp"},
-						SSHAuthSock:   tt.workspaceSSH,
-						GitConfig:     tt.workspaceGit,
-						SSHKnownHosts: tt.workspaceKnown,
+						Paths:       []string{"/tmp"},
+						SSHAuthSock: tt.workspaceSSH,
+						GitConfig:   tt.workspaceGit,
 					},
 				},
 			}
@@ -754,9 +747,6 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 			}
 			if resolved.GitConfig != tt.expectedGit {
 				t.Fatalf("GitConfig = %v, want %v", resolved.GitConfig, tt.expectedGit)
-			}
-			if resolved.SSHKnownHosts != tt.expectedKnown {
-				t.Fatalf("SSHKnownHosts = %v, want %v", resolved.SSHKnownHosts, tt.expectedKnown)
 			}
 		})
 	}

@@ -171,13 +171,11 @@ env_file = ["~/.config/jailoc/shared.env"]
 
 ## Forward SSH agent and Git config
 
-To let the agent clone private repositories or push over SSH, enable SSH agent forwarding and mount your Git configuration:
+To let the agent clone private repositories or push over SSH, enable SSH agent forwarding. Git configuration is mounted by default.
 
 ```toml
 [defaults]
 ssh_auth_sock = true
-git_config = true
-ssh_known_hosts = true
 ```
 
 These can also be set per-workspace. See [How to pass through SSH and Git config](ssh-git-passthrough.md) for details.

@@ -85,8 +85,8 @@ func runUp(ctx context.Context) error {
 		OpenCodePassword: os.Getenv("OPENCODE_SERVER_PASSWORD"),
 		Env:              ws.Env,
 		SSHAuthSock:      resolveSSHAuthSock(ws.SSHAuthSock),
+		SSHKnownHosts:    resolveSSHKnownHosts(ws.SSHAuthSock),
 		GitConfig:        resolveGitConfig(ws.GitConfig),
-		SSHKnownHosts:    resolveSSHKnownHosts(ws.SSHKnownHosts),
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Generating compose configuration...\n")

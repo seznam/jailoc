@@ -46,9 +46,8 @@ The opencode container mounts several things at startup:
 | `~/.config/opencode` | read-only | Your API keys, model config, provider settings |
 | `~/.claude/transcripts` | read-write | Claude Code session transcripts, persisted back to the host |
 | `/etc/jailoc` | read-only | jailoc's own runtime config, including allowed hosts |
-| SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`) |
-| `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`) |
-| `~/.ssh/known_hosts` | read-only | SSH host key verification (when `ssh_known_hosts = true`) |
+| SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`). Also mounts `~/.ssh/known_hosts` read-only for host key verification. |
+| `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`, the default) |
 
 Two named volumes are shared between both containers: one for TLS certificates (so the opencode container can authenticate to the dind daemon) and one for Docker's data directory. A third named volume holds the agent's own data — its SQLite history database and auth tokens. This last volume is intentionally isolated from your host's `~/.local/share/opencode`, so the agent's session history never touches your personal history.
 

@@ -32,8 +32,7 @@ const (
 # allowed_hosts = ["example.com"]
 # allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
-# git_config = false
-# ssh_known_hosts = false
+# git_config = true
 
 [workspaces.default]
 paths = []
@@ -45,8 +44,7 @@ paths = []
 # build_context = ""
 # dockerfile = ""
 # ssh_auth_sock = false
-# git_config = false
-# ssh_known_hosts = false
+# git_config = true
 `
 )
 
@@ -104,8 +102,7 @@ type Defaults struct {
 	AllowedNetworks []string `toml:"allowed_networks"`
 	Image           string   `toml:"image"`
 	SSHAuthSock     bool     `toml:"ssh_auth_sock"`
-	GitConfig       bool     `toml:"git_config"`
-	SSHKnownHosts   bool     `toml:"ssh_known_hosts"`
+	GitConfig       *bool    `toml:"git_config"`
 }
 
 type Workspace struct {
@@ -119,7 +116,6 @@ type Workspace struct {
 	Image           string   `toml:"image"`
 	SSHAuthSock     *bool    `toml:"ssh_auth_sock"`
 	GitConfig       *bool    `toml:"git_config"`
-	SSHKnownHosts   *bool    `toml:"ssh_known_hosts"`
 }
 
 func ConfigDir() string {

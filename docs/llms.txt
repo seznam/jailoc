@@ -24,7 +24,7 @@ Key facts:
 - [Workspace Configuration](https://seznam.github.io/jailoc/how-to/workspace-configuration/): Add workspaces, set paths, per-workspace options
 - [Custom Images](https://seznam.github.io/jailoc/how-to/custom-images/): URL Dockerfile presets, local Dockerfiles, build context
 - [Network Access](https://seznam.github.io/jailoc/how-to/network-access/): allowed_hosts, allowed_networks, verifying firewall rules
-- [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward SSH agent, mount Git config and known_hosts into containers
+- [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward SSH agent (with known_hosts), mount Git config into containers
 - [Access Modes](https://seznam.github.io/jailoc/how-to/access-modes/): Remote vs exec mode configuration
 
 ## Explanation

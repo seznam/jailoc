@@ -1796,28 +1796,40 @@ git_config = true
 paths = ["/data"]
 `,
 			checkFn: func(t *testing.T, cfg *Config) {
-				if !cfg.Defaults.GitConfig {
+				if cfg.Defaults.GitConfig == nil || !*cfg.Defaults.GitConfig {
 					t.Fatal("expected defaults.git_config = true")
 				}
 			},
 		},
 		{
-			name: "defaults ssh_known_hosts true",
+			name: "defaults git_config false",
 			tomlContent: `
 [defaults]
-ssh_known_hosts = true
+git_config = false
 
 [workspaces.default]
 paths = ["/data"]
 `,
 			checkFn: func(t *testing.T, cfg *Config) {
-				if !cfg.Defaults.SSHKnownHosts {
-					t.Fatal("expected defaults.ssh_known_hosts = true")
+				if cfg.Defaults.GitConfig == nil || *cfg.Defaults.GitConfig {
+					t.Fatal("expected defaults.git_config = false")
 				}
 			},
 		},
 		{
-			name: "defaults all false by default",
+			name: "defaults git_config nil when omitted",
+			tomlContent: `
+[workspaces.default]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.GitConfig != nil {
+					t.Fatalf("expected defaults.git_config = nil, got %v", *cfg.Defaults.GitConfig)
+				}
+			},
+		},
+		{
+			name: "defaults ssh_auth_sock false by default",
 			tomlContent: `
 [workspaces.default]
 paths = ["/data"]
@@ -1825,12 +1837,6 @@ paths = ["/data"]
 			checkFn: func(t *testing.T, cfg *Config) {
 				if cfg.Defaults.SSHAuthSock {
 					t.Fatal("expected defaults.ssh_auth_sock = false by default")
-				}
-				if cfg.Defaults.GitConfig {
-					t.Fatal("expected defaults.git_config = false by default")
-				}
-				if cfg.Defaults.SSHKnownHosts {
-					t.Fatal("expected defaults.ssh_known_hosts = false by default")
 				}
 			},
 		},
@@ -1879,9 +1885,6 @@ paths = ["/data"]
 				if ws.GitConfig != nil {
 					t.Fatalf("expected workspace.git_config = nil, got %v", *ws.GitConfig)
 				}
-				if ws.SSHKnownHosts != nil {
-					t.Fatalf("expected workspace.ssh_known_hosts = nil, got %v", *ws.SSHKnownHosts)
-				}
 			},
 		},
 	}
@@ -1911,7 +1914,6 @@ func TestRoundTripSSHGitFields(t *testing.T) {
 [defaults]
 ssh_auth_sock = true
 git_config = true
-ssh_known_hosts = false
 
 [workspaces.default]
 paths = ["/data"]
@@ -1944,11 +1946,8 @@ git_config = true
 	if !first.Defaults.SSHAuthSock {
 		t.Fatal("expected defaults.ssh_auth_sock = true after round-trip")
 	}
-	if !first.Defaults.GitConfig {
+	if first.Defaults.GitConfig == nil || !*first.Defaults.GitConfig {
 		t.Fatal("expected defaults.git_config = true after round-trip")
-	}
-	if first.Defaults.SSHKnownHosts {
-		t.Fatal("expected defaults.ssh_known_hosts = false after round-trip")
 	}
 
 	ws := first.Workspaces["default"]
@@ -1957,9 +1956,6 @@ git_config = true
 	}
 	if ws.GitConfig == nil || !*ws.GitConfig {
 		t.Fatal("expected workspace.git_config = true after round-trip")
-	}
-	if ws.SSHKnownHosts != nil {
-		t.Fatal("expected workspace.ssh_known_hosts = nil after round-trip")
 	}
 }
 
