@@ -91,7 +91,7 @@ func TestResolveFromCWDNoMatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected no match error")
 	}
-	if !strings.Contains(err.Error(), "no workspace matches") {
+	if !strings.Contains(err.Error(), "no matching workspace") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -194,7 +194,7 @@ func TestResolveFromCWD(t *testing.T) {
 				},
 			},
 			cwd:             "/unrelated/path",
-			wantErrContains: "no workspace matches",
+			wantErrContains: "no matching workspace",
 		},
 	}
 
@@ -1015,7 +1015,7 @@ func TestResolveFromCWDErrorMessages(t *testing.T) {
 				},
 			},
 			cwd:         "/unrelated/path",
-			wantSubstrs: []string{"/unrelated/path", "no workspace matches"},
+			wantSubstrs: []string{"/unrelated/path", "no matching workspace"},
 		},
 		{
 			name: "empty workspaces map includes directory",
@@ -1023,7 +1023,7 @@ func TestResolveFromCWDErrorMessages(t *testing.T) {
 				Workspaces: map[string]config.Workspace{},
 			},
 			cwd:         "/some/path",
-			wantSubstrs: []string{"/some/path", "no workspace matches"},
+			wantSubstrs: []string{"/some/path", "no matching workspace"},
 		},
 		{
 			name: "all workspaces have empty paths includes directory",
@@ -1034,7 +1034,7 @@ func TestResolveFromCWDErrorMessages(t *testing.T) {
 				},
 			},
 			cwd:         "/anywhere",
-			wantSubstrs: []string{"/anywhere", "no workspace matches"},
+			wantSubstrs: []string{"/anywhere", "no matching workspace"},
 		},
 	}
 

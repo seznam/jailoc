@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,8 +38,14 @@ func runUp(ctx context.Context, args []string) error {
 	} else if !workspaceExplicit {
 		cwd, err := os.Getwd()
 		if err == nil {
-			if resolved, _, err := workspace.ResolveFromCWD(cfg, cwd); err == nil {
+			resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, cwd)
+			switch {
+			case cwdErr == nil:
 				workspaceFlag = resolved.Name
+			case errors.Is(cwdErr, workspace.ErrNoMatch):
+				// no workspace matches CWD — keep default
+			default:
+				return fmt.Errorf("resolve workspace from current directory: %w", cwdErr)
 			}
 		}
 	}

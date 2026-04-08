@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,11 @@ import (
 
 	"github.com/seznam/jailoc/internal/config"
 )
+
+// ErrNoMatch is returned by ResolveFromCWD when no workspace has a path
+// matching the given directory. Callers can use errors.Is to distinguish
+// this from real configuration/resolution failures.
+var ErrNoMatch = errors.New("no matching workspace")
 
 // BasePort is the internal port that opencode serve binds to inside the container.
 // Host-side ports are assigned as BasePort + alphabetical workspace index.
@@ -152,7 +158,7 @@ func ResolveFromCWD(cfg *config.Config, cwd string) (*Resolved, string, error) {
 	}
 
 	if bestName == "" {
-		return nil, "", fmt.Errorf("no workspace matches directory %q", cwd)
+		return nil, "", fmt.Errorf("%w: directory %q", ErrNoMatch, cwd)
 	}
 
 	resolved, err := Resolve(cfg, bestName)

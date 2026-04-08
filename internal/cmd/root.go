@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -50,8 +51,14 @@ var rootCmd = &cobra.Command{
 		}
 
 		if !workspaceExplicit {
-			if resolved, _, err := workspace.ResolveFromCWD(cfg, targetPath); err == nil {
+			resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, targetPath)
+			switch {
+			case cwdErr == nil:
 				workspaceFlag = resolved.Name
+			case errors.Is(cwdErr, workspace.ErrNoMatch):
+				// no workspace matches target — keep default
+			default:
+				return fmt.Errorf("resolve workspace from target path: %w", cwdErr)
 			}
 		}
 
@@ -107,6 +114,7 @@ var rootCmd = &cobra.Command{
 
 		if !running {
 			_, _ = color.New(color.FgCyan).Printf("Starting workspace %s...\n", ws.Name)
+			workspaceExplicit = true
 			if err := runUp(ctx, nil); err != nil {
 				return fmt.Errorf("start workspace %q: %w", ws.Name, err)
 			}

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,8 +36,14 @@ func runAdd(cmd *cobra.Command, args []string) error {
 
 	// Auto-detect workspace from target path if not explicitly set
 	if !workspaceExplicit {
-		if resolved, _, err := workspace.ResolveFromCWD(cfg, targetDir); err == nil {
+		resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, targetDir)
+		switch {
+		case cwdErr == nil:
 			workspaceFlag = resolved.Name
+		case errors.Is(cwdErr, workspace.ErrNoMatch):
+			// no workspace matches target — keep default
+		default:
+			return fmt.Errorf("resolve workspace from target directory: %w", cwdErr)
 		}
 	}
 

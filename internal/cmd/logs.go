@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,8 +36,14 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	} else if !workspaceExplicit {
 		cwd, err := os.Getwd()
 		if err == nil {
-			if resolved, _, err := workspace.ResolveFromCWD(cfg, cwd); err == nil {
+			resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, cwd)
+			switch {
+			case cwdErr == nil:
 				name = resolved.Name
+			case errors.Is(cwdErr, workspace.ErrNoMatch):
+				// no workspace matches CWD — keep default
+			default:
+				return fmt.Errorf("resolve workspace from current directory: %w", cwdErr)
 			}
 		}
 	}
