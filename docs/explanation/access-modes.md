@@ -1,10 +1,10 @@
 # Access Modes
 
-When you run `jailoc attach`, you're connecting to an agent running inside a container. There are two distinct ways that connection can work, and they have meaningfully different characteristics. Understanding the difference helps you choose the right mode and explains some behaviours that might otherwise seem surprising.
+When you run `jailoc`, you're connecting to an agent running inside a container. There are two distinct ways that connection can work, and they have meaningfully different characteristics. Understanding the difference helps you choose the right mode and explains some behaviours that might otherwise seem surprising.
 
 ## Remote mode
 
-In remote mode, `opencode serve` runs inside the container and listens on a TCP port. On the host, `jailoc attach` calls `opencode attach` pointing at that port. The agent process and the terminal UI are in different places, connected by a network socket.
+In remote mode, `opencode serve` runs inside the container and listens on a TCP port. On the host, `jailoc` calls `opencode attach` pointing at that port. The agent process and the terminal UI are in different places, connected by a network socket.
 
 ```mermaid
 flowchart TB
@@ -31,7 +31,7 @@ If the `opencode` container stops or is recreated while you are attached, `jailo
 
 ## Exec mode
 
-In exec mode, `jailoc attach` uses `docker exec` to run `opencode attach` inside the container, connecting to the same `opencode serve` process. Both the client and the server run inside the container, with stdin/stdout piped through docker exec to the host terminal.
+In exec mode, `jailoc` uses `docker exec` to run `opencode attach` inside the container, connecting to the same `opencode serve` process. Both the client and the server run inside the container, with stdin/stdout piped through docker exec to the host terminal.
 
 ```mermaid
 flowchart TB
@@ -52,7 +52,7 @@ The terminal pipeline goes host stdin → docker exec → `opencode attach` (ins
 
 ### Why this matters
 
-Because rendering happens through docker exec's pipe, terminal capabilities are limited. Some keyboard shortcuts don't reach the application correctly, and clipboard behaviour depends on how your terminal emulator handles the piped session. If you close the terminal or disconnect, the exec'd `opencode attach` client exits, but the server and its agent session keep running. You can reconnect by running `jailoc attach --exec` again.
+Because rendering happens through docker exec's pipe, terminal capabilities are limited. Some keyboard shortcuts don't reach the application correctly, and clipboard behaviour depends on how your terminal emulator handles the piped session. If you close the terminal or disconnect, the exec'd `opencode attach` client exits, but the server and its agent session keep running. You can reconnect by running `jailoc --exec` again.
 
 The upside is that exec mode has no host-side dependencies. As long as Docker is available, it works. You don't need opencode installed on your machine.
 

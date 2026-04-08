@@ -12,7 +12,7 @@ Key facts:
 
 ## Reference
 
-- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): All subcommands (`up`, `down`, `attach`, `logs`, `status`, `add`, `config`) with flags and usage
+- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): All subcommands (`up`, `down`, `logs`, `status`, `add`, `config`) with flags and usage
 - [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field — `[base]`, `[defaults]`, `[workspaces.<name>]` — types, defaults, validation rules, merge semantics
 - [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): 5-step resolution cascade with step details, triggers, constraints, and image tag summary
 - [Default Image Contents](https://seznam.github.io/jailoc/reference/default-image/): Tools and runtimes shipped in the embedded base image

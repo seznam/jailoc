@@ -14,7 +14,7 @@ By default, jailoc checks whether `opencode` or `opencode-cli` is on your `PATH`
 You don't need any config for this. Just run:
 
 ```bash
-jailoc attach
+jailoc
 ```
 
 ---
@@ -44,8 +44,8 @@ Valid values:
 Use CLI flags to force a mode without changing your config:
 
 ```bash
-jailoc attach --remote   # force remote mode for this run
-jailoc attach --exec     # force exec mode for this run
+jailoc --remote   # force remote mode for this run
+jailoc --exec     # force exec mode for this run
 ```
 
 The flag takes precedence over both the config value and auto-detection.
@@ -57,10 +57,10 @@ The flag takes precedence over both the config value and auto-detection.
 By default, `opencode attach` opens the workspace root. Use `--dir` to open a subdirectory instead:
 
 ```bash
-jailoc attach --dir /home/you/projects/myproject/src
+jailoc --dir /home/you/projects/myproject/src
 ```
 
-The root `jailoc` command does this automatically — it resolves the current working directory and forwards it as `--dir`:
+The root `jailoc` command does this automatically when run from a subdirectory — it resolves the current working directory and forwards it as `--dir`:
 
 ```bash
 cd ~/projects/myproject/src
@@ -78,4 +78,4 @@ Both modes fail fast if the `opencode` container stops or is replaced while you 
 - In **remote** mode, jailoc terminates the host-side `opencode attach` process instead of leaving it blocked against a dead container.
 - In **exec** mode, jailoc cancels the `docker exec` session so your terminal is restored instead of staying stuck in a hung interactive session.
 
-This is most noticeable when you rebuild, bake, or otherwise replace the workspace container while an attach session is active. After the attach command exits, run `jailoc attach` again to reconnect to the new container.
+This is most noticeable when you rebuild, bake, or otherwise replace the workspace container while an attach session is active. After the attach command exits, run `jailoc` again to reconnect to the new container.

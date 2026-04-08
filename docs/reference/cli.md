@@ -64,28 +64,6 @@ When `--workspace` is not set, resolves the workspace whose configured path best
 
 ---
 
-### `jailoc attach`
-
-Attach to a running workspace environment from the host.
-
-```
-jailoc attach [flags]
-```
-
-| Flag | Description |
-|------|-------------|
-| `--remote` | Force remote connection mode (runs `opencode attach` on the host). |
-| `--exec` | Force exec connection mode (runs `docker exec` into the container). |
-| `--dir` | Directory to open in opencode (forwarded as `--dir` to `opencode attach`). |
-
-The workspace must already be running. See [access modes explanation](../explanation/access-modes.md) for the difference between `--remote` and `--exec`.
-
-If the `opencode` container stops or is replaced while attachment is active, `jailoc attach` exits instead of waiting indefinitely for the underlying client session to recover.
-
-When no positional workspace argument and `--workspace` is not set, resolves the workspace from the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
-
----
-
 ### `jailoc status`
 
 Print the state and assigned port for each configured workspace.

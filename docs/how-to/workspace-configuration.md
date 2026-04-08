@@ -148,7 +148,7 @@ build_context = "/home/you/projects/myproject/docker"
 
 ## Set a connection mode
 
-Control how `jailoc attach` connects to the running container:
+Control how `jailoc` connects to the running container:
 
 ```toml
 [workspaces.myproject]
