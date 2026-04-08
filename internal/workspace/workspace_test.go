@@ -943,3 +943,116 @@ func TestResolveImagePropagation(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveErrorMessages(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		cfg         *config.Config
+		workspace   string
+		wantSubstrs []string
+	}{
+		{
+			name:        "nil config includes workspace name",
+			cfg:         nil,
+			workspace:   "myws",
+			wantSubstrs: []string{"myws", "not found"},
+		},
+		{
+			name: "nonexistent workspace includes name",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"other": {Paths: []string{"/data"}},
+				},
+			},
+			workspace:   "missing",
+			wantSubstrs: []string{"missing", "not found"},
+		},
+		{
+			name: "empty workspaces map includes name",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{},
+			},
+			workspace:   "default",
+			wantSubstrs: []string{"default", "not found"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := workspace.Resolve(tt.cfg, tt.workspace)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			msg := err.Error()
+			for _, sub := range tt.wantSubstrs {
+				if !strings.Contains(msg, sub) {
+					t.Errorf("error %q missing expected substring %q", msg, sub)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveFromCWDErrorMessages(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		cfg         *config.Config
+		cwd         string
+		wantSubstrs []string
+	}{
+		{
+			name: "no matching workspace includes directory",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"default": {Paths: []string{"/home/user/projects"}},
+				},
+			},
+			cwd:         "/unrelated/path",
+			wantSubstrs: []string{"/unrelated/path", "no workspace matches"},
+		},
+		{
+			name: "empty workspaces map includes directory",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{},
+			},
+			cwd:         "/some/path",
+			wantSubstrs: []string{"/some/path", "no workspace matches"},
+		},
+		{
+			name: "all workspaces have empty paths includes directory",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"default": {Paths: []string{}},
+					"other":   {Paths: []string{}},
+				},
+			},
+			cwd:         "/anywhere",
+			wantSubstrs: []string{"/anywhere", "no workspace matches"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := workspace.ResolveFromCWD(tt.cfg, tt.cwd)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			msg := err.Error()
+			for _, sub := range tt.wantSubstrs {
+				if !strings.Contains(msg, sub) {
+					t.Errorf("error %q missing expected substring %q", msg, sub)
+				}
+			}
+		})
+	}
+}
