@@ -186,9 +186,13 @@ func MatchesCWD(ws *Resolved, cwd string) bool {
 }
 
 // pathSegments returns the number of non-empty segments in a filepath.
-// For example, "/a/b/c" returns 3, "/a/bb" returns 2.
+// For example, "/a/b/c" returns 3, "/a/bb" returns 2, "/" returns 0.
 func pathSegments(p string) int {
-	return len(strings.Split(strings.Trim(p, string(filepath.Separator)), string(filepath.Separator)))
+	trimmed := strings.Trim(p, string(filepath.Separator))
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, string(filepath.Separator)))
 }
 
 func pathMatchesCWD(base, cwd string) bool {

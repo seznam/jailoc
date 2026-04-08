@@ -46,7 +46,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	// Conflict detection: explicit -w + path not under workspace → error
-	if workspaceExplicit && !workspace.MatchesCWD(ws, targetDir) {
+	if workspaceExplicit && len(ws.Paths) > 0 && !workspace.MatchesCWD(ws, targetDir) {
 		return fmt.Errorf("path %q is not under workspace %q; use a different --workspace or omit the flag for auto-detection", targetDir, workspaceFlag)
 	}
 
