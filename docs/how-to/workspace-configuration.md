@@ -165,4 +165,19 @@ env_file = ["~/.config/jailoc/shared.env"]
 ```
 
 !!! note
-    Several keys are reserved and cannot be set: `OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`. Setting any of these causes a config validation error.
+    Several keys are reserved and cannot be set: `OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `SSH_AUTH_SOCK`. Setting any of these causes a config validation error.
+
+---
+
+## Forward SSH agent and Git config
+
+To let the agent clone private repositories or push over SSH, enable SSH agent forwarding and mount your Git configuration:
+
+```toml
+[defaults]
+ssh_auth_sock = true
+git_config = true
+ssh_known_hosts = true
+```
+
+These can also be set per-workspace. See [How to pass through SSH and Git config](ssh-git-passthrough.md) for details.

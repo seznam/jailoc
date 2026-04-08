@@ -41,6 +41,9 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `env_file` | string[] | `[]` | Paths to `.env` files loaded for all workspaces. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Parsed before workspace-level `env_file` entries. |
 | `allowed_hosts` | string[] | `[]` | Hostnames allowed through the firewall for all workspaces. Merged with per-workspace `allowed_hosts`. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges allowed through the firewall for all workspaces. Merged with per-workspace `allowed_networks`. |
+| `ssh_auth_sock` | bool | `false` | Mount the host SSH agent socket into the container. Auto-detects the socket: Docker Desktop/OrbStack magic path first, then `$SSH_AUTH_SOCK`. |
+| `git_config` | bool | `false` | Mount the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only into the container. |
+| `ssh_known_hosts` | bool | `false` | Mount `~/.ssh/known_hosts` read-only into the container. |
 
 ### Example
 
@@ -51,6 +54,9 @@ env = ["GOPRIVATE=*.example.com", "NPM_REGISTRY=https://npm.example.com"]
 env_file = ["~/.config/jailoc/shared.env"]
 allowed_hosts = ["internal-registry.example.com"]
 allowed_networks = ["10.0.0.0/8"]
+ssh_auth_sock = true
+git_config = true
+ssh_known_hosts = true
 ```
 
 ---
@@ -72,6 +78,9 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for a workspace-specific overlay image. Builds on top of the base image resolved by `[base]` settings. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. Supports `~` expansion for local paths. |
 | `env` | string[] | `[]` | Environment variables for this workspace. Each entry in `KEY=VALUE` format. These override any global `defaults.env` entry with the same key. Reserved keys are rejected (see Validation Rules). |
 | `env_file` | string[] | `[]` | Paths to `.env` files for this workspace. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Loaded after global `defaults.env_file` entries. |
+| `ssh_auth_sock` | bool | (inherit) | Mount the host SSH agent socket into the container. When not set, inherits from `[defaults]`. |
+| `git_config` | bool | (inherit) | Mount the host Git configuration read-only into the container. When not set, inherits from `[defaults]`. |
+| `ssh_known_hosts` | bool | (inherit) | Mount `~/.ssh/known_hosts` read-only into the container. When not set, inherits from `[defaults]`. |
 
 !!! note
     `image` is mutually exclusive with `dockerfile` and `build_context`. Setting `image` alongside either of those fields is a validation error.
@@ -146,6 +155,7 @@ Each entry must be in `KEY=VALUE` format (key cannot be empty, must contain `=`)
 | `DOCKER_TLS_CERTDIR` | DinD TLS certs |
 | `DOCKER_CERT_PATH` | DinD TLS certs |
 | `DOCKER_TLS_VERIFY` | DinD TLS verification |
+| `SSH_AUTH_SOCK` | SSH agent passthrough |
 
 ### `env_file`
 
@@ -169,6 +179,8 @@ Environment variables from multiple sources are merged in this order (later entr
 4. Workspace `env` — per-workspace inline values (highest priority)
 
 `allowed_hosts` and `allowed_networks` use union deduplication: the global list is merged with the workspace list, with duplicates removed, preserving order.
+
+`ssh_auth_sock`, `git_config`, and `ssh_known_hosts` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence.
 
 ---
 

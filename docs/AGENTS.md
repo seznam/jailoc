@@ -33,6 +33,7 @@ docs/
     workspace-configuration.md     Add workspaces, set paths, per-workspace options
     custom-images.md               URL Dockerfile presets, local Dockerfiles, build context
     network-access.md              allowed_hosts, allowed_networks, verifying rules
+    ssh-git-passthrough.md         SSH agent forwarding, Git config and known_hosts mounting
     access-modes.md                remote vs exec mode configuration
   reference/
     cli.md                         All subcommands with flags and examples

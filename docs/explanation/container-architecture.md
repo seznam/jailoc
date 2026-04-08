@@ -46,6 +46,9 @@ The opencode container mounts several things at startup:
 | `~/.config/opencode` | read-only | Your API keys, model config, provider settings |
 | `~/.claude/transcripts` | read-write | Claude Code session transcripts, persisted back to the host |
 | `/etc/jailoc` | read-only | jailoc's own runtime config, including allowed hosts |
+| SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`) |
+| `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`) |
+| `~/.ssh/known_hosts` | read-only | SSH host key verification (when `ssh_known_hosts = true`) |
 
 Two named volumes are shared between both containers: one for TLS certificates (so the opencode container can authenticate to the dind daemon) and one for Docker's data directory. A third named volume holds the agent's own data — its SQLite history database and auth tokens. This last volume is intentionally isolated from your host's `~/.local/share/opencode`, so the agent's session history never touches your personal history.
 
@@ -57,7 +60,7 @@ The entrypoint script is bind-mounted into the container at runtime by jailoc an
 
 **Phase 1: Network rules.** The script installs iptables rules that shape what the agent can reach. It inserts ACCEPT rules for the dind container, the host gateway, and any hosts or networks you've allowed in config. It then appends DROP rules for RFC 1918 address space, link-local addresses, and CGNAT ranges. Public internet traffic is untouched. See [Network Isolation](network-isolation.md) for a full explanation of the security model.
 
-**Phase 2: Ownership fix.** Named volumes are created by Docker as root. The entrypoint runs `chown` on the data directories so UID 1000 can write to them once the privilege drop happens.
+**Phase 2: Ownership fix.** Named volumes are created by Docker as root. The entrypoint runs `chown` on the data directories so UID 1000 can write to them once the privilege drop happens. If an SSH agent socket is mounted, its ownership is adjusted to UID 1000 as well. If the `~/.ssh` directory exists (from the known hosts mount), it is recursively owned to UID 1000.
 
 **Phase 3: Privilege drop.** The entrypoint calls:
 

@@ -36,6 +36,7 @@ Step-by-step guides for specific tasks once you're up and running.
 - [Workspace Configuration](how-to/workspace-configuration.md)
 - [Custom Images](how-to/custom-images.md)
 - [Network Access](how-to/network-access.md)
+- [SSH & Git Passthrough](how-to/ssh-git-passthrough.md)
 - [Access Modes](how-to/access-modes.md)
 
 ### Reference
