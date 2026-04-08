@@ -128,29 +128,39 @@ func dedupEnvByKeyLastWins(entries []string) []string {
 }
 
 func ResolveFromCWD(cfg *config.Config, cwd string) (*Resolved, string, error) {
-	var bestWs *Resolved
+	var bestName string
 	var bestMatchedPath string
 	var bestSegments int
 
 	for _, name := range workspaceNames(cfg) {
-		resolved, err := Resolve(cfg, name)
-		if err != nil {
-			continue
-		}
-		for _, p := range resolved.Paths {
+		ws := cfg.Workspaces[name]
+		for _, raw := range ws.Paths {
+			expanded, err := expandPath(raw)
+			if err != nil {
+				continue
+			}
+			p, err := filepath.Abs(expanded)
+			if err != nil {
+				continue
+			}
 			if pathMatchesCWD(p, cwd) && pathSegments(p) > bestSegments {
-				bestWs = resolved
+				bestName = name
 				bestMatchedPath = p
 				bestSegments = pathSegments(p)
 			}
 		}
 	}
 
-	if bestWs == nil {
-		return nil, "", fmt.Errorf("no workspace matches path %s", cwd)
+	if bestName == "" {
+		return nil, "", fmt.Errorf("no workspace matches directory %q", cwd)
 	}
 
-	return bestWs, bestMatchedPath, nil
+	resolved, err := Resolve(cfg, bestName)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve workspace %q: %w", bestName, err)
+	}
+
+	return resolved, bestMatchedPath, nil
 }
 
 func PortForWorkspace(cfg *config.Config, name string) int {
