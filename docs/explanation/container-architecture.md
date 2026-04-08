@@ -53,7 +53,7 @@ Environment variables configured via `env` or `env_file` in the workspace config
 
 ## The entrypoint sequence
 
-The container image's entrypoint script runs as root and performs three distinct phases before handing off to the agent process.
+The entrypoint script is bind-mounted into the container at runtime by jailoc and runs as root. It performs three distinct phases before handing off to the agent process.
 
 **Phase 1: Network rules.** The script installs iptables rules that shape what the agent can reach. It inserts ACCEPT rules for the dind container, the host gateway, and any hosts or networks you've allowed in config. It then appends DROP rules for RFC 1918 address space, link-local addresses, and CGNAT ranges. Public internet traffic is untouched. See [Network Isolation](network-isolation.md) for a full explanation of the security model.
 

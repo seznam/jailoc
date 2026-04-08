@@ -12,7 +12,7 @@ When an overlay Dockerfile uses `FROM <parent>`, the following instructions are 
 | `EXPOSE` | Yes | All exposed ports from the parent remain declared |
 | `VOLUME` | Yes | Parent-declared volumes persist; see incompatible changes below |
 | `LABEL` | Yes | Parent labels are merged; overlay labels take precedence on collision |
-| `ENTRYPOINT` | Overridden | Compose template forces `/usr/local/bin/entrypoint.sh` at runtime |
+| `ENTRYPOINT` | Overridden | Compose template sets the entrypoint to a bind-mounted script at runtime |
 | `CMD` | Overridden | Compose template forces `opencode serve ...` at runtime |
 | `USER` | Overridden | Entrypoint drops to UID 1000 via `setpriv`; `USER` instruction has no effect |
 | `WORKDIR` | Overridden | Compose template sets `working_dir` to the first workspace path at runtime |
@@ -26,7 +26,7 @@ The generated `docker-compose.yml` unconditionally sets the following fields for
 
 | Compose field | Value | Source |
 |---------------|-------|--------|
-| `entrypoint` | `["/usr/local/bin/entrypoint.sh"]` | Compose template |
+| `entrypoint` | `["/usr/local/bin/entrypoint.sh"]` | Compose template; script is bind-mounted from the host |
 | `command` | `["opencode", "serve", ...]` | Compose template |
 | `working_dir` | First workspace path from config | Resolved workspace |
 
@@ -38,7 +38,6 @@ The table below lists overlay actions that affect runtime behaviour. Severity le
 
 | Action | Severity | Effect |
 |--------|----------|--------|
-| Delete `/usr/local/bin/entrypoint.sh` | Fatal | Container fails to start; entrypoint binary is missing |
 | Delete `/home/agent` or UID 1000 user | Fatal | Entrypoint `chown` and `setpriv` calls fail; container exits before agent starts |
 | Remove `iptables` package | Fatal | Network isolation setup fails; entrypoint exits with error |
 | Remove `setpriv` package | Fatal | Privilege drop from root to UID 1000 fails; entrypoint cannot continue |

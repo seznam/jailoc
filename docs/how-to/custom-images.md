@@ -28,7 +28,7 @@ Set `image` in `[defaults]` to use a pre-built image as the starting point for a
 image = "myregistry.example.com/myteam/opencode-base:v1.2.3"
 ```
 
-The image must contain OpenCode and the required agent tooling (entrypoint, iptables, setpriv). A plain OS image like `ubuntu:22.04` cannot be used here — the container would fail to start. When `defaults.image` is not set, jailoc builds from its embedded Dockerfile automatically.
+The image must contain OpenCode and the required agent tooling (iptables, setpriv). A plain OS image like `ubuntu:22.04` cannot be used here — the container would fail to start. When `defaults.image` is not set, jailoc builds from its embedded Dockerfile automatically.
 
 With this set, a workspace that adds its own `dockerfile` builds on top of the specified image:
 
@@ -42,38 +42,26 @@ A workspace without a `dockerfile` receives the specified image as-is.
 
 ---
 
-## Use a local Dockerfile as the base image
+## Use a custom Dockerfile as the base image
 
-Set `dockerfile` in the global `[base]` section to an absolute path on your host. jailoc reads the file, builds it locally, and tags the result with a content-based hash (`jailoc-base:preset-<hash>`).
+Set `dockerfile` in the global `[base]` section to a local path or HTTP(S) URL. jailoc reads (or downloads) the file, builds it locally, and tags the result with a content-based hash (`jailoc-base:preset-<hash>`).
 
 ```toml
 [base]
 dockerfile = "/opt/myorg/base.Dockerfile"
 ```
 
-Tilde paths work too:
+Tilde paths and HTTP(S) URLs work too:
 
 ```toml
 [base]
 dockerfile = "~/dockerfiles/base.Dockerfile"
-```
-
-!!! warning
-    If the file doesn't exist or the build fails, jailoc aborts. There is no fallback to the embedded image.
-
----
-
-## Use a remote Dockerfile URL as the base image
-
-Set `dockerfile` in `[base]` to an HTTP(S) URL. jailoc downloads the file, builds it locally, and tags the result with a content-based hash.
-
-```toml
-[base]
+# or
 dockerfile = "https://git.example.com/team/dockerfiles/-/raw/main/opencode.Dockerfile"
 ```
 
 !!! warning
-    If the download fails or exceeds 1 MiB, jailoc aborts. The URL must be reachable at `jailoc up` time.
+    If the file doesn't exist, the download fails (or exceeds 1 MiB), or the build fails, jailoc aborts. There is no fallback to the embedded image.
 
 ---
 
@@ -179,12 +167,33 @@ COPY --from=builder /bin/mytool /usr/local/bin/mytool
 
 This keeps the final image free of compilers and intermediate artifacts.
 
+### Install a custom binary
+
+To add a pre-built binary from a release URL, download and install it in a single `RUN` layer:
+
+```dockerfile
+ARG BASE
+FROM ${BASE}
+
+RUN curl -fsSL https://github.com/org/tool/releases/download/v1.0/tool-linux-amd64 \
+    -o /usr/local/bin/tool \
+    && chmod +x /usr/local/bin/tool
+```
+
+For archives that need extraction:
+
+```dockerfile
+RUN curl -fsSL https://github.com/org/tool/releases/download/v1.0/tool-linux-amd64.tar.gz \
+    | tar -xzf - -C /usr/local/bin tool
+```
+
+If the tool requires compilation, use a [multi-stage build](#use-multi-stage-builds-for-compiled-tools) instead to keep the final image small.
+
 ### What to avoid
 
 !!! danger "Fatal: breaks the container entirely"
     These changes cause the container to fail at startup or make the agent unusable:
 
-    - **Deleting `/usr/local/bin/entrypoint.sh`** — the compose template sets this as the container entrypoint; removing it prevents the container from starting.
     - **Deleting `/home/agent` or removing UID 1000** — the entrypoint drops privileges to UID 1000 and all agent tools run as this user; without it, startup fails.
     - **Removing `iptables`** — the entrypoint uses iptables to enforce network isolation rules; without it, the container exits immediately.
     - **Removing `setpriv`** — the entrypoint calls `setpriv` to drop capabilities and switch to UID 1000; without it, the agent runs as root or the container fails to start.
