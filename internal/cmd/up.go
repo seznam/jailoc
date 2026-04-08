@@ -32,7 +32,7 @@ func runUp(ctx context.Context) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if !workspaceExplicit {
+	if !workspaceExplicit && workspaceFlag == "default" {
 		cwd, err := os.Getwd()
 		if err == nil {
 			if resolved, _, err := workspace.ResolveFromCWD(cfg, cwd); err == nil {
