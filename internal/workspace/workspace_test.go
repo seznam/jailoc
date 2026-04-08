@@ -153,6 +153,22 @@ func TestResolveFromCWD(t *testing.T) {
 			wantMatchedPath: "/a/b",
 		},
 		{
+			name: "segment count wins over string length",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"long-name": {
+						Paths: []string{"/a/bb"},
+					},
+					"deep": {
+						Paths: []string{"/a/b/c"},
+					},
+				},
+			},
+			cwd:             "/a/b/c/d",
+			wantWorkspace:   "deep",
+			wantMatchedPath: "/a/b/c",
+		},
+		{
 			name: "single match no overlap unchanged",
 			cfg: &config.Config{
 				Workspaces: map[string]config.Workspace{

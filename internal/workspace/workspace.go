@@ -130,7 +130,7 @@ func dedupEnvByKeyLastWins(entries []string) []string {
 func ResolveFromCWD(cfg *config.Config, cwd string) (*Resolved, string, error) {
 	var bestWs *Resolved
 	var bestMatchedPath string
-	var bestPathLen int
+	var bestSegments int
 
 	for _, name := range workspaceNames(cfg) {
 		resolved, err := Resolve(cfg, name)
@@ -138,10 +138,10 @@ func ResolveFromCWD(cfg *config.Config, cwd string) (*Resolved, string, error) {
 			continue
 		}
 		for _, p := range resolved.Paths {
-			if pathMatchesCWD(p, cwd) && len(p) > bestPathLen {
+			if pathMatchesCWD(p, cwd) && pathSegments(p) > bestSegments {
 				bestWs = resolved
 				bestMatchedPath = p
-				bestPathLen = len(p)
+				bestSegments = pathSegments(p)
 			}
 		}
 	}
@@ -173,6 +173,12 @@ func MatchesCWD(ws *Resolved, cwd string) bool {
 		}
 	}
 	return false
+}
+
+// pathSegments returns the number of non-empty segments in a filepath.
+// For example, "/a/b/c" returns 3, "/a/bb" returns 2.
+func pathSegments(p string) int {
+	return len(strings.Split(strings.Trim(p, string(filepath.Separator)), string(filepath.Separator)))
 }
 
 func pathMatchesCWD(base, cwd string) bool {
