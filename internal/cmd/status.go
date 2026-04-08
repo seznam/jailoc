@@ -25,6 +25,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	if !workspaceExplicit {
+		cwd, err := os.Getwd()
+		if err == nil {
+			if resolved, _, err := workspace.ResolveFromCWD(cfg, cwd); err == nil {
+				workspaceFlag = resolved.Name
+			}
+		}
+	}
+
 	ws, err := workspace.Resolve(cfg, workspaceFlag)
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)

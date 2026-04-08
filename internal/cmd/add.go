@@ -33,9 +33,21 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Auto-detect workspace from target path if not explicitly set
+	if !workspaceExplicit {
+		if resolved, _, err := workspace.ResolveFromCWD(cfg, targetDir); err == nil {
+			workspaceFlag = resolved.Name
+		}
+	}
+
 	ws, err := workspace.Resolve(cfg, workspaceFlag)
 	if err != nil {
 		return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
+	}
+
+	// Conflict detection: explicit -w + path not under workspace → error
+	if workspaceExplicit && !workspace.MatchesCWD(ws, targetDir) {
+		return fmt.Errorf("path %q is not under workspace %q; use a different --workspace or omit the flag for auto-detection", targetDir, workspaceFlag)
 	}
 
 	if isDuplicate(ws.Paths, targetDir) {

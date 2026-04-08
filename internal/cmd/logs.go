@@ -32,6 +32,13 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	name := workspaceFlag
 	if len(args) > 0 {
 		name = args[0]
+	} else if !workspaceExplicit {
+		cwd, err := os.Getwd()
+		if err == nil {
+			if resolved, _, err := workspace.ResolveFromCWD(cfg, cwd); err == nil {
+				name = resolved.Name
+			}
+		}
 	}
 
 	ws, err := workspace.Resolve(cfg, name)

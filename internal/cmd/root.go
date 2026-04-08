@@ -20,6 +20,7 @@ import (
 )
 
 var workspaceFlag string
+var workspaceExplicit bool
 var appVersion string
 var remoteFlag, execFlag bool
 
@@ -28,10 +29,12 @@ var rootCmd = &cobra.Command{
 	Short:        "Manage sandboxed OpenCode Docker environments",
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		if noColor, _ := cmd.Flags().GetBool("no-color"); noColor {
 			color.NoColor = true
 		}
+		workspaceExplicit = cmd.Flags().Changed("workspace")
+		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -44,6 +47,12 @@ var rootCmd = &cobra.Command{
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
+		}
+
+		if !workspaceExplicit {
+			if resolved, _, err := workspace.ResolveFromCWD(cfg, targetPath); err == nil {
+				workspaceFlag = resolved.Name
+			}
 		}
 
 		ws, err := workspace.Resolve(cfg, workspaceFlag)
