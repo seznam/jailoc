@@ -2058,3 +2058,195 @@ image = "alpine:latest"
 		})
 	}
 }
+
+func TestValidateErrorMessages(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "valid.env")
+	writeFile(t, envFile, "KEY=val\n")
+
+	tests := []struct {
+		name        string
+		cfg         *Config
+		wantSubstrs []string // all substrings must appear in the error message
+	}{
+		{
+			name: "invalid workspace name includes the name",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"My Project": {Paths: []string{"/data"}},
+				},
+			},
+			wantSubstrs: []string{"My Project", "must match"},
+		},
+		{
+			name: "invalid CIDR includes workspace name and value",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Paths: []string{"/data"}, AllowedNetworks: []string{"not-a-cidr"}},
+				},
+			},
+			wantSubstrs: []string{"myws", "not-a-cidr"},
+		},
+		{
+			name: "forbidden path includes workspace name, path, and prefix",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Paths: []string{"/usr/local/bin"}},
+				},
+			},
+			wantSubstrs: []string{"myws", "/usr/local/bin", "conflicts with container-internal directory"},
+		},
+		{
+			name: "empty path string includes workspace name",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Paths: []string{"/data", ""}},
+				},
+			},
+			wantSubstrs: []string{"myws", "empty path"},
+		},
+		{
+			name: "invalid mode includes the value",
+			cfg: &Config{
+				Mode:       "banana",
+				Workspaces: map[string]Workspace{},
+			},
+			wantSubstrs: []string{"banana", "invalid mode"},
+		},
+		{
+			name: "env missing equals includes workspace and entry",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Env: []string{"NO_EQUALS"}},
+				},
+			},
+			wantSubstrs: []string{"myws", "NO_EQUALS", "KEY=VALUE"},
+		},
+		{
+			name: "env empty key includes workspace and entry",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Env: []string{"=value"}},
+				},
+			},
+			wantSubstrs: []string{"myws", "=value", "key must not be empty"},
+		},
+		{
+			name: "env reserved key includes workspace and key name",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Env: []string{"DOCKER_HOST=tcp://localhost:2376"}},
+				},
+			},
+			wantSubstrs: []string{"myws", "DOCKER_HOST", "reserved"},
+		},
+		{
+			name: "env_file relative path includes workspace and path",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {EnvFile: []string{"relative/path.env"}},
+				},
+			},
+			wantSubstrs: []string{"myws", "relative/path.env", "must be absolute"},
+		},
+		{
+			name: "env_file nonexistent includes workspace and path",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {EnvFile: []string{"/nonexistent/file.env"}},
+				},
+			},
+			wantSubstrs: []string{"myws", "/nonexistent/file.env", "does not exist"},
+		},
+		{
+			name: "defaults env missing equals includes context",
+			cfg: &Config{
+				Defaults: Defaults{Env: []string{"NOEQUALS"}},
+			},
+			wantSubstrs: []string{"defaults", "NOEQUALS", "KEY=VALUE"},
+		},
+		{
+			name: "defaults env reserved key includes context and key",
+			cfg: &Config{
+				Defaults: Defaults{Env: []string{"OPENCODE_LOG=debug"}},
+			},
+			wantSubstrs: []string{"defaults", "OPENCODE_LOG", "reserved"},
+		},
+		{
+			name: "defaults env_file relative path includes context",
+			cfg: &Config{
+				Defaults: Defaults{EnvFile: []string{"relative.env"}},
+			},
+			wantSubstrs: []string{"defaults", "relative.env", "must be absolute"},
+		},
+		{
+			name: "image and dockerfile conflict includes workspace",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Paths: []string{"/data"}, Image: "nginx:latest", Dockerfile: "/Dockerfile"},
+				},
+			},
+			wantSubstrs: []string{"myws", "cannot set both", "image", "dockerfile"},
+		},
+		{
+			name: "image and build_context conflict includes workspace",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Paths: []string{"/data"}, Image: "nginx:latest", BuildContext: "/build"},
+				},
+			},
+			wantSubstrs: []string{"myws", "cannot set both", "image", "build_context"},
+		},
+		{
+			name: "whitespace-only image includes workspace",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Paths: []string{"/data"}, Image: "   "},
+				},
+			},
+			wantSubstrs: []string{"myws", "image", "must not be empty or whitespace-only"},
+		},
+		{
+			name: "dockerfile relative path includes workspace",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Paths: []string{"/data"}, Dockerfile: "relative/Dockerfile"},
+				},
+			},
+			wantSubstrs: []string{"myws", "must be an absolute path"},
+		},
+		{
+			name: "base dockerfile invalid URL includes field",
+			cfg: &Config{
+				Base:       BaseConfig{Dockerfile: "http:///no-host"},
+				Workspaces: map[string]Workspace{},
+			},
+			wantSubstrs: []string{"base dockerfile", "scheme must be http or https"},
+		},
+		{
+			name:        "nil config",
+			cfg:         nil,
+			wantSubstrs: []string{"nil"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := Validate(tt.cfg)
+			if err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+
+			msg := err.Error()
+			for _, sub := range tt.wantSubstrs {
+				if !strings.Contains(msg, sub) {
+					t.Errorf("error message %q missing expected substring %q", msg, sub)
+				}
+			}
+		})
+	}
+}

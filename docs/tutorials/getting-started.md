@@ -53,9 +53,6 @@ The bare `jailoc` shortcut is convenient, but you can also drive each step expli
 ```bash
 # Start the environment in the background
 jailoc up
-
-# Attach your local opencode TUI to the running agent
-jailoc attach
 ```
 
 This separation is useful when you want to start the workspace and come back to it later, or when you're scripting workspace lifecycle from CI.

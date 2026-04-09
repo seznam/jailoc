@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 )
 
 var workspaceFlag string
+var workspaceExplicit bool
 var appVersion string
 var remoteFlag, execFlag bool
 
@@ -28,10 +30,12 @@ var rootCmd = &cobra.Command{
 	Short:        "Manage sandboxed OpenCode Docker environments",
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		if noColor, _ := cmd.Flags().GetBool("no-color"); noColor {
 			color.NoColor = true
 		}
+		workspaceExplicit = cmd.Flags().Changed("workspace")
+		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -44,6 +48,18 @@ var rootCmd = &cobra.Command{
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
+		}
+
+		if !workspaceExplicit {
+			resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, targetPath)
+			switch {
+			case cwdErr == nil:
+				workspaceFlag = resolved.Name
+			case errors.Is(cwdErr, workspace.ErrNoMatch):
+				// no workspace matches target — keep default
+			default:
+				return fmt.Errorf("resolve workspace from target path: %w", cwdErr)
+			}
 		}
 
 		ws, err := workspace.Resolve(cfg, workspaceFlag)
@@ -98,7 +114,8 @@ var rootCmd = &cobra.Command{
 
 		if !running {
 			_, _ = color.New(color.FgCyan).Printf("Starting workspace %s...\n", ws.Name)
-			if err := runUp(ctx); err != nil {
+			workspaceExplicit = true
+			if err := runUp(ctx, nil); err != nil {
 				return fmt.Errorf("start workspace %q: %w", ws.Name, err)
 			}
 			_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)

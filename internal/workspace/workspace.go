@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,11 @@ import (
 
 	"github.com/seznam/jailoc/internal/config"
 )
+
+// ErrNoMatch is returned by ResolveFromCWD when no workspace has a path
+// matching the given directory. Callers can use errors.Is to distinguish
+// this from real configuration/resolution failures.
+var ErrNoMatch = errors.New("no matching workspace")
 
 // BasePort is the internal port that opencode serve binds to inside the container.
 // Host-side ports are assigned as BasePort + alphabetical workspace index.
@@ -128,19 +134,39 @@ func dedupEnvByKeyLastWins(entries []string) []string {
 }
 
 func ResolveFromCWD(cfg *config.Config, cwd string) (*Resolved, string, error) {
+	var bestName string
+	var bestMatchedPath string
+	var bestSegments int
+
 	for _, name := range workspaceNames(cfg) {
-		resolved, err := Resolve(cfg, name)
-		if err != nil {
-			return nil, "", err
-		}
-		for _, p := range resolved.Paths {
-			if pathMatchesCWD(p, cwd) {
-				return resolved, p, nil
+		ws := cfg.Workspaces[name]
+		for _, raw := range ws.Paths {
+			expanded, err := expandPath(raw)
+			if err != nil {
+				continue
+			}
+			p, err := filepath.Abs(expanded)
+			if err != nil {
+				continue
+			}
+			if pathMatchesCWD(p, cwd) && pathSegments(p) > bestSegments {
+				bestName = name
+				bestMatchedPath = p
+				bestSegments = pathSegments(p)
 			}
 		}
 	}
 
-	return nil, "", fmt.Errorf("no workspace matches current directory %q", cwd)
+	if bestName == "" {
+		return nil, "", fmt.Errorf("%w: directory %q", ErrNoMatch, cwd)
+	}
+
+	resolved, err := Resolve(cfg, bestName)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve workspace %q: %w", bestName, err)
+	}
+
+	return resolved, bestMatchedPath, nil
 }
 
 func PortForWorkspace(cfg *config.Config, name string) int {
@@ -163,6 +189,16 @@ func MatchesCWD(ws *Resolved, cwd string) bool {
 		}
 	}
 	return false
+}
+
+// pathSegments returns the number of non-empty segments in a filepath.
+// For example, "/a/b/c" returns 3, "/a/bb" returns 2, "/" returns 0.
+func pathSegments(p string) int {
+	trimmed := strings.Trim(p, string(filepath.Separator))
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, string(filepath.Separator)))
 }
 
 func pathMatchesCWD(base, cwd string) bool {

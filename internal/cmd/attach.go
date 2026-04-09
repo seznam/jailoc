@@ -7,27 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
 )
-
-var attachCmd = &cobra.Command{
-	Use:   "attach [workspace]",
-	Short: "Attach to a running workspace (host opencode attach by default)",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runAttach,
-}
-
-var attachDirFlag string
 
 func attachHostArgs(serverURL, password, dir string) []string {
 	args := []string{"attach", serverURL}
@@ -46,61 +34,6 @@ func attachExecArgs(serverURL, dir string) []string {
 		args = append(args, "--dir", dir)
 	}
 	return args
-}
-
-func runAttach(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	name := workspaceFlag
-	if len(args) > 0 {
-		name = args[0]
-	}
-
-	ws, err := workspace.Resolve(cfg, name)
-	if err != nil {
-		return fmt.Errorf("resolve workspace: %w", err)
-	}
-
-	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-	client := docker.NewClient(composePath, "", ws.Name)
-
-	ctx := cmd.Context()
-	running, err := client.IsRunning(ctx)
-	if err != nil || !running {
-		return fmt.Errorf("workspace %q is not running; run 'jailoc up' first", ws.Name)
-	}
-
-	attachCtx, stop, err := startAttachWatch(ctx, client, ws.Name)
-	if err != nil {
-		return err
-	}
-	defer stop()
-
-	mode := resolveFromFlags(cmd, cfg)
-	var attachErr error
-	switch mode {
-	case config.ModeExec:
-		_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-		attachErr = attachExec(attachCtx, client, attachDirFlag)
-	default:
-		_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
-		attachErr = attachOnHost(attachCtx, ws, attachDirFlag)
-	}
-
-	if errors.Is(attachErr, errUnhealthy) {
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stderr, "\n--- last %d log lines ---\n", tailLogLines)
-		logCtx, logCancel := context.WithTimeout(ctx, tailLogTimeout)
-		defer logCancel()
-		if logErr := client.TailLogs(logCtx, tailLogLines, os.Stderr); logErr != nil {
-			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "failed to retrieve logs: %v\n", logErr)
-		}
-		_, _ = color.New(color.FgRed).Fprintf(os.Stderr, "--- container reported unhealthy; see logs above ---\n")
-	}
-
-	return attachErr
 }
 
 func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string) error {
@@ -154,8 +87,6 @@ func attachExec(ctx context.Context, client *docker.Client, dir string) error {
 const (
 	attachPollInterval = 500 * time.Millisecond
 	attachWaitDelay    = 2 * time.Second
-	tailLogLines       = 50
-	tailLogTimeout     = 10 * time.Second
 )
 
 var errUnhealthy = errors.New("opencode process unhealthy inside container")
@@ -257,9 +188,4 @@ func runCommandWithContext(ctx context.Context, cmd *exec.Cmd, terminate func() 
 			return <-resultCh
 		}
 	}
-}
-
-func init() {
-	rootCmd.AddCommand(attachCmd)
-	attachCmd.Flags().StringVar(&attachDirFlag, "dir", "", "directory to open in opencode (forwarded as --dir to opencode attach)")
 }

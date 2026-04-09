@@ -14,6 +14,30 @@ The file is created automatically on first run with a `default` workspace alread
 
 ---
 
+## Automatic workspace detection
+
+Most commands accept an explicit `--workspace` flag. When omitted, jailoc selects the workspace automatically using this resolution order:
+
+1. **Explicit `--workspace` flag** — if set, use that workspace.
+2. **Longest-prefix CWD match** — compare the current working directory against every workspace's configured `paths`. The workspace whose path is the longest matching prefix wins. Equal-length matches break alphabetically.
+3. **`default` fallback** — if no path matches, the `default` workspace is used.
+
+Given these two workspaces:
+
+```toml
+[workspaces.broad]
+paths = ["/home/you/projects"]
+
+[workspaces.specific]
+paths = ["/home/you/projects/api"]
+```
+
+Running `jailoc up` from `/home/you/projects/api/src` selects `specific` (longer prefix match). Running from `/home/you/projects/other` selects `broad`.
+
+`jailoc add` uses the path being added (not the raw CWD) for detection. If `--workspace` is set explicitly and the path being added is not under any of that workspace's configured paths, jailoc returns an error.
+
+---
+
 ## Define a workspace
 
 Each workspace is a `[workspaces.<name>]` section. The only required field is `paths`.
@@ -124,7 +148,7 @@ build_context = "/home/you/projects/myproject/docker"
 
 ## Set a connection mode
 
-Control how `jailoc attach` connects to the running container:
+Control how `jailoc` connects to the running container:
 
 ```toml
 [workspaces.myproject]

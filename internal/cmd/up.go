@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,14 +23,31 @@ var upCmd = &cobra.Command{
 	Long:  "Start the Docker Compose environment for a workspace. If already running, no-op.",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runUp(cmd.Context())
+		return runUp(cmd.Context(), args)
 	},
 }
 
-func runUp(ctx context.Context) error {
+func runUp(ctx context.Context, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	if len(args) > 0 {
+		workspaceFlag = args[0]
+	} else if !workspaceExplicit {
+		cwd, err := os.Getwd()
+		if err == nil {
+			resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, cwd)
+			switch {
+			case cwdErr == nil:
+				workspaceFlag = resolved.Name
+			case errors.Is(cwdErr, workspace.ErrNoMatch):
+				// no workspace matches CWD — keep default
+			default:
+				return fmt.Errorf("resolve workspace from current directory: %w", cwdErr)
+			}
+		}
 	}
 
 	ws, err := workspace.Resolve(cfg, workspaceFlag)

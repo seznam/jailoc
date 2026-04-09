@@ -72,7 +72,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
 | `image` | string | (none) | Pre-built Docker image to use directly for this workspace, bypassing all build steps. Compose pulls the image natively at startup. Cannot be combined with `dockerfile` or `build_context`. |
 | `build_context` | string | (none) | Docker build context directory for the workspace overlay build. When empty and `dockerfile` is a local path, defaults to the parent directory of the Dockerfile. When empty and `dockerfile` is an HTTP URL, a temporary directory is used. Supports `~` expansion. |
-| `mode` | string | `""` | Connection mode for `jailoc attach` and the root `jailoc` command. Accepted values: `"remote"`, `"exec"`, `""` (auto-detect). |
+| `mode` | string | `""` | Connection mode for `jailoc`. Accepted values: `"remote"`, `"exec"`, `""` (auto-detect). |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for a workspace-specific overlay image. Builds on top of the base image resolved by `[base]` settings. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. Supports `~` expansion for local paths. |
 | `env` | string[] | `[]` | Environment variables for this workspace. Each entry in `KEY=VALUE` format. These override any global `defaults.env` entry with the same key. Reserved keys are rejected (see Validation Rules). |
 | `env_file` | string[] | `[]` | Paths to `.env` files for this workspace. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Loaded after global `defaults.env_file` entries. |
