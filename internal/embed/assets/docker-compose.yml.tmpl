@@ -59,8 +59,7 @@ services:
     cpus: 2.0
     pids_limit: 256
     networks:
-      - dind
-      - egress
+      - jailoc
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "DEBUG"]
 {{- if .Paths}}
@@ -99,8 +98,7 @@ services:
       - 1.1.1.1
       - 8.8.8.8
     networks:
-      - dind
-      - egress
+      - jailoc
     expose:
       - "2376"
 
@@ -112,6 +110,4 @@ volumes:
   dind-data:
 
 networks:
-  dind:
-    internal: true
-  egress:
+  jailoc:
