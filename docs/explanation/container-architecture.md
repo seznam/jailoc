@@ -20,21 +20,17 @@ flowchart TB
     end
   end
 
-  oc -.- dind_net["dind network (internal)"]
-  dind -.- dind_net
-  oc -.- egress_net["egress network (external)"]
+  oc -.- net["jailoc network"]
+    dind -.- net
 ```
 
 The **opencode container** is where the agent lives. It runs `opencode serve` as UID 1000 (a non-root user named `agent`), exposes a port to the host for attaching a terminal, and has your workspace paths mounted read-write. Your OpenCode configuration is mounted read-only so the agent inherits your API keys and settings without being able to modify them on the host.
 
 The **dind container** runs a full Docker daemon in privileged mode. It exists solely to give the agent access to Docker without sharing the host's socket. The daemon listens on port 2376 with mutual TLS authentication, and the certificates are shared with the opencode container via a named volume. When the agent runs `docker build` or starts a database for testing, those containers exist entirely within the dind daemon's scope and are invisible to the host.
 
-## Two networks
+## Network
 
-The Compose project attaches containers to two networks:
-
-- The **dind network** is marked `internal: true`, meaning no host-routed traffic flows through it. It carries only the TLS connection between the opencode container and the dind daemon. Setting it internal ensures the dind daemon itself isn't reachable from outside the project.
-- The **egress network** connects the opencode container to the outside world. Traffic on this network is subject to the iptables rules set up during container startup.
+Both containers share a single Docker network named `jailoc`. The opencode container communicates with the dind daemon over this network via TLS on port 2376, and the same network carries the opencode container's egress traffic to the outside world. Network isolation is handled by iptables rules inside the opencode container rather than by network-level separation — see [Network Isolation](network-isolation.md) for details.
 
 ## Volume mounts
 
@@ -73,7 +69,7 @@ The three-phase sequence matters because iptables manipulation and `chown` both 
 
 ## Why privileged dind?
 
-Nested Docker requires the `--privileged` flag because it needs to mount cgroups, load kernel modules, and use `overlay2` as a storage driver. There's no way around this with current Linux kernel capabilities. The tradeoff is accepted deliberately: the dind container is privileged, but it's on an internal network, has no access to host paths, and its daemon is only reachable from the opencode container over mutual TLS.
+Nested Docker requires the `--privileged` flag because it needs to mount cgroups, load kernel modules, and use `overlay2` as a storage driver. There's no way around this with current Linux kernel capabilities. The tradeoff is accepted deliberately: the dind container is privileged, but it has no access to host paths, and its daemon is only reachable from the opencode container over mutual TLS.
 
 For instructions on configuring which hosts the agent can reach, see [How-to: Network Access](../how-to/network-access.md).
 

@@ -45,7 +45,7 @@ No dependency cycles. Shared types cross package boundaries: `config.Config`, `c
 
 ### Container architecture
 
-Two services per workspace on an internal Docker network:
+Two services per workspace on a shared Docker network:
 
 - **opencode container**: runs `opencode serve` as UID 1000 (agent), workspace paths bind-mounted (rw), OC config mounted (ro), port exposed to host
 - **dind container**: privileged Docker daemon on TLS :2376, shared TLS certs + docker data via named volumes

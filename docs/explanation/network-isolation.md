@@ -34,7 +34,7 @@ For step-by-step instructions, see [How-to: Network Access](../how-to/network-ac
 
 ## The dind sidecar is a special case
 
-The dind container runs on the internal Docker network, not the egress network. iptables rules in the opencode container control egress from that container — they don't apply to the dind container at all. The dind daemon is isolated differently: it's on a network marked `internal: true`, which means Docker prevents host-routed traffic from reaching it. It's only reachable from within the Compose project.
+The dind container shares the same Docker network as the opencode container. iptables rules in the opencode container control egress from that container — they don't apply to the dind container at all. The dind daemon listens on port 2376 with mutual TLS, so only the opencode container (which holds the client certificates) can connect to it.
 
 Any containers the agent starts through dind inherit the dind daemon's network configuration, not the opencode container's iptables rules. If an agent-started container needs to reach a specific address, that's determined by dind's setup, not by jailoc's iptables. This is a deliberate tradeoff: the agent's direct network is controlled, but containers-within-containers operate outside that control layer.
 
