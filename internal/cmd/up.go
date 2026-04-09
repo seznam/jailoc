@@ -105,6 +105,8 @@ func runUp(ctx context.Context, args []string) error {
 		SSHAuthSock:      resolveSSHAuthSock(ws.SSHAuthSock),
 		SSHKnownHosts:    resolveSSHKnownHosts(ws.SSHAuthSock),
 		GitConfig:        resolveGitConfig(ws.GitConfig),
+		CPU:              ws.CPU,
+		Memory:           ws.Memory,
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Generating compose configuration...\n")

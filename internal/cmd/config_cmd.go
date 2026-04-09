@@ -86,6 +86,18 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	defaultsCPU := "(not set, default: 2.0)"
+	if cfg.Defaults.CPU != nil {
+		defaultsCPU = fmt.Sprintf("%.1f", *cfg.Defaults.CPU)
+	}
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults CPU: %s\n", defaultsCPU)
+
+	defaultsMemory := "(not set, default: 4g)"
+	if cfg.Defaults.Memory != nil {
+		defaultsMemory = *cfg.Defaults.Memory
+	}
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Memory: %s\n", defaultsMemory)
+
 	_, _ = fmt.Fprintf(os.Stdout, "\n")
 
 	// Print each workspace
@@ -156,6 +168,18 @@ func runConfig(cmd *cobra.Command, args []string) error {
 				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", f)
 			}
 		}
+
+		wsCPU := "(not set)"
+		if ws.CPU != nil {
+			wsCPU = fmt.Sprintf("%.1f", *ws.CPU)
+		}
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  CPU: %s\n", wsCPU)
+
+		wsMemory := "(not set)"
+		if ws.Memory != nil {
+			wsMemory = *ws.Memory
+		}
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Memory: %s\n", wsMemory)
 
 		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}
