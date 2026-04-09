@@ -34,10 +34,18 @@ if [ -f "$ALLOWED_HOSTS" ]; then
   done < "$ALLOWED_HOSTS"
 fi
 
-# --- Allow DNS resolvers ---
-while read -r key value _; do
-  [ "$key" = "nameserver" ] && iptables -I OUTPUT -d "$value" -j ACCEPT
-done < /etc/resolv.conf
+# --- Allow DNS resolvers (port 53 only) ---
+if [ -f /etc/resolv.conf ]; then
+  while read -r key value _; do
+    if [ "$key" = "nameserver" ]; then
+      if [[ "$value" == *:* ]]; then
+        continue
+      fi
+      iptables -I OUTPUT -p udp -d "$value" --dport 53 -j ACCEPT
+      iptables -I OUTPUT -p tcp -d "$value" --dport 53 -j ACCEPT
+    fi
+  done < /etc/resolv.conf
+fi
 
 # --- Allow CIDR networks from config ---
 ALLOWED_NETWORKS="/etc/jailoc/allowed-networks"
