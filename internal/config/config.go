@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -316,8 +317,8 @@ func Validate(cfg *Config) error {
 		return err
 	}
 
-	if cfg.Defaults.CPU != nil && *cfg.Defaults.CPU <= 0 {
-		return fmt.Errorf("defaults: cpu must be greater than 0")
+	if cfg.Defaults.CPU != nil && (*cfg.Defaults.CPU <= 0 || math.IsNaN(*cfg.Defaults.CPU) || math.IsInf(*cfg.Defaults.CPU, 0)) {
+		return fmt.Errorf("defaults: cpu must be a finite number greater than 0")
 	}
 	if cfg.Defaults.Memory != nil && !validMemory.MatchString(*cfg.Defaults.Memory) {
 		return fmt.Errorf("defaults: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", *cfg.Defaults.Memory)
@@ -388,8 +389,8 @@ func Validate(cfg *Config) error {
 			return err
 		}
 
-		if ws.CPU != nil && *ws.CPU <= 0 {
-			return fmt.Errorf("workspace %q: cpu must be greater than 0", name)
+		if ws.CPU != nil && (*ws.CPU <= 0 || math.IsNaN(*ws.CPU) || math.IsInf(*ws.CPU, 0)) {
+			return fmt.Errorf("workspace %q: cpu must be a finite number greater than 0", name)
 		}
 		if ws.Memory != nil && !validMemory.MatchString(*ws.Memory) {
 			return fmt.Errorf("workspace %q: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", name, *ws.Memory)

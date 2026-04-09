@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -2391,7 +2392,7 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 				},
 				Workspaces: map[string]Workspace{},
 			},
-			errSubstrs: []string{"defaults", "cpu must be greater than 0"},
+			errSubstrs: []string{"defaults", "cpu must be a finite number greater than 0"},
 		},
 		{
 			name: "defaults cpu negative",
@@ -2401,7 +2402,7 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 				},
 				Workspaces: map[string]Workspace{},
 			},
-			errSubstrs: []string{"defaults", "cpu must be greater than 0"},
+			errSubstrs: []string{"defaults", "cpu must be a finite number greater than 0"},
 		},
 		{
 			name: "workspace cpu zero",
@@ -2413,7 +2414,7 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 					},
 				},
 			},
-			errSubstrs: []string{"test", "cpu must be greater than 0"},
+			errSubstrs: []string{"test", "cpu must be a finite number greater than 0"},
 		},
 		{
 			name: "workspace cpu negative",
@@ -2425,7 +2426,49 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 					},
 				},
 			},
-			errSubstrs: []string{"test", "cpu must be greater than 0"},
+			errSubstrs: []string{"test", "cpu must be a finite number greater than 0"},
+		},
+		{
+			name: "defaults cpu NaN",
+			cfg: &Config{
+				Defaults: Defaults{
+					CPU: ptrFloat64(math.NaN()),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "cpu must be a finite number greater than 0"},
+		},
+		{
+			name: "defaults cpu positive infinity",
+			cfg: &Config{
+				Defaults: Defaults{
+					CPU: ptrFloat64(math.Inf(1)),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "cpu must be a finite number greater than 0"},
+		},
+		{
+			name: "defaults cpu negative infinity",
+			cfg: &Config{
+				Defaults: Defaults{
+					CPU: ptrFloat64(math.Inf(-1)),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "cpu must be a finite number greater than 0"},
+		},
+		{
+			name: "workspace cpu NaN",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths: []string{"/data"},
+						CPU:   ptrFloat64(math.NaN()),
+					},
+				},
+			},
+			errSubstrs: []string{"test", "cpu must be a finite number greater than 0"},
 		},
 		{
 			name: "defaults memory zero",
