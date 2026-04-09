@@ -17,6 +17,8 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 		Paths:            []string{"/Users/test/work/project"},
 		OpenCodePassword: "secret",
 		Env:              nil,
+		CPU:              2.0,
+		Memory:           "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -51,7 +53,9 @@ func TestGenerateComposeMultiplePaths(t *testing.T) {
 			"/repos/api",
 			"/repos/web-app",
 		},
-		Env: nil,
+		Env:    nil,
+		CPU:    2.0,
+		Memory: "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -75,6 +79,8 @@ func TestGenerateComposeEmptyPasswordRendersEmptyValue(t *testing.T) {
 		Image:         "ghcr.io/seznam/jailoc:dev",
 		Paths:         []string{"/tmp/work"},
 		Env:           nil,
+		CPU:           2.0,
+		Memory:        "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -99,6 +105,8 @@ func TestGenerateComposeVolumeNamesIncludeWorkspaceName(t *testing.T) {
 		Image:         "ghcr.io/seznam/jailoc:main",
 		Paths:         []string{"/tmp/repo"},
 		Env:           nil,
+		CPU:           2.0,
+		Memory:        "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -124,6 +132,8 @@ func TestWriteComposeFileHappyPath(t *testing.T) {
 		Paths:            []string{"/tmp/workspace"},
 		OpenCodePassword: "testpass",
 		Env:              nil,
+		CPU:              2.0,
+		Memory:           "4g",
 	}
 
 	destPath := filepath.Join(t.TempDir(), "docker-compose.yml")
@@ -165,6 +175,8 @@ func TestWriteComposeFileErrorPath(t *testing.T) {
 		Image:         "ghcr.io/seznam/jailoc:test",
 		Paths:         []string{"/tmp/workspace"},
 		Env:           nil,
+		CPU:           2.0,
+		Memory:        "4g",
 	}
 
 	destPath := "/nonexistent/directory/docker-compose.yml"
@@ -198,6 +210,8 @@ func TestGenerateComposeSSHAuthSock(t *testing.T) {
 			Paths:            []string{"/tmp/work"},
 			OpenCodePassword: "secret",
 			SSHAuthSock:      "/run/host-services/ssh-auth.sock",
+			CPU:              2.0,
+			Memory:           "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -219,6 +233,8 @@ func TestGenerateComposeSSHAuthSock(t *testing.T) {
 			Paths:            []string{"/tmp/work"},
 			OpenCodePassword: "secret",
 			SSHAuthSock:      "",
+			CPU:              2.0,
+			Memory:           "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -248,6 +264,8 @@ func TestGenerateComposeGitConfig(t *testing.T) {
 			Paths:            []string{"/tmp/work"},
 			OpenCodePassword: "secret",
 			GitConfig:        "/home/user/.gitconfig",
+			CPU:              2.0,
+			Memory:           "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -268,6 +286,8 @@ func TestGenerateComposeGitConfig(t *testing.T) {
 			Paths:            []string{"/tmp/work"},
 			OpenCodePassword: "secret",
 			GitConfig:        "",
+			CPU:              2.0,
+			Memory:           "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -294,6 +314,8 @@ func TestGenerateComposeSSHKnownHosts(t *testing.T) {
 			Paths:            []string{"/tmp/work"},
 			OpenCodePassword: "secret",
 			SSHKnownHosts:    "/home/user/.ssh/known_hosts",
+			CPU:              2.0,
+			Memory:           "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -314,6 +336,8 @@ func TestGenerateComposeSSHKnownHosts(t *testing.T) {
 			Paths:            []string{"/tmp/work"},
 			OpenCodePassword: "secret",
 			SSHKnownHosts:    "",
+			CPU:              2.0,
+			Memory:           "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -340,6 +364,8 @@ func TestGenerateComposeAllSSHGitEnabled(t *testing.T) {
 		SSHAuthSock:      "/run/host-services/ssh-auth.sock",
 		GitConfig:        "/home/user/.gitconfig",
 		SSHKnownHosts:    "/home/user/.ssh/known_hosts",
+		CPU:              2.0,
+		Memory:           "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -364,6 +390,8 @@ func TestGenerateComposeEnv(t *testing.T) {
 		Paths:            []string{"/tmp/work"},
 		OpenCodePassword: "secret",
 		Env:              []string{"MY_VAR=hello", "OTHER=world"},
+		CPU:              2.0,
+		Memory:           "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -393,6 +421,8 @@ func TestGenerateComposeEmptyEnv(t *testing.T) {
 		Paths:            []string{"/tmp/work"},
 		OpenCodePassword: "secret",
 		Env:              nil,
+		CPU:              2.0,
+		Memory:           "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -421,5 +451,111 @@ func TestGenerateComposeEmptyEnv(t *testing.T) {
 		if !strings.HasPrefix(afterEnv, "      -") {
 			t.Errorf("expected environment entry starting with '      -', got: %q", afterEnv)
 		}
+	}
+}
+
+func TestComposeResourceLimits(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "test",
+		Port:          4096,
+		Image:         "ubuntu:22.04",
+		Paths:         []string{"/data/workspace"},
+		CPU:           2.0,
+		Memory:        "4g",
+	}
+
+	rendered, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	assertContains(t, string(rendered), "mem_limit: 4g")
+	assertContains(t, string(rendered), "memswap_limit: 4g")
+	assertContains(t, string(rendered), "cpus: 2.0")
+	assertContains(t, string(rendered), "mem_reservation: 512m")
+	assertContains(t, string(rendered), "pids_limit: 256")
+}
+
+func TestComposeCustomResourceLimits(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "test",
+		Port:          4096,
+		Image:         "ubuntu:22.04",
+		Paths:         []string{"/data/workspace"},
+		CPU:           4.0,
+		Memory:        "8g",
+	}
+
+	rendered, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	assertContains(t, string(rendered), "mem_limit: 8g")
+	assertContains(t, string(rendered), "memswap_limit: 8g")
+	assertContains(t, string(rendered), "cpus: 4.0")
+	// Old values must NOT be present
+	if strings.Contains(string(rendered), "mem_limit: 4g") {
+		t.Error("expected custom mem_limit: 8g, found old value mem_limit: 4g")
+	}
+}
+
+func TestComposeResourceLimitsFractionalCPU(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "test",
+		Port:          4096,
+		Image:         "ubuntu:22.04",
+		Paths:         []string{"/data/workspace"},
+		CPU:           1.5,
+		Memory:        "512m",
+	}
+
+	rendered, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	assertContains(t, string(rendered), "cpus: 1.5")
+	assertContains(t, string(rendered), "mem_limit: 512m")
+	assertContains(t, string(rendered), "memswap_limit: 512m")
+}
+
+func TestComposeHealthCheckTimings(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "test",
+		Port:          4096,
+		Image:         "ubuntu:22.04",
+		Paths:         []string{"/data/workspace"},
+		CPU:           2.0,
+		Memory:        "4g",
+	}
+
+	rendered, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	assertContains(t, string(rendered), "interval: 30s")
+	assertContains(t, string(rendered), "timeout: 10s")
+	assertContains(t, string(rendered), "retries: 5")
+	assertContains(t, string(rendered), "start_period: 60s")
+
+	// Old hardcoded values must not be present
+	if strings.Contains(string(rendered), "interval: 10s") {
+		t.Error("old health check interval 10s still present")
+	}
+	if strings.Contains(string(rendered), "timeout: 5s") {
+		t.Error("old health check timeout 5s still present")
+	}
+	if strings.Contains(string(rendered), "retries: 3\n") {
+		t.Error("old health check retries: 3 still present")
 	}
 }

@@ -1056,3 +1056,61 @@ func TestResolveFromCWDErrorMessages(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveCPUMemory(t *testing.T) {
+	t.Parallel()
+
+	f64 := func(v float64) *float64 { return &v }
+	str := func(v string) *string { return &v }
+
+	tests := []struct {
+		name       string
+		defCPU     *float64
+		defMemory  *string
+		wsCPU      *float64
+		wsMemory   *string
+		wantCPU    float64
+		wantMemory string
+	}{
+		{"workspace overrides defaults cpu", f64(1.0), nil, f64(4.0), nil, 4.0, "4g"},
+		{"workspace overrides defaults memory", nil, str("8g"), nil, str("16g"), 2.0, "16g"},
+		{"defaults used for cpu when workspace unset", f64(1.0), nil, nil, nil, 1.0, "4g"},
+		{"defaults used for memory when workspace unset", nil, str("8g"), nil, nil, 2.0, "8g"},
+		{"fallback cpu when both unset", nil, nil, nil, nil, 2.0, "4g"},
+		{"fallback memory when both unset", nil, nil, nil, nil, 2.0, "4g"},
+		{"workspace cpu without defaults", nil, nil, f64(0.5), nil, 0.5, "4g"},
+		{"workspace memory without defaults", nil, nil, nil, str("512m"), 2.0, "512m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{
+					CPU:    tt.defCPU,
+					Memory: tt.defMemory,
+				},
+				Workspaces: map[string]config.Workspace{
+					"test": {
+						Paths:  []string{"/data"},
+						CPU:    tt.wsCPU,
+						Memory: tt.wsMemory,
+					},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "test")
+			if err != nil {
+				t.Fatalf("Resolve failed: %v", err)
+			}
+
+			if resolved.CPU != tt.wantCPU {
+				t.Errorf("CPU: got %v, want %v", resolved.CPU, tt.wantCPU)
+			}
+			if resolved.Memory != tt.wantMemory {
+				t.Errorf("Memory: got %q, want %q", resolved.Memory, tt.wantMemory)
+			}
+		})
+	}
+}
