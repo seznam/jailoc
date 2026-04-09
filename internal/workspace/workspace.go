@@ -32,6 +32,8 @@ type Resolved struct {
 	Env             []string
 	SSHAuthSock     bool
 	GitConfig       bool
+	CPU             float64
+	Memory          string
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -104,6 +106,8 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Env:             mergedEnv,
 		SSHAuthSock:     boolWithOverride(cfg.Defaults.SSHAuthSock, ws.SSHAuthSock),
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
+		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
+		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 	}, nil
 }
 
@@ -246,6 +250,26 @@ func boolWithOverride(defaultVal bool, override *bool) bool {
 }
 
 func boolPtrWithDefault(defaultVal *bool, override *bool, fallback bool) bool {
+	if override != nil {
+		return *override
+	}
+	if defaultVal != nil {
+		return *defaultVal
+	}
+	return fallback
+}
+
+func floatWithDefault(defaultVal *float64, override *float64, fallback float64) float64 {
+	if override != nil {
+		return *override
+	}
+	if defaultVal != nil {
+		return *defaultVal
+	}
+	return fallback
+}
+
+func stringWithDefault(defaultVal *string, override *string, fallback string) string {
 	if override != nil {
 		return *override
 	}
