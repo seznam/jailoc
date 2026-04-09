@@ -53,10 +53,10 @@ services:
       - DAC_READ_SEARCH   # traverse restricted dirs during chown
     stdin_open: true
     tty: true
-    mem_limit: {{.Memory}}
-    memswap_limit: {{.Memory}}
+    mem_limit: "{{.Memory}}"
+    memswap_limit: "{{.Memory}}"
     mem_reservation: 512m
-    cpus: {{printf "%.1f" .CPU}}
+    cpus: {{printf "%g" .CPU}}
     pids_limit: 256
     networks:
       - dind

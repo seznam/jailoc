@@ -471,9 +471,9 @@ func TestComposeResourceLimits(t *testing.T) {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
 
-	assertContains(t, string(rendered), "mem_limit: 4g")
-	assertContains(t, string(rendered), "memswap_limit: 4g")
-	assertContains(t, string(rendered), "cpus: 2.0")
+	assertContains(t, string(rendered), `mem_limit: "4g"`)
+	assertContains(t, string(rendered), `memswap_limit: "4g"`)
+	assertContains(t, string(rendered), "cpus: 2")
 	assertContains(t, string(rendered), "mem_reservation: 512m")
 	assertContains(t, string(rendered), "pids_limit: 256")
 }
@@ -495,12 +495,12 @@ func TestComposeCustomResourceLimits(t *testing.T) {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
 
-	assertContains(t, string(rendered), "mem_limit: 8g")
-	assertContains(t, string(rendered), "memswap_limit: 8g")
-	assertContains(t, string(rendered), "cpus: 4.0")
+	assertContains(t, string(rendered), `mem_limit: "8g"`)
+	assertContains(t, string(rendered), `memswap_limit: "8g"`)
+	assertContains(t, string(rendered), "cpus: 4")
 	// Old values must NOT be present
-	if strings.Contains(string(rendered), "mem_limit: 4g") {
-		t.Error("expected custom mem_limit: 8g, found old value mem_limit: 4g")
+	if strings.Contains(string(rendered), `mem_limit: "4g"`) {
+		t.Error(`expected custom mem_limit: "8g", found old value mem_limit: "4g"`)
 	}
 }
 
@@ -522,8 +522,8 @@ func TestComposeResourceLimitsFractionalCPU(t *testing.T) {
 	}
 
 	assertContains(t, string(rendered), "cpus: 1.5")
-	assertContains(t, string(rendered), "mem_limit: 512m")
-	assertContains(t, string(rendered), "memswap_limit: 512m")
+	assertContains(t, string(rendered), `mem_limit: "512m"`)
+	assertContains(t, string(rendered), `memswap_limit: "512m"`)
 }
 
 func TestComposeHealthCheckTimings(t *testing.T) {

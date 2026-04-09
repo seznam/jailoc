@@ -88,7 +88,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 
 	defaultsCPU := "(not set, default: 2.0)"
 	if cfg.Defaults.CPU != nil {
-		defaultsCPU = fmt.Sprintf("%.1f", *cfg.Defaults.CPU)
+		defaultsCPU = fmt.Sprintf("%g", *cfg.Defaults.CPU)
 	}
 	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults CPU: %s\n", defaultsCPU)
 
@@ -171,7 +171,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 
 		wsCPU := "(not set)"
 		if ws.CPU != nil {
-			wsCPU = fmt.Sprintf("%.1f", *ws.CPU)
+			wsCPU = fmt.Sprintf("%g", *ws.CPU)
 		}
 		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  CPU: %s\n", wsCPU)
 
