@@ -203,3 +203,21 @@ ssh_auth_sock = true
 ```
 
 These can also be set per-workspace. See [How to pass through SSH and Git config](ssh-git-passthrough.md) for details.
+
+---
+
+## Set resource limits
+
+Control the CPU and memory allocated to the opencode container with `cpu` and `memory`:
+
+```toml
+[defaults]
+cpu = 2.0
+memory = "4g"
+
+[workspaces.heavy-agent]
+cpu = 8.0
+memory = "16g"
+```
+
+Both fields are optional. Workspace values override defaults; when neither is set, the fallback is `2.0` CPU cores and `"4g"` memory. The `memory` field accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` (e.g. `512m`, `4g`, `1024`).

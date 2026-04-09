@@ -43,6 +43,8 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `allowed_networks` | string[] | `[]` | CIDR ranges allowed through the firewall for all workspaces. Merged with per-workspace `allowed_networks`. |
 | `ssh_auth_sock` | bool | `false` | Mount the host SSH agent socket into the container. Auto-detects the socket: Docker Desktop/OrbStack magic path first, then `$SSH_AUTH_SOCK`. Also mounts `~/.ssh/known_hosts` read-only when enabled. |
 | `git_config` | bool | `true` | Mount the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only into the container. |
+| `cpu` | float64 | `2.0` | Number of CPU cores allocated to the opencode container. Must be greater than 0. |
+| `memory` | string | `"4g"` | Memory limit for the opencode container. Accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` suffix (e.g. `512m`, `4g`, `1024`). Must be greater than 0. |
 
 ### Example
 
@@ -55,6 +57,8 @@ allowed_hosts = ["internal-registry.example.com"]
 allowed_networks = ["10.0.0.0/8"]
 ssh_auth_sock = true
 git_config = true
+cpu = 4.0
+memory = "8g"
 ```
 
 ---
@@ -78,6 +82,8 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `env_file` | string[] | `[]` | Paths to `.env` files for this workspace. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Loaded after global `defaults.env_file` entries. |
 | `ssh_auth_sock` | bool | (inherit) | Mount the host SSH agent socket into the container. When not set, inherits from `[defaults]`. Also mounts `~/.ssh/known_hosts` read-only when enabled. |
 | `git_config` | bool | (inherit) | Mount the host Git configuration read-only into the container. When not set, inherits from `[defaults]`. Falls back to `true` when neither the workspace nor defaults set it. |
+| `cpu` | float64 | (inherit) | Number of CPU cores allocated to the opencode container. When not set, inherits from `[defaults]`. Falls back to `2.0` when neither the workspace nor defaults set it. |
+| `memory` | string | (inherit) | Memory limit for the opencode container. When not set, inherits from `[defaults]`. Falls back to `"4g"` when neither the workspace nor defaults set it. |
 
 !!! note
     `image` is mutually exclusive with `dockerfile` and `build_context`. Setting `image` alongside either of those fields is a validation error.
@@ -130,6 +136,14 @@ The workspace `image` field is mutually exclusive with `dockerfile` and `build_c
 - `image` set together with `dockerfile`
 - `image` set together with `build_context`
 
+### `cpu`
+
+Must be a positive number (greater than 0). Applies to both `[defaults]` and workspace sections. Zero and negative values are rejected at config load time.
+
+### `memory`
+
+Must match the regular expression `^[1-9][0-9]*[kmgKMG]?$` — a positive integer optionally followed by a `k`, `m`, or `g` suffix (case-insensitive). Examples: `512m`, `4g`, `1024`. Values like `0`, `0m`, or empty strings are rejected at config load time.
+
 ### `dockerfile` fields
 
 Accepted values:
@@ -178,6 +192,8 @@ Environment variables from multiple sources are merged in this order (later entr
 `allowed_hosts` and `allowed_networks` use union deduplication: the global list is merged with the workspace list, with duplicates removed, preserving order.
 
 `ssh_auth_sock` and `git_config` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config` falls back to `true` when neither the workspace nor defaults set it.
+
+`cpu` and `memory` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `cpu` falls back to `2.0` and `memory` falls back to `"4g"` when neither the workspace nor defaults set them.
 
 ---
 

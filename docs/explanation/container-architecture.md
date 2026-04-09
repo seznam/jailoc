@@ -27,6 +27,8 @@ flowchart TB
 
 The **opencode container** is where the agent lives. It runs `opencode serve` as UID 1000 (a non-root user named `agent`), exposes a port to the host for attaching a terminal, and has your workspace paths mounted read-write. Your OpenCode configuration is mounted read-only so the agent inherits your API keys and settings without being able to modify them on the host.
 
+The opencode container runs with configurable resource limits. The `cpu` (default 2 cores) and `memory` (default 4 GB) settings control how much of the host's resources the container can consume, and are configurable per workspace via the TOML config. Other resource limits — `pids_limit` (256) and `mem_reservation` (512 MB) — are fixed and not configurable. Resource limit changes take effect on the next `jailoc up` invocation; running containers are not affected until restarted.
+
 The **dind container** runs a full Docker daemon in privileged mode. It exists solely to give the agent access to Docker without sharing the host's socket. The daemon listens on port 2376 with mutual TLS authentication, and the certificates are shared with the opencode container via a named volume. When the agent runs `docker build` or starts a database for testing, those containers exist entirely within the dind daemon's scope and are invisible to the host.
 
 ## Two networks
