@@ -33,6 +33,8 @@ const (
 # allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
 # git_config = true
+# cpu = 2.0
+# memory = "4g"
 
 [workspaces.default]
 paths = []
@@ -45,6 +47,8 @@ paths = []
 # dockerfile = ""
 # ssh_auth_sock = false
 # git_config = true
+# cpu = 2.0
+# memory = "4g"
 `
 )
 
@@ -54,6 +58,8 @@ const (
 )
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+var validMemory = regexp.MustCompile(`^[1-9][0-9]*[kmgKMG]?$`)
 
 var reservedEnvKeys = map[string]bool{
 	"OPENCODE_LOG":             true,
@@ -103,6 +109,8 @@ type Defaults struct {
 	Image           string   `toml:"image"`
 	SSHAuthSock     bool     `toml:"ssh_auth_sock"`
 	GitConfig       *bool    `toml:"git_config"`
+	CPU             *float64 `toml:"cpu"`
+	Memory          *string  `toml:"memory"`
 }
 
 type Workspace struct {
@@ -116,6 +124,8 @@ type Workspace struct {
 	Image           string   `toml:"image"`
 	SSHAuthSock     *bool    `toml:"ssh_auth_sock"`
 	GitConfig       *bool    `toml:"git_config"`
+	CPU             *float64 `toml:"cpu"`
+	Memory          *string  `toml:"memory"`
 }
 
 func ConfigDir() string {
@@ -306,6 +316,13 @@ func Validate(cfg *Config) error {
 		return err
 	}
 
+	if cfg.Defaults.CPU != nil && *cfg.Defaults.CPU <= 0 {
+		return fmt.Errorf("defaults: cpu must be greater than 0")
+	}
+	if cfg.Defaults.Memory != nil && !validMemory.MatchString(*cfg.Defaults.Memory) {
+		return fmt.Errorf("defaults: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", *cfg.Defaults.Memory)
+	}
+
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
 		names = append(names, name)
@@ -369,6 +386,13 @@ func Validate(cfg *Config) error {
 		}
 		if err := validateEnvFiles(ws.EnvFile, wsContext); err != nil {
 			return err
+		}
+
+		if ws.CPU != nil && *ws.CPU <= 0 {
+			return fmt.Errorf("workspace %q: cpu must be greater than 0", name)
+		}
+		if ws.Memory != nil && !validMemory.MatchString(*ws.Memory) {
+			return fmt.Errorf("workspace %q: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", name, *ws.Memory)
 		}
 
 		cfg.Workspaces[name] = ws

@@ -2250,3 +2250,349 @@ func TestValidateErrorMessages(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigCPUMemoryParsing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		checkFn func(t *testing.T, cfg *Config)
+	}{
+		{
+			name: "defaults cpu and memory",
+			content: `
+[defaults]
+cpu = 1.5
+memory = "8g"
+
+[workspaces.x]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.CPU == nil {
+					t.Fatal("expected Defaults.CPU to be non-nil")
+				}
+				if *cfg.Defaults.CPU != 1.5 {
+					t.Errorf("expected CPU 1.5, got %v", *cfg.Defaults.CPU)
+				}
+				if cfg.Defaults.Memory == nil {
+					t.Fatal("expected Defaults.Memory to be non-nil")
+				}
+				if *cfg.Defaults.Memory != "8g" {
+					t.Errorf("expected Memory \"8g\", got %q", *cfg.Defaults.Memory)
+				}
+			},
+		},
+		{
+			name: "workspace cpu and memory",
+			content: `
+[workspaces.test]
+paths = ["/data"]
+cpu = 4.0
+memory = "16g"
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				ws := cfg.Workspaces["test"]
+				if ws.CPU == nil {
+					t.Fatal("expected Workspace.CPU to be non-nil")
+				}
+				if *ws.CPU != 4.0 {
+					t.Errorf("expected CPU 4.0, got %v", *ws.CPU)
+				}
+				if ws.Memory == nil {
+					t.Fatal("expected Workspace.Memory to be non-nil")
+				}
+				if *ws.Memory != "16g" {
+					t.Errorf("expected Memory \"16g\", got %q", *ws.Memory)
+				}
+			},
+		},
+		{
+			name: "no cpu and memory",
+			content: `
+[workspaces.x]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.CPU != nil {
+					t.Errorf("expected Defaults.CPU to be nil, got %v", cfg.Defaults.CPU)
+				}
+				if cfg.Defaults.Memory != nil {
+					t.Errorf("expected Defaults.Memory to be nil, got %q", *cfg.Defaults.Memory)
+				}
+				ws := cfg.Workspaces["x"]
+				if ws.CPU != nil {
+					t.Errorf("expected Workspace.CPU to be nil, got %v", ws.CPU)
+				}
+				if ws.Memory != nil {
+					t.Errorf("expected Workspace.Memory to be nil, got %q", *ws.Memory)
+				}
+			},
+		},
+		{
+			name: "defaults and workspace independently",
+			content: `
+[defaults]
+cpu = 2.0
+memory = "4g"
+
+[workspaces.prod]
+paths = ["/data"]
+cpu = 8.0
+memory = "32g"
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.CPU == nil || *cfg.Defaults.CPU != 2.0 {
+					t.Errorf("expected Defaults.CPU 2.0, got %v", cfg.Defaults.CPU)
+				}
+				if cfg.Defaults.Memory == nil || *cfg.Defaults.Memory != "4g" {
+					t.Errorf("expected Defaults.Memory \"4g\", got %v", cfg.Defaults.Memory)
+				}
+				ws := cfg.Workspaces["prod"]
+				if ws.CPU == nil || *ws.CPU != 8.0 {
+					t.Errorf("expected Workspace.CPU 8.0, got %v", ws.CPU)
+				}
+				if ws.Memory == nil || *ws.Memory != "32g" {
+					t.Errorf("expected Workspace.Memory \"32g\", got %v", ws.Memory)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			writeFile(t, path, tt.content)
+			cfg, err := LoadFrom(path)
+			if err != nil {
+				t.Fatalf("LoadFrom failed: %v", err)
+			}
+			tt.checkFn(t, cfg)
+		})
+	}
+}
+
+func TestConfigCPUMemoryValidation(t *testing.T) {
+	t.Parallel()
+
+	invalidTests := []struct {
+		name       string
+		cfg        *Config
+		errSubstrs []string
+	}{
+		{
+			name: "defaults cpu zero",
+			cfg: &Config{
+				Defaults: Defaults{
+					CPU: ptrFloat64(0.0),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "cpu must be greater than 0"},
+		},
+		{
+			name: "defaults cpu negative",
+			cfg: &Config{
+				Defaults: Defaults{
+					CPU: ptrFloat64(-1.0),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "cpu must be greater than 0"},
+		},
+		{
+			name: "workspace cpu zero",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths: []string{"/data"},
+						CPU:   ptrFloat64(0.0),
+					},
+				},
+			},
+			errSubstrs: []string{"test", "cpu must be greater than 0"},
+		},
+		{
+			name: "workspace cpu negative",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths: []string{"/data"},
+						CPU:   ptrFloat64(-1.0),
+					},
+				},
+			},
+			errSubstrs: []string{"test", "cpu must be greater than 0"},
+		},
+		{
+			name: "defaults memory zero",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString("0g"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid memory format"},
+		},
+		{
+			name: "defaults memory fractional",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString("4.5g"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid memory format"},
+		},
+		{
+			name: "defaults memory empty",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString(""),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid memory format"},
+		},
+		{
+			name: "defaults memory invalid suffix",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString("4gb"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid memory format"},
+		},
+		{
+			name: "defaults memory negative",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString("-1g"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid memory format"},
+		},
+		{
+			name: "workspace memory invalid",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths:  []string{"/data"},
+						Memory: ptrString("0m"),
+					},
+				},
+			},
+			errSubstrs: []string{"test", "invalid memory format"},
+		},
+	}
+
+	for _, tt := range invalidTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := Validate(tt.cfg)
+			if err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			msg := err.Error()
+			for _, substr := range tt.errSubstrs {
+				if !strings.Contains(msg, substr) {
+					t.Errorf("error message %q missing expected substring %q", msg, substr)
+				}
+			}
+		})
+	}
+
+	validTests := []struct {
+		name string
+		cfg  *Config
+	}{
+		{
+			name: "defaults memory lowercase m",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString("512m"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+		},
+		{
+			name: "defaults memory uppercase G",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString("4G"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+		},
+		{
+			name: "defaults memory bare integer",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString("1024"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+		},
+		{
+			name: "defaults memory 4g",
+			cfg: &Config{
+				Defaults: Defaults{
+					Memory: ptrString("4g"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+		},
+		{
+			name: "defaults cpu fractional",
+			cfg: &Config{
+				Defaults: Defaults{
+					CPU: ptrFloat64(0.5),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+		},
+		{
+			name: "defaults cpu high",
+			cfg: &Config{
+				Defaults: Defaults{
+					CPU: ptrFloat64(8.0),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+		},
+		{
+			name: "workspace memory 512m",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths:  []string{"/data"},
+						Memory: ptrString("512m"),
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range validTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := Validate(tt.cfg)
+			if err != nil {
+				t.Errorf("expected nil error, got: %v", err)
+			}
+		})
+	}
+}
+
+func ptrFloat64(v float64) *float64 {
+	return &v
+}
+
+func ptrString(v string) *string {
+	return &v
+}
