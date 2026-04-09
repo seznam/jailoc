@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.9.0](https://github.com/seznam/jailoc/compare/v1.8.0...v1.9.0) (2026-04-09)
+
+
+### Features
+
+* automatic workspace selection by path ([#54](https://github.com/seznam/jailoc/issues/54)) ([f666df6](https://github.com/seznam/jailoc/commit/f666df62016d6f4a8a5bb5d564caf810bf0bd7ad))
+* **config:** add SSH agent, git config, and known_hosts passthrough ([#52](https://github.com/seznam/jailoc/issues/52)) ([dc924b4](https://github.com/seznam/jailoc/commit/dc924b490816d7e84e49f09a0ef3ae8e79cc382c))
+* configurable cpu and memory resource limits ([#58](https://github.com/seznam/jailoc/issues/58)) ([d401de4](https://github.com/seznam/jailoc/commit/d401de4d43cdf861fc35eee465ece4ad6abeb284))
+
+
+### Bug Fixes
+
+* **ci:** use existing draft release to prevent duplicate releases ([#53](https://github.com/seznam/jailoc/issues/53)) ([84ec66d](https://github.com/seznam/jailoc/commit/84ec66d5b72e7c8b07db0c9c14b72edddd246527))
+* **podman:** whitelist DNS resolvers and collapse networks for Podman compatibility ([#57](https://github.com/seznam/jailoc/issues/57)) ([ad96de1](https://github.com/seznam/jailoc/commit/ad96de152bd83f1e5f3645c461fb260dfca8a6e8))
+
 ## [1.8.0](https://github.com/seznam/jailoc/compare/v1.7.1...v1.8.0) (2026-04-08)
 
 
