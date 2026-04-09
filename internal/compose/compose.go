@@ -22,6 +22,8 @@ type ComposeParams struct {
 	SSHAuthSock      string // host socket path to mount, empty = disabled
 	SSHKnownHosts    string // host known_hosts path to mount (bound to SSHAuthSock), empty = disabled
 	GitConfig        string // host gitconfig path to mount, empty = disabled
+	CPU              float64
+	Memory           string
 }
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {

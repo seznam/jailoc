@@ -53,10 +53,10 @@ services:
       - DAC_READ_SEARCH   # traverse restricted dirs during chown
     stdin_open: true
     tty: true
-    mem_limit: 4g
-    memswap_limit: 4g
+    mem_limit: {{.Memory}}
+    memswap_limit: {{.Memory}}
     mem_reservation: 512m
-    cpus: 2.0
+    cpus: {{printf "%.1f" .CPU}}
     pids_limit: 256
     networks:
       - dind
@@ -68,10 +68,10 @@ services:
 {{- end}}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -u \"opencode:$$OPENCODE_SERVER_PASSWORD\" http://localhost:4096/global/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   dind:
     image: docker:dind
