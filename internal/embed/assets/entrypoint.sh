@@ -60,8 +60,8 @@ if [ -f "$ALLOWED_NETWORKS" ]; then
   done < "$ALLOWED_NETWORKS"
 fi
 
-# --- Allow replies to inbound connections (e.g. port-forwarded traffic) ---
-iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# --- Allow replies to inbound connections on the published service port ---
+iptables -A OUTPUT -p tcp --sport 4096 -m conntrack --ctstate ESTABLISHED -j ACCEPT
 
 # --- Block private/internal networks ---
 iptables -A OUTPUT -d 10.0.0.0/8 -j DROP

@@ -53,7 +53,7 @@ Environment variables configured via `env` or `env_file` in the workspace config
 
 The entrypoint script is bind-mounted into the container at runtime by jailoc and runs as root. It performs three distinct phases before handing off to the agent process.
 
-**Phase 1: Network rules.** The script installs iptables rules that shape what the agent can reach. It inserts ACCEPT rules for the dind container, the host gateway, and any hosts or networks you've allowed in config. It then appends DROP rules for RFC 1918 address space, link-local addresses, and CGNAT ranges. Public internet traffic is untouched. See [Network Isolation](network-isolation.md) for a full explanation of the security model.
+**Phase 1: Network rules.** The script installs iptables rules that shape what the agent can reach. It inserts ACCEPT rules for the dind container, the host gateway, DNS resolver addresses (port 53 only), and any hosts or networks you've allowed in config. It appends an ACCEPT rule for TCP replies on the published service port so that port-forwarded connections from the host can complete. It then appends DROP rules for RFC 1918 address space, link-local addresses, and CGNAT ranges. Public internet traffic is untouched. See [Network Isolation](network-isolation.md) for a full explanation of the security model.
 
 **Phase 2: Ownership fix.** Named volumes are created by Docker as root. The entrypoint runs `chown` on the data directories so UID 1000 can write to them once the privilege drop happens. If an SSH agent socket is mounted, its ownership is adjusted to UID 1000 as well. If the `~/.ssh` directory exists (from the known hosts mount), it is recursively owned to UID 1000.
 
