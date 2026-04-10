@@ -32,6 +32,28 @@ go install github.com/seznam/jailoc/cmd/jailoc@latest
 
 Make sure `$GOPATH/bin` (default `$HOME/go/bin`) is on your `PATH`.
 
+### Nix
+
+Run without installing:
+
+```bash
+nix run github:seznam/jailoc
+```
+
+Or add to your flake inputs:
+
+```nix
+{
+  inputs.jailoc.url = "github:seznam/jailoc";
+}
+```
+
+and include the package in your `environment.systemPackages` or `home.packages`:
+
+```nix
+inputs.jailoc.packages."${pkgs.stdenv.hostPlatform.system}".jailoc
+```
+
 ### Pre-built binaries
 
 Download the archive for your platform from [GitHub Releases](https://github.com/seznam/jailoc/releases) (Linux/macOS × amd64/arm64), extract, and place the `jailoc` binary on your `PATH`.
