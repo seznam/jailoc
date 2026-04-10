@@ -53,6 +53,15 @@
             # date intentionally omitted for reproducible builds
           ];
 
+          nativeBuildInputs = [ pkgs.installShellFiles ];
+
+          postInstall = pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+            installShellCompletion --cmd jailoc \
+              --bash <($out/bin/jailoc completion bash) \
+              --fish <($out/bin/jailoc completion fish) \
+              --zsh <($out/bin/jailoc completion zsh)
+          '';
+
           meta = with pkgs.lib; {
             description = "Manage sandboxed Docker Compose environments for headless OpenCode coding agents";
             homepage = "https://github.com/seznam/jailoc";
