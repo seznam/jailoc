@@ -1,0 +1,53 @@
+name: Update Nix vendorHash
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+concurrency:
+  group: nix-vendor-hash-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  update-vendor-hash:
+    name: Update vendorHash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Update vendor hash
+        run: nix develop .#ci --command nix-update --flake --version=skip jailoc
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet flake.nix; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify flake
+        if: steps.diff.outputs.changed == 'true'
+        run: nix flake check
+      - name: Verify build
+        if: steps.diff.outputs.changed == 'true'
+        run: nix build
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        if: steps.diff.outputs.changed == 'true'
+        with:
+          add-paths: flake.nix
+          branch: chore/nix-vendor-hash-update
+          commit-message: "chore(nix): update vendorHash"
+          title: "chore(nix): update vendorHash"
+          body: "Automated vendorHash update after go.mod/go.sum changes."

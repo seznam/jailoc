@@ -72,5 +72,20 @@
 
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.jailoc;
       });
+
+      devShells = forAllSystems ({ pkgs }: {
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            go_1_26
+            gopls
+            golangci-lint
+            nix-update
+          ];
+        };
+
+        ci = pkgs.mkShell {
+          packages = [ pkgs.nix-update ];
+        };
+      });
     };
 }
