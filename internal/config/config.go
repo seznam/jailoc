@@ -866,7 +866,7 @@ func expandPaths(ws *Workspace) error {
 		}
 
 		m.Host = expandedHost
-		m.Container = expandedContainer
+		m.Container = filepath.Clean(expandedContainer)
 		ws.Mounts[i] = formatMount(m)
 	}
 

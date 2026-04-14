@@ -1630,6 +1630,52 @@ func TestExpandPathsTildeEnvFile(t *testing.T) {
 	})
 }
 
+func TestExpandPathsNormalizesContainerPath(t *testing.T) {
+	home := "/data/home_test_" + strings.ReplaceAll(t.Name(), "/", "_")
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		name      string
+		spec      string
+		wantMount string
+	}{
+		{
+			name:      "trailing slash removed",
+			spec:      "/host/dir:/container/path/:ro",
+			wantMount: "/host/dir:/container/path:ro",
+		},
+		{
+			name:      "dot segment cleaned",
+			spec:      "/host/dir:/container/./path:rw",
+			wantMount: "/host/dir:/container/path:rw",
+		},
+		{
+			name:      "double slash cleaned",
+			spec:      "/host/dir:/container//path:ro",
+			wantMount: "/host/dir:/container/path:ro",
+		},
+		{
+			name:      "tilde and traversal cleaned",
+			spec:      "~/data:/home/agent/../agent/data:rw",
+			wantMount: home + "/data:/home/agent/data:rw",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := &Workspace{
+				Paths:  []string{"/data"},
+				Mounts: []string{tt.spec},
+			}
+			if err := expandPaths(ws); err != nil {
+				t.Fatalf("expandPaths failed: %v", err)
+			}
+			if ws.Mounts[0] != tt.wantMount {
+				t.Fatalf("got %q, want %q", ws.Mounts[0], tt.wantMount)
+			}
+		})
+	}
+}
+
 func TestValidateImageAndDockerfileMutualExclusivity(t *testing.T) {
 	t.Parallel()
 
