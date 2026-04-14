@@ -97,6 +97,7 @@ var forbiddenMountPrefixes = []string{
 // Unlike forbiddenMountPrefixes (used for workspace paths), this does NOT include /home/agent,
 // because mounts intentionally target /home/agent/... subpaths (e.g. the default OC mounts).
 var forbiddenMountContainerPrefixes = []string{
+	"/",
 	"/usr",
 	"/etc",
 	"/var",
@@ -509,7 +510,7 @@ func Validate(cfg *Config) error {
 		}
 
 		m.Host = expandedHost
-		m.Container = expandedContainer
+		m.Container = filepath.Clean(expandedContainer)
 		if !strings.HasPrefix(m.Container, "/") {
 			return fmt.Errorf("defaults: mount container path %q must be absolute (start with /)", m.Container)
 		}
@@ -584,13 +585,14 @@ func Validate(cfg *Config) error {
 			if err != nil {
 				return fmt.Errorf("workspace %q: expand mount container path %q: %w", name, m.Container, err)
 			}
-			if !strings.HasPrefix(expandedContainer, "/") {
-				return fmt.Errorf("workspace %q: mount container path %q must be absolute (start with /)", name, expandedContainer)
+			cleanedContainer := filepath.Clean(expandedContainer)
+			if !strings.HasPrefix(cleanedContainer, "/") {
+				return fmt.Errorf("workspace %q: mount container path %q must be absolute (start with /)", name, cleanedContainer)
 			}
 
 			for _, prefix := range forbiddenMountContainerPrefixes {
-				if expandedContainer == prefix || strings.HasPrefix(expandedContainer, prefix+"/") {
-					return fmt.Errorf("workspace %q: mount container path %q is not allowed (conflicts with container-internal directory %q)", name, expandedContainer, prefix)
+				if cleanedContainer == prefix || strings.HasPrefix(cleanedContainer, prefix+"/") {
+					return fmt.Errorf("workspace %q: mount container path %q is not allowed (conflicts with container-internal directory %q)", name, cleanedContainer, prefix)
 				}
 			}
 		}

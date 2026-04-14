@@ -767,3 +767,41 @@ func TestGenerateComposeMountsFromParams(t *testing.T) {
 		t.Fatalf("expected no hardcoded OC mounts in template output, got:\n%s", rendered)
 	}
 }
+
+func TestGenerateComposeMountOrderAfterNamedVolumes(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "order-test",
+		Port:          4810,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/work"},
+		Mounts: []string{
+			"/host/custom:/home/agent/custom:rw",
+		},
+		UseDataVolume:  true,
+		UseCacheVolume: true,
+		CPU:            2.0,
+		Memory:         "4g",
+	}
+
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose returned error: %v", err)
+	}
+
+	rendered := string(out)
+
+	dataVolIdx := strings.Index(rendered, "opencode-data-order-test:/home/agent/.local/share/opencode")
+	mountIdx := strings.Index(rendered, "/host/custom:/home/agent/custom:rw")
+
+	if dataVolIdx < 0 {
+		t.Fatalf("expected named data volume in output, got:\n%s", rendered)
+	}
+	if mountIdx < 0 {
+		t.Fatalf("expected user mount in output, got:\n%s", rendered)
+	}
+	if mountIdx < dataVolIdx {
+		t.Fatalf("expected user mounts to appear after named volumes so they take precedence;\nnamed volume at index %d, user mount at index %d", dataVolIdx, mountIdx)
+	}
+}

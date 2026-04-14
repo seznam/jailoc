@@ -2424,6 +2424,48 @@ func TestValidateMountsInDefaultsRejectsForbiddenContainerPath(t *testing.T) {
 	}
 }
 
+func TestValidateMountsInDefaultsRejectsContainerTraversal(t *testing.T) {
+	safeHome(t)
+
+	cfg := &Config{
+		Defaults: Defaults{
+			Mounts: []string{"~/safe:/home/agent/../../etc:ro"},
+		},
+		Workspaces: map[string]Workspace{
+			"default": {Paths: []string{"/data/workspace"}},
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected defaults container path traversal to fail")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected not allowed error, got: %v", err)
+	}
+}
+
+func TestValidateMountsInDefaultsRejectsRootContainerPath(t *testing.T) {
+	safeHome(t)
+
+	cfg := &Config{
+		Defaults: Defaults{
+			Mounts: []string{"~/safe:/:rw"},
+		},
+		Workspaces: map[string]Workspace{
+			"default": {Paths: []string{"/data/workspace"}},
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected defaults root container path to fail")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected not allowed error, got: %v", err)
+	}
+}
+
 func TestValidateMountsInWorkspace(t *testing.T) {
 	safeHome(t)
 
@@ -2473,6 +2515,44 @@ func TestValidateMountsInWorkspace(t *testing.T) {
 
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("expected /home/agent mount override to be allowed, got: %v", err)
+		}
+	})
+
+	t.Run("container path traversal blocked", func(t *testing.T) {
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"default": {
+					Paths:  []string{"/data/workspace"},
+					Mounts: []string{"~/safe:/home/agent/../../etc:ro"},
+				},
+			},
+		}
+
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected container path traversal to be blocked")
+		}
+		if !strings.Contains(err.Error(), "not allowed") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("root container path blocked", func(t *testing.T) {
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"default": {
+					Paths:  []string{"/data/workspace"},
+					Mounts: []string{"~/safe:/:rw"},
+				},
+			},
+		}
+
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected root container path to be blocked")
+		}
+		if !strings.Contains(err.Error(), "not allowed") {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }
