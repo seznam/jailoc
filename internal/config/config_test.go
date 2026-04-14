@@ -2377,6 +2377,21 @@ func TestValidateMountsHostPathValidation(t *testing.T) {
 			spec:      "/etc/shadow:/container:ro",
 			wantError: true,
 		},
+		{
+			name:      "/private/etc bypasses /etc via symlink on macOS",
+			spec:      "/private/etc:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/private/var bypasses /var via symlink on macOS",
+			spec:      "/private/var:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/private/var subpath is rejected",
+			spec:      "/private/var/run:/container:ro",
+			wantError: true,
+		},
 	}
 
 	for _, tt := range tests {

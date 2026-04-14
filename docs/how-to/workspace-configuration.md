@@ -229,7 +229,7 @@ mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode:rw"]
 ```
 
 !!! note
-    Dangerous host paths are forbidden in mounts: `/`, `/boot`, `/dev`, `/etc`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Container destinations under `/home/agent/...` are allowed; other system directories (`/usr`, `/etc`, `/var`, etc.) are forbidden.
+    Dangerous host paths are forbidden in mounts: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Container destinations under `/home/agent/...` are allowed; other system directories (`/usr`, `/etc`, `/var`, etc.) are forbidden.
 
 See [Configuration reference](../reference/configuration.md) for the full mount format, merge semantics, and validation rules.
 

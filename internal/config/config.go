@@ -120,6 +120,7 @@ var forbiddenMountHostPaths = []string{
 	"/boot",
 	"/dev",
 	"/etc",
+	"/private",
 	"/proc",
 	"/sys",
 	"/run",

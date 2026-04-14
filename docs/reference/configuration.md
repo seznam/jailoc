@@ -145,6 +145,7 @@ The following host paths are forbidden:
 | `/boot` |
 | `/dev` |
 | `/etc` |
+| `/private` |
 | `/proc` |
 | `/sys` |
 | `/run` |
