@@ -15,8 +15,12 @@ services:
 {{- end}}
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+{{- if .UseDataVolume}}
       - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode
+{{- end}}
+{{- if .UseCacheVolume}}
       - opencode-cache-{{.WorkspaceName}}:/home/agent/.cache
+{{- end}}
       - dind-certs-client:/certs/client:ro
 {{- if .SSHAuthSock}}
       - {{.SSHAuthSock}}:/run/ssh-agent.sock
@@ -102,8 +106,12 @@ services:
       - "2376"
 
 volumes:
+{{- if .UseDataVolume}}
   opencode-data-{{.WorkspaceName}}:
+{{- end}}
+{{- if .UseCacheVolume}}
   opencode-cache-{{.WorkspaceName}}:
+{{- end}}
   dind-certs-ca:
   dind-certs-client:
   dind-data:

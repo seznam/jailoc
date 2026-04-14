@@ -126,6 +126,8 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		AllowedNetworks:  ws2.AllowedNetworks,
 		OpenCodePassword: password,
 		Env:              ws2.Env,
+		UseDataVolume:    !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.local/share/opencode"),
+		UseCacheVolume:   !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.cache"),
 	}
 
 	if err := config.WriteAllowedFiles(ws2.Name, cfg); err != nil {

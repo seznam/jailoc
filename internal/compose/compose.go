@@ -25,6 +25,8 @@ type ComposeParams struct {
 	GitConfig        string // host gitconfig path to mount, empty = disabled
 	CPU              float64
 	Memory           string
+	UseDataVolume    bool
+	UseCacheVolume   bool
 }
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {
@@ -54,4 +56,14 @@ func WriteComposeFile(params ComposeParams, destPath string) error {
 	}
 
 	return nil
+}
+
+func MountsContainTarget(mounts []string, containerPath string) bool {
+	for _, m := range mounts {
+		parts := strings.SplitN(m, ":", 3)
+		if len(parts) >= 2 && parts[1] == containerPath {
+			return true
+		}
+	}
+	return false
 }

@@ -19,6 +19,8 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 		Env:              nil,
 		CPU:              2.0,
 		Memory:           "4g",
+		UseDataVolume:    true,
+		UseCacheVolume:   true,
 	}
 
 	out, err := GenerateCompose(params)
@@ -100,13 +102,15 @@ func TestGenerateComposeVolumeNamesIncludeWorkspaceName(t *testing.T) {
 	t.Parallel()
 
 	params := ComposeParams{
-		WorkspaceName: "delta",
-		Port:          4444,
-		Image:         "ghcr.io/seznam/jailoc:main",
-		Paths:         []string{"/tmp/repo"},
-		Env:           nil,
-		CPU:           2.0,
-		Memory:        "4g",
+		WorkspaceName:  "delta",
+		Port:           4444,
+		Image:          "ghcr.io/seznam/jailoc:main",
+		Paths:          []string{"/tmp/repo"},
+		Env:            nil,
+		CPU:            2.0,
+		Memory:         "4g",
+		UseDataVolume:  true,
+		UseCacheVolume: true,
 	}
 
 	out, err := GenerateCompose(params)
@@ -557,6 +561,170 @@ func TestComposeHealthCheckTimings(t *testing.T) {
 	}
 	if strings.Contains(string(rendered), "retries: 3\n") {
 		t.Error("old health check retries: 3 still present")
+	}
+}
+
+func TestGenerateComposeNamedVolumeOverriddenByMount(t *testing.T) {
+	t.Parallel()
+
+	t.Run("data volume overridden", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName: "vol-override",
+			Port:          4900,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
+			Mounts: []string{
+				"/host/data:/home/agent/.local/share/opencode:rw",
+			},
+			UseDataVolume:  false,
+			UseCacheVolume: true,
+			CPU:            2.0,
+			Memory:         "4g",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		assertContains(t, rendered, "/host/data:/home/agent/.local/share/opencode:rw")
+		if strings.Contains(rendered, "opencode-data-vol-override:/home/agent/.local/share/opencode") {
+			t.Fatalf("expected named data volume to be absent when overridden by mount, got:\n%s", rendered)
+		}
+		// Cache volume should still be present
+		assertContains(t, rendered, "opencode-cache-vol-override:/home/agent/.cache")
+	})
+
+	t.Run("cache volume overridden", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName: "cache-override",
+			Port:          4901,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
+			Mounts: []string{
+				"/host/cache:/home/agent/.cache:rw",
+			},
+			UseDataVolume:  true,
+			UseCacheVolume: false,
+			CPU:            2.0,
+			Memory:         "4g",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		assertContains(t, rendered, "/host/cache:/home/agent/.cache:rw")
+		if strings.Contains(rendered, "opencode-cache-cache-override:/home/agent/.cache") {
+			t.Fatalf("expected named cache volume to be absent when overridden by mount, got:\n%s", rendered)
+		}
+		// Data volume should still be present
+		assertContains(t, rendered, "opencode-data-cache-override:/home/agent/.local/share/opencode")
+	})
+
+	t.Run("both volumes overridden", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName: "both-override",
+			Port:          4902,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
+			Mounts: []string{
+				"/host/data:/home/agent/.local/share/opencode:rw",
+				"/host/cache:/home/agent/.cache:rw",
+			},
+			UseDataVolume:  false,
+			UseCacheVolume: false,
+			CPU:            2.0,
+			Memory:         "4g",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		if strings.Contains(rendered, "opencode-data-both-override") {
+			t.Fatalf("expected no named data volume, got:\n%s", rendered)
+		}
+		if strings.Contains(rendered, "opencode-cache-both-override") {
+			t.Fatalf("expected no named cache volume, got:\n%s", rendered)
+		}
+	})
+
+	t.Run("default volumes present", func(t *testing.T) {
+		t.Parallel()
+		params := ComposeParams{
+			WorkspaceName:  "default-vols",
+			Port:           4903,
+			Image:          "ghcr.io/seznam/jailoc:test",
+			Paths:          []string{"/tmp/work"},
+			UseDataVolume:  true,
+			UseCacheVolume: true,
+			CPU:            2.0,
+			Memory:         "4g",
+		}
+
+		out, err := GenerateCompose(params)
+		if err != nil {
+			t.Fatalf("GenerateCompose returned error: %v", err)
+		}
+
+		rendered := string(out)
+		assertContains(t, rendered, "opencode-data-default-vols:/home/agent/.local/share/opencode")
+		assertContains(t, rendered, "opencode-cache-default-vols:/home/agent/.cache")
+	})
+}
+
+func TestMountsContainTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		mounts        []string
+		containerPath string
+		want          bool
+	}{
+		{
+			name:          "match",
+			mounts:        []string{"/host/data:/home/agent/.local/share/opencode:rw"},
+			containerPath: "/home/agent/.local/share/opencode",
+			want:          true,
+		},
+		{
+			name:          "no match",
+			mounts:        []string{"/host/data:/home/agent/.config/opencode:ro"},
+			containerPath: "/home/agent/.local/share/opencode",
+			want:          false,
+		},
+		{
+			name:          "empty mounts",
+			mounts:        nil,
+			containerPath: "/home/agent/.cache",
+			want:          false,
+		},
+		{
+			name:          "partial path no match",
+			mounts:        []string{"/host:/home/agent/.cache/subdir:rw"},
+			containerPath: "/home/agent/.cache",
+			want:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := MountsContainTarget(tt.mounts, tt.containerPath)
+			if got != tt.want {
+				t.Errorf("MountsContainTarget(%v, %q) = %v, want %v", tt.mounts, tt.containerPath, got, tt.want)
+			}
+		})
 	}
 }
 

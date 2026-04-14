@@ -115,11 +115,17 @@ var forbiddenMountContainerPrefixes = []string{
 }
 
 var forbiddenMountHostPaths = []string{
+	"/",
+	"/boot",
+	"/dev",
+	"/etc",
+	"/proc",
+	"/sys",
+	"/run",
+	"/var",
 	"~/.ssh",
 	"~/.gnupg",
 	"~/.aws",
-	"/etc/shadow",
-	"/etc/passwd",
 }
 
 var DefaultMounts = []string{

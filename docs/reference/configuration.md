@@ -74,7 +74,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `paths` | string[] | (required) | Directories bind-mounted into the container at their original absolute paths. The first path becomes the container's working directory. Supports `~` expansion. |
-| `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/home/agent/.opencode:ro"`) removes a default mount matching the container path. Container paths are validated against the same forbidden prefixes as `paths`. |
+| `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/home/agent/.opencode:ro"`) removes a default mount matching the container path. Container destinations under `/home/agent/...` are allowed (unlike `paths`); see [mounts validation](#mounts) for the full list of forbidden container prefixes. |
 | `allowed_hosts` | string[] | `[]` | Hostnames resolved at container start and added as iptables `ACCEPT` rules before the private-range `DROP` rules. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
 | `image` | string | (none) | Pre-built Docker image to use directly for this workspace, bypassing all build steps. Compose pulls the image natively at startup. Cannot be combined with `dockerfile` or `build_context`. |
@@ -134,20 +134,26 @@ Each entry is validated against a list of forbidden path prefixes. Paths startin
 Each entry uses the format `host:container[:mode]`.
 
 - `host`: a local path (absolute or starting with `~`). An empty string signals removal of a default mount matching the container path.
-- `container`: must be an absolute path after `~` expansion. Validated against the same forbidden prefixes as `paths` (see table above).
+- `container`: must be an absolute path after `~` expansion. Validated against a separate set of forbidden prefixes: `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. Unlike `paths`, destinations under `/home/agent/...` are allowed.
 - `mode`: `ro` or `rw`. Defaults to `rw` when omitted.
 
 The following host paths are forbidden:
 
 | Forbidden host path |
 |---|
+| `/` |
+| `/boot` |
+| `/dev` |
+| `/etc` |
+| `/proc` |
+| `/sys` |
+| `/run` |
+| `/var` |
 | `~/.ssh` |
 | `~/.gnupg` |
 | `~/.aws` |
-| `/etc/shadow` |
-| `/etc/passwd` |
 
-Any host path starting with these prefixes is rejected.
+Any host path equal to or starting with these prefixes is rejected.
 
 ### `allowed_networks`
 

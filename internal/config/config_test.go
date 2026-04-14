@@ -24,6 +24,20 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// safeHome creates a temporary HOME directory outside forbidden mount host paths
+// (e.g. /var on macOS, where t.TempDir() resolves). Mount validation tests need
+// this because ~ expansion resolves to HOME, and /var is a forbidden host prefix.
+func safeHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "jailoc-test-home-*")
+	if err != nil {
+		t.Fatalf("create safe home: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	return home
+}
+
 func TestLoadFullConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -2245,8 +2259,7 @@ func TestMergeMountsInvalidSpec(t *testing.T) {
 }
 
 func TestValidateMountsHostPathValidation(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	safeHome(t)
 
 	tests := []struct {
 		name      string
@@ -2271,6 +2284,51 @@ func TestValidateMountsHostPathValidation(t *testing.T) {
 		{
 			name:      "forbidden subpath is rejected",
 			spec:      "~/.ssh/keys:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "root filesystem is rejected",
+			spec:      "/:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/boot is rejected",
+			spec:      "/boot:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/dev is rejected",
+			spec:      "/dev:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/proc is rejected",
+			spec:      "/proc:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/sys is rejected",
+			spec:      "/sys:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/run is rejected",
+			spec:      "/run:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/var is rejected",
+			spec:      "/var:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/etc is rejected",
+			spec:      "/etc:/container:ro",
+			wantError: true,
+		},
+		{
+			name:      "/etc subpath is rejected",
+			spec:      "/etc/shadow:/container:ro",
 			wantError: true,
 		},
 	}
@@ -2305,8 +2363,7 @@ func TestValidateMountsHostPathValidation(t *testing.T) {
 }
 
 func TestValidateMountsAcceptsSafe(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	safeHome(t)
 
 	cfg := &Config{
 		Defaults: Defaults{
@@ -2326,8 +2383,7 @@ func TestValidateMountsAcceptsSafe(t *testing.T) {
 }
 
 func TestValidateMountsInDefaults(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := safeHome(t)
 
 	cfg := &Config{
 		Defaults: Defaults{
@@ -2348,8 +2404,7 @@ func TestValidateMountsInDefaults(t *testing.T) {
 }
 
 func TestValidateMountsInDefaultsRejectsForbiddenContainerPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	safeHome(t)
 
 	cfg := &Config{
 		Defaults: Defaults{
@@ -2370,8 +2425,7 @@ func TestValidateMountsInDefaultsRejectsForbiddenContainerPath(t *testing.T) {
 }
 
 func TestValidateMountsInWorkspace(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	safeHome(t)
 
 	t.Run("valid workspace mounts", func(t *testing.T) {
 		cfg := &Config{
