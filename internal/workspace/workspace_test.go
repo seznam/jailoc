@@ -1201,3 +1201,24 @@ func TestResolveMountsRemoval(t *testing.T) {
 		t.Fatalf("mounts mismatch: got %#v want %#v", resolved.Mounts, want)
 	}
 }
+
+func TestResolveMountsMergeError(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Mounts: []string{"relative-host:/container:rw"},
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {Paths: []string{"/tmp"}},
+		},
+	}
+
+	_, err := workspace.Resolve(cfg, "default")
+	if err == nil {
+		t.Fatal("expected Resolve to fail when mount merge fails")
+	}
+	if !strings.Contains(err.Error(), "merge mounts for workspace default") {
+		t.Fatalf("unexpected error context: %v", err)
+	}
+}

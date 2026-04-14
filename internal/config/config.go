@@ -93,6 +93,27 @@ var forbiddenMountPrefixes = []string{
 	"/certs",
 }
 
+// forbiddenMountContainerPrefixes lists container-side mount destinations that must not be overridden.
+// Unlike forbiddenMountPrefixes (used for workspace paths), this does NOT include /home/agent,
+// because mounts intentionally target /home/agent/... subpaths (e.g. the default OC mounts).
+var forbiddenMountContainerPrefixes = []string{
+	"/usr",
+	"/etc",
+	"/var",
+	"/bin",
+	"/sbin",
+	"/lib",
+	"/lib64",
+	"/opt",
+	"/root",
+	"/proc",
+	"/sys",
+	"/dev",
+	"/run",
+	"/tmp",
+	"/certs",
+}
+
 var forbiddenMountHostPaths = []string{
 	"~/.ssh",
 	"~/.gnupg",
@@ -318,6 +339,16 @@ func ParseMount(spec string) (Mount, error) {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: mode must be ro or rw", spec)
 	}
 
+	if host != "" {
+		expandedHost, err := ExpandPath(host)
+		if err != nil {
+			return Mount{}, fmt.Errorf("expand mount host path %q: %w", host, err)
+		}
+		if !strings.HasPrefix(expandedHost, "/") {
+			return Mount{}, fmt.Errorf("invalid mount spec %q: host path %q must be absolute (start with / or ~)", spec, host)
+		}
+	}
+
 	expandedContainer, err := ExpandPath(container)
 	if err != nil {
 		return Mount{}, fmt.Errorf("expand mount container path %q: %w", container, err)
@@ -338,14 +369,18 @@ func validateMountHostPath(host string, context string) error {
 	if err != nil {
 		return fmt.Errorf("%s: expand mount host path %q: %w", context, host, err)
 	}
+	cleanHost := filepath.Clean(expandedHost)
 
 	for _, forbidden := range forbiddenMountHostPaths {
 		expandedForbidden, err := ExpandPath(forbidden)
 		if err != nil {
 			return fmt.Errorf("%s: expand forbidden mount host path %q: %w", context, forbidden, err)
 		}
-		if strings.HasPrefix(expandedHost, expandedForbidden) {
-			return fmt.Errorf("%s: mount host path %q is forbidden", context, expandedHost)
+
+		cleanForbidden := filepath.Clean(expandedForbidden)
+		forbiddenPrefix := cleanForbidden + string(os.PathSeparator)
+		if cleanHost == cleanForbidden || strings.HasPrefix(cleanHost, forbiddenPrefix) {
+			return fmt.Errorf("%s: mount host path %q is forbidden", context, cleanHost)
 		}
 	}
 
@@ -356,9 +391,9 @@ func formatMount(m Mount) string {
 	return fmt.Sprintf("%s:%s:%s", m.Host, m.Container, m.Mode)
 }
 
-func MergeMounts(layers ...[]string) []string {
+func MergeMounts(layers ...[]string) ([]string, error) {
 	if len(layers) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	orderedContainers := make([]string, 0)
@@ -369,14 +404,14 @@ func MergeMounts(layers ...[]string) []string {
 		for _, spec := range layer {
 			m, err := ParseMount(spec)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("parse mount spec %q: %w", spec, err)
 			}
 
 			expandedHost := m.Host
 			if m.Host != "" {
 				expanded, err := ExpandPath(m.Host)
 				if err != nil {
-					continue
+					return nil, fmt.Errorf("expand mount host path %q: %w", m.Host, err)
 				}
 				expandedHost = expanded
 			}
@@ -408,7 +443,7 @@ func MergeMounts(layers ...[]string) []string {
 		merged = append(merged, formatMount(m))
 	}
 
-	return merged
+	return merged, nil
 }
 
 func Validate(cfg *Config) error {
@@ -471,6 +506,12 @@ func Validate(cfg *Config) error {
 		m.Container = expandedContainer
 		if !strings.HasPrefix(m.Container, "/") {
 			return fmt.Errorf("defaults: mount container path %q must be absolute (start with /)", m.Container)
+		}
+
+		for _, prefix := range forbiddenMountContainerPrefixes {
+			if m.Container == prefix || strings.HasPrefix(m.Container, prefix+"/") {
+				return fmt.Errorf("defaults: mount container path %q is not allowed (conflicts with container-internal directory %q)", m.Container, prefix)
+			}
 		}
 
 		if err := validateMountHostPath(m.Host, "defaults"); err != nil {
@@ -541,9 +582,9 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("workspace %q: mount container path %q must be absolute (start with /)", name, expandedContainer)
 			}
 
-			for _, prefix := range forbiddenMountPrefixes {
+			for _, prefix := range forbiddenMountContainerPrefixes {
 				if expandedContainer == prefix || strings.HasPrefix(expandedContainer, prefix+"/") {
-					return fmt.Errorf("workspace %q: mount container path %q conflicts with container-internal directory %q", name, expandedContainer, prefix)
+					return fmt.Errorf("workspace %q: mount container path %q is not allowed (conflicts with container-internal directory %q)", name, expandedContainer, prefix)
 				}
 			}
 		}

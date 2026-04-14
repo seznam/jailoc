@@ -95,7 +95,10 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	mergedEnv = append(mergedEnv, ws.Env...)
 	mergedEnv = dedupEnvByKeyLastWins(mergedEnv)
 
-	mergedMounts := config.MergeMounts(config.DefaultMounts, cfg.Defaults.Mounts, ws.Mounts)
+	mergedMounts, err := config.MergeMounts(config.DefaultMounts, cfg.Defaults.Mounts, ws.Mounts)
+	if err != nil {
+		return nil, fmt.Errorf("merge mounts for workspace %s: %w", name, err)
+	}
 
 	return &Resolved{
 		Name:            name,
