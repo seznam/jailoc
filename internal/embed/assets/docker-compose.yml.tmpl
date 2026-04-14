@@ -10,10 +10,9 @@ services:
 {{- range .Paths}}
       - {{.}}:{{.}}
 {{- end}}
-      - ${HOME}/.config/opencode:/home/agent/.config/opencode:ro
-      - ${HOME}/.opencode:/home/agent/.opencode:ro
-      - ${HOME}/.claude/transcripts:/home/agent/.claude/transcripts
-      - ${HOME}/.agents:/home/agent/.agents:ro
+{{- range .Mounts}}
+      - {{.}}
+{{- end}}
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode

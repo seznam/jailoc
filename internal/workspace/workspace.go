@@ -23,6 +23,7 @@ const BasePort = 4096
 type Resolved struct {
 	Name            string
 	Paths           []string
+	Mounts          []string
 	Port            int
 	AllowedHosts    []string
 	AllowedNetworks []string
@@ -94,9 +95,12 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	mergedEnv = append(mergedEnv, ws.Env...)
 	mergedEnv = dedupEnvByKeyLastWins(mergedEnv)
 
+	mergedMounts := config.MergeMounts(config.DefaultMounts, cfg.Defaults.Mounts, ws.Mounts)
+
 	return &Resolved{
 		Name:            name,
 		Paths:           paths,
+		Mounts:          mergedMounts,
 		Port:            PortForWorkspace(cfg, name),
 		AllowedHosts:    ws.AllowedHosts,
 		AllowedNetworks: ws.AllowedNetworks,

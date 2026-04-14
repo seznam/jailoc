@@ -2060,6 +2060,280 @@ image = "alpine:latest"
 	}
 }
 
+func TestParseMountValid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		spec      string
+		host      string
+		container string
+		mode      string
+	}{
+		{
+			name:      "host and container with implicit rw",
+			spec:      "/host/path:/container/path",
+			host:      "/host/path",
+			container: "/container/path",
+			mode:      "rw",
+		},
+		{
+			name:      "host container ro",
+			spec:      "/host:/container:ro",
+			host:      "/host",
+			container: "/container",
+			mode:      "ro",
+		},
+		{
+			name:      "removal implicit rw",
+			spec:      ":/container/path",
+			host:      "",
+			container: "/container/path",
+			mode:      "rw",
+		},
+		{
+			name:      "removal explicit ro",
+			spec:      ":/container:ro",
+			host:      "",
+			container: "/container",
+			mode:      "ro",
+		},
+		{
+			name:      "tilde host",
+			spec:      "~/.config/oc:/home/agent/.config/oc:ro",
+			host:      "~/.config/oc",
+			container: "/home/agent/.config/oc",
+			mode:      "ro",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseMount(tt.spec)
+			if err != nil {
+				t.Fatalf("ParseMount(%q) failed: %v", tt.spec, err)
+			}
+
+			if got.Host != tt.host || got.Container != tt.container || got.Mode != tt.mode {
+				t.Fatalf("ParseMount(%q) = %#v, want host=%q container=%q mode=%q", tt.spec, got, tt.host, tt.container, tt.mode)
+			}
+		})
+	}
+}
+
+func TestParseMountInvalid(t *testing.T) {
+	t.Parallel()
+
+	invalidSpecs := []string{
+		"",
+		"/only-one-part",
+		"/a:/b:invalid",
+		"/a:/b:ro:extra",
+		"/host:relative/path",
+	}
+
+	for _, spec := range invalidSpecs {
+		t.Run(spec, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := ParseMount(spec); err == nil {
+				t.Fatalf("expected ParseMount(%q) to fail", spec)
+			}
+		})
+	}
+}
+
+func TestMergeMounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		name     string
+		layers   [][]string
+		expected []string
+	}{
+		{
+			name: "default mounts only",
+			layers: [][]string{
+				DefaultMounts,
+			},
+			expected: []string{
+				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
+				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
+				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+			},
+		},
+		{
+			name: "override default mount mode",
+			layers: [][]string{
+				DefaultMounts,
+				{"~/cfg:/home/agent/.config/opencode:rw"},
+			},
+			expected: []string{
+				filepath.Join(home, "cfg") + ":/home/agent/.config/opencode:rw",
+				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
+				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+			},
+		},
+		{
+			name: "remove default mount",
+			layers: [][]string{
+				DefaultMounts,
+				{":/home/agent/.opencode"},
+			},
+			expected: []string{
+				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
+				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
+				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+			},
+		},
+		{
+			name: "add new mount",
+			layers: [][]string{
+				DefaultMounts,
+				{"~/my-data:/workspace/data:rw"},
+			},
+			expected: []string{
+				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
+				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
+				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+				filepath.Join(home, "my-data") + ":/workspace/data:rw",
+			},
+		},
+		{
+			name: "multiple layers overrides and removals",
+			layers: [][]string{
+				DefaultMounts,
+				{"~/cfg:/home/agent/.config/opencode:rw", "~/x:/x:rw"},
+				{":/home/agent/.agents", "~/y:/x:ro"},
+			},
+			expected: []string{
+				filepath.Join(home, "cfg") + ":/home/agent/.config/opencode:rw",
+				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
+				filepath.Join(home, "y") + ":/x:ro",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MergeMounts(tt.layers...)
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Fatalf("MergeMounts() = %#v, want %#v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestValidateMountsForbiddenHostPath(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Workspaces: map[string]Workspace{
+			"default": {
+				Paths:  []string{"/data/workspace"},
+				Mounts: []string{"~/.ssh:/safe/mount:ro"},
+			},
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected forbidden mount host path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected forbidden error, got: %v", err)
+	}
+}
+
+func TestValidateMountsAcceptsSafe(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &Config{
+		Defaults: Defaults{
+			Mounts: []string{"~/safe:/workspace/safe:rw"},
+		},
+		Workspaces: map[string]Workspace{
+			"default": {
+				Paths:  []string{"/data/workspace"},
+				Mounts: []string{"~/other:/workspace/other:ro"},
+			},
+		},
+	}
+
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected safe mounts to pass validation, got: %v", err)
+	}
+}
+
+func TestValidateMountsInDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &Config{
+		Defaults: Defaults{
+			Mounts: []string{"~/cfg:/workspace/cfg:ro"},
+		},
+		Workspaces: map[string]Workspace{
+			"default": {Paths: []string{"/data/workspace"}},
+		},
+	}
+
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected defaults.mounts validation to pass, got: %v", err)
+	}
+
+	if got := cfg.Defaults.Mounts[0]; !strings.HasPrefix(got, home+"/") {
+		t.Fatalf("expected defaults.mounts host to be expanded, got: %q", got)
+	}
+}
+
+func TestValidateMountsInWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	t.Run("valid workspace mounts", func(t *testing.T) {
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"default": {
+					Paths:  []string{"/data/workspace"},
+					Mounts: []string{"~/safe:/workspace/safe:rw"},
+				},
+			},
+		}
+
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("expected workspace.mounts validation to pass, got: %v", err)
+		}
+	})
+
+	t.Run("forbidden container prefix", func(t *testing.T) {
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"default": {
+					Paths:  []string{"/data/workspace"},
+					Mounts: []string{"~/safe:/etc/inside:ro"},
+				},
+			},
+		}
+
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected forbidden workspace mount container path to fail")
+		}
+		if !strings.Contains(err.Error(), "conflicts with container-internal directory") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestValidateErrorMessages(t *testing.T) {
 	t.Parallel()
 

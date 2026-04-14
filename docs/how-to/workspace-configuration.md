@@ -193,6 +193,48 @@ env_file = ["~/.config/jailoc/shared.env"]
 
 ---
 
+## Configure mounts
+
+jailoc mounts several host directories into the container by default (OpenCode config, session transcripts, agent tooling). To add extra mounts or override the defaults, use the `mounts` field.
+
+Add a host directory to the container:
+
+```toml
+[workspaces.my-project]
+paths = ["/home/you/projects/my-project"]
+mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode"]
+```
+
+Each entry follows `host:container[:mode]` format. The mode is `ro` (read-only) or `rw` (read-write, the default).
+
+To remove a default mount, set an empty host source for that container path:
+
+```toml
+[workspaces.my-project]
+paths = ["/home/you/projects/my-project"]
+mounts = [":/home/agent/.opencode:ro"]
+```
+
+This removes the `~/.opencode` mount for the `my-project` workspace.
+
+Mounts set in `[defaults]` apply to all workspaces. Per-workspace `mounts` override defaults for the same container path:
+
+```toml
+[defaults]
+mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode:ro"]
+
+[workspaces.my-project]
+paths = ["/home/you/projects/my-project"]
+mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode:rw"]
+```
+
+!!! note
+    Host paths under `~/.ssh`, `~/.gnupg`, and `~/.aws` are forbidden in mounts. Container paths are validated against the same forbidden prefixes as `paths`.
+
+See [Configuration reference](../reference/configuration.md) for the full mount format, merge semantics, and validation rules.
+
+---
+
 ## Forward SSH agent and Git config
 
 To let the agent clone private repositories or push over SSH, enable SSH agent forwarding. Git configuration is mounted by default.

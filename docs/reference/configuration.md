@@ -39,6 +39,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `image` | string | (none) | Pre-built Docker image used as the base for workspace Dockerfile builds, or pulled directly when no workspace `dockerfile` is set. |
 | `env` | string[] | `[]` | Environment variables applied to all workspaces. Each entry must be in `KEY=VALUE` format. Workspace `env` entries take precedence over defaults with the same key. |
 | `env_file` | string[] | `[]` | Paths to `.env` files loaded for all workspaces. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Parsed before workspace-level `env_file` entries. |
+| `mounts` | string[] | `[]` | Additional bind mounts for all workspaces. Each entry follows `host:container[:mode]` format where mode is `ro` or `rw` (default `rw`). An empty host source removes a default mount matching the container path. Merged with per-workspace `mounts` — see Merge Semantics below. Supports `~` expansion on both host and container sides. |
 | `allowed_hosts` | string[] | `[]` | Hostnames allowed through the firewall for all workspaces. Merged with per-workspace `allowed_hosts`. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges allowed through the firewall for all workspaces. Merged with per-workspace `allowed_networks`. |
 | `ssh_auth_sock` | bool | `false` | Mount the host SSH agent socket into the container. Auto-detects the socket: Docker Desktop/OrbStack magic path first, then `$SSH_AUTH_SOCK`. Also mounts `~/.ssh/known_hosts` read-only when enabled. |
@@ -53,6 +54,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 image = "myregistry.example.com/myteam/opencode-base:v1.2.3"
 env = ["GOPRIVATE=*.example.com", "NPM_REGISTRY=https://npm.example.com"]
 env_file = ["~/.config/jailoc/shared.env"]
+mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode"]
 allowed_hosts = ["internal-registry.example.com"]
 allowed_networks = ["10.0.0.0/8"]
 ssh_auth_sock = true
@@ -72,6 +74,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `paths` | string[] | (required) | Directories bind-mounted into the container at their original absolute paths. The first path becomes the container's working directory. Supports `~` expansion. |
+| `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/home/agent/.opencode:ro"`) removes a default mount matching the container path. Container paths are validated against the same forbidden prefixes as `paths`. |
 | `allowed_hosts` | string[] | `[]` | Hostnames resolved at container start and added as iptables `ACCEPT` rules before the private-range `DROP` rules. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
 | `image` | string | (none) | Pre-built Docker image to use directly for this workspace, bypassing all build steps. Compose pulls the image natively at startup. Cannot be combined with `dockerfile` or `build_context`. |
@@ -95,6 +98,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 paths = ["~/projects/my-project", "~/shared/libs"]
 allowed_hosts = ["api.example.com", "pypi.org"]
 allowed_networks = ["10.0.0.0/8"]
+mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode"]
 build_context = "~/projects/my-project/docker"
 mode = "remote"
 dockerfile = "~/projects/my-project/overlay.Dockerfile"
@@ -124,6 +128,26 @@ Each entry is validated against a list of forbidden path prefixes. Paths startin
 | `/lib64` |
 
 `~` is expanded to `$HOME` before validation. HTTP(S) URLs in `dockerfile` fields are not subject to `~` expansion; local paths starting with `~` are expanded.
+
+### `mounts`
+
+Each entry uses the format `host:container[:mode]`.
+
+- `host`: a local path (absolute or starting with `~`). An empty string signals removal of a default mount matching the container path.
+- `container`: must be an absolute path after `~` expansion. Validated against the same forbidden prefixes as `paths` (see table above).
+- `mode`: `ro` or `rw`. Defaults to `rw` when omitted.
+
+The following host paths are forbidden:
+
+| Forbidden host path |
+|---|
+| `~/.ssh` |
+| `~/.gnupg` |
+| `~/.aws` |
+| `/etc/shadow` |
+| `/etc/passwd` |
+
+Any host path starting with these prefixes is rejected.
 
 ### `allowed_networks`
 
@@ -190,6 +214,15 @@ Environment variables from multiple sources are merged in this order (later entr
 4. Workspace `env` — per-workspace inline values (highest priority)
 
 `allowed_hosts` and `allowed_networks` use union deduplication: the global list is merged with the workspace list, with duplicates removed, preserving order.
+
+`mounts` follows a three-layer merge keyed by container path. Default mounts (built into jailoc) are applied first, then `[defaults].mounts`, then per-workspace `mounts`. For each container path, the last layer to set it wins. An entry with an empty host source removes the mount for that container path. The built-in default mounts are:
+
+| Container path | Host source | Mode |
+|---|---|---|
+| `/home/agent/.config/opencode` | `~/.config/opencode` | `ro` |
+| `/home/agent/.opencode` | `~/.opencode` | `ro` |
+| `/home/agent/.claude/transcripts` | `~/.claude/transcripts` | `rw` |
+| `/home/agent/.agents` | `~/.agents` | `ro` |
 
 `ssh_auth_sock` and `git_config` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config` falls back to `true` when neither the workspace nor defaults set it.
 

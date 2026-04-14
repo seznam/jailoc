@@ -3,6 +3,7 @@ package workspace_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1112,5 +1113,91 @@ func TestResolveCPUMemory(t *testing.T) {
 				t.Errorf("Memory: got %q, want %q", resolved.Memory, tt.wantMemory)
 			}
 		})
+	}
+}
+
+func TestResolveMountsDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {Paths: []string{"/tmp"}},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	want := []string{
+		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
+		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
+		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+	}
+
+	if !reflect.DeepEqual(resolved.Mounts, want) {
+		t.Fatalf("mounts mismatch: got %#v want %#v", resolved.Mounts, want)
+	}
+}
+
+func TestResolveMountsOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Mounts: []string{"~/custom-opencode:/home/agent/.config/opencode:rw"},
+		},
+		Workspaces: map[string]config.Workspace{
+			"default": {Paths: []string{"/tmp"}},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	want := []string{
+		filepath.Join(home, "custom-opencode") + ":/home/agent/.config/opencode:rw",
+		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
+		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+	}
+
+	if !reflect.DeepEqual(resolved.Mounts, want) {
+		t.Fatalf("mounts mismatch: got %#v want %#v", resolved.Mounts, want)
+	}
+}
+
+func TestResolveMountsRemoval(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"default": {
+				Paths:  []string{"/tmp"},
+				Mounts: []string{":/home/agent/.opencode"},
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "default")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	want := []string{
+		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
+		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
+		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+	}
+
+	if !reflect.DeepEqual(resolved.Mounts, want) {
+		t.Fatalf("mounts mismatch: got %#v want %#v", resolved.Mounts, want)
 	}
 }

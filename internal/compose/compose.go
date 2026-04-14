@@ -15,6 +15,7 @@ type ComposeParams struct {
 	Port             int
 	Image            string
 	Paths            []string
+	Mounts           []string
 	AllowedHosts     []string
 	AllowedNetworks  []string
 	OpenCodePassword string

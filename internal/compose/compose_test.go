@@ -559,3 +559,43 @@ func TestComposeHealthCheckTimings(t *testing.T) {
 		t.Error("old health check retries: 3 still present")
 	}
 }
+
+func TestGenerateComposeMountsFromParams(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "mounts-test",
+		Port:          4800,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/work"},
+		Mounts: []string{
+			"/home/user/.config/opencode:/home/agent/.config/opencode:ro",
+			"/home/user/.agents:/home/agent/.agents:ro",
+		},
+		OpenCodePassword: "secret",
+		CPU:              2.0,
+		Memory:           "4g",
+	}
+
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose returned error: %v", err)
+	}
+
+	rendered := string(out)
+	assertContains(t, rendered, "/home/user/.config/opencode:/home/agent/.config/opencode:ro")
+	assertContains(t, rendered, "/home/user/.agents:/home/agent/.agents:ro")
+
+	if strings.Contains(rendered, "${HOME}/.config/opencode:/home/agent/.config/opencode:ro") {
+		t.Fatalf("expected no hardcoded OC mounts in template output, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "${HOME}/.opencode:/home/agent/.opencode:ro") {
+		t.Fatalf("expected no hardcoded OC mounts in template output, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "${HOME}/.claude/transcripts:/home/agent/.claude/transcripts") {
+		t.Fatalf("expected no hardcoded OC mounts in template output, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "${HOME}/.agents:/home/agent/.agents:ro") {
+		t.Fatalf("expected no hardcoded OC mounts in template output, got:\n%s", rendered)
+	}
+}

@@ -30,6 +30,7 @@ const (
 # image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
+# mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
 # allowed_hosts = ["example.com"]
 # allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
@@ -44,6 +45,7 @@ paths = []
 # allowed_networks = []
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
+# mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
 # build_context = ""
 # dockerfile = ""
 # ssh_auth_sock = false
@@ -91,6 +93,27 @@ var forbiddenMountPrefixes = []string{
 	"/certs",
 }
 
+var forbiddenMountHostPaths = []string{
+	"~/.ssh",
+	"~/.gnupg",
+	"~/.aws",
+	"/etc/shadow",
+	"/etc/passwd",
+}
+
+var DefaultMounts = []string{
+	"~/.config/opencode:/home/agent/.config/opencode:ro",
+	"~/.opencode:/home/agent/.opencode:ro",
+	"~/.claude/transcripts:/home/agent/.claude/transcripts:rw",
+	"~/.agents:/home/agent/.agents:ro",
+}
+
+type Mount struct {
+	Host      string
+	Container string
+	Mode      string
+}
+
 type Config struct {
 	Mode       string               `toml:"mode"`
 	Base       BaseConfig           `toml:"base"`
@@ -105,6 +128,7 @@ type BaseConfig struct {
 type Defaults struct {
 	Env             []string `toml:"env"`
 	EnvFile         []string `toml:"env_file"`
+	Mounts          []string `toml:"mounts"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
 	Image           string   `toml:"image"`
@@ -116,6 +140,7 @@ type Defaults struct {
 
 type Workspace struct {
 	Paths           []string `toml:"paths"`
+	Mounts          []string `toml:"mounts"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
 	Env             []string `toml:"env"`
@@ -276,6 +301,116 @@ func validateEnvFiles(paths []string, context string) error {
 	return nil
 }
 
+func ParseMount(spec string) (Mount, error) {
+	parts := strings.Split(spec, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: expected host:container[:mode]", spec)
+	}
+
+	host := parts[0]
+	container := parts[1]
+	mode := "rw"
+	if len(parts) == 3 {
+		mode = parts[2]
+	}
+
+	if mode != "ro" && mode != "rw" {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: mode must be ro or rw", spec)
+	}
+
+	expandedContainer, err := ExpandPath(container)
+	if err != nil {
+		return Mount{}, fmt.Errorf("expand mount container path %q: %w", container, err)
+	}
+	if !strings.HasPrefix(expandedContainer, "/") {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: container path %q must be absolute (start with /)", spec, container)
+	}
+
+	return Mount{Host: host, Container: container, Mode: mode}, nil
+}
+
+func validateMountHostPath(host string, context string) error {
+	if host == "" {
+		return nil
+	}
+
+	expandedHost, err := ExpandPath(host)
+	if err != nil {
+		return fmt.Errorf("%s: expand mount host path %q: %w", context, host, err)
+	}
+
+	for _, forbidden := range forbiddenMountHostPaths {
+		expandedForbidden, err := ExpandPath(forbidden)
+		if err != nil {
+			return fmt.Errorf("%s: expand forbidden mount host path %q: %w", context, forbidden, err)
+		}
+		if strings.HasPrefix(expandedHost, expandedForbidden) {
+			return fmt.Errorf("%s: mount host path %q is forbidden", context, expandedHost)
+		}
+	}
+
+	return nil
+}
+
+func formatMount(m Mount) string {
+	return fmt.Sprintf("%s:%s:%s", m.Host, m.Container, m.Mode)
+}
+
+func MergeMounts(layers ...[]string) []string {
+	if len(layers) == 0 {
+		return nil
+	}
+
+	orderedContainers := make([]string, 0)
+	seenContainers := make(map[string]bool)
+	byContainer := make(map[string]Mount)
+
+	for _, layer := range layers {
+		for _, spec := range layer {
+			m, err := ParseMount(spec)
+			if err != nil {
+				continue
+			}
+
+			expandedHost := m.Host
+			if m.Host != "" {
+				expanded, err := ExpandPath(m.Host)
+				if err != nil {
+					continue
+				}
+				expandedHost = expanded
+			}
+
+			if !seenContainers[m.Container] {
+				seenContainers[m.Container] = true
+				orderedContainers = append(orderedContainers, m.Container)
+			}
+
+			if m.Host == "" {
+				delete(byContainer, m.Container)
+				continue
+			}
+
+			byContainer[m.Container] = Mount{
+				Host:      expandedHost,
+				Container: m.Container,
+				Mode:      m.Mode,
+			}
+		}
+	}
+
+	merged := make([]string, 0, len(byContainer))
+	for _, container := range orderedContainers {
+		m, ok := byContainer[container]
+		if !ok {
+			continue
+		}
+		merged = append(merged, formatMount(m))
+	}
+
+	return merged
+}
+
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
@@ -315,6 +450,34 @@ func Validate(cfg *Config) error {
 
 	if err := validateEnvFiles(cfg.Defaults.EnvFile, "defaults"); err != nil {
 		return err
+	}
+
+	for i, spec := range cfg.Defaults.Mounts {
+		m, err := ParseMount(spec)
+		if err != nil {
+			return fmt.Errorf("defaults: %w", err)
+		}
+
+		expandedHost, err := ExpandPath(m.Host)
+		if err != nil {
+			return fmt.Errorf("defaults: expand mount host path %q: %w", m.Host, err)
+		}
+		expandedContainer, err := ExpandPath(m.Container)
+		if err != nil {
+			return fmt.Errorf("defaults: expand mount container path %q: %w", m.Container, err)
+		}
+
+		m.Host = expandedHost
+		m.Container = expandedContainer
+		if !strings.HasPrefix(m.Container, "/") {
+			return fmt.Errorf("defaults: mount container path %q must be absolute (start with /)", m.Container)
+		}
+
+		if err := validateMountHostPath(m.Host, "defaults"); err != nil {
+			return err
+		}
+
+		cfg.Defaults.Mounts[i] = formatMount(m)
 	}
 
 	if cfg.Defaults.CPU != nil && (*cfg.Defaults.CPU <= 0 || math.IsNaN(*cfg.Defaults.CPU) || math.IsInf(*cfg.Defaults.CPU, 0)) {
@@ -357,6 +520,31 @@ func Validate(cfg *Config) error {
 				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "warning: path %q is configured in multiple workspaces: %q and %q\n", p, owner, name)
 			} else {
 				pathOwners[p] = name
+			}
+		}
+
+		for _, spec := range ws.Mounts {
+			m, err := ParseMount(spec)
+			if err != nil {
+				return fmt.Errorf("workspace %q: %w", name, err)
+			}
+
+			if err := validateMountHostPath(m.Host, fmt.Sprintf("workspace %q", name)); err != nil {
+				return err
+			}
+
+			expandedContainer, err := ExpandPath(m.Container)
+			if err != nil {
+				return fmt.Errorf("workspace %q: expand mount container path %q: %w", name, m.Container, err)
+			}
+			if !strings.HasPrefix(expandedContainer, "/") {
+				return fmt.Errorf("workspace %q: mount container path %q must be absolute (start with /)", name, expandedContainer)
+			}
+
+			for _, prefix := range forbiddenMountPrefixes {
+				if expandedContainer == prefix || strings.HasPrefix(expandedContainer, prefix+"/") {
+					return fmt.Errorf("workspace %q: mount container path %q conflicts with container-internal directory %q", name, expandedContainer, prefix)
+				}
 			}
 		}
 
@@ -611,6 +799,26 @@ func expandPaths(ws *Workspace) error {
 			return fmt.Errorf("expand env_file path %q: %w", p, err)
 		}
 		ws.EnvFile[i] = expanded
+	}
+
+	for i, spec := range ws.Mounts {
+		m, err := ParseMount(spec)
+		if err != nil {
+			return fmt.Errorf("parse mount %q: %w", spec, err)
+		}
+
+		expandedHost, err := ExpandPath(m.Host)
+		if err != nil {
+			return fmt.Errorf("expand mount host path %q: %w", m.Host, err)
+		}
+		expandedContainer, err := ExpandPath(m.Container)
+		if err != nil {
+			return fmt.Errorf("expand mount container path %q: %w", m.Container, err)
+		}
+
+		m.Host = expandedHost
+		m.Container = expandedContainer
+		ws.Mounts[i] = formatMount(m)
 	}
 
 	return nil

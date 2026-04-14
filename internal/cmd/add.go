@@ -121,6 +121,7 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		Port:             ws2.Port,
 		Image:            "jailoc-base:embedded",
 		Paths:            ws2.Paths,
+		Mounts:           ws2.Mounts,
 		AllowedHosts:     ws2.AllowedHosts,
 		AllowedNetworks:  ws2.AllowedNetworks,
 		OpenCodePassword: password,

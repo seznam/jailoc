@@ -98,6 +98,7 @@ func runUp(ctx context.Context, args []string) error {
 		Port:             ws.Port,
 		Image:            finalImage,
 		Paths:            ws.Paths,
+		Mounts:           ws.Mounts,
 		AllowedHosts:     ws.AllowedHosts,
 		AllowedNetworks:  ws.AllowedNetworks,
 		OpenCodePassword: os.Getenv("OPENCODE_SERVER_PASSWORD"),
