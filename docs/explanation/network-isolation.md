@@ -63,6 +63,8 @@ These gaps are intentional or accepted tradeoffs, not oversights. The goal of ja
 
 ## Kernel requirements
 
-The iptables rules require the container runtime's Linux kernel to support **netfilter**. Most Docker runtimes ship kernels with full netfilter support, but some minimal hypervisor configurations do not. Rancher Desktop using VZ virtualization without Rosetta on macOS is a known case — its ARM64 kernel lacks both nftables and legacy netfilter modules, causing all iptables operations to fail with `Protocol not supported`. jailoc refuses to start in this situation because network isolation cannot be enforced.
+The iptables rules require the container runtime's Linux kernel to support **netfilter**. On startup, jailoc probes the default `iptables` (nft backend) first; if that fails, it falls back to `iptables-legacy`. If neither backend works, the container aborts because network isolation cannot be enforced.
+
+Most Docker runtimes ship kernels with full netfilter support, but some minimal hypervisor configurations do not. Rancher Desktop using VZ virtualization without Rosetta on macOS is a known case — its ARM64 kernel lacks netfilter entirely, so both backends fail with `Protocol not supported`.
 
 See [Installation — Docker runtime compatibility](../how-to/installation.md#docker-runtime-compatibility) for a full list of tested runtimes.

@@ -18,7 +18,7 @@ This guide covers installation methods and the prerequisites you need before run
 | Colima | macOS | ✅ | Lima-based VM; performance depends on VM type (`vz` faster than `qemu`) |
 | Podman | macOS | ✅ | VM-based on macOS; comparable to Docker Desktop |
 | Rancher Desktop (VZ + Rosetta) | macOS | ✅ | Rosetta provides a more complete kernel with netfilter support |
-| Rancher Desktop (VZ, no Rosetta) | macOS | ❌ | VZ hypervisor without Rosetta runs a minimal ARM64 kernel that lacks netfilter — both `iptables-nft` and `iptables-legacy` fail |
+| Rancher Desktop (VZ, no Rosetta) | macOS | ❌ | VZ hypervisor without Rosetta runs a minimal ARM64 kernel that lacks netfilter — jailoc probes both `iptables-nft` and `iptables-legacy` but neither works, so startup is aborted |
 | Docker Engine (rootless) | Linux | ⚠️ | Untested — DinD sidecar requires `--privileged`, which rootless mode may not support |
 | WSL2 + Docker | Windows | ⚠️ | Untested — the Linux binary may work under WSL2 with Docker Engine installed inside the distribution |
 
