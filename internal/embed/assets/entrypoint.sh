@@ -8,12 +8,19 @@ set -euo pipefail
 # isolation is non-negotiable.
 if iptables -L -n >/dev/null 2>&1; then
   IPT=iptables
-elif command -v iptables-legacy >/dev/null 2>&1 && iptables-legacy -L -n >/dev/null 2>&1; then
-  IPT=iptables-legacy
-  echo "jailoc: iptables-nft unavailable, using iptables-legacy" >&2
 else
-  echo "jailoc: FATAL: no working iptables found, cannot enforce network isolation" >&2
-  exit 1
+  IPTABLES_ERROR="$(iptables -L -n 2>&1 || true)"
+  if command -v iptables-legacy >/dev/null 2>&1 && iptables-legacy -L -n >/dev/null 2>&1; then
+    IPT=iptables-legacy
+    if [ -n "$IPTABLES_ERROR" ]; then
+      echo "jailoc: iptables unusable ($IPTABLES_ERROR), using iptables-legacy" >&2
+    else
+      echo "jailoc: iptables unusable, using iptables-legacy" >&2
+    fi
+  else
+    echo "jailoc: FATAL: no working iptables found, cannot enforce network isolation" >&2
+    exit 1
+  fi
 fi
 
 # --- Allow infrastructure targets ---
