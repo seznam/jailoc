@@ -16,6 +16,8 @@ import (
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/docker/compose/v5/pkg/compose"
 	"github.com/docker/docker/api/types/build"
+	dcontainer "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/fatih/color"
@@ -526,4 +528,46 @@ func resolveOverlayBuildContext(ws workspace.Resolved) (dir string, cleanup func
 	}
 
 	return tmpDir, func() { _ = os.RemoveAll(tmpDir) }, nil
+}
+
+// RunningWorkspacePorts returns a map of workspace name → published host port
+// for all running jailoc opencode containers.
+func RunningWorkspacePorts(ctx context.Context) (map[string]int, error) {
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("create docker client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	containers, err := cli.ContainerList(ctx, dcontainer.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("label", "com.docker.compose.service=opencode"),
+			filters.Arg("status", "running"),
+		),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list containers: %w", err)
+	}
+
+	return workspacePortsFromContainers(containers), nil
+}
+
+// workspacePortsFromContainers extracts workspace name → published host port
+// from a list of Docker containers. Only containers belonging to jailoc compose
+// projects (project label prefixed with "jailoc-") are included.
+func workspacePortsFromContainers(containers []dcontainer.Summary) map[string]int {
+	result := make(map[string]int, len(containers))
+	for _, ct := range containers {
+		name, ok := strings.CutPrefix(ct.Labels["com.docker.compose.project"], "jailoc-")
+		if !ok {
+			continue
+		}
+		for _, p := range ct.Ports {
+			if p.PrivatePort == uint16(workspace.BasePort) && p.PublicPort != 0 {
+				result[name] = int(p.PublicPort)
+				break
+			}
+		}
+	}
+	return result
 }

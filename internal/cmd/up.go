@@ -74,6 +74,14 @@ func runUp(ctx context.Context, args []string) error {
 		return nil
 	}
 
+	runningPorts, err := docker.RunningWorkspacePorts(ctx)
+	if err != nil {
+		return fmt.Errorf("check running workspace ports: %w", err)
+	}
+	if err := checkPortConflict(runningPorts, ws.Name, ws.Port); err != nil {
+		return err
+	}
+
 	_, _ = color.New(color.FgCyan).Printf("Resolving image for workspace %s...\n", ws.Name)
 	finalImage, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
 	if err != nil {
@@ -222,6 +230,21 @@ func isComposeFileMissing(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "no such file or directory") ||
 		strings.Contains(msg, "open ") && strings.Contains(msg, "docker-compose.yml")
+}
+
+// checkPortConflict returns an error if another running workspace already
+// occupies the target port. It skips the target workspace itself (a restart
+// scenario where the container is still shutting down).
+func checkPortConflict(ports map[string]int, targetName string, targetPort int) error {
+	for name, port := range ports {
+		if name == targetName {
+			continue
+		}
+		if port == targetPort {
+			return fmt.Errorf("port %d is already in use by running workspace %q — stop it first with: jailoc down %s", targetPort, name, name)
+		}
+	}
+	return nil
 }
 
 // writeEntrypoint writes the embedded entrypoint.sh to the workspace cache dir

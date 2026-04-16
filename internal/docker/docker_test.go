@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/docker/compose/v5/pkg/api"
+	dcontainer "github.com/docker/docker/api/types/container"
 	containertypes "github.com/moby/moby/api/types/container"
 
 	"github.com/seznam/jailoc/internal/config"
@@ -329,5 +330,124 @@ func TestBuildOverlayImageDockerfileLoadError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), nonExistentPath) {
 		t.Fatalf("unexpected error: got %q, want path %q", err.Error(), nonExistentPath)
+	}
+}
+
+func TestWorkspacePortsFromContainers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		containers []dcontainer.Summary
+		want       map[string]int
+	}{
+		{
+			name: "single workspace with correct labels and port",
+			containers: []dcontainer.Summary{
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "jailoc-default",
+						"com.docker.compose.service": "opencode",
+					},
+					Ports: []dcontainer.Port{
+						{PrivatePort: uint16(workspace.BasePort), PublicPort: 4096},
+					},
+				},
+			},
+			want: map[string]int{"default": 4096},
+		},
+		{
+			name: "hyphenated workspace name",
+			containers: []dcontainer.Summary{
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "jailoc-my-app",
+						"com.docker.compose.service": "opencode",
+					},
+					Ports: []dcontainer.Port{
+						{PrivatePort: uint16(workspace.BasePort), PublicPort: 4097},
+					},
+				},
+			},
+			want: map[string]int{"my-app": 4097},
+		},
+		{
+			name: "non-jailoc project label is skipped",
+			containers: []dcontainer.Summary{
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "other-project",
+						"com.docker.compose.service": "opencode",
+					},
+					Ports: []dcontainer.Port{
+						{PrivatePort: uint16(workspace.BasePort), PublicPort: 9999},
+					},
+				},
+			},
+			want: map[string]int{},
+		},
+		{
+			name: "no published port is skipped",
+			containers: []dcontainer.Summary{
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "jailoc-default",
+						"com.docker.compose.service": "opencode",
+					},
+					Ports: []dcontainer.Port{
+						{PrivatePort: uint16(workspace.BasePort), PublicPort: 0},
+					},
+				},
+			},
+			want: map[string]int{},
+		},
+		{
+			name: "multiple workspaces",
+			containers: []dcontainer.Summary{
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "jailoc-alpha",
+					},
+					Ports: []dcontainer.Port{
+						{PrivatePort: uint16(workspace.BasePort), PublicPort: 4096},
+					},
+				},
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "jailoc-beta",
+					},
+					Ports: []dcontainer.Port{
+						{PrivatePort: uint16(workspace.BasePort), PublicPort: 4097},
+					},
+				},
+			},
+			want: map[string]int{"alpha": 4096, "beta": 4097},
+		},
+		{
+			name:       "empty container list",
+			containers: []dcontainer.Summary{},
+			want:       map[string]int{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := workspacePortsFromContainers(tc.containers)
+
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d entries, want %d: %v", len(got), len(tc.want), got)
+			}
+			for name, wantPort := range tc.want {
+				gotPort, ok := got[name]
+				if !ok {
+					t.Fatalf("missing workspace %q in result: %v", name, got)
+				}
+				if gotPort != wantPort {
+					t.Fatalf("workspace %q: got port %d, want %d", name, gotPort, wantPort)
+				}
+			}
+		})
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/seznam/jailoc/internal/embed"
@@ -438,4 +439,66 @@ func TestWriteEntrypointToCache(t *testing.T) {
 			t.Fatalf("expected permissions 0o755, got %o", info.Mode().Perm())
 		}
 	})
+}
+
+func TestCheckPortConflict(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		ports      map[string]int
+		targetName string
+		targetPort int
+		wantErr    bool
+		errSubstr  string
+	}{
+		{
+			name:       "no conflict",
+			ports:      map[string]int{"alpha": 4096},
+			targetName: "beta",
+			targetPort: 4097,
+			wantErr:    false,
+		},
+		{
+			name:       "conflict with another workspace",
+			ports:      map[string]int{"alpha": 4096},
+			targetName: "beta",
+			targetPort: 4096,
+			wantErr:    true,
+			errSubstr:  "alpha",
+		},
+		{
+			name:       "same workspace is not a conflict",
+			ports:      map[string]int{"alpha": 4096},
+			targetName: "alpha",
+			targetPort: 4096,
+			wantErr:    false,
+		},
+		{
+			name:       "empty map",
+			ports:      map[string]int{},
+			targetName: "alpha",
+			targetPort: 4096,
+			wantErr:    false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := checkPortConflict(tc.ports, tc.targetName, tc.targetPort)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.errSubstr) {
+					t.Fatalf("error %q should contain %q", err.Error(), tc.errSubstr)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
 }
