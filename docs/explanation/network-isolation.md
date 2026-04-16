@@ -60,3 +60,9 @@ Any containers the agent starts through dind inherit the dind daemon's network c
 - The root filesystem is not read-only
 
 These gaps are intentional or accepted tradeoffs, not oversights. The goal of jailoc is to protect your internal network and keep the agent's state from bleeding into your host environment — not to prevent the agent from doing its job on the public internet.
+
+## Kernel requirements
+
+The iptables rules require the container runtime's Linux kernel to support **netfilter**. Most Docker runtimes ship kernels with full netfilter support, but some minimal hypervisor configurations do not. Rancher Desktop using VZ virtualization without Rosetta on macOS is a known case — its ARM64 kernel lacks both nftables and legacy netfilter modules, causing all iptables operations to fail with `Protocol not supported`. jailoc refuses to start in this situation because network isolation cannot be enforced.
+
+See [Installation — Docker runtime compatibility](../how-to/installation.md#docker-runtime-compatibility) for a full list of tested runtimes.
