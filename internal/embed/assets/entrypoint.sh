@@ -70,15 +70,15 @@ iptables -A OUTPUT -d 192.168.0.0/16 -j DROP
 iptables -A OUTPUT -d 169.254.0.0/16 -j DROP
 iptables -A OUTPUT -d 100.64.0.0/10 -j DROP
 
-chown -R 1000:1000 /home/agent/.local /home/agent/.cache
-chown 1000:1000 /home/agent/.claude
+chown -R 1000:1000 /home/agent/.local /home/agent/.cache 2>/dev/null || true
+chown 1000:1000 /home/agent/.claude 2>/dev/null || true
 
 if [ -S /run/ssh-agent.sock ]; then
   chown 1000:1000 /run/ssh-agent.sock 2>/dev/null || true
 fi
 
 if [ -d /home/agent/.ssh ]; then
-  chown 1000:1000 /home/agent/.ssh
+  chown 1000:1000 /home/agent/.ssh 2>/dev/null || true
 fi
 
 exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --no-new-privs -- env HOME=/home/agent "$@"
