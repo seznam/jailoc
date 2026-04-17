@@ -228,6 +228,28 @@ paths = ["/home/you/projects/my-project"]
 mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode:rw"]
 ```
 
+### Pass through OpenCode auth credentials
+
+The container's `~/.local/share/opencode` is a named Docker volume by default — your host `auth.json` is not available inside. To pass it through without replacing the entire volume, mount just the file:
+
+```toml
+[defaults]
+mounts = ["~/.local/share/opencode/auth.json:/home/agent/.local/share/opencode/auth.json:ro"]
+```
+
+The bind mount overlays the single file on top of the named volume. The rest of the data directory (sessions, state) stays container-local.
+
+### Share additional paths
+
+To make additional host directories (e.g. shared AI instruction files consumed by both Copilot and OpenCode) available inside the container, mount the directory read-only:
+
+```toml
+[defaults]
+mounts = ["~/.config/ai-instructions:~/.config/ai-instructions:ro"]
+```
+
+`~` expands to the agent's home (`/home/agent`) on the container side, so paths like `~/.config/ai-instructions/...` resolve identically inside and outside the container.
+
 !!! note
     Dangerous host paths are forbidden in mounts: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Container destinations under `/home/agent/...` are allowed; other system directories (`/usr`, `/etc`, `/var`, etc.) are forbidden.
 
