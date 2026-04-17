@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.10.0](https://github.com/seznam/jailoc/compare/v1.9.0...v1.10.0) (2026-04-17)
+
+
+### Features
+
+* add nix flake ([#63](https://github.com/seznam/jailoc/issues/63)) ([cf1eab3](https://github.com/seznam/jailoc/commit/cf1eab37badac4b3a01755421e6ef2e5d1e01b4e))
+* **config:** add user-configurable mounts ([#68](https://github.com/seznam/jailoc/issues/68)) ([33f18b0](https://github.com/seznam/jailoc/commit/33f18b08e49f683f0662b96f9b7273e7f139f86a))
+
+
+### Bug Fixes
+
+* **embed:** fall back to iptables-legacy when nft backend is unsupported ([#74](https://github.com/seznam/jailoc/issues/74)) ([e403eb6](https://github.com/seznam/jailoc/commit/e403eb6e55d7fbdf52d4298a73a50b6a263b8072))
+* **entrypoint:** avoid recursive chown on bind-mounted transcripts dir ([#69](https://github.com/seznam/jailoc/issues/69)) ([c5366d2](https://github.com/seznam/jailoc/commit/c5366d2af44303c25ca1014f7bce97f10004b389))
+* **entrypoint:** suppress chown errors on read-only bind mounts ([#72](https://github.com/seznam/jailoc/issues/72)) ([a4536c4](https://github.com/seznam/jailoc/commit/a4536c4e90dbfadd600c3ca09c658f4b3fb60504))
+* **up:** detect port conflicts before starting workspace ([#73](https://github.com/seznam/jailoc/issues/73)) ([9643d66](https://github.com/seznam/jailoc/commit/9643d66641adaa565fe22c950abb537f790b6d27))
+
+
+### Documentation
+
+* add pre-commit checks to AGENTS.md and development.md ([#82](https://github.com/seznam/jailoc/issues/82)) ([e947794](https://github.com/seznam/jailoc/commit/e94779445af8991ba251c6484b71a2f217fb321c))
+* **how-to:** add auth passthrough and shared paths mount examples ([#85](https://github.com/seznam/jailoc/issues/85)) ([eed1228](https://github.com/seznam/jailoc/commit/eed1228c98b72e956a1a2a211fcddd7f70c2f45b))
+
 ## [1.9.0](https://github.com/seznam/jailoc/compare/v1.8.0...v1.9.0) (2026-04-09)
 
 
