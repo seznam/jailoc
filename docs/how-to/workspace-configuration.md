@@ -237,7 +237,7 @@ The container's `~/.local/share/opencode` is a named Docker volume by default â€
 mounts = ["~/.local/share/opencode/auth.json:/home/agent/.local/share/opencode/auth.json:ro"]
 ```
 
-The bind mount overlays the single file on top of the named volume. The rest of the data directory (sessions, state) stays container-local.
+The bind mount overlays the single file on top of the named volume. The rest of the data directory (sessions, state) stays in the named Docker volume.
 
 ### Share additional paths
 
@@ -245,10 +245,10 @@ To make additional host directories (e.g. shared AI instruction files consumed b
 
 ```toml
 [defaults]
-mounts = ["~/.config/ai-instructions:~/.config/ai-instructions:ro"]
+mounts = ["~/.config/ai-instructions:/home/agent/.config/ai-instructions:ro"]
 ```
 
-`~` expands to the agent's home (`/home/agent`) on the container side, so paths like `~/.config/ai-instructions/...` resolve identically inside and outside the container.
+`~` on the host side expands to your home directory. The container path must use an absolute path â€” the agent's home is `/home/agent`.
 
 !!! note
     Dangerous host paths are forbidden in mounts: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Container destinations under `/home/agent/...` are allowed; other system directories (`/usr`, `/etc`, `/var`, etc.) are forbidden.
