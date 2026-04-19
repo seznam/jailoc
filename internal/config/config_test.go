@@ -541,6 +541,26 @@ func TestValidateRejectsInvalidMode(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsValidPasswordModes(t *testing.T) {
+	for _, mode := range []string{"", "auto", "env", "keyring", "file"} {
+		cfg := &Config{PasswordMode: mode, Workspaces: map[string]Workspace{"default": {Paths: []string{"/data/workspace"}}}}
+		if err := Validate(cfg); err != nil {
+			t.Errorf("password_mode %q: unexpected error: %v", mode, err)
+		}
+	}
+}
+
+func TestValidateRejectsInvalidPasswordMode(t *testing.T) {
+	cfg := &Config{PasswordMode: "banana", Workspaces: map[string]Workspace{"default": {Paths: []string{"/data/workspace"}}}}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid password_mode, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid password_mode") {
+		t.Errorf("error %q does not contain 'invalid password_mode'", err.Error())
+	}
+}
+
 func TestResolveModeWithOpenCodeOnPath(t *testing.T) {
 	orig := lookPath
 	t.Cleanup(func() { lookPath = orig })

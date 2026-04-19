@@ -22,6 +22,7 @@ const (
 
 # Access mode: "remote" (host opencode attach), "exec" (docker exec opencode), or "" (auto-detect)
 # mode = ""
+# password_mode = "auto"
 
 [base]
 # dockerfile = ""
@@ -144,10 +145,11 @@ type Mount struct {
 }
 
 type Config struct {
-	Mode       string               `toml:"mode"`
-	Base       BaseConfig           `toml:"base"`
-	Defaults   Defaults             `toml:"defaults"`
-	Workspaces map[string]Workspace `toml:"workspaces"`
+	Mode         string               `toml:"mode"`
+	PasswordMode string               `toml:"password_mode"`
+	Base         BaseConfig           `toml:"base"`
+	Defaults     Defaults             `toml:"defaults"`
+	Workspaces   map[string]Workspace `toml:"workspaces"`
 }
 
 type BaseConfig struct {
@@ -465,6 +467,10 @@ func Validate(cfg *Config) error {
 
 	if cfg.Mode != "" && cfg.Mode != ModeRemote && cfg.Mode != ModeExec {
 		return fmt.Errorf("invalid mode %q: must be %q, %q, or empty (auto-detect)", cfg.Mode, ModeRemote, ModeExec)
+	}
+	validPasswordModes := map[string]bool{"": true, "auto": true, "env": true, "keyring": true, "file": true}
+	if !validPasswordModes[cfg.PasswordMode] {
+		return fmt.Errorf("invalid password_mode %q: must be \"auto\", \"env\", \"keyring\", \"file\", or empty (auto)", cfg.PasswordMode)
 	}
 
 	if err := validateDockerfileSource(cfg.Base.Dockerfile, "base dockerfile"); err != nil {
