@@ -174,7 +174,7 @@ func TestResolve(t *testing.T) {
 			workspace:  "ws-auto-all-miss-generate",
 			setupHome:  true,
 			keyring:    &mockKeyring{getErr: keyring.ErrNotFound},
-			wantSource: SourceFile,
+			wantSource: SourceKeyring,
 			assert: func(t *testing.T, tcName string, kr *mockKeyring, _ string, workspace string, got string) {
 				t.Helper()
 				if !kr.getCalled {
@@ -192,8 +192,8 @@ func TestResolve(t *testing.T) {
 				if err != nil {
 					t.Fatalf("ReadPasswordFile(%q) error: %v", workspace, err)
 				}
-				if stored != got {
-					t.Fatalf("stored password = %q, want %q", stored, got)
+				if stored != "keyring" {
+					t.Fatalf("password file = %q, want keyring marker", stored)
 				}
 			},
 		},
@@ -248,6 +248,17 @@ func TestResolve(t *testing.T) {
 			keyring:    &mockKeyring{getErr: errBoom},
 			wantValue:  "from-file",
 			wantSource: SourceFile,
+		},
+		{
+			name:         "auto_keyring_fail_marker_file",
+			mode:         ModeAuto,
+			workspace:    "ws-auto-keyring-fail-marker",
+			setupHome:    true,
+			setupFile:    true,
+			fileVal:      "keyring",
+			keyring:      &mockKeyring{getErr: errBoom},
+			wantErr:      true,
+			wantErrParts: []string{"resolve password for workspace", "keyring is unavailable", "delete"},
 		},
 		{
 			name:       "env_mode_set",

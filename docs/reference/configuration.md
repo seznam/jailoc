@@ -14,7 +14,7 @@ Fields set at the root level of `config.toml`, outside any TOML table.
 |-------|------|---------|-------------|
 | `password_mode` | string | `"auto"` | Password storage mode. Accepted values: `"auto"` (env var override → OS keyring → password file), `"env"` (env var only — error if unset), `"keyring"` (OS keyring only — error if unavailable), `"file"` (file only, skips keyring). |
 
-jailoc auto-generates a 64-character hex password on first run and stores it in the OS keyring (preferred) with a fallback file at `~/.local/share/jailoc/{workspace}/password`. `jailoc status` shows the source label (`env`, `keyring`, or `file`).
+jailoc auto-generates a 64-character hex password on first run and stores it in the OS keyring (preferred) with a fallback file at `~/.local/share/jailoc/{workspace}/password`. When the keyring is used, a marker file is written instead of the actual password. If the keyring becomes unavailable later, jailoc reports an error with the marker file path — delete it to generate a new file-based password. `jailoc status` shows the source label (`env`, `keyring`, or `file`).
 
 ### Example
 

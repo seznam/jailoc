@@ -16,6 +16,7 @@ const (
 	passwordLen      = 32
 	passwordFileName = "password"
 	envKey           = "OPENCODE_SERVER_PASSWORD"
+	keyringMarker    = "keyring"
 )
 
 const (
@@ -76,6 +77,13 @@ func (r *Resolver) resolve(workspace string) (string, string, error) {
 		}
 
 		if value, err := ReadPasswordFile(workspace); err == nil {
+			if value == keyringMarker {
+				return "", "", fmt.Errorf(
+					"password stored in OS keyring but keyring is unavailable; delete %s to generate a new file-based password",
+					PasswordFilePath(workspace),
+				)
+			}
+
 			return value, SourceFile, nil
 		}
 
@@ -84,7 +92,14 @@ func (r *Resolver) resolve(workspace string) (string, string, error) {
 			return "", "", err
 		}
 
-		_ = r.keyring.Set(keyringService, workspace, generated)
+		if err := r.keyring.Set(keyringService, workspace, generated); err == nil {
+			if writeErr := WritePasswordFile(workspace, keyringMarker); writeErr != nil {
+				return "", "", writeErr
+			}
+
+			return generated, SourceKeyring, nil
+		}
+
 		if err := WritePasswordFile(workspace, generated); err != nil {
 			return "", "", err
 		}
