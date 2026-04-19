@@ -441,6 +441,30 @@ func TestWriteEntrypointToCache(t *testing.T) {
 	})
 }
 
+func TestNeedsMigration(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		isRunning   bool
+		hasPassword bool
+		want        bool
+	}{
+		{name: "running_no_password", isRunning: true, hasPassword: false, want: true},
+		{name: "running_has_password", isRunning: true, hasPassword: true, want: false},
+		{name: "not_running_no_password", isRunning: false, hasPassword: false, want: false},
+		{name: "not_running_has_password", isRunning: false, hasPassword: true, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := needsMigration(tc.isRunning, tc.hasPassword)
+			if got != tc.want {
+				t.Fatalf("needsMigration(%v, %v) = %v, want %v", tc.isRunning, tc.hasPassword, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCheckPortConflict(t *testing.T) {
 	t.Parallel()
 

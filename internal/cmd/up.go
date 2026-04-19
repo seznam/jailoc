@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -71,7 +72,23 @@ func runUp(ctx context.Context, args []string) error {
 		}
 		running = false
 	}
-	if running {
+	_, hasPasswordErr := password.ReadPasswordFile(ws.Name)
+	hasPassword := hasPasswordErr == nil
+
+	if needsMigration(running, hasPassword) {
+		_, _ = color.New(color.FgYellow).Printf("Workspace %s is running without a password.\n", ws.Name)
+		fmt.Printf("Applying a password requires restarting the workspace containers.\n")
+		fmt.Printf("Continue? [y/N] ")
+		reader := bufio.NewReader(os.Stdin)
+		answer, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read migration prompt for workspace %q: %w", ws.Name, err)
+		}
+		answer = strings.TrimSpace(answer)
+		if answer != "y" && answer != "Y" {
+			return fmt.Errorf("password migration declined for workspace %q", ws.Name)
+		}
+	} else if running {
 		_, _ = color.New(color.FgYellow).Printf("Workspace %s is already running on port %d\n", ws.Name, ws.Port)
 		return nil
 	}
@@ -239,6 +256,12 @@ func isComposeFileMissing(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "no such file or directory") ||
 		strings.Contains(msg, "open ") && strings.Contains(msg, "docker-compose.yml")
+}
+
+// needsMigration returns true when a workspace is running but has no stored
+// password — i.e. it was started before automatic password management existed.
+func needsMigration(isRunning bool, hasPassword bool) bool {
+	return isRunning && !hasPassword
 }
 
 // checkPortConflict returns an error if another running workspace already
