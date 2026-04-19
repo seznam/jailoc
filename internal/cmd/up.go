@@ -75,8 +75,8 @@ func runUp(ctx context.Context, args []string) error {
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
 	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
-	pwSource, _ := resolver.Peek(ws.Name)
-	hasPassword := pwSource != ""
+	_, hasPasswordErr := password.ReadPasswordFile(ws.Name)
+	hasPassword := hasPasswordErr == nil
 
 	if needsMigration(running, hasPassword) {
 		_, _ = color.New(color.FgYellow).Printf("Workspace %s is running without a password.\n", ws.Name)
