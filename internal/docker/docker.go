@@ -88,7 +88,10 @@ func (c *Client) Up(ctx context.Context) error {
 		return fmt.Errorf("load compose project for workspace %q: %w", c.workspace, err)
 	}
 
-	if err := c.svc.Up(ctx, project, api.UpOptions{Start: api.StartOptions{}}); err != nil {
+	if err := c.svc.Up(ctx, project, api.UpOptions{
+		Create: api.CreateOptions{Recreate: api.RecreateForce},
+		Start:  api.StartOptions{},
+	}); err != nil {
 		return fmt.Errorf("compose up for workspace %q: %w", c.workspace, err)
 	}
 
