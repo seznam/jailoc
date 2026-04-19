@@ -3,7 +3,6 @@ package password
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -231,8 +230,8 @@ func TestKeyringMessage(t *testing.T) {
 	if err := k.Set(keyringService, "workspace-a", "secret"); err != nil {
 		t.Fatalf("Set() unexpected error: %v", err)
 	}
-	wantTwice := fmt.Sprintf("%s%s", wantOnce, wantOnce)
-	if got := buf.String(); got != wantTwice {
-		t.Fatalf("Set() message = %q, want %q", got, wantTwice)
+	// Message should still appear only once — sync.Once deduplicates across Get/Set.
+	if got := buf.String(); got != wantOnce {
+		t.Fatalf("after Get+Set message = %q, want single %q", got, wantOnce)
 	}
 }

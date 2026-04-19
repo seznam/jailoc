@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -33,13 +34,20 @@ type timedKeyring struct {
 	timeout     time.Duration
 	interactive bool
 	w           io.Writer
+	msgOnce     sync.Once
+}
+
+func (k *timedKeyring) announceAccess() {
+	if k.interactive {
+		k.msgOnce.Do(func() {
+			_, _ = io.WriteString(k.w, "Accessing system keyring...\n")
+		})
+	}
 }
 
 func (k *timedKeyring) Get(service, user string) (string, error) {
 	if k.interactive {
-		if _, err := io.WriteString(k.w, "Accessing system keyring...\n"); err != nil {
-			return "", fmt.Errorf("write keyring access message: %w", err)
-		}
+		k.announceAccess()
 
 		password, err := k.inner.Get(service, user)
 		if err != nil {
@@ -74,9 +82,7 @@ func (k *timedKeyring) Get(service, user string) (string, error) {
 
 func (k *timedKeyring) Set(service, user, password string) error {
 	if k.interactive {
-		if _, err := io.WriteString(k.w, "Accessing system keyring...\n"); err != nil {
-			return fmt.Errorf("write keyring access message: %w", err)
-		}
+		k.announceAccess()
 
 		if err := k.inner.Set(service, user, password); err != nil {
 			return fmt.Errorf("keyring set for workspace %q: %w", user, err)

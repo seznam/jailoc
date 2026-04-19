@@ -16,6 +16,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
+	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -121,6 +122,18 @@ var rootCmd = &cobra.Command{
 			_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
 			if err := waitForReady(ctx, ws.Port, client); err != nil {
 				return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
+			}
+		} else {
+			_, hasPasswordErr := password.ReadPasswordFile(ws.Name)
+			if hasPasswordErr != nil {
+				workspaceExplicit = true
+				if err := runUp(ctx, nil); err != nil {
+					return fmt.Errorf("migrate workspace %q: %w", ws.Name, err)
+				}
+				_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
+				if err := waitForReady(ctx, ws.Port, client); err != nil {
+					return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
+				}
 			}
 		}
 
