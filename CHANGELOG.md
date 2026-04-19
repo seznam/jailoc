@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/seznam/jailoc/compare/v1.10.1...v1.11.0) (2026-04-19)
+
+
+### Features
+
+* **password:** automatic workspace password management ([#105](https://github.com/seznam/jailoc/issues/105)) ([903cd14](https://github.com/seznam/jailoc/commit/903cd148d0405753a1ce5743cf9a84f342ae09e5))
+
 ## [1.10.1](https://github.com/seznam/jailoc/compare/v1.10.0...v1.10.1) (2026-04-19)
 
 
