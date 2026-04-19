@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.10.1](https://github.com/seznam/jailoc/compare/v1.10.0...v1.10.1) (2026-04-19)
+
+
+### Bug Fixes
+
+* **compose:** bind published port to localhost only ([6378b45](https://github.com/seznam/jailoc/commit/6378b45ffd448de1c7a4697bb8b78b6f78eaef2d))
+* **test:** fix integration test build errors, /tmp paths, and timeouts ([#101](https://github.com/seznam/jailoc/issues/101)) ([64a3f44](https://github.com/seznam/jailoc/commit/64a3f442565e00980bf20461f505e05d8543dead))
+* **test:** use docker/docker client and avoid /tmp workspace paths in integration tests ([#100](https://github.com/seznam/jailoc/issues/100)) ([bb85755](https://github.com/seznam/jailoc/commit/bb857552759409e1df493963d2f4002bb8c6e589))
+
 ## [1.10.0](https://github.com/seznam/jailoc/compare/v1.9.0...v1.10.0) (2026-04-17)
 
 
