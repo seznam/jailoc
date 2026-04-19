@@ -39,7 +39,7 @@ type Keyring interface {
 func DataDir(workspace string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		panic(fmt.Errorf("data dir for workspace %q: %w", workspace, err))
+		return filepath.Join("~", ".local", "share", "jailoc", workspace)
 	}
 
 	return filepath.Join(home, ".local", "share", "jailoc", workspace)
