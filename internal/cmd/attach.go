@@ -44,7 +44,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}
 
 	serverArg := fmt.Sprintf("http://localhost:%d", ws.Port)
-	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
 	resolver := password.DefaultResolver(interactive, passwordMode)
 	pw, _, err := resolver.Resolve(ws.Name)
 	if err != nil {

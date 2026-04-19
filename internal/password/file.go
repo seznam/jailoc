@@ -15,7 +15,7 @@ func ReadPasswordFile(workspace string) (string, error) {
 
 	password := strings.TrimSpace(string(raw))
 	if password == "" {
-		return "", fmt.Errorf("read password file for workspace %q: %w", workspace, errors.New("password file is empty"))
+		return "", fmt.Errorf("read password file for workspace %q: password file is empty", workspace)
 	}
 
 	return password, nil
@@ -27,7 +27,7 @@ func WritePasswordFile(workspace string, password string) error {
 	}
 
 	path := PasswordFilePath(workspace)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: path is constructed from validated workspace name
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil

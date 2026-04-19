@@ -117,7 +117,7 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return fmt.Errorf("re-resolve workspace for restart: %w", err)
 	}
 
-	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
 	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
 	pw, _, err := resolver.Resolve(ws2.Name)
 	if err != nil {

@@ -14,7 +14,7 @@ type osKeyring struct{}
 func (k osKeyring) Get(service, user string) (string, error) {
 	password, err := keyring.Get(service, user)
 	if err != nil {
-		return "", fmt.Errorf("keyring get for workspace %q: %w", user, err)
+		return "", err
 	}
 
 	return password, nil
@@ -22,7 +22,7 @@ func (k osKeyring) Get(service, user string) (string, error) {
 
 func (k osKeyring) Set(service, user, password string) error {
 	if err := keyring.Set(service, user, password); err != nil {
-		return fmt.Errorf("keyring set for workspace %q: %w", user, err)
+		return err
 	}
 
 	return nil
