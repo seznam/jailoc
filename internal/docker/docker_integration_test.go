@@ -21,7 +21,7 @@ func skipWithoutDocker(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cli, err := dockerclient.NewClientWithOpts()
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		t.Skip("Docker client not available: ", err)
 	}
@@ -101,7 +101,7 @@ func TestBuildEmbeddedImage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		t.Fatalf("create Docker client: %v", err)
 	}
