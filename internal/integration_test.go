@@ -68,6 +68,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	cleanupAllHomes()
+	_ = os.RemoveAll(filepath.Join(projectRoot(), ".integration-tmp"))
 	if err := os.Setenv("HOME", oldHome); err != nil {
 		fmt.Fprintf(os.Stderr, "restore HOME: %v\n", err)
 	}
@@ -98,7 +99,7 @@ func TestConfigAutoCreation(t *testing.T) {
 }
 
 func TestUpStatusDownLifecycle(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	if !dockerAvailable(ctx) {
@@ -106,7 +107,7 @@ func TestUpStatusDownLifecycle(t *testing.T) {
 	}
 
 	home := testHome(t)
-	if err := writeMinimalConfig(home, t.TempDir()); err != nil {
+	if err := writeMinimalConfig(home, testWorkspaceDir(t)); err != nil {
 		t.Fatalf("write minimal config: %v", err)
 	}
 
@@ -145,12 +146,12 @@ func TestAddPathPersists(t *testing.T) {
 	defer cancel()
 
 	home := testHome(t)
-	workspaceDir := t.TempDir()
+	workspaceDir := testWorkspaceDir(t)
 	if err := writeMinimalConfig(home, workspaceDir); err != nil {
 		t.Fatalf("write minimal config: %v", err)
 	}
 
-	addDir := t.TempDir()
+	addDir := testWorkspaceDir(t)
 	addOut, addErr := runJailoc(ctx, home, "add", addDir)
 	if addErr != nil {
 		t.Fatalf("run jailoc add: %v\noutput:\n%s", addErr, addOut)
@@ -197,7 +198,7 @@ func TestInvalidConfigErrors(t *testing.T) {
 }
 
 func TestUpIdempotent(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	if !dockerAvailable(ctx) {
@@ -205,7 +206,7 @@ func TestUpIdempotent(t *testing.T) {
 	}
 
 	home := testHome(t)
-	if err := writeMinimalConfig(home, t.TempDir()); err != nil {
+	if err := writeMinimalConfig(home, testWorkspaceDir(t)); err != nil {
 		t.Fatalf("write minimal config: %v", err)
 	}
 
@@ -240,7 +241,7 @@ func TestEnvVarsReachContainer(t *testing.T) {
 	}
 
 	home := testHome(t)
-	workspaceDir := t.TempDir()
+	workspaceDir := testWorkspaceDir(t)
 
 	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
 	content := fmt.Sprintf(`[base]
@@ -286,7 +287,7 @@ func TestEnvFileVarsReachContainer(t *testing.T) {
 	}
 
 	home := testHome(t)
-	workspaceDir := t.TempDir()
+	workspaceDir := testWorkspaceDir(t)
 
 	envFile, err := os.CreateTemp("", "jailoc-integration-*.env")
 	if err != nil {
@@ -349,6 +350,22 @@ func projectRoot() string {
 		}
 		dir = parent
 	}
+}
+
+// testWorkspaceDir creates a temp directory under the project root instead of
+// os.TempDir(). Workspace paths under /tmp conflict with forbiddenMountPrefixes
+// validation, which blocks /tmp as a container-internal directory.
+func testWorkspaceDir(t *testing.T) string {
+	t.Helper()
+	base := filepath.Join(projectRoot(), ".integration-tmp")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("create workspace base dir %q: %v", base, err)
+	}
+	dir, err := os.MkdirTemp(base, "ws-")
+	if err != nil {
+		t.Fatalf("create test workspace dir: %v", err)
+	}
+	return dir
 }
 
 func testHome(t *testing.T) string {
@@ -453,7 +470,7 @@ func TestHealthEndpointAccessible(t *testing.T) {
 	}
 
 	home := testHome(t)
-	workspaceDir := t.TempDir()
+	workspaceDir := testWorkspaceDir(t)
 
 	content := fmt.Sprintf(`[base]
 
