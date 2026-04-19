@@ -13,8 +13,10 @@ import (
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/embed"
+	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var upCmd = &cobra.Command{
@@ -101,6 +103,13 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
+	pw, _, err := resolver.Resolve(ws.Name)
+	if err != nil {
+		return fmt.Errorf("resolve password for workspace %q: %w", ws.Name, err)
+	}
+
 	params := compose.ComposeParams{
 		WorkspaceName:    ws.Name,
 		Port:             ws.Port,
@@ -109,7 +118,7 @@ func runUp(ctx context.Context, args []string) error {
 		Mounts:           ws.Mounts,
 		AllowedHosts:     ws.AllowedHosts,
 		AllowedNetworks:  ws.AllowedNetworks,
-		OpenCodePassword: os.Getenv("OPENCODE_SERVER_PASSWORD"),
+		OpenCodePassword: pw,
 		Env:              ws.Env,
 		SSHAuthSock:      resolveSSHAuthSock(ws.SSHAuthSock),
 		SSHKnownHosts:    resolveSSHKnownHosts(ws.SSHAuthSock),

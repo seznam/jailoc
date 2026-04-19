@@ -138,7 +138,7 @@ var rootCmd = &cobra.Command{
 			attachErr = attachExec(attachCtx, client, targetPath)
 		default:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
-			attachErr = attachOnHost(attachCtx, ws, targetPath)
+			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode)
 		}
 		if attachErr != nil {
 			return fmt.Errorf("attach to workspace %q: %w", ws.Name, attachErr)

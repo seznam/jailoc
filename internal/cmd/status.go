@@ -9,8 +9,10 @@ import (
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
+	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var statusCmd = &cobra.Command{
@@ -73,6 +75,23 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	_, _ = color.New(color.FgCyan).Printf("Workspace: %s\n", ws.Name)
 	_, _ = color.New(color.FgCyan).Printf("Port:      %d\n", ws.Port)
+
+	// Resolve password source (we only need the source label, not the value)
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	pwResolver := password.DefaultResolver(interactive, cfg.PasswordMode)
+	_, pwSource, pwErr := pwResolver.Resolve(ws.Name)
+
+	_, _ = color.New(color.FgCyan).Printf("Password:  ")
+	if pwErr != nil {
+		_, _ = color.New(color.FgYellow).Printf("unknown\n")
+	} else {
+		switch pwSource {
+		case password.SourceEnv:
+			_, _ = color.New(color.FgYellow).Printf("%s\n", pwSource)
+		default:
+			_, _ = color.New(color.FgGreen).Printf("%s\n", pwSource)
+		}
+	}
 
 	switch state {
 	case "running":

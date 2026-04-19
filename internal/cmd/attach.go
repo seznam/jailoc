@@ -14,6 +14,7 @@ import (
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
+	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -36,15 +37,20 @@ func attachExecArgs(serverURL, dir string) []string {
 	return args
 }
 
-func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string) error {
+func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passwordMode string) error {
 	binary, err := config.ResolveBinary()
 	if err != nil {
 		return fmt.Errorf("resolve opencode binary: %w", err)
 	}
 
 	serverArg := fmt.Sprintf("http://localhost:%d", ws.Port)
-	password := os.Getenv("OPENCODE_SERVER_PASSWORD")
-	args := attachHostArgs(serverArg, password, dir)
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	resolver := password.DefaultResolver(interactive, passwordMode)
+	pw, _, err := resolver.Resolve(ws.Name)
+	if err != nil {
+		return fmt.Errorf("resolve password for workspace %q: %w", ws.Name, err)
+	}
+	args := attachHostArgs(serverArg, pw, dir)
 	cmd := exec.Command(binary, args...) //nolint:gosec // binary name is from ResolveBinary, args are controlled
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

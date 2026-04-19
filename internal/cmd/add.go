@@ -11,8 +11,10 @@ import (
 	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
+	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var addCmd = &cobra.Command{
@@ -115,6 +117,13 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return fmt.Errorf("re-resolve workspace for restart: %w", err)
 	}
 
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
+	pw, _, err := resolver.Resolve(ws2.Name)
+	if err != nil {
+		return fmt.Errorf("resolve password for workspace %q: %w", ws2.Name, err)
+	}
+
 	params := compose.ComposeParams{
 		WorkspaceName:    ws2.Name,
 		Port:             ws2.Port,
@@ -123,7 +132,7 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		Mounts:           ws2.Mounts,
 		AllowedHosts:     ws2.AllowedHosts,
 		AllowedNetworks:  ws2.AllowedNetworks,
-		OpenCodePassword: os.Getenv("OPENCODE_SERVER_PASSWORD"),
+		OpenCodePassword: pw,
 		Env:              ws2.Env,
 		SSHAuthSock:      resolveSSHAuthSock(ws2.SSHAuthSock),
 		SSHKnownHosts:    resolveSSHKnownHosts(ws2.SSHAuthSock),
