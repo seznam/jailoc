@@ -13,6 +13,7 @@ require (
 	github.com/moby/moby/client v0.3.0
 	github.com/moby/term v0.5.2
 	github.com/spf13/cobra v1.10.2
+	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/term v0.41.0
 )
 
@@ -35,6 +36,7 @@ require (
 	github.com/containerd/platforms v1.0.0-rc.2 // indirect
 	github.com/containerd/ttrpc v1.2.8 // indirect
 	github.com/containerd/typeurl/v2 v2.2.3 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/buildx v0.31.1 // indirect
@@ -48,6 +50,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
@@ -125,7 +128,7 @@ require (
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
