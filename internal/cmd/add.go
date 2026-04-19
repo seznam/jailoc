@@ -121,7 +121,7 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
 	pw, _, err := resolver.Resolve(ws2.Name)
 	if err != nil {
-		return fmt.Errorf("resolve password for workspace %q: %w", ws2.Name, err)
+		return err
 	}
 
 	params := compose.ComposeParams{

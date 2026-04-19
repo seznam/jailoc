@@ -384,7 +384,6 @@ func TestResolve(t *testing.T) {
 		},
 		{
 			name:       "newresolver_empty_mode_defaults_to_auto",
-			parallel:   true,
 			mode:       "",
 			workspace:  "ws-newresolver-empty-mode-defaults-to-auto",
 			keyring:    &mockKeyring{getVal: "from-keyring"},
@@ -417,7 +416,7 @@ func TestResolve(t *testing.T) {
 
 			if tc.envSet {
 				t.Setenv(envKey, tc.envVal)
-			} else if tc.mode == ModeAuto || tc.mode == ModeEnv {
+			} else if tc.mode == ModeAuto || tc.mode == ModeEnv || tc.mode == "" {
 				t.Setenv(envKey, "")
 			}
 
@@ -486,7 +485,7 @@ func TestResolve(t *testing.T) {
 	})
 
 	t.Run("resolve_wraps_workspace_context", func(t *testing.T) {
-		t.Parallel()
+		t.Setenv(envKey, "")
 		workspace := "ws-wraps-context"
 		_, _, err := NewResolver(&mockKeyring{}, ModeEnv).Resolve(workspace)
 		if err == nil {

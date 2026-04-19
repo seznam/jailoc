@@ -124,7 +124,7 @@ func runUp(ctx context.Context, args []string) error {
 	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
 	pw, _, err := resolver.Resolve(ws.Name)
 	if err != nil {
-		return fmt.Errorf("resolve password for workspace %q: %w", ws.Name, err)
+		return err
 	}
 
 	params := compose.ComposeParams{

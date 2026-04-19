@@ -48,7 +48,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	resolver := password.DefaultResolver(interactive, passwordMode)
 	pw, _, err := resolver.Resolve(ws.Name)
 	if err != nil {
-		return fmt.Errorf("resolve password for workspace %q: %w", ws.Name, err)
+		return err
 	}
 	args := attachHostArgs(serverArg, pw, dir)
 	cmd := exec.Command(binary, args...) //nolint:gosec // binary name is from ResolveBinary, args are controlled
