@@ -6,6 +6,24 @@ The file is auto-created with defaults on first run. All fields are optional unl
 
 ---
 
+## Top-level fields
+
+Fields set at the root level of `config.toml`, outside any TOML table.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `password_mode` | string | `"auto"` | Password storage mode. Accepted values: `"auto"` (env var override → OS keyring → password file), `"env"` (env var only — error if unset), `"keyring"` (OS keyring only — error if unavailable), `"file"` (file only, skips keyring). |
+
+jailoc auto-generates a 64-character hex password on first run and stores it in the OS keyring (preferred) with a fallback file at `~/.local/share/jailoc/{workspace}/password`. `jailoc status` shows the source label (`env`, `keyring`, or `file`).
+
+### Example
+
+```toml
+password_mode = "auto"
+```
+
+---
+
 ## `[base]`
 
 Global base image settings. Controls the fallback image used when no workspace-level `image` is set.
@@ -192,7 +210,7 @@ Each entry must be in `KEY=VALUE` format (key cannot be empty, must contain `=`)
 | Reserved key | Reason |
 |---|---|
 | `OPENCODE_LOG` | opencode runtime config |
-| `OPENCODE_SERVER_PASSWORD` | opencode server auth |
+| `OPENCODE_SERVER_PASSWORD` | managed automatically by jailoc; set to override the automatic password cascade |
 | `DOCKER_HOST` | DinD TLS connection |
 | `DOCKER_TLS_CERTDIR` | DinD TLS certs |
 | `DOCKER_CERT_PATH` | DinD TLS certs |

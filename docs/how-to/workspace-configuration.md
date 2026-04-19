@@ -189,7 +189,7 @@ env_file = ["~/.config/jailoc/shared.env"]
 ```
 
 !!! note
-    Several keys are reserved and cannot be set: `OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `SSH_AUTH_SOCK`. Setting any of these causes a config validation error.
+    Several keys are reserved and cannot be set: `OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `SSH_AUTH_SOCK`. Setting any of these causes a config validation error. `OPENCODE_SERVER_PASSWORD` is managed automatically by jailoc. Setting it in `env` or `env_file` is rejected, but it can be set as an OS environment variable to override the automatic cascade (useful for CI/CD).
 
 ---
 
