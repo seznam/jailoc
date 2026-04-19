@@ -33,7 +33,7 @@ services:
 {{- end}}
     environment:
       - OPENCODE_LOG=debug
-      - OPENCODE_SERVER_PASSWORD={{.OpenCodePassword}}
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD}
       - DOCKER_HOST=tcp://dind:2376
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_CERT_PATH=/certs/client

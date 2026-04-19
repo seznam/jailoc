@@ -124,15 +124,16 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return err
 	}
 
+	os.Setenv("OPENCODE_SERVER_PASSWORD", pw) //nolint:gosec,errcheck // only fails if key is empty
+
 	params := compose.ComposeParams{
-		WorkspaceName:    ws2.Name,
-		Port:             ws2.Port,
-		Image:            "jailoc-base:embedded",
-		Paths:            ws2.Paths,
-		Mounts:           ws2.Mounts,
-		AllowedHosts:     ws2.AllowedHosts,
-		AllowedNetworks:  ws2.AllowedNetworks,
-		OpenCodePassword: pw,
+		WorkspaceName:   ws2.Name,
+		Port:            ws2.Port,
+		Image:           "jailoc-base:embedded",
+		Paths:           ws2.Paths,
+		Mounts:          ws2.Mounts,
+		AllowedHosts:    ws2.AllowedHosts,
+		AllowedNetworks: ws2.AllowedNetworks,
 		Env:              ws2.Env,
 		SSHAuthSock:      resolveSSHAuthSock(ws2.SSHAuthSock),
 		SSHKnownHosts:    resolveSSHKnownHosts(ws2.SSHAuthSock),

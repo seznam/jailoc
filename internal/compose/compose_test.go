@@ -15,12 +15,11 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 		Port:             4111,
 		Image:            "ghcr.io/seznam/jailoc:test",
 		Paths:            []string{"/Users/test/work/project"},
-		OpenCodePassword: "secret",
-		Env:              nil,
-		CPU:              2.0,
-		Memory:           "4g",
-		UseDataVolume:    true,
-		UseCacheVolume:   true,
+		Env:            nil,
+		CPU:            2.0,
+		Memory:         "4g",
+		UseDataVolume:  true,
+		UseCacheVolume: true,
 	}
 
 	out, err := GenerateCompose(params)
@@ -34,7 +33,7 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	assertContains(t, rendered, "image: ghcr.io/seznam/jailoc:test")
 	assertContains(t, rendered, "- \"127.0.0.1:4111:4096\"")
 	assertContains(t, rendered, "- /Users/test/work/project:/Users/test/work/project")
-	assertContains(t, rendered, "- OPENCODE_SERVER_PASSWORD=secret")
+	assertContains(t, rendered, "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD}")
 	assertContains(t, rendered, "opencode-data-alpha")
 	assertContains(t, rendered, "opencode-cache-alpha")
 	assertContains(t, rendered, "working_dir: /Users/test/work/project")
@@ -72,7 +71,7 @@ func TestGenerateComposeMultiplePaths(t *testing.T) {
 	assertContains(t, rendered, "working_dir: /repos/api")
 }
 
-func TestGenerateComposeEmptyPasswordRendersEmptyValue(t *testing.T) {
+func TestGenerateComposePasswordUsesEnvSubstitution(t *testing.T) {
 	t.Parallel()
 
 	params := ComposeParams{
@@ -92,10 +91,7 @@ func TestGenerateComposeEmptyPasswordRendersEmptyValue(t *testing.T) {
 
 	rendered := string(out)
 
-	assertContains(t, rendered, "- OPENCODE_SERVER_PASSWORD=")
-	if strings.Contains(rendered, "${OPENCODE_SERVER_PASSWORD") {
-		t.Fatalf("expected no shell interpolation for OPENCODE_SERVER_PASSWORD, got:\n%s", rendered)
-	}
+	assertContains(t, rendered, "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD}")
 }
 
 func TestGenerateComposeVolumeNamesIncludeWorkspaceName(t *testing.T) {
@@ -134,8 +130,7 @@ func TestWriteComposeFileHappyPath(t *testing.T) {
 		Port:             4500,
 		Image:            "ghcr.io/seznam/jailoc:test",
 		Paths:            []string{"/tmp/workspace"},
-		OpenCodePassword: "testpass",
-		Env:              nil,
+		Env: nil,
 		CPU:              2.0,
 		Memory:           "4g",
 	}
@@ -212,8 +207,7 @@ func TestGenerateComposeSSHAuthSock(t *testing.T) {
 			Port:             4700,
 			Image:            "ghcr.io/seznam/jailoc:test",
 			Paths:            []string{"/tmp/work"},
-			OpenCodePassword: "secret",
-			SSHAuthSock:      "/run/host-services/ssh-auth.sock",
+			SSHAuthSock: "/run/host-services/ssh-auth.sock",
 			CPU:              2.0,
 			Memory:           "4g",
 		}
@@ -235,8 +229,7 @@ func TestGenerateComposeSSHAuthSock(t *testing.T) {
 			Port:             4701,
 			Image:            "ghcr.io/seznam/jailoc:test",
 			Paths:            []string{"/tmp/work"},
-			OpenCodePassword: "secret",
-			SSHAuthSock:      "",
+			SSHAuthSock: "",
 			CPU:              2.0,
 			Memory:           "4g",
 		}
@@ -266,8 +259,7 @@ func TestGenerateComposeGitConfig(t *testing.T) {
 			Port:             4702,
 			Image:            "ghcr.io/seznam/jailoc:test",
 			Paths:            []string{"/tmp/work"},
-			OpenCodePassword: "secret",
-			GitConfig:        "/home/user/.gitconfig",
+			GitConfig: "/home/user/.gitconfig",
 			CPU:              2.0,
 			Memory:           "4g",
 		}
@@ -288,8 +280,7 @@ func TestGenerateComposeGitConfig(t *testing.T) {
 			Port:             4703,
 			Image:            "ghcr.io/seznam/jailoc:test",
 			Paths:            []string{"/tmp/work"},
-			OpenCodePassword: "secret",
-			GitConfig:        "",
+			GitConfig: "",
 			CPU:              2.0,
 			Memory:           "4g",
 		}
@@ -316,8 +307,7 @@ func TestGenerateComposeSSHKnownHosts(t *testing.T) {
 			Port:             4704,
 			Image:            "ghcr.io/seznam/jailoc:test",
 			Paths:            []string{"/tmp/work"},
-			OpenCodePassword: "secret",
-			SSHKnownHosts:    "/home/user/.ssh/known_hosts",
+			SSHKnownHosts: "/home/user/.ssh/known_hosts",
 			CPU:              2.0,
 			Memory:           "4g",
 		}
@@ -338,8 +328,7 @@ func TestGenerateComposeSSHKnownHosts(t *testing.T) {
 			Port:             4705,
 			Image:            "ghcr.io/seznam/jailoc:test",
 			Paths:            []string{"/tmp/work"},
-			OpenCodePassword: "secret",
-			SSHKnownHosts:    "",
+			SSHKnownHosts: "",
 			CPU:              2.0,
 			Memory:           "4g",
 		}
@@ -364,8 +353,7 @@ func TestGenerateComposeAllSSHGitEnabled(t *testing.T) {
 		Port:             4706,
 		Image:            "ghcr.io/seznam/jailoc:test",
 		Paths:            []string{"/tmp/work"},
-		OpenCodePassword: "secret",
-		SSHAuthSock:      "/run/host-services/ssh-auth.sock",
+		SSHAuthSock:   "/run/host-services/ssh-auth.sock",
 		GitConfig:        "/home/user/.gitconfig",
 		SSHKnownHosts:    "/home/user/.ssh/known_hosts",
 		CPU:              2.0,
@@ -392,8 +380,7 @@ func TestGenerateComposeEnv(t *testing.T) {
 		Port:             4600,
 		Image:            "ghcr.io/seznam/jailoc:test",
 		Paths:            []string{"/tmp/work"},
-		OpenCodePassword: "secret",
-		Env:              []string{"MY_VAR=hello", "OTHER=world"},
+		Env:    []string{"MY_VAR=hello", "OTHER=world"},
 		CPU:              2.0,
 		Memory:           "4g",
 	}
@@ -423,8 +410,7 @@ func TestGenerateComposeEmptyEnv(t *testing.T) {
 		Port:             4700,
 		Image:            "ghcr.io/seznam/jailoc:test",
 		Paths:            []string{"/tmp/work"},
-		OpenCodePassword: "secret",
-		Env:              nil,
+		Env:    nil,
 		CPU:              2.0,
 		Memory:           "4g",
 	}
@@ -740,9 +726,8 @@ func TestGenerateComposeMountsFromParams(t *testing.T) {
 			"/home/user/.config/opencode:/home/agent/.config/opencode:ro",
 			"/home/user/.agents:/home/agent/.agents:ro",
 		},
-		OpenCodePassword: "secret",
-		CPU:              2.0,
-		Memory:           "4g",
+		CPU:    2.0,
+		Memory: "4g",
 	}
 
 	out, err := GenerateCompose(params)

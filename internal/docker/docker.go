@@ -88,10 +88,9 @@ func (c *Client) Up(ctx context.Context) error {
 		return fmt.Errorf("load compose project for workspace %q: %w", c.workspace, err)
 	}
 
-	if err := c.svc.Up(ctx, project, api.UpOptions{
-		Create: api.CreateOptions{Recreate: api.RecreateForce},
-		Start:  api.StartOptions{},
-	}); err != nil {
+	// Default UpOptions uses RecreateDiverged: containers are recreated only
+	// when the compose configuration changes (e.g. new env vars, image update).
+	if err := c.svc.Up(ctx, project, api.UpOptions{}); err != nil {
 		return fmt.Errorf("compose up for workspace %q: %w", c.workspace, err)
 	}
 

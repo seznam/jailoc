@@ -131,15 +131,16 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
+	os.Setenv("OPENCODE_SERVER_PASSWORD", pw) //nolint:gosec,errcheck // only fails if key is empty
+
 	params := compose.ComposeParams{
-		WorkspaceName:    ws.Name,
-		Port:             ws.Port,
-		Image:            finalImage,
-		Paths:            ws.Paths,
-		Mounts:           ws.Mounts,
-		AllowedHosts:     ws.AllowedHosts,
-		AllowedNetworks:  ws.AllowedNetworks,
-		OpenCodePassword: pw,
+		WorkspaceName:   ws.Name,
+		Port:            ws.Port,
+		Image:           finalImage,
+		Paths:           ws.Paths,
+		Mounts:          ws.Mounts,
+		AllowedHosts:    ws.AllowedHosts,
+		AllowedNetworks: ws.AllowedNetworks,
 		Env:              ws.Env,
 		SSHAuthSock:      resolveSSHAuthSock(ws.SSHAuthSock),
 		SSHKnownHosts:    resolveSSHKnownHosts(ws.SSHAuthSock),
