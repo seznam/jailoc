@@ -68,6 +68,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	cleanupAllHomes()
+	_ = os.RemoveAll(filepath.Join(projectRoot(), ".integration-tmp"))
 	if err := os.Setenv("HOME", oldHome); err != nil {
 		fmt.Fprintf(os.Stderr, "restore HOME: %v\n", err)
 	}
@@ -364,7 +365,6 @@ func testWorkspaceDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("create test workspace dir: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }
 
