@@ -1,5 +1,6 @@
 .envrc
 .sisyphus/
+.integration-tmp/
 jailoc
 .DS_Store
 all.md
