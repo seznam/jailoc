@@ -72,11 +72,17 @@ func runUp(ctx context.Context, args []string) error {
 		}
 		running = false
 	}
-	_, hasPasswordErr := password.ReadPasswordFile(ws.Name)
-	hasPassword := hasPasswordErr == nil
+
+	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
+	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
+	pwSource, _ := resolver.Peek(ws.Name)
+	hasPassword := pwSource != ""
 
 	if needsMigration(running, hasPassword) {
 		_, _ = color.New(color.FgYellow).Printf("Workspace %s is running without a password.\n", ws.Name)
+		if !interactive {
+			return fmt.Errorf("password migration required for workspace %q but stdin is not a terminal; restart with: jailoc down %s && jailoc up %s", ws.Name, ws.Name, ws.Name)
+		}
 		fmt.Printf("Applying a password requires restarting the workspace containers.\n")
 		fmt.Printf("Continue? [y/N] ")
 		reader := bufio.NewReader(os.Stdin)
@@ -120,8 +126,6 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
-	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
 	pw, _, err := resolver.Resolve(ws.Name)
 	if err != nil {
 		return err

@@ -65,6 +65,47 @@ func (r *Resolver) Resolve(workspace string) (password string, source string, er
 	return password, source, nil
 }
 
+// Peek checks existing password sources without generating or persisting.
+// Returns the source label ("env", "keyring", "file") or empty string if no
+// password is configured. Unlike Resolve, Peek never creates new passwords.
+func (r *Resolver) Peek(workspace string) (string, error) {
+	switch r.mode {
+	case ModeAuto:
+		if value := os.Getenv(envKey); value != "" {
+			return SourceEnv, nil
+		}
+		// Check file before keyring — file reads are fast and local,
+		// keyring may trigger system dialogs or timeouts.
+		if value, err := ReadPasswordFile(workspace); err == nil {
+			if value == keyringMarker {
+				return SourceKeyring, nil
+			}
+			return SourceFile, nil
+		}
+		if _, err := r.keyring.Get(keyringService, workspace); err == nil {
+			return SourceKeyring, nil
+		}
+		return "", nil
+	case ModeEnv:
+		if value := os.Getenv(envKey); value != "" {
+			return SourceEnv, nil
+		}
+		return "", nil
+	case ModeKeyring:
+		if _, err := r.keyring.Get(keyringService, workspace); err == nil {
+			return SourceKeyring, nil
+		}
+		return "", nil
+	case ModeFile:
+		if _, err := ReadPasswordFile(workspace); err == nil {
+			return SourceFile, nil
+		}
+		return "", nil
+	default:
+		return "", fmt.Errorf("unsupported password mode %q", r.mode)
+	}
+}
+
 func (r *Resolver) resolve(workspace string) (string, string, error) {
 	switch r.mode {
 	case ModeAuto:
@@ -72,12 +113,26 @@ func (r *Resolver) resolve(workspace string) (string, string, error) {
 			return value, SourceEnv, nil
 		}
 
-		if value, err := r.keyring.Get(keyringService, workspace); err == nil {
-			return value, SourceKeyring, nil
+		keyringValue, keyringErr := r.keyring.Get(keyringService, workspace)
+		if keyringErr == nil {
+			return keyringValue, SourceKeyring, nil
 		}
 
 		if value, err := ReadPasswordFile(workspace); err == nil {
 			if value == keyringMarker {
+				if errors.Is(keyringErr, keyring.ErrNotFound) {
+					generated, genErr := Generate()
+					if genErr != nil {
+						return "", "", genErr
+					}
+					if setErr := r.keyring.Set(keyringService, workspace, generated); setErr != nil {
+						return "", "", fmt.Errorf(
+							"keyring entry deleted and cannot restore (%w); delete %s to reset password storage",
+							setErr, PasswordFilePath(workspace),
+						)
+					}
+					return generated, SourceKeyring, nil
+				}
 				return "", "", fmt.Errorf(
 					"password stored in OS keyring but keyring is unavailable; delete %s to generate a new file-based password",
 					PasswordFilePath(workspace),

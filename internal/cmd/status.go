@@ -76,10 +76,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	_, _ = color.New(color.FgCyan).Printf("Workspace: %s\n", ws.Name)
 	_, _ = color.New(color.FgCyan).Printf("Port:      %d\n", ws.Port)
 
-	// Resolve password source (we only need the source label, not the value)
+	// Peek at password source without generating or persisting (status is read-only).
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
 	pwResolver := password.DefaultResolver(interactive, cfg.PasswordMode)
-	_, pwSource, pwErr := pwResolver.Resolve(ws.Name)
+	pwSource, pwErr := pwResolver.Peek(ws.Name)
 
 	_, _ = color.New(color.FgCyan).Printf("Password:  ")
 	if pwErr != nil {

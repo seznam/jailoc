@@ -261,6 +261,37 @@ func TestResolve(t *testing.T) {
 			wantErrParts: []string{"resolve password for workspace", "keyring is unavailable", "delete"},
 		},
 		{
+			name:       "auto_keyring_deleted_marker_regenerate",
+			mode:       ModeAuto,
+			workspace:  "ws-auto-keyring-deleted-marker",
+			setupHome:  true,
+			setupFile:  true,
+			fileVal:    "keyring",
+			keyring:    &mockKeyring{getErr: keyring.ErrNotFound},
+			wantSource: SourceKeyring,
+			assert: func(t *testing.T, tcName string, kr *mockKeyring, _ string, _ string, got string) {
+				t.Helper()
+				if !kr.setCalled {
+					t.Fatal("expected keyring Set to be called for regenerated password")
+				}
+				re := regexp.MustCompile(`^[0-9a-f]{64}$`)
+				if !re.MatchString(got) {
+					t.Fatalf("%s: regenerated password has invalid format: %q", tcName, got)
+				}
+			},
+		},
+		{
+			name:         "auto_keyring_deleted_marker_restore_fails",
+			mode:         ModeAuto,
+			workspace:    "ws-auto-keyring-deleted-restore-fails",
+			setupHome:    true,
+			setupFile:    true,
+			fileVal:      "keyring",
+			keyring:      &mockKeyring{getErr: keyring.ErrNotFound, setErr: errBoom},
+			wantErr:      true,
+			wantErrParts: []string{"keyring entry deleted", "cannot restore", "delete"},
+		},
+		{
 			name:       "env_mode_set",
 			mode:       ModeEnv,
 			workspace:  "ws-env-mode-set",
@@ -507,4 +538,157 @@ func TestResolve(t *testing.T) {
 			t.Fatalf("Resolve() error = %q, want substring %q", err.Error(), want)
 		}
 	})
+}
+
+func TestPeek(t *testing.T) {
+	tests := []struct {
+		name       string
+		parallel   bool
+		mode       string
+		workspace  string
+		envSet     bool
+		envVal     string
+		setupHome  bool
+		setupFile  bool
+		fileVal    string
+		keyring    *mockKeyring
+		wantSource string
+		wantErr    bool
+	}{
+		{
+			name:       "auto_env_set",
+			mode:       ModeAuto,
+			workspace:  "ws-peek-auto-env",
+			envSet:     true,
+			envVal:     "secret",
+			keyring:    &mockKeyring{},
+			wantSource: SourceEnv,
+		},
+		{
+			name:       "auto_file_exists",
+			mode:       ModeAuto,
+			workspace:  "ws-peek-auto-file",
+			setupHome:  true,
+			setupFile:  true,
+			fileVal:    "from-file",
+			keyring:    &mockKeyring{getErr: keyring.ErrNotFound},
+			wantSource: SourceFile,
+		},
+		{
+			name:       "auto_marker_file",
+			mode:       ModeAuto,
+			workspace:  "ws-peek-auto-marker",
+			setupHome:  true,
+			setupFile:  true,
+			fileVal:    "keyring",
+			keyring:    &mockKeyring{getErr: keyring.ErrNotFound},
+			wantSource: SourceKeyring,
+		},
+		{
+			name:       "auto_keyring_hit_no_file",
+			mode:       ModeAuto,
+			workspace:  "ws-peek-auto-keyring",
+			setupHome:  true,
+			keyring:    &mockKeyring{getVal: "from-keyring"},
+			wantSource: SourceKeyring,
+		},
+		{
+			name:       "auto_nothing",
+			mode:       ModeAuto,
+			workspace:  "ws-peek-auto-nothing",
+			setupHome:  true,
+			keyring:    &mockKeyring{getErr: keyring.ErrNotFound},
+			wantSource: "",
+		},
+		{
+			name:       "env_set",
+			mode:       ModeEnv,
+			workspace:  "ws-peek-env-set",
+			envSet:     true,
+			envVal:     "from-env",
+			keyring:    &mockKeyring{},
+			wantSource: SourceEnv,
+		},
+		{
+			name:       "env_unset",
+			mode:       ModeEnv,
+			workspace:  "ws-peek-env-unset",
+			keyring:    &mockKeyring{},
+			wantSource: "",
+		},
+		{
+			name:       "keyring_hit",
+			parallel:   true,
+			mode:       ModeKeyring,
+			workspace:  "ws-peek-keyring-hit",
+			keyring:    &mockKeyring{getVal: "from-keyring"},
+			wantSource: SourceKeyring,
+		},
+		{
+			name:       "keyring_miss",
+			parallel:   true,
+			mode:       ModeKeyring,
+			workspace:  "ws-peek-keyring-miss",
+			keyring:    &mockKeyring{getErr: keyring.ErrNotFound},
+			wantSource: "",
+		},
+		{
+			name:       "file_hit",
+			mode:       ModeFile,
+			workspace:  "ws-peek-file-hit",
+			setupHome:  true,
+			setupFile:  true,
+			fileVal:    "from-file",
+			keyring:    &mockKeyring{},
+			wantSource: SourceFile,
+		},
+		{
+			name:       "file_miss",
+			mode:       ModeFile,
+			workspace:  "ws-peek-file-miss",
+			setupHome:  true,
+			keyring:    &mockKeyring{},
+			wantSource: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.parallel {
+				t.Parallel()
+			}
+
+			if tc.envSet {
+				t.Setenv(envKey, tc.envVal)
+			} else if tc.mode == ModeAuto || tc.mode == ModeEnv {
+				t.Setenv(envKey, "")
+			}
+
+			if tc.setupHome {
+				safeHome(t)
+			}
+
+			if tc.setupFile {
+				if err := WritePasswordFile(tc.workspace, tc.fileVal); err != nil {
+					t.Fatalf("WritePasswordFile setup: %v", err)
+				}
+			}
+
+			resolver := NewResolver(tc.keyring, tc.mode)
+			source, err := resolver.Peek(tc.workspace)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Peek(%q) error = nil, want error", tc.workspace)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Peek(%q) unexpected error: %v", tc.workspace, err)
+			}
+			if source != tc.wantSource {
+				t.Fatalf("Peek(%q) source = %q, want %q", tc.workspace, source, tc.wantSource)
+			}
+		})
+	}
 }
