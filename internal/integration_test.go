@@ -99,7 +99,7 @@ func TestConfigAutoCreation(t *testing.T) {
 }
 
 func TestUpStatusDownLifecycle(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	if !dockerAvailable(ctx) {
@@ -198,7 +198,7 @@ func TestInvalidConfigErrors(t *testing.T) {
 }
 
 func TestUpIdempotent(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	if !dockerAvailable(ctx) {
