@@ -124,8 +124,12 @@ var rootCmd = &cobra.Command{
 				return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
 			}
 		} else {
-			_, hasPasswordErr := password.ReadPasswordFile(ws.Name)
-			if hasPasswordErr != nil {
+			resolver := password.DefaultResolver(false, cfg.PasswordMode)
+			pwSource, peekErr := resolver.Peek(ws.Name)
+			if peekErr != nil {
+				return fmt.Errorf("check password for workspace %q: %w", ws.Name, peekErr)
+			}
+			if pwSource == "" {
 				workspaceExplicit = true
 				if err := runUp(ctx, nil); err != nil {
 					return fmt.Errorf("migrate workspace %q: %w", ws.Name, err)
