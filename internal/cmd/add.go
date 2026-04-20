@@ -152,6 +152,10 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return err
 	}
 
+	if err := writeDindEntrypoint(filepath.Dir(compPath)); err != nil {
+		return err
+	}
+
 	if err := compose.WriteComposeFile(params, compPath); err != nil {
 		return fmt.Errorf("regenerate compose file: %w", err)
 	}
