@@ -145,7 +145,6 @@ func TestExecuteUpdateCheck(t *testing.T) {
 	// Suppress update check side effects. t.Setenv is incompatible with t.Parallel(),
 	// so this test cannot be parallel.
 	t.Setenv("JAILOC_NO_UPDATE_NOTIFIER", "1")
-	t.Setenv("HOME", t.TempDir())
 
 	// Drive Cobra down a controlled, side-effect-free path.
 	rootCmd.SetArgs([]string{"--help"})

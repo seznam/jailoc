@@ -110,6 +110,7 @@ func checkLatest(ctx context.Context, releaseURL string) (string, error) {
 		return "", fmt.Errorf("create release request for %s: %w", releaseURL, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "jailoc-update-checker")
 
 	client := &http.Client{Timeout: httpTimeout}
 
@@ -181,7 +182,6 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 			}
 
 			latest = fetched
-			_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: latest})
 		}
 
 		currentV, err := goversion.NewVersion(version)
@@ -200,6 +200,8 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 			ch <- nil
 			return
 		}
+
+		_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: latest})
 
 		if currentV.LessThan(latestV) {
 			ch <- &Result{Current: version, Latest: latest}
