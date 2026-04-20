@@ -125,15 +125,15 @@ jailoc checks GitHub Releases for newer versions on every command run. The check
 ### Behavior
 
 - **Frequency**: Cached for 24 hours. Subsequent checks within the cache window return the cached result.
-- **Output**: When a newer version is available, a colored notice is printed to stderr. Output is suppressed if stderr is not a TTY (e.g., when output is redirected or piped).
+- **Output**: When a newer version is available, a notice is printed to stderr. If stderr is not a TTY (e.g., when output is redirected or piped), the notice is suppressed, but the background check still runs and updates the cache.
 - **Non-blocking**: The check runs in a goroutine and results are collected at command completion. Command execution is not delayed.
-- **Color**: Respects the `--no-color` flag. When `--no-color` is set, the notice is printed without ANSI color codes.
+- **Color**: Respects the `--no-color` flag. When `--no-color` is set and a notice is printed, it appears without ANSI color codes.
 
 ### Disabling Update Checks
 
 Update checks are skipped in the following conditions:
 
-- **Development builds**: Builds without a version string (e.g., built locally with `go build` instead of via release process)
+- **Development builds**: Builds whose version is `dev` or `(devel)` (e.g., local `go build` without release ldflags)
 - **CI environments**: When the `CI` environment variable is set to any non-empty value
 - **Explicit opt-out**: When the `JAILOC_NO_UPDATE_NOTIFIER` environment variable is set to any non-empty value
 

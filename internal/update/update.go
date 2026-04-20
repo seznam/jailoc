@@ -158,12 +158,16 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 	ch := make(chan *Result, 1)
 
 	go func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- nil
+			}
+		}()
 
 		s, _ := loadState(statePath)
 
 		latest := s.LatestVersion
-		if time.Since(s.CheckedAt) >= cacheTTL {
+		if s.CheckedAt.IsZero() || time.Until(s.CheckedAt) > 0 || time.Since(s.CheckedAt) >= cacheTTL {
 			var err error
 			latest, err = checkLatest(ctx, releaseURL)
 			if err != nil {
