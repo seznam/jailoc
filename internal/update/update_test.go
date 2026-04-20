@@ -96,17 +96,17 @@ func TestLoadState(t *testing.T) {
 				if err != nil {
 					t.Fatalf("marshal state: %v", err)
 				}
-			if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // test file in temp directory
-				t.Fatalf("write state file: %v", err)
-			}
+				if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // test file in temp directory
+					t.Fatalf("write state file: %v", err)
+				}
+			},
+			exp: expectation{want: state{CheckedAt: checkedAt, LatestVersion: "v2.0.0"}},
 		},
-		exp: expectation{want: state{CheckedAt: checkedAt, LatestVersion: "v2.0.0"}},
-	},
-	{
-		name: "corrupt json returns zero state and error",
-		setup: func(t *testing.T, path string) {
-			t.Helper()
-			if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil { //nolint:gosec // test file in temp directory
+		{
+			name: "corrupt json returns zero state and error",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil { //nolint:gosec // test file in temp directory
 					t.Fatalf("write corrupt state file: %v", err)
 				}
 			},

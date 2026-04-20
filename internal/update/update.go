@@ -168,13 +168,15 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 
 		latest := s.LatestVersion
 		if s.CheckedAt.IsZero() || time.Until(s.CheckedAt) > 0 || time.Since(s.CheckedAt) >= cacheTTL {
-			var err error
-			latest, err = checkLatest(ctx, releaseURL)
+			fetched, err := checkLatest(ctx, releaseURL)
 			if err != nil {
+				// Save state even on failure to avoid hammering the API on every invocation.
+				_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: s.LatestVersion})
 				ch <- nil
 				return
 			}
 
+			latest = fetched
 			_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: latest})
 		}
 
