@@ -19,6 +19,7 @@ import (
 	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var workspaceFlag string
@@ -124,7 +125,8 @@ var rootCmd = &cobra.Command{
 				return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
 			}
 		} else {
-			resolver := password.DefaultResolver(false, cfg.PasswordMode)
+			interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
+			resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
 			pwSource, peekErr := resolver.Peek(ws.Name)
 			if peekErr != nil {
 				return fmt.Errorf("check password for workspace %q: %w", ws.Name, peekErr)
