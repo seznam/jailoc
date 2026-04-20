@@ -198,13 +198,13 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 			return
 		}
 
+		if fetched {
+			_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: latest})
+		}
+
 		if currentV.Prerelease() != "" || latestV.Prerelease() != "" {
 			ch <- nil
 			return
-		}
-
-		if fetched {
-			_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: latest})
 		}
 
 		if currentV.LessThan(latestV) {
