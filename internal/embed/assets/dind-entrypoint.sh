@@ -25,6 +25,7 @@ if [ -z "$DEFAULT_IF" ]; then
 fi
 
 iptables -N DOCKER-USER 2>/dev/null || true
+iptables -F DOCKER-USER
 
 iptables -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 
@@ -77,20 +78,24 @@ iptables -A DOCKER-USER -j RETURN
 
 # --- OUTPUT chain: restrict DinD's own traffic ---
 
-iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A OUTPUT -o docker0 -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -N JAILOC-OUTPUT 2>/dev/null || true
+iptables -F JAILOC-OUTPUT
+iptables -C OUTPUT -j JAILOC-OUTPUT 2>/dev/null || iptables -A OUTPUT -j JAILOC-OUTPUT
+
+iptables -A JAILOC-OUTPUT -o lo -j ACCEPT
+iptables -A JAILOC-OUTPUT -o docker0 -j ACCEPT
+iptables -A JAILOC-OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 for DNS_IP in $DNS_RESOLVERS; do
-  iptables -A OUTPUT -p udp -d "$DNS_IP" --dport 53 -j ACCEPT
-  iptables -A OUTPUT -p tcp -d "$DNS_IP" --dport 53 -j ACCEPT
+  iptables -A JAILOC-OUTPUT -p udp -d "$DNS_IP" --dport 53 -j ACCEPT
+  iptables -A JAILOC-OUTPUT -p tcp -d "$DNS_IP" --dport 53 -j ACCEPT
 done
 
-iptables -A OUTPUT -d 10.0.0.0/8 -j DROP
-iptables -A OUTPUT -d 172.16.0.0/12 -j DROP
-iptables -A OUTPUT -d 192.168.0.0/16 -j DROP
-iptables -A OUTPUT -d 169.254.0.0/16 -j DROP
-iptables -A OUTPUT -d 100.64.0.0/10 -j DROP
+iptables -A JAILOC-OUTPUT -d 10.0.0.0/8 -j DROP
+iptables -A JAILOC-OUTPUT -d 172.16.0.0/12 -j DROP
+iptables -A JAILOC-OUTPUT -d 192.168.0.0/16 -j DROP
+iptables -A JAILOC-OUTPUT -d 169.254.0.0/16 -j DROP
+iptables -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
 
 # --- Clean stale containerd state ---
 # Prevents "containerd is still running" crash loop when PID file persists
