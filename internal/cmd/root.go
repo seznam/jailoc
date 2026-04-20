@@ -283,13 +283,20 @@ func Execute(version, commit, date string) error {
 	defer stop()
 	rootCmd.SetContext(ctx)
 
-	// Fire non-blocking update check. Result collected after command completes.
-	updateResult := update.CheckAsync(ctx, version)
+	// Fire non-blocking update check only when stderr is a terminal —
+	// skip the HTTP call entirely in non-interactive environments.
+	var updateResult <-chan *update.Result
+	if term.IsTerminal(int(os.Stderr.Fd())) { //nolint:gosec // Fd() fits int on all supported 64-bit platforms
+		updateResult = update.CheckAsync(ctx, version)
+	}
 	defer func() {
+		if updateResult == nil {
+			return
+		}
 		// Non-blocking read: if result not ready (fast command), skip gracefully.
 		select {
 		case res := <-updateResult:
-			if res != nil && term.IsTerminal(int(os.Stderr.Fd())) { //nolint:gosec // Fd() fits int on all supported 64-bit platforms
+			if res != nil {
 				fmt.Fprint(os.Stderr, update.FormatNotice(res.Current, res.Latest))
 			}
 		default:

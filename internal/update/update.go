@@ -158,6 +158,7 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 	ch := make(chan *Result, 1)
 
 	go func() {
+		defer close(ch)
 		defer func() {
 			if r := recover(); r != nil {
 				ch <- nil
