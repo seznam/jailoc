@@ -16,6 +16,20 @@ set -eu
 # toward the compose network (and beyond) is filtered. Inter-container traffic
 # on Docker bridge interfaces (docker0, br-*) is unaffected.
 
+# --- Detect working iptables variant ---
+if iptables -L -n >/dev/null 2>&1; then
+  IPT=iptables
+else
+  IPTABLES_ERROR="$(iptables -L -n 2>&1 || true)"
+  if command -v iptables-legacy >/dev/null 2>&1 && iptables-legacy -L -n >/dev/null 2>&1; then
+    IPT=iptables-legacy
+    echo "jailoc-dind: iptables unusable ($IPTABLES_ERROR), using iptables-legacy" >&2
+  else
+    echo "jailoc-dind: FATAL: no working iptables found, cannot enforce network isolation" >&2
+    exit 1
+  fi
+fi
+
 # --- DOCKER-USER chain: restrict inner containers ---
 
 DEFAULT_IF=$(ip route show default | awk '{print $5}' | head -1)
@@ -24,10 +38,10 @@ if [ -z "$DEFAULT_IF" ]; then
   exit 1
 fi
 
-iptables -N DOCKER-USER 2>/dev/null || true
-iptables -F DOCKER-USER
+$IPT -N DOCKER-USER 2>/dev/null || true
+$IPT -F DOCKER-USER
 
-iptables -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+$IPT -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 
 # Allow DNS only to configured resolvers (from compose dns: entries in
 # /etc/resolv.conf), not to arbitrary destinations on port 53.
@@ -36,8 +50,8 @@ DNS_RESOLVERS=$(
     /etc/resolv.conf | sort -u
 )
 for DNS_IP in $DNS_RESOLVERS; do
-  iptables -A DOCKER-USER -o "$DEFAULT_IF" -p udp -d "$DNS_IP" --dport 53 -j RETURN
-  iptables -A DOCKER-USER -o "$DEFAULT_IF" -p tcp -d "$DNS_IP" --dport 53 -j RETURN
+  $IPT -A DOCKER-USER -o "$DEFAULT_IF" -p udp -d "$DNS_IP" --dport 53 -j RETURN
+  $IPT -A DOCKER-USER -o "$DEFAULT_IF" -p tcp -d "$DNS_IP" --dport 53 -j RETURN
 done
 
 ALLOWED_HOSTS="/etc/jailoc/allowed-hosts"
@@ -50,7 +64,7 @@ if [ -f "$ALLOWED_HOSTS" ]; then
     RESOLVED=$(getent hosts "$line" 2>/dev/null | awk '{print $1}' || true)
     if [ -n "$RESOLVED" ]; then
       for IP in $RESOLVED; do
-        iptables -A DOCKER-USER -o "$DEFAULT_IF" -d "$IP" -j RETURN
+        $IPT -A DOCKER-USER -o "$DEFAULT_IF" -d "$IP" -j RETURN
       done
     fi
   done < "$ALLOWED_HOSTS"
@@ -63,39 +77,39 @@ if [ -f "$ALLOWED_NETWORKS" ]; then
     line="$(echo "$line" | tr -d ' ')"
     [ -z "$line" ] && continue
 
-    iptables -A DOCKER-USER -o "$DEFAULT_IF" -d "$line" -j RETURN
+    $IPT -A DOCKER-USER -o "$DEFAULT_IF" -d "$line" -j RETURN
   done < "$ALLOWED_NETWORKS"
 fi
 
 # Block inner containers from reaching private/internal networks.
-iptables -A DOCKER-USER -o "$DEFAULT_IF" -d 10.0.0.0/8 -j DROP
-iptables -A DOCKER-USER -o "$DEFAULT_IF" -d 172.16.0.0/12 -j DROP
-iptables -A DOCKER-USER -o "$DEFAULT_IF" -d 192.168.0.0/16 -j DROP
-iptables -A DOCKER-USER -o "$DEFAULT_IF" -d 169.254.0.0/16 -j DROP
-iptables -A DOCKER-USER -o "$DEFAULT_IF" -d 100.64.0.0/10 -j DROP
+$IPT -A DOCKER-USER -o "$DEFAULT_IF" -d 10.0.0.0/8 -j DROP
+$IPT -A DOCKER-USER -o "$DEFAULT_IF" -d 172.16.0.0/12 -j DROP
+$IPT -A DOCKER-USER -o "$DEFAULT_IF" -d 192.168.0.0/16 -j DROP
+$IPT -A DOCKER-USER -o "$DEFAULT_IF" -d 169.254.0.0/16 -j DROP
+$IPT -A DOCKER-USER -o "$DEFAULT_IF" -d 100.64.0.0/10 -j DROP
 
-iptables -A DOCKER-USER -j RETURN
+$IPT -A DOCKER-USER -j RETURN
 
 # --- OUTPUT chain: restrict DinD's own traffic ---
 
-iptables -N JAILOC-OUTPUT 2>/dev/null || true
-iptables -F JAILOC-OUTPUT
-iptables -C OUTPUT -j JAILOC-OUTPUT 2>/dev/null || iptables -A OUTPUT -j JAILOC-OUTPUT
+$IPT -N JAILOC-OUTPUT 2>/dev/null || true
+$IPT -F JAILOC-OUTPUT
+$IPT -C OUTPUT -j JAILOC-OUTPUT 2>/dev/null || $IPT -A OUTPUT -j JAILOC-OUTPUT
 
-iptables -A JAILOC-OUTPUT -o lo -j ACCEPT
-iptables -A JAILOC-OUTPUT -o docker0 -j ACCEPT
-iptables -A JAILOC-OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+$IPT -A JAILOC-OUTPUT -o lo -j ACCEPT
+$IPT -A JAILOC-OUTPUT -o docker0 -j ACCEPT
+$IPT -A JAILOC-OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 for DNS_IP in $DNS_RESOLVERS; do
-  iptables -A JAILOC-OUTPUT -p udp -d "$DNS_IP" --dport 53 -j ACCEPT
-  iptables -A JAILOC-OUTPUT -p tcp -d "$DNS_IP" --dport 53 -j ACCEPT
+  $IPT -A JAILOC-OUTPUT -p udp -d "$DNS_IP" --dport 53 -j ACCEPT
+  $IPT -A JAILOC-OUTPUT -p tcp -d "$DNS_IP" --dport 53 -j ACCEPT
 done
 
-iptables -A JAILOC-OUTPUT -d 10.0.0.0/8 -j DROP
-iptables -A JAILOC-OUTPUT -d 172.16.0.0/12 -j DROP
-iptables -A JAILOC-OUTPUT -d 192.168.0.0/16 -j DROP
-iptables -A JAILOC-OUTPUT -d 169.254.0.0/16 -j DROP
-iptables -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
+$IPT -A JAILOC-OUTPUT -d 10.0.0.0/8 -j DROP
+$IPT -A JAILOC-OUTPUT -d 172.16.0.0/12 -j DROP
+$IPT -A JAILOC-OUTPUT -d 192.168.0.0/16 -j DROP
+$IPT -A JAILOC-OUTPUT -d 169.254.0.0/16 -j DROP
+$IPT -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
 
 # --- Clean stale containerd state ---
 # Prevents "containerd is still running" crash loop when PID file persists
