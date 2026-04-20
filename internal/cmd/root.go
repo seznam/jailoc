@@ -289,7 +289,7 @@ func Execute(version, commit, date string) error {
 		// Non-blocking read: if result not ready (fast command), skip gracefully.
 		select {
 		case res := <-updateResult:
-			if res != nil && term.IsTerminal(int(os.Stderr.Fd())) {
+			if res != nil && term.IsTerminal(int(os.Stderr.Fd())) { //nolint:gosec // Fd() fits int on all supported 64-bit platforms
 				fmt.Fprint(os.Stderr, update.FormatNotice(res.Current, res.Latest))
 			}
 		default:
