@@ -17,8 +17,10 @@ import (
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/password"
+	"github.com/seznam/jailoc/internal/update"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var workspaceFlag string
@@ -280,6 +282,19 @@ func Execute(version, commit, date string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	rootCmd.SetContext(ctx)
+
+	// Fire non-blocking update check. Result collected after command completes.
+	updateResult := update.CheckAsync(ctx, version)
+	defer func() {
+		// Non-blocking read: if result not ready (fast command), skip gracefully.
+		select {
+		case res := <-updateResult:
+			if res != nil && term.IsTerminal(int(os.Stderr.Fd())) {
+				fmt.Fprint(os.Stderr, update.FormatNotice(res.Current, res.Latest))
+			}
+		default:
+		}
+	}()
 
 	return rootCmd.Execute()
 }

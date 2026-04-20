@@ -140,3 +140,20 @@ func assertContains(t *testing.T, s, substr string) {
 		t.Errorf("expected %q to contain %q", s, substr)
 	}
 }
+
+func TestExecuteUpdateCheck(t *testing.T) {
+	// Suppress update check side effects. t.Setenv is incompatible with t.Parallel(),
+	// so this test cannot be parallel.
+	t.Setenv("JAILOC_NO_UPDATE_NOTIFIER", "1")
+
+	// Call Execute() with "dev" version (which also gates the update check).
+	// This is a smoke test to verify the update check wiring in Execute() doesn't panic.
+	err := Execute("dev", "test-commit", "test-date")
+
+	// Execute() will fail because we're not providing valid Cobra args,
+	// but the important thing is it doesn't panic. We just verify no panic occurred.
+	// The error is expected (e.g., "no such file or directory" from config loading).
+	if err == nil {
+		t.Fatalf("expected error from Execute (config not found), got nil")
+	}
+}
