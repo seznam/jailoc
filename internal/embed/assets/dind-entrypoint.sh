@@ -61,7 +61,7 @@ if [ -f "$ALLOWED_HOSTS" ]; then
     line="$(echo "$line" | tr -d ' ')"
     [ -z "$line" ] && continue
 
-    RESOLVED=$(getent hosts "$line" 2>/dev/null | awk '{print $1}' || true)
+    RESOLVED=$(getent hosts "$line" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.' || true)
     if [ -n "$RESOLVED" ]; then
       for IP in $RESOLVED; do
         $IPT -A DOCKER-USER -o "$DEFAULT_IF" -d "$IP" -j RETURN

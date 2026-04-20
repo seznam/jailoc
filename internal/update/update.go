@@ -169,8 +169,9 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 		s, _ := loadState(statePath)
 
 		latest := s.LatestVersion
+		fetched := false
 		if s.LatestVersion == "" || s.CheckedAt.IsZero() || time.Until(s.CheckedAt) > 0 || time.Since(s.CheckedAt) >= cacheTTL {
-			fetched, err := checkLatest(ctx, releaseURL)
+			result, err := checkLatest(ctx, releaseURL)
 			if err != nil {
 				// Save state on failure only when there is a cached version to reuse,
 				// so an empty cache does not suppress retries for the full TTL.
@@ -181,7 +182,8 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 				return
 			}
 
-			latest = fetched
+			latest = result
+			fetched = true
 		}
 
 		currentV, err := goversion.NewVersion(version)
@@ -201,7 +203,9 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 			return
 		}
 
-		_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: latest})
+		if fetched {
+			_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: latest})
+		}
 
 		if currentV.LessThan(latestV) {
 			ch <- &Result{Current: version, Latest: latest}
