@@ -12,6 +12,9 @@ var composeTemplateStr string
 //go:embed assets/entrypoint.sh
 var entrypointBytes []byte
 
+//go:embed assets/dind-entrypoint.sh
+var dindEntrypointBytes []byte
+
 // Dockerfile returns the embedded fallback Dockerfile bytes.
 func Dockerfile() []byte { return dockerfileBytes }
 
@@ -20,3 +23,6 @@ func ComposeTemplate() string { return composeTemplateStr }
 
 // Entrypoint returns the embedded entrypoint.sh bytes.
 func Entrypoint() []byte { return entrypointBytes }
+
+// DindEntrypoint returns the embedded dind-entrypoint.sh bytes.
+func DindEntrypoint() []byte { return dindEntrypointBytes }

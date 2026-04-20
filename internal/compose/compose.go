@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,7 +31,8 @@ type ComposeParams struct {
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {
 	tmpl, err := template.New("docker-compose.yml").Funcs(template.FuncMap{
-		"base": filepath.Base,
+		"base":      filepath.Base,
+		"yamlQuote": yamlQuote,
 	}).Parse(embed.ComposeTemplate())
 	if err != nil {
 		return nil, fmt.Errorf("parse compose template: %w", err)
@@ -42,6 +44,11 @@ func GenerateCompose(params ComposeParams) ([]byte, error) {
 	}
 
 	return []byte(out.String()), nil
+}
+
+func yamlQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func WriteComposeFile(params ComposeParams, destPath string) error {

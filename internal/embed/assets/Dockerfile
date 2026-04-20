@@ -119,17 +119,14 @@ RUN (userdel -r ubuntu || true) \
     && mkdir -p /home/agent/.local/state /home/agent/.local/share \
     && chown -R agent:agent /home/agent/.local
 
-# OpenCode — the AI coding agent. Installed as `agent` user so it writes to
-# /home/agent/.opencode/. Copied to /usr/local/bin for global PATH access.
+# OpenCode — the AI coding agent. Installed via npm for supply-chain safety
+# (avoids curl|bash). The npm package is "opencode-ai".
 ARG OPENCODE_VERSION
-USER agent
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${OPENCODE_VERSION#v}
-USER root
-RUN cp /home/agent/.opencode/bin/opencode /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode
+RUN npm install -g "opencode-ai@${OPENCODE_VERSION#v}"
 
 # PATH includes agent's local bin dirs for tools installed as the agent user
 # (e.g. uv from preset overlays goes to ~/.local/bin).
-ENV PATH="/home/agent/.local/bin:/home/agent/.opencode/bin:${PATH}"
+ENV PATH="/home/agent/.local/bin:${PATH}"
 
 # Default OpenCode serve port — jailoc assigns ports starting at 4096.
 EXPOSE 4096

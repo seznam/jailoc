@@ -42,7 +42,7 @@ services:
       - SSH_AUTH_SOCK=/run/ssh-agent.sock
 {{- end}}
 {{- range .Env}}
-      - "{{.}}"
+      - {{. | yamlQuote}}
 {{- end}}
     cap_drop:
       - ALL
@@ -78,18 +78,7 @@ services:
   dind:
     image: docker:dind
     privileged: true
-    entrypoint:
-      - sh
-      - -c
-      - |
-        # Clean stale containerd state from prior unclean shutdown to prevent
-        # "containerd is still running" crash loop (PID file persists on volume).
-        # See: https://github.com/moby/moby/blob/v28.1.1/cmd/dockerd/daemon.go#L146-L160
-        rm -f /var/lib/docker/containerd/containerd.pid \
-              /var/lib/docker/containerd/containerd.sock \
-              /var/lib/docker/containerd/containerd-debug.sock
-        exec dockerd-entrypoint.sh "$$@"
-      - --
+    entrypoint: ["/usr/local/bin/dind-entrypoint.sh"]
     environment:
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_TLS_SAN=DNS:dind
@@ -97,6 +86,8 @@ services:
       - dind-certs-ca:/certs/ca
       - dind-certs-client:/certs/client
       - dind-data:/var/lib/docker
+      - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/dind-entrypoint.sh:/usr/local/bin/dind-entrypoint.sh:ro
+      - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
     dns:
       - 1.1.1.1
       - 8.8.8.8

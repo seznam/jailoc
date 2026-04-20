@@ -28,7 +28,7 @@ $IPT -I OUTPUT -d dind -j ACCEPT
 
 HOST_IP=$(getent hosts host.docker.internal | awk '{print $1}' || true)
 if [ -n "$HOST_IP" ]; then
-  $IPT -I OUTPUT -d "$HOST_IP" -j ACCEPT
+  $IPT -I OUTPUT -d "$HOST_IP" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 fi
 
 for GW in $(awk '$3 != "00000000" && $3 != "Gateway" {print $3}' /proc/net/route | sort -u); do

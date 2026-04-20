@@ -126,6 +126,10 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
+	if err := writeDindEntrypoint(cacheDir); err != nil {
+		return err
+	}
+
 	pw, _, err := resolver.Resolve(ws.Name)
 	if err != nil {
 		return err
@@ -295,6 +299,17 @@ func writeEntrypoint(cacheDir string) error {
 	}
 	if err := os.Chmod(p, 0o755); err != nil { //nolint:gosec // ensure +x even when file already existed
 		return fmt.Errorf("chmod entrypoint: %w", err)
+	}
+	return nil
+}
+
+func writeDindEntrypoint(cacheDir string) error {
+	p := filepath.Join(cacheDir, "dind-entrypoint.sh")
+	if err := os.WriteFile(p, embed.DindEntrypoint(), 0o755); err != nil { //nolint:gosec // 0o755 required: bind-mount preserves host perms, script must be executable in container
+		return fmt.Errorf("write dind entrypoint: %w", err)
+	}
+	if err := os.Chmod(p, 0o755); err != nil { //nolint:gosec // ensure +x even when file already existed
+		return fmt.Errorf("chmod dind entrypoint: %w", err)
 	}
 	return nil
 }
