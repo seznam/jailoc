@@ -353,6 +353,9 @@ func TestFormatNotice(t *testing.T) {
 }
 
 func TestCheckAsync(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv("JAILOC_NO_UPDATE_NOTIFIER", "")
+
 	t.Run("happy path", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)

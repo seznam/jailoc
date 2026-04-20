@@ -88,7 +88,7 @@ func saveState(path string, s state) error {
 		return fmt.Errorf("close temp state file %q: %w", tmpPath, err)
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil { //nolint:gosec // path is internal cache file path from defaultStatePath()
 		return fmt.Errorf("replace state file %q: %w", path, err)
 	}
 
