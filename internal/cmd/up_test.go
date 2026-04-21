@@ -574,6 +574,13 @@ func TestWriteTUIConfig(t *testing.T) {
 	if !bytes.Equal(pkgJSON, embed.TUIPluginJSON()) {
 		t.Fatalf("package.json content mismatch")
 	}
+	var pkg map[string]any
+	if err := json.Unmarshal(pkgJSON, &pkg); err != nil {
+		t.Fatalf("json.Unmarshal(package.json) failed: %v", err)
+	}
+	if got, ok := pkg["type"].(string); !ok || got != "module" {
+		t.Fatalf("package.json type = %v, want %q", pkg["type"], "module")
+	}
 
 	tuiJS, err := os.ReadFile(filepath.Join(tmpDir, "tui-plugin", "tui.js")) //nolint:gosec // test path
 	if err != nil {

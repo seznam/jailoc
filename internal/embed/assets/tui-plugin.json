@@ -1,1 +1,1 @@
-{"name":"@seznam/jailoc","version":"0.0.0","exports":{"./tui":"./tui.js"},"oc-plugin":["tui"]}
+{"name":"@seznam/jailoc","version":"0.0.0","type":"module","exports":{"./tui":"./tui.js"},"oc-plugin":["tui"]}
