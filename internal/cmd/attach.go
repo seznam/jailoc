@@ -112,7 +112,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	tuiPath := filepath.Join(ComposeCacheDir(ws.Name), "tui.json")
+	tuiPath := filepath.Join(jailocCacheDir(), "tui.json")
 	cmd.Env = envWithOverrides(os.Environ(),
 		"JAILOC=1",
 		"JAILOC_WORKSPACE="+ws.Name,

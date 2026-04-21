@@ -140,7 +140,7 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := writeTUIConfig(cacheDir); err != nil {
+	if err := writeTUIConfig(jailocCacheDir()); err != nil {
 		return err
 	}
 
@@ -211,11 +211,15 @@ func preflightDocker(ctx context.Context, workspaceName string) error {
 }
 
 func ComposeCacheDir(workspace string) string {
+	return filepath.Join(jailocCacheDir(), workspace) + string(filepath.Separator)
+}
+
+func jailocCacheDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), "jailoc", workspace) + string(filepath.Separator)
+		return filepath.Join(os.TempDir(), "jailoc")
 	}
-	return filepath.Join(home, ".cache", "jailoc", workspace) + string(filepath.Separator)
+	return filepath.Join(home, ".cache", "jailoc")
 }
 
 type imageStrategy int
@@ -335,21 +339,23 @@ func writeDindEntrypoint(cacheDir string) error {
 
 const tuiPluginContainerDir = "/etc/jailoc-tui-plugin"
 
-func writeTUIConfig(cacheDir string) error {
-	if err := writeTUIPlugin(cacheDir); err != nil {
+func writeTUIConfig(baseDir string) error {
+	if err := writeTUIPlugin(baseDir); err != nil {
 		return err
 	}
 
 	// Host-side tui.json: opencode attach on the host reads this file, so the
-	// plugin path must resolve on the host filesystem.
-	hostPluginDir := filepath.Join(cacheDir, "tui-plugin")
-	if err := writeTUIJSON(filepath.Join(cacheDir, "tui.json"), "file://"+hostPluginDir); err != nil {
+	// plugin path must resolve on the host filesystem. Shared across all
+	// workspaces — the plugin payload is identical and workspace identity
+	// comes from JAILOC_WORKSPACE at runtime.
+	hostPluginDir := filepath.Join(baseDir, "tui-plugin")
+	if err := writeTUIJSON(filepath.Join(baseDir, "tui.json"), "file://"+hostPluginDir); err != nil {
 		return err
 	}
 
 	// Container-side tui.json: mounted into the container where the plugin
 	// directory is bind-mounted at /etc/jailoc-tui-plugin.
-	if err := writeTUIJSON(filepath.Join(cacheDir, "tui-container.json"), "file://"+tuiPluginContainerDir); err != nil {
+	if err := writeTUIJSON(filepath.Join(baseDir, "tui-container.json"), "file://"+tuiPluginContainerDir); err != nil {
 		return err
 	}
 
@@ -373,8 +379,8 @@ func writeTUIJSON(path, specifier string) error {
 	return nil
 }
 
-func writeTUIPlugin(cacheDir string) error {
-	dir := filepath.Join(cacheDir, "tui-plugin")
+func writeTUIPlugin(baseDir string) error {
+	dir := filepath.Join(baseDir, "tui-plugin")
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // 0o755 required: bind-mount preserves host perms, dir must be readable in container
 		return fmt.Errorf("create tui plugin dir: %w", err)
 	}

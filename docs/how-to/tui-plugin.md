@@ -14,15 +14,15 @@ If you don't have a custom `~/.config/opencode/tui.json` on the host, the plugin
 
 ## Manual setup (custom tui.json)
 
-If you have a custom `~/.config/opencode/tui.json`, jailoc does not override it. Add the generated plugin directory to your `tui.json` manually:
+If you have a custom `~/.config/opencode/tui.json`, jailoc does not override it. Add the shared plugin directory to your `tui.json` manually:
 
 ```json
 {
-  "plugin": ["file:///Users/<you>/.cache/jailoc/<workspace>/tui-plugin"]
+  "plugin": ["file:///Users/<you>/.cache/jailoc/tui-plugin"]
 }
 ```
 
-Replace `<workspace>` with your workspace name. The generated `tui-plugin` directory contains the embedded sidebar plugin that jailoc writes during startup.
+The `tui-plugin` directory is shared across all workspaces — jailoc writes it once to `~/.cache/jailoc/tui-plugin/` during startup.
 
 ---
 
@@ -50,10 +50,10 @@ You should see `JAILOC=1` and `JAILOC_WORKSPACE=<name>`. The plugin renders noth
 
 ### Plugin not loading
 
-Verify jailoc generated the TUI config files for the workspace:
+Verify jailoc generated the TUI config and plugin files:
 
 ```bash
-ls ~/.cache/jailoc/<name>
+ls ~/.cache/jailoc/tui.json ~/.cache/jailoc/tui-container.json ~/.cache/jailoc/tui-plugin/
 ```
 
-You should see `tui.json`, `tui-container.json`, and `tui-plugin/`. If they are missing, restart the workspace with `jailoc down <name> && jailoc up <name>`.
+If they are missing, restart any workspace with `jailoc down <name> && jailoc up <name>`.
