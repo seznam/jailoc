@@ -43,6 +43,7 @@ services:
       - DOCKER_TLS_VERIFY=1
       - JAILOC=1
       - JAILOC_WORKSPACE={{.WorkspaceName}}
+      - OPENCODE_TUI_CONFIG=/etc/jailoc-tui.json
 {{- if .SSHAuthSock}}
       - SSH_AUTH_SOCK=/run/ssh-agent.sock
 {{- end}}
