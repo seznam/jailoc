@@ -474,6 +474,31 @@ func TestGenerateComposeEmptyEnv(t *testing.T) {
 	}
 }
 
+func TestGenerateComposeJailocEnvVars(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName:    "test-jailoc",
+		Port:             4800,
+		Image:            "ghcr.io/seznam/jailoc:test",
+		Paths:            []string{"/tmp/work"},
+		Env:              nil,
+		CPU:              2.0,
+		Memory:           "4g",
+	}
+
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose returned error: %v", err)
+	}
+
+	rendered := string(out)
+
+	// Check that JAILOC env vars are present
+	assertContains(t, rendered, `JAILOC: "1"`)
+	assertContains(t, rendered, `JAILOC_WORKSPACE: "test-jailoc"`)
+}
+
 func TestComposeResourceLimits(t *testing.T) {
 	t.Parallel()
 

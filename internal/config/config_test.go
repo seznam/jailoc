@@ -1897,6 +1897,82 @@ func TestValidateEnvReservedSSHAuthSock(t *testing.T) {
 	})
 }
 
+func TestValidateEnvReservedJailoc(t *testing.T) {
+	t.Parallel()
+
+	t.Run("JAILOC in defaults", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Defaults: Defaults{Env: []string{"JAILOC=custom"}},
+		}
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected error for reserved JAILOC key")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected 'reserved' in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "JAILOC") {
+			t.Fatalf("expected 'JAILOC' in error, got: %v", err)
+		}
+	})
+
+	t.Run("JAILOC_WORKSPACE in defaults", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Defaults: Defaults{Env: []string{"JAILOC_WORKSPACE=foo"}},
+		}
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected error for reserved JAILOC_WORKSPACE key")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected 'reserved' in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "JAILOC_WORKSPACE") {
+			t.Fatalf("expected 'JAILOC_WORKSPACE' in error, got: %v", err)
+		}
+	})
+
+	t.Run("JAILOC in workspace", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"myws": {Env: []string{"JAILOC=custom"}},
+			},
+		}
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected error for reserved JAILOC key")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected 'reserved' in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "JAILOC") {
+			t.Fatalf("expected 'JAILOC' in error, got: %v", err)
+		}
+	})
+
+	t.Run("JAILOC_WORKSPACE in workspace", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Workspaces: map[string]Workspace{
+				"myws": {Env: []string{"JAILOC_WORKSPACE=bar"}},
+			},
+		}
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected error for reserved JAILOC_WORKSPACE key")
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected 'reserved' in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "JAILOC_WORKSPACE") {
+			t.Fatalf("expected 'JAILOC_WORKSPACE' in error, got: %v", err)
+		}
+	})
+}
+
 func TestLoadSSHGitFields(t *testing.T) {
 	t.Parallel()
 

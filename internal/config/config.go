@@ -75,6 +75,8 @@ var reservedEnvKeys = map[string]bool{
 	"DOCKER_CERT_PATH":         true,
 	"DOCKER_TLS_VERIFY":        true,
 	"SSH_AUTH_SOCK":            true,
+	"JAILOC":                   true,
+	"JAILOC_WORKSPACE":         true,
 }
 
 var forbiddenMountPrefixes = []string{
