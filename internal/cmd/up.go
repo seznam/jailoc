@@ -335,9 +335,12 @@ func writeDindEntrypoint(cacheDir string) error {
 
 func writeTUIConfig(cacheDir, version string) error {
 	var specifier string
-	if version == "dev" {
+	switch {
+	case version == "dev":
 		specifier = "github:seznam/jailoc"
-	} else {
+	case pseudoVersionRev(version) != "":
+		specifier = "github:seznam/jailoc#" + pseudoVersionRev(version)
+	default:
 		specifier = fmt.Sprintf("https://github.com/seznam/jailoc/releases/download/v%s/seznam-jailoc-%s.tgz", version, version)
 	}
 
@@ -356,6 +359,23 @@ func writeTUIConfig(cacheDir, version string) error {
 	}
 
 	return nil
+}
+
+func pseudoVersionRev(v string) string {
+	i := strings.LastIndex(v, "-")
+	if i < 0 {
+		return ""
+	}
+	rev := v[i+1:]
+	if len(rev) != 12 {
+		return ""
+	}
+	for _, c := range rev {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return rev
 }
 
 // dockerDesktopSSHSock is the magic socket path used by Docker Desktop and OrbStack.

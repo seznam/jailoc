@@ -551,6 +551,16 @@ func TestWriteTUIConfig(t *testing.T) {
 			version:  "2.0.0",
 			wantSpec: "https://github.com/seznam/jailoc/releases/download/v2.0.0/seznam-jailoc-2.0.0.tgz",
 		},
+		{
+			name:     "pseudo-version from go install @branch",
+			version:  "v1.11.1-0.20260421130442-3758b6c5e57a",
+			wantSpec: "github:seznam/jailoc#3758b6c5e57a",
+		},
+		{
+			name:     "pseudo-version v0 base",
+			version:  "v0.0.0-20260101000000-abcdef012345",
+			wantSpec: "github:seznam/jailoc#abcdef012345",
+		},
 	}
 
 	for _, tc := range tests {
@@ -589,6 +599,31 @@ func TestWriteTUIConfig(t *testing.T) {
 
 			if plugins[0] != tc.wantSpec {
 				t.Fatalf("plugin specifier = %q, want %q", plugins[0], tc.wantSpec)
+			}
+		})
+	}
+}
+
+func TestPseudoVersionRev(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		version string
+		want    string
+	}{
+		{"v1.11.1-0.20260421130442-3758b6c5e57a", "3758b6c5e57a"},
+		{"v0.0.0-20260101000000-abcdef012345", "abcdef012345"},
+		{"dev", ""},
+		{"1.5.0", ""},
+		{"v1.0.0-0.20260101000000-XXXXXXXXXXXX", ""},
+		{"v1.0.0-0.20260101000000-short", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.version, func(t *testing.T) {
+			t.Parallel()
+			if got := pseudoVersionRev(tc.version); got != tc.want {
+				t.Errorf("pseudoVersionRev(%q) = %q, want %q", tc.version, got, tc.want)
 			}
 		})
 	}
