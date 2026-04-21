@@ -1,0 +1,21 @@
+{
+  "name": "@seznam/jailoc",
+  "version": "0.0.0",
+  "private": true,
+  "exports": {
+    "./tui": "./dist/tui.js"
+  },
+  "scripts": {
+    "build": "esbuild plugin/index.jsx --bundle --format=esm --outfile=dist/tui.js --external:solid-js --external:@opentui/solid --jsx=preserve",
+    "prepare": "npm run build",
+    "pack:tgz": "npm pack"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "peerDependencies": {
+    "solid-js": "*",
+    "@opentui/solid": "*"
+  },
+  "oc-plugin": ["tui"]
+}

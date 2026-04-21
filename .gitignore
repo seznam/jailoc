@@ -11,3 +11,7 @@ coverage.out
 .idea/
 iTerm2
 result
+node_modules/
+dist/
+package-lock.json
+*.tgz
