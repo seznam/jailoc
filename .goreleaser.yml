@@ -2,13 +2,6 @@ version: 2
 
 project_name: jailoc
 
-before:
-  hooks:
-    - npm install
-    - npm run build
-    - npm version --no-git-tag-version {{ .Version }}
-    - npm pack
-
 builds:
   - id: jailoc
     main: ./cmd/jailoc
@@ -47,8 +40,6 @@ release:
   github:
     owner: seznam
     name: jailoc
-  extra_files:
-    - glob: "seznam-jailoc-*.tgz"
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
