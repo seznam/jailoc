@@ -383,7 +383,7 @@ func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out after %s waiting for in-container readiness probe", readyPollTimeout)
 		case <-ticker.C:
-			if err := dc.Exec(ctx, probeArgs, nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			if err := dc.Exec(ctx, probeArgs, nil, nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 				continue
 			}
 			return nil

@@ -252,7 +252,7 @@ func (c *Client) TailLogs(ctx context.Context, n int, w io.Writer) error {
 	return nil
 }
 
-func (c *Client) Exec(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (c *Client) Exec(ctx context.Context, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	var stdinRC io.ReadCloser
 	if stdin != nil {
 		if rc, ok := stdin.(io.ReadCloser); ok {
@@ -290,6 +290,7 @@ func (c *Client) Exec(ctx context.Context, args []string, stdin io.Reader, stdou
 		Tty:         true,
 		Interactive: stdin != nil,
 		Index:       1,
+		Environment: env,
 	})
 	if err != nil {
 		return fmt.Errorf("compose exec for workspace %q: %w", c.workspace, err)
