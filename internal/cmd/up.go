@@ -340,8 +340,25 @@ func writeTUIConfig(cacheDir string) error {
 		return err
 	}
 
+	// Host-side tui.json: opencode attach on the host reads this file, so the
+	// plugin path must resolve on the host filesystem.
+	hostPluginDir := filepath.Join(cacheDir, "tui-plugin")
+	if err := writeTUIJSON(filepath.Join(cacheDir, "tui.json"), "file://"+hostPluginDir); err != nil {
+		return err
+	}
+
+	// Container-side tui.json: mounted into the container where the plugin
+	// directory is bind-mounted at /etc/jailoc-tui-plugin.
+	if err := writeTUIJSON(filepath.Join(cacheDir, "tui-container.json"), "file://"+tuiPluginContainerDir); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func writeTUIJSON(path, specifier string) error {
 	config := map[string][]string{
-		"plugin": {"file://" + tuiPluginContainerDir},
+		"plugin": {specifier},
 	}
 
 	data, err := json.Marshal(config)
@@ -349,8 +366,7 @@ func writeTUIConfig(cacheDir string) error {
 		return fmt.Errorf("write tui config: %w", err)
 	}
 
-	p := filepath.Join(cacheDir, "tui.json")
-	if err := os.WriteFile(p, data, 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JSON config file
+	if err := os.WriteFile(path, data, 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JSON config file
 		return fmt.Errorf("write tui config: %w", err)
 	}
 

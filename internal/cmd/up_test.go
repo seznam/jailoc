@@ -537,29 +537,34 @@ func TestWriteTUIConfig(t *testing.T) {
 		t.Fatalf("writeTUIConfig failed: %v", err)
 	}
 
-	tuiPath := filepath.Join(tmpDir, "tui.json")
-	data, err := os.ReadFile(tuiPath) //nolint:gosec // path constructed from t.TempDir(), fully controlled
-	if err != nil {
-		t.Fatalf("os.ReadFile(%q) failed: %v", tuiPath, err)
+	readPluginSpec := func(path string) string {
+		t.Helper()
+		data, err := os.ReadFile(path) //nolint:gosec // test path
+		if err != nil {
+			t.Fatalf("os.ReadFile(%q) failed: %v", path, err)
+		}
+		var config map[string][]string
+		if err := json.Unmarshal(data, &config); err != nil {
+			t.Fatalf("json.Unmarshal(%q) failed: %v", path, err)
+		}
+		plugins, ok := config["plugin"]
+		if !ok {
+			t.Fatalf("%s missing 'plugin' key", path)
+		}
+		if len(plugins) != 1 {
+			t.Fatalf("%s: expected 1 plugin, got %d", path, len(plugins))
+		}
+		return plugins[0]
 	}
 
-	var config map[string][]string
-	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatalf("json.Unmarshal failed: %v", err)
+	wantHost := "file://" + filepath.Join(tmpDir, "tui-plugin")
+	if got := readPluginSpec(filepath.Join(tmpDir, "tui.json")); got != wantHost {
+		t.Fatalf("host tui.json plugin = %q, want %q", got, wantHost)
 	}
 
-	plugins, ok := config["plugin"]
-	if !ok {
-		t.Fatalf("tui.json missing 'plugin' key")
-	}
-
-	if len(plugins) != 1 {
-		t.Fatalf("expected 1 plugin, got %d", len(plugins))
-	}
-
-	wantSpec := "file:///etc/jailoc-tui-plugin"
-	if plugins[0] != wantSpec {
-		t.Fatalf("plugin specifier = %q, want %q", plugins[0], wantSpec)
+	wantContainer := "file:///etc/jailoc-tui-plugin"
+	if got := readPluginSpec(filepath.Join(tmpDir, "tui-container.json")); got != wantContainer {
+		t.Fatalf("container tui.json plugin = %q, want %q", got, wantContainer)
 	}
 
 	pkgJSON, err := os.ReadFile(filepath.Join(tmpDir, "tui-plugin", "package.json")) //nolint:gosec // test path
