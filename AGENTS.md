@@ -78,7 +78,7 @@ Two services per workspace on a shared Docker network:
 - `docker-compose.yml.tmpl` — Go template for compose generation (auto-generated, do not edit manually)
 - `entrypoint.sh` — container entrypoint: iptables setup → privilege drop
 - `config.toml.default` — default config written on first run
-- `tui.js` — built TUI plugin JS (from `plugin/index.jsx` via esbuild)
+- `tui.js` — built TUI plugin JS (from `plugin/index.jsx` via the Babel-based Solid transform in `plugin/build.mjs`)
 - `tui-plugin.json` — minimal package.json for the embedded TUI plugin
 
 ### TUI plugin rebuild
@@ -87,7 +87,7 @@ When `plugin/index.jsx` changes, rebuild and update the embedded copy:
 npm run build
 cp dist/tui.js internal/embed/assets/tui.js
 ```
-The embedded `tui.js` must stay in sync with the plugin source — `go:embed` picks it up at compile time.
+`npm run build` runs the Node-based Babel/Solid pipeline in `plugin/build.mjs`. The embedded `tui.js` must stay in sync with the plugin source — `go:embed` picks it up at compile time.
 
 ## Testing
 
