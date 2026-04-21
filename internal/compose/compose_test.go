@@ -20,6 +20,7 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 		Memory:         "4g",
 		UseDataVolume:  true,
 		UseCacheVolume: true,
+		ExposePort:     true,
 	}
 
 	out, err := GenerateCompose(params)
@@ -133,6 +134,7 @@ func TestWriteComposeFileHappyPath(t *testing.T) {
 		Env: nil,
 		CPU:              2.0,
 		Memory:           "4g",
+		ExposePort:       true,
 	}
 
 	destPath := filepath.Join(t.TempDir(), "docker-compose.yml")
@@ -187,6 +189,34 @@ func TestWriteComposeFileErrorPath(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "write compose file") {
 		t.Fatalf("expected error message to contain 'write compose file', got: %v", err)
+	}
+}
+
+func TestGenerateComposeExposePortFalseOmitsPorts(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "noport",
+		Port:          4111,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/workspace"},
+		CPU:           2.0,
+		Memory:        "4g",
+		ExposePort:    false,
+	}
+
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose returned error: %v", err)
+	}
+
+	rendered := string(out)
+
+	if strings.Contains(rendered, "ports:") {
+		t.Fatal("expected no ports: section when ExposePort is false")
+	}
+	if strings.Contains(rendered, "127.0.0.1") {
+		t.Fatal("expected no 127.0.0.1 binding when ExposePort is false")
 	}
 }
 

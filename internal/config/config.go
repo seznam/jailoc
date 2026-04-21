@@ -167,6 +167,7 @@ type Defaults struct {
 	GitConfig       *bool    `toml:"git_config"`
 	CPU             *float64 `toml:"cpu"`
 	Memory          *string  `toml:"memory"`
+	ExposePort      *bool    `toml:"expose_port"`
 }
 
 type Workspace struct {
@@ -183,6 +184,7 @@ type Workspace struct {
 	GitConfig       *bool    `toml:"git_config"`
 	CPU             *float64 `toml:"cpu"`
 	Memory          *string  `toml:"memory"`
+	ExposePort      *bool    `toml:"expose_port"`
 }
 
 func ConfigDir() string {

@@ -884,6 +884,46 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 	}
 }
 
+func TestResolveExposePortDefaultsTrue(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"test": {Paths: []string{"/tmp"}},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "test")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if !resolved.ExposePort {
+		t.Fatal("expected ExposePort = true by default")
+	}
+}
+
+func TestResolveExposePortWorkspaceOverride(t *testing.T) {
+	t.Parallel()
+
+	boolFalse := false
+	cfg := &config.Config{
+		Workspaces: map[string]config.Workspace{
+			"test": {
+				Paths:      []string{"/tmp"},
+				ExposePort: &boolFalse,
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "test")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved.ExposePort {
+		t.Fatal("expected ExposePort = false when workspace sets it false")
+	}
+}
+
 func TestResolveImagePropagation(t *testing.T) {
 	t.Parallel()
 

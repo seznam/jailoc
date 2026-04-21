@@ -74,7 +74,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Workspace: %s\n", ws.Name)
-	_, _ = color.New(color.FgCyan).Printf("Port:      %d\n", ws.Port)
+	if ws.ExposePort {
+		_, _ = color.New(color.FgCyan).Printf("Port:      %d\n", ws.Port)
+	} else {
+		_, _ = color.New(color.FgCyan).Printf("Port:      not exposed (exec-only)\n")
+	}
 
 	// Peek at password source without generating or persisting (status is read-only).
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors

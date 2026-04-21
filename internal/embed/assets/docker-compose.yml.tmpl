@@ -4,8 +4,10 @@ name: jailoc-{{.WorkspaceName}}
 services:
   opencode:
     image: {{.Image}}
+{{- if .ExposePort}}
     ports:
       - "127.0.0.1:{{.Port}}:4096"
+{{- end}}
     volumes:
 {{- range .Paths}}
       - {{.}}:{{.}}

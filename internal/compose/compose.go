@@ -27,6 +27,7 @@ type ComposeParams struct {
 	Memory           string
 	UseDataVolume    bool
 	UseCacheVolume   bool
+	ExposePort       bool
 }
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {

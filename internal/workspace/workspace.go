@@ -35,6 +35,7 @@ type Resolved struct {
 	GitConfig       bool
 	CPU             float64
 	Memory          string
+	ExposePort      bool
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -115,6 +116,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
+		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
 	}, nil
 }
 

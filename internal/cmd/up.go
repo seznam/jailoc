@@ -156,6 +156,7 @@ func runUp(ctx context.Context, args []string) error {
 		Memory:           ws.Memory,
 		UseDataVolume:    !compose.MountsContainTarget(ws.Mounts, "/home/agent/.local/share/opencode"),
 		UseCacheVolume:   !compose.MountsContainTarget(ws.Mounts, "/home/agent/.cache"),
+		ExposePort:       ws.ExposePort,
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Generating compose configuration...\n")
