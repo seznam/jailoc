@@ -113,7 +113,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string) error {
 	}()
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
-	err = client.Exec(ctx, attachExecArgs(serverURL, dir), tuiConfigEnv("/etc/jailoc/tui.json"), os.Stdin, os.Stdout, os.Stderr)
+	err = client.Exec(ctx, attachExecArgs(serverURL, dir), tuiConfigEnv("/etc/jailoc-tui.json"), os.Stdin, os.Stdout, os.Stderr)
 	return attachResult(ctx, err)
 }
 

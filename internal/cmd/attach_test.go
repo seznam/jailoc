@@ -328,13 +328,13 @@ func TestTUIConfigEnv(t *testing.T) {
 	}{
 		{
 			name:       "returns env when user tui.json does not exist",
-			configPath: "/etc/jailoc/tui.json",
+			configPath: "/etc/jailoc-tui.json",
 			createUser: false,
-			want:       []string{"OPENCODE_TUI_CONFIG=/etc/jailoc/tui.json"},
+			want:       []string{"OPENCODE_TUI_CONFIG=/etc/jailoc-tui.json"},
 		},
 		{
 			name:       "returns nil when user tui.json exists",
-			configPath: "/etc/jailoc/tui.json",
+			configPath: "/etc/jailoc-tui.json",
 			createUser: true,
 			want:       nil,
 		},
