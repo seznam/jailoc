@@ -327,7 +327,7 @@ func waitForReadiness(ctx context.Context, port int, exposePort bool, dc *docker
 	if exposePort {
 		return waitForReady(ctx, port, dc)
 	}
-	return waitForReadyExec(ctx, port, dc)
+	return waitForReadyExec(ctx, workspace.BasePort, dc)
 }
 
 func waitForReady(ctx context.Context, port int, dc *docker.Client) error {
@@ -371,7 +371,7 @@ func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
 	ticker := time.NewTicker(readyPollInterval)
 	defer ticker.Stop()
 
-	probeArgs := []string{"curl", "-sf", fmt.Sprintf("http://localhost:%d", port)}
+	probeArgs := []string{"curl", "-s", fmt.Sprintf("http://localhost:%d", port)}
 
 	for {
 		state, exitCode, err := dc.ContainerState(ctx)
