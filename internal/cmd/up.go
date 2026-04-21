@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -136,6 +137,10 @@ func runUp(ctx context.Context, args []string) error {
 	}
 
 	if err := writeDindEntrypoint(cacheDir); err != nil {
+		return err
+	}
+
+	if err := writeTUIConfig(cacheDir, appVersion); err != nil {
 		return err
 	}
 
@@ -325,6 +330,31 @@ func writeDindEntrypoint(cacheDir string) error {
 	if err := os.Chmod(p, 0o755); err != nil { //nolint:gosec // ensure +x even when file already existed
 		return fmt.Errorf("chmod dind entrypoint: %w", err)
 	}
+	return nil
+}
+
+func writeTUIConfig(cacheDir, version string) error {
+	var specifier string
+	if version == "dev" {
+		specifier = "github:seznam/jailoc"
+	} else {
+		specifier = fmt.Sprintf("https://github.com/seznam/jailoc/releases/download/v%s/seznam-jailoc-%s.tgz", version, version)
+	}
+
+	config := map[string][]string{
+		"plugin": {specifier},
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("write tui config: %w", err)
+	}
+
+	p := filepath.Join(cacheDir, "tui.json")
+	if err := os.WriteFile(p, data, 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JSON config file
+		return fmt.Errorf("write tui config: %w", err)
+	}
+
 	return nil
 }
 

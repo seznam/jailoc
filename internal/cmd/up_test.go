@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -522,6 +523,72 @@ func TestCheckPortConflict(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestWriteTUIConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		version   string
+		wantSpec  string
+	}{
+		{
+			name:     "dev version",
+			version:  "dev",
+			wantSpec: "github:seznam/jailoc",
+		},
+		{
+			name:     "release version 1.5.0",
+			version:  "1.5.0",
+			wantSpec: "https://github.com/seznam/jailoc/releases/download/v1.5.0/seznam-jailoc-1.5.0.tgz",
+		},
+		{
+			name:     "release version 2.0.0",
+			version:  "2.0.0",
+			wantSpec: "https://github.com/seznam/jailoc/releases/download/v2.0.0/seznam-jailoc-2.0.0.tgz",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+
+			if err := writeTUIConfig(tmpDir, tc.version); err != nil {
+				t.Fatalf("writeTUIConfig failed: %v", err)
+			}
+
+			tuiPath := filepath.Join(tmpDir, "tui.json")
+			data, err := os.ReadFile(tuiPath) //nolint:gosec // path constructed from t.TempDir(), fully controlled
+			if err != nil {
+				t.Fatalf("os.ReadFile(%q) failed: %v", tuiPath, err)
+			}
+
+			if !json.Valid(data) {
+				t.Fatalf("tui.json content is not valid JSON: %s", string(data))
+			}
+
+			var config map[string][]string
+			if err := json.Unmarshal(data, &config); err != nil {
+				t.Fatalf("json.Unmarshal failed: %v", err)
+			}
+
+			plugins, ok := config["plugin"]
+			if !ok {
+				t.Fatalf("tui.json missing 'plugin' key")
+			}
+
+			if len(plugins) != 1 {
+				t.Fatalf("expected 1 plugin, got %d", len(plugins))
+			}
+
+			if plugins[0] != tc.wantSpec {
+				t.Fatalf("plugin specifier = %q, want %q", plugins[0], tc.wantSpec)
 			}
 		})
 	}
