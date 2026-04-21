@@ -93,6 +93,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var showLogsHint bool
+
 	switch state {
 	case "running":
 		health, err := client.HealthStatus(ctx)
@@ -104,6 +106,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		case "unhealthy":
 			_, _ = color.New(color.FgCyan).Printf("Status:    ")
 			_, _ = color.New(color.FgRed).Printf("running (unhealthy)\n")
+			showLogsHint = true
 		case "starting":
 			_, _ = color.New(color.FgCyan).Printf("Status:    ")
 			_, _ = color.New(color.FgYellow).Printf("running (starting)\n")
@@ -114,9 +117,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	case "exited":
 		_, _ = color.New(color.FgCyan).Printf("Status:    ")
 		_, _ = color.New(color.FgRed).Printf("exited (code %d)\n", exitCode)
+		showLogsHint = true
 	default:
 		_, _ = color.New(color.FgCyan).Printf("Status:    ")
 		_, _ = color.New(color.FgYellow).Printf("%s\n", state)
+		showLogsHint = true
+	}
+
+	if showLogsHint {
+		fmt.Printf("\nRun 'jailoc logs %s' to inspect container output.\n", ws.Name)
 	}
 
 	return nil
