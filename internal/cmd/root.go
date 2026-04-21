@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -121,11 +122,9 @@ var rootCmd = &cobra.Command{
 			if err := runUp(ctx, nil); err != nil {
 				return fmt.Errorf("start workspace %q: %w", ws.Name, err)
 			}
-			if ws.ExposePort {
-				_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
-				if err := waitForReady(ctx, ws.Port, client); err != nil {
-					return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
-				}
+			_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready...\n")
+			if err := waitForReadiness(ctx, ws.Port, ws.ExposePort, client); err != nil {
+				return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
 			}
 		} else {
 			interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
@@ -139,11 +138,9 @@ var rootCmd = &cobra.Command{
 				if err := runUp(ctx, nil); err != nil {
 					return fmt.Errorf("migrate workspace %q: %w", ws.Name, err)
 				}
-				if ws.ExposePort {
-					_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
-					if err := waitForReady(ctx, ws.Port, client); err != nil {
-						return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
-					}
+				_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready...\n")
+				if err := waitForReadiness(ctx, ws.Port, ws.ExposePort, client); err != nil {
+					return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
 				}
 			}
 		}
@@ -326,6 +323,13 @@ const (
 	readyPollTimeout  = 60 * time.Second
 )
 
+func waitForReadiness(ctx context.Context, port int, exposePort bool, dc *docker.Client) error {
+	if exposePort {
+		return waitForReady(ctx, port, dc)
+	}
+	return waitForReadyExec(ctx, port, dc)
+}
+
 func waitForReady(ctx context.Context, port int, dc *docker.Client) error {
 	url := fmt.Sprintf("http://localhost:%d", port)
 
@@ -355,6 +359,33 @@ func waitForReady(ctx context.Context, port int, dc *docker.Client) error {
 				continue
 			}
 			_ = resp.Body.Close()
+			return nil
+		}
+	}
+}
+
+func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
+	ctx, cancel := context.WithTimeout(ctx, readyPollTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(readyPollInterval)
+	defer ticker.Stop()
+
+	probeArgs := []string{"curl", "-sf", fmt.Sprintf("http://localhost:%d", port)}
+
+	for {
+		state, exitCode, err := dc.ContainerState(ctx)
+		if err == nil && state == "exited" {
+			return fmt.Errorf("container exited with code %d before becoming ready", exitCode)
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out after %s waiting for in-container readiness probe", readyPollTimeout)
+		case <-ticker.C:
+			if err := dc.Exec(ctx, probeArgs, nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+				continue
+			}
 			return nil
 		}
 	}
