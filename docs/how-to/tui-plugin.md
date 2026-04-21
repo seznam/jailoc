@@ -1,11 +1,6 @@
 # How to enable the TUI sidebar plugin
 
-The TUI sidebar plugin displays the workspace name in the OpenCode sidebar when running inside a jailoc container.
-
-## Prerequisites
-
-- jailoc v0.7.0 or later
-- A workspace configured in `~/.config/jailoc/config.toml`
+The TUI sidebar plugin displays the workspace name in the OpenCode sidebar when running inside a jailoc container. Use this guide with a `jailoc` v1.x release that includes the bundled TUI sidebar plugin and a workspace configured in `~/.config/jailoc/config.toml`.
 
 ---
 
