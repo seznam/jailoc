@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -314,5 +316,54 @@ func assertNotCanceled(t *testing.T, ctx context.Context, wait time.Duration) {
 	case <-ctx.Done():
 		t.Fatalf("context was canceled unexpectedly: %v", context.Cause(ctx))
 	case <-time.After(wait):
+	}
+}
+
+func TestTUIConfigEnv(t *testing.T) {
+	tests := []struct {
+		name       string
+		configPath string
+		createUser bool
+		want       []string
+	}{
+		{
+			name:       "returns env when user tui.json does not exist",
+			configPath: "/etc/jailoc/tui.json",
+			createUser: false,
+			want:       []string{"OPENCODE_TUI_CONFIG=/etc/jailoc/tui.json"},
+		},
+		{
+			name:       "returns nil when user tui.json exists",
+			configPath: "/etc/jailoc/tui.json",
+			createUser: true,
+			want:       nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", tmp)
+			t.Setenv("HOME", tmp)
+
+			if tt.createUser {
+				ocDir, err := os.UserConfigDir()
+				if err != nil {
+					t.Fatalf("user config dir: %v", err)
+				}
+				userTUI := filepath.Join(ocDir, "opencode", "tui.json")
+				if err := os.MkdirAll(filepath.Dir(userTUI), 0o750); err != nil {
+					t.Fatalf("create dir: %v", err)
+				}
+				if err := os.WriteFile(userTUI, []byte("{}"), 0o600); err != nil {
+					t.Fatalf("create tui.json: %v", err)
+				}
+			}
+
+			got := tuiConfigEnv(tt.configPath)
+			if !slicesEqual(got, tt.want) {
+				t.Errorf("tuiConfigEnv(%q) = %v, want %v", tt.configPath, got, tt.want)
+			}
+		})
 	}
 }

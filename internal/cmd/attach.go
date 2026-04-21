@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -37,6 +38,21 @@ func attachExecArgs(serverURL, dir string) []string {
 	return args
 }
 
+// tuiConfigEnv returns OPENCODE_TUI_CONFIG env var entries if the user does not
+// already have a tui.json in their OpenCode config directory. configPath is the
+// path to the generated tui.json that should be used as fallback.
+func tuiConfigEnv(configPath string) []string {
+	ocDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil
+	}
+	userTUI := filepath.Join(ocDir, "opencode", "tui.json")
+	if _, err := os.Stat(userTUI); err == nil {
+		return nil // user has their own tui.json — don't override
+	}
+	return []string{"OPENCODE_TUI_CONFIG=" + configPath}
+}
+
 func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passwordMode string) error {
 	binary, err := config.ResolveBinary()
 	if err != nil {
@@ -55,6 +71,11 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	tuiPath := filepath.Join(ComposeCacheDir(ws.Name), "tui.json")
+	if env := tuiConfigEnv(tuiPath); len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 
 	err = runCommandWithContext(ctx, cmd, func() error {
 		if cmd.Process == nil {
@@ -86,7 +107,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string) error {
 	}()
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
-	err = client.Exec(ctx, attachExecArgs(serverURL, dir), nil, os.Stdin, os.Stdout, os.Stderr)
+	err = client.Exec(ctx, attachExecArgs(serverURL, dir), tuiConfigEnv("/etc/jailoc/tui.json"), os.Stdin, os.Stdout, os.Stderr)
 	return attachResult(ctx, err)
 }
 
