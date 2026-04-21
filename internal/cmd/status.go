@@ -111,6 +111,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			_, _ = color.New(color.FgCyan).Printf("Status:    ")
 			_, _ = color.New(color.FgGreen).Printf("running\n")
 		}
+
+		stats, statsErr := client.ContainerStats(ctx)
+		if statsErr == nil {
+			printContainerStats(stats)
+		}
 	case "exited":
 		_, _ = color.New(color.FgCyan).Printf("Status:    ")
 		_, _ = color.New(color.FgRed).Printf("exited (code %d)\n", exitCode)
@@ -120,6 +125,33 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func printContainerStats(s docker.ContainerStats) {
+	label := color.New(color.FgCyan)
+	value := color.New(color.FgWhite)
+
+	_, _ = label.Printf("CPU:       ")
+	_, _ = value.Printf("%.1f%%\n", s.CPUPercent)
+
+	_, _ = label.Printf("Memory:    ")
+	_, _ = value.Printf("%s / %s\n", docker.FormatBytes(s.MemUsage), docker.FormatBytes(s.MemLimit))
+
+	_, _ = label.Printf("PIDs:      ")
+	if s.PIdsLimit > 0 {
+		_, _ = value.Printf("%d / %d\n", s.PIDsCurrent, s.PIdsLimit)
+	} else {
+		_, _ = value.Printf("%d / unlimited\n", s.PIDsCurrent)
+	}
+
+	_, _ = label.Printf("Net I/O:   ")
+	_, _ = value.Printf("%s rx / %s tx\n", docker.FormatBytes(s.NetRx), docker.FormatBytes(s.NetTx))
+
+	_, _ = label.Printf("Block I/O: ")
+	_, _ = value.Printf("%s read / %s write\n", docker.FormatBytes(s.BlockRead), docker.FormatBytes(s.BlockWrite))
+
+	_, _ = label.Printf("Uptime:    ")
+	_, _ = value.Printf("%s\n", docker.FormatUptime(s.Uptime))
 }
 
 func init() {
