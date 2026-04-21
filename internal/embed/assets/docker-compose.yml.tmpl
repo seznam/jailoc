@@ -19,12 +19,12 @@ services:
       - opencode-cache-{{.WorkspaceName}}:/home/agent/.cache
 {{- end}}
 {{- range .Mounts}}
-       - {{.}}
+      - {{.}}
 {{- end}}
-       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
-       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/tui.json:/etc/jailoc/tui.json:ro
-       - dind-certs-client:/certs/client:ro
+      - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
+      - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/tui.json:/etc/jailoc/tui.json:ro
+      - dind-certs-client:/certs/client:ro
 {{- if .SSHAuthSock}}
       - {{.SSHAuthSock}}:/run/ssh-agent.sock
 {{- end}}
