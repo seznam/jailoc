@@ -924,6 +924,54 @@ func TestResolveExposePortWorkspaceOverride(t *testing.T) {
 	}
 }
 
+func TestResolveExposePortDefaultsOverride(t *testing.T) {
+	t.Parallel()
+
+	boolFalse := false
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			ExposePort: &boolFalse,
+		},
+		Workspaces: map[string]config.Workspace{
+			"test": {Paths: []string{"/tmp"}},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "test")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if resolved.ExposePort {
+		t.Fatal("expected ExposePort = false when defaults set it false and workspace leaves it unset")
+	}
+}
+
+func TestResolveExposePortWorkspaceOverridesDefaults(t *testing.T) {
+	t.Parallel()
+
+	boolFalse := false
+	boolTrue := true
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			ExposePort: &boolFalse,
+		},
+		Workspaces: map[string]config.Workspace{
+			"test": {
+				Paths:      []string{"/tmp"},
+				ExposePort: &boolTrue,
+			},
+		},
+	}
+
+	resolved, err := workspace.Resolve(cfg, "test")
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if !resolved.ExposePort {
+		t.Fatal("expected ExposePort = true when workspace sets it true and defaults set it false")
+	}
+}
+
 func TestResolveImagePropagation(t *testing.T) {
 	t.Parallel()
 
