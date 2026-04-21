@@ -16,7 +16,7 @@ type ContainerStats struct {
 	MemUsage   uint64
 	MemLimit   uint64
 	PIDsCurrent uint64
-	PIdsLimit   uint64
+	PIDsLimit   uint64
 	NetRx      uint64
 	NetTx      uint64
 	BlockRead  uint64
@@ -66,7 +66,7 @@ func (c *Client) ContainerStats(ctx context.Context) (ContainerStats, error) {
 		MemUsage:    calcMemUsage(v.MemoryStats),
 		MemLimit:    v.MemoryStats.Limit,
 		PIDsCurrent: v.PidsStats.Current,
-		PIdsLimit:   v.PidsStats.Limit,
+		PIDsLimit:   v.PidsStats.Limit,
 		NetRx:       sumNetRx(v.Networks),
 		NetTx:       sumNetTx(v.Networks),
 		BlockRead:   calcBlockRead(v.BlkioStats),

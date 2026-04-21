@@ -57,12 +57,14 @@ func TestCalcCPUPercent(t *testing.T) {
 		},
 	}
 
+	const epsilon = 1e-9
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			got := calcCPUPercent(tc.pre, tc.cur)
-			if got != tc.want {
+			if diff := got - tc.want; diff > epsilon || diff < -epsilon {
 				t.Fatalf("got %.2f, want %.2f", got, tc.want)
 			}
 		})

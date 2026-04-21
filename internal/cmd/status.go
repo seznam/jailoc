@@ -115,6 +115,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		stats, statsErr := client.ContainerStats(ctx)
 		if statsErr == nil {
 			printContainerStats(stats)
+		} else {
+			_, _ = color.New(color.FgCyan).Printf("Stats:     ")
+			_, _ = color.New(color.FgYellow).Printf("unavailable\n")
 		}
 	case "exited":
 		_, _ = color.New(color.FgCyan).Printf("Status:    ")
@@ -138,8 +141,8 @@ func printContainerStats(s docker.ContainerStats) {
 	_, _ = value.Printf("%s / %s\n", docker.FormatBytes(s.MemUsage), docker.FormatBytes(s.MemLimit))
 
 	_, _ = label.Printf("PIDs:      ")
-	if s.PIdsLimit > 0 {
-		_, _ = value.Printf("%d / %d\n", s.PIDsCurrent, s.PIdsLimit)
+	if s.PIDsLimit > 0 {
+		_, _ = value.Printf("%d / %d\n", s.PIDsCurrent, s.PIDsLimit)
 	} else {
 		_, _ = value.Printf("%d / unlimited\n", s.PIDsCurrent)
 	}
