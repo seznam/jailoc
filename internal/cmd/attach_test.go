@@ -367,3 +367,51 @@ func TestTUIConfigEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestEnvWithOverrides(t *testing.T) {
+	t.Parallel()
+
+	base := []string{
+		"PATH=/usr/bin",
+		"JAILOC=old",
+		"JAILOC_WORKSPACE=stale",
+		"OTHER=value",
+	}
+
+	got := envWithOverrides(
+		base,
+		"JAILOC=1",
+		"JAILOC_WORKSPACE=default",
+		"OPENCODE_TUI_CONFIG=/tmp/tui.json",
+	)
+
+	want := []string{
+		"PATH=/usr/bin",
+		"OTHER=value",
+		"JAILOC=1",
+		"JAILOC_WORKSPACE=default",
+		"OPENCODE_TUI_CONFIG=/tmp/tui.json",
+	}
+
+	if !slicesEqual(got, want) {
+		t.Fatalf("envWithOverrides() = %v, want %v", got, want)
+	}
+
+	if countEnvKey(got, "JAILOC") != 1 {
+		t.Fatalf("expected one JAILOC entry, got %v", got)
+	}
+	if countEnvKey(got, "JAILOC_WORKSPACE") != 1 {
+		t.Fatalf("expected one JAILOC_WORKSPACE entry, got %v", got)
+	}
+}
+
+func countEnvKey(env []string, key string) int {
+	count := 0
+	for _, entry := range env {
+		entryKey, _, ok := strings.Cut(entry, "=")
+		if ok && entryKey == key {
+			count++
+		}
+	}
+	return count
+}

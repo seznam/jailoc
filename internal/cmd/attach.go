@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,6 +56,31 @@ func tuiConfigEnv(configPath string) []string {
 	return []string{"OPENCODE_TUI_CONFIG=" + configPath}
 }
 
+func envWithOverrides(base []string, overrides ...string) []string {
+	if len(overrides) == 0 {
+		return append([]string{}, base...)
+	}
+
+	overrideKeys := make(map[string]struct{}, len(overrides))
+	for _, entry := range overrides {
+		if key, _, ok := strings.Cut(entry, "="); ok && key != "" {
+			overrideKeys[key] = struct{}{}
+		}
+	}
+
+	filtered := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		if key, _, ok := strings.Cut(entry, "="); ok {
+			if _, exists := overrideKeys[key]; exists {
+				continue
+			}
+		}
+		filtered = append(filtered, entry)
+	}
+
+	return append(filtered, overrides...)
+}
+
 func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passwordMode string) error {
 	binary, err := config.ResolveBinary()
 	if err != nil {
@@ -75,7 +101,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	cmd.Stderr = os.Stderr
 
 	tuiPath := filepath.Join(ComposeCacheDir(ws.Name), "tui.json")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = envWithOverrides(os.Environ(),
 		"JAILOC=1",
 		"JAILOC_WORKSPACE="+ws.Name,
 	)
