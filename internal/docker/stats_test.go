@@ -214,6 +214,50 @@ func TestCalcBlockEmpty(t *testing.T) {
 	}
 }
 
+func TestCalcCPULimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		res  dcontainer.Resources
+		want float64
+	}{
+		{
+			name: "NanoCPUs set to 2 cores",
+			res:  dcontainer.Resources{NanoCPUs: 2_000_000_000},
+			want: 2.0,
+		},
+		{
+			name: "CPUQuota and CPUPeriod set to 0.5 cores",
+			res:  dcontainer.Resources{CPUQuota: 50000, CPUPeriod: 100000},
+			want: 0.5,
+		},
+		{
+			name: "NanoCPUs takes precedence over quota/period",
+			res:  dcontainer.Resources{NanoCPUs: 1_000_000_000, CPUQuota: 50000, CPUPeriod: 100000},
+			want: 1.0,
+		},
+		{
+			name: "no limits returns zero",
+			res:  dcontainer.Resources{},
+			want: 0,
+		},
+	}
+
+	const epsilon = 1e-9
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := calcCPULimit(tc.res)
+			if diff := got - tc.want; diff > epsilon || diff < -epsilon {
+				t.Fatalf("got %.2f, want %.2f", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFormatBytes(t *testing.T) {
 	t.Parallel()
 

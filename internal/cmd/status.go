@@ -135,10 +135,14 @@ func printContainerStats(s docker.ContainerStats) {
 	value := color.New(color.FgWhite)
 
 	_, _ = label.Printf("CPU:       ")
-	_, _ = value.Printf("%.1f%%\n", s.CPUPercent)
+	if s.CPULimit > 0 {
+		_, _ = value.Printf("%.1f%% (limit: %.1f cores)\n", s.CPUPercent, s.CPULimit)
+	} else {
+		_, _ = value.Printf("%.1f%%\n", s.CPUPercent)
+	}
 
 	_, _ = label.Printf("Memory:    ")
-	_, _ = value.Printf("%s / %s\n", docker.FormatBytes(s.MemUsage), docker.FormatBytes(s.MemLimit))
+	_, _ = value.Printf("%s / %s (%.1f%%)\n", docker.FormatBytes(s.MemUsage), docker.FormatBytes(s.MemLimit), s.MemPercent)
 
 	_, _ = label.Printf("PIDs:      ")
 	if s.PIDsLimit > 0 {

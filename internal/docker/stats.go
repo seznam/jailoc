@@ -13,8 +13,10 @@ import (
 // ContainerStats holds parsed resource consumption metrics for a container.
 type ContainerStats struct {
 	CPUPercent float64
+	CPULimit   float64 // CPU core limit (0 = unlimited)
 	MemUsage   uint64
 	MemLimit   uint64
+	MemPercent float64
 	PIDsCurrent uint64
 	PIDsLimit   uint64
 	NetRx      uint64
@@ -61,10 +63,19 @@ func (c *Client) ContainerStats(ctx context.Context) (ContainerStats, error) {
 		uptime = time.Since(startedAt)
 	}
 
+	memUsage := calcMemUsage(v.MemoryStats)
+	memLimit := v.MemoryStats.Limit
+	var memPercent float64
+	if memLimit > 0 {
+		memPercent = float64(memUsage) / float64(memLimit) * 100.0
+	}
+
 	return ContainerStats{
 		CPUPercent:  calcCPUPercent(v.PreCPUStats, v.CPUStats),
-		MemUsage:    calcMemUsage(v.MemoryStats),
-		MemLimit:    v.MemoryStats.Limit,
+		CPULimit:    calcCPULimit(inspect.HostConfig.Resources),
+		MemUsage:    memUsage,
+		MemLimit:    memLimit,
+		MemPercent:  memPercent,
 		PIDsCurrent: v.PidsStats.Current,
 		PIDsLimit:   v.PidsStats.Limit,
 		NetRx:       sumNetRx(v.Networks),
@@ -92,6 +103,16 @@ func calcCPUPercent(pre, cur dcontainer.CPUStats) float64 {
 	}
 
 	return (cpuDelta / systemDelta) * float64(onlineCPUs) * 100.0
+}
+
+func calcCPULimit(r dcontainer.Resources) float64 {
+	if r.NanoCPUs > 0 {
+		return float64(r.NanoCPUs) / 1e9
+	}
+	if r.CPUQuota > 0 && r.CPUPeriod > 0 {
+		return float64(r.CPUQuota) / float64(r.CPUPeriod)
+	}
+	return 0
 }
 
 func calcMemUsage(m dcontainer.MemoryStats) uint64 {
