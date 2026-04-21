@@ -40,8 +40,8 @@ services:
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_CERT_PATH=/certs/client
       - DOCKER_TLS_VERIFY=1
-      - JAILOC: "1"
-      - JAILOC_WORKSPACE: "{{.WorkspaceName}}"
+      - JAILOC=1
+      - JAILOC_WORKSPACE={{.WorkspaceName}}
 {{- if .SSHAuthSock}}
       - SSH_AUTH_SOCK=/run/ssh-agent.sock
 {{- end}}

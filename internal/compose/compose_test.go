@@ -494,9 +494,8 @@ func TestGenerateComposeJailocEnvVars(t *testing.T) {
 
 	rendered := string(out)
 
-	// Check that JAILOC env vars are present
-	assertContains(t, rendered, `JAILOC: "1"`)
-	assertContains(t, rendered, `JAILOC_WORKSPACE: "test-jailoc"`)
+	assertContains(t, rendered, "- JAILOC=1")
+	assertContains(t, rendered, "- JAILOC_WORKSPACE=test-jailoc")
 }
 
 func TestComposeResourceLimits(t *testing.T) {
