@@ -36,7 +36,7 @@ func (c *Client) ContainerStats(ctx context.Context) (ContainerStats, error) {
 
 	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
-		return ContainerStats{}, fmt.Errorf("create docker engine client for stats: %w", err)
+		return ContainerStats{}, fmt.Errorf("create Docker Engine client for stats: %w", err)
 	}
 	defer func() { _ = engineCli.Close() }()
 
@@ -86,10 +86,10 @@ func calcCPUPercent(pre, cur dcontainer.CPUStats) float64 {
 
 func calcMemUsage(m dcontainer.MemoryStats) uint64 {
 	// cgroup v2 uses "inactive_file", v1 uses "total_inactive_file".
-	if cache, ok := m.Stats["inactive_file"]; ok && cache < m.Usage {
+	if cache, ok := m.Stats["inactive_file"]; ok && cache <= m.Usage {
 		return m.Usage - cache
 	}
-	if cache, ok := m.Stats["total_inactive_file"]; ok && cache < m.Usage {
+	if cache, ok := m.Stats["total_inactive_file"]; ok && cache <= m.Usage {
 		return m.Usage - cache
 	}
 	return m.Usage
