@@ -140,7 +140,7 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := writeTUIConfig(cacheDir, appVersion); err != nil {
+	if err := writeTUIConfig(cacheDir); err != nil {
 		return err
 	}
 
@@ -333,20 +333,15 @@ func writeDindEntrypoint(cacheDir string) error {
 	return nil
 }
 
-func writeTUIConfig(cacheDir, version string) error {
-	var specifier string
-	switch {
-	case version == "dev":
-		specifier = "github:seznam/jailoc"
-	case pseudoVersionRev(version) != "":
-		specifier = "github:seznam/jailoc#" + pseudoVersionRev(version)
-	default:
-		v := strings.TrimPrefix(version, "v")
-		specifier = fmt.Sprintf("https://github.com/seznam/jailoc/releases/download/v%s/seznam-jailoc-%s.tgz", v, v)
+const tuiPluginContainerDir = "/etc/jailoc-tui-plugin"
+
+func writeTUIConfig(cacheDir string) error {
+	if err := writeTUIPlugin(cacheDir); err != nil {
+		return err
 	}
 
 	config := map[string][]string{
-		"plugin": {specifier},
+		"plugin": {"file://" + tuiPluginContainerDir},
 	}
 
 	data, err := json.Marshal(config)
@@ -362,21 +357,18 @@ func writeTUIConfig(cacheDir, version string) error {
 	return nil
 }
 
-func pseudoVersionRev(v string) string {
-	i := strings.LastIndex(v, "-")
-	if i < 0 {
-		return ""
+func writeTUIPlugin(cacheDir string) error {
+	dir := filepath.Join(cacheDir, "tui-plugin")
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // 0o755 required: bind-mount preserves host perms, dir must be readable in container
+		return fmt.Errorf("create tui plugin dir: %w", err)
 	}
-	rev := v[i+1:]
-	if len(rev) != 12 {
-		return ""
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), embed.TUIPluginJSON(), 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JSON
+		return fmt.Errorf("write tui plugin package.json: %w", err)
 	}
-	for _, c := range rev {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return ""
-		}
+	if err := os.WriteFile(filepath.Join(dir, "tui.js"), embed.TUIPluginJS(), 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JS
+		return fmt.Errorf("write tui plugin tui.js: %w", err)
 	}
-	return rev
+	return nil
 }
 
 // dockerDesktopSSHSock is the magic socket path used by Docker Desktop and OrbStack.

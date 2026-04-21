@@ -24,6 +24,7 @@ services:
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/tui.json:/etc/jailoc-tui.json:ro
+      - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/tui-plugin:/etc/jailoc-tui-plugin:ro
       - dind-certs-client:/certs/client:ro
 {{- if .SSHAuthSock}}
       - {{.SSHAuthSock}}:/run/ssh-agent.sock

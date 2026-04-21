@@ -15,6 +15,12 @@ var entrypointBytes []byte
 //go:embed assets/dind-entrypoint.sh
 var dindEntrypointBytes []byte
 
+//go:embed assets/tui.js
+var tuiPluginJS []byte
+
+//go:embed assets/tui-plugin.json
+var tuiPluginJSON []byte
+
 // Dockerfile returns the embedded fallback Dockerfile bytes.
 func Dockerfile() []byte { return dockerfileBytes }
 
@@ -26,3 +32,9 @@ func Entrypoint() []byte { return entrypointBytes }
 
 // DindEntrypoint returns the embedded dind-entrypoint.sh bytes.
 func DindEntrypoint() []byte { return dindEntrypointBytes }
+
+// TUIPluginJS returns the embedded TUI plugin JavaScript bytes.
+func TUIPluginJS() []byte { return tuiPluginJS }
+
+// TUIPluginJSON returns the embedded TUI plugin package.json bytes.
+func TUIPluginJSON() []byte { return tuiPluginJSON }

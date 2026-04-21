@@ -531,105 +531,50 @@ func TestCheckPortConflict(t *testing.T) {
 func TestWriteTUIConfig(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		version   string
-		wantSpec  string
-	}{
-		{
-			name:     "dev version",
-			version:  "dev",
-			wantSpec: "github:seznam/jailoc",
-		},
-		{
-			name:     "release version 1.5.0",
-			version:  "1.5.0",
-			wantSpec: "https://github.com/seznam/jailoc/releases/download/v1.5.0/seznam-jailoc-1.5.0.tgz",
-		},
-		{
-			name:     "release version 2.0.0",
-			version:  "2.0.0",
-			wantSpec: "https://github.com/seznam/jailoc/releases/download/v2.0.0/seznam-jailoc-2.0.0.tgz",
-		},
-		{
-			name:     "pseudo-version from go install @branch",
-			version:  "v1.11.1-0.20260421130442-3758b6c5e57a",
-			wantSpec: "github:seznam/jailoc#3758b6c5e57a",
-		},
-		{
-			name:     "pseudo-version v0 base",
-			version:  "v0.0.0-20260101000000-abcdef012345",
-			wantSpec: "github:seznam/jailoc#abcdef012345",
-		},
-		{
-			name:     "release version with v prefix",
-			version:  "v1.5.0",
-			wantSpec: "https://github.com/seznam/jailoc/releases/download/v1.5.0/seznam-jailoc-1.5.0.tgz",
-		},
+	tmpDir := t.TempDir()
+
+	if err := writeTUIConfig(tmpDir); err != nil {
+		t.Fatalf("writeTUIConfig failed: %v", err)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			tmpDir := t.TempDir()
-
-			if err := writeTUIConfig(tmpDir, tc.version); err != nil {
-				t.Fatalf("writeTUIConfig failed: %v", err)
-			}
-
-			tuiPath := filepath.Join(tmpDir, "tui.json")
-			data, err := os.ReadFile(tuiPath) //nolint:gosec // path constructed from t.TempDir(), fully controlled
-			if err != nil {
-				t.Fatalf("os.ReadFile(%q) failed: %v", tuiPath, err)
-			}
-
-			if !json.Valid(data) {
-				t.Fatalf("tui.json content is not valid JSON: %s", string(data))
-			}
-
-			var config map[string][]string
-			if err := json.Unmarshal(data, &config); err != nil {
-				t.Fatalf("json.Unmarshal failed: %v", err)
-			}
-
-			plugins, ok := config["plugin"]
-			if !ok {
-				t.Fatalf("tui.json missing 'plugin' key")
-			}
-
-			if len(plugins) != 1 {
-				t.Fatalf("expected 1 plugin, got %d", len(plugins))
-			}
-
-			if plugins[0] != tc.wantSpec {
-				t.Fatalf("plugin specifier = %q, want %q", plugins[0], tc.wantSpec)
-			}
-		})
-	}
-}
-
-func TestPseudoVersionRev(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		version string
-		want    string
-	}{
-		{"v1.11.1-0.20260421130442-3758b6c5e57a", "3758b6c5e57a"},
-		{"v0.0.0-20260101000000-abcdef012345", "abcdef012345"},
-		{"dev", ""},
-		{"1.5.0", ""},
-		{"v1.0.0-0.20260101000000-XXXXXXXXXXXX", ""},
-		{"v1.0.0-0.20260101000000-short", ""},
+	tuiPath := filepath.Join(tmpDir, "tui.json")
+	data, err := os.ReadFile(tuiPath) //nolint:gosec // path constructed from t.TempDir(), fully controlled
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) failed: %v", tuiPath, err)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.version, func(t *testing.T) {
-			t.Parallel()
-			if got := pseudoVersionRev(tc.version); got != tc.want {
-				t.Errorf("pseudoVersionRev(%q) = %q, want %q", tc.version, got, tc.want)
-			}
-		})
+	var config map[string][]string
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	plugins, ok := config["plugin"]
+	if !ok {
+		t.Fatalf("tui.json missing 'plugin' key")
+	}
+
+	if len(plugins) != 1 {
+		t.Fatalf("expected 1 plugin, got %d", len(plugins))
+	}
+
+	wantSpec := "file:///etc/jailoc-tui-plugin"
+	if plugins[0] != wantSpec {
+		t.Fatalf("plugin specifier = %q, want %q", plugins[0], wantSpec)
+	}
+
+	pkgJSON, err := os.ReadFile(filepath.Join(tmpDir, "tui-plugin", "package.json")) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("reading tui-plugin/package.json: %v", err)
+	}
+	if !bytes.Equal(pkgJSON, embed.TUIPluginJSON()) {
+		t.Fatalf("package.json content mismatch")
+	}
+
+	tuiJS, err := os.ReadFile(filepath.Join(tmpDir, "tui-plugin", "tui.js")) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("reading tui-plugin/tui.js: %v", err)
+	}
+	if !bytes.Equal(tuiJS, embed.TUIPluginJS()) {
+		t.Fatalf("tui.js content mismatch")
 	}
 }
