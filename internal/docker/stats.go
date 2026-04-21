@@ -81,7 +81,17 @@ func calcCPUPercent(pre, cur dcontainer.CPUStats) float64 {
 	if systemDelta <= 0 || cpuDelta < 0 {
 		return 0
 	}
-	return (cpuDelta / systemDelta) * float64(cur.OnlineCPUs) * 100.0
+	onlineCPUs := cur.OnlineCPUs
+	if onlineCPUs == 0 {
+		n := len(cur.CPUUsage.PercpuUsage)
+		if n > 0 {
+			onlineCPUs = uint32(n) //nolint:gosec // PercpuUsage length is bounded by physical CPU count
+		} else {
+			onlineCPUs = 1
+		}
+	}
+
+	return (cpuDelta / systemDelta) * float64(onlineCPUs) * 100.0
 }
 
 func calcMemUsage(m dcontainer.MemoryStats) uint64 {

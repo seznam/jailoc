@@ -117,7 +117,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			printContainerStats(stats)
 		} else {
 			_, _ = color.New(color.FgCyan).Printf("Stats:     ")
-			_, _ = color.New(color.FgYellow).Printf("unavailable\n")
+			_, _ = color.New(color.FgYellow).Printf("unavailable (%v)\n", statsErr)
 		}
 	case "exited":
 		_, _ = color.New(color.FgCyan).Printf("Status:    ")

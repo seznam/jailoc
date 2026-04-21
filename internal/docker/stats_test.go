@@ -55,6 +55,35 @@ func TestCalcCPUPercent(t *testing.T) {
 			},
 			want: 0,
 		},
+		{
+			name: "OnlineCPUs zero falls back to PercpuUsage length",
+			pre: dcontainer.CPUStats{
+				CPUUsage:    dcontainer.CPUUsage{TotalUsage: 100_000_000},
+				SystemUsage: 1_000_000_000,
+			},
+			cur: dcontainer.CPUStats{
+				CPUUsage: dcontainer.CPUUsage{
+					TotalUsage:  200_000_000,
+					PercpuUsage: []uint64{0, 0, 0, 0},
+				},
+				SystemUsage: 2_000_000_000,
+				OnlineCPUs:  0,
+			},
+			want: 40.0,
+		},
+		{
+			name: "OnlineCPUs zero and empty PercpuUsage falls back to 1",
+			pre: dcontainer.CPUStats{
+				CPUUsage:    dcontainer.CPUUsage{TotalUsage: 100_000_000},
+				SystemUsage: 1_000_000_000,
+			},
+			cur: dcontainer.CPUStats{
+				CPUUsage:    dcontainer.CPUUsage{TotalUsage: 200_000_000},
+				SystemUsage: 2_000_000_000,
+				OnlineCPUs:  0,
+			},
+			want: 10.0,
+		},
 	}
 
 	const epsilon = 1e-9
