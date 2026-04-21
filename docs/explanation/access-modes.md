@@ -77,6 +77,6 @@ This means the default behaviour changes depending on your host environment. A m
 
 You can override auto-detection by setting `mode` explicitly in your workspace config. This is useful if you have opencode installed but want exec mode for a specific workspace, or if you want to lock the behaviour for predictability in shared setups.
 
-When `expose_port` is `false` for a workspace, the container port is not published to the host, so remote mode is unavailable. In that case, configure `mode = "exec"` for the workspace or use `jailoc attach --exec` when attaching. See [Configuration Reference](../reference/configuration.md) for details on the `expose_port` field.
+When `expose_port` is `false` for a workspace, the container port is not published to the host, so remote mode is unavailable. In that case, configure `mode = "exec"` for the workspace or use `jailoc --exec` when attaching. See [Configuration Reference](../reference/configuration.md) for details on the `expose_port` field.
 
 For configuration instructions, see [How-to: Access Modes](../how-to/access-modes.md). For CLI flags that affect attachment behaviour, see [CLI Reference](../reference/cli.md).

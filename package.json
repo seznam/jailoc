@@ -7,8 +7,7 @@
   },
   "scripts": {
     "build": "bun run ./plugin/build.mjs",
-    "prepare": "npm run build",
-    "pack:tgz": "npm pack"
+    "prepare": "npm run build"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

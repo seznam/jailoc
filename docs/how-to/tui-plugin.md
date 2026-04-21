@@ -11,7 +11,7 @@ The TUI sidebar plugin displays the workspace name in the OpenCode sidebar when 
 
 ## Automatic setup
 
-The plugin is bundled with jailoc — no separate download is needed. When you run `jailoc attach`, jailoc sets the `OPENCODE_TUI_CONFIG` environment variable pointing to the plugin configuration.
+The plugin is bundled with jailoc — no separate download is needed. When you run `jailoc`, jailoc sets `OPENCODE_TUI_CONFIG` to a generated plugin configuration when your host does not already provide a custom `~/.config/opencode/tui.json`.
 
 If you don't have a custom `~/.config/opencode/tui.json` on the host, the plugin works with no additional configuration.
 
@@ -19,15 +19,15 @@ If you don't have a custom `~/.config/opencode/tui.json` on the host, the plugin
 
 ## Manual setup (custom tui.json)
 
-If you have a custom `~/.config/opencode/tui.json`, jailoc does not override it. Add the plugin entry to your `tui.json` manually:
+If you have a custom `~/.config/opencode/tui.json`, jailoc does not override it. Add the generated plugin directory to your `tui.json` manually:
 
 ```json
 {
-  "plugin": ["https://github.com/seznam/jailoc/releases/download/v<version>/seznam-jailoc-<version>.tgz"]
+  "plugin": ["file:///Users/<you>/.cache/jailoc/<workspace>/tui-plugin"]
 }
 ```
 
-Replace `<version>` with the jailoc version you are using (e.g. `0.7.0`).
+Replace `<workspace>` with your workspace name. The generated `tui-plugin` directory contains the embedded sidebar plugin that jailoc writes during startup.
 
 ---
 
@@ -55,10 +55,10 @@ You should see `JAILOC=1` and `JAILOC_WORKSPACE=<name>`. The plugin renders noth
 
 ### Plugin not loading
 
-Verify `tui.json` is mounted inside the container:
+Verify jailoc generated the TUI config files for the workspace:
 
 ```bash
-cat /etc/jailoc/tui.json
+ls ~/.cache/jailoc/<name>
 ```
 
-If the file is missing, check that the workspace is running with jailoc v0.7.0 or later.
+You should see `tui.json`, `tui-container.json`, and `tui-plugin/`. If they are missing, restart the workspace with `jailoc down <name> && jailoc up <name>`.
