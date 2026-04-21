@@ -72,7 +72,7 @@ Print the state and assigned port for each configured workspace.
 jailoc status [flags]
 ```
 
-Output lists all workspaces defined in configuration. For each workspace, shows the container state (running, stopped, or unknown) and the host port it is assigned. Workspaces with `expose_port = false` show "not exposed (exec-only)" instead of a port number.
+Output shows the container state (running, stopped, or unknown) and the assigned host port for the resolved workspace. Workspaces with `expose_port = false` show "not exposed (exec-only)" instead of a port number.
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 

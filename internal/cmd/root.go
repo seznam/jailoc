@@ -121,9 +121,11 @@ var rootCmd = &cobra.Command{
 			if err := runUp(ctx, nil); err != nil {
 				return fmt.Errorf("start workspace %q: %w", ws.Name, err)
 			}
-			_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
-			if err := waitForReady(ctx, ws.Port, client); err != nil {
-				return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
+			if ws.ExposePort {
+				_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
+				if err := waitForReady(ctx, ws.Port, client); err != nil {
+					return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
+				}
 			}
 		} else {
 			interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
@@ -137,14 +139,19 @@ var rootCmd = &cobra.Command{
 				if err := runUp(ctx, nil); err != nil {
 					return fmt.Errorf("migrate workspace %q: %w", ws.Name, err)
 				}
-				_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
-				if err := waitForReady(ctx, ws.Port, client); err != nil {
-					return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
+				if ws.ExposePort {
+					_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready on port %d...\n", ws.Port)
+					if err := waitForReady(ctx, ws.Port, client); err != nil {
+						return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
+					}
 				}
 			}
 		}
 
 		mode := resolveFromFlags(cmd, cfg)
+		if !ws.ExposePort && mode != config.ModeExec {
+			mode = config.ModeExec
+		}
 		attachCtx, stop, err := startAttachWatch(ctx, client, ws.Name)
 		if err != nil {
 			return err

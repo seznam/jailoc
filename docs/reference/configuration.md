@@ -62,7 +62,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `allowed_networks` | string[] | `[]` | CIDR ranges allowed through the firewall for all workspaces. Merged with per-workspace `allowed_networks`. |
 | `ssh_auth_sock` | bool | `false` | Mount the host SSH agent socket into the container. Auto-detects the socket: Docker Desktop/OrbStack magic path first, then `$SSH_AUTH_SOCK`. Also mounts `~/.ssh/known_hosts` read-only when enabled. |
 | `git_config` | bool | `true` | Mount the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only into the container. |
-| `expose_port` | bool | `true` | Expose the opencode container port to the host. When `false`, the `ports:` section is omitted from the generated compose file and the workspace is only accessible via `jailoc attach` in exec mode. |
+| `expose_port` | bool | `true` | Expose the opencode container port to the host. When `false`, the `ports:` section is omitted from the generated compose file and the workspace is only accessible via `jailoc --exec`. |
 | `cpu` | float64 | `2.0` | Number of CPU cores allocated to the opencode container. Must be greater than 0. |
 | `memory` | string | `"4g"` | Memory limit for the opencode container. Accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` suffix (e.g. `512m`, `4g`, `1024`). Must be greater than 0. |
 
@@ -275,7 +275,7 @@ Where `index` is the zero-based position of the workspace name when all workspac
 
 Port assignments shift when workspace names are added or removed. Run `jailoc status` to see current assignments.
 
-When `expose_port` is `false` for a workspace, the port is still allocated but not exposed to the host. The workspace is only accessible via `jailoc attach` in exec mode.
+When `expose_port` is `false` for a workspace, the port is still allocated but not exposed to the host. The workspace remains accessible via `jailoc --exec`, but `jailoc --remote` does not work because readiness detection and remote attach require a published localhost port.
 
 ---
 
