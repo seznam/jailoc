@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -100,15 +101,7 @@ func TestAttachExecArgs(t *testing.T) {
 }
 
 func slicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return reflect.DeepEqual(a, b)
 }
 
 func TestMonitorAttach(t *testing.T) {
@@ -319,24 +312,38 @@ func assertNotCanceled(t *testing.T, ctx context.Context, wait time.Duration) {
 	}
 }
 
-func TestTUIConfigEnv(t *testing.T) {
+func TestHostTUIConfigEnv(t *testing.T) {
 	tests := []struct {
-		name       string
-		configPath string
-		createUser bool
-		want       []string
+		name         string
+		createConfig bool
+		createUser   bool
+		existingEnv  string
+		wantEnv      bool
 	}{
 		{
-			name:       "returns env when user tui.json does not exist",
-			configPath: "/etc/jailoc-tui.json",
-			createUser: false,
-			want:       []string{"OPENCODE_TUI_CONFIG=/etc/jailoc-tui.json"},
+			name:         "returns env when generated config exists and user tui json does not",
+			createConfig: true,
+			createUser:   false,
+			wantEnv:      true,
 		},
 		{
-			name:       "returns nil when user tui.json exists",
-			configPath: "/etc/jailoc-tui.json",
-			createUser: true,
-			want:       nil,
+			name:         "returns nil when user tui json exists",
+			createConfig: true,
+			createUser:   true,
+			wantEnv:      false,
+		},
+		{
+			name:         "returns nil when generated config does not exist",
+			createConfig: false,
+			createUser:   false,
+			wantEnv:      false,
+		},
+		{
+			name:         "returns nil when env already set",
+			createConfig: true,
+			createUser:   false,
+			existingEnv:  "/custom/tui.json",
+			wantEnv:      false,
 		},
 	}
 
@@ -345,6 +352,17 @@ func TestTUIConfigEnv(t *testing.T) {
 			tmp := t.TempDir()
 			t.Setenv("XDG_CONFIG_HOME", tmp)
 			t.Setenv("HOME", tmp)
+
+			configPath := filepath.Join(tmp, "generated", "tui.json")
+
+			if tt.createConfig {
+				if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
+					t.Fatalf("create config dir: %v", err)
+				}
+				if err := os.WriteFile(configPath, []byte("{}"), 0o600); err != nil {
+					t.Fatalf("create generated tui.json: %v", err)
+				}
+			}
 
 			if tt.createUser {
 				ocDir, err := os.UserConfigDir()
@@ -360,11 +378,29 @@ func TestTUIConfigEnv(t *testing.T) {
 				}
 			}
 
-			got := tuiConfigEnv(tt.configPath)
-			if !slicesEqual(got, tt.want) {
-				t.Errorf("tuiConfigEnv(%q) = %v, want %v", tt.configPath, got, tt.want)
+			if tt.existingEnv != "" {
+				t.Setenv("OPENCODE_TUI_CONFIG", tt.existingEnv)
+			}
+
+			got := hostTUIConfigEnv(configPath)
+			var want []string
+			if tt.wantEnv {
+				want = []string{"OPENCODE_TUI_CONFIG=" + configPath}
+			}
+			if !slicesEqual(got, want) {
+				t.Errorf("hostTUIConfigEnv(%q) = %v, want %v", configPath, got, want)
 			}
 		})
+	}
+}
+
+func TestExecTUIConfigEnv(t *testing.T) {
+	t.Setenv("OPENCODE_TUI_CONFIG", "/host/custom.json")
+
+	got := execTUIConfigEnv("/etc/jailoc-tui.json")
+	want := []string{"OPENCODE_TUI_CONFIG=/etc/jailoc-tui.json"}
+	if !slicesEqual(got, want) {
+		t.Fatalf("execTUIConfigEnv() = %v, want %v", got, want)
 	}
 }
 

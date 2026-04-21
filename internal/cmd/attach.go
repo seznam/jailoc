@@ -39,10 +39,18 @@ func attachExecArgs(serverURL, dir string) []string {
 	return args
 }
 
-// tuiConfigEnv returns OPENCODE_TUI_CONFIG env var entries if the user does not
-// already have a tui.json in their OpenCode config directory. configPath is the
-// path to the generated tui.json that should be used as fallback.
-func tuiConfigEnv(configPath string) []string {
+// hostTUIConfigEnv returns OPENCODE_TUI_CONFIG env var entries for host attach
+// when jailoc's generated tui.json should be used as a fallback. It does not
+// override an explicit env var, and it does not point OpenCode at a missing
+// generated config file.
+func hostTUIConfigEnv(configPath string) []string {
+	if os.Getenv("OPENCODE_TUI_CONFIG") != "" {
+		return nil
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		return nil
+	}
+
 	ocDir, err := os.UserConfigDir()
 	if err != nil {
 		return nil
@@ -53,6 +61,10 @@ func tuiConfigEnv(configPath string) []string {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil // unreadable or other filesystem error — don't override
 	}
+	return []string{"OPENCODE_TUI_CONFIG=" + configPath}
+}
+
+func execTUIConfigEnv(configPath string) []string {
 	return []string{"OPENCODE_TUI_CONFIG=" + configPath}
 }
 
@@ -105,8 +117,8 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		"JAILOC=1",
 		"JAILOC_WORKSPACE="+ws.Name,
 	)
-	if env := tuiConfigEnv(tuiPath); len(env) > 0 {
-		cmd.Env = append(cmd.Env, env...)
+	if env := hostTUIConfigEnv(tuiPath); len(env) > 0 {
+		cmd.Env = envWithOverrides(cmd.Env, env...)
 	}
 
 	err = runCommandWithContext(ctx, cmd, func() error {
@@ -139,7 +151,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string) error {
 	}()
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
-	err = client.Exec(ctx, attachExecArgs(serverURL, dir), tuiConfigEnv("/etc/jailoc-tui.json"), os.Stdin, os.Stdout, os.Stderr)
+	err = client.Exec(ctx, attachExecArgs(serverURL, dir), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, os.Stdout, os.Stderr)
 	return attachResult(ctx, err)
 }
 
