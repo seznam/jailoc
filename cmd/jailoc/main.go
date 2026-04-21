@@ -39,9 +39,9 @@ func main() {
 					modified = s.Value == "true"
 				}
 			}
-		if modified {
-			commit += "-dirty"
-		}
+			if modified {
+				commit += "-dirty"
+			}
 
 			// Remote installs (go install ...@branch) have no VCS settings
 			// but embed a pseudo-version like v1.11.1-0.20260421130442-3758b6c5e57a.
@@ -91,6 +91,9 @@ func pseudoVersionTime(v string) string {
 		return ""
 	}
 	ts := parts[len(parts)-2]
+	if i := strings.LastIndex(ts, "."); i >= 0 {
+		ts = ts[i+1:]
+	}
 	if len(ts) != 14 {
 		return ""
 	}
