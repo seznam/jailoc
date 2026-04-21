@@ -150,6 +150,9 @@ var rootCmd = &cobra.Command{
 
 		mode := resolveFromFlags(cmd, cfg)
 		if !ws.ExposePort && mode != config.ModeExec {
+			if remoteFlag {
+				return fmt.Errorf("remote mode is unavailable for workspace %q because the port is not exposed", ws.Name)
+			}
 			mode = config.ModeExec
 		}
 		attachCtx, stop, err := startAttachWatch(ctx, client, ws.Name)
