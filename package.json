@@ -6,7 +6,7 @@
     "./tui": "./dist/tui.js"
   },
   "scripts": {
-    "build": "esbuild plugin/index.jsx --bundle --format=esm --outfile=dist/tui.js --external:solid-js --external:@opentui/solid --jsx=preserve",
+    "build": "bun run ./plugin/build.mjs",
     "prepare": "npm run build",
     "pack:tgz": "npm pack"
   },
