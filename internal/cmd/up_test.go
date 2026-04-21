@@ -561,6 +561,11 @@ func TestWriteTUIConfig(t *testing.T) {
 			version:  "v0.0.0-20260101000000-abcdef012345",
 			wantSpec: "github:seznam/jailoc#abcdef012345",
 		},
+		{
+			name:     "release version with v prefix",
+			version:  "v1.5.0",
+			wantSpec: "https://github.com/seznam/jailoc/releases/download/v1.5.0/seznam-jailoc-1.5.0.tgz",
+		},
 	}
 
 	for _, tc := range tests {

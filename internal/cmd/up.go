@@ -341,7 +341,8 @@ func writeTUIConfig(cacheDir, version string) error {
 	case pseudoVersionRev(version) != "":
 		specifier = "github:seznam/jailoc#" + pseudoVersionRev(version)
 	default:
-		specifier = fmt.Sprintf("https://github.com/seznam/jailoc/releases/download/v%s/seznam-jailoc-%s.tgz", version, version)
+		v := strings.TrimPrefix(version, "v")
+		specifier = fmt.Sprintf("https://github.com/seznam/jailoc/releases/download/v%s/seznam-jailoc-%s.tgz", v, v)
 	}
 
 	config := map[string][]string{

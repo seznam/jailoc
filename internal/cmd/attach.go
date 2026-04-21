@@ -49,6 +49,8 @@ func tuiConfigEnv(configPath string) []string {
 	userTUI := filepath.Join(ocDir, "opencode", "tui.json")
 	if _, err := os.Stat(userTUI); err == nil {
 		return nil // user has their own tui.json — don't override
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil // unreadable or other filesystem error — don't override
 	}
 	return []string{"OPENCODE_TUI_CONFIG=" + configPath}
 }
@@ -73,8 +75,12 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	cmd.Stderr = os.Stderr
 
 	tuiPath := filepath.Join(ComposeCacheDir(ws.Name), "tui.json")
+	cmd.Env = append(os.Environ(),
+		"JAILOC=1",
+		"JAILOC_WORKSPACE="+ws.Name,
+	)
 	if env := tuiConfigEnv(tuiPath); len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
+		cmd.Env = append(cmd.Env, env...)
 	}
 
 	err = runCommandWithContext(ctx, cmd, func() error {
