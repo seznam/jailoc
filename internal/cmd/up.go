@@ -393,7 +393,7 @@ func writeTUIJSON(path, specifier string) error {
 		return fmt.Errorf("write tui config: %w", err)
 	}
 
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := os.Rename(tmpName, path); err != nil { //nolint:gosec // both paths are controlled: tmpName from CreateTemp, path from caller
 		_ = os.Remove(tmpName) //nolint:gosec // tmpName is from os.CreateTemp in a controlled directory
 		return fmt.Errorf("write tui config: %w", err)
 	}
