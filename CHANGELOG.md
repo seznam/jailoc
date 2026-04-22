@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.12.0](https://github.com/seznam/jailoc/compare/v1.11.0...v1.12.0) (2026-04-22)
+
+
+### Features
+
+* **cmd:** add restart command ([#83](https://github.com/seznam/jailoc/issues/83)) ([a8c46f2](https://github.com/seznam/jailoc/commit/a8c46f21d4fc863f00a0e5b50fb44bfc5ac68a7e))
+* **config:** add expose_port option to disable host port exposure ([#109](https://github.com/seznam/jailoc/issues/109)) ([56c39b0](https://github.com/seznam/jailoc/commit/56c39b0add6c92f21ff6a459f37cba22df892dcd))
+* **status:** show container resource consumption stats ([#110](https://github.com/seznam/jailoc/issues/110)) ([61ffaf6](https://github.com/seznam/jailoc/commit/61ffaf6d3849e0545c960e0d9e08d9fb02e3cb21))
+* TUI sidebar plugin for workspace context ([#112](https://github.com/seznam/jailoc/issues/112)) ([3b9c1e2](https://github.com/seznam/jailoc/commit/3b9c1e271aecfcce88231c46ee275bc953c72708))
+* **update:** add update-available notice via GitHub Releases API ([#108](https://github.com/seznam/jailoc/issues/108)) ([abca6d4](https://github.com/seznam/jailoc/commit/abca6d497a71ac066ccf3e5ade11183503128ec9))
+
+
+### Bug Fixes
+
+* **config:** reject reserved keys in env_file during validation ([#81](https://github.com/seznam/jailoc/issues/81)) ([112cb79](https://github.com/seznam/jailoc/commit/112cb79e2c7d8163b1ebd1d98ee81421143700a4))
+* **password:** use Peek for migration detection to support all password modes ([#107](https://github.com/seznam/jailoc/issues/107)) ([1465b93](https://github.com/seznam/jailoc/commit/1465b938ae650fd38e93fe7518462ca9aa09dd51))
+* **status:** add logs hint for unhealthy container states ([#111](https://github.com/seznam/jailoc/issues/111)) ([447f234](https://github.com/seznam/jailoc/commit/447f234b0e11625f57cc861246c0fae90d4c3d8a))
+* **test:** use testWorkspaceDir in TestRestartLifecycle to avoid /tmp mount conflict ([3758b6c](https://github.com/seznam/jailoc/commit/3758b6c5e57a4988f083eee72756f6c4ebb75f6f))
+
 ## [1.11.0](https://github.com/seznam/jailoc/compare/v1.10.1...v1.11.0) (2026-04-19)
 
 
