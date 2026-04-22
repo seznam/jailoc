@@ -161,6 +161,10 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return fmt.Errorf("regenerate compose file: %w", err)
 	}
 
+	if err := writeTUIConfig(jailocCacheDir()); err != nil {
+		return fmt.Errorf("write tui config for restart: %w", err)
+	}
+
 	_, _ = color.New(color.FgCyan).Printf("Restarting workspace %s with updated mounts...\n", ws.Name)
 	if err := client.Up(ctx); err != nil {
 		return fmt.Errorf("restart workspace: %w", err)

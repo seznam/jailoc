@@ -51,17 +51,32 @@ func hostTUIConfigEnv(configPath string) []string {
 		return nil
 	}
 
-	ocDir, err := os.UserConfigDir()
+	ocDir, err := openCodeConfigDir()
 	if err != nil {
 		return nil
 	}
-	userTUI := filepath.Join(ocDir, "opencode", "tui.json")
+	userTUI := filepath.Join(ocDir, "tui.json")
 	if _, err := os.Stat(userTUI); err == nil {
 		return nil // user has their own tui.json — don't override
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil // unreadable or other filesystem error — don't override
 	}
 	return []string{"OPENCODE_TUI_CONFIG=" + configPath}
+}
+
+// openCodeConfigDir returns the directory OpenCode uses for its config:
+// $XDG_CONFIG_HOME/opencode if set, otherwise $HOME/.config/opencode.
+// This matches OpenCode's own resolution regardless of platform (os.UserConfigDir
+// returns ~/Library/Application Support on macOS, which OpenCode does not use).
+func openCodeConfigDir() (string, error) {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "opencode"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "opencode"), nil
 }
 
 func execTUIConfigEnv(configPath string) []string {

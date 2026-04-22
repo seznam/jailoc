@@ -372,7 +372,29 @@ func writeTUIJSON(path, specifier string) error {
 		return fmt.Errorf("write tui config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JSON config file
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tui-*.json")
+	if err != nil {
+		return fmt.Errorf("write tui config: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write tui config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write tui config: %w", err)
+	}
+
+	if err := os.Chmod(tmpName, 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JSON config file
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write tui config: %w", err)
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("write tui config: %w", err)
 	}
 

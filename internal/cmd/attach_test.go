@@ -365,11 +365,11 @@ func TestHostTUIConfigEnv(t *testing.T) {
 			}
 
 			if tt.createUser {
-				ocDir, err := os.UserConfigDir()
+				ocDir, err := openCodeConfigDir()
 				if err != nil {
-					t.Fatalf("user config dir: %v", err)
+					t.Fatalf("opencode config dir: %v", err)
 				}
-				userTUI := filepath.Join(ocDir, "opencode", "tui.json")
+				userTUI := filepath.Join(ocDir, "tui.json")
 				if err := os.MkdirAll(filepath.Dir(userTUI), 0o750); err != nil {
 					t.Fatalf("create dir: %v", err)
 				}
