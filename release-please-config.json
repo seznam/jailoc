@@ -3,6 +3,10 @@
   "release-type": "go",
   "include-v-in-tag": true,
   "draft": true,
+  "force-tag-creation": true,
+  "last-release-sha": "26866589ca25db4563ccac0184af534e7d0337c0",
+  "release-search-depth": 150,
+  "commit-search-depth": 300,
   "changelog-sections": [
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Bug Fixes" },
