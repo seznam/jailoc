@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.2](https://github.com/seznam/jailoc/compare/v1.12.1...v1.12.2) (2026-04-23)
+
+
+### Bug Fixes
+
+* **ci:** gh failure ([096e3ba](https://github.com/seznam/jailoc/commit/096e3bae29d3930f225293543d87bcc0ddb94fcd))
+* **ci:** gh failure II ([4ca09cc](https://github.com/seznam/jailoc/commit/4ca09cc3b5fd133c269b1d768a5d28e2032e28bf))
+
 ## [1.12.1](https://github.com/seznam/jailoc/compare/v1.12.0...v1.12.1) (2026-04-23)
 
 
