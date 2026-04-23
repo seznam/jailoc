@@ -4,6 +4,30 @@ By default, jailoc builds a base image from the Dockerfile embedded in the binar
 
 ---
 
+## Base image requirements
+
+Any image used directly (`image` or `defaults.image`) or built from a custom Dockerfile (`[base].dockerfile`) must provide the components below. Overlay Dockerfiles that extend the default jailoc base (`ARG BASE` / `FROM ${BASE}`) inherit all of these automatically.
+
+| Component | Debian/Ubuntu package | Role |
+|---|---|---|
+| `bash` | `bash` | Entrypoint interpreter |
+| `iptables` or `iptables-legacy` | `iptables` | Network isolation setup |
+| `setpriv` | `util-linux` | Privilege drop from root to UID 1000 |
+| `getent` | `libc-bin` | Hostname resolution in entrypoint |
+| `awk` | `gawk` or `mawk` | Route table parsing in entrypoint |
+| `opencode` | `opencode-ai` (npm) | Agent runtime (`opencode serve`) |
+
+The image must also have:
+
+- A user with **UID 1000** and home directory `/home/agent`
+- Directories `/home/agent/.local` and `/home/agent/.cache`
+- `PATH` including `/home/agent/.local/bin`
+
+!!! warning
+    A plain OS image like `ubuntu:24.04` does not satisfy these requirements. The container will fail to start without iptables, setpriv, the UID 1000 user, and opencode on PATH.
+
+---
+
 ## Use a pre-built image directly
 
 Set `image` in the workspace block to skip all build steps. Compose pulls the image from its registry at container startup.
@@ -28,7 +52,7 @@ Set `image` in `[defaults]` to use a pre-built image as the starting point for a
 image = "myregistry.example.com/myteam/opencode-base:v1.2.3"
 ```
 
-The image must contain OpenCode and the required agent tooling (iptables, setpriv). A plain OS image like `ubuntu:22.04` cannot be used here — the container would fail to start. When `defaults.image` is not set, jailoc builds from its embedded Dockerfile automatically.
+The image must meet the [base image requirements](#base-image-requirements). When `defaults.image` is not set, jailoc builds from its embedded Dockerfile automatically.
 
 With this set, a workspace that adds its own `dockerfile` builds on top of the specified image:
 
@@ -62,6 +86,8 @@ dockerfile = "https://git.example.com/team/dockerfiles/-/raw/main/opencode.Docke
 
 !!! warning
     If the file doesn't exist, the download fails (or exceeds 1 MiB), or the build fails, jailoc aborts. There is no fallback to the embedded image.
+
+The resulting image must meet the [base image requirements](#base-image-requirements).
 
 ---
 

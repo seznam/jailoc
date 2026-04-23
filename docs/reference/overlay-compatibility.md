@@ -56,5 +56,6 @@ The table below lists overlay actions that affect runtime behaviour. Severity le
 ## Related pages
 
 - [Custom images](../how-to/custom-images.md) — how to build and configure overlay Dockerfiles
+- [Base image requirements](../how-to/custom-images.md#base-image-requirements) — components a custom base image must provide
 - [Container architecture](../explanation/container-architecture.md) — entrypoint phases, volume layout, and the DinD sidecar
 - [Image resolution](image-resolution.md) — the two-tier model that resolves base and overlay images
