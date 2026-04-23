@@ -364,6 +364,28 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 	return embeddedTag, nil
 }
 
+// proxyBuildArgs returns Docker build args for proxy environment variables
+// set in the current process environment. Docker Engine API (unlike Docker CLI)
+// does not forward these automatically — they must be passed explicitly.
+func proxyBuildArgs() map[string]*string {
+	keys := []string{
+		"HTTP_PROXY", "http_proxy",
+		"HTTPS_PROXY", "https_proxy",
+		"NO_PROXY", "no_proxy",
+		"FTP_PROXY", "ftp_proxy",
+		"ALL_PROXY", "all_proxy",
+	}
+
+	args := make(map[string]*string)
+	for _, k := range keys {
+		if v, ok := os.LookupEnv(k); ok {
+			args[k] = &v
+		}
+	}
+
+	return args
+}
+
 func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag string) error {
 	tmpDir, err := os.MkdirTemp("", "jailoc-embedded-dockerfile-")
 	if err != nil {
@@ -383,8 +405,9 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 	defer func() { _ = buildCtx.Close() }()
 
 	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
-		Tags:   []string{tag},
-		Remove: true,
+		Tags:      []string{tag},
+		BuildArgs: proxyBuildArgs(),
+		Remove:    true,
 	})
 	if err != nil {
 		return fmt.Errorf("build embedded image in %q: %w", tmpDir, err)
@@ -424,8 +447,9 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	defer func() { _ = buildCtx.Close() }()
 
 	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
-		Tags:   []string{presetTag},
-		Remove: true,
+		Tags:      []string{presetTag},
+		BuildArgs: proxyBuildArgs(),
+		Remove:    true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("build preset image in %q: %w", tmpDir, err)
@@ -492,10 +516,13 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	defer func() { _ = buildCtx.Close() }()
 
 	baseArg := base
+	overlayBuildArgs := proxyBuildArgs()
+	overlayBuildArgs["BASE"] = &baseArg
+
 	_, _ = color.New(color.FgCyan).Printf("Building workspace overlay image...\n")
 	resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:       []string{overlayTag},
-		BuildArgs:  map[string]*string{"BASE": &baseArg},
+		BuildArgs:  overlayBuildArgs,
 		Dockerfile: filepath.Base(tmpDockerfilePath),
 		Remove:     true,
 	})

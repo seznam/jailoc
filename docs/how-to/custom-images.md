@@ -215,6 +215,10 @@ RUN curl -fsSL https://github.com/org/tool/releases/download/v1.0/tool-linux-amd
 
 If the tool requires compilation, use a [multi-stage build](#use-multi-stage-builds-for-compiled-tools) instead to keep the final image small.
 
+### Proxy support during builds
+
+If your host environment has proxy variables set (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY`, and their lowercase variants), jailoc forwards them as build arguments to all image builds — base, preset, and workspace overlay. No `ARG` declarations are needed in the Dockerfile; Docker treats these as [predefined build arguments](https://docs.docker.com/build/building/variables/#proxy-arguments).
+
 ### What to avoid
 
 !!! danger "Fatal: breaks the container entirely"

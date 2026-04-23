@@ -333,6 +333,59 @@ func TestBuildOverlayImageDockerfileLoadError(t *testing.T) {
 	}
 }
 
+func TestProxyBuildArgs(t *testing.T) {
+	t.Run("collects set proxy vars", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://proxy:8080")
+		t.Setenv("HTTPS_PROXY", "http://proxy:8443")
+		t.Setenv("NO_PROXY", "localhost,127.0.0.1")
+
+		got := proxyBuildArgs()
+
+		if v := got["HTTP_PROXY"]; v == nil || *v != "http://proxy:8080" {
+			t.Fatalf("HTTP_PROXY: got %v, want %q", v, "http://proxy:8080")
+		}
+		if v := got["HTTPS_PROXY"]; v == nil || *v != "http://proxy:8443" {
+			t.Fatalf("HTTPS_PROXY: got %v, want %q", v, "http://proxy:8443")
+		}
+		if v := got["NO_PROXY"]; v == nil || *v != "localhost,127.0.0.1" {
+			t.Fatalf("NO_PROXY: got %v, want %q", v, "localhost,127.0.0.1")
+		}
+	})
+
+	t.Run("skips unset vars", func(t *testing.T) {
+		for _, k := range []string{
+			"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
+			"NO_PROXY", "no_proxy", "FTP_PROXY", "ftp_proxy",
+			"ALL_PROXY", "all_proxy",
+		} {
+			t.Setenv(k, "")
+			if err := os.Unsetenv(k); err != nil {
+				t.Fatalf("unsetenv %s: %v", k, err)
+			}
+		}
+
+		got := proxyBuildArgs()
+
+		if len(got) != 0 {
+			t.Fatalf("expected empty map, got %v", got)
+		}
+	})
+
+	t.Run("includes both cases independently", func(t *testing.T) {
+		t.Setenv("http_proxy", "http://lower:3128")
+		t.Setenv("HTTP_PROXY", "http://upper:3128")
+
+		got := proxyBuildArgs()
+
+		if v := got["http_proxy"]; v == nil || *v != "http://lower:3128" {
+			t.Fatalf("http_proxy: got %v, want %q", v, "http://lower:3128")
+		}
+		if v := got["HTTP_PROXY"]; v == nil || *v != "http://upper:3128" {
+			t.Fatalf("HTTP_PROXY: got %v, want %q", v, "http://upper:3128")
+		}
+	})
+}
+
 func TestWorkspacePortsFromContainers(t *testing.T) {
 	t.Parallel()
 

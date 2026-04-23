@@ -43,7 +43,7 @@ flowchart TD
 
 **Behavior:**
 - The workspace Dockerfile is loaded from the specified source (local path or HTTP URL).
-- An overlay image is built on top of `defaults.image`, passed as the `BASE` build argument.
+- An overlay image is built on top of `defaults.image`, passed as the `BASE` build argument. Host proxy environment variables are forwarded as build arguments automatically.
 - The workspace Dockerfile must begin with:
 
   ```dockerfile
@@ -86,6 +86,8 @@ flowchart TD
 
 After this step, a workspace `dockerfile` (if set) is still applied as an overlay on top of the built base.
 
+**Proxy support:** Host proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY`, and lowercase variants) are forwarded as build arguments automatically.
+
 **Constraints:**
 - Accepted sources: absolute local paths (`/...`), tilde paths (`~/...`), HTTP(S) URLs.
 - Maximum download size for HTTP sources: 1 MiB. Files exceeding this limit cause a fatal error.
@@ -104,13 +106,15 @@ After this step, a workspace `dockerfile` (if set) is still applied as an overla
 
 This step always succeeds (assuming a functional Docker daemon), as the Dockerfile is bundled with the binary.
 
+**Proxy support:** Host proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY`, and lowercase variants) are forwarded as build arguments automatically.
+
 After this step, a workspace `dockerfile` (if set) is applied as an overlay on top of the embedded base.
 
 ---
 
 ### Workspace overlay (steps 4 and 5 only)
 
-When the cascade reaches step 4 or 5, a workspace `dockerfile` is applied as an additional layer on top of the resolved base image. Steps 1, 2, and 3 handle the workspace Dockerfile themselves (or bypass it entirely) and do not reach this stage.
+When the cascade reaches step 4 or 5, a workspace `dockerfile` is applied as an additional layer on top of the resolved base image. Steps 1, 2, and 3 handle the workspace Dockerfile themselves (or bypass it entirely) and do not reach this stage. Host proxy environment variables are forwarded as build arguments alongside `BASE`.
 
 ```mermaid
 flowchart TD
