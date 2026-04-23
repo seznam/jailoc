@@ -8,20 +8,20 @@ By default, jailoc builds a base image from the Dockerfile embedded in the binar
 
 Any image used directly (`image` or `defaults.image`) or built from a custom Dockerfile (`[base].dockerfile`) must provide the components below. Overlay Dockerfiles that extend the default jailoc base (`ARG BASE` / `FROM ${BASE}`) inherit all of these automatically.
 
-| Component | Debian/Ubuntu package | Role |
+| Component | Source (Debian/Ubuntu) | Role |
 |---|---|---|
 | `bash` | `bash` | Entrypoint interpreter |
 | `iptables` or `iptables-legacy` | `iptables` | Network isolation setup |
 | `setpriv` | `util-linux` | Privilege drop from root to UID 1000 |
 | `getent` | `libc-bin` | Hostname resolution in entrypoint |
 | `awk` | `gawk` or `mawk` | Route table parsing in entrypoint |
-| `opencode` | `opencode-ai` (npm) | Agent runtime (`opencode serve`) |
+| `opencode` | any method providing the binary on `PATH` | Agent runtime (`opencode serve`) |
 
 The image must also have:
 
 - A user with **UID 1000** and home directory `/home/agent`
 - Directories `/home/agent/.local` and `/home/agent/.cache`
-- `PATH` including `/home/agent/.local/bin`
+- `PATH` including `/home/agent/.local/bin` and `/home/agent/.opencode/bin`
 
 !!! warning
     A plain OS image like `ubuntu:24.04` does not satisfy these requirements. The container will fail to start without iptables, setpriv, the UID 1000 user, and opencode on PATH.
