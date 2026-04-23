@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.12.1](https://github.com/seznam/jailoc/compare/v1.12.0...v1.12.1) (2026-04-23)
+
+
+### Bug Fixes
+
+* **docker:** forward host proxy env vars as build args ([#119](https://github.com/seznam/jailoc/issues/119)) ([441b9eb](https://github.com/seznam/jailoc/commit/441b9eba78a7999dfe13f8bd571d5133ecdbee14))
+
+
+### Documentation
+
+* **custom-images:** add base image requirements section ([#118](https://github.com/seznam/jailoc/issues/118)) ([94bb6bc](https://github.com/seznam/jailoc/commit/94bb6bcd56a38c332acf0fd70fb3c0d02e25715b))
+
 ## [1.12.0](https://github.com/seznam/jailoc/compare/v1.11.0...v1.12.0) (2026-04-22)
 
 
