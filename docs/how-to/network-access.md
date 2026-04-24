@@ -70,6 +70,27 @@ All resolved host IPs and all listed CIDRs get `ACCEPT` rules. Everything else i
 
 ---
 
+## Allow an HTTP proxy on a private network
+
+If your environment routes traffic through an HTTP proxy that lives on a private address (RFC 1918, link-local, or CGNAT), the container must be able to reach it. Add the proxy's address to `allowed_hosts` or its subnet to `allowed_networks`, and pass the proxy URL via `env`:
+
+```toml
+[workspaces.api]
+paths = ["/home/you/projects/api"]
+allowed_hosts = ["proxy.internal.example.com"]
+env = [
+  "HTTP_PROXY=http://proxy.internal.example.com:3128",
+  "HTTPS_PROXY=http://proxy.internal.example.com:3128",
+]
+```
+
+Without the allowlist entry, the proxy address falls into a blocked range and all proxied requests fail silently.
+
+!!! note
+    During image builds, jailoc automatically forwards the host's `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (and their lowercase variants) as Docker build args. No extra configuration is needed for the build step — only the running container requires explicit `env` entries.
+
+---
+
 ## Apply rules to all workspaces
 
 To allow a host or network for every workspace, use the `[defaults]` section instead of repeating it in each workspace:
