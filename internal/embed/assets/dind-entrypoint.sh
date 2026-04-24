@@ -16,8 +16,8 @@ set -eu
 # After iptables setup, capabilities are dropped via setpriv. The rootless
 # dockerd uses setuid newuidmap/newgidmap for user namespace setup, so
 # --no-new-privs is intentionally omitted (it would block setuid execution).
-# With all inheritable capabilities cleared, UID 1000 cannot regain
-# CAP_NET_ADMIN to modify the iptables rules.
+# With all inheritable and bounding capabilities cleared, UID 1000 cannot
+# regain CAP_NET_ADMIN to modify the iptables rules.
 
 # --- Detect working iptables variant ---
 if iptables -L -n >/dev/null 2>&1; then
@@ -92,7 +92,9 @@ $IPT -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
 # Named volumes are created as root by Docker; fix ownership before dropping.
 ROOTLESS_HOME="/home/rootless"
 mkdir -p "$ROOTLESS_HOME/.local/share/docker" "$ROOTLESS_HOME/.config/docker"
-chown -R 1000:1000 "$ROOTLESS_HOME/.local" "$ROOTLESS_HOME/.config"
+if [ "$(stat -c '%u' "$ROOTLESS_HOME/.local" 2>/dev/null)" != "1000" ]; then
+  chown -R 1000:1000 "$ROOTLESS_HOME/.local" "$ROOTLESS_HOME/.config"
+fi
 
 # --- Clean stale containerd state ---
 # Prevents "containerd is still running" crash loop when PID file persists
@@ -103,8 +105,9 @@ rm -f "$ROOTLESS_HOME/.local/share/docker/containerd/containerd.pid" \
       "$ROOTLESS_HOME/.local/share/docker/containerd/containerd-debug.sock"
 
 # --- Drop capabilities and exec rootless dockerd ---
-# setpriv clears all inheritable capabilities so UID 1000 cannot regain
-# CAP_NET_ADMIN (needed to modify iptables). --no-new-privs is intentionally
-# omitted because rootlesskit needs setuid newuidmap/newgidmap.
-exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all -- \
+# setpriv clears all inheritable and bounding capabilities so UID 1000
+# cannot regain CAP_NET_ADMIN (needed to modify iptables) via setuid
+# binaries. --no-new-privs is intentionally omitted because rootlesskit
+# needs setuid newuidmap/newgidmap.
+exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --bounding-set -all -- \
   dockerd-entrypoint.sh "$@"

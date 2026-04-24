@@ -83,6 +83,7 @@ services:
 
   dind:
     image: docker:dind-rootless
+    user: "0:0"
     privileged: true
     entrypoint: ["/usr/local/bin/dind-entrypoint.sh"]
     environment:

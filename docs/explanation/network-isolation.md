@@ -38,7 +38,7 @@ For step-by-step instructions, see [How-to: Network Access](../how-to/network-ac
 
 ## The dind sidecar
 
-The dind container runs a rootless Docker daemon. Its entrypoint installs iptables rules on the OUTPUT chain (via a `JAILOC-OUTPUT` custom chain) as root, then drops all capabilities and execs the rootless daemon as UID 1000.
+The dind container runs a rootless Docker daemon. Its entrypoint installs iptables rules on the OUTPUT chain (via a `JAILOC-OUTPUT` custom chain) as root, then drops all inheritable and bounding capabilities and execs the rootless daemon as UID 1000.
 
 Because the daemon is rootless, all inner containers run inside rootlesskit's user namespace. Their network traffic is routed through vpnkit, which exits via the outer network namespace's OUTPUT chain — where `JAILOC-OUTPUT` catches it. This means a single set of iptables rules controls egress for both the dind container itself and any containers the agent starts inside it.
 
