@@ -36,11 +36,15 @@ If you need the agent to reach an internal service, adding it to `allowed_hosts`
 
 For step-by-step instructions, see [How-to: Network Access](../how-to/network-access.md).
 
-## The dind sidecar is a special case
+## The dind sidecar
 
-The dind container shares the same Docker network as the opencode container. iptables rules in the opencode container control egress from that container — they don't apply to the dind container at all. The dind daemon listens on port 2376 with mutual TLS, so only the opencode container (which holds the client certificates) can connect to it.
+The dind container runs a rootless Docker daemon. Its entrypoint installs iptables rules on the OUTPUT chain (via a `JAILOC-OUTPUT` custom chain) as root, then drops all capabilities and execs the rootless daemon as UID 1000.
 
-Any containers the agent starts through dind inherit the dind daemon's network configuration, not the opencode container's iptables rules. If an agent-started container needs to reach a specific address, that's determined by dind's setup, not by jailoc's iptables. This is a deliberate tradeoff: the agent's direct network is controlled, but containers-within-containers operate outside that control layer.
+Because the daemon is rootless, all inner containers run inside rootlesskit's user namespace. Their network traffic is routed through vpnkit, which exits via the outer network namespace's OUTPUT chain — where `JAILOC-OUTPUT` catches it. This means a single set of iptables rules controls egress for both the dind container itself and any containers the agent starts inside it.
+
+An agent that creates a `--privileged` inner container and attempts to flush iptables will only see the empty netfilter tables inside rootlesskit's namespace. The outer rules remain intact. Similarly, `--network=host` inside the user namespace refers to rootlesskit's network namespace, not the dind container's actual network namespace.
+
+The dind container's allowed hosts and networks are configured from the same `/etc/jailoc/allowed-hosts` and `/etc/jailoc/allowed-networks` files as the opencode container, mounted read-only from the host.
 
 ## What is isolated
 
@@ -53,7 +57,7 @@ Any containers the agent starts through dind inherit the dind daemon's network c
 
 ## What is not isolated
 
-- The dind container itself runs `--privileged`. This is unavoidable for nested Docker support.
+- The dind container runs `--privileged` (required for nested Docker), but the Docker daemon inside runs rootless — inner containers cannot modify the outer network namespace's iptables rules
 - The public internet is fully open from the opencode container
 - API keys present in your mounted `opencode.json` are readable inside the container (the agent needs them to function)
 - No seccomp profile or AppArmor profile is applied beyond Docker's defaults

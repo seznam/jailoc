@@ -82,7 +82,7 @@ services:
       start_period: 60s
 
   dind:
-    image: docker:dind
+    image: docker:dind-rootless
     privileged: true
     entrypoint: ["/usr/local/bin/dind-entrypoint.sh"]
     environment:
@@ -91,7 +91,7 @@ services:
     volumes:
       - dind-certs-ca:/certs/ca
       - dind-certs-client:/certs/client
-      - dind-data:/var/lib/docker
+      - dind-data:/home/rootless/.local/share/docker
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/dind-entrypoint.sh:/usr/local/bin/dind-entrypoint.sh:ro
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
     dns:

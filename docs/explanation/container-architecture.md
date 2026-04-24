@@ -28,7 +28,7 @@ The **opencode container** is where the agent lives. It runs `opencode serve` as
 
 The opencode container runs with configurable resource limits. The `cpu` (default 2 cores) and `memory` (default 4 GB) settings control how much of the host's resources the container can consume, and are configurable per workspace via the TOML config. Other resource limits — `pids_limit` (256) and `mem_reservation` (512 MB) — are fixed and not configurable. Resource limit changes take effect on the next `jailoc up` invocation; running containers are not affected until restarted.
 
-The **dind container** runs a full Docker daemon in privileged mode. It exists solely to give the agent access to Docker without sharing the host's socket. The daemon listens on port 2376 with mutual TLS authentication, and the certificates are shared with the opencode container via a named volume. When the agent runs `docker build` or starts a database for testing, those containers exist entirely within the dind daemon's scope and are invisible to the host.
+The **dind container** runs a rootless Docker daemon (`docker:dind-rootless`) in privileged mode. The entrypoint installs iptables rules as root, then drops all capabilities and execs the rootless Docker daemon as UID 1000. The daemon listens on port 2376 with mutual TLS authentication, and the certificates are shared with the opencode container via a named volume. When the agent runs `docker build` or starts a database for testing, those containers exist entirely within the dind daemon's scope and are invisible to the host. Because the daemon runs rootless, inner containers operate inside a user namespace managed by rootlesskit — even `--privileged` inner containers cannot modify the outer network namespace's iptables rules.
 
 ## Network
 
@@ -70,7 +70,11 @@ The three-phase sequence matters because iptables manipulation and `chown` both 
 
 ## Why privileged dind?
 
-Nested Docker requires the `--privileged` flag because it needs to mount cgroups, load kernel modules, and use `overlay2` as a storage driver. There's no way around this with current Linux kernel capabilities. The tradeoff is accepted deliberately: the dind container is privileged, but it has no access to host paths, and its daemon is only reachable from the opencode container over mutual TLS.
+Nested Docker requires the `--privileged` flag because it needs to mount cgroups, load kernel modules, and use `overlay2` as a storage driver. There's no way around this with current Linux kernel capabilities — caps-only configurations fail when inner containers try to mount `/proc`. The tradeoff is accepted deliberately: the dind container is privileged, but it runs a rootless Docker daemon where the dockerd process and all inner containers operate as UID 1000 inside a user namespace.
+
+The rootless architecture provides a critical security property: inner containers — even those started with `--privileged` or `--network=host` — run inside rootlesskit's user namespace and see their own isolated netfilter tables. An agent that creates a privileged inner container and attempts to flush iptables will only affect the empty netfilter inside that namespace, not the outer rules that enforce network isolation. The dind entrypoint drops all inheritable capabilities via `setpriv --inh-caps=-all` before execing the rootless daemon, so UID 1000 cannot regain `CAP_NET_ADMIN` to modify the outer iptables rules.
+
+`--no-new-privs` is intentionally omitted from the setpriv invocation because rootlesskit requires setuid `newuidmap`/`newgidmap` for user namespace setup. These binaries are narrowly scoped — they only manipulate UID/GID mappings and cannot escalate to arbitrary capabilities.
 
 For instructions on configuring which hosts the agent can reach, see [How-to: Network Access](../how-to/network-access.md).
 
