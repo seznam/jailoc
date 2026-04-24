@@ -65,6 +65,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `expose_port` | bool | `true` | Expose the opencode container port to the host. When `false`, the `ports:` section is omitted from the generated compose file and the workspace is only accessible via `jailoc --exec`. |
 | `cpu` | float64 | `2.0` | Number of CPU cores allocated to the opencode container. Must be greater than 0. |
 | `memory` | string | `"4g"` | Memory limit for the opencode container. Accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` suffix (e.g. `512m`, `4g`, `1024`). Must be greater than 0. |
+| `enable_docker` | bool | `true` | Start a Docker-in-Docker sidecar alongside the opencode container. When `false`, the dind service, TLS certificate volumes, and `DOCKER_HOST`/`DOCKER_TLS_*` environment variables are omitted from the generated compose file, and the `docker` CLI is unavailable inside the container. Disabling reduces resource overhead and tightens security when the agent does not need Docker. |
 
 ### Example
 
@@ -78,6 +79,7 @@ allowed_hosts = ["internal-registry.example.com"]
 allowed_networks = ["10.0.0.0/8"]
 ssh_auth_sock = true
 git_config = true
+enable_docker = true
 cpu = 4.0
 memory = "8g"
 ```
@@ -107,6 +109,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `expose_port` | bool | (inherit) | Expose the opencode container port to the host. When not set, inherits from `[defaults]`. Falls back to `true` when neither the workspace nor defaults set it. When `false`, `jailoc status` shows "not exposed (exec-only)" instead of the port number. |
 | `cpu` | float64 | (inherit) | Number of CPU cores allocated to the opencode container. When not set, inherits from `[defaults]`. Falls back to `2.0` when neither the workspace nor defaults set it. |
 | `memory` | string | (inherit) | Memory limit for the opencode container. When not set, inherits from `[defaults]`. Falls back to `"4g"` when neither the workspace nor defaults set it. |
+| `enable_docker` | bool | (inherit) | Start a Docker-in-Docker sidecar for this workspace. When not set, inherits from `[defaults]`. Falls back to `true` when neither the workspace nor defaults set it. When `false`, the dind service, TLS certificate volumes, and `DOCKER_HOST`/`DOCKER_TLS_*` environment variables are omitted. |
 
 !!! note
     `image` is mutually exclusive with `dockerfile` and `build_context`. Setting `image` alongside either of those fields is a validation error.
@@ -251,7 +254,7 @@ Environment variables from multiple sources are merged in this order (later entr
 | `/home/agent/.claude/transcripts` | `~/.claude/transcripts` | `rw` |
 | `/home/agent/.agents` | `~/.agents` | `ro` |
 
-`ssh_auth_sock`, `git_config`, and `expose_port` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config` and `expose_port` fall back to `true` when neither the workspace nor defaults set it.
+`ssh_auth_sock`, `git_config`, `expose_port`, and `enable_docker` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config`, `expose_port`, and `enable_docker` fall back to `true` when neither the workspace nor defaults set it.
 
 `cpu` and `memory` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `cpu` falls back to `2.0` and `memory` falls back to `"4g"` when neither the workspace nor defaults set them.
 

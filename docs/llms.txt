@@ -4,7 +4,7 @@
 
 Key facts:
 
-- jailoc runs two containers per workspace: an `opencode` container (the agent, UID 1000, capabilities dropped) and a `dind` sidecar (isolated Docker daemon)
+- jailoc runs two containers per workspace: an `opencode` container (the agent, UID 1000, capabilities dropped) and an optional `dind` sidecar (isolated Docker daemon, enabled by default via `enable_docker`)
 - Private networks (RFC 1918, link-local, CGNAT) are blocked by default via iptables; you allowlist specific hosts and CIDR ranges
 - Image resolution follows a 5-step cascade: workspace image → defaults image + workspace overlay → defaults image direct → base Dockerfile → embedded fallback
 - Config lives at `~/.config/jailoc/config.toml` (TOML); compose files are generated to `~/.cache/jailoc/{workspace}/docker-compose.yml`

@@ -1,6 +1,6 @@
 # Container Architecture
 
-Every jailoc workspace runs as a Docker Compose project containing exactly two containers. Understanding why two containers exist, and how they interact, helps explain both the security properties and some of the operational behaviour you'll observe when working with jailoc.
+Every jailoc workspace runs as a Docker Compose project containing one or two containers, depending on whether Docker-in-Docker is enabled. Understanding why two containers exist when they do, and how they interact, helps explain both the security properties and some of the operational behaviour you'll observe when working with jailoc.
 
 ## The two-container model
 
@@ -30,6 +30,8 @@ The opencode container runs with configurable resource limits. The `cpu` (defaul
 
 The **dind container** runs a rootless Docker daemon (`docker:dind-rootless`) in privileged mode. The entrypoint installs iptables rules as root, then drops the inheritable and bounding capability sets before execing the rootless Docker daemon as UID 1000. The daemon listens on port 2376 with mutual TLS authentication, and the certificates are shared with the opencode container via a named volume. When the agent runs `docker build` or starts a database for testing, those containers exist entirely within the dind daemon's scope and are invisible to the host. Because the daemon runs rootless, inner containers operate inside a user namespace managed by rootlesskit — even `--privileged` inner containers cannot modify the outer network namespace's iptables rules.
 
+When `enable_docker` is `false`, the dind container is not started. The opencode container runs alone without Docker access — no dind service, no TLS certificate volumes, and no `DOCKER_HOST` environment variable. This reduces resource overhead and removes the privileged sidecar entirely.
+
 ## Network
 
 Both containers share a single Docker network named `jailoc`. The opencode container communicates with the dind daemon over this network via TLS on port 2376, and the same network carries the opencode container's egress traffic to the outside world. Network isolation is handled by iptables rules inside the opencode container rather than by network-level separation — see [Network Isolation](network-isolation.md) for details.
@@ -46,7 +48,7 @@ The opencode container mounts several things at startup:
 | SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`). Also mounts `~/.ssh/known_hosts` read-only for host key verification. |
 | `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`, the default) |
 
-Two named volumes are shared between both containers: one for TLS certificates (so the opencode container can authenticate to the dind daemon) and one for Docker's data directory. A third named volume holds the agent's own data — its SQLite history database and auth tokens. This last volume is intentionally isolated from your host's `~/.local/share/opencode`, so the agent's session history never touches your personal history.
+Two named volumes are shared between both containers when Docker-in-Docker is enabled: one for TLS certificates (so the opencode container can authenticate to the dind daemon) and one for Docker's data directory. When `enable_docker` is `false`, these volumes are not created. A third named volume holds the agent's own data — its SQLite history database and auth tokens. This last volume is intentionally isolated from your host's `~/.local/share/opencode`, so the agent's session history never touches your personal history.
 
 Environment variables configured via `env` or `env_file` in the workspace config or the `[defaults]` section are passed to the opencode container alongside the system variables required for dind connectivity. Values are literal strings — no host environment variable expansion is performed. jailoc also injects `JAILOC=1` and `JAILOC_WORKSPACE=<name>` into the opencode container; these are reserved and cannot be overridden by workspace config.
 
@@ -54,7 +56,7 @@ Environment variables configured via `env` or `env_file` in the workspace config
 
 The entrypoint script is bind-mounted into the container at runtime by jailoc and runs as root. It performs three distinct phases before handing off to the agent process.
 
-**Phase 1: Network rules.** The script installs iptables rules that shape what the agent can reach. It inserts ACCEPT rules for the dind container, the host gateway, DNS resolver addresses (port 53 only), and any hosts or networks you've allowed in config. It appends an ACCEPT rule for TCP replies on the published service port so that port-forwarded connections from the host can complete. It then appends DROP rules for RFC 1918 address space, link-local addresses, and CGNAT ranges. Public internet traffic is untouched. See [Network Isolation](network-isolation.md) for a full explanation of the security model.
+**Phase 1: Network rules.** The script installs iptables rules that shape what the agent can reach. When Docker-in-Docker is enabled, it inserts an ACCEPT rule for the dind container. It then inserts ACCEPT rules for the host gateway, DNS resolver addresses (port 53 only), and any hosts or networks you've allowed in config. It appends an ACCEPT rule for TCP replies on the published service port so that port-forwarded connections from the host can complete. It then appends DROP rules for RFC 1918 address space, link-local addresses, and CGNAT ranges. Public internet traffic is untouched. See [Network Isolation](network-isolation.md) for a full explanation of the security model.
 
 **Phase 2: Ownership fix.** Named volumes are created by Docker as root. The entrypoint runs `chown` on the data directories so UID 1000 can write to them once the privilege drop happens. If an SSH agent socket is mounted, its ownership is adjusted to UID 1000 as well. If the `~/.ssh` directory exists (from the known hosts mount), it is recursively owned to UID 1000.
 

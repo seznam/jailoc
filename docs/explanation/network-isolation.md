@@ -24,7 +24,7 @@ The rule ordering is the key mechanism. When the entrypoint installs iptables ru
 
 Three things always get ACCEPT rules regardless of your config:
 
-1. The dind container's address (so the agent can reach its Docker daemon)
+1. The dind container's address, when `enable_docker` is `true` (so the agent can reach its Docker daemon)
 2. The host gateway (so DNS and the Docker bridge work)
 3. Any hosts or networks you've explicitly allowed in your workspace config
 
