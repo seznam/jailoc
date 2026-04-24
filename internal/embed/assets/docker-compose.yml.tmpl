@@ -109,6 +109,8 @@ services:
       - "2376"
 {{- end}}
 
+{{- if or .UseDataVolume .UseCacheVolume .EnableDocker}}
+
 volumes:
 {{- if .UseDataVolume}}
   opencode-data-{{.WorkspaceName}}:
@@ -120,6 +122,7 @@ volumes:
   dind-certs-ca:
   dind-certs-client:
   dind-data:
+{{- end}}
 {{- end}}
 
 networks:

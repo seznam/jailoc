@@ -26,10 +26,22 @@ fi
 # --- Allow infrastructure targets ---
 DIND_DOCKER_HOST="${DOCKER_HOST:-}"
 if [[ "$DIND_DOCKER_HOST" == "tcp://dind" || "$DIND_DOCKER_HOST" == tcp://dind:* ]]; then
-  if getent hosts dind >/dev/null 2>&1; then
+  DIND_RESOLVE_ATTEMPTS=10
+  DIND_RESOLVED=0
+  while [ "$DIND_RESOLVE_ATTEMPTS" -gt 0 ]; do
+    if getent hosts dind >/dev/null 2>&1; then
+      DIND_RESOLVED=1
+      break
+    fi
+    DIND_RESOLVE_ATTEMPTS=$((DIND_RESOLVE_ATTEMPTS - 1))
+    [ "$DIND_RESOLVE_ATTEMPTS" -gt 0 ] && sleep 1
+  done
+
+  if [ "$DIND_RESOLVED" -eq 1 ]; then
     $IPT -I OUTPUT -d dind -j ACCEPT
   else
-    echo "jailoc: WARNING: DOCKER_HOST points at dind, but dind could not be resolved; skipping DinD allow rule" >&2
+    echo "jailoc: FATAL: DOCKER_HOST points at dind, but dind could not be resolved; cannot install DinD allow rule" >&2
+    exit 1
   fi
 fi
 
