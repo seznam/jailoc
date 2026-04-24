@@ -3,9 +3,8 @@ set -eu
 
 # Network isolation for the rootless DinD sidecar.
 #
-# The entrypoint runs as root to install iptables rules, then clears
-# inheritable and bounding capabilities and execs the rootless Docker daemon
-# as UID 1000.
+# The entrypoint runs as root to install iptables rules, then drops to
+# UID 1000 via su-exec and execs the rootless Docker daemon.
 #
 # Only the JAILOC-OUTPUT chain on the OUTPUT chain is used. The DOCKER-USER
 # chain (Docker's FORWARD extension point) does not apply to rootless mode
@@ -14,11 +13,11 @@ set -eu
 # traffic — from the DinD container itself and from any inner containers —
 # passes through JAILOC-OUTPUT.
 #
-# After iptables setup, capabilities are dropped via setpriv. The rootless
-# dockerd uses setuid newuidmap/newgidmap for user namespace setup, so
-# --no-new-privs is intentionally omitted (it would block setuid execution).
-# With all inheritable and bounding capabilities cleared, UID 1000 cannot
-# regain CAP_NET_ADMIN to modify the iptables rules.
+# After iptables setup, su-exec switches to UID 1000. The kernel clears
+# inheritable, permitted, effective, and ambient capabilities on the UID
+# transition. The bounding set stays full but is unexploitable — no binary
+# in the image can grant CAP_NET_ADMIN to UID 1000. --no-new-privs is not
+# set because rootlesskit needs setuid newuidmap/newgidmap.
 
 # --- Detect working iptables variant ---
 if iptables -L -n >/dev/null 2>&1; then
@@ -107,10 +106,13 @@ rm -f "$ROOTLESS_HOME/.local/share/docker/containerd/containerd.pid" \
       "$ROOTLESS_HOME/.local/share/docker/containerd/containerd.sock" \
       "$ROOTLESS_HOME/.local/share/docker/containerd/containerd-debug.sock"
 
-# --- Drop capabilities and exec rootless dockerd ---
-# setpriv clears all inheritable and bounding capabilities so UID 1000
-# cannot regain CAP_NET_ADMIN (needed to modify iptables) via setuid
-# binaries. --no-new-privs is intentionally omitted because rootlesskit
-# needs setuid newuidmap/newgidmap.
-exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --bounding-set -all -- \
-  env HOME="$ROOTLESS_HOME" dockerd-entrypoint.sh "$@"
+# --- Drop privileges and exec rootless dockerd ---
+# su-exec switches to UID 1000 (rootless) in a single exec. The kernel
+# automatically clears inheritable, permitted, effective, and ambient
+# capability sets on the UID transition. The bounding set remains full but
+# is unexploitable: the only setuid binary in the image (fusermount3) has
+# no file capabilities, so UID 1000 cannot regain CAP_NET_ADMIN to modify
+# iptables rules. --no-new-privs is not set because rootlesskit needs
+# setuid newuidmap/newgidmap for user namespace setup.
+apk add --no-cache su-exec >/dev/null 2>&1 || true
+exec su-exec rootless env HOME="$ROOTLESS_HOME" dockerd-entrypoint.sh "$@"
