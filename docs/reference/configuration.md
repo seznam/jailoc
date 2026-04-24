@@ -65,7 +65,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `expose_port` | bool | `true` | Expose the opencode container port to the host. When `false`, the `ports:` section is omitted from the generated compose file and the workspace is only accessible via `jailoc --exec`. |
 | `cpu` | float64 | `2.0` | Number of CPU cores allocated to the opencode container. Must be greater than 0. |
 | `memory` | string | `"4g"` | Memory limit for the opencode container. Accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` suffix (e.g. `512m`, `4g`, `1024`). Must be greater than 0. |
-| `enable_docker` | bool | `true` | Start a Docker-in-Docker sidecar alongside the opencode container. When `false`, the dind service, TLS certificate volumes, and `DOCKER_HOST`/`DOCKER_TLS_*` environment variables are omitted from the generated compose file, and the `docker` CLI is unavailable inside the container. Disabling reduces resource overhead and tightens security when the agent does not need Docker. |
+| `enable_docker` | bool | `true` | Start a Docker-in-Docker sidecar alongside the opencode container. When `false`, the dind service, TLS certificate volumes, and `DOCKER_HOST`/`DOCKER_TLS_*` environment variables are omitted from the generated compose file, so Docker access from inside the container is unavailable by default and `docker` commands will not be able to connect to a daemon. Disabling reduces resource overhead and tightens security when the agent does not need Docker. |
 
 ### Example
 
