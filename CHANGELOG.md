@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.13.0](https://github.com/seznam/jailoc/compare/v1.12.2...v1.13.0) (2026-04-24)
+
+
+### Features
+
+* **config:** add enable_docker option to opt out of DinD sidecar ([#147](https://github.com/seznam/jailoc/issues/147)) ([e523e2e](https://github.com/seznam/jailoc/commit/e523e2efd20eee2d0744a369323319bc2095f671))
+* **dind:** switch to rootless Docker daemon for iptables tamper resistance ([#143](https://github.com/seznam/jailoc/issues/143)) ([6248c53](https://github.com/seznam/jailoc/commit/6248c5399b45425fee18a34b4e3cf05c02185f0b))
+
+
+### Bug Fixes
+
+* **release:** enable force-tag-creation for draft releases ([#125](https://github.com/seznam/jailoc/issues/125)) ([37a2469](https://github.com/seznam/jailoc/commit/37a2469e4735d5630113ca41e78b5f0298738468))
+
+
+### Documentation
+
+* **network:** document HTTP proxy allowlisting for private networks ([#146](https://github.com/seznam/jailoc/issues/146)) ([6671a6c](https://github.com/seznam/jailoc/commit/6671a6c43c17420debd3ab540819523df577471a))
+
 ## [1.12.2](https://github.com/seznam/jailoc/compare/v1.12.1...v1.12.2) (2026-04-23)
 
 
