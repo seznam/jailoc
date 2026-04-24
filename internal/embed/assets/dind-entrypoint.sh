@@ -97,6 +97,13 @@ if [ "$(stat -c '%u' "$ROOTLESS_HOME/.local/share/docker" 2>/dev/null)" != "1000
    [ "$(stat -c '%u' "$ROOTLESS_HOME/.config/docker" 2>/dev/null)" != "1000" ]; then
   chown -R 1000:1000 "$ROOTLESS_HOME/.local/share/docker" "$ROOTLESS_HOME/.config/docker"
 fi
+# TLS cert volumes are created as root; the upstream dockerd-entrypoint.sh
+# generates certs and needs write access as UID 1000.
+for d in /certs/ca /certs/client; do
+  if [ -d "$d" ] && [ "$(stat -c '%u' "$d" 2>/dev/null)" != "1000" ]; then
+    chown -R 1000:1000 "$d"
+  fi
+done
 
 # --- Clean stale containerd state ---
 # Prevents "containerd is still running" crash loop when PID file persists
