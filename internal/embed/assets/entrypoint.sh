@@ -24,8 +24,13 @@ else
 fi
 
 # --- Allow infrastructure targets ---
-if [ -n "${DOCKER_HOST:-}" ]; then
-  $IPT -I OUTPUT -d dind -j ACCEPT
+DIND_DOCKER_HOST="${DOCKER_HOST:-}"
+if [[ "$DIND_DOCKER_HOST" == "tcp://dind" || "$DIND_DOCKER_HOST" == tcp://dind:* ]]; then
+  if getent hosts dind >/dev/null 2>&1; then
+    $IPT -I OUTPUT -d dind -j ACCEPT
+  else
+    echo "jailoc: WARNING: DOCKER_HOST points at dind, but dind could not be resolved; skipping DinD allow rule" >&2
+  fi
 fi
 
 HOST_IP=$(getent hosts host.docker.internal | awk '{print $1}' || true)

@@ -22,11 +22,11 @@ Public internet traffic is not blocked. The DROP rules are appended after the AC
 
 The rule ordering is the key mechanism. When the entrypoint installs iptables rules, it inserts ACCEPT rules at the top of the chain before adding the DROP rules at the bottom. Rules are evaluated in order, so an ACCEPT for a specific host wins against a later DROP for its containing range.
 
-Three things always get ACCEPT rules regardless of your config:
+Several things get ACCEPT rules before the DROP rules fire:
 
-1. The dind container's address, when `enable_docker` is `true` (so the agent can reach its Docker daemon)
-2. The host gateway (so DNS and the Docker bridge work)
-3. Any hosts or networks you've explicitly allowed in your workspace config
+- The **host gateway** (so DNS and the Docker bridge work) — always inserted
+- The **dind container's address** — inserted only when `enable_docker` is `true` (so the agent can reach its Docker daemon)
+- Any **hosts or networks** you've explicitly allowed in your workspace config
 
 DNS resolver addresses from `/etc/resolv.conf` also get ACCEPT rules, but only for port 53 (UDP and TCP). This is necessary because some container runtimes (notably Podman) place the DNS resolver at an address inside a blocked private range. Without this rule, hostname resolution would fail and the allowed-hosts mechanism would be useless. The rule is scoped to port 53 so the resolver IP cannot be used as a general-purpose gateway into the private network.
 

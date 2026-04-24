@@ -2,7 +2,9 @@
 
 Every jailoc workspace runs as a Docker Compose project containing one or two containers, depending on whether Docker-in-Docker is enabled. Understanding why two containers exist when they do, and how they interact, helps explain both the security properties and some of the operational behaviour you'll observe when working with jailoc.
 
-## The two-container model
+## Container layout
+
+The diagram below shows the default two-container setup with Docker-in-Docker enabled. When `enable_docker` is `false`, jailoc starts only the **opencode** container — the dind sidecar, its volumes, and `DOCKER_HOST` environment variables are omitted entirely.
 
 ```mermaid
 flowchart TB
