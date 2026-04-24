@@ -95,8 +95,8 @@ $IPT -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
 ROOTLESS_HOME="/home/rootless"
 mkdir -p "$ROOTLESS_HOME/.local/share/docker" "$ROOTLESS_HOME/.config/docker"
 if [ "$(stat -c '%u' "$ROOTLESS_HOME/.local/share/docker" 2>/dev/null)" != "1000" ] || \
-   [ "$(stat -c '%u' "$ROOTLESS_HOME/.config" 2>/dev/null)" != "1000" ]; then
-  chown -R 1000:1000 "$ROOTLESS_HOME/.local" "$ROOTLESS_HOME/.config"
+   [ "$(stat -c '%u' "$ROOTLESS_HOME/.config/docker" 2>/dev/null)" != "1000" ]; then
+  chown -R 1000:1000 "$ROOTLESS_HOME/.local/share/docker" "$ROOTLESS_HOME/.config/docker"
 fi
 
 # --- Clean stale containerd state ---
