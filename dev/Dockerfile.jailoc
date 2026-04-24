@@ -28,7 +28,7 @@ RUN GOBIN=/usr/local/bin go install golang.org/x/tools/gopls@${GOPLS_VERSION}
 
 # golangci-lint — static analysis matching CI (gosec, staticcheck, gocritic).
 # renovate: datasource=github-releases depName=golangci/golangci-lint
-ARG GOLANGCI_LINT_VERSION=v2.10.1
+ARG GOLANGCI_LINT_VERSION=v2.11.4
 RUN set -eux; \
     ARCH=$(dpkg --print-architecture); \
     curl -fsSL "https://github.com/golangci/golangci-lint/releases/download/${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION#v}-linux-${ARCH}.tar.gz" \
