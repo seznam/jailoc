@@ -3,8 +3,9 @@ set -eu
 
 # Network isolation for the rootless DinD sidecar.
 #
-# The entrypoint runs as root to install iptables rules, then drops all
-# capabilities and execs the rootless Docker daemon as UID 1000.
+# The entrypoint runs as root to install iptables rules, then clears
+# inheritable and bounding capabilities and execs the rootless Docker daemon
+# as UID 1000.
 #
 # Only the JAILOC-OUTPUT chain on the OUTPUT chain is used. The DOCKER-USER
 # chain (Docker's FORWARD extension point) does not apply to rootless mode
@@ -110,4 +111,4 @@ rm -f "$ROOTLESS_HOME/.local/share/docker/containerd/containerd.pid" \
 # binaries. --no-new-privs is intentionally omitted because rootlesskit
 # needs setuid newuidmap/newgidmap.
 exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --bounding-set -all -- \
-  dockerd-entrypoint.sh "$@"
+  env HOME="$ROOTLESS_HOME" dockerd-entrypoint.sh "$@"
