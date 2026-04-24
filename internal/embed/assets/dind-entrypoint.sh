@@ -44,7 +44,8 @@ $IPT -A JAILOC-OUTPUT -o lo -j ACCEPT
 $IPT -A JAILOC-OUTPUT -o docker0 -j ACCEPT
 $IPT -A JAILOC-OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# Allow DNS only to configured resolvers.
+# Allow DNS to configured resolvers (public DNS is permitted by the default
+# ACCEPT policy; private-network DROPs below block internal resolvers).
 DNS_RESOLVERS=$(
   awk '$1 == "nameserver" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $2 }' \
     /etc/resolv.conf | sort -u
@@ -93,7 +94,8 @@ $IPT -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
 # Named volumes are created as root by Docker; fix ownership before dropping.
 ROOTLESS_HOME="/home/rootless"
 mkdir -p "$ROOTLESS_HOME/.local/share/docker" "$ROOTLESS_HOME/.config/docker"
-if [ "$(stat -c '%u' "$ROOTLESS_HOME/.local" 2>/dev/null)" != "1000" ]; then
+if [ "$(stat -c '%u' "$ROOTLESS_HOME/.local/share/docker" 2>/dev/null)" != "1000" ] || \
+   [ "$(stat -c '%u' "$ROOTLESS_HOME/.config" 2>/dev/null)" != "1000" ]; then
   chown -R 1000:1000 "$ROOTLESS_HOME/.local" "$ROOTLESS_HOME/.config"
 fi
 
