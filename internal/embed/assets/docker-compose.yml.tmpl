@@ -25,7 +25,9 @@ services:
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ${HOME}/.cache/jailoc/tui-container.json:/etc/jailoc-tui.json:ro
       - ${HOME}/.cache/jailoc/tui-plugin:/etc/jailoc-tui-plugin:ro
+{{- if .EnableDocker}}
       - dind-certs-client:/certs/client:ro
+{{- end}}
 {{- if .SSHAuthSock}}
       - {{.SSHAuthSock}}:/run/ssh-agent.sock
 {{- end}}
@@ -38,10 +40,12 @@ services:
     environment:
       - OPENCODE_LOG=debug
       - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD}
+{{- if .EnableDocker}}
       - DOCKER_HOST=tcp://dind:2376
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_CERT_PATH=/certs/client
       - DOCKER_TLS_VERIFY=1
+{{- end}}
       - JAILOC=1
       - JAILOC_WORKSPACE={{.WorkspaceName}}
 {{- if .SSHAuthSock}}
@@ -80,6 +84,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+{{- if .EnableDocker}}
 
   dind:
     image: docker:dind-rootless
@@ -102,6 +107,7 @@ services:
       - jailoc
     expose:
       - "2376"
+{{- end}}
 
 volumes:
 {{- if .UseDataVolume}}
@@ -110,9 +116,11 @@ volumes:
 {{- if .UseCacheVolume}}
   opencode-cache-{{.WorkspaceName}}:
 {{- end}}
+{{- if .EnableDocker}}
   dind-certs-ca:
   dind-certs-client:
   dind-data:
+{{- end}}
 
 networks:
   jailoc:

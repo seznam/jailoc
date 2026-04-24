@@ -36,6 +36,7 @@ type Resolved struct {
 	CPU             float64
 	Memory          string
 	ExposePort      bool
+	EnableDocker    bool
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -117,6 +118,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
+		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
 	}, nil
 }
 

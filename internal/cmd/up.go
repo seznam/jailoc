@@ -136,8 +136,10 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := writeDindEntrypoint(cacheDir); err != nil {
-		return err
+	if ws.EnableDocker {
+		if err := writeDindEntrypoint(cacheDir); err != nil {
+			return err
+		}
 	}
 
 	if err := writeTUIConfig(jailocCacheDir()); err != nil {
@@ -168,6 +170,7 @@ func runUp(ctx context.Context, args []string) error {
 		UseDataVolume:    !compose.MountsContainTarget(ws.Mounts, "/home/agent/.local/share/opencode"),
 		UseCacheVolume:   !compose.MountsContainTarget(ws.Mounts, "/home/agent/.cache"),
 		ExposePort:       ws.ExposePort,
+		EnableDocker:     ws.EnableDocker,
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Generating compose configuration...\n")

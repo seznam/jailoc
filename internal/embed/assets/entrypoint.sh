@@ -24,7 +24,9 @@ else
 fi
 
 # --- Allow infrastructure targets ---
-$IPT -I OUTPUT -d dind -j ACCEPT
+if [ -n "${DOCKER_HOST:-}" ]; then
+  $IPT -I OUTPUT -d dind -j ACCEPT
+fi
 
 HOST_IP=$(getent hosts host.docker.internal | awk '{print $1}' || true)
 if [ -n "$HOST_IP" ]; then

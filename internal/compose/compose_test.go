@@ -227,6 +227,13 @@ func assertContains(t *testing.T, haystack, needle string) {
 	}
 }
 
+func assertNotContains(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if strings.Contains(haystack, needle) {
+		t.Fatalf("expected rendered compose NOT to contain %q, got:\n%s", needle, haystack)
+	}
+}
+
 func TestGenerateComposeSSHAuthSock(t *testing.T) {
 	t.Parallel()
 
@@ -413,6 +420,7 @@ func TestGenerateComposeEnv(t *testing.T) {
 		Env:    []string{"MY_VAR=hello", "OTHER=world"},
 		CPU:              2.0,
 		Memory:           "4g",
+		EnableDocker:     true,
 	}
 
 	out, err := GenerateCompose(params)
@@ -443,6 +451,7 @@ func TestGenerateComposeEmptyEnv(t *testing.T) {
 		Env:    nil,
 		CPU:              2.0,
 		Memory:           "4g",
+		EnableDocker:     true,
 	}
 
 	out, err := GenerateCompose(params)
@@ -843,4 +852,76 @@ func TestGenerateComposeMountOrderAfterNamedVolumes(t *testing.T) {
 	if mountIdx < dataVolIdx {
 		t.Fatalf("expected user mounts to appear after named volumes so they take precedence;\nnamed volume at index %d, user mount at index %d", dataVolIdx, mountIdx)
 	}
+}
+
+func TestGenerateComposeEnableDockerFalse(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "no-docker-test",
+		Port:          4900,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/work"},
+		CPU:           2.0,
+		Memory:        "4g",
+		EnableDocker:  false,
+	}
+
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose returned error: %v", err)
+	}
+
+	rendered := string(out)
+
+	// DinD service must not be present
+	assertNotContains(t, rendered, "dind:")
+	assertNotContains(t, rendered, "docker:dind-rootless")
+
+	// Docker env vars must not be present
+	assertNotContains(t, rendered, "DOCKER_HOST")
+	assertNotContains(t, rendered, "DOCKER_TLS_CERTDIR")
+	assertNotContains(t, rendered, "DOCKER_CERT_PATH")
+	assertNotContains(t, rendered, "DOCKER_TLS_VERIFY")
+
+	// DinD volumes must not be present
+	assertNotContains(t, rendered, "dind-certs")
+	assertNotContains(t, rendered, "dind-data")
+
+	// Basic service must still be present
+	assertContains(t, rendered, "opencode:")
+	assertContains(t, rendered, "- JAILOC=1")
+}
+
+func TestGenerateComposeEnableDockerTrue(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName: "docker-test",
+		Port:          4901,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/work"},
+		CPU:           2.0,
+		Memory:        "4g",
+		EnableDocker:  true,
+	}
+
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose returned error: %v", err)
+	}
+
+	rendered := string(out)
+
+	// DinD service must be present
+	assertContains(t, rendered, "dind:")
+	assertContains(t, rendered, "docker:dind-rootless")
+
+	// Docker env vars must be present
+	assertContains(t, rendered, "DOCKER_HOST=tcp://dind:2376")
+	assertContains(t, rendered, "DOCKER_TLS_VERIFY=1")
+
+	// DinD volumes must be present
+	assertContains(t, rendered, "dind-certs-client:/certs/client:ro")
+	assertContains(t, rendered, "dind-data:")
 }

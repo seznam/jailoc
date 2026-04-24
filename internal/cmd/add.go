@@ -143,6 +143,7 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		UseDataVolume:    !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.local/share/opencode"),
 		UseCacheVolume:   !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.cache"),
 		ExposePort:       ws2.ExposePort,
+		EnableDocker:     ws2.EnableDocker,
 	}
 
 	if err := config.WriteAllowedFiles(ws2.Name, cfg); err != nil {
@@ -153,8 +154,10 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return err
 	}
 
-	if err := writeDindEntrypoint(filepath.Dir(compPath)); err != nil {
-		return err
+	if ws2.EnableDocker {
+		if err := writeDindEntrypoint(filepath.Dir(compPath)); err != nil {
+			return err
+		}
 	}
 
 	if err := compose.WriteComposeFile(params, compPath); err != nil {
