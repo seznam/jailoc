@@ -6,6 +6,7 @@ repo_name: seznam/jailoc
 
 theme:
   name: material
+  custom_dir: overrides
   language: en
   palette:
     - media: "(prefers-color-scheme)"

