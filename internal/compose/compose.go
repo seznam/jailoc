@@ -75,3 +75,21 @@ func MountsContainTarget(mounts []string, containerPath string) bool {
 	}
 	return false
 }
+
+func ReadOnlyMountCoversPath(mounts []string, containerPath string) (string, bool) {
+	for _, m := range mounts {
+		parts := strings.SplitN(m, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		target := parts[1]
+		options := parts[2]
+		if options != "ro" {
+			continue
+		}
+		if target == containerPath || strings.HasPrefix(containerPath, target+"/") {
+			return m, true
+		}
+	}
+	return "", false
+}

@@ -21,6 +21,8 @@ import (
 	"golang.org/x/term"
 )
 
+const ocConfigContainerPath = "/home/agent/.config/opencode"
+
 var upCmd = &cobra.Command{
 	Use:   "up [workspace]",
 	Short: "Start a workspace environment",
@@ -115,6 +117,14 @@ func runUp(ctx context.Context, args []string) error {
 		if err := checkPortConflict(runningPorts, ws.Name, ws.Port); err != nil {
 			return err
 		}
+	}
+
+	if mount, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr,
+			"WARNING: mount %q covers %s as read-only — OpenCode 1.13+ requires this path to be writable\n"+
+				"See https://github.com/anomalyco/opencode/issues/23040\n"+
+				"Either remove :ro from the mount or pre-create .gitignore in the source directory.\n",
+			mount, ocConfigContainerPath)
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Resolving image for workspace %s...\n", ws.Name)

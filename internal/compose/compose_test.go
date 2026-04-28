@@ -925,3 +925,85 @@ func TestGenerateComposeEnableDockerTrue(t *testing.T) {
 	assertContains(t, rendered, "dind-certs-client:/certs/client:ro")
 	assertContains(t, rendered, "dind-data:")
 }
+
+func TestReadOnlyMountCoversPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		mounts        []string
+		containerPath string
+		wantMount     string
+		wantCovered   bool
+	}{
+		{
+			name:          "exact match ro",
+			mounts:        []string{"/host/cfg:/home/agent/.config/opencode:ro"},
+			containerPath: "/home/agent/.config/opencode",
+			wantMount:     "/host/cfg:/home/agent/.config/opencode:ro",
+			wantCovered:   true,
+		},
+		{
+			name:          "parent directory ro",
+			mounts:        []string{"/host/cfg:/home/agent/.config:ro"},
+			containerPath: "/home/agent/.config/opencode",
+			wantMount:     "/host/cfg:/home/agent/.config:ro",
+			wantCovered:   true,
+		},
+		{
+			name:          "exact match rw",
+			mounts:        []string{"/host/cfg:/home/agent/.config/opencode:rw"},
+			containerPath: "/home/agent/.config/opencode",
+			wantMount:     "",
+			wantCovered:   false,
+		},
+		{
+			name:          "no options part",
+			mounts:        []string{"/host/cfg:/home/agent/.config/opencode"},
+			containerPath: "/home/agent/.config/opencode",
+			wantMount:     "",
+			wantCovered:   false,
+		},
+		{
+			name:          "different path ro",
+			mounts:        []string{"/host/data:/home/agent/.local:ro"},
+			containerPath: "/home/agent/.config/opencode",
+			wantMount:     "",
+			wantCovered:   false,
+		},
+		{
+			name:          "child path ro does not cover parent",
+			mounts:        []string{"/host/sub:/home/agent/.config/opencode/sub:ro"},
+			containerPath: "/home/agent/.config/opencode",
+			wantMount:     "",
+			wantCovered:   false,
+		},
+		{
+			name:          "empty mounts",
+			mounts:        nil,
+			containerPath: "/home/agent/.config/opencode",
+			wantMount:     "",
+			wantCovered:   false,
+		},
+		{
+			name:          "prefix overlap without path boundary",
+			mounts:        []string{"/host:/home/agent/.configXYZ:ro"},
+			containerPath: "/home/agent/.config/opencode",
+			wantMount:     "",
+			wantCovered:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotMount, gotCovered := ReadOnlyMountCoversPath(tt.mounts, tt.containerPath)
+			if gotCovered != tt.wantCovered {
+				t.Errorf("ReadOnlyMountCoversPath(%v, %q) covered = %v, want %v", tt.mounts, tt.containerPath, gotCovered, tt.wantCovered)
+			}
+			if gotMount != tt.wantMount {
+				t.Errorf("ReadOnlyMountCoversPath(%v, %q) mount = %q, want %q", tt.mounts, tt.containerPath, gotMount, tt.wantMount)
+			}
+		})
+	}
+}
