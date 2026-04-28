@@ -121,7 +121,7 @@ func runUp(ctx context.Context, args []string) error {
 
 	if mount, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr,
-			"WARNING: mount %q covers %s as read-only — OpenCode 1.13+ requires this path to be writable\n"+
+			"WARNING: mount %q covers %s as read-only — OpenCode (shipped since jailoc 1.13) requires this path to be writable\n"+
 				"See https://github.com/anomalyco/opencode/issues/23040\n"+
 				"Either remove :ro from the mount or pre-create .gitignore in the source directory.\n",
 			mount, ocConfigContainerPath)
