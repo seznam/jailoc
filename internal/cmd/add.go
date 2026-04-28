@@ -169,6 +169,16 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Restarting workspace %s with updated mounts...\n", ws.Name)
+
+	if hostPath, ok := compose.ReadOnlyMountCoversPath(ws2.Mounts, ocConfigContainerPath); ok {
+		if err := ensureOCConfigGitignore(hostPath); err != nil {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr,
+				"WARNING: could not pre-create .gitignore in %s: %v\n"+
+					"OpenCode (shipped since jailoc 1.13) may fail to start — see https://github.com/anomalyco/opencode/issues/23040\n",
+				hostPath, err)
+		}
+	}
+
 	if err := client.Up(ctx); err != nil {
 		return fmt.Errorf("restart workspace: %w", err)
 	}
