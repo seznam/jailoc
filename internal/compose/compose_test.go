@@ -992,6 +992,20 @@ func TestReadOnlyMountCoversPath(t *testing.T) {
 			wantHost:      "",
 			wantCovered:   false,
 		},
+		{
+			name:          "parent ro overridden by more specific child rw",
+			mounts:        []string{"/host/cfg:/home/agent/.config:ro", "/host/oc:/home/agent/.config/opencode:rw"},
+			containerPath: "/home/agent/.config/opencode",
+			wantHost:      "",
+			wantCovered:   false,
+		},
+		{
+			name:          "parent ro wins when no more specific child",
+			mounts:        []string{"/host/cfg:/home/agent/.config:ro", "/host/other:/home/agent/.local:rw"},
+			containerPath: "/home/agent/.config/opencode",
+			wantHost:      "/host/cfg/opencode",
+			wantCovered:   true,
+		},
 	}
 
 	for _, tt := range tests {

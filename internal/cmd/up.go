@@ -445,8 +445,12 @@ bun.lock
 
 func ensureOCConfigGitignore(hostDir string) error {
 	gitignorePath := filepath.Join(hostDir, ".gitignore")
-	if _, err := os.Stat(gitignorePath); err == nil {
+	_, err := os.Stat(gitignorePath)
+	if err == nil {
 		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %q: %w", gitignorePath, err)
 	}
 	if err := os.MkdirAll(hostDir, 0o755); err != nil { //nolint:gosec // 0o755: directory must be readable when bind-mounted
 		return fmt.Errorf("create directory %q: %w", hostDir, err)

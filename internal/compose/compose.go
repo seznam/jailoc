@@ -77,6 +77,9 @@ func MountsContainTarget(mounts []string, containerPath string) bool {
 }
 
 func ReadOnlyMountCoversPath(mounts []string, containerPath string) (hostPath string, found bool) {
+	var bestHost, bestTarget, bestOptions string
+	bestLen := -1
+
 	for _, m := range mounts {
 		parts := strings.SplitN(m, ":", 3)
 		if len(parts) < 3 {
@@ -85,16 +88,24 @@ func ReadOnlyMountCoversPath(mounts []string, containerPath string) (hostPath st
 		host := parts[0]
 		target := parts[1]
 		options := parts[2]
-		if options != "ro" {
+
+		if target != containerPath && !strings.HasPrefix(containerPath, target+"/") {
 			continue
 		}
-		if target == containerPath {
-			return host, true
-		}
-		if strings.HasPrefix(containerPath, target+"/") {
-			suffix := containerPath[len(target):]
-			return host + suffix, true
+		if len(target) > bestLen {
+			bestHost = host
+			bestTarget = target
+			bestOptions = options
+			bestLen = len(target)
 		}
 	}
-	return "", false
+
+	if bestLen < 0 || bestOptions != "ro" {
+		return "", false
+	}
+	if bestTarget == containerPath {
+		return bestHost, true
+	}
+	suffix := containerPath[len(bestTarget):]
+	return bestHost + suffix, true
 }

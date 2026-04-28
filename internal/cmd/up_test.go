@@ -590,3 +590,41 @@ func TestWriteTUIConfig(t *testing.T) {
 		t.Fatalf("tui.js content mismatch")
 	}
 }
+
+func TestEnsureOCConfigGitignore(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates directory and file when missing", func(t *testing.T) {
+		t.Parallel()
+		dir := filepath.Join(t.TempDir(), "opencode")
+		if err := ensureOCConfigGitignore(dir); err != nil {
+			t.Fatalf("ensureOCConfigGitignore() = %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, ".gitignore")) //nolint:gosec // test path
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if string(data) != ocConfigGitignore {
+			t.Fatalf("content = %q, want %q", data, ocConfigGitignore)
+		}
+	})
+
+	t.Run("no-op when file already exists", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		existing := "existing content\n"
+		if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644); err != nil { //nolint:gosec // test
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := ensureOCConfigGitignore(dir); err != nil {
+			t.Fatalf("ensureOCConfigGitignore() = %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, ".gitignore")) //nolint:gosec // test path
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if string(data) != existing {
+			t.Fatalf("content changed: got %q, want %q", data, existing)
+		}
+	})
+}
