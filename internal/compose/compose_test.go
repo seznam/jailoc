@@ -933,63 +933,63 @@ func TestReadOnlyMountCoversPath(t *testing.T) {
 		name          string
 		mounts        []string
 		containerPath string
-		wantMount     string
+		wantHost      string
 		wantCovered   bool
 	}{
 		{
 			name:          "exact match ro",
 			mounts:        []string{"/host/cfg:/home/agent/.config/opencode:ro"},
 			containerPath: "/home/agent/.config/opencode",
-			wantMount:     "/host/cfg:/home/agent/.config/opencode:ro",
+			wantHost:      "/host/cfg",
 			wantCovered:   true,
 		},
 		{
 			name:          "parent directory ro",
 			mounts:        []string{"/host/cfg:/home/agent/.config:ro"},
 			containerPath: "/home/agent/.config/opencode",
-			wantMount:     "/host/cfg:/home/agent/.config:ro",
+			wantHost:      "/host/cfg/opencode",
 			wantCovered:   true,
 		},
 		{
 			name:          "exact match rw",
 			mounts:        []string{"/host/cfg:/home/agent/.config/opencode:rw"},
 			containerPath: "/home/agent/.config/opencode",
-			wantMount:     "",
+			wantHost:      "",
 			wantCovered:   false,
 		},
 		{
 			name:          "no options part",
 			mounts:        []string{"/host/cfg:/home/agent/.config/opencode"},
 			containerPath: "/home/agent/.config/opencode",
-			wantMount:     "",
+			wantHost:      "",
 			wantCovered:   false,
 		},
 		{
 			name:          "different path ro",
 			mounts:        []string{"/host/data:/home/agent/.local:ro"},
 			containerPath: "/home/agent/.config/opencode",
-			wantMount:     "",
+			wantHost:      "",
 			wantCovered:   false,
 		},
 		{
 			name:          "child path ro does not cover parent",
 			mounts:        []string{"/host/sub:/home/agent/.config/opencode/sub:ro"},
 			containerPath: "/home/agent/.config/opencode",
-			wantMount:     "",
+			wantHost:      "",
 			wantCovered:   false,
 		},
 		{
 			name:          "empty mounts",
 			mounts:        nil,
 			containerPath: "/home/agent/.config/opencode",
-			wantMount:     "",
+			wantHost:      "",
 			wantCovered:   false,
 		},
 		{
 			name:          "prefix overlap without path boundary",
 			mounts:        []string{"/host:/home/agent/.configXYZ:ro"},
 			containerPath: "/home/agent/.config/opencode",
-			wantMount:     "",
+			wantHost:      "",
 			wantCovered:   false,
 		},
 	}
@@ -997,12 +997,12 @@ func TestReadOnlyMountCoversPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			gotMount, gotCovered := ReadOnlyMountCoversPath(tt.mounts, tt.containerPath)
+			gotHost, gotCovered := ReadOnlyMountCoversPath(tt.mounts, tt.containerPath)
 			if gotCovered != tt.wantCovered {
 				t.Errorf("ReadOnlyMountCoversPath(%v, %q) covered = %v, want %v", tt.mounts, tt.containerPath, gotCovered, tt.wantCovered)
 			}
-			if gotMount != tt.wantMount {
-				t.Errorf("ReadOnlyMountCoversPath(%v, %q) mount = %q, want %q", tt.mounts, tt.containerPath, gotMount, tt.wantMount)
+			if gotHost != tt.wantHost {
+				t.Errorf("ReadOnlyMountCoversPath(%v, %q) host = %q, want %q", tt.mounts, tt.containerPath, gotHost, tt.wantHost)
 			}
 		})
 	}

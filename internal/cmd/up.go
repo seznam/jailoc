@@ -119,12 +119,13 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
-	if mount, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
-		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr,
-			"WARNING: mount %q covers %s as read-only — OpenCode (shipped since jailoc 1.13) requires this path to be writable\n"+
-				"See https://github.com/anomalyco/opencode/issues/23040\n"+
-				"Either remove :ro from the mount or pre-create .gitignore in the source directory.\n",
-			mount, ocConfigContainerPath)
+	if hostPath, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
+		if err := ensureOCConfigGitignore(hostPath); err != nil {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr,
+				"WARNING: could not pre-create .gitignore in %s: %v\n"+
+					"OpenCode (shipped since jailoc 1.13) may fail to start — see https://github.com/anomalyco/opencode/issues/23040\n",
+				hostPath, err)
+		}
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Resolving image for workspace %s...\n", ws.Name)
@@ -430,6 +431,31 @@ func writeTUIPlugin(baseDir string) error {
 
 // dockerDesktopSSHSock is the magic socket path used by Docker Desktop and OrbStack.
 const dockerDesktopSSHSock = "/run/host-services/ssh-auth.sock"
+
+// ocConfigGitignore is the .gitignore content that OpenCode (v1.14.22+, shipped
+// since jailoc 1.13) expects in its config directory. Without it, OpenCode
+// crashes with EROFS on read-only filesystems.
+// See: https://github.com/anomalyco/opencode/issues/23040
+const ocConfigGitignore = `node_modules
+package.json
+package-lock.json
+bun.lock
+.gitignore
+`
+
+func ensureOCConfigGitignore(hostDir string) error {
+	gitignorePath := filepath.Join(hostDir, ".gitignore")
+	if _, err := os.Stat(gitignorePath); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(hostDir, 0o755); err != nil { //nolint:gosec // 0o755: directory must be readable when bind-mounted
+		return fmt.Errorf("create directory %q: %w", hostDir, err)
+	}
+	if err := os.WriteFile(gitignorePath, []byte(ocConfigGitignore), 0o644); err != nil { //nolint:gosec // 0o644: standard file perms
+		return fmt.Errorf("write %q: %w", gitignorePath, err)
+	}
+	return nil
+}
 
 var osStat = os.Stat
 
