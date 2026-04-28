@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.1](https://github.com/seznam/jailoc/compare/v1.13.0...v1.13.1) (2026-04-28)
+
+
+### Bug Fixes
+
+* **entrypoint:** pre-create OpenCode config .gitignore to prevent EROFS crash ([#148](https://github.com/seznam/jailoc/issues/148)) ([ce08080](https://github.com/seznam/jailoc/commit/ce08080e56acd042584148cb2989ecff086ff5a6))
+
 ## [1.13.0](https://github.com/seznam/jailoc/compare/v1.12.2...v1.13.0) (2026-04-24)
 
 
