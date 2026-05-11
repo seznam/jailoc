@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,7 +22,7 @@ import (
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
-func attachHostArgs(serverURL, password, dir string) []string {
+func attachHostArgs(serverURL, password, dir, session string, cont bool) []string {
 	args := []string{"attach", serverURL}
 	if password != "" {
 		args = append(args, "--password", password)
@@ -28,13 +30,25 @@ func attachHostArgs(serverURL, password, dir string) []string {
 	if dir != "" {
 		args = append(args, "--dir", dir)
 	}
+	if session != "" {
+		args = append(args, "--session", session)
+	}
+	if cont {
+		args = append(args, "--continue")
+	}
 	return args
 }
 
-func attachExecArgs(serverURL, dir string) []string {
+func attachExecArgs(serverURL, dir, session string, cont bool) []string {
 	args := []string{"opencode", "attach", serverURL}
 	if dir != "" {
 		args = append(args, "--dir", dir)
+	}
+	if session != "" {
+		args = append(args, "--session", session)
+	}
+	if cont {
+		args = append(args, "--continue")
 	}
 	return args
 }
@@ -108,7 +122,7 @@ func envWithOverrides(base []string, overrides ...string) []string {
 	return append(filtered, overrides...)
 }
 
-func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passwordMode string) error {
+func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passwordMode string, session string, cont bool) error {
 	binary, err := config.ResolveBinary()
 	if err != nil {
 		return fmt.Errorf("resolve opencode binary: %w", err)
@@ -121,10 +135,11 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	if err != nil {
 		return err
 	}
-	args := attachHostArgs(serverArg, pw, dir)
+	args := attachHostArgs(serverArg, pw, dir, session, cont)
 	cmd := exec.Command(binary, args...) //nolint:gosec // binary name is from ResolveBinary, args are controlled
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
+	rw := &exitRewriter{w: os.Stdout}
+	cmd.Stdout = rw
 	cmd.Stderr = os.Stderr
 
 	tuiPath := filepath.Join(jailocCacheDir(), "tui.json")
@@ -142,10 +157,11 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		}
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}, attachWaitDelay)
+	_ = rw.Flush()
 	return attachResult(ctx, err)
 }
 
-func attachExec(ctx context.Context, client *docker.Client, dir string) error {
+func attachExec(ctx context.Context, client *docker.Client, dir string, session string, cont bool) error {
 	fd := int(os.Stdin.Fd()) //nolint:gosec // Fd() fits in int on all supported platforms
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -166,7 +182,9 @@ func attachExec(ctx context.Context, client *docker.Client, dir string) error {
 	}()
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
-	err = client.Exec(ctx, attachExecArgs(serverURL, dir), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, os.Stdout, os.Stderr)
+	rw := &exitRewriter{w: os.Stdout}
+	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, rw, os.Stderr)
+	_ = rw.Flush()
 	return attachResult(ctx, err)
 }
 
@@ -274,4 +292,68 @@ func runCommandWithContext(ctx context.Context, cmd *exec.Cmd, terminate func() 
 			return <-resultCh
 		}
 	}
+}
+
+// exitRewriter wraps an io.Writer and replaces occurrences of "opencode -s "
+// with "jailoc -s " in the output stream. It handles partial matches that
+// span Write boundaries by buffering a small suffix.
+type exitRewriter struct {
+	w   io.Writer
+	buf []byte
+}
+
+var (
+	exitMatch   = []byte("opencode -s ")
+	exitReplace = []byte("jailoc -s ")
+)
+
+func (r *exitRewriter) Write(p []byte) (int, error) {
+	n := len(p)
+	data := append(r.buf, p...) //nolint:gocritic // intentional append to new slice
+	r.buf = r.buf[:0]
+
+	for {
+		idx := bytes.Index(data, exitMatch)
+		if idx >= 0 {
+			if idx > 0 {
+				if _, err := r.w.Write(data[:idx]); err != nil {
+					return n, err
+				}
+			}
+			if _, err := r.w.Write(exitReplace); err != nil {
+				return n, err
+			}
+			data = data[idx+len(exitMatch):]
+			continue
+		}
+
+		// Keep any suffix that could be the start of exitMatch.
+		keep := 0
+		for i := 1; i < len(exitMatch) && i <= len(data); i++ {
+			if bytes.Equal(data[len(data)-i:], exitMatch[:i]) {
+				keep = i
+			}
+		}
+
+		flush := data[:len(data)-keep]
+		if len(flush) > 0 {
+			if _, err := r.w.Write(flush); err != nil {
+				return n, err
+			}
+		}
+		r.buf = append(r.buf[:0], data[len(data)-keep:]...)
+		break
+	}
+
+	return n, nil
+}
+
+// Flush writes any buffered partial-match bytes to the underlying writer.
+func (r *exitRewriter) Flush() error {
+	if len(r.buf) > 0 {
+		_, err := r.w.Write(r.buf)
+		r.buf = r.buf[:0]
+		return err
+	}
+	return nil
 }

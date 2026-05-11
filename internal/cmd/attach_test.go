@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -21,6 +22,8 @@ func TestAttachHostArgs(t *testing.T) {
 		serverURL string
 		password  string
 		dir       string
+		session   string
+		cont      bool
 		want      []string
 	}{
 		{
@@ -51,13 +54,38 @@ func TestAttachHostArgs(t *testing.T) {
 			dir:       "/path",
 			want:      []string{"attach", "http://localhost:4096", "--password", "secret", "--dir", "/path"},
 		},
+		{
+			name:      "with session",
+			serverURL: "http://localhost:4096",
+			password:  "",
+			dir:       "",
+			session:   "ses_abc123",
+			want:      []string{"attach", "http://localhost:4096", "--session", "ses_abc123"},
+		},
+		{
+			name:      "with continue",
+			serverURL: "http://localhost:4096",
+			password:  "",
+			dir:       "",
+			cont:      true,
+			want:      []string{"attach", "http://localhost:4096", "--continue"},
+		},
+		{
+			name:      "all flags",
+			serverURL: "http://localhost:4096",
+			password:  "secret",
+			dir:       "/path",
+			session:   "ses_abc123",
+			cont:      true,
+			want:      []string{"attach", "http://localhost:4096", "--password", "secret", "--dir", "/path", "--session", "ses_abc123", "--continue"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := attachHostArgs(tt.serverURL, tt.password, tt.dir)
+			got := attachHostArgs(tt.serverURL, tt.password, tt.dir, tt.session, tt.cont)
 			if !slicesEqual(got, tt.want) {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
@@ -72,6 +100,8 @@ func TestAttachExecArgs(t *testing.T) {
 		name      string
 		serverURL string
 		dir       string
+		session   string
+		cont      bool
 		want      []string
 	}{
 		{
@@ -86,13 +116,35 @@ func TestAttachExecArgs(t *testing.T) {
 			dir:       "/home/user/project",
 			want:      []string{"opencode", "attach", "http://localhost:4096", "--dir", "/home/user/project"},
 		},
+		{
+			name:      "with session",
+			serverURL: "http://localhost:4096",
+			dir:       "",
+			session:   "ses_abc123",
+			want:      []string{"opencode", "attach", "http://localhost:4096", "--session", "ses_abc123"},
+		},
+		{
+			name:      "with continue",
+			serverURL: "http://localhost:4096",
+			dir:       "",
+			cont:      true,
+			want:      []string{"opencode", "attach", "http://localhost:4096", "--continue"},
+		},
+		{
+			name:      "all flags",
+			serverURL: "http://localhost:4096",
+			dir:       "/path",
+			session:   "ses_abc123",
+			cont:      true,
+			want:      []string{"opencode", "attach", "http://localhost:4096", "--dir", "/path", "--session", "ses_abc123", "--continue"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := attachExecArgs(tt.serverURL, tt.dir)
+			got := attachExecArgs(tt.serverURL, tt.dir, tt.session, tt.cont)
 			if !slicesEqual(got, tt.want) {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
@@ -450,4 +502,78 @@ func countEnvKey(env []string, key string) int {
 		}
 	}
 	return count
+}
+
+func TestExitRewriter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		writes []string
+		want   string
+	}{
+		{
+			name:   "no match passes through",
+			writes: []string{"hello world\n"},
+			want:   "hello world\n",
+		},
+		{
+			name:   "replaces opencode -s in single write",
+			writes: []string{"  Continue  opencode -s ses_abc123\n"},
+			want:   "  Continue  jailoc -s ses_abc123\n",
+		},
+		{
+			name:   "replaces when split across writes",
+			writes: []string{"  Continue  open", "code -s ses_abc123\n"},
+			want:   "  Continue  jailoc -s ses_abc123\n",
+		},
+		{
+			name:   "replaces when split mid-pattern",
+			writes: []string{"opencode", " -s ses_x\n"},
+			want:   "jailoc -s ses_x\n",
+		},
+		{
+			name:   "multiple replacements",
+			writes: []string{"opencode -s a\nopencode -s b\n"},
+			want:   "jailoc -s a\njailoc -s b\n",
+		},
+		{
+			name:   "partial match at end flushed without replacement",
+			writes: []string{"trailing opencode"},
+			want:   "trailing opencode",
+		},
+		{
+			name:   "empty write",
+			writes: []string{""},
+			want:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			rw := &exitRewriter{w: &buf}
+
+			for _, w := range tt.writes {
+				n, err := rw.Write([]byte(w))
+				if err != nil {
+					t.Fatalf("Write(%q): %v", w, err)
+				}
+				if n != len(w) {
+					t.Fatalf("Write(%q) returned %d, want %d", w, n, len(w))
+				}
+			}
+
+			if err := rw.Flush(); err != nil {
+				t.Fatalf("Flush: %v", err)
+			}
+
+			got := buf.String()
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
