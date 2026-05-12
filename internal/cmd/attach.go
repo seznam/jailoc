@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/creack/pty/v2"
 	"golang.org/x/term"
 
 	"github.com/seznam/jailoc/internal/config"
@@ -137,9 +138,6 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}
 	args := attachHostArgs(serverArg, pw, dir, session, cont)
 	cmd := exec.Command(binary, args...) //nolint:gosec // binary name is from ResolveBinary, args are controlled
-	cmd.Stdin = os.Stdin
-	rw := &exitRewriter{w: os.Stdout}
-	cmd.Stdout = rw
 	cmd.Stderr = os.Stderr
 
 	tuiPath := filepath.Join(jailocCacheDir(), "tui.json")
@@ -151,12 +149,53 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		cmd.Env = envWithOverrides(cmd.Env, env...)
 	}
 
-	err = runCommandWithContext(ctx, cmd, func() error {
-		if cmd.Process == nil {
-			return nil
+	// PTY keeps isTTY=true for the child (required by opentui) while letting
+	// us intercept stdout through the exitRewriter.
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return fmt.Errorf("start command with pty: %w", err)
+	}
+	defer func() { _ = ptmx.Close() }()
+
+	// Forward terminal resizes to the PTY.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGWINCH)
+	go func() {
+		for range sigCh {
+			_ = pty.InheritSize(os.Stdin, ptmx)
 		}
-		return cmd.Process.Signal(syscall.SIGTERM)
-	}, attachWaitDelay)
+	}()
+	defer func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+	}()
+	_ = pty.InheritSize(os.Stdin, ptmx)
+
+	// Raw mode so keystrokes pass through verbatim (Ctrl-C, arrows, etc.).
+	fd := int(os.Stdin.Fd()) //nolint:gosec // Fd() fits in int on all supported platforms
+	if oldState, restoreErr := term.MakeRaw(fd); restoreErr == nil {
+		defer func() { _ = term.Restore(fd, oldState) }()
+	}
+
+	go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
+
+	// Cancel the child process when the context is done (e.g. container stops).
+	go func() {
+		<-ctx.Done()
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			time.AfterFunc(attachWaitDelay, func() {
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+			})
+		}
+	}()
+
+	rw := &exitRewriter{w: os.Stdout}
+	_, _ = io.Copy(rw, ptmx)
+
+	err = cmd.Wait()
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)
 	}
