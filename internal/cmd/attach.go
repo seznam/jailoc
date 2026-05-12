@@ -157,7 +157,9 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		}
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}, attachWaitDelay)
-	_ = rw.Flush()
+	if ferr := rw.Flush(); ferr != nil && err == nil {
+		err = fmt.Errorf("flush exit rewriter: %w", ferr)
+	}
 	return attachResult(ctx, err)
 }
 
@@ -184,7 +186,9 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
 	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, rw, os.Stderr)
-	_ = rw.Flush()
+	if ferr := rw.Flush(); ferr != nil && err == nil {
+		err = fmt.Errorf("flush exit rewriter: %w", ferr)
+	}
 	return attachResult(ctx, err)
 }
 
@@ -309,7 +313,7 @@ var (
 
 func (r *exitRewriter) Write(p []byte) (int, error) {
 	n := len(p)
-	data := append(r.buf, p...) //nolint:gocritic // intentional append to new slice
+	data := append(r.buf, p...) //nolint:gocritic // append merges buf and p; may reuse buf's backing array
 	r.buf = r.buf[:0]
 
 	for {
