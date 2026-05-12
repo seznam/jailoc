@@ -163,13 +163,20 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	signal.Notify(sigCh, syscall.SIGWINCH)
 	go func() {
 		defer close(sigDone)
-		for range sigCh {
-			_ = pty.InheritSize(os.Stdin, ptmx)
+		for {
+			select {
+			case _, ok := <-sigCh:
+				if !ok {
+					return
+				}
+				_ = pty.InheritSize(os.Stdin, ptmx)
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	defer func() {
 		signal.Stop(sigCh)
-		close(sigCh)
 		<-sigDone
 	}()
 	_ = pty.InheritSize(os.Stdin, ptmx)
