@@ -155,7 +155,9 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	if err != nil {
 		return fmt.Errorf("start command with pty: %w", err)
 	}
-	defer func() { _ = ptmx.Close() }()
+	defer func() {
+		_ = ptmx.Close()
+	}()
 
 	// Forward terminal resizes to the PTY.
 	sigCh := make(chan os.Signal, 1)
@@ -188,18 +190,28 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		defer func() { _ = term.Restore(fd, oldState) }()
 	}
 
-	go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
+	stdinDone := make(chan struct{})
+	go func() {
+		defer close(stdinDone)
+		_, _ = io.Copy(ptmx, os.Stdin)
+	}()
 
 	// Cancel the child process when the context is done (e.g. container stops).
+	waitDone := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			time.AfterFunc(attachWaitDelay, func() {
-				if cmd.Process != nil {
-					_ = cmd.Process.Kill()
+		select {
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+				select {
+				case <-waitDone:
+				case <-time.After(attachWaitDelay):
+					if cmd.Process != nil {
+						_ = cmd.Process.Kill()
+					}
 				}
-			})
+			}
+		case <-waitDone:
 		}
 	}()
 
@@ -207,6 +219,9 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	_, copyErr := io.Copy(rw, ptmx)
 
 	err = cmd.Wait()
+	close(waitDone)
+	_ = ptmx.Close()
+	<-stdinDone
 	// Report copy errors only when the process exited cleanly — PTY read
 	// errors are expected once the child exits.
 	if copyErr != nil && err == nil {
