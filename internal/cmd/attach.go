@@ -177,6 +177,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}()
 	defer func() {
 		signal.Stop(sigCh)
+		close(sigCh)
 		<-sigDone
 	}()
 	_ = pty.InheritSize(os.Stdin, ptmx)
@@ -362,11 +363,11 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 		if idx >= 0 {
 			if idx > 0 {
 				if _, err := r.w.Write(data[:idx]); err != nil {
-					return 0, err
+					return len(p), err
 				}
 			}
 			if _, err := r.w.Write(exitReplace); err != nil {
-				return 0, err
+				return len(p), err
 			}
 			data = data[idx+len(exitMatch):]
 			continue
@@ -383,7 +384,7 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 		flush := data[:len(data)-keep]
 		if len(flush) > 0 {
 			if _, err := r.w.Write(flush); err != nil {
-				return 0, err
+				return len(p), err
 			}
 		}
 		r.buf = append(r.buf[:0], data[len(data)-keep:]...)
