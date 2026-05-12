@@ -183,6 +183,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}()
 	defer func() {
 		signal.Stop(sigCh)
+		closeWaitDone()
 		<-sigDone
 	}()
 	_ = pty.InheritSize(os.Stdin, ptmx)
