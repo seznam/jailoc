@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/creack/pty/v2 v2.0.1
 	github.com/docker/cli v29.4.1+incompatible
 	github.com/docker/compose/v5 v5.1.3
 	github.com/docker/docker v28.5.2+incompatible
@@ -36,7 +37,6 @@ require (
 	github.com/containerd/platforms v1.0.0-rc.4 // indirect
 	github.com/containerd/ttrpc v1.2.8 // indirect
 	github.com/containerd/typeurl/v2 v2.2.3 // indirect
-	github.com/creack/pty/v2 v2.0.1 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/buildx v0.33.0 // indirect

@@ -165,10 +165,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 			_ = pty.InheritSize(os.Stdin, ptmx)
 		}
 	}()
-	defer func() {
-		signal.Stop(sigCh)
-		close(sigCh)
-	}()
+	defer signal.Stop(sigCh)
 	_ = pty.InheritSize(os.Stdin, ptmx)
 
 	// Raw mode so keystrokes pass through verbatim (Ctrl-C, arrows, etc.).
@@ -193,9 +190,14 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}()
 
 	rw := &exitRewriter{w: os.Stdout}
-	_, _ = io.Copy(rw, ptmx)
+	_, copyErr := io.Copy(rw, ptmx)
 
 	err = cmd.Wait()
+	// Report copy errors only when the process exited cleanly — PTY read
+	// errors are expected once the child exits.
+	if copyErr != nil && err == nil {
+		err = fmt.Errorf("copy pty output: %w", copyErr)
+	}
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)
 	}
@@ -217,10 +219,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 			// Terminal resize is forwarded by the exec stream automatically.
 		}
 	}()
-	defer func() {
-		signal.Stop(sigCh)
-		close(sigCh)
-	}()
+	defer signal.Stop(sigCh)
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
@@ -351,7 +350,6 @@ var (
 )
 
 func (r *exitRewriter) Write(p []byte) (int, error) {
-	n := len(p)
 	data := append(r.buf, p...) //nolint:gocritic // append merges buf and p; may reuse buf's backing array
 	r.buf = r.buf[:0]
 
@@ -360,11 +358,11 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 		if idx >= 0 {
 			if idx > 0 {
 				if _, err := r.w.Write(data[:idx]); err != nil {
-					return n, err
+					return 0, err
 				}
 			}
 			if _, err := r.w.Write(exitReplace); err != nil {
-				return n, err
+				return 0, err
 			}
 			data = data[idx+len(exitMatch):]
 			continue
@@ -381,14 +379,14 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 		flush := data[:len(data)-keep]
 		if len(flush) > 0 {
 			if _, err := r.w.Write(flush); err != nil {
-				return n, err
+				return 0, err
 			}
 		}
 		r.buf = append(r.buf[:0], data[len(data)-keep:]...)
 		break
 	}
 
-	return n, nil
+	return len(p), nil
 }
 
 // Flush writes any buffered partial-match bytes to the underlying writer.
