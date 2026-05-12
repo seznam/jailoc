@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -160,6 +161,8 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}()
 
 	waitDone := make(chan struct{})
+	closeWaitDone := sync.OnceFunc(func() { close(waitDone) })
+	defer closeWaitDone()
 
 	// Forward terminal resizes to the PTY.
 	sigCh := make(chan os.Signal, 1)
@@ -218,7 +221,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	_, copyErr := io.Copy(rw, ptmx)
 
 	err = cmd.Wait()
-	close(waitDone)
+	closeWaitDone()
 	_ = ptmx.Close()
 	// Report copy errors only when the process exited cleanly — PTY read
 	// errors are expected once the child exits.
