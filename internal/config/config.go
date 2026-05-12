@@ -31,7 +31,7 @@ const (
 # image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
-# mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
+# mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 # allowed_hosts = ["example.com"]
 # allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
@@ -48,7 +48,7 @@ paths = []
 # allowed_networks = []
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
-# mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
+# mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 # build_context = ""
 # dockerfile = ""
 # ssh_auth_sock = false
@@ -138,8 +138,8 @@ var forbiddenMountHostPaths = []string{
 }
 
 var DefaultMounts = []string{
-	"~/.config/opencode:/home/agent/.config/opencode:ro",
-	"~/.opencode:/home/agent/.opencode:ro",
+	"~/.config/opencode:/home/agent/.config/opencode:rw",
+	"~/.opencode:/home/agent/.opencode:rw",
 	"~/.claude/transcripts:/home/agent/.claude/transcripts:rw",
 	"~/.agents:/home/agent/.agents:ro",
 }
