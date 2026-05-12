@@ -785,10 +785,10 @@ func TestGenerateComposeMountsFromParams(t *testing.T) {
 		Port:          4800,
 		Image:         "ghcr.io/seznam/jailoc:test",
 		Paths:         []string{"/tmp/work"},
-	Mounts: []string{
-		"/home/user/.config/opencode:/home/agent/.config/opencode:rw",
-		"/home/user/.agents:/home/agent/.agents:ro",
-	},
+		Mounts: []string{
+			"/home/user/.config/opencode:/home/agent/.config/opencode:rw",
+			"/home/user/.agents:/home/agent/.agents:ro",
+		},
 		CPU:    2.0,
 		Memory: "4g",
 	}
