@@ -185,6 +185,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "session ID to continue")
 	rootCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "continue the last session")
 	rootCmd.MarkFlagsMutuallyExclusive("remote", "exec")
+	rootCmd.MarkFlagsMutuallyExclusive("session", "continue")
 }
 
 // resolveTargetPath returns the absolute path from a positional argument.
