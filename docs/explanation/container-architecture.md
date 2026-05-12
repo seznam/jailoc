@@ -45,7 +45,7 @@ The opencode container mounts several things at startup:
 | Mount | Direction | Purpose |
 |-------|-----------|---------|
 | Workspace paths | read-write | The directories the agent is working in |
-| Configurable mounts | per-mount | Host directories mounted into the container, controlled by the `mounts` config field. Defaults include OpenCode configuration (ro), session transcripts (rw), and agent tooling (ro). See [Configuration Reference](../reference/configuration.md#mounts) for the full list and merge rules. |
+| Configurable mounts | per-mount | Host directories mounted into the container, controlled by the `mounts` config field. Defaults include OpenCode configuration (rw — the agent needs write access to persist settings, install tools, and update its own configuration), session transcripts (rw), and agent tooling (ro). See [Configuration Reference](../reference/configuration.md#mounts) for the full list and merge rules. |
 | `/etc/jailoc` | read-only | jailoc's own runtime config, including allowed hosts |
 | SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`). Also mounts `~/.ssh/known_hosts` read-only for host key verification. |
 | `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`, the default) |

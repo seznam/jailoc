@@ -251,6 +251,8 @@ Environment variables from multiple sources are merged in this order (later entr
 |---|---|---|
 | `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
 | `/home/agent/.opencode` | `~/.opencode` | `rw` |
+
+OpenCode configuration directories are mounted read-write because the agent needs write access to persist settings changes, install tools and MCPs, and update its own configuration at runtime.
 | `/home/agent/.claude/transcripts` | `~/.claude/transcripts` | `rw` |
 | `/home/agent/.agents` | `~/.agents` | `ro` |
 
