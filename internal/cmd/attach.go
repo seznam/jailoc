@@ -159,13 +159,19 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 
 	// Forward terminal resizes to the PTY.
 	sigCh := make(chan os.Signal, 1)
+	sigDone := make(chan struct{})
 	signal.Notify(sigCh, syscall.SIGWINCH)
 	go func() {
+		defer close(sigDone)
 		for range sigCh {
 			_ = pty.InheritSize(os.Stdin, ptmx)
 		}
 	}()
-	defer signal.Stop(sigCh)
+	defer func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+		<-sigDone
+	}()
 	_ = pty.InheritSize(os.Stdin, ptmx)
 
 	// Raw mode so keystrokes pass through verbatim (Ctrl-C, arrows, etc.).
@@ -211,15 +217,6 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 		return fmt.Errorf("set raw terminal: %w", err)
 	}
 	defer func() { _ = term.Restore(fd, oldState) }()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGWINCH)
-	go func() {
-		for range sigCh {
-			// Terminal resize is forwarded by the exec stream automatically.
-		}
-	}()
-	defer signal.Stop(sigCh)
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
