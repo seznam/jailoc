@@ -2370,8 +2370,8 @@ func TestMergeMounts(t *testing.T) {
 				DefaultMounts,
 			},
 			expected: []string{
-				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
-				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
+				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 			},
@@ -2384,7 +2384,7 @@ func TestMergeMounts(t *testing.T) {
 			},
 			expected: []string{
 				filepath.Join(home, "cfg") + ":/home/agent/.config/opencode:rw",
-				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 			},
@@ -2396,7 +2396,7 @@ func TestMergeMounts(t *testing.T) {
 				{":/home/agent/.opencode"},
 			},
 			expected: []string{
-				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
+				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
 				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 			},
@@ -2408,8 +2408,8 @@ func TestMergeMounts(t *testing.T) {
 				{"~/my-data:/workspace/data:rw"},
 			},
 			expected: []string{
-				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
-				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
+				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 				filepath.Join(home, "my-data") + ":/workspace/data:rw",
@@ -2424,7 +2424,7 @@ func TestMergeMounts(t *testing.T) {
 			},
 			expected: []string{
 				filepath.Join(home, "cfg") + ":/home/agent/.config/opencode:rw",
-				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, "y") + ":/x:ro",
 			},

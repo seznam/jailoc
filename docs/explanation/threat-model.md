@@ -44,7 +44,7 @@ jailoc's isolation model targets two legs of the trifecta:
 
 **Restricting external communication.** The [iptables rules](network-isolation.md) block egress to all private network ranges (RFC 1918, link-local, CGNAT). Even if an attacker's instructions reach the agent, the agent cannot send stolen data to internal infrastructure. Public internet egress remains open (the agent needs it to function), but the internal network — where the most sensitive services live — is unreachable. The DinD sidecar runs a rootless Docker daemon, so inner containers — even those started with `--privileged` or `--network=host` — are subject to the same iptables restrictions and cannot bypass them.
 
-**Limiting private data access.** The agent only sees directories explicitly mounted in the workspace configuration. Host credentials, SSH keys, and unrelated project directories are not available inside the container. OpenCode configuration is mounted read-only. The agent runs as an unprivileged user with dropped capabilities and `no_new_privs`.
+**Limiting private data access.** The agent only sees directories explicitly mounted in the workspace configuration. Host credentials, SSH keys, and unrelated project directories are not available inside the container. OpenCode configuration is mounted read-write. The agent runs as an unprivileged user with dropped capabilities and `no_new_privs`.
 
 These controls do not eliminate prompt injection. They reduce the blast radius by ensuring that even a successfully manipulated agent cannot reach internal services or access data outside its designated workspace.
 

@@ -786,8 +786,8 @@ func TestGenerateComposeMountsFromParams(t *testing.T) {
 		Image:         "ghcr.io/seznam/jailoc:test",
 		Paths:         []string{"/tmp/work"},
 		Mounts: []string{
-			"/home/user/.config/opencode:/home/agent/.config/opencode:ro",
-			"/home/user/.agents:/home/agent/.agents:ro",
+		"/home/user/.config/opencode:/home/agent/.config/opencode:rw",
+		"/home/user/.agents:/home/agent/.agents:ro",
 		},
 		CPU:    2.0,
 		Memory: "4g",
@@ -799,13 +799,13 @@ func TestGenerateComposeMountsFromParams(t *testing.T) {
 	}
 
 	rendered := string(out)
-	assertContains(t, rendered, "/home/user/.config/opencode:/home/agent/.config/opencode:ro")
+	assertContains(t, rendered, "/home/user/.config/opencode:/home/agent/.config/opencode:rw")
 	assertContains(t, rendered, "/home/user/.agents:/home/agent/.agents:ro")
 
-	if strings.Contains(rendered, "${HOME}/.config/opencode:/home/agent/.config/opencode:ro") {
+	if strings.Contains(rendered, "${HOME}/.config/opencode:/home/agent/.config/opencode:rw") {
 		t.Fatalf("expected no hardcoded OC mounts in template output, got:\n%s", rendered)
 	}
-	if strings.Contains(rendered, "${HOME}/.opencode:/home/agent/.opencode:ro") {
+	if strings.Contains(rendered, "${HOME}/.opencode:/home/agent/.opencode:rw") {
 		t.Fatalf("expected no hardcoded OC mounts in template output, got:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "${HOME}/.claude/transcripts:/home/agent/.claude/transcripts") {

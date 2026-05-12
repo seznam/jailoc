@@ -26,7 +26,7 @@ flowchart TB
     dind -.- net
 ```
 
-The **opencode container** is where the agent lives. It runs `opencode serve` as UID 1000 (a non-root user named `agent`), exposes a port bound to `127.0.0.1` on the host for attaching a terminal (not reachable from LAN or VPN), and has your workspace paths mounted read-write. Host directories are mounted into the container via configurable bind mounts — by default, your OpenCode configuration (read-only), session transcripts, and agent tooling directories. See [How-to: Configure mounts](../how-to/workspace-configuration.md#configure-mounts) for customization.
+The **opencode container** is where the agent lives. It runs `opencode serve` as UID 1000 (a non-root user named `agent`), exposes a port bound to `127.0.0.1` on the host for attaching a terminal (not reachable from LAN or VPN), and has your workspace paths mounted read-write. Host directories are mounted into the container via configurable bind mounts — by default, your OpenCode configuration (read-write), session transcripts, and agent tooling directories. See [How-to: Configure mounts](../how-to/workspace-configuration.md#configure-mounts) for customization.
 
 The opencode container runs with configurable resource limits. The `cpu` (default 2 cores) and `memory` (default 4 GB) settings control how much of the host's resources the container can consume, and are configurable per workspace via the TOML config. Other resource limits — `pids_limit` (256) and `mem_reservation` (512 MB) — are fixed and not configurable. Resource limit changes take effect on the next `jailoc up` invocation; running containers are not affected until restarted.
 

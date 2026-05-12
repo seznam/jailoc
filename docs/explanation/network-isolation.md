@@ -50,7 +50,7 @@ The dind container's allowed hosts and networks are configured from the same `/e
 
 - The agent runs as an unprivileged user (UID 1000) with all Linux capabilities dropped and `no_new_privs` set
 - Resource limits apply: 4 GB RAM, 2 CPUs, 256 PIDs
-- OpenCode configuration directories are mounted read-only — the agent can read your settings but cannot modify them on the host
+- OpenCode configuration directories are mounted read-write — the agent can read and modify your settings
 - The agent's data volume (SQLite history, auth tokens) is a named Docker volume, completely separate from your host's `~/.local/share/opencode`
 - The agent gets its own Docker daemon through dind — it never touches the host Docker socket, so containers it starts cannot escape to the host
 - Network egress to private and internal ranges is blocked by iptables

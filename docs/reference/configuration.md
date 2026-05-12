@@ -249,8 +249,8 @@ Environment variables from multiple sources are merged in this order (later entr
 
 | Container path | Host source | Mode |
 |---|---|---|
-| `/home/agent/.config/opencode` | `~/.config/opencode` | `ro` |
-| `/home/agent/.opencode` | `~/.opencode` | `ro` |
+| `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
+| `/home/agent/.opencode` | `~/.opencode` | `rw` |
 | `/home/agent/.claude/transcripts` | `~/.claude/transcripts` | `rw` |
 | `/home/agent/.agents` | `~/.agents` | `ro` |
 

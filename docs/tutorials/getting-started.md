@@ -69,7 +69,7 @@ jailoc down     # stop and remove the workspace containers
 
 When the workspace is up, two containers are active on an isolated Docker network:
 
-- **opencode container** — runs `opencode serve` as UID 1000 with your workspace paths mounted read-write and your OpenCode config mounted read-only.
+- **opencode container** — runs `opencode serve` as UID 1000 with your workspace paths mounted read-write and your OpenCode config mounted read-write.
 - **dind container** — provides a privileged Docker daemon over TLS on port 2376, so the agent can build and run containers if needed.
 
 The entrypoint script sets iptables rules that block private network ranges by default before dropping privileges. The agent can reach the internet, but not your internal network, unless you explicitly allow it.

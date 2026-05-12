@@ -1220,8 +1220,8 @@ func TestResolveMountsDefault(t *testing.T) {
 	}
 
 	want := []string{
-		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
-		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
+		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
@@ -1251,7 +1251,7 @@ func TestResolveMountsOverride(t *testing.T) {
 
 	want := []string{
 		filepath.Join(home, "custom-opencode") + ":/home/agent/.config/opencode:rw",
-		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:ro",
+		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
@@ -1280,7 +1280,7 @@ func TestResolveMountsRemoval(t *testing.T) {
 	}
 
 	want := []string{
-		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:ro",
+		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
 		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
