@@ -159,6 +159,8 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		_ = ptmx.Close()
 	}()
 
+	waitDone := make(chan struct{})
+
 	// Forward terminal resizes to the PTY.
 	sigCh := make(chan os.Signal, 1)
 	sigDone := make(chan struct{})
@@ -167,37 +169,34 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		defer close(sigDone)
 		for {
 			select {
-			case _, ok := <-sigCh:
-				if !ok {
-					return
-				}
+			case <-sigCh:
 				_ = pty.InheritSize(os.Stdin, ptmx)
 			case <-ctx.Done():
+				return
+			case <-waitDone:
 				return
 			}
 		}
 	}()
 	defer func() {
 		signal.Stop(sigCh)
-		close(sigCh)
 		<-sigDone
 	}()
 	_ = pty.InheritSize(os.Stdin, ptmx)
 
 	// Raw mode so keystrokes pass through verbatim (Ctrl-C, arrows, etc.).
 	fd := int(os.Stdin.Fd()) //nolint:gosec // Fd() fits in int on all supported platforms
-	if oldState, restoreErr := term.MakeRaw(fd); restoreErr == nil {
+	if term.IsTerminal(fd) {
+		oldState, rawErr := term.MakeRaw(fd)
+		if rawErr != nil {
+			return fmt.Errorf("set raw terminal: %w", rawErr)
+		}
 		defer func() { _ = term.Restore(fd, oldState) }()
 	}
 
-	stdinDone := make(chan struct{})
-	go func() {
-		defer close(stdinDone)
-		_, _ = io.Copy(ptmx, os.Stdin)
-	}()
+	go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
 
 	// Cancel the child process when the context is done (e.g. container stops).
-	waitDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -221,7 +220,6 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	err = cmd.Wait()
 	close(waitDone)
 	_ = ptmx.Close()
-	<-stdinDone
 	// Report copy errors only when the process exited cleanly — PTY read
 	// errors are expected once the child exits.
 	if copyErr != nil && err == nil {
