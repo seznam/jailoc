@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -698,12 +699,15 @@ func ResolveMode(configured string) string {
 
 func AddPath(workspace, path string) error {
 	configPath := ConfigPath()
+
+	raw, err := os.ReadFile(configPath) //nolint:gosec // configPath is derived from ConfigPath(), not user input
+	if err != nil {
+		return fmt.Errorf("read config for AddPath: %w", err)
+	}
+
 	cfg, err := decode(configPath)
 	if err != nil {
-		return fmt.Errorf("load config for AddPath: %w", err)
-	}
-	if cfg.Workspaces == nil {
-		cfg.Workspaces = map[string]Workspace{}
+		return err
 	}
 
 	ws, ok := cfg.Workspaces[workspace]
@@ -711,17 +715,31 @@ func AddPath(workspace, path string) error {
 		return fmt.Errorf("workspace %q does not exist", workspace)
 	}
 
-	ws.Paths = append(ws.Paths, path)
-	cfg.Workspaces[workspace] = ws
+	newPaths := make([]string, len(ws.Paths), len(ws.Paths)+1)
+	copy(newPaths, ws.Paths)
+	newPaths = append(newPaths, path)
 
-	f, err := os.Create(configPath) //nolint:gosec // configPath is derived from ConfigPath(), not user input
+	patched, err := patchStringArray(raw, workspace, "paths", newPaths)
 	if err != nil {
-		return fmt.Errorf("open config for write: %w", err)
+		return fmt.Errorf("patch config: %w", err)
 	}
-	defer func() { _ = f.Close() }()
 
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		return fmt.Errorf("encode updated config: %w", err)
+	tmp, err := os.CreateTemp(filepath.Dir(configPath), ".config-*.toml.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }() // no-op after rename succeeds
+
+	_, werr := tmp.Write(patched)
+	serr := tmp.Sync()
+	cerr := tmp.Close()
+	if err := errors.Join(werr, serr, cerr); err != nil {
+		return fmt.Errorf("write temp config: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, configPath); err != nil { //nolint:gosec // tmpPath comes from os.CreateTemp, not user input
+		return fmt.Errorf("write config: %w", err)
 	}
 
 	return nil

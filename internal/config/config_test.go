@@ -3346,3 +3346,619 @@ func ptrFloat64(v float64) *float64 {
 func ptrString(v string) *string {
 	return &v
 }
+
+// ---- patchStringArray / AddPath comment-preservation tests ----
+
+func TestAddPathPreservesComments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	content := `# top-level comment
+
+[base]
+# dockerfile = ""
+
+[defaults]
+# image = ""
+
+[workspaces.default]
+paths = []
+# image = ""
+# allowed_hosts = []
+`
+	writeFile(t, ConfigPath(), content)
+
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config after AddPath: %v", err)
+	}
+	got := string(result)
+
+	for _, comment := range []string{
+		"# top-level comment",
+		"# dockerfile = \"\"",
+		"# image = \"\"",
+		"# allowed_hosts = []",
+	} {
+		if !strings.Contains(got, comment) {
+			t.Errorf("comment %q was lost after AddPath; result:\n%s", comment, got)
+		}
+	}
+
+	// The path itself must be present and loadable
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom after AddPath: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/mywork" {
+		t.Fatalf("unexpected paths after AddPath: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathConvertsEmptyArrayToMultiLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `[workspaces.default]
+paths = []
+`)
+
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	if strings.Contains(got, `paths = ["/data/mywork"]`) {
+		t.Error("expected multi-line array, got single-line")
+	}
+	if !strings.Contains(got, `"/data/mywork",`) {
+		t.Errorf("expected path entry on its own line; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if ws := cfg.Workspaces["default"]; len(ws.Paths) != 1 || ws.Paths[0] != "/data/mywork" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathConvertsSingleLineToMultiLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `[workspaces.default]
+paths = ["/existing"]
+`)
+
+	if err := AddPath("default", "/new"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	// Must not be on a single line
+	if strings.Contains(got, `"/existing", "/new"`) {
+		t.Errorf("expected multi-line array, got single-line; result:\n%s", got)
+	}
+	if !strings.Contains(got, `"/existing",`) {
+		t.Errorf("missing existing path entry on its own line; result:\n%s", got)
+	}
+	if !strings.Contains(got, `"/new",`) {
+		t.Errorf("missing new path entry on its own line; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/existing" || ws.Paths[1] != "/new" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathPreservesMultiLineFormat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `[workspaces.default]
+paths = [
+  "/first",
+]
+`)
+
+	if err := AddPath("default", "/second"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	if !strings.Contains(got, "  \"/first\",") {
+		t.Errorf("first entry missing or indentation changed; result:\n%s", got)
+	}
+	if !strings.Contains(got, "  \"/second\",") {
+		t.Errorf("second entry missing or indentation changed; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/first" || ws.Paths[1] != "/second" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathPreservesCustomIndentation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `[workspaces.default]
+paths = [
+    "/first",
+]
+`)
+
+	if err := AddPath("default", "/second"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	if !strings.Contains(got, "    \"/first\",") {
+		t.Errorf("4-space indentation not preserved for first entry; result:\n%s", got)
+	}
+	if !strings.Contains(got, "    \"/second\",") {
+		t.Errorf("4-space indentation not preserved for second entry; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/first" || ws.Paths[1] != "/second" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathPreservesOtherSections(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	content := `# header
+
+[base]
+dockerfile = "/custom/Dockerfile"
+
+[defaults]
+image = "ubuntu:22.04"
+
+[workspaces.default]
+paths = []
+
+[workspaces.other]
+paths = ["/other"]
+image = "alpine:latest"
+`
+	writeFile(t, ConfigPath(), content)
+
+	if err := AddPath("default", "/new"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	for _, preserved := range []string{
+		"# header",
+		`dockerfile = "/custom/Dockerfile"`,
+		`image = "ubuntu:22.04"`,
+		`image = "alpine:latest"`,
+	} {
+		if !strings.Contains(got, preserved) {
+			t.Errorf("line %q was lost; result:\n%s", preserved, got)
+		}
+	}
+
+	// other workspace paths must be untouched
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if other := cfg.Workspaces["other"]; len(other.Paths) != 1 || other.Paths[0] != "/other" {
+		t.Fatalf("other workspace paths changed: %#v", other.Paths)
+	}
+}
+
+func TestAddPathMissingPathsKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Workspace section exists but has no paths key — no indentation.
+	writeFile(t, ConfigPath(), `[workspaces.default]
+image = "alpine:latest"
+`)
+
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	// Inserted key must use the same (zero) indentation as the sibling key.
+	if !strings.Contains(got, "paths = [") {
+		t.Errorf("expected flush-left 'paths = ['; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/mywork" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+	if got := cfg.Workspaces["default"].Image; got != "alpine:latest" {
+		t.Fatalf("sibling key 'image' was changed: got %q", got)
+	}
+}
+
+func TestAddPathMissingPathsKeyIndented(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Workspace section exists but has no paths key — keys are indented.
+	writeFile(t, ConfigPath(), `[workspaces.default]
+  image = "alpine:latest"
+`)
+
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	// Inserted key must match the two-space indent of the sibling key.
+	if !strings.Contains(got, "  paths = [") {
+		t.Errorf("expected 2-space indented 'paths = ['; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/mywork" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestPatchStringArraySectionNotFound(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`[workspaces.default]
+paths = []
+`)
+	_, err := patchStringArray(raw, "nonexistent", "paths", []string{"/foo"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent workspace section")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected 'not found' in error, got: %v", err)
+	}
+}
+
+func TestAddPathOnlyTargetWorkspaceModified(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `[workspaces.alpha]
+paths = ["/alpha/one"]
+
+[workspaces.beta]
+paths = ["/beta/one"]
+`)
+
+	if err := AddPath("alpha", "/alpha/two"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+
+	alpha := cfg.Workspaces["alpha"]
+	if len(alpha.Paths) != 2 || alpha.Paths[0] != "/alpha/one" || alpha.Paths[1] != "/alpha/two" {
+		t.Fatalf("unexpected alpha paths: %#v", alpha.Paths)
+	}
+
+	beta := cfg.Workspaces["beta"]
+	if len(beta.Paths) != 1 || beta.Paths[0] != "/beta/one" {
+		t.Fatalf("beta paths were modified: %#v", beta.Paths)
+	}
+}
+
+func TestAddPathSectionHeaderWithInlineComment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `[workspaces.default] # my workspace
+paths = []
+`)
+
+	if err := AddPath("default", "/data/project"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/project" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(result), "# my workspace") {
+		t.Error("inline comment on section header was lost")
+	}
+}
+
+func TestAddPathPreservesKeyIndentation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `[workspaces]
+  [workspaces.default]
+    paths = ["/data/project"]
+    build_context = ""
+`)
+
+	if err := AddPath("default", "/data/new"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	// Key line must keep its 4-space indent
+	if !strings.Contains(got, "    paths = [") {
+		t.Errorf("key line indentation lost; result:\n%s", got)
+	}
+	// Entries must be indented deeper than the key (4 + 2 = 6 spaces)
+	if !strings.Contains(got, "      \"/data/project\",") {
+		t.Errorf("entry indentation wrong; result:\n%s", got)
+	}
+	// Closing bracket must be at key indentation level
+	if !strings.Contains(got, "    ]") {
+		t.Errorf("closing bracket indentation wrong; result:\n%s", got)
+	}
+	// Sibling key must be untouched
+	if !strings.Contains(got, `    build_context = ""`) {
+		t.Errorf("sibling key indentation changed; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/data/project" || ws.Paths[1] != "/data/new" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathPreservesInlineCommentOnArray(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `[workspaces.default]
+    paths = ["/data/project"] #path comment
+    build_context = ""
+`)
+
+	if err := AddPath("default", "/data/new"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(result)
+
+	if !strings.Contains(got, "#path comment") {
+		t.Errorf("inline comment after array was lost; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/data/project" || ws.Paths[1] != "/data/new" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathPreservesCRLF(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Build a config with CRLF line endings.
+	content := "[workspaces.default]\r\npaths = [\r\n  \"/data/first\",\r\n]\r\n"
+	writeFile(t, ConfigPath(), content)
+
+	if err := AddPath("default", "/data/second"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(raw)
+
+	// Every non-empty line must end with \r\n — including newly generated lines.
+	for i, line := range strings.Split(got, "\n") {
+		if line == "" {
+			continue // trailing empty element after the final \n
+		}
+		if !strings.HasSuffix(line, "\r") {
+			t.Errorf("line %d does not end with \\r: %q", i, line)
+		}
+	}
+
+	// Both paths must be present.
+	if !strings.Contains(got, "\"/data/first\",") {
+		t.Errorf("first path missing; result:\n%s", got)
+	}
+	if !strings.Contains(got, "\"/data/second\",") {
+		t.Errorf("second path missing; result:\n%s", got)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/data/first" || ws.Paths[1] != "/data/second" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathQuotedKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Config uses a quoted key: "paths" = [...] — valid TOML, equivalent to paths = [...]
+	writeFile(t, ConfigPath(), `[workspaces.default]
+"paths" = ["/data/existing"]
+`)
+
+	if err := AddPath("default", "/data/new"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	result, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	// Original quoted key style must be preserved, not rewritten as bare 'paths'.
+	if !strings.Contains(string(result), `"paths" = [`) {
+		t.Errorf("quoted key style not preserved; result:\n%s", string(result))
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/data/existing" || ws.Paths[1] != "/data/new" {
+		t.Fatalf("unexpected paths after AddPath with quoted key: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathQuotedSectionHeader(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Config uses a quoted workspace name in the section header:
+	// [workspaces."default"] — valid TOML, equivalent to [workspaces.default]
+	writeFile(t, ConfigPath(), `[workspaces."default"]
+paths = ["/data/existing"]
+`)
+
+	if err := AddPath("default", "/data/new"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/data/existing" || ws.Paths[1] != "/data/new" {
+		t.Fatalf("unexpected paths after AddPath with quoted section header: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathIntraArrayCommentsNotPreserved(t *testing.T) {
+	t.Parallel()
+
+	// Comments and blank lines inside an array are replaced along with the
+	// array content — this is a known limitation of the text-level approach.
+	raw := []byte(`[workspaces.default]
+paths = [
+  "/data/first",
+  # "/data/commented-out",
+]
+`)
+	result, err := patchStringArray(raw, "default", "paths", []string{"/data/first", "/data/new"})
+	if err != nil {
+		t.Fatalf("patchStringArray failed: %v", err)
+	}
+	got := string(result)
+
+	if strings.Contains(got, "# \"/data/commented-out\"") {
+		t.Log("intra-array comment was preserved (behaviour changed)")
+	}
+
+	// The two live paths must be present and the result must be valid TOML.
+	if !strings.Contains(got, `"/data/first",`) {
+		t.Errorf("first path missing; result:\n%s", got)
+	}
+	if !strings.Contains(got, `"/data/new",`) {
+		t.Errorf("new path missing; result:\n%s", got)
+	}
+
+	var decoded map[string]any
+	if _, err := toml.Decode(got, &decoded); err != nil {
+		t.Fatalf("patched output is not valid TOML: %v\nresult:\n%s", err, got)
+	}
+}
