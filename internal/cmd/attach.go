@@ -193,6 +193,8 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	if term.IsTerminal(fd) {
 		oldState, rawErr := term.MakeRaw(fd)
 		if rawErr != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 			return fmt.Errorf("set raw terminal: %w", rawErr)
 		}
 		defer func() { _ = term.Restore(fd, oldState) }()
@@ -224,9 +226,10 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	err = cmd.Wait()
 	closeWaitDone()
 	_ = ptmx.Close()
-	// Report copy errors only when the process exited cleanly — PTY read
-	// errors are expected once the child exits.
-	if copyErr != nil && err == nil {
+	// PTY reads commonly return EIO when the slave side closes on normal
+	// process exit — treat it as expected EOF. Surface other copy errors
+	// only when the process itself exited cleanly.
+	if copyErr != nil && err == nil && !errors.Is(copyErr, syscall.EIO) {
 		err = fmt.Errorf("copy pty output: %w", copyErr)
 	}
 	if ferr := rw.Flush(); ferr != nil && err == nil {
@@ -380,11 +383,11 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 		if idx >= 0 {
 			if idx > 0 {
 				if _, err := r.w.Write(data[:idx]); err != nil {
-					return len(p), err
+					return 0, err
 				}
 			}
 			if _, err := r.w.Write(exitReplace); err != nil {
-				return len(p), err
+				return 0, err
 			}
 			data = data[idx+len(exitMatch):]
 			continue
@@ -401,7 +404,7 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 		flush := data[:len(data)-keep]
 		if len(flush) > 0 {
 			if _, err := r.w.Write(flush); err != nil {
-				return len(p), err
+				return 0, err
 			}
 		}
 		r.buf = append(r.buf[:0], data[len(data)-keep:]...)
