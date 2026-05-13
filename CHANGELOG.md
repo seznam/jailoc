@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.14.0](https://github.com/seznam/jailoc/compare/v1.13.1...v1.14.0) (2026-05-13)
+
+
+### Features
+
+* **cmd:** add session continuation and rewrite exit title ([#154](https://github.com/seznam/jailoc/issues/154)) ([66059e3](https://github.com/seznam/jailoc/commit/66059e38f28408a5b4ad9a22b77926ce5257d9c5))
+
+
+### Bug Fixes
+
+* **config:** mount OpenCode config directories read-write ([#156](https://github.com/seznam/jailoc/issues/156)) ([178f857](https://github.com/seznam/jailoc/commit/178f8574adb60eddfefc83931404ea589f71a65e))
+
 ## [1.13.1](https://github.com/seznam/jailoc/compare/v1.13.0...v1.13.1) (2026-04-28)
 
 
