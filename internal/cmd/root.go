@@ -28,6 +28,8 @@ var workspaceFlag string
 var workspaceExplicit bool
 var appVersion string
 var remoteFlag, execFlag bool
+var sessionFlag string
+var continueFlag bool
 
 var rootCmd = &cobra.Command{
 	Use:          "jailoc [path]",
@@ -162,10 +164,10 @@ var rootCmd = &cobra.Command{
 		switch mode {
 		case config.ModeExec:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-			attachErr = attachExec(attachCtx, client, targetPath)
+			attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
 		default:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
-			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode)
+			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode, sessionFlag, continueFlag)
 		}
 		if attachErr != nil {
 			return fmt.Errorf("attach to workspace %q: %w", ws.Name, attachErr)
@@ -180,7 +182,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&remoteFlag, "remote", false, "Use remote mode (host-side opencode attach)")
 	rootCmd.PersistentFlags().BoolVar(&execFlag, "exec", false, "Use exec mode (docker exec opencode inside container)")
 	rootCmd.PersistentFlags().Bool("no-color", false, "disable colored output")
+	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "session ID to continue")
+	rootCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "continue the last session")
 	rootCmd.MarkFlagsMutuallyExclusive("remote", "exec")
+	rootCmd.MarkFlagsMutuallyExclusive("session", "continue")
 }
 
 // resolveTargetPath returns the absolute path from a positional argument.

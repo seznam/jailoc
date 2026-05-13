@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/creack/pty/v2 v2.0.1
 	github.com/docker/cli v29.4.1+incompatible
 	github.com/docker/compose/v5 v5.1.3
 	github.com/docker/docker v28.5.2+incompatible
