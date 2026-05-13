@@ -223,9 +223,12 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	rw := &exitRewriter{w: os.Stdout}
 	_, copyErr := io.Copy(rw, ptmx)
 
+	// Close the PTY master so the child receives SIGHUP if it's still running
+	// (e.g. when io.Copy returned early due to a downstream write error).
+	_ = ptmx.Close()
+
 	err = cmd.Wait()
 	closeWaitDone()
-	_ = ptmx.Close()
 	// PTY reads commonly return EIO when the slave side closes on normal
 	// process exit — treat it as expected EOF. Surface other copy errors
 	// only when the process itself exited cleanly.
