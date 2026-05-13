@@ -361,6 +361,18 @@ func runCommandWithContext(ctx context.Context, cmd *exec.Cmd, terminate func() 
 	}
 }
 
+// writeAll writes the entire slice to w, retrying on short writes.
+func writeAll(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := w.Write(data)
+		data = data[n:]
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // exitRewriter wraps an io.Writer and replaces occurrences of "opencode -s "
 // with "jailoc -s " in the output stream. It handles partial matches that
 // span Write boundaries by buffering a small suffix.
@@ -382,12 +394,12 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 		idx := bytes.Index(data, exitMatch)
 		if idx >= 0 {
 			if idx > 0 {
-				if _, err := r.w.Write(data[:idx]); err != nil {
-					return 0, err
+				if err := writeAll(r.w, data[:idx]); err != nil {
+					return len(p), err
 				}
 			}
-			if _, err := r.w.Write(exitReplace); err != nil {
-				return 0, err
+			if err := writeAll(r.w, exitReplace); err != nil {
+				return len(p), err
 			}
 			data = data[idx+len(exitMatch):]
 			continue
@@ -403,8 +415,8 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 
 		flush := data[:len(data)-keep]
 		if len(flush) > 0 {
-			if _, err := r.w.Write(flush); err != nil {
-				return 0, err
+			if err := writeAll(r.w, flush); err != nil {
+				return len(p), err
 			}
 		}
 		r.buf = append(r.buf[:0], data[len(data)-keep:]...)
@@ -417,7 +429,7 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 // Flush writes any buffered partial-match bytes to the underlying writer.
 func (r *exitRewriter) Flush() error {
 	if len(r.buf) > 0 {
-		_, err := r.w.Write(r.buf)
+		err := writeAll(r.w, r.buf)
 		r.buf = r.buf[:0]
 		return err
 	}
