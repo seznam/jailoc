@@ -242,6 +242,21 @@ func (c *Client) Logs(ctx context.Context, follow bool, w io.Writer) error {
 	return nil
 }
 
+// StreamRecentLogs streams container logs to w, starting from the last 5 log
+// entries and following new output until the context is cancelled.
+func (c *Client) StreamRecentLogs(ctx context.Context, w io.Writer) error {
+	if err := c.initComposeSvc(); err != nil {
+		return fmt.Errorf("stream logs: %w", err)
+	}
+
+	consumer := &writerLogConsumer{w: w}
+	if err := c.svc.Logs(ctx, "jailoc-"+c.workspace, consumer, api.LogOptions{Follow: true, Tail: "5"}); err != nil {
+		return fmt.Errorf("compose logs for workspace %q: %w", c.workspace, err)
+	}
+
+	return nil
+}
+
 func (c *Client) TailLogs(ctx context.Context, n int, w io.Writer) error {
 	if err := c.initComposeSvc(); err != nil {
 		return err

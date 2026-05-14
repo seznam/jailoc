@@ -124,7 +124,7 @@ func envWithOverrides(base []string, overrides ...string) []string {
 	return append(filtered, overrides...)
 }
 
-func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passwordMode string, session string, cont bool) error {
+func attachOnHost(ctx context.Context, client *docker.Client, ws *workspace.Resolved, dir string, passwordMode string, session string, cont bool) error {
 	binary, err := config.ResolveBinary()
 	if err != nil {
 		return fmt.Errorf("resolve opencode binary: %w", err)
@@ -226,7 +226,13 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}()
 
 	rw := &exitRewriter{w: os.Stdout}
-	_, copyErr := io.Copy(rw, ptmx)
+	var status io.Writer
+	if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: uintptr→int is safe for file descriptors
+		status = os.Stdout
+	}
+	logReader, logCancel := startLogStream(ctx, client, status)
+	sw := newStartupWriter(rw, status, slowStartWarning, logReader, logCancel)
+	_, copyErr := io.Copy(sw, ptmx)
 
 	// Close the PTY master so the child receives SIGHUP if it's still running
 	// (e.g. when io.Copy returned early due to a downstream write error).
@@ -240,6 +246,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	if copyErr != nil && err == nil && !errors.Is(copyErr, errEIO) {
 		err = fmt.Errorf("copy pty output: %w", copyErr)
 	}
+	sw.Close()
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)
 	}
@@ -256,7 +263,14 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
-	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, rw, os.Stderr)
+	var status io.Writer
+	if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: uintptr→int is safe for file descriptors
+		status = os.Stdout
+	}
+	logReader, logCancel := startLogStream(ctx, client, status)
+	sw := newStartupWriter(rw, status, slowStartWarning, logReader, logCancel)
+	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, sw, os.Stderr)
+	sw.Close()
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)
 	}
@@ -266,6 +280,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 const (
 	attachPollInterval = 500 * time.Millisecond
 	attachWaitDelay    = 2 * time.Second
+	slowStartWarning   = 10 * time.Second
 )
 
 var errUnhealthy = errors.New("opencode process unhealthy inside container")
@@ -433,6 +448,16 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 	}
 
 	return len(p), nil
+}
+
+func startLogStream(ctx context.Context, client *docker.Client, status io.Writer) (io.Reader, func()) {
+	if status == nil || client == nil {
+		return nil, nil
+	}
+	logPR, logPW := io.Pipe()
+	logCtx, cancel := context.WithCancel(ctx)
+	go func() { _ = client.StreamRecentLogs(logCtx, logPW); _ = logPW.Close() }()
+	return logPR, cancel
 }
 
 // Flush writes any buffered partial-match bytes to the underlying writer.
