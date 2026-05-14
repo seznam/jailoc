@@ -167,7 +167,7 @@ var rootCmd = &cobra.Command{
 			attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
 		default:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
-			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode, sessionFlag, continueFlag)
+			attachErr = attachOnHost(attachCtx, client, ws, targetPath, cfg.PasswordMode, sessionFlag, continueFlag)
 			if errors.Is(attachErr, errPTYUnsupported) {
 				if remoteFlag {
 					return fmt.Errorf("remote mode requires PTY support, which is not available on this platform; use --exec instead")
