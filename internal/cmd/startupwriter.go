@@ -8,33 +8,34 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 var startupAltScreenEnable = []byte("\x1b[?1049h")
 
 const (
-	activateMinVisible = 1      // visible (non-escape) characters after alt-screen
+	activateMinVisible = 1       // visible (non-escape) characters after alt-screen
 	maxBufferSize      = 1 << 20 // defensive cap on buffered data (1 MiB)
 )
 
 var _ io.WriteCloser = (*startupWriter)(nil)
 
 type startupWriter struct {
-	w            io.Writer
-	status       io.Writer
-	logReader    io.Reader
-	logCancel    func()
-	logDone      chan struct{}
-	buf          []byte
-	overlap      []byte
-	ready        bool
+	w              io.Writer
+	status         io.Writer
+	logReader      io.Reader
+	logCancel      func()
+	logDone        chan struct{}
+	buf            []byte
+	overlap        []byte
+	ready          bool
 	altSeen        bool
 	postAltVisible int
 	inEscape       bool
 	escType        byte
 	timer          *time.Timer
-	mu           sync.Mutex
-	timeout      time.Duration
+	mu             sync.Mutex
+	timeout        time.Duration
 }
 
 func newStartupWriter(w io.Writer, status io.Writer, timeout time.Duration, logReader io.Reader, logCancel func()) *startupWriter {
@@ -68,6 +69,9 @@ func (s *startupWriter) Write(p []byte) (int, error) {
 
 	s.buf = append(s.buf, p...)
 
+	// Buffer cap exceeded — activate() flushes s.buf (which already
+	// includes the current p via the append above) to s.w and marks
+	// s.ready=true so subsequent Writes bypass buffering.
 	if len(s.buf) > maxBufferSize {
 		s.activate()
 		return len(p), nil
@@ -196,23 +200,21 @@ func (s *startupWriter) readLogs() {
 			continue
 		}
 
-		if len(msg) > 80 {
-			msg = msg[:80]
+		if utf8.RuneCountInString(msg) > 80 {
+			runes := []rune(msg)
+			msg = string(runes[:80])
 		}
 
 		s.mu.Lock()
-		ready := s.ready
-		s.mu.Unlock()
-		if ready {
+		if s.ready {
+			s.mu.Unlock()
 			break
 		}
-
-		if time.Since(lastUpdate) < 100*time.Millisecond {
-			continue
+		if time.Since(lastUpdate) >= 100*time.Millisecond {
+			_, _ = fmt.Fprintf(s.status, "\x1b[2K\r%s", msg)
+			lastUpdate = time.Now()
 		}
-
-		_, _ = fmt.Fprintf(s.status, "\x1b[2K\r%s", msg)
-		lastUpdate = time.Now()
+		s.mu.Unlock()
 	}
 }
 

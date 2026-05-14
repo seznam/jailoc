@@ -216,7 +216,7 @@ func TestStartupWriter_UnquotedMsgExtracted(t *testing.T) {
 	var buf bytes.Buffer
 	var status bytes.Buffer
 	pr, pw := io.Pipe()
-		t.Cleanup(func() { _ = pw.Close() })
+	t.Cleanup(func() { _ = pw.Close() })
 
 	sw := newStartupWriter(&buf, &status, 5*time.Second, pr, func() {})
 
@@ -240,7 +240,7 @@ func TestStartupWriter_NonLogfmtLineSkipped(t *testing.T) {
 	var buf bytes.Buffer
 	var status bytes.Buffer
 	pr, pw := io.Pipe()
-		t.Cleanup(func() { _ = pw.Close() })
+	t.Cleanup(func() { _ = pw.Close() })
 
 	sw := newStartupWriter(&buf, &status, 5*time.Second, pr, func() {})
 
@@ -264,7 +264,7 @@ func TestStartupWriter_EmptyMsgSkipped(t *testing.T) {
 	var buf bytes.Buffer
 	var status bytes.Buffer
 	pr, pw := io.Pipe()
-		t.Cleanup(func() { _ = pw.Close() })
+	t.Cleanup(func() { _ = pw.Close() })
 
 	sw := newStartupWriter(&buf, &status, 5*time.Second, pr, func() {})
 
@@ -350,7 +350,7 @@ func TestStartupWriter_GoroutineExitsOnActivate(t *testing.T) {
 	var buf bytes.Buffer
 	var status bytes.Buffer
 	pr, pw := io.Pipe()
-		t.Cleanup(func() { _ = pw.Close() })
+	t.Cleanup(func() { _ = pw.Close() })
 
 	cancelled := make(chan struct{})
 	cancelFn := func() {

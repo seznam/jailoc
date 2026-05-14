@@ -230,15 +230,7 @@ func attachOnHost(ctx context.Context, client *docker.Client, ws *workspace.Reso
 	if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: uintptr→int is safe for file descriptors
 		status = os.Stdout
 	}
-	var logReader io.Reader
-	var logCancel func()
-	if status != nil && client != nil {
-		pr, pw := io.Pipe()
-		logCtx, cancel := context.WithCancel(ctx)
-		logCancel = cancel
-		go func() { _ = client.StreamRecentLogs(logCtx, pw); _ = pw.Close() }()
-		logReader = pr
-	}
+	logReader, logCancel := startLogStream(ctx, client, status)
 	sw := newStartupWriter(rw, status, 5*time.Second, logReader, logCancel)
 	_, copyErr := io.Copy(sw, ptmx)
 
@@ -277,15 +269,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 	if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: uintptr→int is safe for file descriptors
 		status = os.Stdout
 	}
-	var logReader io.Reader
-	var logCancel func()
-	if status != nil && client != nil {
-		pr, pw := io.Pipe()
-		logCtx, cancel := context.WithCancel(ctx)
-		logCancel = cancel
-		go func() { _ = client.StreamRecentLogs(logCtx, pw); _ = pw.Close() }()
-		logReader = pr
-	}
+	logReader, logCancel := startLogStream(ctx, client, status)
 	sw := newStartupWriter(rw, status, 5*time.Second, logReader, logCancel)
 	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, sw, os.Stderr)
 	if cerr := sw.Close(); cerr != nil && err == nil {
@@ -467,6 +451,16 @@ func (r *exitRewriter) Write(p []byte) (int, error) {
 	}
 
 	return len(p), nil
+}
+
+func startLogStream(ctx context.Context, client *docker.Client, status io.Writer) (io.Reader, func()) {
+	if status == nil || client == nil {
+		return nil, nil
+	}
+	logPR, logPW := io.Pipe()
+	logCtx, cancel := context.WithCancel(ctx)
+	go func() { _ = client.StreamRecentLogs(logCtx, logPW); _ = logPW.Close() }()
+	return logPR, cancel
 }
 
 // Flush writes any buffered partial-match bytes to the underlying writer.
