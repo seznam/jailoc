@@ -227,7 +227,7 @@ func attachOnHost(ctx context.Context, client *docker.Client, ws *workspace.Reso
 
 	rw := &exitRewriter{w: os.Stdout}
 	var status io.Writer
-	if term.IsTerminal(int(os.Stdout.Fd())) {
+	if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: uintptr→int is safe for file descriptors
 		status = os.Stdout
 	}
 	var logReader io.Reader
@@ -274,7 +274,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
 	var status io.Writer
-	if term.IsTerminal(int(os.Stdout.Fd())) {
+	if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: uintptr→int is safe for file descriptors
 		status = os.Stdout
 	}
 	var logReader io.Reader
