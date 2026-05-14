@@ -119,8 +119,7 @@ func TestStartupWriter_CloseFlushesBuffer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, buf.String())
 
-	err = sw.Close()
-	require.NoError(t, err)
+	sw.Close()
 	assert.Equal(t, "pending data", buf.String())
 }
 
@@ -154,8 +153,7 @@ func TestStartupWriter_LoadingMessageErased(t *testing.T) {
 	assert.Equal(t, "Starting OpenCode...", status.String())
 
 	// Trigger activate via Close.
-	err := sw.Close()
-	require.NoError(t, err)
+	sw.Close()
 
 	// Status should now also have the erase sequence.
 	assert.Equal(t, "Starting OpenCode...\x1b[2K\r", status.String())
@@ -307,8 +305,8 @@ func TestStartupWriter_LongMsgTruncated(t *testing.T) {
 	statusStr := status.String()
 	afterInitial := strings.TrimPrefix(statusStr, "Starting OpenCode...")
 	afterErase := strings.TrimPrefix(afterInitial, "\x1b[2K\r")
-	assert.LessOrEqual(t, len(afterErase), 80)
-	assert.Equal(t, strings.Repeat("x", 80), afterErase)
+	assert.LessOrEqual(t, len([]rune(afterErase)), 80)
+	assert.Equal(t, strings.Repeat("x", 79)+"…", afterErase)
 }
 
 func TestStartupWriter_NilLogReaderNoPanic(t *testing.T) {
@@ -320,8 +318,7 @@ func TestStartupWriter_NilLogReaderNoPanic(t *testing.T) {
 
 	assert.Equal(t, "Starting OpenCode...", status.String())
 
-	err := sw.Close()
-	require.NoError(t, err)
+	sw.Close()
 
 	assert.Contains(t, status.String(), "\x1b[2K\r")
 }

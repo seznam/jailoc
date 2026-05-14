@@ -18,7 +18,7 @@ const (
 	maxBufferSize      = 1 << 20 // defensive cap on buffered data (1 MiB)
 )
 
-var _ io.WriteCloser = (*startupWriter)(nil)
+var _ io.Writer = (*startupWriter)(nil)
 
 type startupWriter struct {
 	w              io.Writer
@@ -180,12 +180,11 @@ func (s *startupWriter) countVisibleIn(p []byte) int {
 	return n
 }
 
-func (s *startupWriter) Close() error {
+func (s *startupWriter) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.activate()
-	return nil
 }
 
 func (s *startupWriter) readLogs() {
@@ -202,7 +201,7 @@ func (s *startupWriter) readLogs() {
 
 		if utf8.RuneCountInString(msg) > 80 {
 			runes := []rune(msg)
-			msg = string(runes[:80])
+			msg = string(runes[:79]) + "…"
 		}
 
 		s.mu.Lock()
@@ -221,6 +220,7 @@ func (s *startupWriter) readLogs() {
 // extractLogfmtMsg extracts the value of the msg= field from a logfmt-formatted line.
 // Returns empty string if no msg= field is found or the value is empty.
 // Handles both quoted (msg="text here") and unquoted (msg=connecting) values.
+// Note: backslash-escaped quotes inside quoted values are not handled.
 func extractLogfmtMsg(line string) string {
 	const key = "msg="
 
