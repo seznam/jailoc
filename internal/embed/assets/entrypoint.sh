@@ -116,12 +116,27 @@ $IPT -A OUTPUT -d 100.64.0.0/10 -j DROP
 # into the container's writable layer so the agent can read and modify config
 # at runtime without writes leaking back to the host.
 # node_modules is excluded: OpenCode reinstalls its npm plugin runtime on startup.
+
+# _is_under_bind_mount returns 0 when the given path, or any ancestor below /,
+# is a mount point. This catches both direct mounts at $dst and broader mounts
+# at a parent directory (e.g. /home/agent or /home/agent/.config).
+_is_under_bind_mount() {
+  local p="$1"
+  while [ "$p" != "/" ] && [ -n "$p" ]; do
+    if mountpoint -q "$p" 2>/dev/null; then
+      return 0
+    fi
+    p="$(dirname "$p")"
+  done
+  return 1
+}
+
 for pair in \
     "/mnt/jailoc-host/config-opencode:/home/agent/.config/opencode" \
     "/mnt/jailoc-host/dot-opencode:/home/agent/.opencode"; do
   seed="${pair%%:*}"
   dst="${pair#*:}"
-  if [ -d "$seed" ] && ! mountpoint -q "$dst" 2>/dev/null; then
+  if [ -d "$seed" ] && ! _is_under_bind_mount "$dst"; then
     mkdir -p "$dst" 2>/dev/null || true
     find "$seed" -mindepth 1 -maxdepth 1 ! -name node_modules -exec cp -a {} "$dst/" \;
   fi
