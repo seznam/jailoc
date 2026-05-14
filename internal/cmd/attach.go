@@ -231,7 +231,7 @@ func attachOnHost(ctx context.Context, client *docker.Client, ws *workspace.Reso
 		status = os.Stdout
 	}
 	logReader, logCancel := startLogStream(ctx, client, status)
-	sw := newStartupWriter(rw, status, startupTimeout, logReader, logCancel)
+	sw := newStartupWriter(rw, status, slowStartWarning, logReader, logCancel)
 	_, copyErr := io.Copy(sw, ptmx)
 
 	// Close the PTY master so the child receives SIGHUP if it's still running
@@ -268,7 +268,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 		status = os.Stdout
 	}
 	logReader, logCancel := startLogStream(ctx, client, status)
-	sw := newStartupWriter(rw, status, startupTimeout, logReader, logCancel)
+	sw := newStartupWriter(rw, status, slowStartWarning, logReader, logCancel)
 	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, sw, os.Stderr)
 	sw.Close()
 	if ferr := rw.Flush(); ferr != nil && err == nil {
@@ -280,7 +280,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 const (
 	attachPollInterval = 500 * time.Millisecond
 	attachWaitDelay    = 2 * time.Second
-	startupTimeout     = 5 * time.Second
+	slowStartWarning   = 10 * time.Second
 )
 
 var errUnhealthy = errors.New("opencode process unhealthy inside container")

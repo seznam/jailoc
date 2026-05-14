@@ -90,7 +90,7 @@ func TestStartupWriter_EscapeOnlyDoesNotActivate(t *testing.T) {
 	assert.NotEmpty(t, buf.String(), "first visible character should activate")
 }
 
-func TestStartupWriter_TimeoutFlushes(t *testing.T) {
+func TestStartupWriter_SlowStartWarning(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -103,9 +103,15 @@ func TestStartupWriter_TimeoutFlushes(t *testing.T) {
 
 	time.Sleep(150 * time.Millisecond)
 
-	require.Eventually(t, func() bool {
-		return buf.String() == "waiting for timeout"
-	}, 2*time.Second, 10*time.Millisecond)
+	// Buffer should NOT be flushed — still buffering.
+	assert.Empty(t, buf.String(), "timeout should not flush the buffer")
+
+	// Status should contain the slow-start warning.
+	assert.Contains(t, status.String(), "unusually long")
+
+	// Close flushes normally.
+	sw.Close()
+	assert.Equal(t, "waiting for timeout", buf.String())
 }
 
 func TestStartupWriter_CloseFlushesBuffer(t *testing.T) {

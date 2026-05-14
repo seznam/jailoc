@@ -49,7 +49,10 @@ func newStartupWriter(w io.Writer, status io.Writer, timeout time.Duration, logR
 	sw.timer = time.AfterFunc(timeout, func() {
 		sw.mu.Lock()
 		defer sw.mu.Unlock()
-		sw.activate()
+		if sw.ready {
+			return
+		}
+		_, _ = fmt.Fprintf(sw.status, "\x1b[2K\rOpenCode is taking unusually long — run 'jailoc logs' to check")
 	})
 	if logReader != nil {
 		sw.logDone = make(chan struct{})
