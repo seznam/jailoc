@@ -111,6 +111,22 @@ $IPT -A OUTPUT -d 192.168.0.0/16 -j DROP
 $IPT -A OUTPUT -d 169.254.0.0/16 -j DROP
 $IPT -A OUTPUT -d 100.64.0.0/10 -j DROP
 
+# --- Copy OC config seed mounts to writable paths ---
+# Host OC config dirs are mounted read-only at seed paths. Copy their contents
+# into the container's writable layer so the agent can read and modify config
+# at runtime without writes leaking back to the host.
+# node_modules is excluded: OpenCode reinstalls its npm plugin runtime on startup.
+for pair in \
+    "/mnt/jailoc-host/config-opencode:/home/agent/.config/opencode" \
+    "/mnt/jailoc-host/dot-opencode:/home/agent/.opencode"; do
+  seed="${pair%%:*}"
+  dst="${pair#*:}"
+  if [ -d "$seed" ] && ! mountpoint -q "$dst" 2>/dev/null; then
+    mkdir -p "$dst" 2>/dev/null || true
+    find "$seed" -mindepth 1 -maxdepth 1 ! -name node_modules -exec cp -a {} "$dst/" \;
+  fi
+done
+
 # --- Pre-create OpenCode config directory with .gitignore ---
 # jailoc 1.13+ ships OpenCode v1.14.22+ which writes a .gitignore to every
 # config directory on startup. The default mount is :ro, so `jailoc up`
@@ -131,7 +147,7 @@ bun.lock
 GITIGNORE
 fi
 
-chown -R 1000:1000 /home/agent/.local /home/agent/.cache /home/agent/.config 2>/dev/null || true
+chown -R 1000:1000 /home/agent/.local /home/agent/.cache /home/agent/.config /home/agent/.opencode 2>/dev/null || true
 chown 1000:1000 /home/agent/.claude 2>/dev/null || true
 
 if [ -S /run/ssh-agent.sock ]; then

@@ -249,12 +249,12 @@ Environment variables from multiple sources are merged in this order (later entr
 
 | Container path | Host source | Mode |
 |---|---|---|
-| `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
-| `/home/agent/.opencode` | `~/.opencode` | `rw` |
+| `/mnt/jailoc-host/config-opencode` | `~/.config/opencode` | `ro` |
+| `/mnt/jailoc-host/dot-opencode` | `~/.opencode` | `ro` |
 | `/home/agent/.claude/transcripts` | `~/.claude/transcripts` | `rw` |
 | `/home/agent/.agents` | `~/.agents` | `ro` |
 
-OpenCode configuration directories are mounted read-write because the agent needs write access to persist settings changes, install tools and MCPs, and update its own configuration at runtime.
+OpenCode configuration directories use an overlay model. The host directory is mounted read-only at the seed path. The container entrypoint copies this directory (excluding `node_modules`, which OpenCode reinstalls on startup) into the container's writable layer at the actual configuration path. The agent can modify, install tools, and update its own OpenCode configuration at runtime; writes stay inside the container and do not propagate to the host filesystem. Each `jailoc up` copies a fresh snapshot from the host. Modifications from previous sessions are discarded when the container stops. An explicit `rw` bind mount at the actual container path (e.g., `mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]`) takes priority. The entrypoint detects the direct mount and skips the seed copy.
 
 `ssh_auth_sock`, `git_config`, `expose_port`, and `enable_docker` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config`, `expose_port`, and `enable_docker` fall back to `true` when neither the workspace nor defaults set it.
 
