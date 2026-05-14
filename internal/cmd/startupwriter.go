@@ -13,8 +13,8 @@ import (
 var startupAltScreenEnable = []byte("\x1b[?1049h")
 
 const (
-	activateMinBytes = 512     // post-alt-screen bytes before activation
-	maxBufferSize    = 1 << 20 // defensive cap on buffered data (1 MiB)
+	activateMinVisible = 1      // visible (non-escape) characters after alt-screen
+	maxBufferSize      = 1 << 20 // defensive cap on buffered data (1 MiB)
 )
 
 var _ io.WriteCloser = (*startupWriter)(nil)
@@ -28,9 +28,11 @@ type startupWriter struct {
 	buf          []byte
 	overlap      []byte
 	ready        bool
-	altSeen      bool
-	postAltBytes int
-	timer        *time.Timer
+	altSeen        bool
+	postAltVisible int
+	inEscape       bool
+	escType        byte
+	timer          *time.Timer
 	mu           sync.Mutex
 	timeout      time.Duration
 }
@@ -71,16 +73,24 @@ func (s *startupWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	combined := append(append([]byte{}, s.overlap...), p...)
-	if !s.altSeen && bytes.Contains(combined, startupAltScreenEnable) {
-		s.altSeen = true
+	if !s.altSeen {
+		combined := append(append([]byte{}, s.overlap...), p...)
+		if idx := bytes.Index(combined, startupAltScreenEnable); idx >= 0 {
+			s.altSeen = true
+			postAltStart := idx + len(startupAltScreenEnable) - len(s.overlap)
+			if postAltStart < 0 {
+				postAltStart = 0
+			}
+			if postAltStart < len(p) {
+				s.postAltVisible += s.countVisibleIn(p[postAltStart:])
+			}
+		}
+	} else {
+		s.postAltVisible += s.countVisibleIn(p)
 	}
 
-	if s.altSeen {
-		s.postAltBytes += len(p)
-		if s.postAltBytes >= activateMinBytes {
-			s.activate()
-		}
+	if s.altSeen && s.postAltVisible >= activateMinVisible {
+		s.activate()
 	}
 
 	if len(p) >= len(startupAltScreenEnable) {
@@ -133,6 +143,37 @@ func (s *startupWriter) activate() {
 		_, _ = s.w.Write(s.buf)
 		s.buf = nil
 	}
+}
+
+func (s *startupWriter) countVisibleIn(p []byte) int {
+	n := 0
+	for _, b := range p {
+		switch {
+		case s.inEscape && s.escType == 0:
+			if b == '[' || b == ']' {
+				s.escType = b
+			} else {
+				s.inEscape = false
+			}
+		case s.inEscape && s.escType == '[':
+			if b >= 0x40 && b <= 0x7E {
+				s.inEscape = false
+			}
+		case s.inEscape && s.escType == ']':
+			switch b {
+			case 0x07:
+				s.inEscape = false
+			case 0x1b:
+				s.escType = 0
+			}
+		case b == 0x1b:
+			s.inEscape = true
+			s.escType = 0
+		case b >= 0x20 && b <= 0x7E:
+			n++
+		}
+	}
+	return n
 }
 
 func (s *startupWriter) Close() error {

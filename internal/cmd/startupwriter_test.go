@@ -35,13 +35,13 @@ func TestStartupWriter_BuffersUntilAltScreen(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, buf.String(), "data should be buffered, not written to underlying writer")
 
-	// Alt-screen alone should not flush — need substantial content first.
+	// Alt-screen alone should not flush — need visible content.
 	_, err = sw.Write([]byte("\x1b[?1049h"))
 	require.NoError(t, err)
 	assert.Empty(t, buf.String(), "alt-screen alone should not flush")
 
-	// Substantial content triggers activation.
-	content := strings.Repeat("x", activateMinBytes)
+	// Visible content triggers activation.
+	content := strings.Repeat("x", activateMinVisible)
 	_, err = sw.Write([]byte(content))
 	require.NoError(t, err)
 	assert.Equal(t, "buffered data\x1b[?1049h"+content, buf.String())
@@ -64,11 +64,30 @@ func TestStartupWriter_CrossBoundaryDetection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, buf.String(), "should still buffer until enough post-alt content")
 
-	// Substantial content triggers activation.
-	content := strings.Repeat("x", activateMinBytes)
+	// Visible content triggers activation.
+	content := strings.Repeat("x", activateMinVisible)
 	_, err = sw.Write([]byte(content))
 	require.NoError(t, err)
 	assert.Equal(t, "somedata\x1b[?1049h\x1b[H\x1b[2J"+content, buf.String())
+}
+
+func TestStartupWriter_EscapeOnlyDoesNotActivate(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	var status bytes.Buffer
+	sw := newStartupWriter(&buf, &status, 5*time.Second, nil, nil)
+
+	_, err := sw.Write([]byte("\x1b[?1049h"))
+	require.NoError(t, err)
+
+	_, err = sw.Write([]byte("\x1b[H\x1b[2J\x1b[?25l\x1b[1;1H\x1b[2K\x1b[2;1H\x1b[2K"))
+	require.NoError(t, err)
+	assert.Empty(t, buf.String(), "escape-only content should not activate")
+
+	_, err = sw.Write([]byte("A"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, buf.String(), "first visible character should activate")
 }
 
 func TestStartupWriter_TimeoutFlushes(t *testing.T) {
@@ -113,7 +132,7 @@ func TestStartupWriter_ReadyPassthrough(t *testing.T) {
 	sw := newStartupWriter(&buf, &status, 5*time.Second, nil, nil)
 
 	// Trigger activation with alt-screen + substantial content.
-	content := "\x1b[?1049h" + strings.Repeat("x", activateMinBytes)
+	content := "\x1b[?1049h" + strings.Repeat("x", activateMinVisible)
 	_, err := sw.Write([]byte(content))
 	require.NoError(t, err)
 
@@ -341,7 +360,7 @@ func TestStartupWriter_GoroutineExitsOnActivate(t *testing.T) {
 
 	sw := newStartupWriter(&buf, &status, 5*time.Second, pr, cancelFn)
 
-	_, err := sw.Write([]byte("\x1b[?1049h" + strings.Repeat("x", activateMinBytes)))
+	_, err := sw.Write([]byte("\x1b[?1049h" + strings.Repeat("x", activateMinVisible)))
 	require.NoError(t, err)
 
 	select {
@@ -380,7 +399,7 @@ func TestStartupWriter_NoStatusWritesAfterActivate(t *testing.T) {
 
 	time.Sleep(150 * time.Millisecond)
 
-	_, err := sw.Write([]byte("\x1b[?1049h" + strings.Repeat("x", activateMinBytes)))
+	_, err := sw.Write([]byte("\x1b[?1049h" + strings.Repeat("x", activateMinVisible)))
 	require.NoError(t, err)
 
 	select {
