@@ -12,24 +12,27 @@ import (
 
 var startupAltScreenEnable = []byte("\x1b[?1049h")
 
-var (
-	_ io.WriteCloser = (*startupWriter)(nil)
-	_                = newStartupWriter
+const (
+	activateMinBytes = 512     // post-alt-screen bytes before activation
+	maxBufferSize    = 1 << 20 // defensive cap on buffered data (1 MiB)
 )
 
+var _ io.WriteCloser = (*startupWriter)(nil)
+
 type startupWriter struct {
-	w         io.Writer
-	status    io.Writer
-	logReader io.Reader
-	logCancel func()
-	logDone   chan struct{}
-	buf       []byte
-	overlap   []byte
-	ready     bool
-	altSeen   bool
-	timer     *time.Timer
-	mu        sync.Mutex
-	timeout   time.Duration
+	w            io.Writer
+	status       io.Writer
+	logReader    io.Reader
+	logCancel    func()
+	logDone      chan struct{}
+	buf          []byte
+	overlap      []byte
+	ready        bool
+	altSeen      bool
+	postAltBytes int
+	timer        *time.Timer
+	mu           sync.Mutex
+	timeout      time.Duration
 }
 
 func newStartupWriter(w io.Writer, status io.Writer, timeout time.Duration, logReader io.Reader, logCancel func()) *startupWriter {
@@ -39,7 +42,7 @@ func newStartupWriter(w io.Writer, status io.Writer, timeout time.Duration, logR
 		return sw
 	}
 
-	_, _ = status.Write([]byte("Starting OpenCode...\r\n"))
+	_, _ = status.Write([]byte("Starting OpenCode..."))
 	sw.timer = time.AfterFunc(timeout, func() {
 		sw.mu.Lock()
 		defer sw.mu.Unlock()
@@ -63,13 +66,21 @@ func (s *startupWriter) Write(p []byte) (int, error) {
 
 	s.buf = append(s.buf, p...)
 
+	if len(s.buf) > maxBufferSize {
+		s.activate()
+		return len(p), nil
+	}
+
 	combined := append(append([]byte{}, s.overlap...), p...)
 	if !s.altSeen && bytes.Contains(combined, startupAltScreenEnable) {
 		s.altSeen = true
 	}
 
-	if s.altSeen && len(p) > 0 {
-		s.activate()
+	if s.altSeen {
+		s.postAltBytes += len(p)
+		if s.postAltBytes >= activateMinBytes {
+			s.activate()
+		}
 	}
 
 	if len(p) >= len(startupAltScreenEnable) {

@@ -35,10 +35,16 @@ func TestStartupWriter_BuffersUntilAltScreen(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, buf.String(), "data should be buffered, not written to underlying writer")
 
-	// Write alt-screen enable + content — should flush everything.
-	_, err = sw.Write([]byte("\x1b[?1049h\x1b[H"))
+	// Alt-screen alone should not flush — need substantial content first.
+	_, err = sw.Write([]byte("\x1b[?1049h"))
 	require.NoError(t, err)
-	assert.Equal(t, "buffered data\x1b[?1049h\x1b[H", buf.String())
+	assert.Empty(t, buf.String(), "alt-screen alone should not flush")
+
+	// Substantial content triggers activation.
+	content := strings.Repeat("x", activateMinBytes)
+	_, err = sw.Write([]byte(content))
+	require.NoError(t, err)
+	assert.Equal(t, "buffered data\x1b[?1049h"+content, buf.String())
 }
 
 func TestStartupWriter_CrossBoundaryDetection(t *testing.T) {
@@ -53,10 +59,16 @@ func TestStartupWriter_CrossBoundaryDetection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, buf.String(), "should still be buffering")
 
-	// Second write completes the sequence: 49h + more content.
+	// Second write completes the sequence but doesn't activate yet.
 	_, err = sw.Write([]byte("49h\x1b[H\x1b[2J"))
 	require.NoError(t, err)
-	assert.Equal(t, "somedata\x1b[?1049h\x1b[H\x1b[2J", buf.String())
+	assert.Empty(t, buf.String(), "should still buffer until enough post-alt content")
+
+	// Substantial content triggers activation.
+	content := strings.Repeat("x", activateMinBytes)
+	_, err = sw.Write([]byte(content))
+	require.NoError(t, err)
+	assert.Equal(t, "somedata\x1b[?1049h\x1b[H\x1b[2J"+content, buf.String())
 }
 
 func TestStartupWriter_TimeoutFlushes(t *testing.T) {
@@ -72,7 +84,9 @@ func TestStartupWriter_TimeoutFlushes(t *testing.T) {
 
 	time.Sleep(150 * time.Millisecond)
 
-	assert.Equal(t, "waiting for timeout", buf.String())
+	require.Eventually(t, func() bool {
+		return buf.String() == "waiting for timeout"
+	}, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestStartupWriter_CloseFlushesBuffer(t *testing.T) {
@@ -98,8 +112,9 @@ func TestStartupWriter_ReadyPassthrough(t *testing.T) {
 	var status bytes.Buffer
 	sw := newStartupWriter(&buf, &status, 5*time.Second, nil, nil)
 
-	// Trigger detection with alt-screen sequence.
-	_, err := sw.Write([]byte("\x1b[?1049h"))
+	// Trigger activation with alt-screen + substantial content.
+	content := "\x1b[?1049h" + strings.Repeat("x", activateMinBytes)
+	_, err := sw.Write([]byte(content))
 	require.NoError(t, err)
 
 	// Subsequent writes should pass through directly.
@@ -117,14 +132,14 @@ func TestStartupWriter_LoadingMessageErased(t *testing.T) {
 	sw := newStartupWriter(&buf, &status, 5*time.Second, nil, nil)
 
 	// Status should have the loading message from constructor.
-	assert.Equal(t, "Starting OpenCode...\r\n", status.String())
+	assert.Equal(t, "Starting OpenCode...", status.String())
 
 	// Trigger activate via Close.
 	err := sw.Close()
 	require.NoError(t, err)
 
 	// Status should now also have the erase sequence.
-	assert.Equal(t, "Starting OpenCode...\r\n\x1b[2K\r", status.String())
+	assert.Equal(t, "Starting OpenCode...\x1b[2K\r", status.String())
 }
 
 func TestStartupWriter_LogMessageAppearsInStatus(t *testing.T) {
@@ -221,7 +236,7 @@ func TestStartupWriter_NonLogfmtLineSkipped(t *testing.T) {
 		t.Fatal("goroutine did not exit")
 	}
 
-	assert.Equal(t, "Starting OpenCode...\r\n", status.String())
+	assert.Equal(t, "Starting OpenCode...", status.String())
 }
 
 func TestStartupWriter_EmptyMsgSkipped(t *testing.T) {
@@ -245,7 +260,7 @@ func TestStartupWriter_EmptyMsgSkipped(t *testing.T) {
 		t.Fatal("goroutine did not exit")
 	}
 
-	assert.Equal(t, "Starting OpenCode...\r\n", status.String())
+	assert.Equal(t, "Starting OpenCode...", status.String())
 }
 
 func TestStartupWriter_LongMsgTruncated(t *testing.T) {
@@ -271,7 +286,7 @@ func TestStartupWriter_LongMsgTruncated(t *testing.T) {
 	}
 
 	statusStr := status.String()
-	afterInitial := strings.TrimPrefix(statusStr, "Starting OpenCode...\r\n")
+	afterInitial := strings.TrimPrefix(statusStr, "Starting OpenCode...")
 	afterErase := strings.TrimPrefix(afterInitial, "\x1b[2K\r")
 	assert.LessOrEqual(t, len(afterErase), 80)
 	assert.Equal(t, strings.Repeat("x", 80), afterErase)
@@ -284,7 +299,7 @@ func TestStartupWriter_NilLogReaderNoPanic(t *testing.T) {
 	var status bytes.Buffer
 	sw := newStartupWriter(&buf, &status, 5*time.Second, nil, nil)
 
-	assert.Equal(t, "Starting OpenCode...\r\n", status.String())
+	assert.Equal(t, "Starting OpenCode...", status.String())
 
 	err := sw.Close()
 	require.NoError(t, err)
@@ -326,7 +341,7 @@ func TestStartupWriter_GoroutineExitsOnActivate(t *testing.T) {
 
 	sw := newStartupWriter(&buf, &status, 5*time.Second, pr, cancelFn)
 
-	_, err := sw.Write([]byte("\x1b[?1049h"))
+	_, err := sw.Write([]byte("\x1b[?1049h" + strings.Repeat("x", activateMinBytes)))
 	require.NoError(t, err)
 
 	select {
@@ -365,7 +380,7 @@ func TestStartupWriter_NoStatusWritesAfterActivate(t *testing.T) {
 
 	time.Sleep(150 * time.Millisecond)
 
-	_, err := sw.Write([]byte("\x1b[?1049h"))
+	_, err := sw.Write([]byte("\x1b[?1049h" + strings.Repeat("x", activateMinBytes)))
 	require.NoError(t, err)
 
 	select {
