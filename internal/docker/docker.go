@@ -522,7 +522,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	overlayBuildArgs := proxyBuildArgs()
 	overlayBuildArgs["BASE"] = &baseArg
 
-	_, _ = color.New(color.FgCyan).Printf("Building workspace overlay image...\n")
+	_, _ = color.New(color.FgCyan).Printf("Building workspace overlay image (sending build context to Docker daemon)...\n")
 	resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:       []string{overlayTag},
 		BuildArgs:  overlayBuildArgs,
