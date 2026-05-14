@@ -226,7 +226,12 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}()
 
 	rw := &exitRewriter{w: os.Stdout}
-	_, copyErr := io.Copy(rw, ptmx)
+	var status io.Writer
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		status = os.Stdout
+	}
+	sw := newStartupWriter(rw, status, 5*time.Second)
+	_, copyErr := io.Copy(sw, ptmx)
 
 	// Close the PTY master so the child receives SIGHUP if it's still running
 	// (e.g. when io.Copy returned early due to a downstream write error).
@@ -239,6 +244,9 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	// only when the process itself exited cleanly.
 	if copyErr != nil && err == nil && !errors.Is(copyErr, errEIO) {
 		err = fmt.Errorf("copy pty output: %w", copyErr)
+	}
+	if cerr := sw.Close(); cerr != nil && err == nil {
+		err = fmt.Errorf("close startup writer: %w", cerr)
 	}
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)
@@ -256,7 +264,15 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
-	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, rw, os.Stderr)
+	var status io.Writer
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		status = os.Stdout
+	}
+	sw := newStartupWriter(rw, status, 5*time.Second)
+	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, sw, os.Stderr)
+	if cerr := sw.Close(); cerr != nil && err == nil {
+		err = fmt.Errorf("close startup writer: %w", cerr)
+	}
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)
 	}
