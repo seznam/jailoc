@@ -154,6 +154,9 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	// us intercept stdout through the exitRewriter.
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
+		if errors.Is(err, pty.ErrUnsupported) {
+			return errPTYUnsupported
+		}
 		return fmt.Errorf("start command with pty: %w", err)
 	}
 	defer func() {
@@ -266,6 +269,7 @@ const (
 )
 
 var errUnhealthy = errors.New("opencode process unhealthy inside container")
+var errPTYUnsupported = errors.New("PTY not supported on this platform")
 
 func startAttachWatch(parent context.Context, client *docker.Client, workspaceName string) (context.Context, func(), error) {
 	containerID, err := client.CurrentContainerID(parent)
