@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,19 +18,22 @@ var (
 )
 
 type startupWriter struct {
-	w       io.Writer
-	status  io.Writer
-	buf     []byte
-	overlap []byte
-	ready   bool
-	altSeen bool
-	timer   *time.Timer
-	mu      sync.Mutex
-	timeout time.Duration
+	w         io.Writer
+	status    io.Writer
+	logReader io.Reader
+	logCancel func()
+	logDone   chan struct{}
+	buf       []byte
+	overlap   []byte
+	ready     bool
+	altSeen   bool
+	timer     *time.Timer
+	mu        sync.Mutex
+	timeout   time.Duration
 }
 
-func newStartupWriter(w io.Writer, status io.Writer, timeout time.Duration) *startupWriter {
-	sw := &startupWriter{w: w, status: status, timeout: timeout}
+func newStartupWriter(w io.Writer, status io.Writer, timeout time.Duration, logReader io.Reader, logCancel func()) *startupWriter {
+	sw := &startupWriter{w: w, status: status, timeout: timeout, logReader: logReader, logCancel: logCancel}
 	if status == nil {
 		sw.ready = true
 		return sw
@@ -39,6 +45,10 @@ func newStartupWriter(w io.Writer, status io.Writer, timeout time.Duration) *sta
 		defer sw.mu.Unlock()
 		sw.activate()
 	})
+	if logReader != nil {
+		sw.logDone = make(chan struct{})
+		go sw.readLogs()
+	}
 
 	return sw
 }
@@ -79,6 +89,26 @@ func (s *startupWriter) activate() {
 		return
 	}
 
+	logCancel := s.logCancel
+	s.logCancel = nil
+	logDone := s.logDone
+
+	if logCancel != nil {
+		logCancel()
+	}
+
+	if logDone != nil {
+		s.mu.Unlock()
+		select {
+		case <-logDone:
+		case <-time.After(time.Second):
+		}
+		s.mu.Lock()
+		if s.ready {
+			return
+		}
+	}
+
 	s.ready = true
 	if s.timer != nil {
 		s.timer.Stop()
@@ -100,4 +130,62 @@ func (s *startupWriter) Close() error {
 
 	s.activate()
 	return nil
+}
+
+func (s *startupWriter) readLogs() {
+	defer close(s.logDone)
+
+	scanner := bufio.NewScanner(s.logReader)
+	var lastUpdate time.Time
+
+	for scanner.Scan() {
+		msg := extractLogfmtMsg(scanner.Text())
+		if msg == "" {
+			continue
+		}
+
+		if len(msg) > 80 {
+			msg = msg[:80]
+		}
+
+		s.mu.Lock()
+		ready := s.ready
+		s.mu.Unlock()
+		if ready {
+			break
+		}
+
+		if time.Since(lastUpdate) < 100*time.Millisecond {
+			continue
+		}
+
+		_, _ = fmt.Fprintf(s.status, "\x1b[2K\r%s", msg)
+		lastUpdate = time.Now()
+	}
+}
+
+// extractLogfmtMsg extracts the value of the msg= field from a logfmt-formatted line.
+// Returns empty string if no msg= field is found or the value is empty.
+// Handles both quoted (msg="text here") and unquoted (msg=connecting) values.
+func extractLogfmtMsg(line string) string {
+	const key = "msg="
+
+	_, rest, found := strings.Cut(line, key)
+	if !found {
+		return ""
+	}
+	if len(rest) == 0 {
+		return ""
+	}
+
+	if rest[0] == '"' {
+		end := strings.Index(rest[1:], "\"")
+		if end < 0 {
+			return rest[1:]
+		}
+		return rest[1 : end+1]
+	}
+
+	value, _, _ := strings.Cut(rest, " ")
+	return value
 }

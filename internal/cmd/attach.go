@@ -124,7 +124,7 @@ func envWithOverrides(base []string, overrides ...string) []string {
 	return append(filtered, overrides...)
 }
 
-func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passwordMode string, session string, cont bool) error {
+func attachOnHost(ctx context.Context, client *docker.Client, ws *workspace.Resolved, dir string, passwordMode string, session string, cont bool) error {
 	binary, err := config.ResolveBinary()
 	if err != nil {
 		return fmt.Errorf("resolve opencode binary: %w", err)
@@ -230,7 +230,16 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		status = os.Stdout
 	}
-	sw := newStartupWriter(rw, status, 5*time.Second)
+	var logReader io.Reader
+	var logCancel func()
+	if status != nil && client != nil {
+		pr, pw := io.Pipe()
+		logCtx, cancel := context.WithCancel(ctx)
+		logCancel = cancel
+		go func() { _ = client.StreamRecentLogs(logCtx, pw); _ = pw.Close() }()
+		logReader = pr
+	}
+	sw := newStartupWriter(rw, status, 5*time.Second, logReader, logCancel)
 	_, copyErr := io.Copy(sw, ptmx)
 
 	// Close the PTY master so the child receives SIGHUP if it's still running
@@ -268,7 +277,16 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		status = os.Stdout
 	}
-	sw := newStartupWriter(rw, status, 5*time.Second)
+	var logReader io.Reader
+	var logCancel func()
+	if status != nil && client != nil {
+		pr, pw := io.Pipe()
+		logCtx, cancel := context.WithCancel(ctx)
+		logCancel = cancel
+		go func() { _ = client.StreamRecentLogs(logCtx, pw); _ = pw.Close() }()
+		logReader = pr
+	}
+	sw := newStartupWriter(rw, status, 5*time.Second, logReader, logCancel)
 	err = client.Exec(ctx, attachExecArgs(serverURL, dir, session, cont), execTUIConfigEnv("/etc/jailoc-tui.json"), os.Stdin, sw, os.Stderr)
 	if cerr := sw.Close(); cerr != nil && err == nil {
 		err = fmt.Errorf("close startup writer: %w", cerr)
