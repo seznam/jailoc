@@ -138,7 +138,7 @@ for pair in \
   dst="${pair#*:}"
   if [ -d "$seed" ] && ! _is_under_bind_mount "$dst"; then
     mkdir -p "$dst" 2>/dev/null || true
-    find "$seed" -mindepth 1 -maxdepth 1 ! -name node_modules -exec cp -an {} "$dst/" \;
+    find "$seed" -mindepth 1 -maxdepth 1 ! -name node_modules -exec cp -a {} "$dst/" \;
   fi
 done
 
