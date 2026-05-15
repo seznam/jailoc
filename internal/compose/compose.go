@@ -71,10 +71,12 @@ func containerPath(hostPath string) string {
 // splitMountSpec splits a mount spec string (host:container[:mode]) into its
 // parts, handling Windows drive-letter prefixes in the host path where the
 // colon after the drive letter is part of the path, not a field separator.
+// Only drive-absolute paths (e.g. C:\foo, D:/bar) are recognised; a path
+// separator must follow the colon to avoid mis-parsing specs like "a:/container".
 func splitMountSpec(spec string) (host, container, mode string, ok bool) {
 	s := spec
 	hostPrefix := ""
-	if len(s) >= 2 && s[1] == ':' &&
+	if len(s) >= 3 && s[1] == ':' && (s[2] == '\\' || s[2] == '/') &&
 		((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z')) {
 		hostPrefix = s[:2]
 		s = s[2:]

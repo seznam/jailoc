@@ -353,11 +353,13 @@ func validateEnvFiles(paths []string, context string) error {
 }
 
 func ParseMount(spec string) (Mount, error) {
-	// Handle Windows drive-letter paths (e.g., C:\Users\...) where the colon
-	// after the drive letter is part of the host path, not a field separator.
+	// Handle Windows drive-letter paths (e.g., C:\Users\... or C:/Users/...)
+	// where the colon after the drive letter is part of the host path, not a
+	// field separator. Only match when a path separator follows the colon to
+	// avoid mis-parsing specs like "a:/container".
 	splitSpec := spec
 	hostPrefix := ""
-	if len(spec) >= 2 && spec[1] == ':' &&
+	if len(spec) >= 3 && spec[1] == ':' && (spec[2] == '\\' || spec[2] == '/') &&
 		((spec[0] >= 'a' && spec[0] <= 'z') || (spec[0] >= 'A' && spec[0] <= 'Z')) {
 		hostPrefix = spec[:2]
 		splitSpec = spec[2:]
