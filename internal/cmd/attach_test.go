@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,6 +148,42 @@ func TestAttachExecArgs(t *testing.T) {
 			got := attachExecArgs(tt.serverURL, tt.dir, tt.session, tt.cont)
 			if !slicesEqual(got, tt.want) {
 				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrPTYUnsupported(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		err     error
+		isMatch bool
+	}{
+		{
+			name:    "matches sentinel directly",
+			err:     errPTYUnsupported,
+			isMatch: true,
+		},
+		{
+			name:    "matches wrapped sentinel",
+			err:     fmt.Errorf("wrap: %w", errPTYUnsupported),
+			isMatch: true,
+		},
+		{
+			name:    "does not match different error",
+			err:     errors.New("other error"),
+			isMatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := errors.Is(tt.err, errPTYUnsupported); got != tt.isMatch {
+				t.Errorf("errors.Is(%v, errPTYUnsupported) = %v, want %v", tt.err, got, tt.isMatch)
 			}
 		})
 	}

@@ -154,6 +154,9 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	// us intercept stdout through the exitRewriter.
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
+		if errors.Is(err, pty.ErrUnsupported) {
+			return errPTYUnsupported
+		}
 		return fmt.Errorf("start command with pty: %w", err)
 	}
 	defer func() {
@@ -164,28 +167,30 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	closeWaitDone := sync.OnceFunc(func() { close(waitDone) })
 	defer closeWaitDone()
 
-	// Forward terminal resizes to the PTY.
-	sigCh := make(chan os.Signal, 1)
-	sigDone := make(chan struct{})
-	signal.Notify(sigCh, syscall.SIGWINCH)
-	go func() {
-		defer close(sigDone)
-		for {
-			select {
-			case <-sigCh:
-				_ = pty.InheritSize(os.Stdin, ptmx)
-			case <-ctx.Done():
-				return
-			case <-waitDone:
-				return
+	if sigWinch != nil {
+		// Forward terminal resizes to the PTY.
+		sigCh := make(chan os.Signal, 1)
+		sigDone := make(chan struct{})
+		signal.Notify(sigCh, sigWinch)
+		go func() {
+			defer close(sigDone)
+			for {
+				select {
+				case <-sigCh:
+					_ = pty.InheritSize(os.Stdin, ptmx)
+				case <-ctx.Done():
+					return
+				case <-waitDone:
+					return
+				}
 			}
-		}
-	}()
-	defer func() {
-		signal.Stop(sigCh)
-		closeWaitDone()
-		<-sigDone
-	}()
+		}()
+		defer func() {
+			signal.Stop(sigCh)
+			closeWaitDone()
+			<-sigDone
+		}()
+	}
 	_ = pty.InheritSize(os.Stdin, ptmx)
 
 	// Raw mode so keystrokes pass through verbatim (Ctrl-C, arrows, etc.).
@@ -232,7 +237,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	// PTY reads commonly return EIO when the slave side closes on normal
 	// process exit — treat it as expected EOF. Surface other copy errors
 	// only when the process itself exited cleanly.
-	if copyErr != nil && err == nil && !errors.Is(copyErr, syscall.EIO) {
+	if copyErr != nil && err == nil && !errors.Is(copyErr, errEIO) {
 		err = fmt.Errorf("copy pty output: %w", copyErr)
 	}
 	if ferr := rw.Flush(); ferr != nil && err == nil {
@@ -264,6 +269,7 @@ const (
 )
 
 var errUnhealthy = errors.New("opencode process unhealthy inside container")
+var errPTYUnsupported = errors.New("PTY not supported on this platform")
 
 func startAttachWatch(parent context.Context, client *docker.Client, workspaceName string) (context.Context, func(), error) {
 	containerID, err := client.CurrentContainerID(parent)
