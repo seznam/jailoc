@@ -764,6 +764,18 @@ func TestMountsContainTarget(t *testing.T) {
 			containerPath: "/home/agent/.cache",
 			want:          false,
 		},
+		{
+			name:          "windows drive letter host",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.config/opencode:rw`},
+			containerPath: "/home/agent/.config/opencode",
+			want:          true,
+		},
+		{
+			name:          "windows drive letter no match",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.local:rw`},
+			containerPath: "/home/agent/.config/opencode",
+			want:          false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1006,6 +1018,27 @@ func TestReadOnlyMountCoversPath(t *testing.T) {
 			wantHost:      "/host/cfg/opencode",
 			wantCovered:   true,
 		},
+		{
+			name:          "windows drive letter exact match ro",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.config/opencode:ro`},
+			containerPath: "/home/agent/.config/opencode",
+			wantHost:      `C:\Users\me\cfg`,
+			wantCovered:   true,
+		},
+		{
+			name:          "windows drive letter parent ro",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.config:ro`},
+			containerPath: "/home/agent/.config/opencode",
+			wantHost:      `C:\Users\me\cfg/opencode`,
+			wantCovered:   true,
+		},
+		{
+			name:          "windows drive letter rw not covered",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.config/opencode:rw`},
+			containerPath: "/home/agent/.config/opencode",
+			wantHost:      "",
+			wantCovered:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1054,6 +1087,11 @@ func TestContainerPath(t *testing.T) {
 			name: "empty string",
 			host: "",
 			want: "",
+		},
+		{
+			name: "drive-relative path unchanged",
+			host: "C:foo",
+			want: "C:foo",
 		},
 	}
 
