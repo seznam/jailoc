@@ -311,7 +311,7 @@ func validateDockerfileSource(value, fieldName string) error {
 	}
 
 	// Anything else is invalid
-	return fmt.Errorf("%s: must be an absolute path or HTTP(S) URL, got %q", fieldName, value)
+	return fmt.Errorf("%s: must be an absolute path, ~ home path, or HTTP(S) URL, got %q", fieldName, value)
 }
 
 func validateEnvEntries(entries []string, context string) error {
