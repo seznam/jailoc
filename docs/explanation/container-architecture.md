@@ -13,7 +13,7 @@ flowchart TB
     subgraph oc["opencode"]
       direction TB
       oc_uid["UID 1000 (agent)<br>opencode serve :4096<br>published to host 127.0.0.1:PORT"]
-      oc_mounts["Mounts:<br>paths/* (rw)<br>~/.config/opencode (rw)<br>~/.opencode (rw)<br>~/.claude/transcripts (rw)<br>~/.agents (ro)<br>/etc/jailoc (ro)"]
+      oc_mounts["Mounts:<br>paths/* (rw)<br>~/.config/opencode (overlay: ro seed → container copy)<br>~/.opencode (overlay: ro seed → container copy)<br>~/.claude/transcripts (rw)<br>~/.agents (ro)<br>/etc/jailoc (ro)"]
     end
     subgraph dind["dind (privileged)"]
       direction TB
@@ -26,7 +26,7 @@ flowchart TB
     dind -.- net
 ```
 
-The **opencode container** is where the agent lives. It runs `opencode serve` as UID 1000 (a non-root user named `agent`), exposes a port bound to `127.0.0.1` on the host for attaching a terminal (not reachable from LAN or VPN), and has your workspace paths mounted read-write. Host directories are mounted into the container via configurable bind mounts — by default, your OpenCode configuration (read-write), session transcripts, and agent tooling directories. See [How-to: Configure mounts](../how-to/workspace-configuration.md#configure-mounts) for customization.
+The **opencode container** is where the agent lives. It runs `opencode serve` as UID 1000 (a non-root user named `agent`), exposes a port bound to `127.0.0.1` on the host for attaching a terminal (not reachable from LAN or VPN), and has your workspace paths mounted read-write. Host directories are mounted into the container via configurable bind mounts. By default, your OpenCode configuration uses an overlay model: the host directory is mounted read-only at a seed path, and the entrypoint copies it into the container's writable layer at startup (excluding `node_modules`). The agent can read and modify OpenCode configuration at runtime; modifications are contained within the container's writable layer and persist across restarts but are discarded when the container is removed or recreated (e.g. `jailoc down`). The entrypoint copies host files on each container start, overlaying them without removing existing files. Session transcripts are direct read-write bind mounts, and agent tooling directories are mounted read-only. See [How-to: Configure mounts](../how-to/workspace-configuration.md#configure-mounts) for customization.
 
 The opencode container runs with configurable resource limits. The `cpu` (default 2 cores) and `memory` (default 4 GB) settings control how much of the host's resources the container can consume, and are configurable per workspace via the TOML config. Other resource limits — `pids_limit` (256) and `mem_reservation` (512 MB) — are fixed and not configurable. Resource limit changes take effect on the next `jailoc up` invocation; running containers are not affected until restarted.
 
@@ -45,7 +45,7 @@ The opencode container mounts several things at startup:
 | Mount | Direction | Purpose |
 |-------|-----------|---------|
 | Workspace paths | read-write | The directories the agent is working in |
-| Configurable mounts | per-mount | Host directories mounted into the container, controlled by the `mounts` config field. Defaults include OpenCode configuration (rw — the agent needs write access to persist settings, install tools, and update its own configuration), session transcripts (rw), and agent tooling (ro). See [Configuration Reference](../reference/configuration.md#mounts) for the full list and merge rules. |
+| Configurable mounts | per-mount | Host directories mounted into the container, controlled by the `mounts` config field. Defaults include OpenCode configuration (overlay with ro seed path — entrypoint copies to actual path), session transcripts (rw), and agent tooling (ro). See [Configuration Reference](../reference/configuration.md#mounts) for the full list and merge rules. |
 | `/etc/jailoc` | read-only | jailoc's own runtime config, including allowed hosts |
 | SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`). Also mounts `~/.ssh/known_hosts` read-only for host key verification. |
 | `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`, the default) |

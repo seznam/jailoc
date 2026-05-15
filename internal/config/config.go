@@ -138,8 +138,8 @@ var forbiddenMountHostPaths = []string{
 }
 
 var DefaultMounts = []string{
-	"~/.config/opencode:/home/agent/.config/opencode:rw",
-	"~/.opencode:/home/agent/.opencode:rw",
+	"~/.config/opencode:/mnt/jailoc-host/config-opencode:ro",
+	"~/.opencode:/mnt/jailoc-host/dot-opencode:ro",
 	"~/.claude/transcripts:/home/agent/.claude/transcripts:rw",
 	"~/.agents:/home/agent/.agents:ro",
 }

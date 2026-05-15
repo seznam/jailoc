@@ -212,10 +212,10 @@ To remove a default mount, set an empty host source for that container path:
 ```toml
 [workspaces.my-project]
 paths = ["/home/you/projects/my-project"]
-mounts = [":/home/agent/.opencode"]
+mounts = [":/mnt/jailoc-host/dot-opencode"]
 ```
 
-This removes the `~/.opencode` mount for the `my-project` workspace.
+This removes the `~/.opencode` default mount for the `my-project` workspace.
 
 Mounts set in `[defaults]` apply to all workspaces. Per-workspace `mounts` override defaults for the same container path:
 
