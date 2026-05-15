@@ -287,8 +287,8 @@ func validateDockerfileSource(value, fieldName string) error {
 		return nil
 	}
 
-	// Absolute local paths starting with / are allowed
-	if strings.HasPrefix(value, "/") {
+	// Absolute local paths are allowed
+	if filepath.IsAbs(value) {
 		return nil
 	}
 
@@ -332,8 +332,8 @@ func validateEnvEntries(entries []string, context string) error {
 
 func validateEnvFiles(paths []string, context string) error {
 	for _, p := range paths {
-		if !strings.HasPrefix(p, "/") {
-			return fmt.Errorf("%s: env_file path %q must be absolute (start with /)", context, p)
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("%s: env_file path %q must be absolute", context, p)
 		}
 		if _, err := os.Stat(p); err != nil {
 			if os.IsNotExist(err) {
@@ -374,8 +374,8 @@ func ParseMount(spec string) (Mount, error) {
 		if err != nil {
 			return Mount{}, fmt.Errorf("expand mount host path %q: %w", host, err)
 		}
-		if !strings.HasPrefix(expandedHost, "/") {
-			return Mount{}, fmt.Errorf("invalid mount spec %q: host path %q must be absolute (start with / or ~)", spec, host)
+		if !filepath.IsAbs(expandedHost) {
+			return Mount{}, fmt.Errorf("invalid mount spec %q: host path %q must be absolute", spec, host)
 		}
 	}
 
