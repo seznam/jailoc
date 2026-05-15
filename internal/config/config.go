@@ -385,7 +385,7 @@ func ParseMount(spec string) (Mount, error) {
 			return Mount{}, fmt.Errorf("expand mount host path %q: %w", host, err)
 		}
 		if !filepath.IsAbs(expandedHost) {
-			return Mount{}, fmt.Errorf("invalid mount spec %q: host path %q must be absolute", spec, host)
+			return Mount{}, fmt.Errorf("invalid mount spec %q: host path %q must be an absolute path or ~ home path", spec, host)
 		}
 	}
 
