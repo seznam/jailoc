@@ -353,12 +353,22 @@ func validateEnvFiles(paths []string, context string) error {
 }
 
 func ParseMount(spec string) (Mount, error) {
-	parts := strings.Split(spec, ":")
+	// Handle Windows drive-letter paths (e.g., C:\Users\...) where the colon
+	// after the drive letter is part of the host path, not a field separator.
+	splitSpec := spec
+	hostPrefix := ""
+	if len(spec) >= 2 && spec[1] == ':' &&
+		((spec[0] >= 'a' && spec[0] <= 'z') || (spec[0] >= 'A' && spec[0] <= 'Z')) {
+		hostPrefix = spec[:2]
+		splitSpec = spec[2:]
+	}
+
+	parts := strings.Split(splitSpec, ":")
 	if len(parts) < 2 || len(parts) > 3 {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: expected host:container[:mode]", spec)
 	}
 
-	host := parts[0]
+	host := hostPrefix + parts[0]
 	container := parts[1]
 	mode := "rw"
 	if len(parts) == 3 {
