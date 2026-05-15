@@ -10,7 +10,7 @@ services:
 {{- end}}
     volumes:
 {{- range .Paths}}
-      - {{.}}:{{.}}
+      - {{.}}:{{. | containerPath}}
 {{- end}}
 {{- if .UseDataVolume}}
       - opencode-data-{{.WorkspaceName}}:/home/agent/.local/share/opencode
@@ -76,7 +76,7 @@ services:
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "DEBUG"]
 {{- if .Paths}}
-    working_dir: {{index .Paths 0}}
+    working_dir: {{index .Paths 0 | containerPath}}
 {{- end}}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -u \"opencode:$$OPENCODE_SERVER_PASSWORD\" http://localhost:4096/global/health || exit 1"]

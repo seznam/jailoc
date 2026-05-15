@@ -33,8 +33,9 @@ type ComposeParams struct {
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {
 	tmpl, err := template.New("docker-compose.yml").Funcs(template.FuncMap{
-		"base":      filepath.Base,
-		"yamlQuote": yamlQuote,
+		"base":          filepath.Base,
+		"yamlQuote":     yamlQuote,
+		"containerPath": containerPath,
 	}).Parse(embed.ComposeTemplate())
 	if err != nil {
 		return nil, fmt.Errorf("parse compose template: %w", err)
@@ -51,6 +52,17 @@ func GenerateCompose(params ComposeParams) ([]byte, error) {
 func yamlQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// containerPath converts a host filesystem path to a Linux container path.
+// On Unix hosts the path is already valid; on Windows it converts
+// backslashes to forward slashes and turns "C:\foo" into "/C/foo".
+func containerPath(hostPath string) string {
+	p := strings.ReplaceAll(hostPath, `\`, "/")
+	if len(p) >= 2 && p[1] == ':' {
+		p = "/" + string(p[0]) + p[2:]
+	}
+	return p
 }
 
 func WriteComposeFile(params ComposeParams, destPath string) error {
