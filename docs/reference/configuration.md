@@ -95,7 +95,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `paths` | string[] | (required) | Directories bind-mounted into the container at their original absolute paths. The first path becomes the container's working directory. Supports `~` expansion. |
-| `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/home/agent/.opencode"`) removes a default mount matching the container path. Container destinations under `/home/agent/...` are allowed (unlike `paths`); see [mounts validation](#mounts) for the full list of forbidden container prefixes. |
+| `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/mnt/jailoc-host/dot-opencode"`) removes a default mount matching the container path. Container destinations under `/home/agent/...` are allowed (unlike `paths`); see [mounts validation](#mounts) for the full list of forbidden container prefixes. |
 | `allowed_hosts` | string[] | `[]` | Hostnames resolved at container start and added as iptables `ACCEPT` rules before the private-range `DROP` rules. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
 | `image` | string | (none) | Pre-built Docker image to use directly for this workspace, bypassing all build steps. Compose pulls the image natively at startup. Cannot be combined with `dockerfile` or `build_context`. |
