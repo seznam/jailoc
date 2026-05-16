@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/compose-spec/compose-go/v2/format"
 	"github.com/fatih/color"
 )
 
@@ -353,30 +354,32 @@ func validateEnvFiles(paths []string, context string) error {
 }
 
 func ParseMount(spec string) (Mount, error) {
-	// Handle Windows drive-letter paths (e.g., C:\Users\... or C:/Users/...)
-	// where the colon after the drive letter is part of the host path, not a
-	// field separator. Only match when a path separator follows the colon to
-	// avoid mis-parsing specs like "a:/container".
-	splitSpec := spec
-	hostPrefix := ""
-	if len(spec) >= 3 && spec[1] == ':' && (spec[2] == '\\' || spec[2] == '/') &&
-		((spec[0] >= 'a' && spec[0] <= 'z') || (spec[0] >= 'A' && spec[0] <= 'Z')) {
-		hostPrefix = spec[:2]
-		splitSpec = spec[2:]
+	// Handle removal specs (e.g. ":/container" or ":/container:ro").
+	// format.ParseVolume rejects empty source sections.
+	if strings.HasPrefix(spec, ":") {
+		return parseRemovalMount(spec)
 	}
 
-	parts := strings.Split(splitSpec, ":")
-	if len(parts) < 2 || len(parts) > 3 {
+	vol, err := format.ParseVolume(spec)
+	if err != nil {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: %w", spec, err)
+	}
+
+	// ParseVolume accepts single-component specs as anonymous volumes;
+	// jailoc requires both host and container.
+	if vol.Source == "" || vol.Target == "" {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: expected host:container[:mode]", spec)
 	}
 
-	host := hostPrefix + parts[0]
-	container := parts[1]
-	mode := "rw"
-	if len(parts) == 3 {
-		mode = parts[2]
-	}
+	host := vol.Source
+	container := vol.Target
 
+	// ParseVolume silently drops unknown mode options. Re-validate from the
+	// raw spec to reject anything other than ro/rw.
+	mode := rawMode(spec, host, container)
+	if mode == "" {
+		mode = "rw"
+	}
 	if mode != "ro" && mode != "rw" {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: mode must be ro or rw", spec)
 	}
@@ -400,6 +403,46 @@ func ParseMount(spec string) (Mount, error) {
 	}
 
 	return Mount{Host: host, Container: container, Mode: mode}, nil
+}
+
+// parseRemovalMount handles mount specs with empty host (e.g. ":/container:ro")
+// that override an inherited mount by removing it or changing its mode.
+func parseRemovalMount(spec string) (Mount, error) {
+	rest := spec[1:]
+	parts := strings.SplitN(rest, ":", 2)
+	container := parts[0]
+	mode := "rw"
+	if len(parts) == 2 {
+		mode = parts[1]
+	}
+
+	if mode != "ro" && mode != "rw" {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: mode must be ro or rw", spec)
+	}
+
+	expandedContainer, err := ExpandPath(container)
+	if err != nil {
+		return Mount{}, fmt.Errorf("expand mount container path %q: %w", container, err)
+	}
+	if !strings.HasPrefix(expandedContainer, "/") {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: container path %q must be absolute (start with /)", spec, container)
+	}
+
+	return Mount{Host: "", Container: container, Mode: mode}, nil
+}
+
+// rawMode extracts the raw mode string from a mount spec, given the source and
+// target parsed by format.ParseVolume. Returns "" if no mode was specified.
+func rawMode(spec, source, target string) string {
+	prefix := source + ":" + target
+	if !strings.HasPrefix(spec, prefix) {
+		return ""
+	}
+	rest := spec[len(prefix):]
+	if len(rest) > 0 && rest[0] == ':' {
+		return rest[1:]
+	}
+	return ""
 }
 
 func validateMountHostPath(host string, context string) error {
