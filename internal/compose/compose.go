@@ -77,7 +77,7 @@ func splitMountSpec(spec string) (host, container, mode string, ok bool) {
 	if strings.HasPrefix(spec, ":") {
 		rest := spec[1:]
 		parts := strings.SplitN(rest, ":", 2)
-		if len(parts) == 0 || parts[0] == "" {
+		if parts[0] == "" {
 			return "", "", "", false
 		}
 		m := "rw"
