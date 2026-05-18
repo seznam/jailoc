@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.14.1](https://github.com/seznam/jailoc/compare/v1.14.0...v1.14.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **cmd:** enable Windows cross-compilation with PTY fallback ([#161](https://github.com/seznam/jailoc/issues/161)) ([e90baf5](https://github.com/seznam/jailoc/commit/e90baf5040cf62080001317f547de1ff6d484ec7))
+* **config:** use filepath.IsAbs for cross-platform path validation ([#165](https://github.com/seznam/jailoc/issues/165)) ([6baf43e](https://github.com/seznam/jailoc/commit/6baf43e0c60343733cad589f3689c61f37777178))
+* **docker:** clarify overlay build status message ([#162](https://github.com/seznam/jailoc/issues/162)) ([f0aa418](https://github.com/seznam/jailoc/commit/f0aa41809b81e17e2ca1281caadf5d0f3613211a))
+
 ## [1.14.0](https://github.com/seznam/jailoc/compare/v1.13.1...v1.14.0) (2026-05-13)
 
 
