@@ -405,8 +405,8 @@ func ParseMount(spec string) (Mount, error) {
 	return Mount{Host: host, Container: container, Mode: mode}, nil
 }
 
-// parseRemovalMount handles mount specs with empty host (e.g. ":/container:ro")
-// that override an inherited mount by removing it or changing its mode.
+// parseRemovalMount handles mount specs with empty host (e.g. ":/container")
+// that override an inherited mount by removing it.
 func parseRemovalMount(spec string) (Mount, error) {
 	rest := spec[1:]
 	parts := strings.SplitN(rest, ":", 2)

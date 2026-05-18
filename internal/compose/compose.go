@@ -56,10 +56,9 @@ func yamlQuote(s string) string {
 }
 
 // containerPath converts a host filesystem path to a Linux container path.
-// On Unix hosts the path is already valid; on Windows it converts
-// backslashes to forward slashes and turns "C:\foo" into "/C/foo".
-// Only absolute drive paths (e.g. C:\foo, D:/bar) are rewritten;
-// drive-relative paths like "C:foo" are left unchanged.
+// It unconditionally normalizes backslashes to forward slashes and on
+// Windows turns absolute drive paths (e.g. C:\foo, D:/bar) into "/C/foo".
+// Drive-relative paths like "C:foo" are left unchanged.
 func containerPath(hostPath string) string {
 	p := strings.ReplaceAll(hostPath, `\`, "/")
 	if len(p) >= 3 && p[1] == ':' && p[2] == '/' &&
