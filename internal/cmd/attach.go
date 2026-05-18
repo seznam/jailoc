@@ -12,10 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	"github.com/creack/pty/v2"
+	gopty "github.com/aymanbagabas/go-pty"
 	"golang.org/x/term"
 
 	"github.com/seznam/jailoc/internal/config"
@@ -138,30 +137,43 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		return err
 	}
 	args := attachHostArgs(serverArg, pw, dir, session, cont)
-	cmd := exec.Command(binary, args...) //nolint:gosec // binary name is from ResolveBinary, args are controlled
-	cmd.Stderr = os.Stderr
 
 	tuiPath := filepath.Join(jailocCacheDir(), "tui.json")
-	cmd.Env = envWithOverrides(os.Environ(),
+	env := envWithOverrides(os.Environ(),
 		"JAILOC=1",
 		"JAILOC_WORKSPACE="+ws.Name,
 	)
-	if env := hostTUIConfigEnv(tuiPath); len(env) > 0 {
-		cmd.Env = envWithOverrides(cmd.Env, env...)
+	if tuiEnv := hostTUIConfigEnv(tuiPath); len(tuiEnv) > 0 {
+		env = envWithOverrides(env, tuiEnv...)
 	}
 
 	// PTY keeps isTTY=true for the child (required by opentui) while letting
 	// us intercept stdout through the exitRewriter.
-	ptmx, err := pty.Start(cmd)
+	p, err := gopty.New()
 	if err != nil {
-		if errors.Is(err, pty.ErrUnsupported) {
+		if errors.Is(err, gopty.ErrUnsupported) {
 			return errPTYUnsupported
 		}
-		return fmt.Errorf("start command with pty: %w", err)
+		return fmt.Errorf("create pty: %w", err)
 	}
 	defer func() {
-		_ = ptmx.Close()
+		_ = p.Close()
 	}()
+
+	// Set initial size BEFORE starting — fixes race where child reads
+	// default PTY dimensions at startup.
+	fd := int(os.Stdin.Fd()) //nolint:gosec // Fd() fits in int on all supported platforms
+	if term.IsTerminal(fd) {
+		if w, h, sizeErr := term.GetSize(fd); sizeErr == nil {
+			_ = p.Resize(w, h)
+		}
+	}
+
+	cmd := p.Command(binary, args...)
+	cmd.Env = env
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start command with pty: %w", err)
+	}
 
 	waitDone := make(chan struct{})
 	closeWaitDone := sync.OnceFunc(func() { close(waitDone) })
@@ -177,7 +189,9 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 			for {
 				select {
 				case <-sigCh:
-					_ = pty.InheritSize(os.Stdin, ptmx)
+					if w, h, err := term.GetSize(fd); err == nil {
+						_ = p.Resize(w, h)
+					}
 				case <-ctx.Done():
 					return
 				case <-waitDone:
@@ -190,11 +204,35 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 			closeWaitDone()
 			<-sigDone
 		}()
+	} else if term.IsTerminal(fd) {
+		// No SIGWINCH (Windows): poll for terminal size changes.
+		pollDone := make(chan struct{})
+		go func() {
+			defer close(pollDone)
+			var lastW, lastH int
+			ticker := time.NewTicker(resizePollInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if w, h, err := term.GetSize(fd); err == nil && (w != lastW || h != lastH) {
+						_ = p.Resize(w, h)
+						lastW, lastH = w, h
+					}
+				case <-ctx.Done():
+					return
+				case <-waitDone:
+					return
+				}
+			}
+		}()
+		defer func() {
+			closeWaitDone()
+			<-pollDone
+		}()
 	}
-	_ = pty.InheritSize(os.Stdin, ptmx)
 
 	// Raw mode so keystrokes pass through verbatim (Ctrl-C, arrows, etc.).
-	fd := int(os.Stdin.Fd()) //nolint:gosec // Fd() fits in int on all supported platforms
 	if term.IsTerminal(fd) {
 		oldState, rawErr := term.MakeRaw(fd)
 		if rawErr != nil {
@@ -205,14 +243,14 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		defer func() { _ = term.Restore(fd, oldState) }()
 	}
 
-	go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
+	go func() { _, _ = io.Copy(p, os.Stdin) }()
 
 	// Cancel the child process when the context is done (e.g. container stops).
 	go func() {
 		select {
 		case <-ctx.Done():
 			if cmd.Process != nil {
-				_ = cmd.Process.Signal(syscall.SIGTERM)
+				_ = cmd.Process.Signal(terminateSignal)
 				select {
 				case <-waitDone:
 				case <-time.After(attachWaitDelay):
@@ -226,18 +264,18 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	}()
 
 	rw := &exitRewriter{w: os.Stdout}
-	_, copyErr := io.Copy(rw, ptmx)
+	_, copyErr := io.Copy(rw, p)
 
-	// Close the PTY master so the child receives SIGHUP if it's still running
-	// (e.g. when io.Copy returned early due to a downstream write error).
-	_ = ptmx.Close()
+	// Close the PTY so the child receives SIGHUP if it's still running.
+	_ = p.Close()
 
 	err = cmd.Wait()
 	closeWaitDone()
 	// PTY reads commonly return EIO when the slave side closes on normal
-	// process exit — treat it as expected EOF. Surface other copy errors
-	// only when the process itself exited cleanly.
-	if copyErr != nil && err == nil && !errors.Is(copyErr, errEIO) {
+	// process exit — treat it as expected EOF. On Windows, pipe close may
+	// surface as os.ErrClosed. Surface other copy errors only when the
+	// process itself exited cleanly.
+	if copyErr != nil && err == nil && !isExpectedPTYClose(copyErr) {
 		err = fmt.Errorf("copy pty output: %w", copyErr)
 	}
 	if ferr := rw.Flush(); ferr != nil && err == nil {
@@ -264,12 +302,17 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 }
 
 const (
-	attachPollInterval = 500 * time.Millisecond
-	attachWaitDelay    = 2 * time.Second
+	attachPollInterval  = 500 * time.Millisecond
+	attachWaitDelay     = 2 * time.Second
+	resizePollInterval  = 250 * time.Millisecond
 )
 
 var errUnhealthy = errors.New("opencode process unhealthy inside container")
 var errPTYUnsupported = errors.New("PTY not supported on this platform")
+
+func isExpectedPTYClose(err error) bool {
+	return errors.Is(err, errEIO) || errors.Is(err, os.ErrClosed)
+}
 
 func startAttachWatch(parent context.Context, client *docker.Client, workspaceName string) (context.Context, func(), error) {
 	containerID, err := client.CurrentContainerID(parent)
