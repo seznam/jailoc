@@ -56,16 +56,19 @@ func yamlQuote(s string) string {
 }
 
 // containerPath converts a host filesystem path to a Linux container path.
-// It unconditionally normalizes backslashes to forward slashes and on
-// Windows turns absolute drive paths (e.g. C:\foo, D:/bar) into "/C/foo".
-// Drive-relative paths like "C:foo" are left unchanged.
+// Only drive-absolute Windows paths (e.g. C:\foo, D:/bar) are normalized:
+// backslashes become forward slashes and the drive prefix becomes "/C/foo".
+// All other paths (Unix absolute, drive-relative, volume-less rooted) are
+// returned unchanged to avoid silently mapping ambiguous forms into sensitive
+// container directories.
 func containerPath(hostPath string) string {
-	p := strings.ReplaceAll(hostPath, `\`, "/")
-	if len(p) >= 3 && p[1] == ':' && p[2] == '/' &&
-		((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) {
-		p = "/" + string(p[0]) + p[2:]
+	if len(hostPath) >= 3 &&
+		((hostPath[0] >= 'a' && hostPath[0] <= 'z') || (hostPath[0] >= 'A' && hostPath[0] <= 'Z')) &&
+		hostPath[1] == ':' && (hostPath[2] == '\\' || hostPath[2] == '/') {
+		p := strings.ReplaceAll(hostPath, `\`, "/")
+		return "/" + string(p[0]) + p[2:]
 	}
-	return p
+	return hostPath
 }
 
 // splitMountSpec splits a mount spec string (host:container[:mode]) into its
