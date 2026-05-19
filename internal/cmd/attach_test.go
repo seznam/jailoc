@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/seznam/jailoc/internal/docker"
 )
 
 func TestAttachHostArgs(t *testing.T) {
@@ -612,5 +614,27 @@ func TestExitRewriter(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSendLatestResize(t *testing.T) {
+	t.Parallel()
+
+	ch := make(chan docker.TerminalSize, 1)
+	first := docker.TerminalSize{Width: 80, Height: 24}
+	latest := docker.TerminalSize{Width: 120, Height: 40}
+
+	sendLatestResize(ch, first)
+	sendLatestResize(ch, latest)
+
+	got := <-ch
+	if got != latest {
+		t.Fatalf("got %#v, want %#v", got, latest)
+	}
+
+	select {
+	case extra := <-ch:
+		t.Fatalf("unexpected extra resize: %#v", extra)
+	default:
 	}
 }

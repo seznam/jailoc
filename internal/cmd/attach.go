@@ -329,8 +329,10 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 	resizeCh := make(chan docker.TerminalSize, 1)
 	defer close(resizeCh)
 
-	if w, h, sizeErr := term.GetSize(fd); sizeErr == nil {
-		resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)} //nolint:gosec // terminal dimensions are always positive
+	initialSize, hasInitialSize := currentTerminalSize(fd)
+	initialSizePtr := (*docker.TerminalSize)(nil)
+	if hasInitialSize {
+		initialSizePtr = &initialSize
 	}
 
 	done := make(chan struct{})
@@ -342,9 +344,9 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 			defer close(sigDone)
 			for {
 				select {
-			case <-sigCh:
-				if w, h, err := term.GetSize(fd); err == nil {
-						resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)} //nolint:gosec // terminal dimensions are always positive
+				case <-sigCh:
+					if size, ok := currentTerminalSize(fd); ok {
+						sendLatestResize(resizeCh, size)
 					}
 				case <-ctx.Done():
 					return
@@ -367,10 +369,10 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 			defer ticker.Stop()
 			for {
 				select {
-			case <-ticker.C:
-				if w, h, err := term.GetSize(fd); err == nil && (w != lastW || h != lastH) {
-						resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)} //nolint:gosec // terminal dimensions are always positive
-						lastW, lastH = w, h
+				case <-ticker.C:
+					if size, ok := currentTerminalSize(fd); ok && (int(size.Width) != lastW || int(size.Height) != lastH) {
+						sendLatestResize(resizeCh, size)
+						lastW, lastH = int(size.Width), int(size.Height)
 					}
 				case <-ctx.Done():
 					return
@@ -388,17 +390,40 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
 	execEnv := append(execTUIConfigEnv("/etc/jailoc-tui.json"), terminalEnv()...)
-	err = client.ExecInteractive(ctx, containerID, attachExecArgs(serverURL, dir, session, cont), execEnv, os.Stdin, rw, resizeCh)
+	err = client.ExecInteractive(ctx, containerID, attachExecArgs(serverURL, dir, session, cont), execEnv, os.Stdin, rw, initialSizePtr, resizeCh)
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)
 	}
 	return attachResult(ctx, err)
 }
 
+func currentTerminalSize(fd int) (docker.TerminalSize, bool) {
+	w, h, err := term.GetSize(fd)
+	if err != nil || w <= 0 || h <= 0 {
+		return docker.TerminalSize{}, false
+	}
+	return docker.TerminalSize{Width: uint(w), Height: uint(h)}, true //nolint:gosec // terminal dimensions are positive
+}
+
+func sendLatestResize(ch chan docker.TerminalSize, size docker.TerminalSize) {
+	select {
+	case ch <- size:
+		return
+	default:
+	}
+
+	select {
+	case <-ch:
+	default:
+	}
+
+	ch <- size
+}
+
 const (
-	attachPollInterval  = 500 * time.Millisecond
-	attachWaitDelay     = 2 * time.Second
-	resizePollInterval  = 250 * time.Millisecond
+	attachPollInterval = 500 * time.Millisecond
+	attachWaitDelay    = 2 * time.Second
+	resizePollInterval = 250 * time.Millisecond
 )
 
 var errUnhealthy = errors.New("opencode process unhealthy inside container")

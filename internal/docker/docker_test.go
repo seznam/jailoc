@@ -39,6 +39,34 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+func TestConsoleSize(t *testing.T) {
+	t.Parallel()
+
+	if got := consoleSize(nil); got != nil {
+		t.Fatalf("consoleSize(nil) = %v, want nil", got)
+	}
+
+	zeroWidth := TerminalSize{Width: 0, Height: 40}
+	if got := consoleSize(&zeroWidth); got != nil {
+		t.Fatalf("consoleSize(zero width) = %v, want nil", got)
+	}
+
+	zeroHeight := TerminalSize{Width: 120, Height: 0}
+	if got := consoleSize(&zeroHeight); got != nil {
+		t.Fatalf("consoleSize(zero height) = %v, want nil", got)
+	}
+
+	size := TerminalSize{Width: 120, Height: 40}
+	got := consoleSize(&size)
+	if got == nil {
+		t.Fatal("consoleSize(valid) = nil, want size")
+	}
+	want := [2]uint{40, 120}
+	if *got != want {
+		t.Fatalf("consoleSize(valid) = %v, want %v", *got, want)
+	}
+}
+
 func TestWriterLogConsumer(t *testing.T) {
 	t.Parallel()
 

@@ -313,18 +313,26 @@ type TerminalSize struct {
 	Height uint
 }
 
+func consoleSize(size *TerminalSize) *[2]uint {
+	if size == nil || size.Width == 0 || size.Height == 0 {
+		return nil
+	}
+	return &[2]uint{size.Height, size.Width}
+}
+
 // ExecInteractive runs a command in the opencode container using the Docker
 // Engine API directly (not Compose SDK). This gives the caller full control
-// over TTY resize via the resizeCh channel. Each TerminalSize sent on resizeCh
-// triggers a ContainerExecResize call. The method blocks until the exec
-// process exits or the context is cancelled.
-func (c *Client) ExecInteractive(ctx context.Context, containerID string, args []string, env []string, stdin io.Reader, stdout io.Writer, resizeCh <-chan TerminalSize) error {
+// over the initial TTY size and later resizes via the resizeCh channel. Each
+// TerminalSize sent on resizeCh triggers a ContainerExecResize call. The method
+// blocks until the exec process exits or the context is cancelled.
+func (c *Client) ExecInteractive(ctx context.Context, containerID string, args []string, env []string, stdin io.Reader, stdout io.Writer, initialSize *TerminalSize, resizeCh <-chan TerminalSize) error {
 	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		return fmt.Errorf("create Docker Engine client for exec: %w", err)
 	}
 	defer func() { _ = engineCli.Close() }()
 
+	initialConsoleSize := consoleSize(initialSize)
 	execCfg := dcontainer.ExecOptions{
 		Cmd:          args,
 		Env:          env,
@@ -332,6 +340,7 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 		AttachStdout: true,
 		AttachStderr: true,
 		Tty:          true,
+		ConsoleSize:  initialConsoleSize,
 	}
 
 	execResp, err := engineCli.ContainerExecCreate(ctx, containerID, execCfg)
@@ -340,7 +349,10 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 	}
 	execID := execResp.ID
 
-	attachResp, err := engineCli.ContainerExecAttach(ctx, execID, dcontainer.ExecAttachOptions{Tty: true})
+	attachResp, err := engineCli.ContainerExecAttach(ctx, execID, dcontainer.ExecAttachOptions{
+		Tty:         true,
+		ConsoleSize: initialConsoleSize,
+	})
 	if err != nil {
 		return fmt.Errorf("attach to exec %s: %w", execID, err)
 	}
