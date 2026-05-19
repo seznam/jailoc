@@ -115,6 +115,12 @@ func terminalEnv() []string {
 	if os.Getenv("COLORFGBG") == "" {
 		env = append(env, "COLORFGBG=15;0")
 	}
+	// Default COLORTERM so OpenCode renders with full 24-bit color palette.
+	// Many terminals (iTerm2, Alacritty, kitty) set this, but Terminal.app and
+	// Docker exec environments often don't.
+	if os.Getenv("COLORTERM") == "" {
+		env = append(env, "COLORTERM=truecolor")
+	}
 	// Ensure UTF-8 locale reaches the container so TUI box-drawing characters
 	// and icons render correctly (macOS Terminal.app sets LANG on the host but
 	// Docker exec doesn't inherit it without explicit forwarding).
