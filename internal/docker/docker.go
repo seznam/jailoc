@@ -65,6 +65,7 @@ type Client struct {
 	svcOnce     sync.Once
 	svcErr      error
 	svc         api.Compose
+	cli         *command.DockerCli
 }
 
 func NewClient(composeFile, workDir, workspace string) *Client {
@@ -319,7 +320,13 @@ type TerminalSize struct {
 // triggers a ContainerExecResize call. The method blocks until the exec
 // process exits or the context is cancelled.
 func (c *Client) ExecInteractive(ctx context.Context, containerID string, args []string, env []string, stdin io.Reader, stdout io.Writer, resizeCh <-chan TerminalSize) error {
-	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err := c.initComposeSvc(); err != nil {
+		return err
+	}
+	engineCli, err := dockerclient.NewClientWithOpts(
+		dockerclient.WithHost(c.cli.Client().DaemonHost()),
+		dockerclient.WithAPIVersionNegotiation(),
+	)
 	if err != nil {
 		return fmt.Errorf("create Docker Engine client for exec: %w", err)
 	}
@@ -424,6 +431,7 @@ func (c *Client) initComposeSvc() error {
 			c.svcErr = fmt.Errorf("create Compose service: %w", err)
 			return
 		}
+		c.cli = dockerCLI
 		c.svc = svc
 	})
 

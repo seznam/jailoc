@@ -354,8 +354,14 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 						select {
 						case resizeCh <- size:
 						default:
-							<-resizeCh
-							resizeCh <- size
+							select {
+							case <-resizeCh:
+							default:
+							}
+							select {
+							case resizeCh <- size:
+							default:
+							}
 						}
 					}
 				case <-ctx.Done():
@@ -385,8 +391,14 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 						select {
 						case resizeCh <- size:
 						default:
-							<-resizeCh
-							resizeCh <- size
+							select {
+							case <-resizeCh:
+							default:
+							}
+							select {
+							case resizeCh <- size:
+							default:
+							}
 						}
 						lastW, lastH = w, h
 					}
