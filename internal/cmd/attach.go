@@ -102,10 +102,18 @@ func execTUIConfigEnv(configPath string) []string {
 // that should be forwarded to the container exec session for proper color support.
 func terminalEnv() []string {
 	var env []string
-	for _, key := range []string{"TERM", "COLORTERM"} {
+	for _, key := range []string{"TERM", "COLORTERM", "CLICOLOR_FORCE", "TERM_PROGRAM", "COLORFGBG"} {
 		if v := os.Getenv(key); v != "" {
 			env = append(env, key+"="+v)
 		}
+	}
+	if os.Getenv("CLICOLOR_FORCE") == "" {
+		env = append(env, "CLICOLOR_FORCE=1")
+	}
+	// Provide COLORFGBG fallback so termenv skips OSC terminal queries for
+	// foreground/background color detection (which timeout through Docker exec PTY).
+	if os.Getenv("COLORFGBG") == "" {
+		env = append(env, "COLORFGBG=15;0")
 	}
 	return env
 }
