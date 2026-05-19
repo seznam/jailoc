@@ -365,11 +365,8 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 		}()
 	}
 
-	var wg sync.WaitGroup
 	if stdin != nil {
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			_, _ = io.Copy(attachResp.Conn, stdin)
 			_ = attachResp.CloseWrite()
 		}()
@@ -377,7 +374,10 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 
 	_, copyErr := io.Copy(stdout, attachResp.Reader)
 
-	wg.Wait()
+	// Exec finished — close connection to unblock the stdin goroutine if
+	// it's in Conn.Write(). If blocked in os.Stdin.Read() (uninterruptible),
+	// the goroutine exits harmlessly at process exit.
+	attachResp.Close()
 
 	inspect, err := engineCli.ContainerExecInspect(ctx, execID)
 	if err != nil {
