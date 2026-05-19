@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -64,6 +65,7 @@ type Client struct {
 	svcOnce     sync.Once
 	svcErr      error
 	svc         api.Compose
+	cli         *command.DockerCli
 }
 
 func NewClient(composeFile, workDir, workspace string) *Client {
@@ -306,6 +308,113 @@ func (c *Client) Exec(ctx context.Context, args []string, env []string, stdin io
 	return nil
 }
 
+// TerminalSize represents a terminal width and height in characters.
+type TerminalSize struct {
+	Width  uint
+	Height uint
+}
+
+// ExecInteractive runs a command in the opencode container using the Docker
+// Engine API directly (not Compose SDK). This gives the caller full control
+// over TTY resize via the resizeCh channel. Each TerminalSize sent on resizeCh
+// triggers a ContainerExecResize call. The method blocks until the exec
+// process exits or the context is cancelled.
+func (c *Client) ExecInteractive(ctx context.Context, containerID string, args []string, env []string, stdin io.Reader, stdout io.Writer, resizeCh <-chan TerminalSize) error {
+	if err := c.initComposeSvc(); err != nil {
+		return err
+	}
+	engineCli, err := dockerclient.NewClientWithOpts(
+		dockerclient.WithHost(c.cli.Client().DaemonHost()),
+		dockerclient.WithAPIVersionNegotiation(),
+	)
+	if err != nil {
+		return fmt.Errorf("create Docker Engine client for exec: %w", err)
+	}
+	defer func() { _ = engineCli.Close() }()
+
+	execCfg := dcontainer.ExecOptions{
+		Cmd:          args,
+		Env:          env,
+		AttachStdin:  stdin != nil,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          true,
+	}
+
+	// Apply initial terminal size before starting the exec so the process
+	// launches with the correct dimensions (avoids startup-size race).
+	if resizeCh != nil {
+		select {
+		case size := <-resizeCh:
+			execCfg.ConsoleSize = &[2]uint{size.Height, size.Width}
+		default:
+		}
+	}
+
+	execResp, err := engineCli.ContainerExecCreate(ctx, containerID, execCfg)
+	if err != nil {
+		return fmt.Errorf("create exec in container %s: %w", containerID, err)
+	}
+	execID := execResp.ID
+
+	attachResp, err := engineCli.ContainerExecAttach(ctx, execID, dcontainer.ExecAttachOptions{Tty: true})
+	if err != nil {
+		return fmt.Errorf("attach to exec %s: %w", execID, err)
+	}
+	defer attachResp.Close()
+
+	if resizeCh != nil {
+		go func() {
+			for {
+				select {
+				case size, ok := <-resizeCh:
+					if !ok {
+						return
+					}
+					_ = engineCli.ContainerExecResize(ctx, execID, dcontainer.ResizeOptions{
+						Width:  size.Width,
+						Height: size.Height,
+					})
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	if stdin != nil {
+		go func() {
+			_, _ = io.Copy(attachResp.Conn, stdin)
+			_ = attachResp.CloseWrite()
+		}()
+	}
+
+	_, copyErr := io.Copy(stdout, attachResp.Reader)
+
+	// Exec finished — close connection to unblock the stdin goroutine if
+	// it's in Conn.Write(). If blocked in os.Stdin.Read() (uninterruptible),
+	// the goroutine exits harmlessly at process exit.
+	attachResp.Close()
+
+	inspect, err := engineCli.ContainerExecInspect(ctx, execID)
+	if err != nil {
+		if copyErr != nil {
+			return fmt.Errorf("copy exec output: %w", copyErr)
+		}
+		return fmt.Errorf("inspect exec %s: %w", execID, err)
+	}
+
+	if inspect.ExitCode != 0 {
+		return fmt.Errorf("exec exited with code %d", inspect.ExitCode)
+	}
+
+	if copyErr != nil && !errors.Is(copyErr, io.EOF) {
+		return fmt.Errorf("copy exec output: %w", copyErr)
+	}
+
+	return nil
+}
+
 func (c *Client) initComposeSvc() error {
 	c.svcOnce.Do(func() {
 		dockerCLI, err := command.NewDockerCli()
@@ -322,6 +431,7 @@ func (c *Client) initComposeSvc() error {
 			c.svcErr = fmt.Errorf("create Compose service: %w", err)
 			return
 		}
+		c.cli = dockerCLI
 		c.svc = svc
 	})
 
