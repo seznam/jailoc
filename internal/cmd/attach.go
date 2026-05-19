@@ -324,7 +324,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 	defer close(resizeCh)
 
 	if w, h, sizeErr := term.GetSize(fd); sizeErr == nil {
-		resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)}
+		resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)} //nolint:gosec // terminal dimensions are always positive
 	}
 
 	done := make(chan struct{})
@@ -336,9 +336,9 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 			defer close(sigDone)
 			for {
 				select {
-				case <-sigCh:
-					if w, h, err := term.GetSize(fd); err == nil {
-						resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)}
+			case <-sigCh:
+				if w, h, err := term.GetSize(fd); err == nil {
+						resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)} //nolint:gosec // terminal dimensions are always positive
 					}
 				case <-ctx.Done():
 					return
@@ -361,9 +361,9 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 			defer ticker.Stop()
 			for {
 				select {
-				case <-ticker.C:
-					if w, h, err := term.GetSize(fd); err == nil && (w != lastW || h != lastH) {
-						resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)}
+			case <-ticker.C:
+				if w, h, err := term.GetSize(fd); err == nil && (w != lastW || h != lastH) {
+						resizeCh <- docker.TerminalSize{Width: uint(w), Height: uint(h)} //nolint:gosec // terminal dimensions are always positive
 						lastW, lastH = w, h
 					}
 				case <-ctx.Done():
