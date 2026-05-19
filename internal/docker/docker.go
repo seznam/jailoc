@@ -334,6 +334,16 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 		Tty:          true,
 	}
 
+	// Apply initial terminal size before starting the exec so the process
+	// launches with the correct dimensions (avoids startup-size race).
+	if resizeCh != nil {
+		select {
+		case size := <-resizeCh:
+			execCfg.ConsoleSize = &[2]uint{size.Height, size.Width}
+		default:
+		}
+	}
+
 	execResp, err := engineCli.ContainerExecCreate(ctx, containerID, execCfg)
 	if err != nil {
 		return fmt.Errorf("create exec in container %s: %w", containerID, err)
