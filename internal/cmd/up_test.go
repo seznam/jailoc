@@ -543,18 +543,27 @@ func TestWriteTUIConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("os.ReadFile(%q) failed: %v", path, err)
 		}
-		var config map[string][]string
+		var config map[string]any
 		if err := json.Unmarshal(data, &config); err != nil {
 			t.Fatalf("json.Unmarshal(%q) failed: %v", path, err)
 		}
-		plugins, ok := config["plugin"]
+		theme, ok := config["theme"]
+		if !ok {
+			t.Fatalf("%s missing 'theme' key", path)
+		}
+		if theme != "opencode" {
+			t.Fatalf("%s: theme = %q, want %q", path, theme, "opencode")
+		}
+		pluginsRaw, ok := config["plugin"]
 		if !ok {
 			t.Fatalf("%s missing 'plugin' key", path)
 		}
-		if len(plugins) != 1 {
-			t.Fatalf("%s: expected 1 plugin, got %d", path, len(plugins))
+		plugins, ok := pluginsRaw.([]any)
+		if !ok || len(plugins) != 1 {
+			t.Fatalf("%s: expected 1 plugin, got %v", path, pluginsRaw)
 		}
-		return plugins[0]
+		s, _ := plugins[0].(string)
+		return s
 	}
 
 	wantHost := "file://" + filepath.Join(tmpDir, "tui-plugin")

@@ -382,14 +382,20 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 		}()
 	}
 
+	connWriter := &syncWriter{w: attachResp.Conn}
+
 	if stdin != nil {
 		go func() {
-			_, _ = io.Copy(attachResp.Conn, stdin)
+			_, _ = io.Copy(connWriter, stdin)
 			_ = attachResp.CloseWrite()
 		}()
 	}
 
-	_, copyErr := io.Copy(stdout, attachResp.Reader)
+	palette := newPaletteResponder(stdout, connWriter)
+	_, copyErr := io.Copy(palette, attachResp.Reader)
+	if ferr := palette.Flush(); ferr != nil && copyErr == nil {
+		copyErr = ferr
+	}
 
 	// Exec finished — close connection to unblock the stdin goroutine if
 	// it's in Conn.Write(). If blocked in os.Stdin.Read() (uninterruptible),
