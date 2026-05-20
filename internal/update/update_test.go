@@ -509,6 +509,7 @@ func TestCheckAsync(t *testing.T) {
 		res := recvResult(t, checkAsync(context.Background(), "v1.0.0", ts.URL, statePath))
 		if res == nil {
 			t.Fatal("expected non-nil result")
+			return
 		}
 		if res.Latest != "v3.0.0" {
 			t.Fatalf("Latest = %q, want %q", res.Latest, "v3.0.0")
