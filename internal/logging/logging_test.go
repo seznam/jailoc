@@ -85,8 +85,6 @@ func TestInitConcurrentWrites(t *testing.T) {
 		_ = os.Unsetenv("HOME")
 	})
 
-	t.Parallel()
-
 	if err := Init(); err != nil {
 		t.Fatalf("Init() error = %v, want nil", err)
 	}

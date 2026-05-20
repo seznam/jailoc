@@ -50,7 +50,7 @@ func Init() error {
 func logFilePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = os.TempDir()
+		return filepath.Join(os.TempDir(), "jailoc", "jailoc.log")
 	}
 	return filepath.Join(home, ".cache", "jailoc", "jailoc.log")
 }

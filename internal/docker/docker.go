@@ -358,7 +358,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 			return "", fmt.Errorf("build preset image: %w", err)
 		}
 
-		slog.Info("base image resolved", "tag", tag)
+		slog.Debug("base image resolved", "tag", tag)
 		return tag, nil
 	}
 
@@ -374,7 +374,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 		return "", fmt.Errorf("build embedded base image: %w", err)
 	}
 
-	slog.Info("base image resolved", "tag", embeddedTag)
+	slog.Debug("base image resolved", "tag", embeddedTag)
 	return embeddedTag, nil
 }
 
