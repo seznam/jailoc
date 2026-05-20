@@ -456,6 +456,7 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 
 	hash := sha256.Sum256(dockerfileContent)
 	presetTag := fmt.Sprintf("jailoc-base:preset-%x", hash[:8])
+	slog.Debug("building image", "tag", presetTag, "context", tmpDir)
 
 	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
 	if err != nil {

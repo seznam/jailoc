@@ -271,6 +271,7 @@ func resolveImageStrategy(wsImage, defaultsImage, wsDockerfile string) (imageStr
 
 func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, version string) (string, error) {
 	strategy, strategyImage := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
+	slog.Debug("image strategy resolved", "strategy", strategy, "image", strategyImage)
 	switch strategy {
 	case strategyDirectImage:
 		_, _ = color.New(color.FgCyan).Printf("Using workspace image %s\n", strategyImage)
