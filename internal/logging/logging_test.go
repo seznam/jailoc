@@ -8,8 +8,19 @@ import (
 	"testing"
 )
 
+func cleanupLogFile(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		if logFile != nil {
+			_ = logFile.Close()
+			logFile = nil
+		}
+	})
+}
+
 func TestInitCreatesFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	cleanupLogFile(t)
 
 	if err := Init(); err != nil {
 		t.Fatalf("Init() error = %v, want nil", err)
@@ -27,6 +38,7 @@ func TestInitCreatesFile(t *testing.T) {
 
 func TestInitRotatesLargeFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	cleanupLogFile(t)
 
 	logPath := logFilePath()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o750); err != nil {
@@ -57,6 +69,7 @@ func TestInitRotatesLargeFile(t *testing.T) {
 
 func TestInitGracefulDegradation(t *testing.T) {
 	t.Setenv("HOME", "/dev/null")
+	cleanupLogFile(t)
 
 	if err := Init(); err != nil {
 		t.Fatalf("Init() error = %v, want nil", err)
@@ -84,6 +97,7 @@ func TestInitConcurrentWrites(t *testing.T) {
 		}
 		_ = os.Unsetenv("HOME")
 	})
+	cleanupLogFile(t)
 
 	if err := Init(); err != nil {
 		t.Fatalf("Init() error = %v, want nil", err)
