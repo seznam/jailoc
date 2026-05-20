@@ -323,7 +323,14 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 	if err != nil {
 		return fmt.Errorf("create Docker Engine client for exec: %w", err)
 	}
-	defer func() { _ = engineCli.Close() }()
+
+	// done is closed before engineCli to ensure the resize goroutine exits
+	// before the client is closed, preventing calls on a closed client.
+	done := make(chan struct{})
+	defer func() {
+		close(done)
+		_ = engineCli.Close()
+	}()
 
 	execCfg := dcontainer.ExecOptions{
 		Cmd:          args,
@@ -368,6 +375,8 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 						Width:  size.Width,
 						Height: size.Height,
 					})
+				case <-done:
+					return
 				case <-ctx.Done():
 					return
 				}
@@ -391,7 +400,7 @@ func (c *Client) ExecInteractive(ctx context.Context, containerID string, args [
 
 	inspect, err := engineCli.ContainerExecInspect(ctx, execID)
 	if err != nil {
-		if copyErr != nil {
+		if copyErr != nil && !errors.Is(copyErr, io.EOF) {
 			return fmt.Errorf("copy exec output: %w", copyErr)
 		}
 		return fmt.Errorf("inspect exec %s: %w", execID, err)
