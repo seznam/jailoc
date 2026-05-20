@@ -377,8 +377,9 @@ func writeTUIConfig(baseDir string) error {
 }
 
 func writeTUIJSON(path, specifier string) error {
-	config := map[string][]string{
-		"plugin": {specifier},
+	config := map[string]any{
+		"theme":  "opencode",
+		"plugin": []string{specifier},
 	}
 
 	data, err := json.Marshal(config)
