@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
+	"github.com/seznam/jailoc/internal/logging"
 	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/update"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -37,6 +39,8 @@ var rootCmd = &cobra.Command{
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		_ = logging.Init()
+		slog.Info("jailoc started", "version", appVersion)
 		if noColor, _ := cmd.Flags().GetBool("no-color"); noColor {
 			color.NoColor = true
 		}
