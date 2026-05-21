@@ -74,6 +74,7 @@ nav:
     - SSH & Git Passthrough: how-to/ssh-git-passthrough.md
     - Access Modes: how-to/access-modes.md
     - TUI Plugin: how-to/tui-plugin.md
+    - Troubleshooting: how-to/troubleshooting.md
   - Reference:
     - CLI: reference/cli.md
     - Configuration: reference/configuration.md
