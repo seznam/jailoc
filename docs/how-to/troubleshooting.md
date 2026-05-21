@@ -12,7 +12,7 @@ jailoc writes structured logs to:
 ~/.cache/jailoc/jailoc.log
 ```
 
-The log file rotates automatically at 5 MB — the previous file is kept as `jailoc.log.1`. If your home directory cannot be determined, logs fall back to `$TMPDIR/jailoc/jailoc.log`. If the log file still cannot be opened, logging is silently disabled.
+The log file rotates at startup when it exceeds 5 MB — the previous file is kept as `jailoc.log.1`. If your home directory cannot be determined, logs fall back to `$TMPDIR/jailoc/jailoc.log`. If the log file still cannot be opened, logging is silently disabled.
 
 All log entries use `slog` text format with timestamps, levels, and key-value pairs. Look for `level=ERROR` lines to find failures.
 
@@ -202,14 +202,14 @@ rm -rf ~/.cache/jailoc/<workspace>/
 ### Remove jailoc Docker resources
 
 ```bash
-# Stop a workspace
+# Stop all workspaces first
 jailoc down <workspace>
 
-# Remove stopped jailoc containers
-docker ps -a --filter "label=com.docker.compose.project" --format '{{.Names}}' \
-  | grep '^jailoc-' | xargs docker rm
+# Remove exited jailoc containers
+docker ps -a --filter "label=com.docker.compose.project" --filter "status=exited" \
+  --format '{{.Names}}' | grep '^jailoc-' | xargs docker rm
 
-# Remove jailoc volumes
+# Remove jailoc volumes (all workspaces must be stopped)
 docker volume ls --format '{{.Name}}' \
   | grep '^jailoc-' | xargs docker volume rm
 ```
