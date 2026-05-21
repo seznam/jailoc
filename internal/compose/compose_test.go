@@ -764,6 +764,18 @@ func TestMountsContainTarget(t *testing.T) {
 			containerPath: "/home/agent/.cache",
 			want:          false,
 		},
+		{
+			name:          "windows drive letter host",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.config/opencode:rw`},
+			containerPath: "/home/agent/.config/opencode",
+			want:          true,
+		},
+		{
+			name:          "windows drive letter no match",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.local:rw`},
+			containerPath: "/home/agent/.config/opencode",
+			want:          false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1006,6 +1018,27 @@ func TestReadOnlyMountCoversPath(t *testing.T) {
 			wantHost:      "/host/cfg/opencode",
 			wantCovered:   true,
 		},
+		{
+			name:          "windows drive letter exact match ro",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.config/opencode:ro`},
+			containerPath: "/home/agent/.config/opencode",
+			wantHost:      `C:\Users\me\cfg`,
+			wantCovered:   true,
+		},
+		{
+			name:          "windows drive letter parent ro",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.config:ro`},
+			containerPath: "/home/agent/.config/opencode",
+			wantHost:      `C:\Users\me\cfg/opencode`,
+			wantCovered:   true,
+		},
+		{
+			name:          "windows drive letter rw not covered",
+			mounts:        []string{`C:\Users\me\cfg:/home/agent/.config/opencode:rw`},
+			containerPath: "/home/agent/.config/opencode",
+			wantHost:      "",
+			wantCovered:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1020,4 +1053,81 @@ func TestReadOnlyMountCoversPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContainerPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{
+			name: "unix path unchanged",
+			host: "/Users/test/work/project",
+			want: "/Users/test/work/project",
+		},
+		{
+			name: "windows drive letter",
+			host: `C:\Users\filip\git\project`,
+			want: "/C/Users/filip/git/project",
+		},
+		{
+			name: "windows lowercase drive",
+			host: `d:\repos\app`,
+			want: "/d/repos/app",
+		},
+		{
+			name: "windows forward slashes",
+			host: "C:/Users/filip/git/project",
+			want: "/C/Users/filip/git/project",
+		},
+		{
+			name: "empty string",
+			host: "",
+			want: "",
+		},
+		{
+			name: "drive-relative path unchanged",
+			host: "C:foo",
+			want: "C:foo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := containerPath(tt.host)
+			if got != tt.want {
+				t.Errorf("containerPath(%q) = %q, want %q", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGenerateComposeWindowsPaths(t *testing.T) {
+	t.Parallel()
+
+	params := ComposeParams{
+		WorkspaceName:  "wintest",
+		Port:           4096,
+		Image:          "ghcr.io/seznam/jailoc:test",
+		Paths:          []string{`C:\Users\filip\git\project`},
+		CPU:            2.0,
+		Memory:         "4g",
+		UseDataVolume:  true,
+		UseCacheVolume: true,
+		ExposePort:     true,
+	}
+
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose returned error: %v", err)
+	}
+
+	rendered := string(out)
+
+	assertContains(t, rendered, `- C:\Users\filip\git\project:/C/Users/filip/git/project`)
+	assertContains(t, rendered, "working_dir: /C/Users/filip/git/project")
 }

@@ -31,7 +31,7 @@ The `tui-plugin` directory is shared across all workspaces — jailoc writes it 
 Restart the workspace to apply the plugin configuration:
 
 ```bash
-jailoc down <name> && jailoc up <name>
+jailoc restart <name>
 ```
 
 ---
@@ -56,4 +56,4 @@ Verify jailoc generated the TUI config and plugin files:
 ls ~/.cache/jailoc/tui.json ~/.cache/jailoc/tui-container.json ~/.cache/jailoc/tui-plugin/
 ```
 
-If they are missing, restart any workspace with `jailoc down <name> && jailoc up <name>`.
+If they are missing, restart any workspace with `jailoc restart <name>`.

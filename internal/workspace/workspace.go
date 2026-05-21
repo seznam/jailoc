@@ -3,6 +3,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -40,6 +41,8 @@ type Resolved struct {
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
+	slog.Debug("resolving workspace", "name", name)
+
 	if cfg == nil {
 		return nil, fmt.Errorf("workspace %q not found", name)
 	}
@@ -102,7 +105,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		return nil, fmt.Errorf("merge mounts for workspace %s: %w", name, err)
 	}
 
-	return &Resolved{
+	r := &Resolved{
 		Name:            name,
 		Paths:           paths,
 		Mounts:          mergedMounts,
@@ -119,7 +122,11 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
-	}, nil
+	}
+
+	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))
+
+	return r, nil
 }
 
 func dedupEnvByKeyLastWins(entries []string) []string {

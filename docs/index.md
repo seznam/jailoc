@@ -38,6 +38,7 @@ Step-by-step guides for specific tasks once you're up and running.
 - [Network Access](how-to/network-access.md)
 - [SSH & Git Passthrough](how-to/ssh-git-passthrough.md)
 - [Access Modes](how-to/access-modes.md)
+- [Troubleshooting](how-to/troubleshooting.md)
 
 ### Reference
 

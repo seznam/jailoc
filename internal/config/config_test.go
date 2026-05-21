@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -2345,6 +2346,73 @@ func TestParseMountInvalid(t *testing.T) {
 	}
 
 	for _, spec := range invalidSpecs {
+		t.Run(spec, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := ParseMount(spec); err == nil {
+				t.Fatalf("expected ParseMount(%q) to fail", spec)
+			}
+		})
+	}
+}
+
+func TestParseMountWindowsPaths(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only path parsing test")
+	}
+	t.Parallel()
+
+	valid := []struct {
+		name      string
+		spec      string
+		host      string
+		container string
+		mode      string
+	}{
+		{
+			name:      "backslash path",
+			spec:      `C:\Users\foo:/container:rw`,
+			host:      `C:\Users\foo`,
+			container: "/container",
+			mode:      "rw",
+		},
+		{
+			name:      "forward slash path",
+			spec:      "D:/projects/app:/home/agent/app:ro",
+			host:      "D:/projects/app",
+			container: "/home/agent/app",
+			mode:      "ro",
+		},
+		{
+			name:      "implicit rw",
+			spec:      `C:\Users\foo\project:/home/agent/project`,
+			host:      `C:\Users\foo\project`,
+			container: "/home/agent/project",
+			mode:      "rw",
+		},
+	}
+
+	for _, tt := range valid {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseMount(tt.spec)
+			if err != nil {
+				t.Fatalf("ParseMount(%q) failed: %v", tt.spec, err)
+			}
+
+			if got.Host != tt.host || got.Container != tt.container || got.Mode != tt.mode {
+				t.Fatalf("ParseMount(%q) = %#v, want host=%q container=%q mode=%q", tt.spec, got, tt.host, tt.container, tt.mode)
+			}
+		})
+	}
+
+	invalid := []string{
+		`C:\a:/b:invalid`,
+		`C:\a:/b:ro:extra`,
+	}
+
+	for _, spec := range invalid {
 		t.Run(spec, func(t *testing.T) {
 			t.Parallel()
 

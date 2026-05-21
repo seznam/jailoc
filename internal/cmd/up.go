@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +57,7 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
+	slog.Debug("resolving workspace", "name", workspaceFlag, "explicit", workspaceExplicit)
 	ws, err := workspace.Resolve(cfg, workspaceFlag)
 	if err != nil {
 		return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
@@ -133,6 +135,7 @@ func runUp(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve image for workspace %q: %w", ws.Name, err)
 	}
+	slog.Debug("image resolved", "image", finalImage)
 
 	cacheDir := ComposeCacheDir(ws.Name)
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
@@ -172,25 +175,27 @@ func runUp(ctx context.Context, args []string) error {
 		Mounts:          ws.Mounts,
 		AllowedHosts:    ws.AllowedHosts,
 		AllowedNetworks: ws.AllowedNetworks,
-		Env:              ws.Env,
-		SSHAuthSock:      resolveSSHAuthSock(ws.SSHAuthSock),
-		SSHKnownHosts:    resolveSSHKnownHosts(ws.SSHAuthSock),
-		GitConfig:        resolveGitConfig(ws.GitConfig),
-		CPU:              ws.CPU,
-		Memory:           ws.Memory,
-		UseDataVolume:    !compose.MountsContainTarget(ws.Mounts, "/home/agent/.local/share/opencode"),
-		UseCacheVolume:   !compose.MountsContainTarget(ws.Mounts, "/home/agent/.cache"),
-		ExposePort:       ws.ExposePort,
-		EnableDocker:     ws.EnableDocker,
+		Env:             ws.Env,
+		SSHAuthSock:     resolveSSHAuthSock(ws.SSHAuthSock),
+		SSHKnownHosts:   resolveSSHKnownHosts(ws.SSHAuthSock),
+		GitConfig:       resolveGitConfig(ws.GitConfig),
+		CPU:             ws.CPU,
+		Memory:          ws.Memory,
+		UseDataVolume:   !compose.MountsContainTarget(ws.Mounts, "/home/agent/.local/share/opencode"),
+		UseCacheVolume:  !compose.MountsContainTarget(ws.Mounts, "/home/agent/.cache"),
+		ExposePort:      ws.ExposePort,
+		EnableDocker:    ws.EnableDocker,
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Generating compose configuration...\n")
 	if err := compose.WriteComposeFile(params, composePath); err != nil {
 		return fmt.Errorf("write compose file for workspace %q: %w", ws.Name, err)
 	}
+	slog.Info("compose file written", "path", composePath)
 
 	_, _ = color.New(color.FgCyan).Printf("Starting workspace %s...\n", ws.Name)
 	startClient := docker.NewClient(composePath, "", ws.Name)
+	slog.Debug("starting workspace", "name", ws.Name, "port", ws.Port)
 	if err := startClient.Up(ctx); err != nil {
 		return fmt.Errorf("start workspace %q: %w", ws.Name, err)
 	}
@@ -266,6 +271,7 @@ func resolveImageStrategy(wsImage, defaultsImage, wsDockerfile string) (imageStr
 
 func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, version string) (string, error) {
 	strategy, strategyImage := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
+	slog.Debug("image strategy resolved", "strategy", strategy, "image", strategyImage)
 	switch strategy {
 	case strategyDirectImage:
 		_, _ = color.New(color.FgCyan).Printf("Using workspace image %s\n", strategyImage)
@@ -287,6 +293,7 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 			return "", fmt.Errorf("resolve base image: %w", err)
 		}
 
+		slog.Debug("building workspace layer", "base", base, "dockerfile", ws.Dockerfile)
 		final, err := docker.BuildOverlayImage(ctx, base, *ws)
 		if err != nil {
 			return "", fmt.Errorf("build workspace overlay image: %w", err)

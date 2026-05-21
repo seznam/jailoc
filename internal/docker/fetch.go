@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -18,13 +19,13 @@ const (
 )
 
 func detectSourceType(value string) (sourceType, error) {
-	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") {
+	if filepath.IsAbs(value) || strings.HasPrefix(value, "~") {
 		return sourceLocal, nil
 	}
 	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
 		return sourceHTTP, nil
 	}
-	return 0, fmt.Errorf("unsupported dockerfile source %q: must be an absolute local path (/..., ~/...) or HTTP(S) URL", value)
+	return 0, fmt.Errorf("unsupported dockerfile source %q: must be an absolute local path, a ~/path, or an HTTP(S) URL", value)
 }
 
 func readLocalDockerfile(path string) ([]byte, error) {

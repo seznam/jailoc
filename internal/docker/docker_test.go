@@ -27,6 +27,7 @@ func TestNewClient(t *testing.T) {
 
 	if client == nil {
 		t.Fatal("expected non-nil client")
+		return
 	}
 	if client.composeFile != composeFile {
 		t.Fatalf("unexpected composeFile: got %q, want %q", client.composeFile, composeFile)
