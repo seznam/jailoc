@@ -12,7 +12,7 @@ jailoc writes structured logs to:
 ~/.cache/jailoc/jailoc.log
 ```
 
-The log file rotates automatically at 5 MB — the previous file is kept as `jailoc.log.1`. If `~/.cache` is unreachable, logs fall back to the system temp directory (`/tmp/jailoc/jailoc.log`).
+The log file rotates automatically at 5 MB — the previous file is kept as `jailoc.log.1`. If your home directory cannot be determined, logs fall back to `$TMPDIR/jailoc/jailoc.log`. If the log file still cannot be opened, logging is silently disabled.
 
 All log entries use `slog` text format with timestamps, levels, and key-value pairs. Look for `level=ERROR` lines to find failures.
 
@@ -110,7 +110,7 @@ Image resolution follows a cascade — if one step fails, jailoc tries the next.
 
 ```bash
 # Check the log for the resolution cascade
-grep -i "image\|pull\|build\|dockerfile" ~/.cache/jailoc/jailoc.log
+grep -Ei "image|pull|build|dockerfile" ~/.cache/jailoc/jailoc.log
 ```
 
 If all steps in the cascade fail, jailoc falls back to the embedded base image. If even that fails, check Docker daemon health.
@@ -199,19 +199,23 @@ Over time, stopped workspaces may leave behind containers, volumes, and cached f
 rm -rf ~/.cache/jailoc/<workspace>/
 ```
 
-### Remove all jailoc Docker resources
+### Remove jailoc Docker resources
 
 ```bash
-# Stop all running workspaces
+# Stop a workspace
 jailoc down <workspace>
 
-# Prune containers and volumes with the jailoc label
-docker ps -a --filter "label=com.docker.compose.project" | grep jailoc
-docker volume ls --filter "label=com.docker.compose.project" | grep jailoc
+# Remove stopped jailoc containers
+docker ps -a --filter "label=com.docker.compose.project" --format '{{.Names}}' \
+  | grep '^jailoc-' | xargs -r docker rm
+
+# Remove jailoc volumes
+docker volume ls --format '{{.Name}}' \
+  | grep '^jailoc-' | xargs -r docker volume rm
 ```
 
 ### Remove the log file
 
 ```bash
-rm ~/.cache/jailoc/jailoc.log ~/.cache/jailoc/jailoc.log.1
+rm -f ~/.cache/jailoc/jailoc.log ~/.cache/jailoc/jailoc.log.1
 ```
