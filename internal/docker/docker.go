@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -76,6 +77,8 @@ func NewClient(composeFile, workDir, workspace string) *Client {
 }
 
 func (c *Client) Up(ctx context.Context) error {
+	slog.Info("compose up", "workspace", c.workspace)
+
 	if err := c.initComposeSvc(); err != nil {
 		return err
 	}
@@ -102,6 +105,8 @@ func (c *Client) Up(ctx context.Context) error {
 }
 
 func (c *Client) Down(ctx context.Context) error {
+	slog.Info("compose down", "workspace", c.workspace)
+
 	if err := c.initComposeSvc(); err != nil {
 		return err
 	}
@@ -114,6 +119,8 @@ func (c *Client) Down(ctx context.Context) error {
 }
 
 func (c *Client) IsRunning(ctx context.Context) (bool, error) {
+	slog.Debug("checking container running status", "workspace", c.workspace)
+
 	container, err := c.opencodeContainer(ctx)
 	if err != nil {
 		return false, err
@@ -440,6 +447,8 @@ func (c *Client) initComposeSvc() error {
 }
 
 func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (string, error) {
+	slog.Debug("resolving base image", "version", version)
+
 	if cfg != nil && strings.TrimSpace(cfg.Base.Dockerfile) != "" {
 		source := strings.TrimSpace(cfg.Base.Dockerfile)
 		_, _ = color.New(color.FgCyan).Printf("Loading preset Dockerfile from %s...\n", source)
@@ -460,6 +469,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 			return "", fmt.Errorf("build preset image: %w", err)
 		}
 
+		slog.Debug("base image resolved", "tag", tag)
 		return tag, nil
 	}
 
@@ -475,6 +485,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 		return "", fmt.Errorf("build embedded base image: %w", err)
 	}
 
+	slog.Debug("base image resolved", "tag", embeddedTag)
 	return embeddedTag, nil
 }
 
@@ -506,6 +517,9 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 		return fmt.Errorf("create temp directory for embedded Dockerfile: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	buildContextDir := tmpDir
+	slog.Debug("building image", "tag", tag, "context", buildContextDir)
 
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
 	if err := os.WriteFile(dockerfilePath, embed.Dockerfile(), 0o600); err != nil {
@@ -553,6 +567,7 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 
 	hash := sha256.Sum256(dockerfileContent)
 	presetTag := fmt.Sprintf("jailoc-base:preset-%x", hash[:8])
+	slog.Debug("building image", "tag", presetTag, "context", tmpDir)
 
 	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
 	if err != nil {

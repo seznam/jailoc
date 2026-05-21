@@ -3,6 +3,7 @@ package compose
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,23 +14,23 @@ import (
 )
 
 type ComposeParams struct {
-	WorkspaceName    string
-	Port             int
-	Image            string
-	Paths            []string
-	Mounts           []string
-	AllowedHosts     []string
-	AllowedNetworks  []string
-	Env []string
-	SSHAuthSock      string // host socket path to mount, empty = disabled
-	SSHKnownHosts    string // host known_hosts path to mount (bound to SSHAuthSock), empty = disabled
-	GitConfig        string // host gitconfig path to mount, empty = disabled
-	CPU              float64
-	Memory           string
-	UseDataVolume    bool
-	UseCacheVolume   bool
-	ExposePort       bool
-	EnableDocker     bool
+	WorkspaceName   string
+	Port            int
+	Image           string
+	Paths           []string
+	Mounts          []string
+	AllowedHosts    []string
+	AllowedNetworks []string
+	Env             []string
+	SSHAuthSock     string // host socket path to mount, empty = disabled
+	SSHKnownHosts   string // host known_hosts path to mount (bound to SSHAuthSock), empty = disabled
+	GitConfig       string // host gitconfig path to mount, empty = disabled
+	CPU             float64
+	Memory          string
+	UseDataVolume   bool
+	UseCacheVolume  bool
+	ExposePort      bool
+	EnableDocker    bool
 }
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {
@@ -102,6 +103,8 @@ func splitMountSpec(spec string) (host, container, mode string, ok bool) {
 }
 
 func WriteComposeFile(params ComposeParams, destPath string) error {
+	slog.Debug("generating compose file", "workspace", params.WorkspaceName, "dest", destPath)
+
 	composeBytes, err := GenerateCompose(params)
 	if err != nil {
 		return fmt.Errorf("generate compose file content: %w", err)
@@ -110,6 +113,8 @@ func WriteComposeFile(params ComposeParams, destPath string) error {
 	if err := os.WriteFile(destPath, composeBytes, 0o600); err != nil {
 		return fmt.Errorf("write compose file to %q: %w", destPath, err)
 	}
+
+	slog.Debug("compose file written", "bytes", len(composeBytes))
 
 	return nil
 }

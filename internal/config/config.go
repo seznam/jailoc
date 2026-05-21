@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/url"
@@ -210,7 +211,17 @@ func ConfigPath() string {
 }
 
 func Load() (*Config, error) {
-	return loadFrom(ConfigPath(), true)
+	configPath := ConfigPath()
+	slog.Debug("loading config", "path", configPath)
+
+	cfg, err := loadFrom(configPath, true)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Debug("config loaded", "workspaces", len(cfg.Workspaces))
+
+	return cfg, nil
 }
 
 func LoadFrom(path string) (*Config, error) {
