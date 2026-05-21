@@ -19,6 +19,8 @@
       });
     in
     {
+      formatter = forAllSystems ({ pkgs }: pkgs.alejandra);
+
       packages = forAllSystems ({ pkgs }: {
         jailoc = pkgs.buildGoModule {
           pname = "jailoc";
