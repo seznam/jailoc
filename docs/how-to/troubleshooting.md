@@ -12,7 +12,7 @@ jailoc writes structured logs to:
 ~/.cache/jailoc/jailoc.log
 ```
 
-The log file rotates at startup when it exceeds 5 MB — the previous file is kept as `jailoc.log.1`. If your home directory cannot be determined, logs fall back to `$TMPDIR/jailoc/jailoc.log`. If the log file still cannot be opened, logging is silently disabled.
+The log file rotates at startup when it exceeds 5 MB — the previous file is renamed to `jailoc.log.1`. If the rename fails, the log file is truncated instead (so `.1` may not exist on every system). If your home directory cannot be determined, logs fall back to `$TMPDIR/jailoc/jailoc.log`. If the log file still cannot be opened, logging is silently disabled.
 
 All log entries use `slog` text format with timestamps, levels, and key-value pairs. Look for `level=ERROR` lines to find failures.
 
@@ -89,7 +89,7 @@ allowed_networks = ["10.10.5.0/24"]
 Then restart the workspace:
 
 ```bash
-jailoc down myproject && jailoc up myproject
+jailoc restart myproject
 ```
 
 See [How to allow specific hosts or networks](network-access.md) for details.
@@ -180,12 +180,6 @@ Common causes:
 - Host does not support privileged containers (some CI environments)
 - TLS certificate volume not properly shared between containers
 - Insufficient disk space for Docker data volume
-
-**Fix:** Restart the workspace to regenerate TLS certificates and volumes:
-
-```bash
-jailoc down <workspace> && jailoc up <workspace>
-```
 
 ---
 
