@@ -196,7 +196,7 @@ rm -rf ~/.cache/jailoc/<workspace>/
 ### Remove jailoc Docker resources
 
 ```bash
-# Stop all workspaces first
+# Stop each workspace first (repeat for every running workspace)
 jailoc down <workspace>
 
 # Remove exited jailoc containers
