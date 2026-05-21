@@ -145,9 +145,9 @@ done
 
 # --- Pre-create OpenCode config directory with .gitignore ---
 # jailoc 1.13+ ships OpenCode v1.14.22+ which writes a .gitignore to every
-# config directory on startup. The default mount is :ro, so `jailoc up`
-# pre-creates the file on the host side. This block only matters when the
-# default mount is removed and no host mount covers the config directory.
+# config directory on startup. With the overlay model, seed dirs are read-only
+# and the entrypoint handles the writable layer. This block is a fallback when
+# the default seed mount is removed and no host mount covers the config directory.
 # See: https://github.com/anomalyco/opencode/issues/23040
 mkdir -p /home/agent/.config/opencode 2>/dev/null || true
 if [ -d /home/agent/.config/opencode ] && [ ! -f /home/agent/.config/opencode/.gitignore ]; then
