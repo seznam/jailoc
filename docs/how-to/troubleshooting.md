@@ -100,7 +100,7 @@ See [How to allow specific hosts or networks](network-access.md) for details.
 
 **Symptom:** `jailoc up` reports errors pulling or building the container image.
 
-Image resolution follows a cascade — if one step fails, jailoc tries the next. Common causes:
+Image resolution uses a priority cascade — the first matching configuration wins, and build/pull failures at that step are fatal. Common causes:
 
 - Registry unreachable (network issues, auth required)
 - URL Dockerfile returns HTTP errors
@@ -109,11 +109,11 @@ Image resolution follows a cascade — if one step fails, jailoc tries the next.
 **Debugging:**
 
 ```bash
-# Check the log for the resolution cascade
+# Check the log for image resolution errors
 grep -Ei "image|pull|build|dockerfile" ~/.cache/jailoc/jailoc.log
 ```
 
-If all steps in the cascade fail, jailoc falls back to the embedded base image. If even that fails, check Docker daemon health.
+See [Image resolution reference](../reference/image-resolution.md) for the full cascade order.
 
 ---
 
@@ -207,11 +207,11 @@ jailoc down <workspace>
 
 # Remove stopped jailoc containers
 docker ps -a --filter "label=com.docker.compose.project" --format '{{.Names}}' \
-  | grep '^jailoc-' | xargs -r docker rm
+  | grep '^jailoc-' | xargs docker rm
 
 # Remove jailoc volumes
 docker volume ls --format '{{.Name}}' \
-  | grep '^jailoc-' | xargs -r docker volume rm
+  | grep '^jailoc-' | xargs docker volume rm
 ```
 
 ### Remove the log file
