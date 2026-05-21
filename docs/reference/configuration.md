@@ -95,7 +95,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `paths` | string[] | (required) | Directories bind-mounted into the container at their original absolute paths. The first path becomes the container's working directory. Supports `~` expansion. |
-| `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/home/agent/.opencode"`) removes a default mount matching the container path. Container destinations under `/home/agent/...` are allowed (unlike `paths`); see [mounts validation](#mounts) for the full list of forbidden container prefixes. |
+| `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/mnt/jailoc-host/dot-opencode"`) removes a default mount matching the container path. Container destinations under `/home/agent/...` are allowed (unlike `paths`); see [mounts validation](#mounts) for the full list of forbidden container prefixes. |
 | `allowed_hosts` | string[] | `[]` | Hostnames resolved at container start and added as iptables `ACCEPT` rules before the private-range `DROP` rules. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
 | `image` | string | (none) | Pre-built Docker image to use directly for this workspace, bypassing all build steps. Compose pulls the image natively at startup. Cannot be combined with `dockerfile` or `build_context`. |
@@ -249,12 +249,12 @@ Environment variables from multiple sources are merged in this order (later entr
 
 | Container path | Host source | Mode |
 |---|---|---|
-| `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
-| `/home/agent/.opencode` | `~/.opencode` | `rw` |
+| `/mnt/jailoc-host/config-opencode` | `~/.config/opencode` | `ro` |
+| `/mnt/jailoc-host/dot-opencode` | `~/.opencode` | `ro` |
 | `/home/agent/.claude/transcripts` | `~/.claude/transcripts` | `rw` |
 | `/home/agent/.agents` | `~/.agents` | `ro` |
 
-OpenCode configuration directories are mounted read-write because the agent needs write access to persist settings changes, install tools and MCPs, and update its own configuration at runtime.
+OpenCode configuration directories use an overlay model. The host directory is mounted read-only at the seed path. The container entrypoint copies this directory (excluding `node_modules`, which OpenCode reinstalls on startup) into the container's writable layer at the actual configuration path. The agent can modify, install tools, and update its own OpenCode configuration at runtime; writes stay inside the container and do not propagate to the host filesystem. The entrypoint copies host files on each container start, overwriting any container-side changes to files that also exist on the host. Agent-created files (not present on the host) persist across container restarts but are discarded when the container is removed or recreated (e.g. `jailoc down`). An explicit bind mount at the actual container path (e.g., `mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]`) or at any parent path takes priority — the entrypoint detects the mount and skips the seed copy.
 
 `ssh_auth_sock`, `git_config`, `expose_port`, and `enable_docker` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config`, `expose_port`, and `enable_docker` fall back to `true` when neither the workspace nor defaults set it.
 

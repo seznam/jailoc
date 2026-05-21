@@ -1220,8 +1220,8 @@ func TestResolveMountsDefault(t *testing.T) {
 	}
 
 	want := []string{
-		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
-		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
+		filepath.Join(home, ".config", "opencode") + ":/mnt/jailoc-host/config-opencode:ro",
+		filepath.Join(home, ".opencode") + ":/mnt/jailoc-host/dot-opencode:ro",
 		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
@@ -1250,10 +1250,11 @@ func TestResolveMountsOverride(t *testing.T) {
 	}
 
 	want := []string{
-		filepath.Join(home, "custom-opencode") + ":/home/agent/.config/opencode:rw",
-		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
+		filepath.Join(home, ".config", "opencode") + ":/mnt/jailoc-host/config-opencode:ro",
+		filepath.Join(home, ".opencode") + ":/mnt/jailoc-host/dot-opencode:ro",
 		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+		filepath.Join(home, "custom-opencode") + ":/home/agent/.config/opencode:rw",
 	}
 
 	if !reflect.DeepEqual(resolved.Mounts, want) {
@@ -1269,7 +1270,7 @@ func TestResolveMountsRemoval(t *testing.T) {
 		Workspaces: map[string]config.Workspace{
 			"default": {
 				Paths:  []string{"/tmp"},
-				Mounts: []string{":/home/agent/.opencode"},
+				Mounts: []string{":/mnt/jailoc-host/dot-opencode"},
 			},
 		},
 	}
@@ -1280,7 +1281,7 @@ func TestResolveMountsRemoval(t *testing.T) {
 	}
 
 	want := []string{
-		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
+		filepath.Join(home, ".config", "opencode") + ":/mnt/jailoc-host/config-opencode:ro",
 		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}

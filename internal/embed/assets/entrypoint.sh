@@ -111,11 +111,43 @@ $IPT -A OUTPUT -d 192.168.0.0/16 -j DROP
 $IPT -A OUTPUT -d 169.254.0.0/16 -j DROP
 $IPT -A OUTPUT -d 100.64.0.0/10 -j DROP
 
+# --- Copy OC config seed mounts to writable paths ---
+# Host OC config dirs are mounted read-only at seed paths. Copy their contents
+# into the container's writable layer so the agent can read and modify config
+# at runtime without writes leaking back to the host.
+# node_modules is excluded: OpenCode reinstalls its npm plugin runtime on startup.
+
+# _is_under_bind_mount returns 0 when the given path, or any ancestor below /,
+# is a mount point. This catches both direct mounts at $dst and broader mounts
+# at a parent directory (e.g. /home/agent or /home/agent/.config).
+_is_under_bind_mount() {
+  local p="$1"
+  while [ "$p" != "/" ] && [ -n "$p" ]; do
+    if mountpoint -q "$p" 2>/dev/null; then
+      return 0
+    fi
+    p="$(dirname "$p")"
+  done
+  return 1
+}
+
+for pair in \
+    "/mnt/jailoc-host/config-opencode:/home/agent/.config/opencode" \
+    "/mnt/jailoc-host/dot-opencode:/home/agent/.opencode"; do
+  seed="${pair%%:*}"
+  dst="${pair#*:}"
+  if [ -d "$seed" ] && ! _is_under_bind_mount "$dst"; then
+    mkdir -p "$dst" 2>/dev/null || true
+    find "$seed" -mindepth 1 -maxdepth 1 ! -name node_modules -exec cp -a -- {} "$dst/" \; || \
+      echo "jailoc: warning: some files from $seed could not be copied" >&2
+  fi
+done
+
 # --- Pre-create OpenCode config directory with .gitignore ---
 # jailoc 1.13+ ships OpenCode v1.14.22+ which writes a .gitignore to every
-# config directory on startup. The default mount is :ro, so `jailoc up`
-# pre-creates the file on the host side. This block only matters when the
-# default mount is removed and no host mount covers the config directory.
+# config directory on startup. With the overlay model, seed dirs are read-only
+# and the entrypoint handles the writable layer. This block is a fallback when
+# the default seed mount is removed and no host mount covers the config directory.
 # See: https://github.com/anomalyco/opencode/issues/23040
 mkdir -p /home/agent/.config/opencode 2>/dev/null || true
 if [ -d /home/agent/.config/opencode ] && [ ! -f /home/agent/.config/opencode/.gitignore ]; then
@@ -131,7 +163,7 @@ bun.lock
 GITIGNORE
 fi
 
-chown -R 1000:1000 /home/agent/.local /home/agent/.cache /home/agent/.config 2>/dev/null || true
+chown -R 1000:1000 /home/agent/.local /home/agent/.cache /home/agent/.config /home/agent/.opencode 2>/dev/null || true
 chown 1000:1000 /home/agent/.claude 2>/dev/null || true
 
 if [ -S /run/ssh-agent.sock ]; then
