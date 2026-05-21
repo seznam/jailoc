@@ -73,6 +73,15 @@ vendorHash = "sha256-CmcnUV7mk1yg13JODN+xPA0+UvQf1CU73mI0hIb/XPI=";
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.jailoc;
       });
 
+      apps = forAllSystems ({ pkgs }: {
+        jailoc = {
+          type = "app";
+          program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.jailoc}/bin/jailoc";
+        };
+
+        default = self.apps.${pkgs.stdenv.hostPlatform.system}.jailoc;
+      });
+
       devShells = forAllSystems ({ pkgs }: {
         default = pkgs.mkShell {
           packages = with pkgs; [
