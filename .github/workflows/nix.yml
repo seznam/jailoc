@@ -22,7 +22,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
-      - run: nix fmt --check .
+      - name: Check formatting
+        run: |
+          nix fmt .
+          git diff --exit-code
       - run: nix flake check
       - run: nix build
       - run: nix run . -- --help
