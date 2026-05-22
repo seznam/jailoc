@@ -628,6 +628,12 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		return "", fmt.Errorf("close temporary workspace Dockerfile %q: %w", tmpDockerfilePath, err)
 	}
 
+	// Workspace overlays are rebuilt unconditionally on every jailoc up.
+	// We do NOT check whether overlayTag already exists locally and skip the build —
+	// that would silently run a stale image when the user edits their Dockerfile
+	// but the edit produces a build error. Build failure must abort startup.
+	// Daemon-side layer cache already provides the fast path for unchanged Dockerfiles;
+	// adding a second cache layer here would only mask user errors.
 	hash := sha256.Sum256(dockerfileContent)
 	hashHex := fmt.Sprintf("%x", hash)
 	overlayTag := fmt.Sprintf("jailoc-%s:%s", ws.Name, hashHex[:8])
