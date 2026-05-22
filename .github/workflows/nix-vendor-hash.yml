@@ -27,6 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
       - name: Update vendor hash
         run: nix develop .#ci --command nix-update --flake --version=skip jailoc
       - name: Check for changes
@@ -37,12 +38,18 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Format flake
+        if: steps.diff.outputs.changed == 'true'
+        run: nix fmt .
       - name: Verify flake
         if: steps.diff.outputs.changed == 'true'
         run: nix flake check
       - name: Verify build
         if: steps.diff.outputs.changed == 'true'
         run: nix build
+      - name: Verify run
+        if: steps.diff.outputs.changed == 'true'
+        run: nix run . -- --help
       - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         if: steps.diff.outputs.changed == 'true'
         with:
