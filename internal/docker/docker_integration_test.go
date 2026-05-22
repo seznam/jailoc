@@ -125,6 +125,29 @@ func TestBuildEmbeddedImage(t *testing.T) {
 	}
 }
 
+func TestBuildOverlayImageImplicitBaseArg(t *testing.T) {
+	t.Parallel()
+	skipWithoutDocker(t)
+
+	tmpDir := t.TempDir()
+	wsDockerfile := filepath.Join(tmpDir, "overlay.Dockerfile")
+	// Dockerfile uses ${BASE} without declaring ARG BASE — jailoc must prepend it automatically.
+	if err := os.WriteFile(wsDockerfile, []byte("FROM ${BASE}\nRUN echo hello\n"), 0o600); err != nil {
+		t.Fatalf("write workspace dockerfile: %v", err)
+	}
+
+	_, err := BuildOverlayImage(context.Background(), "registry.example.com/base:v1", workspace.Resolved{
+		Name:       "ws-implicit-base",
+		Dockerfile: wsDockerfile,
+	})
+	if err == nil {
+		t.Fatal("expected docker build error (image pull), got nil")
+	}
+	if strings.Contains(err.Error(), "should not be blank") {
+		t.Fatalf("BASE arg was not injected: %v", err)
+	}
+}
+
 func TestBuildOverlayImageExplicitBuildContext(t *testing.T) {
 	t.Parallel()
 	skipWithoutDocker(t)

@@ -607,6 +607,10 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		return "", fmt.Errorf("load workspace dockerfile from %q: %w", ws.Dockerfile, err)
 	}
 
+	// Ensure BASE is declared as a global ARG so Docker can substitute it in FROM instructions.
+	// This is a no-op if the Dockerfile already declares ARG BASE — duplicate bare ARGs are harmless.
+	dockerfileContent = append([]byte("ARG BASE\n"), dockerfileContent...)
+
 	buildContextDir, cleanupCtx, err := resolveOverlayBuildContext(ws)
 	if err != nil {
 		return "", fmt.Errorf("determine build context for workspace %q: %w", ws.Name, err)
