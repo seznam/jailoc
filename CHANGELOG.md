@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.15.0](https://github.com/seznam/jailoc/compare/v1.14.0...v1.15.0) (2026-05-21)
+
+
+### Features
+
+* **logging:** add always-on debug file logging ([#172](https://github.com/seznam/jailoc/issues/172)) ([d407654](https://github.com/seznam/jailoc/commit/d4076543b9375cccb6cd2268be58cc647a655ac5))
+
+
+### Bug Fixes
+
+* **cmd:** enable Windows cross-compilation with PTY fallback ([#161](https://github.com/seznam/jailoc/issues/161)) ([e90baf5](https://github.com/seznam/jailoc/commit/e90baf5040cf62080001317f547de1ff6d484ec7))
+* **cmd:** replace creack/pty with go-pty for cross-platform PTY support ([#166](https://github.com/seznam/jailoc/issues/166)) ([5ad0cc1](https://github.com/seznam/jailoc/commit/5ad0cc18a29f3074b9525a12ec21649133ee66c9))
+* **config:** use filepath.IsAbs for cross-platform path validation ([#165](https://github.com/seznam/jailoc/issues/165)) ([6baf43e](https://github.com/seznam/jailoc/commit/6baf43e0c60343733cad589f3689c61f37777178))
+* **docker:** clarify overlay build status message ([#162](https://github.com/seznam/jailoc/issues/162)) ([f0aa418](https://github.com/seznam/jailoc/commit/f0aa41809b81e17e2ca1281caadf5d0f3613211a))
+
+
+### Documentation
+
+* **how-to:** add troubleshooting page ([#174](https://github.com/seznam/jailoc/issues/174)) ([948d93e](https://github.com/seznam/jailoc/commit/948d93e6b303802956629e99aa73154271f47fab))
+
+## [1.14.0](https://github.com/seznam/jailoc/compare/v1.13.1...v1.14.0) (2026-05-13)
+
+
+### Features
+
+* **cmd:** add session continuation and rewrite exit title ([#154](https://github.com/seznam/jailoc/issues/154)) ([66059e3](https://github.com/seznam/jailoc/commit/66059e38f28408a5b4ad9a22b77926ce5257d9c5))
+
+
+### Bug Fixes
+
+* **config:** mount OpenCode config directories read-write ([#156](https://github.com/seznam/jailoc/issues/156)) ([178f857](https://github.com/seznam/jailoc/commit/178f8574adb60eddfefc83931404ea589f71a65e))
+
 ## [1.13.1](https://github.com/seznam/jailoc/compare/v1.13.0...v1.13.1) (2026-04-28)
 
 

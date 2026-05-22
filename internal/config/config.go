@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/compose-spec/compose-go/v2/format"
 	"github.com/fatih/color"
 )
 
@@ -31,7 +33,7 @@ const (
 # image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
-# mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
+# mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 # allowed_hosts = ["example.com"]
 # allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
@@ -48,7 +50,7 @@ paths = []
 # allowed_networks = []
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
-# mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
+# mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 # build_context = ""
 # dockerfile = ""
 # ssh_auth_sock = false
@@ -138,8 +140,8 @@ var forbiddenMountHostPaths = []string{
 }
 
 var DefaultMounts = []string{
-	"~/.config/opencode:/home/agent/.config/opencode:ro",
-	"~/.opencode:/home/agent/.opencode:ro",
+	"~/.config/opencode:/home/agent/.config/opencode:rw",
+	"~/.opencode:/home/agent/.opencode:rw",
 	"~/.claude/transcripts:/home/agent/.claude/transcripts:rw",
 	"~/.agents:/home/agent/.agents:ro",
 }
@@ -209,7 +211,17 @@ func ConfigPath() string {
 }
 
 func Load() (*Config, error) {
-	return loadFrom(ConfigPath(), true)
+	configPath := ConfigPath()
+	slog.Debug("loading config", "path", configPath)
+
+	cfg, err := loadFrom(configPath, true)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Debug("config loaded", "workspaces", len(cfg.Workspaces))
+
+	return cfg, nil
 }
 
 func LoadFrom(path string) (*Config, error) {
@@ -287,8 +299,8 @@ func validateDockerfileSource(value, fieldName string) error {
 		return nil
 	}
 
-	// Absolute local paths starting with / are allowed
-	if strings.HasPrefix(value, "/") {
+	// Absolute local paths are allowed
+	if filepath.IsAbs(value) {
 		return nil
 	}
 
@@ -311,7 +323,7 @@ func validateDockerfileSource(value, fieldName string) error {
 	}
 
 	// Anything else is invalid
-	return fmt.Errorf("%s: must be an absolute path (/..., ~/...) or HTTP(S) URL, got %q", fieldName, value)
+	return fmt.Errorf("%s: must be an absolute path, ~ home path, or HTTP(S) URL, got %q", fieldName, value)
 }
 
 func validateEnvEntries(entries []string, context string) error {
@@ -332,8 +344,8 @@ func validateEnvEntries(entries []string, context string) error {
 
 func validateEnvFiles(paths []string, context string) error {
 	for _, p := range paths {
-		if !strings.HasPrefix(p, "/") {
-			return fmt.Errorf("%s: env_file path %q must be absolute (start with /)", context, p)
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("%s: env_file path %q must be absolute", context, p)
 		}
 		if _, err := os.Stat(p); err != nil {
 			if os.IsNotExist(err) {
@@ -353,18 +365,32 @@ func validateEnvFiles(paths []string, context string) error {
 }
 
 func ParseMount(spec string) (Mount, error) {
-	parts := strings.Split(spec, ":")
-	if len(parts) < 2 || len(parts) > 3 {
+	// Handle removal specs (e.g. ":/container" or ":/container:ro").
+	// format.ParseVolume rejects empty source sections.
+	if strings.HasPrefix(spec, ":") {
+		return parseRemovalMount(spec)
+	}
+
+	vol, err := format.ParseVolume(spec)
+	if err != nil {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: %w", spec, err)
+	}
+
+	// ParseVolume accepts single-component specs as anonymous volumes;
+	// jailoc requires both host and container.
+	if vol.Source == "" || vol.Target == "" {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: expected host:container[:mode]", spec)
 	}
 
-	host := parts[0]
-	container := parts[1]
-	mode := "rw"
-	if len(parts) == 3 {
-		mode = parts[2]
-	}
+	host := vol.Source
+	container := vol.Target
 
+	// ParseVolume silently drops unknown mode options. Re-validate from the
+	// raw spec to reject anything other than ro/rw.
+	mode := rawMode(spec, host, container)
+	if mode == "" {
+		mode = "rw"
+	}
 	if mode != "ro" && mode != "rw" {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: mode must be ro or rw", spec)
 	}
@@ -374,8 +400,8 @@ func ParseMount(spec string) (Mount, error) {
 		if err != nil {
 			return Mount{}, fmt.Errorf("expand mount host path %q: %w", host, err)
 		}
-		if !strings.HasPrefix(expandedHost, "/") {
-			return Mount{}, fmt.Errorf("invalid mount spec %q: host path %q must be absolute (start with / or ~)", spec, host)
+		if !filepath.IsAbs(expandedHost) {
+			return Mount{}, fmt.Errorf("invalid mount spec %q: host path %q must be an absolute path or ~ home path", spec, host)
 		}
 	}
 
@@ -388,6 +414,46 @@ func ParseMount(spec string) (Mount, error) {
 	}
 
 	return Mount{Host: host, Container: container, Mode: mode}, nil
+}
+
+// parseRemovalMount handles mount specs with empty host (e.g. ":/container")
+// that override an inherited mount by removing it.
+func parseRemovalMount(spec string) (Mount, error) {
+	rest := spec[1:]
+	parts := strings.SplitN(rest, ":", 2)
+	container := parts[0]
+	mode := "rw"
+	if len(parts) == 2 {
+		mode = parts[1]
+	}
+
+	if mode != "ro" && mode != "rw" {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: mode must be ro or rw", spec)
+	}
+
+	expandedContainer, err := ExpandPath(container)
+	if err != nil {
+		return Mount{}, fmt.Errorf("expand mount container path %q: %w", container, err)
+	}
+	if !strings.HasPrefix(expandedContainer, "/") {
+		return Mount{}, fmt.Errorf("invalid mount spec %q: container path %q must be absolute (start with /)", spec, container)
+	}
+
+	return Mount{Host: "", Container: container, Mode: mode}, nil
+}
+
+// rawMode extracts the raw mode string from a mount spec, given the source and
+// target parsed by format.ParseVolume. Returns "" if no mode was specified.
+func rawMode(spec, source, target string) string {
+	prefix := source + ":" + target
+	if !strings.HasPrefix(spec, prefix) {
+		return ""
+	}
+	rest := spec[len(prefix):]
+	if len(rest) > 0 && rest[0] == ':' {
+		return rest[1:]
+	}
+	return ""
 }
 
 func validateMountHostPath(host string, context string) error {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
+	"github.com/seznam/jailoc/internal/logging"
 	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/update"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -28,6 +30,8 @@ var workspaceFlag string
 var workspaceExplicit bool
 var appVersion string
 var remoteFlag, execFlag bool
+var sessionFlag string
+var continueFlag bool
 
 var rootCmd = &cobra.Command{
 	Use:          "jailoc [path]",
@@ -35,6 +39,8 @@ var rootCmd = &cobra.Command{
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		_ = logging.Init()
+		slog.Info("jailoc started", "version", appVersion)
 		if noColor, _ := cmd.Flags().GetBool("no-color"); noColor {
 			color.NoColor = true
 		}
@@ -162,10 +168,17 @@ var rootCmd = &cobra.Command{
 		switch mode {
 		case config.ModeExec:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-			attachErr = attachExec(attachCtx, client, targetPath)
+			attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
 		default:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
-			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode)
+			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode, sessionFlag, continueFlag)
+			if errors.Is(attachErr, errPTYUnsupported) {
+				if remoteFlag {
+					return fmt.Errorf("remote mode requires PTY support, which is not available on this platform; use --exec instead")
+				}
+				_, _ = color.New(color.FgYellow).Println("PTY not supported, falling back to exec mode...")
+				attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
+			}
 		}
 		if attachErr != nil {
 			return fmt.Errorf("attach to workspace %q: %w", ws.Name, attachErr)
@@ -180,7 +193,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&remoteFlag, "remote", false, "Use remote mode (host-side opencode attach)")
 	rootCmd.PersistentFlags().BoolVar(&execFlag, "exec", false, "Use exec mode (docker exec opencode inside container)")
 	rootCmd.PersistentFlags().Bool("no-color", false, "disable colored output")
+	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "session ID to continue")
+	rootCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "continue the last session")
 	rootCmd.MarkFlagsMutuallyExclusive("remote", "exec")
+	rootCmd.MarkFlagsMutuallyExclusive("session", "continue")
 }
 
 // resolveTargetPath returns the absolute path from a positional argument.
