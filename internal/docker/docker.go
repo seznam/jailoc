@@ -628,7 +628,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		return "", fmt.Errorf("close temporary workspace Dockerfile %q: %w", tmpDockerfilePath, err)
 	}
 
-	// Workspace overlays are rebuilt unconditionally on every jailoc up.
+	// Workspace overlays are rebuilt unconditionally on every workspace startup.
 	// We do NOT check whether overlayTag already exists locally and skip the build —
 	// that would silently run a stale image when the user edits their Dockerfile
 	// but the edit produces a build error. Build failure must abort startup.
