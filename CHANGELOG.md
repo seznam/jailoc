@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.15.1](https://github.com/seznam/jailoc/compare/v1.15.0...v1.15.1) (2026-05-22)
+
+
+### Features
+
+* **nix:** Add `apps` and `formatter` to flake ([#176](https://github.com/seznam/jailoc/issues/176)) ([66878f8](https://github.com/seznam/jailoc/commit/66878f8293a32c8f21216e22cb892018b87dd2f2))
+
+
+### Miscellaneous
+
+* **deps:** bump goreleaser/goreleaser-action in the all group ([#175](https://github.com/seznam/jailoc/issues/175)) ([132de64](https://github.com/seznam/jailoc/commit/132de64eef360549d435347ee6087ecd7d904de1))
+
 ## [1.15.0](https://github.com/seznam/jailoc/compare/v1.14.0...v1.15.0) (2026-05-21)
 
 
