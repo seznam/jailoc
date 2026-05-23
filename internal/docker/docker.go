@@ -607,6 +607,8 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		return "", fmt.Errorf("load workspace dockerfile from %q: %w", ws.Dockerfile, err)
 	}
 
+	dockerfileContent = injectBaseArg(dockerfileContent)
+
 	buildContextDir, cleanupCtx, err := resolveOverlayBuildContext(ws)
 	if err != nil {
 		return "", fmt.Errorf("determine build context for workspace %q: %w", ws.Name, err)
@@ -671,6 +673,34 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	}
 
 	return overlayTag, nil
+}
+
+// injectBaseArg inserts "ARG BASE\n" after any leading parser directives (# syntax=...,
+// # escape=..., # check=...) so that ${BASE} is substitutable in FROM instructions without
+// breaking directives that must appear before any instruction.
+func injectBaseArg(content []byte) []byte {
+	const argLine = "ARG BASE\n"
+	i := 0
+	for i < len(content) {
+		lineEnd := i
+		for lineEnd < len(content) && content[lineEnd] != '\n' {
+			lineEnd++
+		}
+		if lineEnd < len(content) {
+			lineEnd++
+		}
+		line := strings.TrimSpace(string(content[i:lineEnd]))
+		if line == "" || (strings.HasPrefix(line, "#") && strings.Contains(line, "=")) {
+			i = lineEnd
+			continue
+		}
+		break
+	}
+	result := make([]byte, 0, len(content)+len(argLine))
+	result = append(result, content[:i]...)
+	result = append(result, argLine...)
+	result = append(result, content[i:]...)
+	return result
 }
 
 func resolveOverlayBuildContext(ws workspace.Resolved) (dir string, cleanup func(), err error) {

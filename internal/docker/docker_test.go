@@ -334,6 +334,57 @@ func TestBuildOverlayImageDockerfileLoadError(t *testing.T) {
 	}
 }
 
+func TestInjectBaseArg(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "plain FROM",
+			input: "FROM ${BASE}\nRUN echo hello\n",
+			want:  "ARG BASE\nFROM ${BASE}\nRUN echo hello\n",
+		},
+		{
+			name:  "already has ARG BASE",
+			input: "ARG BASE\nFROM ${BASE}\nRUN echo hello\n",
+			want:  "ARG BASE\nARG BASE\nFROM ${BASE}\nRUN echo hello\n",
+		},
+		{
+			name:  "syntax directive preserved",
+			input: "# syntax=docker/dockerfile:1\nFROM ${BASE}\n",
+			want:  "# syntax=docker/dockerfile:1\nARG BASE\nFROM ${BASE}\n",
+		},
+		{
+			name:  "escape directive preserved",
+			input: "# escape=`\nFROM ${BASE}\n",
+			want:  "# escape=`\nARG BASE\nFROM ${BASE}\n",
+		},
+		{
+			name:  "multiple directives",
+			input: "# syntax=docker/dockerfile:1\n# escape=`\nFROM ${BASE}\n",
+			want:  "# syntax=docker/dockerfile:1\n# escape=`\nARG BASE\nFROM ${BASE}\n",
+		},
+		{
+			name:  "directive with blank line separator",
+			input: "# syntax=docker/dockerfile:1\n\nFROM ${BASE}\n",
+			want:  "# syntax=docker/dockerfile:1\n\nARG BASE\nFROM ${BASE}\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := string(injectBaseArg([]byte(tt.input)))
+			if got != tt.want {
+				t.Fatalf("injectBaseArg(%q)\n got: %q\nwant: %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProxyBuildArgs(t *testing.T) {
 	t.Run("collects set proxy vars", func(t *testing.T) {
 		t.Setenv("HTTP_PROXY", "http://proxy:8080")
