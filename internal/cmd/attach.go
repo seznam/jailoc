@@ -207,6 +207,15 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 		return fmt.Errorf("start command with pty: %w", err)
 	}
 
+	// Close the parent's copy of the PTY slave fd. The child has already dup'd
+	// it onto stdin/stdout/stderr via fork-exec; keeping our copy open would
+	// prevent the master from ever returning EOF/EIO when the child exits,
+	// causing io.Copy(rw, p) below to block forever (e.g. after the user
+	// terminates opencode from inside the TUI).
+	if unixP, ok := p.(gopty.UnixPty); ok {
+		_ = unixP.Slave().Close()
+	}
+
 	waitDone := make(chan struct{})
 	closeWaitDone := sync.OnceFunc(func() { close(waitDone) })
 	defer closeWaitDone()
