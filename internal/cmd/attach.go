@@ -213,7 +213,11 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	// causing io.Copy(rw, p) below to block forever (e.g. after the user
 	// terminates opencode from inside the TUI).
 	if unixP, ok := p.(gopty.UnixPty); ok {
-		_ = unixP.Slave().Close()
+		if err := unixP.Slave().Close(); err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return fmt.Errorf("close pty slave: %w", err)
+		}
 	}
 
 	waitDone := make(chan struct{})
