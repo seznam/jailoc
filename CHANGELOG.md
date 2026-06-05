@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.16.0](https://github.com/seznam/jailoc/compare/v1.15.1...v1.16.0) (2026-06-05)
+
+
+### Features
+
+* **embed:** upgrade pinned tool versions ([#188](https://github.com/seznam/jailoc/issues/188)) ([6be8ff8](https://github.com/seznam/jailoc/commit/6be8ff8be991025b962c1ec54a9437de7d1c3a6c))
+
+
+### Bug Fixes
+
+* **cmd:** close parent's PTY slave fd to unblock attach on child exit ([#187](https://github.com/seznam/jailoc/issues/187)) ([9f1e1f2](https://github.com/seznam/jailoc/commit/9f1e1f22267019adeb6881a75e34e59907c7fe0e))
+* **cmd:** unwrap build errors, remove premature startup message ([#180](https://github.com/seznam/jailoc/issues/180)) ([252cf1f](https://github.com/seznam/jailoc/commit/252cf1fed20080d492e1cbb926300b9ca88ecb77))
+* **docker:** prepend ARG BASE to overlay Dockerfiles ([#182](https://github.com/seznam/jailoc/issues/182)) ([62f443b](https://github.com/seznam/jailoc/commit/62f443b9d5cf3cdf708fdb1d56e7ec14f56b86b8))
+
 ## [1.15.1](https://github.com/seznam/jailoc/compare/v1.15.0...v1.15.1) (2026-05-22)
 
 
