@@ -79,9 +79,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   ripgrep (rg), fd-find, jq — fast search/filter tools used by OpenCode
 #   unzip, xz-utils        — archive extraction for runtime downloads
 #   iptables               — network isolation: entrypoint.sh blocks RFC 1918
+#   libatomic1             — required by Node.js 26+ runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git openssh-client sudo \
-    python3 ripgrep fd-find jq unzip xz-utils iptables \
+    python3 ripgrep fd-find jq unzip xz-utils iptables libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js — installed again in the final stage (not copied from builder)
