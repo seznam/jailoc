@@ -81,6 +81,40 @@ if [ -f "$ALLOWED_NETWORKS" ]; then
   done < "$ALLOWED_NETWORKS"
 fi
 
+# Allow selected host ports on Docker gateway(s).
+HOST_PORTS="/etc/jailoc/host-ports"
+if [ -f "$HOST_PORTS" ]; then
+  GATEWAYS=$(
+    awk '$3 != "00000000" && $3 != "Gateway" {print $3}' /proc/net/route | sort -u
+  )
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="$(echo "$line" | tr -d ' ')"
+    [ -z "$line" ] && continue
+
+    case "$line" in
+      ''|*[!0-9]*)
+        echo "jailoc-dind: WARNING: ignoring invalid host port $line" >&2
+        continue
+        ;;
+    esac
+    if [ "$line" -lt 1 ] || [ "$line" -gt 65535 ]; then
+      echo "jailoc-dind: WARNING: ignoring invalid host port $line" >&2
+      continue
+    fi
+
+    for GW in $GATEWAYS; do
+      OCT1=$(echo "$GW" | cut -c7-8)
+      OCT2=$(echo "$GW" | cut -c5-6)
+      OCT3=$(echo "$GW" | cut -c3-4)
+      OCT4=$(echo "$GW" | cut -c1-2)
+      GW_IP=$(printf '%d.%d.%d.%d' "0x$OCT1" "0x$OCT2" "0x$OCT3" "0x$OCT4")
+      $IPT -A JAILOC-OUTPUT -p tcp -d "$GW_IP" --dport "$line" -j ACCEPT
+      $IPT -A JAILOC-OUTPUT -p udp -d "$GW_IP" --dport "$line" -j ACCEPT
+    done
+  done < "$HOST_PORTS"
+fi
+
 # Block private/internal networks.
 $IPT -A JAILOC-OUTPUT -d 10.0.0.0/8 -j DROP
 $IPT -A JAILOC-OUTPUT -d 172.16.0.0/12 -j DROP
