@@ -118,7 +118,7 @@ Run `go build`, `go test ./...`, and `golangci-lint run` inside as usual.
 ## CI/CD
 
 GitHub Actions workflows:
-- **CI** (`.github/workflows/ci.yml`): runs on push/PR to master — `go build`, `go test`, `go vet`, and golangci-lint v2.11.4 (gosec, staticcheck, gocritic)
+- **CI** (`.github/workflows/ci.yml`): runs on push/PR to master — `go build`, `go test`, `go vet`, and golangci-lint v2.12.2 (gosec, staticcheck, gocritic)
 - **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, then GoReleaser publishes binaries (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`)
 - **Re-release** (`.github/workflows/release.yml`): manual `workflow_dispatch` fallback — re-runs GoReleaser for an existing tag
 - **Docs** (`.github/workflows/release-please.yml`): runs as part of the release process — zensical + mkdocs-macros-plugin → GitHub Pages
