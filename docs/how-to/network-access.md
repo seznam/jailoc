@@ -1,6 +1,6 @@
 # How to allow specific hosts or networks
 
-By default, jailoc containers can't reach private addresses. This guide shows how to punch holes in that restriction for specific hostnames or CIDR ranges. For a full explanation of how the network isolation model works, see [Network isolation](../explanation/network-isolation.md).
+By default, jailoc containers can't reach private addresses. This guide shows how to punch holes in that restriction for specific hostnames, CIDR ranges, or selected host ports. For a full explanation of how the network isolation model works, see [Network isolation](../explanation/network-isolation.md).
 
 ---
 
@@ -67,6 +67,29 @@ allowed_networks = ["10.10.5.0/24"]
 ```
 
 All resolved host IPs and all listed CIDRs get `ACCEPT` rules. Everything else in the RFC 1918, link-local, and CGNAT ranges is blocked.
+
+---
+
+## Allow selected host ports
+
+Use `host_ports` when you need access to services running on your host machine (for example local databases or dev servers) without opening the whole private network.
+
+```toml
+[workspaces.api]
+paths = ["/home/you/projects/api"]
+host_ports = [5432, 8080]
+```
+
+Ports are allowed only on Docker gateway addresses, and rules are inserted before private-range `DROP` rules.
+
+To apply the same host-port list to all workspaces:
+
+```toml
+[defaults]
+host_ports = [5432, 8080]
+```
+
+Workspace values are merged with defaults (duplicates removed, order preserved).
 
 ---
 
