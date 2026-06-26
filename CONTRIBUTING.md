@@ -4,7 +4,7 @@
 
 - Go 1.26+
 - Docker (required for integration tests)
-- [golangci-lint](https://golangci-lint.run/welcome/install/) v2.11.4
+- [golangci-lint](https://golangci-lint.run/welcome/install/) v2.12.2
 
 ## Local setup
 
