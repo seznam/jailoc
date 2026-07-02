@@ -5,8 +5,8 @@ go 1.26.3
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/aymanbagabas/go-pty v0.2.3
-	github.com/compose-spec/compose-go/v2 v2.12.1
-	github.com/docker/cli v29.6.0+incompatible
+	github.com/compose-spec/compose-go/v2 v2.13.0
+	github.com/docker/cli v29.6.1+incompatible
 	github.com/docker/compose/v5 v5.2.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/fatih/color v1.19.0
