@@ -60,6 +60,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `mounts` | string[] | `[]` | Additional bind mounts for all workspaces. Each entry follows `host:container[:mode]` format where mode is `ro` or `rw` (default `rw`). An empty host source removes a default mount matching the container path. Merged with per-workspace `mounts` — see Merge Semantics below. Supports `~` expansion on both host and container sides. |
 | `allowed_hosts` | string[] | `[]` | Hostnames allowed through the firewall for all workspaces. Merged with per-workspace `allowed_hosts`. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges allowed through the firewall for all workspaces. Merged with per-workspace `allowed_networks`. |
+| `host_ports` | int[] | `[]` | Host ports allowed on Docker gateway addresses for all workspaces. Merged with per-workspace `host_ports`. |
 | `ssh_auth_sock` | bool | `false` | Mount the host SSH agent socket into the container. Auto-detects the socket: Docker Desktop/OrbStack magic path first, then `$SSH_AUTH_SOCK`. Also mounts `~/.ssh/known_hosts` read-only when enabled. |
 | `git_config` | bool | `true` | Mount the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only into the container. |
 | `expose_port` | bool | `true` | Expose the opencode container port to the host. When `false`, the `ports:` section is omitted from the generated compose file and the workspace is only accessible via `jailoc --exec`. |
@@ -77,6 +78,7 @@ env_file = ["~/.config/jailoc/shared.env"]
 mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode"]
 allowed_hosts = ["internal-registry.example.com"]
 allowed_networks = ["10.0.0.0/8"]
+host_ports = [5432, 8080]
 ssh_auth_sock = true
 git_config = true
 enable_docker = true
@@ -98,6 +100,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/home/agent/.opencode"`) removes a default mount matching the container path. Container destinations under `/home/agent/...` are allowed (unlike `paths`); see [mounts validation](#mounts) for the full list of forbidden container prefixes. |
 | `allowed_hosts` | string[] | `[]` | Hostnames resolved at container start and added as iptables `ACCEPT` rules before the private-range `DROP` rules. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
+| `host_ports` | int[] | `[]` | Host ports allowed on Docker gateway addresses. Rules are added before private-range `DROP` rules. |
 | `image` | string | (none) | Pre-built Docker image to use directly for this workspace, bypassing all build steps. Compose pulls the image natively at startup. Cannot be combined with `dockerfile` or `build_context`. |
 | `build_context` | string | (none) | Docker build context directory for the workspace overlay build. When empty and `dockerfile` is a local path, defaults to the parent directory of the Dockerfile. When empty and `dockerfile` is an HTTP URL, a temporary directory is used. Supports `~` expansion. |
 | `mode` | string | `""` | Connection mode for `jailoc`. Accepted values: `"remote"`, `"exec"`, `""` (auto-detect). |
@@ -121,6 +124,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 paths = ["~/projects/my-project", "~/shared/libs"]
 allowed_hosts = ["api.example.com", "pypi.org"]
 allowed_networks = ["10.0.0.0/8"]
+host_ports = [3128, 5432]
 mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode"]
 build_context = "~/projects/my-project/docker"
 mode = "remote"
@@ -183,6 +187,10 @@ Any host path equal to or starting with these prefixes is rejected.
 
 Each entry must be a valid CIDR notation string as accepted by Go's `net.ParseCIDR`. Invalid CIDR values are rejected at config load time.
 
+### `host_ports`
+
+Each entry must be an integer in range `1..65535`. Out-of-range values are rejected at config load time.
+
 ### Workspace `image`
 
 The workspace `image` field is mutually exclusive with `dockerfile` and `build_context`. The following combinations are rejected at config load time:
@@ -243,7 +251,7 @@ Environment variables from multiple sources are merged in this order (later entr
 3. Workspace `env_file` — per-workspace file values (in list order)
 4. Workspace `env` — per-workspace inline values (highest priority)
 
-`allowed_hosts` and `allowed_networks` use union deduplication: the global list is merged with the workspace list, with duplicates removed, preserving order.
+`allowed_hosts`, `allowed_networks`, and `host_ports` use union deduplication: the global list is merged with the workspace list, with duplicates removed, preserving order.
 
 `mounts` follows a three-layer merge keyed by container path. Default mounts (built into jailoc) are applied first, then `[defaults].mounts`, then per-workspace `mounts`. For each container path, the last layer to set it wins. An entry with an empty host source removes the mount for that container path. The built-in default mounts are:
 

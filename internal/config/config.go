@@ -36,6 +36,7 @@ const (
 # mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 # allowed_hosts = ["example.com"]
 # allowed_networks = ["10.0.0.0/8"]
+# host_ports = [8080, 5432]
 # ssh_auth_sock = false
 # git_config = true
 # expose_port = true
@@ -48,6 +49,7 @@ paths = []
 # image = ""
 # allowed_hosts = []
 # allowed_networks = []
+# host_ports = []
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
 # mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
@@ -170,6 +172,7 @@ type Defaults struct {
 	Mounts          []string `toml:"mounts"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
+	HostPorts       []int    `toml:"host_ports"`
 	Image           string   `toml:"image"`
 	SSHAuthSock     bool     `toml:"ssh_auth_sock"`
 	GitConfig       *bool    `toml:"git_config"`
@@ -184,6 +187,7 @@ type Workspace struct {
 	Mounts          []string `toml:"mounts"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
+	HostPorts       []int    `toml:"host_ports"`
 	Env             []string `toml:"env"`
 	EnvFile         []string `toml:"env_file"`
 	BuildContext    string   `toml:"build_context"`
@@ -627,6 +631,9 @@ func Validate(cfg *Config) error {
 	if cfg.Defaults.Memory != nil && !validMemory.MatchString(*cfg.Defaults.Memory) {
 		return fmt.Errorf("defaults: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", *cfg.Defaults.Memory)
 	}
+	if err := validateHostPorts(cfg.Defaults.HostPorts, "defaults"); err != nil {
+		return err
+	}
 
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
@@ -695,6 +702,9 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("workspace %q: invalid CIDR %q: %w", name, cidr, err)
 			}
 		}
+		if err := validateHostPorts(ws.HostPorts, fmt.Sprintf("workspace %q", name)); err != nil {
+			return err
+		}
 
 		if err := validateDockerfileSource(ws.Dockerfile, fmt.Sprintf("workspace %q dockerfile", name)); err != nil {
 			return err
@@ -727,6 +737,16 @@ func Validate(cfg *Config) error {
 		}
 
 		cfg.Workspaces[name] = ws
+	}
+
+	return nil
+}
+
+func validateHostPorts(ports []int, context string) error {
+	for _, port := range ports {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("%s: invalid host port %d: must be in range 1..65535", context, port)
+		}
 	}
 
 	return nil
@@ -828,6 +848,17 @@ func WriteAllowedFiles(workspace string, cfg *Config) error {
 		}
 	}
 
+	hostPortsPath := filepath.Join(dir, "host-ports")
+	if content := HostPortsFileContent(workspace, cfg); content != "" {
+		if err := os.WriteFile(hostPortsPath, []byte(content), 0o600); err != nil {
+			return fmt.Errorf("write host-ports file: %w", err)
+		}
+	} else {
+		if err := os.Remove(hostPortsPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale host-ports file: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -843,6 +874,34 @@ func mergeDedup(a, b []string) []string {
 
 	seen := make(map[string]bool)
 	result := make([]string, 0, len(a)+len(b))
+
+	for _, item := range a {
+		if !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+
+	for _, item := range b {
+		if !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+
+	return result
+}
+
+func mergeDedupInt(a, b []int) []int {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+
+	seen := make(map[int]bool)
+	result := make([]int, 0, len(a)+len(b))
 
 	for _, item := range a {
 		if !seen[item] {
@@ -895,6 +954,29 @@ func AllowedNetworksFileContent(workspace string, cfg *Config) string {
 	}
 
 	return strings.Join(merged, "\n") + "\n"
+}
+
+func HostPortsFileContent(workspace string, cfg *Config) string {
+	if cfg == nil {
+		return ""
+	}
+
+	ws, ok := cfg.Workspaces[workspace]
+	if !ok {
+		return ""
+	}
+
+	merged := mergeDedupInt(cfg.Defaults.HostPorts, ws.HostPorts)
+	if len(merged) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(merged))
+	for _, port := range merged {
+		lines = append(lines, fmt.Sprintf("%d", port))
+	}
+
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func ExpandPath(path string) (string, error) {

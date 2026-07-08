@@ -101,6 +101,29 @@ if [ -f "$ALLOWED_NETWORKS" ]; then
   done < "$ALLOWED_NETWORKS"
 fi
 
+# --- Allow selected host ports on Docker gateway(s) ---
+HOST_PORTS="/etc/jailoc/host-ports"
+if [ -f "$HOST_PORTS" ]; then
+  GATEWAYS=$(awk '$3 != "00000000" && $3 != "Gateway" {print $3}' /proc/net/route | sort -u)
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="${line// /}"
+    [ -z "$line" ] && continue
+
+    if ! [[ "$line" =~ ^[0-9]+$ ]] || [ "$line" -lt 1 ] || [ "$line" -gt 65535 ]; then
+      echo "jailoc: WARNING: ignoring invalid host port $line" >&2
+      continue
+    fi
+
+    for GW in $GATEWAYS; do
+      GW_IP=$(printf '%d.%d.%d.%d' "0x${GW:6:2}" "0x${GW:4:2}" "0x${GW:2:2}" "0x${GW:0:2}")
+      $IPT -I OUTPUT -p tcp -d "$GW_IP" --dport "$line" -j ACCEPT
+      $IPT -I OUTPUT -p udp -d "$GW_IP" --dport "$line" -j ACCEPT
+      echo "jailoc: allow host port $line via $GW_IP"
+    done
+  done < "$HOST_PORTS"
+fi
+
 # --- Allow replies to inbound connections on the published service port ---
 $IPT -A OUTPUT -p tcp --sport 4096 -m conntrack --ctstate ESTABLISHED -j ACCEPT
 

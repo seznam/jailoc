@@ -49,6 +49,7 @@ func TestLoadFullConfig(t *testing.T) {
 paths = ["/data/workspace"]
 allowed_hosts = ["foo.com", "bar.com"]
 allowed_networks = ["172.20.0.0/16"]
+host_ports = [8080, 5432]
 build_context = "/tmp/context"
 `)
 
@@ -70,6 +71,9 @@ build_context = "/tmp/context"
 	}
 	if !reflect.DeepEqual(ws.AllowedNetworks, []string{"172.20.0.0/16"}) {
 		t.Fatalf("unexpected allowed networks: %#v", ws.AllowedNetworks)
+	}
+	if !reflect.DeepEqual(ws.HostPorts, []int{8080, 5432}) {
+		t.Fatalf("unexpected host ports: %#v", ws.HostPorts)
 	}
 	if ws.BuildContext != "/tmp/context" {
 		t.Fatalf("unexpected build context: %q", ws.BuildContext)
@@ -103,6 +107,9 @@ paths = ["/data/workspace"]
 	if len(ws.AllowedNetworks) != 0 {
 		t.Fatalf("expected empty allowed networks, got %#v", ws.AllowedNetworks)
 	}
+	if len(ws.HostPorts) != 0 {
+		t.Fatalf("expected empty host ports, got %#v", ws.HostPorts)
+	}
 	if ws.BuildContext != "" {
 		t.Fatalf("expected empty build context, got %q", ws.BuildContext)
 	}
@@ -123,6 +130,7 @@ env = ["GLOBAL_VAR=value1"]
 env_file = [%q]
 allowed_hosts = ["global.example.com"]
 allowed_networks = ["10.0.0.0/8"]
+host_ports = [3128, 8080]
 
 [base]
 
@@ -131,6 +139,7 @@ image = "alpine:latest"
 paths = ["/data/workspace", "/work2"]
 allowed_hosts = ["foo.com"]
 allowed_networks = ["10.0.0.0/8"]
+host_ports = [8080, 5432]
 env = ["LOCAL_VAR=value2"]
 env_file = [%q]
 `, envGlobal, envLocal))
@@ -163,14 +172,26 @@ env_file = [%q]
 	if second.Defaults.Image != "ubuntu:22.04" {
 		t.Fatalf("expected second.defaults.image to be 'ubuntu:22.04', got %q", second.Defaults.Image)
 	}
+	if !reflect.DeepEqual(first.Defaults.HostPorts, []int{3128, 8080}) {
+		t.Fatalf("unexpected defaults host_ports: %#v", first.Defaults.HostPorts)
+	}
+	if !reflect.DeepEqual(second.Defaults.HostPorts, []int{3128, 8080}) {
+		t.Fatalf("unexpected second defaults host_ports: %#v", second.Defaults.HostPorts)
+	}
 
 	ws := first.Workspaces["default"]
 	if ws.Image != "alpine:latest" {
 		t.Fatalf("expected workspace.image to be 'alpine:latest', got %q", ws.Image)
 	}
+	if !reflect.DeepEqual(ws.HostPorts, []int{8080, 5432}) {
+		t.Fatalf("unexpected workspace host_ports: %#v", ws.HostPorts)
+	}
 	ws2 := second.Workspaces["default"]
 	if ws2.Image != "alpine:latest" {
 		t.Fatalf("expected second.workspace.image to be 'alpine:latest', got %q", ws2.Image)
+	}
+	if !reflect.DeepEqual(ws2.HostPorts, []int{8080, 5432}) {
+		t.Fatalf("unexpected second workspace host_ports: %#v", ws2.HostPorts)
 	}
 }
 
@@ -188,6 +209,7 @@ env = ["GLOBAL_VAR=value1", "GLOBAL_VAR2=value2"]
 env_file = [%q, %q]
 allowed_hosts = ["api.example.com", "db.example.com"]
 allowed_networks = ["10.0.0.0/8", "172.16.0.0/12"]
+host_ports = [443, 8443]
 
 [workspaces.default]
 paths = ["/data/workspace"]
@@ -209,6 +231,9 @@ paths = ["/data/workspace"]
 	}
 	if !reflect.DeepEqual(cfg.Defaults.AllowedNetworks, []string{"10.0.0.0/8", "172.16.0.0/12"}) {
 		t.Fatalf("unexpected defaults allowed_networks: %#v", cfg.Defaults.AllowedNetworks)
+	}
+	if !reflect.DeepEqual(cfg.Defaults.HostPorts, []int{443, 8443}) {
+		t.Fatalf("unexpected defaults host_ports: %#v", cfg.Defaults.HostPorts)
 	}
 }
 
@@ -315,6 +340,43 @@ func TestValidateAcceptsValidCIDR(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidHostPort(t *testing.T) {
+	cfg := &Config{
+		Workspaces: map[string]Workspace{
+			"default": {
+				Paths:     []string{"/data/workspace"},
+				HostPorts: []int{8080, 70000},
+			},
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "70000") {
+		t.Fatalf("expected error to contain host port value, got: %v", err)
+	}
+}
+
+func TestValidateAcceptsValidHostPorts(t *testing.T) {
+	cfg := &Config{
+		Defaults: Defaults{
+			HostPorts: []int{22, 8080},
+		},
+		Workspaces: map[string]Workspace{
+			"default": {
+				Paths:     []string{"/data/workspace"},
+				HostPorts: []int{5432},
+			},
+		},
+	}
+
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
 func TestLoadMissingFileAutoCreates(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -398,6 +460,17 @@ func TestAllowedNetworksContent(t *testing.T) {
 	got := AllowedNetworksFileContent("default", cfg)
 	if got != "10.0.0.0/8\n" {
 		t.Fatalf("unexpected allowed networks content: %q", got)
+	}
+}
+
+func TestHostPortsContent(t *testing.T) {
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"default": {HostPorts: []int{8080, 5432}},
+	}}
+
+	got := HostPortsFileContent("default", cfg)
+	if got != "8080\n5432\n" {
+		t.Fatalf("unexpected host ports content: %q", got)
 	}
 }
 
@@ -714,6 +787,24 @@ func TestAllowedNetworksFileContentMissingWorkspace(t *testing.T) {
 	}
 }
 
+func TestHostPortsFileContentNilConfig(t *testing.T) {
+	got := HostPortsFileContent("default", nil)
+	if got != "" {
+		t.Fatalf("expected empty string for nil config, got %q", got)
+	}
+}
+
+func TestHostPortsFileContentMissingWorkspace(t *testing.T) {
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"default": {HostPorts: []int{8080}},
+	}}
+
+	got := HostPortsFileContent("nonexistent", cfg)
+	if got != "" {
+		t.Fatalf("expected empty string for missing workspace, got %q", got)
+	}
+}
+
 func TestAddPathToNonexistentWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -783,16 +874,33 @@ func TestAllowedNetworksFileContentEmptyList(t *testing.T) {
 	}
 }
 
-func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
+func TestHostPortsFileContentEmptyList(t *testing.T) {
+	cfg := &Config{Workspaces: map[string]Workspace{
+		"default": {HostPorts: []int{}},
+	}}
+
+	got := HostPortsFileContent("default", cfg)
+	if got != "" {
+		t.Fatalf("expected empty string for empty host ports list, got %q", got)
+	}
+}
+
+func TestWriteAllowedFilesWritesAllowlistFiles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"myws": {
-			AllowedHosts:    []string{"foo.com", "bar.com"},
-			AllowedNetworks: []string{"10.0.0.0/8", "172.16.0.0/12"},
+	cfg := &Config{
+		Defaults: Defaults{
+			HostPorts: []int{3128},
 		},
-	}}
+		Workspaces: map[string]Workspace{
+			"myws": {
+				AllowedHosts:    []string{"foo.com", "bar.com"},
+				AllowedNetworks: []string{"10.0.0.0/8", "172.16.0.0/12"},
+				HostPorts:       []int{5432, 3128, 8080},
+			},
+		},
+	}
 
 	if err := WriteAllowedFiles("myws", cfg); err != nil {
 		t.Fatalf("WriteAllowedFiles returned error: %v", err)
@@ -815,6 +923,14 @@ func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
 	if string(networksData) != "10.0.0.0/8\n172.16.0.0/12\n" {
 		t.Fatalf("unexpected allowed-networks content: %q", string(networksData))
 	}
+
+	hostPortsData, err := os.ReadFile(filepath.Join(dir, "host-ports")) //nolint:gosec // test reads from t.TempDir()
+	if err != nil {
+		t.Fatalf("read host-ports: %v", err)
+	}
+	if string(hostPortsData) != "3128\n5432\n8080\n" {
+		t.Fatalf("unexpected host-ports content: %q", string(hostPortsData))
+	}
 }
 
 func TestWriteAllowedFilesRemovesStaleFiles(t *testing.T) {
@@ -832,9 +948,12 @@ func TestWriteAllowedFilesRemovesStaleFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "allowed-networks"), []byte("192.168.0.0/16\n"), 0o600); err != nil {
 		t.Fatalf("write stale allowed-networks: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "host-ports"), []byte("9999\n"), 0o600); err != nil {
+		t.Fatalf("write stale host-ports: %v", err)
+	}
 
 	cfg := &Config{Workspaces: map[string]Workspace{
-		"myws": {AllowedHosts: []string{}, AllowedNetworks: []string{}},
+		"myws": {AllowedHosts: []string{}, AllowedNetworks: []string{}, HostPorts: []int{}},
 	}}
 
 	if err := WriteAllowedFiles("myws", cfg); err != nil {
@@ -846,6 +965,9 @@ func TestWriteAllowedFilesRemovesStaleFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "allowed-networks")); !os.IsNotExist(err) {
 		t.Fatal("expected allowed-networks to be removed for empty list")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "host-ports")); !os.IsNotExist(err) {
+		t.Fatal("expected host-ports to be removed for empty list")
 	}
 }
 
@@ -1350,6 +1472,58 @@ func TestAllowedNetworksMerge(t *testing.T) {
 			}
 
 			got := AllowedNetworksFileContent("test", cfg)
+			if got != tt.expectedRepr {
+				t.Fatalf("expected %q, got %q", tt.expectedRepr, got)
+			}
+		})
+	}
+}
+
+func TestHostPortsMerge(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaults     []int
+		workspace    []int
+		expectedRepr string
+	}{
+		{
+			name:         "global only",
+			defaults:     []int{443, 8443},
+			workspace:    []int{},
+			expectedRepr: "443\n8443\n",
+		},
+		{
+			name:         "workspace only",
+			defaults:     []int{},
+			workspace:    []int{5432, 8080},
+			expectedRepr: "5432\n8080\n",
+		},
+		{
+			name:         "both with overlap",
+			defaults:     []int{3128, 8080},
+			workspace:    []int{8080, 5432},
+			expectedRepr: "3128\n8080\n5432\n",
+		},
+		{
+			name:         "all empty",
+			defaults:     []int{},
+			workspace:    []int{},
+			expectedRepr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Defaults: Defaults{
+					HostPorts: tt.defaults,
+				},
+				Workspaces: map[string]Workspace{
+					"test": {HostPorts: tt.workspace},
+				},
+			}
+
+			got := HostPortsFileContent("test", cfg)
 			if got != tt.expectedRepr {
 				t.Fatalf("expected %q, got %q", tt.expectedRepr, got)
 			}
@@ -2866,6 +3040,15 @@ func TestValidateErrorMessages(t *testing.T) {
 			wantSubstrs: []string{"myws", "not-a-cidr"},
 		},
 		{
+			name: "invalid host port includes workspace name and value",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"myws": {Paths: []string{"/data"}, HostPorts: []int{0}},
+				},
+			},
+			wantSubstrs: []string{"myws", "host port", "0"},
+		},
+		{
 			name: "forbidden path includes workspace name, path, and prefix",
 			cfg: &Config{
 				Workspaces: map[string]Workspace{
@@ -3306,6 +3489,28 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 				},
 			},
 			errSubstrs: []string{"test", "invalid memory format"},
+		},
+		{
+			name: "defaults host port out of range",
+			cfg: &Config{
+				Defaults: Defaults{
+					HostPorts: []int{65536},
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "host port", "65536"},
+		},
+		{
+			name: "workspace host port out of range",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths:     []string{"/data"},
+						HostPorts: []int{-1},
+					},
+				},
+			},
+			errSubstrs: []string{"test", "host port", "-1"},
 		},
 	}
 
