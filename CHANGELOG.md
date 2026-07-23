@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.16.1](https://github.com/seznam/jailoc/compare/v1.16.0...v1.16.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **deps:** bump actions/setup-go in the all group across 1 directory ([#200](https://github.com/seznam/jailoc/issues/200)) ([bf2f9a7](https://github.com/seznam/jailoc/commit/bf2f9a7348647a5782fdcd45c36e93fd369fff26))
+* **deps:** bump brace-expansion from 2.1.0 to 2.1.2 ([#207](https://github.com/seznam/jailoc/issues/207)) ([3d4494c](https://github.com/seznam/jailoc/commit/3d4494cd9d9ca7f909b419c333f34c96be646685))
+* **deps:** bump google.golang.org/grpc from 1.81.1 to 1.82.1 ([#206](https://github.com/seznam/jailoc/issues/206)) ([b7e4cd8](https://github.com/seznam/jailoc/commit/b7e4cd8d02762aadbcb2e9a8635d14e12b6d4a87))
+* **deps:** bump idna in the uv group across 1 directory ([#191](https://github.com/seznam/jailoc/issues/191)) ([9192b81](https://github.com/seznam/jailoc/commit/9192b81ab6b205b444927437e518652409f00e9e))
+* **deps:** bump the all group across 1 directory with 6 updates ([#205](https://github.com/seznam/jailoc/issues/205)) ([6dfbf1c](https://github.com/seznam/jailoc/commit/6dfbf1c7464b2751521a997a7295eedece98a71a))
+* **deps:** bump the go-minor-patch group across 1 directory with 2 updates ([#189](https://github.com/seznam/jailoc/issues/189)) ([3847a0b](https://github.com/seznam/jailoc/commit/3847a0b5a3adf7dbd4415da2d618f4e3277be70f))
+* **deps:** bump the go-minor-patch group across 1 directory with 4 updates ([#203](https://github.com/seznam/jailoc/issues/203)) ([6d7b1de](https://github.com/seznam/jailoc/commit/6d7b1de3ef119cca609b2e214e13d1dd45235cee))
+* **deps:** bump the go-minor-patch group with 4 updates ([#197](https://github.com/seznam/jailoc/issues/197)) ([a26e592](https://github.com/seznam/jailoc/commit/a26e59226798a318969ba296d1d2ddb34cd4c16c))
+
 ## [1.16.0](https://github.com/seznam/jailoc/compare/v1.15.1...v1.16.0) (2026-06-05)
 
 
