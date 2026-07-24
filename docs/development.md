@@ -41,7 +41,7 @@ Integration tests run as part of the CI workflow on `v*` tags with `go test -tag
 
 ## Default container contents
 
-The embedded Dockerfile defines an Ubuntu 24.04 base image. Exact versions are pinned there and kept up to date by Renovate.
+The embedded Dockerfile defines an Ubuntu 24.04 base image. Exact versions are pinned there.
 
 | Category | Tools |
 |----------|-------|
