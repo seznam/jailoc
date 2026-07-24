@@ -13,7 +13,6 @@ ARG BASE
 FROM ${BASE}
 
 # Go toolchain — required by golangci-lint and gopls at runtime.
-# renovate: datasource=golang-version depName=go
 ARG GO_VERSION=1.26.4
 RUN set -eux; \
     ARCH=$(dpkg --print-architecture); \
@@ -22,12 +21,10 @@ RUN set -eux; \
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # gopls — Go language server for OpenCode code intelligence (go-to-definition, completions, diagnostics).
-# renovate: datasource=go depName=golang.org/x/tools/gopls
 ARG GOPLS_VERSION=v0.22.0
 RUN GOBIN=/usr/local/bin go install golang.org/x/tools/gopls@${GOPLS_VERSION}
 
 # golangci-lint — static analysis matching CI (gosec, staticcheck, gocritic).
-# renovate: datasource=github-releases depName=golangci/golangci-lint
 ARG GOLANGCI_LINT_VERSION=v2.12.2
 RUN set -eux; \
     ARCH=$(dpkg --print-architecture); \
