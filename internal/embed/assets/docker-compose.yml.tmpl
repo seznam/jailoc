@@ -64,6 +64,8 @@ services:
       - CHOWN             # chown data dirs before drop
       - FOWNER            # bypass ownership checks on chown
       - DAC_READ_SEARCH   # traverse restricted dirs during chown
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     stdin_open: true
     tty: true
     mem_limit: "{{.Memory}}"
