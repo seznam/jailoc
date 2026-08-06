@@ -5,13 +5,13 @@ go 1.26.3
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/aymanbagabas/go-pty v0.2.3
-	github.com/compose-spec/compose-go/v2 v2.13.0
-	github.com/docker/cli v29.6.1+incompatible
+	github.com/compose-spec/compose-go/v2 v2.14.0
+	github.com/docker/cli v29.7.1+incompatible
 	github.com/docker/compose/v5 v5.3.1
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/fatih/color v1.19.0
 	github.com/hashicorp/go-version v1.9.0
-	github.com/moby/go-archive v0.2.0
+	github.com/moby/go-archive v0.3.2
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/term v0.5.2
 	github.com/spf13/cobra v1.10.2
@@ -67,7 +67,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/inhies/go-bytesize v0.0.0-20220417184213-4913239db9cf // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
