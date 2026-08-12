@@ -97,15 +97,16 @@ All listed paths are mounted read-write. The first is the working directory.
 
 ---
 
-## Allow specific hosts or networks
+## Allow specific hosts, networks, or host ports
 
-By default, containers cannot reach private networks. To grant access to specific services, use `allowed_hosts` or `allowed_networks`.
+By default, containers cannot reach private networks. To grant access to specific services, use `allowed_hosts`, `allowed_networks`, or `host_ports` for host-local services.
 
 ```toml
 [workspaces.api]
 paths = ["/home/you/projects/api"]
 allowed_hosts = ["internal-registry.example.com"]
 allowed_networks = ["10.10.5.0/24"]
+host_ports = [5432]
 ```
 
 See [How to allow specific hosts or networks](network-access.md) for step-by-step instructions.
