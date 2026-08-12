@@ -794,7 +794,7 @@ func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
 		},
 	}}
 
-	if err := WriteAllowedFiles("myws", cfg); err != nil {
+	if err := WriteAllowedFiles("myws", cfg, nil); err != nil {
 		t.Fatalf("WriteAllowedFiles returned error: %v", err)
 	}
 
@@ -837,7 +837,7 @@ func TestWriteAllowedFilesRemovesStaleFiles(t *testing.T) {
 		"myws": {AllowedHosts: []string{}, AllowedNetworks: []string{}},
 	}}
 
-	if err := WriteAllowedFiles("myws", cfg); err != nil {
+	if err := WriteAllowedFiles("myws", cfg, nil); err != nil {
 		t.Fatalf("WriteAllowedFiles returned error: %v", err)
 	}
 
@@ -853,7 +853,7 @@ func TestWriteAllowedFilesNilConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	if err := WriteAllowedFiles("whatever", nil); err != nil {
+	if err := WriteAllowedFiles("whatever", nil, nil); err != nil {
 		t.Fatalf("WriteAllowedFiles with nil config returned error: %v", err)
 	}
 
@@ -871,7 +871,7 @@ func TestWriteAllowedFilesMissingWorkspace(t *testing.T) {
 		"other": {AllowedHosts: []string{"foo.com"}},
 	}}
 
-	if err := WriteAllowedFiles("nonexistent", cfg); err != nil {
+	if err := WriteAllowedFiles("nonexistent", cfg, nil); err != nil {
 		t.Fatalf("WriteAllowedFiles with missing workspace returned error: %v", err)
 	}
 

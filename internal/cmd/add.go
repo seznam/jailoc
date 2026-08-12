@@ -146,7 +146,7 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		EnableDocker:     ws2.EnableDocker,
 	}
 
-	if err := config.WriteAllowedFiles(ws2.Name, cfg); err != nil {
+	if err := config.WriteAllowedFiles(ws2.Name, cfg, nil); err != nil {
 		return fmt.Errorf("write allowed files for workspace %q: %w", ws2.Name, err)
 	}
 

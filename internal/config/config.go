@@ -180,6 +180,17 @@ type Secret struct {
 	ExposeEnv string `toml:"expose_env"`
 }
 
+// SecretEnvPair maps a Compose secret name to the environment variable the
+// container entrypoint should export it as. It carries no secret value — the
+// value is read inside the container from /run/secrets/<Name>.
+//
+// It exists so that WriteAllowedFiles can accept resolved secret metadata
+// without package config importing package workspace.
+type SecretEnvPair struct {
+	Name string
+	Var  string
+}
+
 type Config struct {
 	Mode         string               `toml:"mode"`
 	PasswordMode string               `toml:"password_mode"`
@@ -927,7 +938,19 @@ func AddPath(workspace, path string) error {
 	return nil
 }
 
-func WriteAllowedFiles(workspace string, cfg *Config) error {
+// WriteAllowedFiles materialises the per-workspace files bind-mounted into the
+// container at /etc/jailoc.
+//
+// secretEnv must contain only pairs whose source secret declares a non-empty
+// expose_env, and must already be sorted by Name — the manifest is written in
+// the given order verbatim. Callers get that ordering for free from
+// workspace.Resolved.Secrets, which is sorted by Name.
+//
+// The secret-env manifest holds NAMES ONLY, never values: the same directory is
+// also mounted into the privileged dind sidecar
+// (internal/embed/assets/docker-compose.yml.tmpl:24 and :108), so anything
+// written here is readable by both containers.
+func WriteAllowedFiles(workspace string, cfg *Config, secretEnv []SecretEnvPair) error {
 	if cfg == nil {
 		return nil
 	}
@@ -962,7 +985,29 @@ func WriteAllowedFiles(workspace string, cfg *Config) error {
 		}
 	}
 
+	secretEnvPath := filepath.Join(dir, "secret-env")
+	if content := secretEnvFileContent(secretEnv); content != "" {
+		if err := os.WriteFile(secretEnvPath, []byte(content), 0o600); err != nil {
+			return fmt.Errorf("write secret-env file: %w", err)
+		}
+	} else {
+		if err := os.Remove(secretEnvPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale secret-env file: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func secretEnvFileContent(secretEnv []SecretEnvPair) string {
+	var b strings.Builder
+	for _, pair := range secretEnv {
+		if pair.Name == "" || pair.Var == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s %s\n", pair.Name, pair.Var)
+	}
+	return b.String()
 }
 
 // mergeDedup combines two string slices into one, removing duplicates.
