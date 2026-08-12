@@ -43,6 +43,13 @@ const (
 # cpu = 2.0
 # memory = "4g"
 
+# Secrets are mounted at /run/secrets/NAME. Set exactly one of "env" or "file".
+# Optionally set "expose_env" to also export the value as a container env var.
+# [defaults.secrets.NAME]
+# env = "HOST_ENV_VAR"
+# file = "/path/to/secret"
+# expose_env = "CONTAINER_ENV_VAR"
+
 [workspaces.default]
 paths = []
 # image = ""
@@ -59,6 +66,11 @@ paths = []
 # enable_docker = true
 # cpu = 2.0
 # memory = "4g"
+
+# [workspaces.default.secrets.NAME]
+# env = "HOST_ENV_VAR"
+# file = "/path/to/secret"
+# expose_env = "CONTAINER_ENV_VAR"
 `
 )
 
@@ -70,6 +82,16 @@ const (
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 var validMemory = regexp.MustCompile(`^[1-9][0-9]*[kmgKMG]?$`)
+
+// secretNameRe is a deliberately safe subset of Docker Compose's own secret-name
+// grammar (`^[a-zA-Z0-9._-]+$`): dots are excluded so a secret name can never be
+// confused with a path segment when it is rendered into /run/secrets/<name>.
+var secretNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// envVarNameRe is the exact POSIX shell identifier grammar. It is stricter than
+// validateEnvEntries (which only guards the KEY=VALUE shape) because an
+// expose_env name is exported verbatim into the container environment.
+var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var reservedEnvKeys = map[string]bool{
 	"OPENCODE_LOG":             true,
@@ -152,6 +174,12 @@ type Mount struct {
 	Mode      string
 }
 
+type Secret struct {
+	Env       string `toml:"env"`
+	File      string `toml:"file"`
+	ExposeEnv string `toml:"expose_env"`
+}
+
 type Config struct {
 	Mode         string               `toml:"mode"`
 	PasswordMode string               `toml:"password_mode"`
@@ -165,36 +193,38 @@ type BaseConfig struct {
 }
 
 type Defaults struct {
-	Env             []string `toml:"env"`
-	EnvFile         []string `toml:"env_file"`
-	Mounts          []string `toml:"mounts"`
-	AllowedHosts    []string `toml:"allowed_hosts"`
-	AllowedNetworks []string `toml:"allowed_networks"`
-	Image           string   `toml:"image"`
-	SSHAuthSock     bool     `toml:"ssh_auth_sock"`
-	GitConfig       *bool    `toml:"git_config"`
-	CPU             *float64 `toml:"cpu"`
-	Memory          *string  `toml:"memory"`
-	ExposePort      *bool    `toml:"expose_port"`
-	EnableDocker    *bool    `toml:"enable_docker"`
+	Env             []string          `toml:"env"`
+	EnvFile         []string          `toml:"env_file"`
+	Mounts          []string          `toml:"mounts"`
+	AllowedHosts    []string          `toml:"allowed_hosts"`
+	AllowedNetworks []string          `toml:"allowed_networks"`
+	Secrets         map[string]Secret `toml:"secrets"`
+	Image           string            `toml:"image"`
+	SSHAuthSock     bool              `toml:"ssh_auth_sock"`
+	GitConfig       *bool             `toml:"git_config"`
+	CPU             *float64          `toml:"cpu"`
+	Memory          *string           `toml:"memory"`
+	ExposePort      *bool             `toml:"expose_port"`
+	EnableDocker    *bool             `toml:"enable_docker"`
 }
 
 type Workspace struct {
-	Paths           []string `toml:"paths"`
-	Mounts          []string `toml:"mounts"`
-	AllowedHosts    []string `toml:"allowed_hosts"`
-	AllowedNetworks []string `toml:"allowed_networks"`
-	Env             []string `toml:"env"`
-	EnvFile         []string `toml:"env_file"`
-	BuildContext    string   `toml:"build_context"`
-	Dockerfile      string   `toml:"dockerfile"`
-	Image           string   `toml:"image"`
-	SSHAuthSock     *bool    `toml:"ssh_auth_sock"`
-	GitConfig       *bool    `toml:"git_config"`
-	CPU             *float64 `toml:"cpu"`
-	Memory          *string  `toml:"memory"`
-	ExposePort      *bool    `toml:"expose_port"`
-	EnableDocker    *bool    `toml:"enable_docker"`
+	Paths           []string          `toml:"paths"`
+	Mounts          []string          `toml:"mounts"`
+	AllowedHosts    []string          `toml:"allowed_hosts"`
+	AllowedNetworks []string          `toml:"allowed_networks"`
+	Env             []string          `toml:"env"`
+	EnvFile         []string          `toml:"env_file"`
+	Secrets         map[string]Secret `toml:"secrets"`
+	BuildContext    string            `toml:"build_context"`
+	Dockerfile      string            `toml:"dockerfile"`
+	Image           string            `toml:"image"`
+	SSHAuthSock     *bool             `toml:"ssh_auth_sock"`
+	GitConfig       *bool             `toml:"git_config"`
+	CPU             *float64          `toml:"cpu"`
+	Memory          *string           `toml:"memory"`
+	ExposePort      *bool             `toml:"expose_port"`
+	EnableDocker    *bool             `toml:"enable_docker"`
 }
 
 func ConfigDir() string {
@@ -360,6 +390,99 @@ func validateEnvFiles(paths []string, context string) error {
 		if err := validateEnvEntries(entries, fmt.Sprintf("%s: env_file %q", context, p)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateEnvVarName(name string) error {
+	if !envVarNameRe.MatchString(name) {
+		return fmt.Errorf("invalid environment variable name %q: must match ^[A-Za-z_][A-Za-z0-9_]*$", name)
+	}
+	return nil
+}
+
+func validateSecret(name string, secret Secret, context string) error {
+	if !secretNameRe.MatchString(name) {
+		return fmt.Errorf("%s: secret %q: invalid name: must match [a-zA-Z0-9_-]+", context, name)
+	}
+
+	hasEnv := secret.Env != ""
+	hasFile := secret.File != ""
+	switch {
+	case hasEnv && hasFile:
+		return fmt.Errorf("%s: secret %q: cannot set both \"env\" and \"file\": exactly one source is required", context, name)
+	case !hasEnv && !hasFile:
+		return fmt.Errorf("%s: secret %q: must set exactly one of \"env\" or \"file\"", context, name)
+	}
+
+	if hasFile {
+		if err := validateSecretFile(secret.File); err != nil {
+			return fmt.Errorf("%s: secret %q: %w", context, name, err)
+		}
+	}
+
+	if secret.ExposeEnv != "" {
+		if err := validateEnvVarName(secret.ExposeEnv); err != nil {
+			return fmt.Errorf("%s: secret %q: expose_env: %w", context, name, err)
+		}
+		if reservedEnvKeys[secret.ExposeEnv] || secret.ExposeEnv == "HOME" {
+			return fmt.Errorf("%s: secret %q: expose_env %q is reserved and cannot be overridden", context, name, secret.ExposeEnv)
+		}
+	}
+
+	return nil
+}
+
+// validateSecretFile rejects "$" because Docker Compose interpolates the whole
+// YAML document before loading it, and compose.yamlQuote does not escape "$".
+func validateSecretFile(path string) error {
+	if strings.Contains(path, "$") {
+		return fmt.Errorf("file path %q must not contain \"$\": Docker Compose interpolates it before loading the compose file", path)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("file path %q must be absolute", path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("file %q does not exist", path)
+		}
+		return fmt.Errorf("file %q: %w", path, err)
+	}
+	return nil
+}
+
+func validateSecrets(secrets map[string]Secret, context string) error {
+	for _, name := range sortedSecretNames(secrets) {
+		if err := validateSecret(name, secrets[name], context); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sortedSecretNames(secrets map[string]Secret) []string {
+	names := make([]string, 0, len(secrets))
+	for name := range secrets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// expandSecretFiles expands a leading ~ in every secret file path. Env and
+// ExposeEnv are variable names, not paths, and are deliberately left untouched.
+func expandSecretFiles(secrets map[string]Secret) error {
+	for _, name := range sortedSecretNames(secrets) {
+		secret := secrets[name]
+		if secret.File == "" {
+			continue
+		}
+		expanded, err := ExpandPath(secret.File)
+		if err != nil {
+			return fmt.Errorf("secret %q: expand file path %q: %w", name, secret.File, err)
+		}
+		secret.File = expanded
+		secrets[name] = secret
 	}
 	return nil
 }
@@ -587,6 +710,14 @@ func Validate(cfg *Config) error {
 		return err
 	}
 
+	if err := expandSecretFiles(cfg.Defaults.Secrets); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
+
+	if err := validateSecrets(cfg.Defaults.Secrets, "defaults"); err != nil {
+		return err
+	}
+
 	for i, spec := range cfg.Defaults.Mounts {
 		m, err := ParseMount(spec)
 		if err != nil {
@@ -716,6 +847,9 @@ func Validate(cfg *Config) error {
 			return err
 		}
 		if err := validateEnvFiles(ws.EnvFile, wsContext); err != nil {
+			return err
+		}
+		if err := validateSecrets(ws.Secrets, wsContext); err != nil {
 			return err
 		}
 
@@ -941,6 +1075,10 @@ func expandPaths(ws *Workspace) error {
 			return fmt.Errorf("expand env_file path %q: %w", p, err)
 		}
 		ws.EnvFile[i] = expanded
+	}
+
+	if err := expandSecretFiles(ws.Secrets); err != nil {
+		return err
 	}
 
 	for i, spec := range ws.Mounts {
