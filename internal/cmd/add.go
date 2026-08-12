@@ -117,6 +117,12 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return fmt.Errorf("re-resolve workspace for restart: %w", err)
 	}
 
+	// Must run before every generated-file write below: the secret-env manifest
+	// must never be produced for an invalid or colliding configuration.
+	if err := validateSecretSources(ws2); err != nil {
+		return fmt.Errorf("validate secrets for workspace %q: %w", ws2.Name, err)
+	}
+
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
 	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
 	pw, _, err := resolver.Resolve(ws2.Name)
@@ -144,9 +150,10 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		UseCacheVolume:   !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.cache"),
 		ExposePort:       ws2.ExposePort,
 		EnableDocker:     ws2.EnableDocker,
+		Secrets:          secretSpecs(ws2),
 	}
 
-	if err := config.WriteAllowedFiles(ws2.Name, cfg, nil); err != nil {
+	if err := config.WriteAllowedFiles(ws2.Name, cfg, secretEnvPairs(ws2)); err != nil {
 		return fmt.Errorf("write allowed files for workspace %q: %w", ws2.Name, err)
 	}
 

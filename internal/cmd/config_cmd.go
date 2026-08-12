@@ -169,6 +169,15 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Secrets:\n")
+		if len(ws.Secrets) == 0 {
+			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
+		} else {
+			for _, secretName := range sortedSecretNames(ws.Secrets) {
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", secretReference(secretName, ws.Secrets[secretName]))
+			}
+		}
+
 		wsCPU := "(not set)"
 		if ws.CPU != nil {
 			wsCPU = fmt.Sprintf("%g", *ws.CPU)
