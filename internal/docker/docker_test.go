@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v5/pkg/api"
 	dcontainer "github.com/docker/docker/api/types/container"
 	containertypes "github.com/moby/moby/api/types/container"
@@ -554,5 +555,64 @@ func TestWorkspacePortsFromContainers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type fakeCompose struct {
+	api.Compose
+
+	loaded    *types.Project
+	upProject *types.Project
+	upOptions api.UpOptions
+}
+
+func (f *fakeCompose) LoadProject(_ context.Context, _ api.ProjectLoadOptions) (*types.Project, error) {
+	return f.loaded, nil
+}
+
+func (f *fakeCompose) Up(_ context.Context, project *types.Project, options api.UpOptions) error {
+	f.upProject = project
+	f.upOptions = options
+
+	return nil
+}
+
+func newFakeSvcClient(workspace string, svc api.Compose) *Client {
+	client := NewClient("/tmp/jailoc/docker-compose.yml", "/tmp/jailoc", workspace)
+	client.svcOnce.Do(func() {})
+	client.svc = svc
+
+	return client
+}
+
+func TestUpPassesProjectToStartOptions(t *testing.T) {
+	t.Parallel()
+
+	project := &types.Project{
+		Name: "jailoc-default",
+		Secrets: types.Secrets{
+			"gitlab_token": types.SecretConfig{Environment: "GITLAB_TOKEN"},
+		},
+	}
+	fake := &fakeCompose{loaded: project}
+
+	if err := newFakeSvcClient("default", fake).Up(context.Background()); err != nil {
+		t.Fatalf("Up returned error: %v", err)
+	}
+
+	if fake.upProject != project {
+		t.Fatalf("Up received project %p, want %p", fake.upProject, project)
+	}
+	if fake.upOptions.Start.Project == nil {
+		t.Fatal("UpOptions.Start.Project is nil: the Compose SDK would rebuild the project from container labels and drop project.Secrets, silently skipping env-sourced secrets")
+	}
+	if fake.upOptions.Start.Project != project {
+		t.Fatalf("UpOptions.Start.Project is %p, want the loaded project %p", fake.upOptions.Start.Project, project)
+	}
+	if len(fake.upOptions.Start.Project.Secrets) != len(project.Secrets) {
+		t.Fatalf("UpOptions.Start.Project carries %d secrets, want %d", len(fake.upOptions.Start.Project.Secrets), len(project.Secrets))
+	}
+	if !fake.upOptions.Create.RemoveOrphans {
+		t.Fatal("UpOptions.Create.RemoveOrphans is false, want true")
 	}
 }
