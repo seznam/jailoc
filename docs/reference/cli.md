@@ -44,7 +44,7 @@ Start the Docker Compose environment for the target workspace. No-op if the work
 jailoc up [flags]
 ```
 
-Resolves the container image (see [Image Resolution](image-resolution.md)), generates a `docker-compose.yml` in `~/.cache/jailoc/{workspace}/`, and starts two containers: `opencode` and `dind`.
+Resolves the container image (see [Image Resolution](image-resolution.md)), validates secret sources (verifying host environment variables exist and are non-empty, and secret files exist with valid permissions), generates a `docker-compose.yml` in `~/.cache/jailoc/{workspace}/`, and starts two containers: `opencode` and `dind`.
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
@@ -114,7 +114,7 @@ Print the current resolved configuration.
 jailoc config [flags]
 ```
 
-Reads `~/.config/jailoc/config.toml`, resolves all defaults and `~` expansions, and prints the result. Useful for verifying what values are in effect.
+Reads `~/.config/jailoc/config.toml`, resolves all defaults and `~` expansions, and prints the result. Useful for verifying what values are in effect. Secret definitions are printed as references showing their source configuration (for example, `name (env VAR -> EXPOSE)` or `name (file path)`), never resolving or displaying raw secret values.
 
 ---
 
@@ -126,7 +126,7 @@ Add the current working directory to the target workspace's `paths` list.
 jailoc add [flags]
 ```
 
-Appends the current directory to `workspaces.<name>.paths` in `~/.config/jailoc/config.toml`. The path must not be under a forbidden system prefix. See the [configuration reference](configuration.md) for path validation rules.
+Appends the current directory to `workspaces.<name>.paths` in `~/.config/jailoc/config.toml`. The path must not be under a forbidden system prefix. See the [configuration reference](configuration.md) for path validation rules. Validates secret sources for the target workspace before updating configuration.
 
 When `--workspace` is not set, resolves the workspace from the path being added (longest prefix). If `--workspace` is set explicitly and the path is not under any of that workspace's configured paths, `jailoc add` returns an error. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 

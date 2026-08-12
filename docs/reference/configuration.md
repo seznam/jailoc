@@ -66,6 +66,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `cpu` | float64 | `2.0` | Number of CPU cores allocated to the opencode container. Must be greater than 0. |
 | `memory` | string | `"4g"` | Memory limit for the opencode container. Accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` suffix (e.g. `512m`, `4g`, `1024`). Must be greater than 0. |
 | `enable_docker` | bool | `true` | Start a Docker-in-Docker sidecar alongside the opencode container. When `false`, the dind service, TLS certificate volumes, and `DOCKER_HOST`/`DOCKER_TLS_*` environment variables are omitted from the generated compose file, so Docker access from inside the container is unavailable by default and `docker` commands will not be able to connect to a daemon. Disabling reduces resource overhead and tightens security when the agent does not need Docker. |
+| `secrets` | table | `{}` | Secrets configuration map applied to all workspaces. See [secrets](#secrets) validation rules and the [secrets how-to](../how-to/secrets.md). |
 
 ### Example
 
@@ -110,6 +111,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `cpu` | float64 | (inherit) | Number of CPU cores allocated to the opencode container. When not set, inherits from `[defaults]`. Falls back to `2.0` when neither the workspace nor defaults set it. |
 | `memory` | string | (inherit) | Memory limit for the opencode container. When not set, inherits from `[defaults]`. Falls back to `"4g"` when neither the workspace nor defaults set it. |
 | `enable_docker` | bool | (inherit) | Start a Docker-in-Docker sidecar for this workspace. When not set, inherits from `[defaults]`. Falls back to `true` when neither the workspace nor defaults set it. When `false`, the dind service, TLS certificate volumes, and `DOCKER_HOST`/`DOCKER_TLS_*` environment variables are omitted. |
+| `secrets` | table | `{}` | Secrets configuration map for this workspace. Overrides default secrets with the same secret name. See [secrets](#secrets) validation rules and the [secrets how-to](../how-to/secrets.md). |
 
 !!! note
     `image` is mutually exclusive with `dockerfile` and `build_context`. Setting `image` alongside either of those fields is a validation error.
@@ -234,6 +236,33 @@ Each path must be absolute (starting with `/`) or start with `~` (expanded to `$
 
 Values are treated as literal strings — no host environment variable expansion is performed.
 
+### `secrets`
+
+Secrets can be defined under `[defaults.secrets.<NAME>]` or `[workspaces.<ws>.secrets.<NAME>]`. Secret names must match `^[a-zA-Z0-9_-]+$`.
+
+Each secret table supports the following fields:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `env` | string | (none) | Host environment variable name to read the secret value from. |
+| `file` | string | (none) | Host file path (absolute or starting with `~`) to read the secret value from. |
+| `expose_env` | string | (none) | Container environment variable name to inject the secret value into. |
+
+#### XOR Rule
+Exactly one of `env` or `file` must be specified for each secret. Setting both or neither is a validation error (`secret "<NAME>": must specify exactly one of 'env' or 'file'`).
+
+#### `expose_env` Constraints
+The container environment variable name must match `^[A-Za-z_][A-Za-z0-9_]*$`. The following names are rejected:
+- `HOME`
+- Reserved environment variable keys (`OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `SSH_AUTH_SOCK`)
+- Variable names that collide with workspace `env` variables (`secret "<NAME>": expose_env "<VAR>" collides with workspace env variable "<VAR>"`)
+- Variable names that collide with another secret's `expose_env` (`secret "<NAME>": expose_env "<VAR>" collides with secret "<OTHER_NAME>"`)
+
+#### Source Validation at Up-Time
+Secret sources are validated when `jailoc up` or `jailoc add` runs:
+- **`env` sources**: The host environment variable must be set and non-empty. An unset host variable reports `secret "<NAME>": host environment variable "<VAR>" is not set`. A set-but-empty host variable reports `secret "<NAME>": host environment variable "<VAR>" is set but empty (Compose requires a non-empty value)`.
+- **`file` sources**: The file path must exist, be a regular file, and be world-readable (`o+r`) unless `expose_env` is set. Missing files report `secret "<NAME>": secret file "<PATH>" does not exist`. Non-regular files report `secret "<NAME>": secret file "<PATH>" is not a regular file`. Files that are not world-readable without `expose_env` report `secret "<NAME>": secret file "<PATH>" is not readable by others (permissions <PERMS>); set expose_env to make it accessible to the container user`.
+
 ### Merge semantics
 
 Environment variables from multiple sources are merged in this order (later entries win for the same key):
@@ -259,6 +288,8 @@ OpenCode configuration directories are mounted read-write because the agent need
 `ssh_auth_sock`, `git_config`, `expose_port`, and `enable_docker` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config`, `expose_port`, and `enable_docker` fall back to `true` when neither the workspace nor defaults set it.
 
 `cpu` and `memory` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `cpu` falls back to `2.0` and `memory` falls back to `"4g"` when neither the workspace nor defaults set them.
+
+`secrets` entries merge by secret name. Global default secrets under `[defaults.secrets.<NAME>]` apply to all workspaces. If a workspace declares a secret with the same name under `[workspaces.<ws>.secrets.<NAME>]`, the workspace-level secret entry replaces the defaults secret entry entirely (whole-struct replacement).
 
 ---
 
