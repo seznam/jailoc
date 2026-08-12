@@ -1310,3 +1310,145 @@ func TestResolveMountsMergeError(t *testing.T) {
 		t.Fatalf("unexpected error context: %v", err)
 	}
 }
+
+func TestResolveSecrets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		defaultSecrets  map[string]config.Secret
+		wsSecrets       map[string]config.Secret
+		want            []workspace.ResolvedSecret
+		wantErrContains []string
+	}{
+		{
+			name: "no secrets resolves to nil",
+			want: nil,
+		},
+		{
+			name: "defaults only survive",
+			defaultSecrets: map[string]config.Secret{
+				"gh": {Env: "GH_TOKEN_HOST", ExposeEnv: "GH_TOKEN"},
+			},
+			want: []workspace.ResolvedSecret{
+				{Name: "gh", Env: "GH_TOKEN_HOST", ExposeEnv: "GH_TOKEN"},
+			},
+		},
+		{
+			name: "workspace only survive",
+			wsSecrets: map[string]config.Secret{
+				"key": {File: "/etc/jailoc-key"},
+			},
+			want: []workspace.ResolvedSecret{
+				{Name: "key", File: "/etc/jailoc-key"},
+			},
+		},
+		{
+			name: "both layers survive and are sorted by name",
+			defaultSecrets: map[string]config.Secret{
+				"zulu":  {Env: "ZULU_HOST"},
+				"bravo": {File: "/etc/bravo"},
+			},
+			wsSecrets: map[string]config.Secret{
+				"alpha":   {Env: "ALPHA_HOST"},
+				"charlie": {File: "/etc/charlie"},
+			},
+			want: []workspace.ResolvedSecret{
+				{Name: "alpha", Env: "ALPHA_HOST"},
+				{Name: "bravo", File: "/etc/bravo"},
+				{Name: "charlie", File: "/etc/charlie"},
+				{Name: "zulu", Env: "ZULU_HOST"},
+			},
+		},
+		{
+			name: "workspace override replaces the whole defaults struct",
+			defaultSecrets: map[string]config.Secret{
+				"token": {Env: "DEFAULTS_HOST_VAR", ExposeEnv: "DEFAULTS_EXPOSE"},
+			},
+			wsSecrets: map[string]config.Secret{
+				"token": {File: "/etc/workspace-token"},
+			},
+			want: []workspace.ResolvedSecret{
+				{Name: "token", File: "/etc/workspace-token"},
+			},
+		},
+		{
+			name: "workspace override drops only the overridden name",
+			defaultSecrets: map[string]config.Secret{
+				"kept":     {Env: "KEPT_HOST", ExposeEnv: "KEPT"},
+				"replaced": {Env: "OLD_HOST", ExposeEnv: "OLD"},
+			},
+			wsSecrets: map[string]config.Secret{
+				"replaced": {File: "/etc/new"},
+			},
+			want: []workspace.ResolvedSecret{
+				{Name: "kept", Env: "KEPT_HOST", ExposeEnv: "KEPT"},
+				{Name: "replaced", File: "/etc/new"},
+			},
+		},
+		{
+			name: "merged secret with both sources is rejected",
+			defaultSecrets: map[string]config.Secret{
+				"token": {Env: "DEFAULTS_HOST_VAR"},
+			},
+			wsSecrets: map[string]config.Secret{
+				"token": {Env: "WS_HOST_VAR", File: "/etc/workspace-token"},
+			},
+			wantErrContains: []string{
+				"merge secrets for workspace default",
+				`secret "token"`,
+				`cannot set both "env" and "file"`,
+			},
+		},
+		{
+			name: "merged secret with no source is rejected",
+			wsSecrets: map[string]config.Secret{
+				"token": {ExposeEnv: "TOKEN"},
+			},
+			wantErrContains: []string{
+				"merge secrets for workspace default",
+				`secret "token"`,
+				`must set exactly one of "env" or "file"`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{
+					Secrets: tt.defaultSecrets,
+				},
+				Workspaces: map[string]config.Workspace{
+					"default": {
+						Paths:   []string{"/tmp"},
+						Secrets: tt.wsSecrets,
+					},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "default")
+
+			if len(tt.wantErrContains) > 0 {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErrContains)
+				}
+				for _, sub := range tt.wantErrContains {
+					if !strings.Contains(err.Error(), sub) {
+						t.Errorf("error %q missing expected substring %q", err.Error(), sub)
+					}
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+			if !reflect.DeepEqual(resolved.Secrets, tt.want) {
+				t.Fatalf("secrets mismatch: got %#v want %#v", resolved.Secrets, tt.want)
+			}
+		})
+	}
+}
