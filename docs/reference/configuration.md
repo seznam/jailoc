@@ -245,23 +245,23 @@ Each secret table supports the following fields:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `env` | string | (none) | Host environment variable name to read the secret value from. |
-| `file` | string | (none) | Host file path (absolute or starting with `~`) to read the secret value from. |
+| `file` | string | (none) | Host file path to read the secret value from. Absolute, or starting with `~` (expanded to the home directory). Must not contain `$` (Docker Compose would interpolate it). |
 | `expose_env` | string | (none) | Container environment variable name to inject the secret value into. |
 
 #### XOR Rule
-Exactly one of `env` or `file` must be specified for each secret. Setting both or neither is a validation error (`secret "<NAME>": must specify exactly one of 'env' or 'file'`).
+Exactly one of `env` or `file` must be specified for each secret. Setting both, or neither, is a validation error.
 
 #### `expose_env` Constraints
 The container environment variable name must match `^[A-Za-z_][A-Za-z0-9_]*$`. The following names are rejected:
 - `HOME`
 - Reserved environment variable keys (`OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `SSH_AUTH_SOCK`)
-- Variable names that collide with workspace `env` variables (`secret "<NAME>": expose_env "<VAR>" collides with workspace env variable "<VAR>"`)
-- Variable names that collide with another secret's `expose_env` (`secret "<NAME>": expose_env "<VAR>" collides with secret "<OTHER_NAME>"`)
+- Variable names that collide with a workspace `env` variable
+- Variable names that collide with another secret's `expose_env`
 
 #### Source Validation at Up-Time
 Secret sources are validated when `jailoc up` or `jailoc add` runs:
-- **`env` sources**: The host environment variable must be set and non-empty. An unset host variable reports `secret "<NAME>": host environment variable "<VAR>" is not set`. A set-but-empty host variable reports `secret "<NAME>": host environment variable "<VAR>" is set but empty (Compose requires a non-empty value)`.
-- **`file` sources**: The file path must exist, be a regular file, and be world-readable (`o+r`) unless `expose_env` is set. Missing files report `secret "<NAME>": secret file "<PATH>" does not exist`. Non-regular files report `secret "<NAME>": secret file "<PATH>" is not a regular file`. Files that are not world-readable without `expose_env` report `secret "<NAME>": secret file "<PATH>" is not readable by others (permissions <PERMS>); set expose_env to make it accessible to the container user`.
+- **`env` sources**: the host environment variable must be set and non-empty. An unset or empty value is rejected, because Docker Compose omits empty secrets and `/run/secrets/<NAME>` would not exist inside the container.
+- **`file` sources**: the file path must exist, be a regular file, and — unless `expose_env` is set — be world-readable (`o+r`), because the agent process runs as UID 1000. Setting `expose_env` signals that root reads the file during entrypoint startup, which lifts the world-readable requirement.
 
 ### Merge semantics
 
