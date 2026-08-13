@@ -66,8 +66,8 @@ When a secret references a host environment variable (`env = "VAR"`), Compose ex
 
 To prevent silent failures inside the container where `/run/secrets/<name>` unexpectedly does not exist, jailoc checks host environment variables during up-time validation:
 
-- If the variable is unset: `secret "<NAME>": host environment variable "<VAR>" is not set`
-- If the variable is set but empty: `secret "<NAME>": host environment variable "<VAR>" is set but empty (Compose requires a non-empty value)`
+- If the variable is unset, validation fails.
+- If the variable is set but empty, validation fails as well: Compose omits empty secrets, so `/run/secrets/<name>` would not be created.
 
 ### Conservative world-readable check for file secrets
 
@@ -76,8 +76,7 @@ When a secret uses `file` without `expose_env`, the file must be readable by the
 However, host-to-container UID mapping varies depending on the operating system and container runtime (for example, virtiofs or grpcfuse on macOS vs user namespaces on Linux). Because jailoc cannot know at validation time how the container runtime will map host UIDs inside the container, it applies a **conservative check**:
 
 - If `expose_env` is **not** set, jailoc verifies that the host file is world-readable (`others` read bit `o+r`).
-- If the file is not world-readable, `jailoc up` fails with:
-  `secret "<NAME>": secret file "<PATH>" is not readable by others (permissions <PERMS>); set expose_env to make it accessible to the container user`
+- If the file is not world-readable, `jailoc up` fails and reports the offending permissions, explaining that `expose_env` can be set instead to make the secret readable by the container user.
 
 Setting `expose_env` acts as the explicit signal that the secret will be read by root during entrypoint execution and re-exported into an environment variable, bypassing the world-readable requirement.
 
@@ -85,7 +84,7 @@ Setting `expose_env` acts as the explicit signal that the secret will be read by
 
 ## Secret Validation Summary
 
-The complete validation sequence enforced at `jailoc up` and `jailoc add` time is:
+Validation happens in two tiers. Structural rules (exactly one of `env` or `file`, the secret-name format, and the `expose_env` variable-name and reserved-name rules) are checked whenever configuration is loaded. Source rules that inspect the host (environment-variable presence and the secret file's existence, type, and permissions) are checked when a container starts (`jailoc up`, and `jailoc add` for an already-running workspace).
 
 1. **XOR Rule**: Exactly one of `env` or `file` must be specified for each secret.
 2. **Secret Name**: Must match `^[a-zA-Z0-9_-]+$`.
