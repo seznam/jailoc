@@ -453,12 +453,6 @@ func validateSecretFile(path string) error {
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("file path %q must be absolute", path)
 	}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("file %q does not exist", path)
-		}
-		return fmt.Errorf("file %q: %w", path, err)
-	}
 	return nil
 }
 

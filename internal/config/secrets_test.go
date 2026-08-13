@@ -75,10 +75,12 @@ func TestValidateSecrets(t *testing.T) {
 			wantSubstrs: []string{"invalid name"},
 		},
 		{
-			name:        "file does not exist",
-			secretName:  "key",
-			secret:      Secret{File: "/nonexistent/path/secret"},
-			wantSubstrs: []string{"key", "/nonexistent/path/secret", "does not exist"},
+			name:       "nonexistent file accepted at config layer",
+			secretName: "key",
+			secret:     Secret{File: "/nonexistent/path/secret"},
+			// config layer no longer stats the filesystem; existence is
+			// enforced at up-time by validateSecretFileSource.
+			wantSubstrs: nil, // expect Validate to succeed
 		},
 		{
 			name:        "relative file path",
@@ -288,13 +290,13 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 	})
 }
 
-// TestValidateExpandsSecretFileBeforeExistsCheck locks the ordering invariant:
-// a "~" path must be expanded before the exists check, otherwise a valid config
-// would be rejected.
-func TestValidateExpandsSecretFileBeforeExistsCheck(t *testing.T) {
+// TestValidateExpandsSecretFileBeforeAbsCheck locks the ordering invariant: a
+// "~" path must be expanded before the filepath.IsAbs check, otherwise a valid
+// config would be rejected as relative. The config layer does NOT require the
+// file to exist — the secret file is deliberately never created here.
+func TestValidateExpandsSecretFileBeforeAbsCheck(t *testing.T) {
 	home := safeHome(t)
 	secretFile := filepath.Join(home, "token")
-	writeFile(t, secretFile, "s3cr3t\n")
 
 	t.Run("defaults", func(t *testing.T) {
 		cfg := &Config{
@@ -321,6 +323,31 @@ func TestValidateExpandsSecretFileBeforeExistsCheck(t *testing.T) {
 			t.Errorf("secret file = %q, want %q", got, secretFile)
 		}
 	})
+}
+
+// TestLoadFromAcceptsMissingSecretFile locks the bug fix: config.Load runs
+// Validate on EVERY jailoc command, so a missing secret file in any workspace
+// must not break unrelated commands (config, status, logs, down). Existence is
+// enforced at up-time only.
+func TestLoadFromAcceptsMissingSecretFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `
+[workspaces.default]
+paths = ["/data/workspace"]
+
+[workspaces.default.secrets.token]
+file = "/nonexistent/path/secret"
+`)
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if got := cfg.Workspaces["default"].Secrets["token"].File; got != "/nonexistent/path/secret" {
+		t.Errorf("secret file = %q, want %q", got, "/nonexistent/path/secret")
+	}
 }
 
 func TestDefaultConfigContentDocumentsSecrets(t *testing.T) {
