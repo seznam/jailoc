@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"net"
 	"net/url"
@@ -10,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -178,6 +181,25 @@ type Secret struct {
 	Env       string `toml:"env"`
 	File      string `toml:"file"`
 	ExposeEnv string `toml:"expose_env"`
+}
+
+// EnvSecret is one [<scope>.secrets.env.<NAME>] entry: the section NAME is the
+// container env var, FromEnv is the host env var the value is read from.
+type EnvSecret struct {
+	FromEnv string `toml:"from_env"`
+}
+
+// FileSecret is one [<scope>.secrets.file.<NAME>] entry: the section NAME is the
+// /run/secrets/<NAME> basename, FromFile is the absolute host path. Never exported to env.
+type FileSecret struct {
+	FromFile string `toml:"from_file"`
+}
+
+// Secrets is a whole [<scope>.secrets] block. The sub-table a secret lives in
+// decides its destination, so env-vs-file is structural, not a validated XOR.
+type Secrets struct {
+	Env  map[string]EnvSecret  `toml:"env,omitempty"`
+	File map[string]FileSecret `toml:"file,omitempty"`
 }
 
 // SecretEnvPair maps a Compose secret name to the environment variable the
@@ -490,6 +512,174 @@ func expandSecretFiles(secrets map[string]Secret) error {
 		secrets[name] = secret
 	}
 	return nil
+}
+
+// reservedSecretEnvName reports container env var names an env secret must
+// never claim. entrypoint.sh execs `env HOME=/home/agent "${secret_envs[@]}"
+// opencode` with a bare command name, so a PATH secret poisons command lookup
+// and a HOME secret overrides the agent home — both break container startup.
+func reservedSecretEnvName(name string) bool {
+	return reservedEnvKeys[name] || name == "HOME" || name == "PATH"
+}
+
+func validateEnvSecret(name string, secret EnvSecret, context string) error {
+	if err := validateEnvVarName(name); err != nil {
+		return fmt.Errorf("%s: env secret %q: %w", context, name, err)
+	}
+	if reservedSecretEnvName(name) {
+		return fmt.Errorf("%s: env secret %q: name is reserved and cannot be overridden", context, name)
+	}
+	if secret.FromEnv == "" {
+		return fmt.Errorf("%s: env secret %q: \"from_env\" must not be empty", context, name)
+	}
+	return nil
+}
+
+func validateFileSecret(name string, secret FileSecret, context string) error {
+	if !secretNameRe.MatchString(name) {
+		return fmt.Errorf("%s: file secret %q: invalid name: must match [a-zA-Z0-9_-]+", context, name)
+	}
+	if secret.FromFile == "" {
+		return fmt.Errorf("%s: file secret %q: \"from_file\" must not be empty", context, name)
+	}
+	if err := validateSecretFile(secret.FromFile); err != nil {
+		return fmt.Errorf("%s: file secret %q: %w", context, name, err)
+	}
+	return nil
+}
+
+func validateSecretsBlock(secrets Secrets, context string) error {
+	for _, name := range slices.Sorted(maps.Keys(secrets.Env)) {
+		if _, ok := secrets.File[name]; ok {
+			return fmt.Errorf("%s: secret %q: declared in both \"secrets.env\" and \"secrets.file\": a name may live in only one", context, name)
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(secrets.Env)) {
+		if err := validateEnvSecret(name, secrets.Env[name], context); err != nil {
+			return err
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(secrets.File)) {
+		if err := validateFileSecret(name, secrets.File[name], context); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// expandSecretsBlockFiles expands a leading ~ in every file secret path. Env
+// secrets hold variable names, not paths, and are deliberately left untouched.
+func expandSecretsBlockFiles(secrets *Secrets) error {
+	if secrets == nil {
+		return nil
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(secrets.File)) {
+		secret := secrets.File[name]
+		if secret.FromFile == "" {
+			continue
+		}
+		expanded, err := ExpandPath(secret.FromFile)
+		if err != nil {
+			return fmt.Errorf("expand secret file %q: %w", secret.FromFile, err)
+		}
+		secret.FromFile = expanded
+		secrets.File[name] = secret
+	}
+
+	return nil
+}
+
+const secretsDocURL = "https://seznam.github.io/jailoc/how-to/secrets/"
+
+func legacySecretError(scope, name string) error {
+	return fmt.Errorf(
+		"legacy secret %q: the [<scope>.secrets.<NAME>] schema was removed; "+
+			"rewrite as [%s.secrets.env.%s] from_env = \"HOST_VAR\" (container env var) "+
+			"or [%s.secrets.file.%s] from_file = \"/abs/path\" (/run/secrets/%s). "+
+			"A file secret can no longer also export an env var; export the value to a host env var "+
+			"and use secrets.env instead. See %s",
+		scope+".secrets."+name, scope, name, scope, name, name, secretsDocURL,
+	)
+}
+
+// detectLegacySecrets rejects the removed [<scope>.secrets.<NAME>] schema from a
+// map[string]any view of the raw TOML. It runs before the typed decode because a
+// legacy secret literally named "env" or "file" makes the typed decode fail with
+// a cryptic type-mismatch instead of an actionable migration message.
+//
+// Matching is position-anchored: only "secrets" directly under "defaults" or
+// under a workspace is inspected, so a workspace literally named "secrets" is
+// never misflagged.
+func detectLegacySecrets(raw map[string]any) error {
+	var errs []error
+
+	if _, ok := raw["secrets"]; ok {
+		errs = append(errs, fmt.Errorf(
+			"top-level [secrets] is not supported: declare secrets under "+
+				"[defaults.secrets.env.<NAME>] / [defaults.secrets.file.<NAME>] or "+
+				"[workspaces.<ws>.secrets.env.<NAME>] / [workspaces.<ws>.secrets.file.<NAME>]. See %s",
+			secretsDocURL,
+		))
+	}
+
+	errs = append(errs, legacySecretsInScope(raw["defaults"], "defaults")...)
+
+	if workspaces, ok := raw["workspaces"].(map[string]any); ok {
+		for _, name := range slices.Sorted(maps.Keys(workspaces)) {
+			errs = append(errs, legacySecretsInScope(workspaces[name], "workspaces."+name)...)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func legacySecretsInScope(scopeValue any, scope string) []error {
+	scopeTable, ok := scopeValue.(map[string]any)
+	if !ok {
+		return nil
+	}
+	secrets, ok := scopeTable["secrets"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(secrets)) {
+		if legacySecretEntry(name, secrets[name]) {
+			errs = append(errs, legacySecretError(scope, name))
+		}
+	}
+	return errs
+}
+
+// legacySecretEntry reports whether one key of a [<scope>.secrets] table is a
+// legacy secret rather than the new "env"/"file" namespace.
+//
+// An EMPTY "env"/"file" table is legacy: it is indistinguishable from an empty
+// legacy secret of that name, and AddPath's omitempty re-encode would silently
+// drop it. Only a bare [<scope>.secrets] table with no env/file key at all is
+// accepted, because that is what AddPath emits for an unrelated reason.
+func legacySecretEntry(name string, value any) bool {
+	if name != "env" && name != "file" {
+		return true
+	}
+
+	namespace, ok := value.(map[string]any)
+	if !ok || len(namespace) == 0 {
+		return true
+	}
+
+	for _, body := range namespace {
+		if _, ok := body.(map[string]any); !ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 func ParseMount(spec string) (Mount, error) {
