@@ -407,6 +407,46 @@ env = "HOST_TOKEN"
 	}
 }
 
+func TestAddPathRejectsAmbiguousEmptySecretsWithoutRewriting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  string
+	}{
+		{
+			name: "empty env namespace table",
+			cfg: `
+[workspaces.default]
+paths = []
+
+[defaults.secrets.env]
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+
+			original := []byte(tc.cfg)
+			writeFile(t, ConfigPath(), tc.cfg)
+
+			err := AddPath("default", "/data/mywork")
+			if err == nil {
+				t.Fatal("expected migration error, got nil")
+			}
+			if !strings.Contains(err.Error(), "defaults.secrets.") {
+				t.Fatalf("error %q does not identify the legacy secret", err.Error())
+			}
+			got, readErr := os.ReadFile(ConfigPath())
+			if readErr != nil {
+				t.Fatalf("read config after AddPath: %v", readErr)
+			}
+			if !bytes.Equal(got, original) {
+				t.Fatalf("AddPath rewrote ambiguous legacy config:\ngot:\n%s\nwant:\n%s", got, original)
+			}
+		})
+	}
+}
+
 func TestAllowedHostsContent(t *testing.T) {
 	cfg := &Config{Workspaces: map[string]Workspace{
 		"default": {AllowedHosts: []string{"foo.com", "bar.com"}},
@@ -469,6 +509,26 @@ func TestCreateDefault(t *testing.T) {
 
 	if !strings.Contains(string(data), "[workspaces.default]") {
 		t.Fatalf("expected default content to include workspace block, got:\n%s", string(data))
+	}
+}
+
+func TestAddPathDoesNotEmitEmptySecretsHeaderAfterCreateDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := CreateDefault(); err != nil {
+		t.Fatalf("CreateDefault failed: %v", err)
+	}
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+	if bytes.Contains(data, []byte("[defaults.secrets")) {
+		t.Fatalf("expected no secrets table header in persisted config, got:\n%s", string(data))
 	}
 }
 
