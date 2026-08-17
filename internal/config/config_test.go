@@ -379,6 +379,34 @@ func TestAddPathPersists(t *testing.T) {
 	}
 }
 
+func TestAddPathRejectsLegacySecretsWithoutRewriting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	original := []byte(`[workspaces.default]
+paths = []
+
+[defaults.secrets.TOKEN]
+env = "HOST_TOKEN"
+`)
+	writeFile(t, ConfigPath(), string(original))
+
+	err := AddPath("default", "/data/mywork")
+	if err == nil {
+		t.Fatal("expected migration error, got nil")
+	}
+	if !strings.Contains(err.Error(), "defaults.secrets.TOKEN") {
+		t.Fatalf("error %q does not identify the legacy secret", err.Error())
+	}
+	got, readErr := os.ReadFile(ConfigPath())
+	if readErr != nil {
+		t.Fatalf("read config after AddPath: %v", readErr)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("AddPath rewrote legacy config:\ngot:\n%s\nwant:\n%s", got, original)
+	}
+}
+
 func TestAllowedHostsContent(t *testing.T) {
 	cfg := &Config{Workspaces: map[string]Workspace{
 		"default": {AllowedHosts: []string{"foo.com", "bar.com"}},

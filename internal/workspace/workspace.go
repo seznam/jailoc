@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,14 +16,6 @@ import (
 // matching the given directory. Callers can use errors.Is to distinguish
 // this from real configuration/resolution failures.
 var ErrNoMatch = errors.New("no matching workspace")
-
-// Defensive re-assertion of the XOR invariant config.Validate already enforces
-// per layer: a workspace override replaces a defaults secret as a whole struct,
-// so it may change the source kind but must never combine or drop both.
-var (
-	errSecretBothSources = errors.New(`cannot set both "env" and "file": exactly one source is required`)
-	errSecretNoSource    = errors.New(`must set exactly one of "env" or "file"`)
-)
 
 // BasePort is the internal port that opencode serve binds to inside the container.
 // Host-side ports are assigned as BasePort + alphabetical workspace index.
@@ -50,13 +41,19 @@ type Resolved struct {
 	EnableDocker    bool
 }
 
-// ResolvedSecret is a secret after the defaults+workspace merge. Exactly one
-// of Env (host environment variable name) or File (host path) is set.
+type SecretKind int
+
+const (
+	SecretKindEnv SecretKind = iota
+	SecretKindFile
+)
+
+// ResolvedSecret is a secret after the defaults+workspace merge.
 type ResolvedSecret struct {
-	Name      string
-	Env       string
-	File      string
-	ExposeEnv string
+	Name     string
+	Kind     SecretKind
+	FromEnv  string
+	FromFile string
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -124,10 +121,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		return nil, fmt.Errorf("merge mounts for workspace %s: %w", name, err)
 	}
 
-	mergedSecrets, err := mergeSecrets(cfg.Defaults.Secrets, ws.Secrets)
-	if err != nil {
-		return nil, fmt.Errorf("merge secrets for workspace %s: %w", name, err)
-	}
+	mergedSecrets := mergeSecrets(cfg.Defaults.Secrets, ws.Secrets)
 
 	r := &Resolved{
 		Name:            name,
@@ -154,14 +148,23 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	return r, nil
 }
 
-func mergeSecrets(defaults, overrides map[string]config.Secret) ([]ResolvedSecret, error) {
-	if len(defaults) == 0 && len(overrides) == 0 {
-		return nil, nil
+func mergeSecrets(defaults, overrides config.Secrets) []ResolvedSecret {
+	merged := make(map[string]ResolvedSecret, len(defaults.Env)+len(defaults.File)+len(overrides.Env)+len(overrides.File))
+	for name, secret := range defaults.Env {
+		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv}
 	}
-
-	merged := make(map[string]config.Secret, len(defaults)+len(overrides))
-	maps.Copy(merged, defaults)
-	maps.Copy(merged, overrides)
+	for name, secret := range defaults.File {
+		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromFile: secret.FromFile}
+	}
+	for name, secret := range overrides.Env {
+		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv}
+	}
+	for name, secret := range overrides.File {
+		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromFile: secret.FromFile}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
 
 	names := make([]string, 0, len(merged))
 	for name := range merged {
@@ -171,22 +174,10 @@ func mergeSecrets(defaults, overrides map[string]config.Secret) ([]ResolvedSecre
 
 	resolved := make([]ResolvedSecret, 0, len(names))
 	for _, name := range names {
-		secret := merged[name]
-		switch {
-		case secret.Env != "" && secret.File != "":
-			return nil, fmt.Errorf("secret %q: %w", name, errSecretBothSources)
-		case secret.Env == "" && secret.File == "":
-			return nil, fmt.Errorf("secret %q: %w", name, errSecretNoSource)
-		}
-		resolved = append(resolved, ResolvedSecret{
-			Name:      name,
-			Env:       secret.Env,
-			File:      secret.File,
-			ExposeEnv: secret.ExposeEnv,
-		})
+		resolved = append(resolved, merged[name])
 	}
 
-	return resolved, nil
+	return resolved
 }
 
 func dedupEnvByKeyLastWins(entries []string) []string {

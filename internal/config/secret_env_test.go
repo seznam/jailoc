@@ -109,11 +109,7 @@ func TestWriteSecretEnvManifestCarriesNoValues(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"myws": {Secrets: map[string]Secret{
-			"gh": {File: "/tmp/token", ExposeEnv: "GH_TOKEN"},
-		}},
-	}}
+	cfg := &Config{Workspaces: map[string]Workspace{"myws": {}}}
 
 	if err := WriteAllowedFiles("myws", cfg, []SecretEnvPair{{Name: "gh", Var: "GH_TOKEN"}}); err != nil {
 		t.Fatalf("WriteAllowedFiles returned error: %v", err)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -170,11 +171,11 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		}
 
 		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Secrets:\n")
-		if len(ws.Secrets) == 0 {
+		if len(ws.Secrets.Env) == 0 && len(ws.Secrets.File) == 0 {
 			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
 		} else {
 			for _, secretName := range sortedSecretNames(ws.Secrets) {
-				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", secretReference(secretName, ws.Secrets[secretName]))
+				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", secretReference(secretName))
 			}
 		}
 
@@ -195,6 +196,27 @@ func runConfig(cmd *cobra.Command, args []string) error {
 
 	_ = ctx // silence unused variable warning
 	return nil
+}
+
+func sortedSecretNames(secrets config.Secrets) []workspace.ResolvedSecret {
+	resolved := make([]workspace.ResolvedSecret, 0, len(secrets.Env)+len(secrets.File))
+	envNames := make([]string, 0, len(secrets.Env))
+	for name := range secrets.Env {
+		envNames = append(envNames, name)
+	}
+	sort.Strings(envNames)
+	for _, name := range envNames {
+		resolved = append(resolved, workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindEnv, FromEnv: secrets.Env[name].FromEnv})
+	}
+	fileNames := make([]string, 0, len(secrets.File))
+	for name := range secrets.File {
+		fileNames = append(fileNames, name)
+	}
+	sort.Strings(fileNames)
+	for _, name := range fileNames {
+		resolved = append(resolved, workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindFile, FromFile: secrets.File[name].FromFile})
+	}
+	return resolved
 }
 
 func init() {

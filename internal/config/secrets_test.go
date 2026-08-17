@@ -1,155 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
 )
-
-func TestValidateSecrets(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	secretFile := filepath.Join(dir, "token")
-	writeFile(t, secretFile, "s3cr3t\n")
-
-	tests := []struct {
-		name        string
-		secretName  string
-		secret      Secret
-		wantSubstrs []string
-	}{
-		{
-			name:       "env source only",
-			secretName: "token",
-			secret:     Secret{Env: "HOST_TOKEN"},
-		},
-		{
-			name:       "file source only",
-			secretName: "key",
-			secret:     Secret{File: secretFile},
-		},
-		{
-			name:       "env source with expose_env",
-			secretName: "token",
-			secret:     Secret{Env: "HOST_TOKEN", ExposeEnv: "TOKEN_1"},
-		},
-		{
-			name:       "file source with expose_env",
-			secretName: "key",
-			secret:     Secret{File: secretFile, ExposeEnv: "_MY_KEY9"},
-		},
-		{
-			name:       "name with dash and underscore",
-			secretName: "my-secret_1",
-			secret:     Secret{Env: "HOST_TOKEN"},
-		},
-		{
-			name:        "both env and file",
-			secretName:  "token",
-			secret:      Secret{Env: "HOST_TOKEN", File: secretFile},
-			wantSubstrs: []string{"token", "cannot set both", "exactly one source"},
-		},
-		{
-			name:        "neither env nor file",
-			secretName:  "token",
-			secret:      Secret{ExposeEnv: "TOKEN_1"},
-			wantSubstrs: []string{"token", "must set exactly one"},
-		},
-		{
-			name:        "name with dot is rejected",
-			secretName:  "my.secret",
-			secret:      Secret{Env: "HOST_TOKEN"},
-			wantSubstrs: []string{"my.secret", "invalid name", "[a-zA-Z0-9_-]+"},
-		},
-		{
-			name:        "name with slash is rejected",
-			secretName:  "dir/token",
-			secret:      Secret{Env: "HOST_TOKEN"},
-			wantSubstrs: []string{"dir/token", "invalid name"},
-		},
-		{
-			name:        "empty name is rejected",
-			secretName:  "",
-			secret:      Secret{Env: "HOST_TOKEN"},
-			wantSubstrs: []string{"invalid name"},
-		},
-		{
-			name:       "nonexistent file accepted at config layer",
-			secretName: "key",
-			secret:     Secret{File: "/nonexistent/path/secret"},
-			// config layer no longer stats the filesystem; existence is
-			// enforced at up-time by validateSecretFileSource.
-			wantSubstrs: nil, // expect Validate to succeed
-		},
-		{
-			name:        "relative file path",
-			secretName:  "key",
-			secret:      Secret{File: "relative/secret"},
-			wantSubstrs: []string{"key", "relative/secret", "must be absolute"},
-		},
-		{
-			name:        "file path containing dollar sign",
-			secretName:  "key",
-			secret:      Secret{File: "/secrets/$USER/token"},
-			wantSubstrs: []string{"key", "/secrets/$USER/token", "$", "interpolates"},
-		},
-		{
-			name:        "expose_env starting with a digit",
-			secretName:  "token",
-			secret:      Secret{Env: "HOST_TOKEN", ExposeEnv: "1TOKEN"},
-			wantSubstrs: []string{"token", "1TOKEN", "^[A-Za-z_][A-Za-z0-9_]*$"},
-		},
-		{
-			name:        "expose_env containing a dash",
-			secretName:  "token",
-			secret:      Secret{Env: "HOST_TOKEN", ExposeEnv: "TOKEN-NAME"},
-			wantSubstrs: []string{"token", "TOKEN-NAME", "^[A-Za-z_][A-Za-z0-9_]*$"},
-		},
-		{
-			name:        "expose_env HOME is reserved",
-			secretName:  "token",
-			secret:      Secret{Env: "HOST_TOKEN", ExposeEnv: "HOME"},
-			wantSubstrs: []string{"token", "HOME", "reserved"},
-		},
-		{
-			name:        "expose_env DOCKER_HOST is reserved",
-			secretName:  "token",
-			secret:      Secret{Env: "HOST_TOKEN", ExposeEnv: "DOCKER_HOST"},
-			wantSubstrs: []string{"token", "DOCKER_HOST", "reserved"},
-		},
-		{
-			name:        "expose_env SSH_AUTH_SOCK is reserved",
-			secretName:  "token",
-			secret:      Secret{Env: "HOST_TOKEN", ExposeEnv: "SSH_AUTH_SOCK"},
-			wantSubstrs: []string{"token", "SSH_AUTH_SOCK", "reserved"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run("defaults/"+tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cfg := &Config{
-				Defaults: Defaults{Secrets: map[string]Secret{tt.secretName: tt.secret}},
-			}
-			assertSecretValidation(t, Validate(cfg), tt.wantSubstrs, "defaults")
-		})
-
-		t.Run("workspace/"+tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cfg := &Config{
-				Workspaces: map[string]Workspace{
-					"myws": {Secrets: map[string]Secret{tt.secretName: tt.secret}},
-				},
-			}
-			assertSecretValidation(t, Validate(cfg), tt.wantSubstrs, "myws")
-		})
-	}
-}
 
 func assertSecretValidation(t *testing.T, err error, wantSubstrs []string, wantContext string) {
 	t.Helper()
@@ -174,30 +32,6 @@ func assertSecretValidation(t *testing.T, err error, wantSubstrs []string, wantC
 	}
 	if !strings.Contains(msg, wantContext) {
 		t.Errorf("error message %q missing expected context %q", msg, wantContext)
-	}
-}
-
-func TestValidateSecretsIteratesSortedNames(t *testing.T) {
-	t.Parallel()
-
-	for range 50 {
-		cfg := &Config{
-			Workspaces: map[string]Workspace{
-				"myws": {Secrets: map[string]Secret{
-					"aaa": {},
-					"mmm": {},
-					"zzz": {},
-				}},
-			},
-		}
-
-		err := Validate(cfg)
-		if err == nil {
-			t.Fatal("expected validation error, got nil")
-		}
-		if !strings.Contains(err.Error(), `secret "aaa"`) {
-			t.Fatalf("expected the alphabetically first secret to be reported, got: %v", err)
-		}
 	}
 }
 
@@ -249,9 +83,9 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 	t.Run("workspace", func(t *testing.T) {
 		ws := &Workspace{
 			Paths: []string{"/data"},
-			Secrets: map[string]Secret{
-				"token": {File: "~/secrets/token", ExposeEnv: "TOKEN_1"},
-				"other": {Env: "~HOST_VAR", ExposeEnv: "~EXPOSED"},
+			Secrets: Secrets{
+				File: map[string]FileSecret{"token": {FromFile: "~/secrets/token"}},
+				Env:  map[string]EnvSecret{"OTHER": {FromEnv: "~HOST_VAR"}},
 			},
 		}
 
@@ -259,34 +93,28 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 			t.Fatalf("expandPaths failed: %v", err)
 		}
 
-		if got := ws.Secrets["token"].File; got != home+"/secrets/token" {
+		if got := ws.Secrets.File["token"].FromFile; got != home+"/secrets/token" {
 			t.Errorf("secret file = %q, want %q", got, home+"/secrets/token")
 		}
-		if got := ws.Secrets["token"].ExposeEnv; got != "TOKEN_1" {
-			t.Errorf("expose_env = %q, want it untouched", got)
-		}
-		if got := ws.Secrets["other"].Env; got != "~HOST_VAR" {
+		if got := ws.Secrets.Env["OTHER"].FromEnv; got != "~HOST_VAR" {
 			t.Errorf("env = %q, want it untouched", got)
-		}
-		if got := ws.Secrets["other"].ExposeEnv; got != "~EXPOSED" {
-			t.Errorf("expose_env = %q, want it untouched", got)
 		}
 	})
 
 	t.Run("defaults", func(t *testing.T) {
-		secrets := map[string]Secret{
-			"token": {File: "~/secrets/token"},
-			"other": {Env: "~HOST_VAR"},
+		secrets := Secrets{
+			File: map[string]FileSecret{"token": {FromFile: "~/secrets/token"}},
+			Env:  map[string]EnvSecret{"OTHER": {FromEnv: "~HOST_VAR"}},
 		}
 
-		if err := expandSecretFiles(secrets); err != nil {
-			t.Fatalf("expandSecretFiles failed: %v", err)
+		if err := expandSecretsBlockFiles(&secrets); err != nil {
+			t.Fatalf("expandSecretsBlockFiles failed: %v", err)
 		}
 
-		if got := secrets["token"].File; got != home+"/secrets/token" {
+		if got := secrets.File["token"].FromFile; got != home+"/secrets/token" {
 			t.Errorf("secret file = %q, want %q", got, home+"/secrets/token")
 		}
-		if got := secrets["other"].Env; got != "~HOST_VAR" {
+		if got := secrets.Env["OTHER"].FromEnv; got != "~HOST_VAR" {
 			t.Errorf("env = %q, want it untouched", got)
 		}
 	})
@@ -302,12 +130,12 @@ func TestValidateExpandsSecretFileBeforeAbsCheck(t *testing.T) {
 
 	t.Run("defaults", func(t *testing.T) {
 		cfg := &Config{
-			Defaults: Defaults{Secrets: map[string]Secret{"token": {File: "~/token"}}},
+			Defaults: Defaults{Secrets: Secrets{File: map[string]FileSecret{"token": {FromFile: "~/token"}}}},
 		}
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got := cfg.Defaults.Secrets["token"].File; got != secretFile {
+		if got := cfg.Defaults.Secrets.File["token"].FromFile; got != secretFile {
 			t.Errorf("secret file = %q, want %q", got, secretFile)
 		}
 	})
@@ -315,13 +143,13 @@ func TestValidateExpandsSecretFileBeforeAbsCheck(t *testing.T) {
 	t.Run("workspace", func(t *testing.T) {
 		cfg := &Config{
 			Workspaces: map[string]Workspace{
-				"myws": {Secrets: map[string]Secret{"token": {File: "~/token"}}},
+				"myws": {Secrets: Secrets{File: map[string]FileSecret{"token": {FromFile: "~/token"}}}},
 			},
 		}
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got := cfg.Workspaces["myws"].Secrets["token"].File; got != secretFile {
+		if got := cfg.Workspaces["myws"].Secrets.File["token"].FromFile; got != secretFile {
 			t.Errorf("secret file = %q, want %q", got, secretFile)
 		}
 	})
@@ -338,8 +166,8 @@ func TestLoadFromAcceptsMissingSecretFile(t *testing.T) {
 [workspaces.default]
 paths = ["/data/workspace"]
 
-[workspaces.default.secrets.token]
-file = "/nonexistent/path/secret"
+[workspaces.default.secrets.file.token]
+from_file = "/nonexistent/path/secret"
 `)
 
 	cfg, err := LoadFrom(path)
@@ -347,7 +175,7 @@ file = "/nonexistent/path/secret"
 		t.Fatalf("LoadFrom failed: %v", err)
 	}
 
-	if got := cfg.Workspaces["default"].Secrets["token"].File; got != "/nonexistent/path/secret" {
+	if got := cfg.Workspaces["default"].Secrets.File["token"].FromFile; got != "/nonexistent/path/secret" {
 		t.Errorf("secret file = %q, want %q", got, "/nonexistent/path/secret")
 	}
 }
@@ -356,17 +184,21 @@ func TestDefaultConfigContentDocumentsSecrets(t *testing.T) {
 	t.Parallel()
 
 	wantLines := []string{
-		"# [defaults.secrets.NAME]",
-		"# [workspaces.default.secrets.NAME]",
-		`# env = "HOST_ENV_VAR"`,
-		`# file = "/path/to/secret"`,
-		`# expose_env = "CONTAINER_ENV_VAR"`,
+		"# [defaults.secrets.env.MY_TOKEN]",
+		"# [defaults.secrets.file.MY_FILE]",
+		"# [workspaces.default.secrets.env.MY_TOKEN]",
+		"# [workspaces.default.secrets.file.MY_FILE]",
+		`#   from_env = "HOST_ENV_VAR"`,
+		`#   from_file = "/path/to/secret"`,
 	}
 
 	for _, line := range wantLines {
 		if !strings.Contains(defaultConfigContent, line) {
 			t.Errorf("defaultConfigContent missing %q", line)
 		}
+	}
+	if strings.Contains(defaultConfigContent, "expose_env") {
+		t.Error("defaultConfigContent still documents expose_env")
 	}
 }
 
@@ -528,6 +360,84 @@ env = "HOST_TOKEN"
 				if !strings.Contains(err.Error(), sub) {
 					t.Errorf("error %q missing expected substring %q", err.Error(), sub)
 				}
+			}
+		})
+	}
+}
+
+func TestLoadFromRejectsLegacySecrets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       string
+		wantSubstrs []string
+	}{
+		{
+			name: "defaults legacy entry",
+			input: `
+[defaults.secrets.TOKEN]
+env = "HOST_TOKEN"
+`,
+			wantSubstrs: []string{"defaults.secrets.TOKEN", "secrets.env"},
+		},
+		{
+			name: "legacy entry named env",
+			input: `
+[defaults.secrets.env]
+env = "HOST_TOKEN"
+`,
+			wantSubstrs: []string{"defaults.secrets.env", "schema was removed"},
+		},
+		{
+			name:        "top-level secrets",
+			input:       "[secrets.env.X]\nfrom_env = \"HOST\"\n",
+			wantSubstrs: []string{"top-level [secrets]"},
+		},
+		{
+			name:        "legacy inline entry",
+			input:       `defaults = { secrets = { TOKEN = { env = "HOST" } } }`,
+			wantSubstrs: []string{"defaults.secrets.TOKEN"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "config.toml")
+			writeFile(t, path, tt.input)
+
+			_, err := LoadFrom(path)
+			if err == nil {
+				t.Fatal("expected migration error, got nil")
+			}
+			for _, sub := range tt.wantSubstrs {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("error %q missing expected substring %q", err.Error(), sub)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadFromValidatesEnvSecretNames(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"gh-token", "HOME", "PATH", "DOCKER_HOST"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "config.toml")
+			writeFile(t, path, fmt.Sprintf(`
+[workspaces.default.secrets.env.%s]
+from_env = "HOST_TOKEN"
+`, name))
+
+			_, err := LoadFrom(path)
+			if err == nil {
+				t.Fatalf("expected validation error for %q, got nil", name)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Fatalf("error %q does not name %q", err.Error(), name)
 			}
 		})
 	}

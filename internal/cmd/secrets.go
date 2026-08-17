@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/seznam/jailoc/internal/compose"
@@ -24,29 +23,26 @@ import (
 // It never reads a secret value — only its metadata.
 func validateSecretSources(ws *workspace.Resolved) error {
 	envKeys := envKeySet(ws.Env)
-	exposedBy := make(map[string]string, len(ws.Secrets))
+	envSecretNames := make(map[string]bool, len(ws.Secrets))
 
 	for _, s := range ws.Secrets {
-		if s.Env != "" {
+		switch s.Kind {
+		case workspace.SecretKindEnv:
 			if err := validateSecretEnvSource(s); err != nil {
 				return err
 			}
-		}
-		if s.File != "" {
+			if envKeys[s.Name] {
+				return fmt.Errorf("env secret %q collides with an env entry", s.Name)
+			}
+			if envSecretNames[s.Name] {
+				return fmt.Errorf("duplicate env secret %q", s.Name)
+			}
+			envSecretNames[s.Name] = true
+		case workspace.SecretKindFile:
 			if err := validateSecretFileSource(s); err != nil {
 				return err
 			}
 		}
-		if s.ExposeEnv == "" {
-			continue
-		}
-		if envKeys[s.ExposeEnv] {
-			return fmt.Errorf("secret %q: expose_env %q collides with an env entry", s.Name, s.ExposeEnv)
-		}
-		if other, ok := exposedBy[s.ExposeEnv]; ok {
-			return fmt.Errorf("secrets %q and %q both expose_env %q", other, s.Name, s.ExposeEnv)
-		}
-		exposedBy[s.ExposeEnv] = s.Name
 	}
 
 	return nil
@@ -56,39 +52,37 @@ func validateSecretSources(ws *workspace.Resolved) error {
 // set-but-empty. Docker Compose silently omits an empty environment-sourced
 // secret, so /run/secrets/<name> would simply not exist inside the container.
 func validateSecretEnvSource(s workspace.ResolvedSecret) error {
-	value, ok := os.LookupEnv(s.Env)
+	value, ok := os.LookupEnv(s.FromEnv)
 	if !ok {
-		return fmt.Errorf("secret %q: host environment variable %q is not set", s.Name, s.Env)
+		return fmt.Errorf("secret %q: host environment variable %q is not set", s.Name, s.FromEnv)
 	}
 	if value == "" {
-		return fmt.Errorf("secret %q: host environment variable %q is set but empty; Docker Compose omits empty secrets, so /run/secrets/%s would not exist", s.Name, s.Env, s.Name)
+		return fmt.Errorf("secret %q: host environment variable %q is set but empty; Docker Compose omits empty secrets, so /run/secrets/%s would not exist", s.Name, s.FromEnv, s.Name)
 	}
 	return nil
 }
 
 // validateSecretFileSource checks that a file-sourced secret exists, is a
-// regular file, and is plausibly readable by the agent.
+// regular file, and is world-readable by the agent.
 //
 // The world-readable check is deliberately CONSERVATIVE: a file-sourced secret
 // is a read-only bind mount that keeps its host ownership and mode, and the
 // effective UID mapping inside the container is unknowable at up-time (it
-// differs between macOS virtiofs and native Linux). When expose_env is set the
-// check is skipped — the root entrypoint reads the file before setpriv drops to
-// UID 1000, so host permissions for the agent user do not matter.
+// differs between macOS virtiofs and native Linux).
 func validateSecretFileSource(s workspace.ResolvedSecret) error {
-	fi, err := os.Stat(s.File)
+	fi, err := os.Stat(s.FromFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("secret %q: file %q does not exist", s.Name, s.File)
+			return fmt.Errorf("secret %q: file %q does not exist", s.Name, s.FromFile)
 		}
-		return fmt.Errorf("secret %q: stat file %q: %w", s.Name, s.File, err)
+		return fmt.Errorf("secret %q: stat file %q: %w", s.Name, s.FromFile, err)
 	}
 	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("secret %q: file %q is not a regular file", s.Name, s.File)
+		return fmt.Errorf("secret %q: file %q is not a regular file", s.Name, s.FromFile)
 	}
 	mode := fi.Mode().Perm()
-	if mode&0o004 == 0 && s.ExposeEnv == "" {
-		return fmt.Errorf("secret %q: file %q is not world-readable (mode %04o); the agent runs as UID 1000 and this is a conservative check — run 'chmod o+r %s' or set expose_env", s.Name, s.File, mode, s.File)
+	if mode&0o004 == 0 {
+		return fmt.Errorf("secret %q: file %q is not world-readable (mode %04o); the agent runs as UID 1000 and this is a conservative check — run 'chmod o+r %s' to make it readable inside the container", s.Name, s.FromFile, mode, s.FromFile)
 	}
 	return nil
 }
@@ -108,34 +102,18 @@ func envKeySet(env []string) map[string]bool {
 	return keys
 }
 
-// sortedSecretNames returns the secret names of a config-layer secrets map in
-// deterministic order — Go map iteration order is random.
-func sortedSecretNames(secrets map[string]config.Secret) []string {
-	names := make([]string, 0, len(secrets))
-	for name := range secrets {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 // secretReference renders a secret for jailoc config output. It emits the
 // source REFERENCE (host variable name or host path) and never resolves it, so
 // no secret value can reach stdout.
-func secretReference(name string, s config.Secret) string {
-	var source string
-	switch {
-	case s.Env != "":
-		source = fmt.Sprintf("env %s", s.Env)
-	case s.File != "":
-		source = fmt.Sprintf("file %s", s.File)
+func secretReference(s workspace.ResolvedSecret) string {
+	switch s.Kind {
+	case workspace.SecretKindEnv:
+		return fmt.Sprintf("%s (from_env %s)", s.Name, s.FromEnv)
+	case workspace.SecretKindFile:
+		return fmt.Sprintf("%s (from_file %s)", s.Name, s.FromFile)
 	default:
-		source = "no source"
+		return s.Name
 	}
-	if s.ExposeEnv != "" {
-		return fmt.Sprintf("%s (%s -> %s)", name, source, s.ExposeEnv)
-	}
-	return fmt.Sprintf("%s (%s)", name, source)
 }
 
 // secretSpecs maps resolved secrets onto compose secret sources. The order of
@@ -148,28 +126,26 @@ func secretSpecs(ws *workspace.Resolved) []compose.SecretSpec {
 	}
 	specs := make([]compose.SecretSpec, 0, len(ws.Secrets))
 	for _, s := range ws.Secrets {
-		specs = append(specs, compose.SecretSpec{
-			Name:        s.Name,
-			Environment: s.Env,
-			File:        s.File,
-		})
+		switch s.Kind {
+		case workspace.SecretKindEnv:
+			specs = append(specs, compose.SecretSpec{Name: s.Name, Environment: s.FromEnv})
+		case workspace.SecretKindFile:
+			specs = append(specs, compose.SecretSpec{Name: s.Name, File: s.FromFile})
+		}
 	}
 	return specs
 }
 
-// secretEnvPairs returns the name/variable pairs for secrets that opt into
-// environment exposure. WriteAllowedFiles writes them verbatim in this order,
-// which is already sorted by Name via workspace.Resolve.
+// secretEnvPairs returns the name/variable pairs for env secrets.
 func secretEnvPairs(ws *workspace.Resolved) []config.SecretEnvPair {
 	if len(ws.Secrets) == 0 {
 		return nil
 	}
 	pairs := make([]config.SecretEnvPair, 0, len(ws.Secrets))
 	for _, s := range ws.Secrets {
-		if s.ExposeEnv == "" {
-			continue
+		if s.Kind == workspace.SecretKindEnv {
+			pairs = append(pairs, config.SecretEnvPair{Name: s.Name, Var: s.Name})
 		}
-		pairs = append(pairs, config.SecretEnvPair{Name: s.Name, Var: s.ExposeEnv})
 	}
 	if len(pairs) == 0 {
 		return nil

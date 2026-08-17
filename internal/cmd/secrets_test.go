@@ -43,87 +43,81 @@ func TestValidateSecretSources(t *testing.T) {
 			name: "env source set and non-empty",
 			env:  map[string]string{"JAILOC_TEST_TOKEN": "value"},
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "gh", Env: "JAILOC_TEST_TOKEN"},
+				{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_TOKEN"},
 			}},
 		},
 		{
 			name: "env source unset",
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "gh", Env: "JAILOC_TEST_ABSENT"},
+				{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_ABSENT"},
 			}},
-			wantErr: `secret "gh": host environment variable "JAILOC_TEST_ABSENT" is not set`,
+			wantErr: `secret "GH_TOKEN": host environment variable "JAILOC_TEST_ABSENT" is not set`,
 		},
 		{
 			name: "env source set but empty",
 			env:  map[string]string{"JAILOC_TEST_EMPTY": ""},
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "gh", Env: "JAILOC_TEST_EMPTY"},
+				{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_EMPTY"},
 			}},
-			wantErr: `secret "gh": host environment variable "JAILOC_TEST_EMPTY" is set but empty; Docker Compose omits empty secrets, so /run/secrets/gh would not exist`,
+			wantErr: `secret "GH_TOKEN": host environment variable "JAILOC_TEST_EMPTY" is set but empty; Docker Compose omits empty secrets, so /run/secrets/GH_TOKEN would not exist`,
 		},
 		{
 			name: "file source world readable",
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "key", File: worldReadable},
+				{Name: "key", Kind: workspace.SecretKindFile, FromFile: worldReadable},
 			}},
 		},
 		{
 			name: "file source missing",
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "key", File: filepath.Join(dir, "absent")},
+				{Name: "key", Kind: workspace.SecretKindFile, FromFile: filepath.Join(dir, "absent")},
 			}},
 			wantErr: fmt.Sprintf("secret %q: file %q does not exist", "key", filepath.Join(dir, "absent")),
 		},
 		{
 			name: "file source is a directory",
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "key", File: dir},
+				{Name: "key", Kind: workspace.SecretKindFile, FromFile: dir},
 			}},
 			wantErr: fmt.Sprintf("secret %q: file %q is not a regular file", "key", dir),
 		},
 		{
-			name: "file source not world readable without expose_env",
+			name: "file source not world readable",
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "key", File: ownerOnly},
+				{Name: "key", Kind: workspace.SecretKindFile, FromFile: ownerOnly},
 			}},
-			wantErr: fmt.Sprintf("secret %q: file %q is not world-readable (mode 0600); the agent runs as UID 1000 and this is a conservative check — run 'chmod o+r %s' or set expose_env", "key", ownerOnly, ownerOnly),
+			wantErr: fmt.Sprintf("secret %q: file %q is not world-readable (mode 0600); the agent runs as UID 1000 and this is a conservative check — run 'chmod o+r %s' to make it readable inside the container", "key", ownerOnly, ownerOnly),
 		},
 		{
-			name: "file source not world readable with expose_env is allowed",
-			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "key", File: ownerOnly, ExposeEnv: "KEY"},
-			}},
-		},
-		{
-			name: "expose_env collides with env entry",
+			name: "env secret name collides with env entry",
 			env:  map[string]string{"JAILOC_TEST_TOKEN": "value"},
 			ws: &workspace.Resolved{
 				Name: "ws",
 				Env:  []string{"FOO=bar", "GH_TOKEN=already-here"},
 				Secrets: []workspace.ResolvedSecret{
-					{Name: "gh", Env: "JAILOC_TEST_TOKEN", ExposeEnv: "GH_TOKEN"},
+					{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_TOKEN"},
 				},
 			},
-			wantErr: `secret "gh": expose_env "GH_TOKEN" collides with an env entry`,
+			wantErr: `env secret "GH_TOKEN" collides with an env entry`,
 		},
 		{
-			name: "two secrets share expose_env",
+			name: "duplicate env secret names",
 			env:  map[string]string{"JAILOC_TEST_TOKEN": "value"},
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "alpha", Env: "JAILOC_TEST_TOKEN", ExposeEnv: "GH_TOKEN"},
-				{Name: "beta", Env: "JAILOC_TEST_TOKEN", ExposeEnv: "GH_TOKEN"},
+				{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_TOKEN"},
+				{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_TOKEN"},
 			}},
-			wantErr: `secrets "alpha" and "beta" both expose_env "GH_TOKEN"`,
+			wantErr: `duplicate env secret "TOKEN"`,
 		},
 		{
-			name: "distinct expose_env values pass",
+			name: "distinct env and file secrets pass",
 			env:  map[string]string{"JAILOC_TEST_TOKEN": "value"},
 			ws: &workspace.Resolved{
 				Name: "ws",
 				Env:  []string{"FOO=bar"},
 				Secrets: []workspace.ResolvedSecret{
-					{Name: "alpha", Env: "JAILOC_TEST_TOKEN", ExposeEnv: "ALPHA"},
-					{Name: "beta", File: worldReadable, ExposeEnv: "BETA"},
+					{Name: "ALPHA", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_TOKEN"},
+					{Name: "beta", Kind: workspace.SecretKindFile, FromFile: worldReadable},
 				},
 			},
 		},
@@ -168,16 +162,16 @@ func TestSecretSpecsAndEnvPairs(t *testing.T) {
 	t.Run("preserves resolved order and maps fields", func(t *testing.T) {
 		t.Parallel()
 		ws := &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-			{Name: "alpha", Env: "ALPHA_VAR", ExposeEnv: "ALPHA"},
-			{Name: "beta", File: "/tmp/beta"},
-			{Name: "gamma", Env: "GAMMA_VAR", ExposeEnv: "GAMMA"},
+			{Name: "ALPHA", Kind: workspace.SecretKindEnv, FromEnv: "ALPHA_VAR"},
+			{Name: "beta", Kind: workspace.SecretKindFile, FromFile: "/tmp/beta"},
+			{Name: "GAMMA", Kind: workspace.SecretKindEnv, FromEnv: "GAMMA_VAR"},
 		}}
 
 		specs := secretSpecs(ws)
 		if len(specs) != 3 {
 			t.Fatalf("secretSpecs() len = %d, want 3", len(specs))
 		}
-		if specs[0].Name != "alpha" || specs[0].Environment != "ALPHA_VAR" || specs[0].File != "" {
+		if specs[0].Name != "ALPHA" || specs[0].Environment != "ALPHA_VAR" || specs[0].File != "" {
 			t.Fatalf("secretSpecs()[0] = %+v", specs[0])
 		}
 		if specs[1].Name != "beta" || specs[1].File != "/tmp/beta" || specs[1].Environment != "" {
@@ -185,7 +179,7 @@ func TestSecretSpecsAndEnvPairs(t *testing.T) {
 		}
 
 		pairs := secretEnvPairs(ws)
-		want := []config.SecretEnvPair{{Name: "alpha", Var: "ALPHA"}, {Name: "gamma", Var: "GAMMA"}}
+		want := []config.SecretEnvPair{{Name: "ALPHA", Var: "ALPHA"}, {Name: "GAMMA", Var: "GAMMA"}}
 		if len(pairs) != len(want) {
 			t.Fatalf("secretEnvPairs() = %+v, want %+v", pairs, want)
 		}
@@ -196,10 +190,10 @@ func TestSecretSpecsAndEnvPairs(t *testing.T) {
 		}
 	})
 
-	t.Run("secrets without expose_env yield nil pairs", func(t *testing.T) {
+	t.Run("file secrets yield nil pairs", func(t *testing.T) {
 		t.Parallel()
 		ws := &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-			{Name: "beta", File: "/tmp/beta"},
+			{Name: "beta", Kind: workspace.SecretKindFile, FromFile: "/tmp/beta"},
 		}}
 		if got := secretEnvPairs(ws); got != nil {
 			t.Fatalf("secretEnvPairs() = %v, want nil", got)
@@ -224,12 +218,11 @@ func TestConfigShowsSecretReferences(t *testing.T) {
 	content := fmt.Sprintf(`[workspaces.alpha]
 paths = ["/data/alpha"]
 
-[workspaces.alpha.secrets.gh]
-env = "GITHUB_TOKEN"
-expose_env = "GH_TOKEN"
+[workspaces.alpha.secrets.env.GH_TOKEN]
+from_env = "GITHUB_TOKEN"
 
-[workspaces.alpha.secrets.key]
-file = %q
+[workspaces.alpha.secrets.file.key]
+from_file = %q
 
 [workspaces.bare]
 paths = ["/data/bare"]
@@ -246,7 +239,7 @@ paths = ["/data/bare"]
 		}
 	})
 
-	assertContains(t, out, "  Secrets:\n    - gh (env GITHUB_TOKEN -> GH_TOKEN)\n    - key (file "+secretFile+")\n")
+	assertContains(t, out, "  Secrets:\n    - GH_TOKEN (from_env GITHUB_TOKEN)\n    - key (from_file "+secretFile+")\n")
 	assertContains(t, out, "Workspace: bare")
 
 	if strings.Contains(out, "supersecret") {
@@ -261,6 +254,64 @@ paths = ["/data/bare"]
 		t.Fatalf("workspace bare section missing from output:\n%s", out)
 	}
 	assertContains(t, bareSection, "  Secrets:\n    (none)\n")
+}
+
+func TestConfigSecretsOutputOrder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("HOST_A", "secret-value-a")
+	t.Setenv("HOST_Z", "secret-value-z")
+
+	configDir := filepath.Join(home, ".config", "jailoc")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	content := `[workspaces.alpha]
+paths = ["/data/alpha"]
+
+[workspaces.alpha.secrets.env.Z_TOKEN]
+from_env = "HOST_Z"
+
+[workspaces.alpha.secrets.env.A_TOKEN]
+from_env = "HOST_A"
+
+[workspaces.alpha.secrets.file.z-file]
+from_file = "/z/file"
+
+[workspaces.alpha.secrets.file.a-file]
+from_file = "/a/file"
+
+[workspaces.empty]
+paths = []
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		if err := runConfig(cmd, nil); err != nil {
+			t.Fatalf("runConfig() = %v", err)
+		}
+	})
+
+	want := "  Secrets:\n" +
+		"    - A_TOKEN (from_env HOST_A)\n" +
+		"    - Z_TOKEN (from_env HOST_Z)\n" +
+		"    - a-file (from_file /a/file)\n" +
+		"    - z-file (from_file /z/file)\n"
+	assertContains(t, out, want)
+	_, emptySection, ok := strings.Cut(out, "Workspace: empty")
+	if !ok {
+		t.Fatalf("workspace empty section missing from output:\n%s", out)
+	}
+	assertContains(t, emptySection, "  Secrets:\n    (none)\n")
+	for _, secretValue := range []string{"secret-value-a", "secret-value-z"} {
+		if strings.Contains(out, secretValue) {
+			t.Fatalf("jailoc config output leaked secret value %q:\n%s", secretValue, out)
+		}
+	}
 }
 
 // TestComposeParamsParity fails when up.go and add.go stop assigning the same
