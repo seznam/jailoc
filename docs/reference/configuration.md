@@ -238,30 +238,51 @@ Values are treated as literal strings — no host environment variable expansion
 
 ### `secrets`
 
-Secrets can be defined under `[defaults.secrets.<NAME>]` or `[workspaces.<ws>.secrets.<NAME>]`. Secret names must match `^[a-zA-Z0-9_-]+$`.
+Secrets are configured under `[defaults.secrets.env.<NAME>]`, `[defaults.secrets.file.<NAME>]`, `[workspaces.<ws>.secrets.env.<NAME>]`, or `[workspaces.<ws>.secrets.file.<NAME>]`. Secrets declared at the top level outside `[defaults]` or `[workspaces.<ws>]` are rejected.
 
-Each secret table supports the following fields:
+The sub-table name (`env` or `file`) determines how the secret is exposed to the container. The section header name (`<NAME>`) specifies the destination inside the container.
+
+#### Environment secrets (`secrets.env.<NAME>`)
+
+Environment secrets read values from host environment variables and export them into the container environment as `<NAME>`. Every environment secret is unconditionally exported as a container environment variable.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `env` | string | (none) | Host environment variable name to read the secret value from. |
-| `file` | string | (none) | Host file path to read the secret value from. Absolute, or starting with `~` (expanded to the home directory). Must not contain `$` (Docker Compose would interpolate it). |
-| `expose_env` | string | (none) | Container environment variable name to inject the secret value into. |
+| `from_env` | string | (required) | Host environment variable name to read the secret value from. Must not be empty. |
 
-#### XOR Rule
-Exactly one of `env` or `file` must be specified for each secret. Setting both, or neither, is a validation error.
-
-#### `expose_env` Constraints
-The container environment variable name must match `^[A-Za-z_][A-Za-z0-9_]*$`. The following names are rejected:
+##### `<NAME>` Constraints
+The container environment variable name (`<NAME>`) must match `^[A-Za-z_][A-Za-z0-9_]*$`. The following names are reserved and rejected:
 - `HOME`
-- Reserved environment variable keys (`OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `SSH_AUTH_SOCK`)
-- Variable names that collide with a workspace `env` variable
-- Variable names that collide with another secret's `expose_env`
+- `PATH`
+- `OPENCODE_LOG`
+- `OPENCODE_SERVER_PASSWORD`
+- `DOCKER_HOST`
+- `DOCKER_TLS_CERTDIR`
+- `DOCKER_CERT_PATH`
+- `DOCKER_TLS_VERIFY`
+- `SSH_AUTH_SOCK`
+- `JAILOC`
+- `JAILOC_WORKSPACE`
 
-#### Source Validation at Up-Time
-Secret sources are validated when `jailoc up` or `jailoc add` runs:
-- **`env` sources**: the host environment variable must be set and non-empty. An unset or empty value is rejected, because Docker Compose omits empty secrets and `/run/secrets/<NAME>` would not exist inside the container.
-- **`file` sources**: the file path must exist, be a regular file, and — unless `expose_env` is set — be world-readable (`o+r`), because the agent process runs as UID 1000. Setting `expose_env` signals that root reads the file during entrypoint startup, which lifts the world-readable requirement.
+##### Source Validation at Up-Time
+When `jailoc up` or `jailoc add` runs, the host environment variable specified by `from_env` must be set and non-empty. Unset or empty host environment variables cause a startup validation error.
+
+#### File secrets (`secrets.file.<NAME>`)
+
+File secrets mount host files into the container at `/run/secrets/<NAME>`. File secrets are never exported as container environment variables.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `from_file` | string | (required) | Host file path to read the secret from. Must be absolute (`/...`) or start with `~` (expanded to home directory). Must not contain `$` (Docker Compose interpolation constraint). Must not be empty. |
+
+##### `<NAME>` Constraints
+The secret name (`<NAME>`) must match `^[a-zA-Z0-9_-]+$`.
+
+##### Source Validation at Up-Time
+When `jailoc up` or `jailoc add` runs, the host file specified by `from_file` must exist, be a regular file, and be world-readable (`o+r`), because the container agent process runs as unprivileged UID 1000.
+
+#### Intra-Scope Constraints
+Within a single scope (`[defaults]` or a specific workspace `[workspaces.<ws>]`), a secret `<NAME>` cannot be declared in both `secrets.env` and `secrets.file`.
 
 ### Merge semantics
 
@@ -289,7 +310,7 @@ OpenCode configuration directories are mounted read-write because the agent need
 
 `cpu` and `memory` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `cpu` falls back to `2.0` and `memory` falls back to `"4g"` when neither the workspace nor defaults set them.
 
-`secrets` entries merge by secret name. Global default secrets under `[defaults.secrets.<NAME>]` apply to all workspaces. If a workspace declares a secret with the same name under `[workspaces.<ws>.secrets.<NAME>]`, the workspace-level secret entry replaces the defaults secret entry entirely (whole-struct replacement).
+`secrets` entries merge by secret name across layers. Global default secrets under `[defaults.secrets.env.<NAME>]` or `[defaults.secrets.file.<NAME>]` apply to all workspaces. If a workspace declares a secret with the same `<NAME>` under `[workspaces.<ws>.secrets.env.<NAME>]` or `[workspaces.<ws>.secrets.file.<NAME>]`, the workspace secret entry replaces the defaults secret entry entirely, including across secret kinds (for example, a workspace environment secret replaces a default file secret of the same name). There is no syntax to unset an inherited default secret in a workspace.
 
 ---
 

@@ -59,7 +59,7 @@ Background on how jailoc works and why it's designed the way it is.
 - [Threat Model](explanation/threat-model.md)
 - [Container Architecture](explanation/container-architecture.md)
 - [Network Isolation](explanation/network-isolation.md)
-- [Secrets Architecture](explanation/secrets.md)
+- [Secrets](explanation/secrets.md)
 - [Access Modes](explanation/access-modes.md)
 
 ### Development
