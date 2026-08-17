@@ -90,8 +90,8 @@ var validMemory = regexp.MustCompile(`^[1-9][0-9]*[kmgKMG]?$`)
 var secretNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // envVarNameRe is the exact POSIX shell identifier grammar. It is stricter than
-// validateEnvEntries (which only guards the KEY=VALUE shape) because an
-// secret env name is exported verbatim into the container environment.
+// validateEnvEntries (which only guards the KEY=VALUE shape) because env
+// secret names are exported verbatim into the container environment.
 var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var reservedEnvKeys = map[string]bool{
@@ -175,12 +175,6 @@ type Mount struct {
 	Mode      string
 }
 
-type Secret struct {
-	Env       string `toml:"env"`
-	File      string `toml:"file"`
-	ExposeEnv string `toml:"expose_env"`
-}
-
 // EnvSecret is one [<scope>.secrets.env.<NAME>] entry: the section NAME is the
 // container env var, FromEnv is the host env var the value is read from.
 type EnvSecret struct {
@@ -200,9 +194,9 @@ type Secrets struct {
 	File map[string]FileSecret `toml:"file,omitempty"`
 }
 
-// SecretEnvPair maps a Compose secret name to the environment variable the
-// container entrypoint should export it as. It carries no secret value — the
-// value is read inside the container from /run/secrets/<Name>.
+// SecretEnvPair maps a Compose secret name to the environment variable every
+// env secret exports it as. It carries no secret value — the value is read
+// inside the container from /run/secrets/<Name>.
 //
 // It exists so that WriteAllowedFiles can accept resolved secret metadata
 // without package config importing package workspace.
@@ -445,38 +439,6 @@ func validateEnvVarName(name string) error {
 	return nil
 }
 
-func validateSecret(name string, secret Secret, context string) error {
-	if !secretNameRe.MatchString(name) {
-		return fmt.Errorf("%s: secret %q: invalid name: must match [a-zA-Z0-9_-]+", context, name)
-	}
-
-	hasEnv := secret.Env != ""
-	hasFile := secret.File != ""
-	switch {
-	case hasEnv && hasFile:
-		return fmt.Errorf("%s: secret %q: cannot set both \"env\" and \"file\": exactly one source is required", context, name)
-	case !hasEnv && !hasFile:
-		return fmt.Errorf("%s: secret %q: must set exactly one of \"env\" or \"file\"", context, name)
-	}
-
-	if hasFile {
-		if err := validateSecretFile(secret.File); err != nil {
-			return fmt.Errorf("%s: secret %q: %w", context, name, err)
-		}
-	}
-
-	if secret.ExposeEnv != "" {
-		if err := validateEnvVarName(secret.ExposeEnv); err != nil {
-			return fmt.Errorf("%s: secret %q: expose_env: %w", context, name, err)
-		}
-		if reservedEnvKeys[secret.ExposeEnv] || secret.ExposeEnv == "HOME" {
-			return fmt.Errorf("%s: secret %q: expose_env %q is reserved and cannot be overridden", context, name, secret.ExposeEnv)
-		}
-	}
-
-	return nil
-}
-
 // validateSecretFile rejects "$" because Docker Compose interpolates the whole
 // YAML document before loading it, and compose.yamlQuote does not escape "$".
 func validateSecretFile(path string) error {
@@ -485,42 +447,6 @@ func validateSecretFile(path string) error {
 	}
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("file path %q must be absolute", path)
-	}
-	return nil
-}
-
-func validateSecrets(secrets map[string]Secret, context string) error {
-	for _, name := range sortedSecretNames(secrets) {
-		if err := validateSecret(name, secrets[name], context); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func sortedSecretNames(secrets map[string]Secret) []string {
-	names := make([]string, 0, len(secrets))
-	for name := range secrets {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// expandSecretFiles expands a leading ~ in every secret file path. Env and
-// ExposeEnv are variable names, not paths, and are deliberately left untouched.
-func expandSecretFiles(secrets map[string]Secret) error {
-	for _, name := range sortedSecretNames(secrets) {
-		secret := secrets[name]
-		if secret.File == "" {
-			continue
-		}
-		expanded, err := ExpandPath(secret.File)
-		if err != nil {
-			return fmt.Errorf("secret %q: expand file path %q: %w", name, secret.File, err)
-		}
-		secret.File = expanded
-		secrets[name] = secret
 	}
 	return nil
 }
