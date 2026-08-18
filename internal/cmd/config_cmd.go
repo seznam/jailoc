@@ -206,7 +206,8 @@ func sortedSecretNames(secrets config.Secrets) []workspace.ResolvedSecret {
 	}
 	sort.Strings(envNames)
 	for _, name := range envNames {
-		resolved = append(resolved, workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindEnv, FromEnv: secrets.Env[name].FromEnv})
+		s := secrets.Env[name]
+		resolved = append(resolved, workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindEnv, FromEnv: s.FromEnv, FromFile: s.FromFile})
 	}
 	fileNames := make([]string, 0, len(secrets.File))
 	for name := range secrets.File {
@@ -214,7 +215,8 @@ func sortedSecretNames(secrets config.Secrets) []workspace.ResolvedSecret {
 	}
 	sort.Strings(fileNames)
 	for _, name := range fileNames {
-		resolved = append(resolved, workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindFile, FromFile: secrets.File[name].FromFile})
+		s := secrets.File[name]
+		resolved = append(resolved, workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindFile, FromEnv: s.FromEnv, FromFile: s.FromFile})
 	}
 	return resolved
 }

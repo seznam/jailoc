@@ -83,7 +83,10 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 			Paths: []string{"/data"},
 			Secrets: Secrets{
 				File: map[string]FileSecret{"token": {FromFile: "~/secrets/token"}},
-				Env:  map[string]EnvSecret{"OTHER": {FromEnv: "~HOST_VAR"}},
+				Env: map[string]EnvSecret{
+					"FILE_KEY": {FromFile: "~/secrets/env-token"},
+					"OTHER":    {FromEnv: "~HOST_VAR"},
+				},
 			},
 		}
 
@@ -94,6 +97,9 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 		if got := ws.Secrets.File["token"].FromFile; got != home+"/secrets/token" {
 			t.Errorf("secret file = %q, want %q", got, home+"/secrets/token")
 		}
+		if got := ws.Secrets.Env["FILE_KEY"].FromFile; got != home+"/secrets/env-token" {
+			t.Errorf("env-destination secret file = %q, want %q", got, home+"/secrets/env-token")
+		}
 		if got := ws.Secrets.Env["OTHER"].FromEnv; got != "~HOST_VAR" {
 			t.Errorf("env = %q, want it untouched", got)
 		}
@@ -102,7 +108,10 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		secrets := Secrets{
 			File: map[string]FileSecret{"token": {FromFile: "~/secrets/token"}},
-			Env:  map[string]EnvSecret{"OTHER": {FromEnv: "~HOST_VAR"}},
+			Env: map[string]EnvSecret{
+				"FILE_KEY": {FromFile: "~/secrets/env-token"},
+				"OTHER":    {FromEnv: "~HOST_VAR"},
+			},
 		}
 
 		if err := expandSecretsBlockFiles(&secrets); err != nil {
@@ -111,6 +120,9 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 
 		if got := secrets.File["token"].FromFile; got != home+"/secrets/token" {
 			t.Errorf("secret file = %q, want %q", got, home+"/secrets/token")
+		}
+		if got := secrets.Env["FILE_KEY"].FromFile; got != home+"/secrets/env-token" {
+			t.Errorf("env-destination secret file = %q, want %q", got, home+"/secrets/env-token")
 		}
 		if got := secrets.Env["OTHER"].FromEnv; got != "~HOST_VAR" {
 			t.Errorf("env = %q, want it untouched", got)
@@ -229,63 +241,70 @@ func TestValidateEnvSecret(t *testing.T) {
 	tests := []struct {
 		name        string
 		secretName  string
-		secret      EnvSecret
+		secret      Secret
 		wantSubstrs []string
 	}{
-		{name: "uppercase name", secretName: "MY_TOKEN", secret: EnvSecret{FromEnv: "GH_TOKEN"}},
-		{name: "leading underscore", secretName: "_TOKEN9", secret: EnvSecret{FromEnv: "GH_TOKEN"}},
+		{name: "uppercase name", secretName: "MY_TOKEN", secret: Secret{FromEnv: "GH_TOKEN"}},
+		{name: "leading underscore", secretName: "_TOKEN9", secret: Secret{FromEnv: "GH_TOKEN"}},
+		{name: "file source", secretName: "FILE_KEY", secret: Secret{FromFile: "/abs/key"}},
 		{
 			name:       "from_env is not grammar checked",
 			secretName: "MY_TOKEN",
-			secret:     EnvSecret{FromEnv: "not-a-valid-shell-identifier"},
+			secret:     Secret{FromEnv: "not-a-valid-shell-identifier"},
 		},
 		{
 			name:        "name with a dash",
 			secretName:  "gh-token",
-			secret:      EnvSecret{FromEnv: "GH_TOKEN"},
+			secret:      Secret{FromEnv: "GH_TOKEN"},
 			wantSubstrs: []string{"gh-token", "^[A-Za-z_][A-Za-z0-9_]*$"},
 		},
 		{
 			name:        "name starting with a digit",
 			secretName:  "1TOKEN",
-			secret:      EnvSecret{FromEnv: "GH_TOKEN"},
+			secret:      Secret{FromEnv: "GH_TOKEN"},
 			wantSubstrs: []string{"1TOKEN", "^[A-Za-z_][A-Za-z0-9_]*$"},
 		},
 		{
 			name:        "empty name",
 			secretName:  "",
-			secret:      EnvSecret{FromEnv: "GH_TOKEN"},
+			secret:      Secret{FromEnv: "GH_TOKEN"},
 			wantSubstrs: []string{"^[A-Za-z_][A-Za-z0-9_]*$"},
 		},
 		{
 			name:        "HOME is reserved",
 			secretName:  "HOME",
-			secret:      EnvSecret{FromEnv: "GH_TOKEN"},
+			secret:      Secret{FromEnv: "GH_TOKEN"},
 			wantSubstrs: []string{"HOME", "reserved"},
 		},
 		{
 			name:        "PATH is reserved",
 			secretName:  "PATH",
-			secret:      EnvSecret{FromEnv: "GH_TOKEN"},
+			secret:      Secret{FromEnv: "GH_TOKEN"},
 			wantSubstrs: []string{"PATH", "reserved"},
 		},
-		{
+		{ //nolint:gosec // DOCKER_HOST is the reserved-name test input, not a credential.
 			name:        "DOCKER_HOST is reserved",
 			secretName:  "DOCKER_HOST",
-			secret:      EnvSecret{FromEnv: "GH_TOKEN"},
+			secret:      Secret{FromEnv: "HOST_VALUE"},
 			wantSubstrs: []string{"DOCKER_HOST", "reserved"},
 		},
-		{
+		{ //nolint:gosec // SSH_AUTH_SOCK is the reserved-name test input, not a credential.
 			name:        "SSH_AUTH_SOCK is reserved",
 			secretName:  "SSH_AUTH_SOCK",
-			secret:      EnvSecret{FromEnv: "GH_TOKEN"},
+			secret:      Secret{FromEnv: "HOST_VALUE"},
 			wantSubstrs: []string{"SSH_AUTH_SOCK", "reserved"},
 		},
 		{
 			name:        "empty from_env",
 			secretName:  "MY_TOKEN",
-			secret:      EnvSecret{},
-			wantSubstrs: []string{"MY_TOKEN", "from_env", "must not be empty"},
+			secret:      Secret{},
+			wantSubstrs: []string{"MY_TOKEN", "exactly one of", "from_env", "from_file"},
+		},
+		{
+			name:        "both sources",
+			secretName:  "MY_TOKEN",
+			secret:      Secret{FromEnv: "GH_TOKEN", FromFile: "/abs/key"},
+			wantSubstrs: []string{"MY_TOKEN", "mutually exclusive", "from_env", "from_file"},
 		},
 	}
 
@@ -293,7 +312,7 @@ func TestValidateEnvSecret(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateEnvSecret(tt.secretName, tt.secret, "defaults")
+			err := validateSecret(tt.secretName, tt.secret, destEnv, "defaults")
 			assertSecretValidation(t, err, tt.wantSubstrs, "defaults")
 		})
 	}
@@ -305,50 +324,57 @@ func TestValidateFileSecret(t *testing.T) {
 	tests := []struct {
 		name        string
 		secretName  string
-		secret      FileSecret
+		secret      Secret
 		wantSubstrs []string
 	}{
-		{name: "absolute path", secretName: "NETRC", secret: FileSecret{FromFile: "/home/me/.netrc"}},
-		{name: "name with dash and underscore", secretName: "my-secret_1", secret: FileSecret{FromFile: "/abs/x"}},
+		{name: "absolute path", secretName: "NETRC", secret: Secret{FromFile: "/home/me/.netrc"}},
+		{name: "name with dash and underscore", secretName: "my-secret_1", secret: Secret{FromFile: "/abs/x"}},
+		{name: "environment source", secretName: "envkey", secret: Secret{FromEnv: "HOST_KEY"}},
 		{
 			name:       "nonexistent file is accepted at the config layer",
 			secretName: "NETRC",
-			secret:     FileSecret{FromFile: "/nonexistent/path/secret"},
+			secret:     Secret{FromFile: "/nonexistent/path/secret"},
 		},
 		{
 			name:        "name with a dot",
 			secretName:  "my.secret",
-			secret:      FileSecret{FromFile: "/abs/x"},
+			secret:      Secret{FromFile: "/abs/x"},
 			wantSubstrs: []string{"my.secret", "invalid name", "[a-zA-Z0-9_-]+"},
 		},
 		{
 			name:        "name with a slash",
 			secretName:  "dir/token",
-			secret:      FileSecret{FromFile: "/abs/x"},
+			secret:      Secret{FromFile: "/abs/x"},
 			wantSubstrs: []string{"dir/token", "invalid name"},
 		},
 		{
 			name:        "empty name",
 			secretName:  "",
-			secret:      FileSecret{FromFile: "/abs/x"},
+			secret:      Secret{FromFile: "/abs/x"},
 			wantSubstrs: []string{"invalid name"},
 		},
 		{
 			name:        "empty from_file",
 			secretName:  "NETRC",
-			secret:      FileSecret{},
-			wantSubstrs: []string{"NETRC", "from_file", "must not be empty"},
+			secret:      Secret{},
+			wantSubstrs: []string{"NETRC", "exactly one of", "from_env", "from_file"},
+		},
+		{
+			name:        "both sources",
+			secretName:  "NETRC",
+			secret:      Secret{FromEnv: "HOST_KEY", FromFile: "/abs/x"},
+			wantSubstrs: []string{"NETRC", "mutually exclusive", "from_env", "from_file"},
 		},
 		{
 			name:        "relative from_file",
 			secretName:  "NETRC",
-			secret:      FileSecret{FromFile: "relative/secret"},
+			secret:      Secret{FromFile: "relative/secret"},
 			wantSubstrs: []string{"NETRC", "relative/secret", "must be absolute"},
 		},
 		{
 			name:        "from_file containing a dollar sign",
 			secretName:  "NETRC",
-			secret:      FileSecret{FromFile: "/secrets/$USER/token"},
+			secret:      Secret{FromFile: "/secrets/$USER/token"},
 			wantSubstrs: []string{"NETRC", "/secrets/$USER/token", "$", "interpolates"},
 		},
 	}
@@ -357,7 +383,7 @@ func TestValidateFileSecret(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateFileSecret(tt.secretName, tt.secret, "workspace \"myws\"")
+			err := validateSecret(tt.secretName, tt.secret, destFile, "workspace \"myws\"")
 			assertSecretValidation(t, err, tt.wantSubstrs, "myws")
 		})
 	}
@@ -377,6 +403,13 @@ func TestValidateSecretsBlock(t *testing.T) {
 			secrets: Secrets{
 				Env:  map[string]EnvSecret{"MY_TOKEN": {FromEnv: "GH_TOKEN"}},
 				File: map[string]FileSecret{"NETRC": {FromFile: "/home/me/.netrc"}},
+			},
+		},
+		{
+			name: "cross-source combinations",
+			secrets: Secrets{
+				Env:  map[string]EnvSecret{"FILE_KEY": {FromFile: "/abs/key"}},
+				File: map[string]FileSecret{"envkey": {FromEnv: "HOST_KEY"}},
 			},
 		},
 		{
@@ -430,7 +463,10 @@ func TestExpandSecretsBlockFiles(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	secrets := Secrets{
-		Env:  map[string]EnvSecret{"TOKEN": {FromEnv: "~HOST_VAR"}},
+		Env: map[string]EnvSecret{
+			"FILE_KEY": {FromFile: "~/secrets/env-token"},
+			"TOKEN":    {FromEnv: "~HOST_VAR"},
+		},
 		File: map[string]FileSecret{"NETRC": {FromFile: "~/secrets/netrc"}, "ABS": {FromFile: "/abs/x"}},
 	}
 
@@ -443,6 +479,9 @@ func TestExpandSecretsBlockFiles(t *testing.T) {
 	}
 	if got := secrets.File["ABS"].FromFile; got != "/abs/x" {
 		t.Errorf("from_file = %q, want it untouched", got)
+	}
+	if got := secrets.Env["FILE_KEY"].FromFile; got != home+"/secrets/env-token" {
+		t.Errorf("env destination from_file = %q, want %q", got, home+"/secrets/env-token")
 	}
 	if got := secrets.Env["TOKEN"].FromEnv; got != "~HOST_VAR" {
 		t.Errorf("from_env = %q, want it untouched", got)

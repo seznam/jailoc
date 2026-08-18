@@ -26,11 +26,22 @@ func validateSecretSources(ws *workspace.Resolved) error {
 	envSecretNames := make(map[string]bool, len(ws.Secrets))
 
 	for _, s := range ws.Secrets {
-		switch s.Kind {
-		case workspace.SecretKindEnv:
+		if s.FromEnv != "" {
 			if err := validateSecretEnvSource(s); err != nil {
 				return err
 			}
+		} else {
+			if err := validateSecretFileExists(s); err != nil {
+				return err
+			}
+			if s.Kind == workspace.SecretKindFile {
+				if err := validateSecretFileWorldReadable(s); err != nil {
+					return err
+				}
+			}
+		}
+
+		if s.Kind == workspace.SecretKindEnv {
 			if envKeys[s.Name] {
 				return fmt.Errorf("env secret %q collides with an env entry", s.Name)
 			}
@@ -38,10 +49,6 @@ func validateSecretSources(ws *workspace.Resolved) error {
 				return fmt.Errorf("duplicate env secret %q", s.Name)
 			}
 			envSecretNames[s.Name] = true
-		case workspace.SecretKindFile:
-			if err := validateSecretFileSource(s); err != nil {
-				return err
-			}
 		}
 	}
 
@@ -62,14 +69,7 @@ func validateSecretEnvSource(s workspace.ResolvedSecret) error {
 	return nil
 }
 
-// validateSecretFileSource checks that a file-sourced secret exists, is a
-// regular file, and is world-readable by the agent.
-//
-// The world-readable check is deliberately CONSERVATIVE: a file-sourced secret
-// is a read-only bind mount that keeps its host ownership and mode, and the
-// effective UID mapping inside the container is unknowable at up-time (it
-// differs between macOS virtiofs and native Linux).
-func validateSecretFileSource(s workspace.ResolvedSecret) error {
+func validateSecretFileExists(s workspace.ResolvedSecret) error {
 	fi, err := os.Stat(s.FromFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -79,6 +79,14 @@ func validateSecretFileSource(s workspace.ResolvedSecret) error {
 	}
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("secret %q: file %q is not a regular file", s.Name, s.FromFile)
+	}
+	return nil
+}
+
+func validateSecretFileWorldReadable(s workspace.ResolvedSecret) error {
+	fi, err := os.Stat(s.FromFile)
+	if err != nil {
+		return fmt.Errorf("secret %q: stat file %q: %w", s.Name, s.FromFile, err)
 	}
 	mode := fi.Mode().Perm()
 	if mode&0o004 == 0 {
@@ -106,14 +114,17 @@ func envKeySet(env []string) map[string]bool {
 // source REFERENCE (host variable name or host path) and never resolves it, so
 // no secret value can reach stdout.
 func secretReference(s workspace.ResolvedSecret) string {
-	switch s.Kind {
-	case workspace.SecretKindEnv:
-		return fmt.Sprintf("%s (from_env %s)", s.Name, s.FromEnv)
-	case workspace.SecretKindFile:
-		return fmt.Sprintf("%s (from_file %s)", s.Name, s.FromFile)
-	default:
-		return s.Name
+	destWord := "file"
+	if s.Kind == workspace.SecretKindEnv {
+		destWord = "env"
 	}
+	sourceWord := "file"
+	value := s.FromFile
+	if s.FromEnv != "" {
+		sourceWord = "env"
+		value = s.FromEnv
+	}
+	return fmt.Sprintf("%s (%s from_%s %s)", s.Name, destWord, sourceWord, value)
 }
 
 // secretSpecs maps resolved secrets onto compose secret sources. The order of
@@ -126,10 +137,9 @@ func secretSpecs(ws *workspace.Resolved) []compose.SecretSpec {
 	}
 	specs := make([]compose.SecretSpec, 0, len(ws.Secrets))
 	for _, s := range ws.Secrets {
-		switch s.Kind {
-		case workspace.SecretKindEnv:
+		if s.FromEnv != "" {
 			specs = append(specs, compose.SecretSpec{Name: s.Name, Environment: s.FromEnv})
-		case workspace.SecretKindFile:
+		} else {
 			specs = append(specs, compose.SecretSpec{Name: s.Name, File: s.FromFile})
 		}
 	}

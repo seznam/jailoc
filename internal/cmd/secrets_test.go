@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
@@ -40,10 +41,23 @@ func TestValidateSecretSources(t *testing.T) {
 			ws:   &workspace.Resolved{Name: "ws", Env: []string{"FOO=bar"}},
 		},
 		{
-			name: "env source set and non-empty",
+			name: "env destination from environment source",
 			env:  map[string]string{"JAILOC_TEST_TOKEN": "value"},
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
 				{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_TOKEN"},
+			}},
+		},
+		{
+			name: "env destination from file source need not be world readable",
+			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
+				{Name: "FILE_KEY", Kind: workspace.SecretKindEnv, FromFile: ownerOnly},
+			}},
+		},
+		{
+			name: "file destination from environment source",
+			env:  map[string]string{"JAILOC_TEST_TOKEN": "value"},
+			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
+				{Name: "envkey", Kind: workspace.SecretKindFile, FromEnv: "JAILOC_TEST_TOKEN"},
 			}},
 		},
 		{
@@ -62,7 +76,7 @@ func TestValidateSecretSources(t *testing.T) {
 			wantErr: `secret "GH_TOKEN": host environment variable "JAILOC_TEST_EMPTY" is set but empty; Docker Compose omits empty secrets, so /run/secrets/GH_TOKEN would not exist`,
 		},
 		{
-			name: "file source world readable",
+			name: "file destination from file source world readable",
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
 				{Name: "key", Kind: workspace.SecretKindFile, FromFile: worldReadable},
 			}},
@@ -99,6 +113,17 @@ func TestValidateSecretSources(t *testing.T) {
 				},
 			},
 			wantErr: `env secret "GH_TOKEN" collides with an env entry`,
+		},
+		{
+			name: "file-sourced env secret name collides with env entry",
+			ws: &workspace.Resolved{
+				Name: "ws",
+				Env:  []string{"FILE_KEY=already-here"},
+				Secrets: []workspace.ResolvedSecret{
+					{Name: "FILE_KEY", Kind: workspace.SecretKindEnv, FromFile: worldReadable},
+				},
+			},
+			wantErr: `env secret "FILE_KEY" collides with an env entry`,
 		},
 		{
 			name: "duplicate env secret names",
@@ -163,23 +188,30 @@ func TestSecretSpecsAndEnvPairs(t *testing.T) {
 		t.Parallel()
 		ws := &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
 			{Name: "ALPHA", Kind: workspace.SecretKindEnv, FromEnv: "ALPHA_VAR"},
-			{Name: "beta", Kind: workspace.SecretKindFile, FromFile: "/tmp/beta"},
-			{Name: "GAMMA", Kind: workspace.SecretKindEnv, FromEnv: "GAMMA_VAR"},
+			{Name: "BETA", Kind: workspace.SecretKindEnv, FromFile: "/tmp/beta"},
+			{Name: "gamma", Kind: workspace.SecretKindFile, FromEnv: "GAMMA_VAR"},
+			{Name: "delta", Kind: workspace.SecretKindFile, FromFile: "/tmp/delta"},
 		}}
 
 		specs := secretSpecs(ws)
-		if len(specs) != 3 {
-			t.Fatalf("secretSpecs() len = %d, want 3", len(specs))
+		if len(specs) != 4 {
+			t.Fatalf("secretSpecs() len = %d, want 4", len(specs))
 		}
 		if specs[0].Name != "ALPHA" || specs[0].Environment != "ALPHA_VAR" || specs[0].File != "" {
 			t.Fatalf("secretSpecs()[0] = %+v", specs[0])
 		}
-		if specs[1].Name != "beta" || specs[1].File != "/tmp/beta" || specs[1].Environment != "" {
+		if specs[1].Name != "BETA" || specs[1].File != "/tmp/beta" || specs[1].Environment != "" {
 			t.Fatalf("secretSpecs()[1] = %+v", specs[1])
+		}
+		if specs[2].Name != "gamma" || specs[2].Environment != "GAMMA_VAR" || specs[2].File != "" {
+			t.Fatalf("secretSpecs()[2] = %+v", specs[2])
+		}
+		if specs[3].Name != "delta" || specs[3].File != "/tmp/delta" || specs[3].Environment != "" {
+			t.Fatalf("secretSpecs()[3] = %+v", specs[3])
 		}
 
 		pairs := secretEnvPairs(ws)
-		want := []config.SecretEnvPair{{Name: "ALPHA", Var: "ALPHA"}, {Name: "GAMMA", Var: "GAMMA"}}
+		want := []config.SecretEnvPair{{Name: "ALPHA", Var: "ALPHA"}, {Name: "BETA", Var: "BETA"}}
 		if len(pairs) != len(want) {
 			t.Fatalf("secretEnvPairs() = %+v, want %+v", pairs, want)
 		}
@@ -199,6 +231,39 @@ func TestSecretSpecsAndEnvPairs(t *testing.T) {
 			t.Fatalf("secretEnvPairs() = %v, want nil", got)
 		}
 	})
+}
+
+func TestSecretSpecsRenderAllSourceDestinationCombinations(t *testing.T) {
+	t.Parallel()
+
+	ws := &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
+		{Name: "FILE_KEY", Kind: workspace.SecretKindEnv, FromFile: "/tmp/x"},
+		{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "GITHUB_TOKEN"},
+		{Name: "envkey", Kind: workspace.SecretKindFile, FromEnv: "HOST_A"},
+		{Name: "key", Kind: workspace.SecretKindFile, FromFile: "/tmp/x"},
+	}}
+
+	rendered, err := compose.GenerateCompose(compose.ComposeParams{WorkspaceName: "ws", Secrets: secretSpecs(ws)})
+	if err != nil {
+		t.Fatalf("GenerateCompose() = %v", err)
+	}
+	yaml := string(rendered)
+	assertContains(t, yaml, `environment: "GITHUB_TOKEN"`)
+	assertContains(t, yaml, `environment: "HOST_A"`)
+	if got := strings.Count(yaml, `file: "/tmp/x"`); got != 2 {
+		t.Fatalf("rendered compose file source count = %d, want 2:\n%s", got, yaml)
+	}
+
+	wantPairs := []config.SecretEnvPair{{Name: "FILE_KEY", Var: "FILE_KEY"}, {Name: "GH_TOKEN", Var: "GH_TOKEN"}}
+	gotPairs := secretEnvPairs(ws)
+	if len(gotPairs) != len(wantPairs) {
+		t.Fatalf("secretEnvPairs() = %+v, want %+v", gotPairs, wantPairs)
+	}
+	for i := range wantPairs {
+		if gotPairs[i] != wantPairs[i] {
+			t.Fatalf("secretEnvPairs()[%d] = %+v, want %+v", i, gotPairs[i], wantPairs[i])
+		}
+	}
 }
 
 // TestConfigShowsSecretReferences is not parallel: it uses t.Setenv to point
@@ -221,12 +286,18 @@ paths = ["/data/alpha"]
 [workspaces.alpha.secrets.env.GH_TOKEN]
 from_env = "GITHUB_TOKEN"
 
+[workspaces.alpha.secrets.env.FILE_KEY]
+from_file = %q
+
+[workspaces.alpha.secrets.file.envkey]
+from_env = "GITHUB_TOKEN"
+
 [workspaces.alpha.secrets.file.key]
 from_file = %q
 
 [workspaces.bare]
 paths = ["/data/bare"]
-`, secretFile)
+`, secretFile, secretFile)
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -239,7 +310,7 @@ paths = ["/data/bare"]
 		}
 	})
 
-	assertContains(t, out, "  Secrets:\n    - GH_TOKEN (from_env GITHUB_TOKEN)\n    - key (from_file "+secretFile+")\n")
+	assertContains(t, out, "  Secrets:\n    - FILE_KEY (env from_file "+secretFile+")\n    - GH_TOKEN (env from_env GITHUB_TOKEN)\n    - envkey (file from_env GITHUB_TOKEN)\n    - key (file from_file "+secretFile+")\n")
 	assertContains(t, out, "Workspace: bare")
 
 	if strings.Contains(out, "supersecret") {
@@ -275,11 +346,17 @@ from_env = "HOST_Z"
 [workspaces.alpha.secrets.env.A_TOKEN]
 from_env = "HOST_A"
 
+[workspaces.alpha.secrets.env.F_TOKEN]
+from_file = "/a/envfile"
+
 [workspaces.alpha.secrets.file.z-file]
 from_file = "/z/file"
 
 [workspaces.alpha.secrets.file.a-file]
 from_file = "/a/file"
+
+[workspaces.alpha.secrets.file.e-file]
+from_env = "HOST_A"
 
 [workspaces.empty]
 paths = []
@@ -297,10 +374,12 @@ paths = []
 	})
 
 	want := "  Secrets:\n" +
-		"    - A_TOKEN (from_env HOST_A)\n" +
-		"    - Z_TOKEN (from_env HOST_Z)\n" +
-		"    - a-file (from_file /a/file)\n" +
-		"    - z-file (from_file /z/file)\n"
+		"    - A_TOKEN (env from_env HOST_A)\n" +
+		"    - F_TOKEN (env from_file /a/envfile)\n" +
+		"    - Z_TOKEN (env from_env HOST_Z)\n" +
+		"    - a-file (file from_file /a/file)\n" +
+		"    - e-file (file from_env HOST_A)\n" +
+		"    - z-file (file from_file /z/file)\n"
 	assertContains(t, out, want)
 	_, emptySection, ok := strings.Cut(out, "Workspace: empty")
 	if !ok {

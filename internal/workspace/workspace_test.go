@@ -1334,10 +1334,28 @@ func TestResolveSecrets(t *testing.T) {
 			},
 		},
 		{
+			name: "env destination with file source survives",
+			defaultSecrets: config.Secrets{Env: map[string]config.EnvSecret{
+				"FILE_KEY": {FromFile: "/etc/file-key"},
+			}},
+			want: []workspace.ResolvedSecret{
+				{Name: "FILE_KEY", Kind: workspace.SecretKindEnv, FromFile: "/etc/file-key"},
+			},
+		},
+		{
 			name:      "workspace only survive",
 			wsSecrets: config.Secrets{File: map[string]config.FileSecret{"key": {FromFile: "/etc/jailoc-key"}}},
 			want: []workspace.ResolvedSecret{
 				{Name: "key", Kind: workspace.SecretKindFile, FromFile: "/etc/jailoc-key"},
+			},
+		},
+		{
+			name: "file destination with environment source survives",
+			wsSecrets: config.Secrets{File: map[string]config.FileSecret{
+				"envkey": {FromEnv: "HOST_KEY"},
+			}},
+			want: []workspace.ResolvedSecret{
+				{Name: "envkey", Kind: workspace.SecretKindFile, FromEnv: "HOST_KEY"},
 			},
 		},
 		{
@@ -1432,6 +1450,18 @@ func TestResolveSecretsWorkspaceOverrideAcrossKinds(t *testing.T) {
 			defaults: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromFile: "/old"}}},
 			override: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromEnv: "NEW"}}},
 			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "NEW"},
+		},
+		{
+			name:     "file source replaces environment source within env destination",
+			defaults: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromEnv: "OLD"}}},
+			override: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromFile: "/new"}}},
+			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromFile: "/new"},
+		},
+		{
+			name:     "environment source replaces file source within file destination",
+			defaults: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromFile: "/old"}}},
+			override: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromEnv: "NEW"}}},
+			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindFile, FromEnv: "NEW"},
 		},
 		{
 			name:     "file replaces file",

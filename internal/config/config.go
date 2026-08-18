@@ -451,28 +451,37 @@ func reservedSecretEnvName(name string) bool {
 	return reservedEnvKeys[name] || name == "HOME" || name == "PATH"
 }
 
-func validateEnvSecret(name string, secret EnvSecret, context string) error {
-	if err := validateEnvVarName(name); err != nil {
-		return fmt.Errorf("%s: env secret %q: %w", context, name, err)
-	}
-	if reservedSecretEnvName(name) {
-		return fmt.Errorf("%s: env secret %q: name is reserved and cannot be overridden", context, name)
-	}
-	if secret.FromEnv == "" {
-		return fmt.Errorf("%s: env secret %q: \"from_env\" must not be empty", context, name)
-	}
-	return nil
-}
+type secretDest int
 
-func validateFileSecret(name string, secret FileSecret, context string) error {
-	if !secretNameRe.MatchString(name) {
+const (
+	destEnv secretDest = iota
+	destFile
+)
+
+func validateSecret(name string, secret Secret, dest secretDest, context string) error {
+	destLabel := "file"
+	if dest == destEnv {
+		destLabel = "env"
+		if err := validateEnvVarName(name); err != nil {
+			return fmt.Errorf("%s: env secret %q: %w", context, name, err)
+		}
+		if reservedSecretEnvName(name) {
+			return fmt.Errorf("%s: env secret %q: name is reserved and cannot be overridden", context, name)
+		}
+	} else if !secretNameRe.MatchString(name) {
 		return fmt.Errorf("%s: file secret %q: invalid name: must match [a-zA-Z0-9_-]+", context, name)
 	}
-	if secret.FromFile == "" {
-		return fmt.Errorf("%s: file secret %q: \"from_file\" must not be empty", context, name)
+
+	if secret.FromEnv == "" && secret.FromFile == "" {
+		return fmt.Errorf("%s: %s secret %q: exactly one of \"from_env\" or \"from_file\" must be set", context, destLabel, name)
 	}
-	if err := validateSecretFile(secret.FromFile); err != nil {
-		return fmt.Errorf("%s: file secret %q: %w", context, name, err)
+	if secret.FromEnv != "" && secret.FromFile != "" {
+		return fmt.Errorf("%s: %s secret %q: \"from_env\" and \"from_file\" are mutually exclusive: set exactly one", context, destLabel, name)
+	}
+	if secret.FromFile != "" {
+		if err := validateSecretFile(secret.FromFile); err != nil {
+			return fmt.Errorf("%s: %s secret %q: %w", context, destLabel, name, err)
+		}
 	}
 	return nil
 }
@@ -485,13 +494,13 @@ func validateSecretsBlock(secrets Secrets, context string) error {
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(secrets.Env)) {
-		if err := validateEnvSecret(name, secrets.Env[name], context); err != nil {
+		if err := validateSecret(name, secrets.Env[name], destEnv, context); err != nil {
 			return err
 		}
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(secrets.File)) {
-		if err := validateFileSecret(name, secrets.File[name], context); err != nil {
+		if err := validateSecret(name, secrets.File[name], destFile, context); err != nil {
 			return err
 		}
 	}
@@ -499,24 +508,24 @@ func validateSecretsBlock(secrets Secrets, context string) error {
 	return nil
 }
 
-// expandSecretsBlockFiles expands a leading ~ in every file secret path. Env
-// secrets hold variable names, not paths, and are deliberately left untouched.
 func expandSecretsBlockFiles(secrets *Secrets) error {
 	if secrets == nil {
 		return nil
 	}
 
-	for _, name := range slices.Sorted(maps.Keys(secrets.File)) {
-		secret := secrets.File[name]
-		if secret.FromFile == "" {
-			continue
+	for _, secretMap := range []map[string]Secret{secrets.Env, secrets.File} {
+		for _, name := range slices.Sorted(maps.Keys(secretMap)) {
+			secret := secretMap[name]
+			if secret.FromFile == "" {
+				continue
+			}
+			expanded, err := ExpandPath(secret.FromFile)
+			if err != nil {
+				return fmt.Errorf("expand secret file %q: %w", secret.FromFile, err)
+			}
+			secret.FromFile = expanded
+			secretMap[name] = secret
 		}
-		expanded, err := ExpandPath(secret.FromFile)
-		if err != nil {
-			return fmt.Errorf("expand secret file %q: %w", secret.FromFile, err)
-		}
-		secret.FromFile = expanded
-		secrets.File[name] = secret
 	}
 
 	return nil

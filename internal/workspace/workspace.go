@@ -151,16 +151,16 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 func mergeSecrets(defaults, overrides config.Secrets) []ResolvedSecret {
 	merged := make(map[string]ResolvedSecret, len(defaults.Env)+len(defaults.File)+len(overrides.Env)+len(overrides.File))
 	for name, secret := range defaults.Env {
-		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv}
+		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile}
 	}
 	for name, secret := range defaults.File {
-		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromFile: secret.FromFile}
+		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile}
 	}
 	for name, secret := range overrides.Env {
-		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv}
+		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile}
 	}
 	for name, secret := range overrides.File {
-		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromFile: secret.FromFile}
+		merged[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile}
 	}
 	if len(merged) == 0 {
 		return nil
