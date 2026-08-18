@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -320,21 +319,8 @@ func loadFrom(path string, defaultPath bool) (*Config, error) {
 }
 
 func decode(path string) (*Config, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config %q: %w", path, err)
-	}
-
-	raw := map[string]any{}
-	if _, err := toml.Decode(string(b), &raw); err != nil {
-		return nil, fmt.Errorf("parse TOML %q: %w", path, err)
-	}
-	if err := detectLegacySecrets(raw); err != nil {
-		return nil, fmt.Errorf("parse %q: %w", path, err)
-	}
-
 	var cfg Config
-	if _, err := toml.Decode(string(b), &cfg); err != nil {
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, fmt.Errorf("parse TOML %q: %w", path, err)
 	}
 
@@ -528,95 +514,6 @@ func expandSecretsBlockFiles(secrets *Secrets) error {
 	}
 
 	return nil
-}
-
-const secretsDocURL = "https://seznam.github.io/jailoc/how-to/secrets/"
-
-func legacySecretError(scope, name string) error {
-	return fmt.Errorf(
-		"legacy secret %q: the [<scope>.secrets.<NAME>] schema was removed; "+
-			"rewrite as [%s.secrets.env.%s] from_env = \"HOST_VAR\" (container env var) "+
-			"or [%s.secrets.file.%s] from_file = \"/abs/path\" (/run/secrets/%s). "+
-			"A file secret can no longer also export an env var; export the value to a host env var "+
-			"and use secrets.env instead. See %s",
-		scope+".secrets."+name, scope, name, scope, name, name, secretsDocURL,
-	)
-}
-
-// detectLegacySecrets rejects the removed [<scope>.secrets.<NAME>] schema from a
-// map[string]any view of the raw TOML. It runs before the typed decode because a
-// legacy secret literally named "env" or "file" makes the typed decode fail with
-// a cryptic type-mismatch instead of an actionable migration message.
-//
-// Matching is position-anchored: only "secrets" directly under "defaults" or
-// under a workspace is inspected, so a workspace literally named "secrets" is
-// never misflagged.
-func detectLegacySecrets(raw map[string]any) error {
-	var errs []error
-
-	if _, ok := raw["secrets"]; ok {
-		errs = append(errs, fmt.Errorf(
-			"top-level [secrets] is not supported: declare secrets under "+
-				"[defaults.secrets.env.<NAME>] / [defaults.secrets.file.<NAME>] or "+
-				"[workspaces.<ws>.secrets.env.<NAME>] / [workspaces.<ws>.secrets.file.<NAME>]. See %s",
-			secretsDocURL,
-		))
-	}
-
-	errs = append(errs, legacySecretsInScope(raw["defaults"], "defaults")...)
-
-	if workspaces, ok := raw["workspaces"].(map[string]any); ok {
-		for _, name := range slices.Sorted(maps.Keys(workspaces)) {
-			errs = append(errs, legacySecretsInScope(workspaces[name], "workspaces."+name)...)
-		}
-	}
-
-	return errors.Join(errs...)
-}
-
-func legacySecretsInScope(scopeValue any, scope string) []error {
-	scopeTable, ok := scopeValue.(map[string]any)
-	if !ok {
-		return nil
-	}
-	secrets, ok := scopeTable["secrets"].(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	var errs []error
-	for _, name := range slices.Sorted(maps.Keys(secrets)) {
-		if legacySecretEntry(name, secrets[name]) {
-			errs = append(errs, legacySecretError(scope, name))
-		}
-	}
-	return errs
-}
-
-// legacySecretEntry reports whether one key of a [<scope>.secrets] table is a
-// legacy secret rather than the new "env"/"file" namespace.
-//
-// An EMPTY "env"/"file" table is legacy: it is indistinguishable from an empty
-// legacy secret of that name, and AddPath's omitempty re-encode would silently
-// drop it. Only a bare [<scope>.secrets] table with no env/file key at all is
-// accepted, because that is what AddPath emits for an unrelated reason.
-func legacySecretEntry(name string, value any) bool {
-	if name != "env" && name != "file" {
-		return true
-	}
-
-	namespace, ok := value.(map[string]any)
-	if !ok || len(namespace) == 0 {
-		return true
-	}
-
-	for _, body := range namespace {
-		if _, ok := body.(map[string]any); !ok {
-			return true
-		}
-	}
-
-	return false
 }
 
 func ParseMount(spec string) (Mount, error) {
