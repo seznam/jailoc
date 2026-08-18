@@ -82,8 +82,8 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 		ws := &Workspace{
 			Paths: []string{"/data"},
 			Secrets: Secrets{
-				File: map[string]FileSecret{"token": {FromFile: "~/secrets/token"}},
-				Env: map[string]EnvSecret{
+				File: map[string]Secret{"token": {FromFile: "~/secrets/token"}},
+				Env: map[string]Secret{
 					"FILE_KEY": {FromFile: "~/secrets/env-token"},
 					"OTHER":    {FromEnv: "~HOST_VAR"},
 				},
@@ -107,8 +107,8 @@ func TestExpandPathsTildeSecretFile(t *testing.T) {
 
 	t.Run("defaults", func(t *testing.T) {
 		secrets := Secrets{
-			File: map[string]FileSecret{"token": {FromFile: "~/secrets/token"}},
-			Env: map[string]EnvSecret{
+			File: map[string]Secret{"token": {FromFile: "~/secrets/token"}},
+			Env: map[string]Secret{
 				"FILE_KEY": {FromFile: "~/secrets/env-token"},
 				"OTHER":    {FromEnv: "~HOST_VAR"},
 			},
@@ -140,7 +140,7 @@ func TestValidateExpandsSecretFileBeforeAbsCheck(t *testing.T) {
 
 	t.Run("defaults", func(t *testing.T) {
 		cfg := &Config{
-			Defaults: Defaults{Secrets: Secrets{File: map[string]FileSecret{"token": {FromFile: "~/token"}}}},
+			Defaults: Defaults{Secrets: Secrets{File: map[string]Secret{"token": {FromFile: "~/token"}}}},
 		}
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -153,7 +153,7 @@ func TestValidateExpandsSecretFileBeforeAbsCheck(t *testing.T) {
 	t.Run("workspace", func(t *testing.T) {
 		cfg := &Config{
 			Workspaces: map[string]Workspace{
-				"myws": {Secrets: Secrets{File: map[string]FileSecret{"token": {FromFile: "~/token"}}}},
+				"myws": {Secrets: Secrets{File: map[string]Secret{"token": {FromFile: "~/token"}}}},
 			},
 		}
 		if err := Validate(cfg); err != nil {
@@ -212,7 +212,7 @@ func TestDefaultConfigContentDocumentsSecrets(t *testing.T) {
 	}
 }
 
-func TestLoadFromValidatesEnvSecretNames(t *testing.T) {
+func TestLoadFromValidatesSecretNames(t *testing.T) {
 	t.Parallel()
 
 	for _, name := range []string{"gh-token", "HOME", "PATH", "DOCKER_HOST"} {
@@ -235,7 +235,7 @@ from_env = "HOST_TOKEN"
 	}
 }
 
-func TestValidateEnvSecret(t *testing.T) {
+func TestValidateEnvSourceSecret(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -318,7 +318,7 @@ func TestValidateEnvSecret(t *testing.T) {
 	}
 }
 
-func TestValidateFileSecret(t *testing.T) {
+func TestValidateFileSourceSecret(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -401,33 +401,33 @@ func TestValidateSecretsBlock(t *testing.T) {
 		{
 			name: "env and file with distinct names",
 			secrets: Secrets{
-				Env:  map[string]EnvSecret{"MY_TOKEN": {FromEnv: "GH_TOKEN"}},
-				File: map[string]FileSecret{"NETRC": {FromFile: "/home/me/.netrc"}},
+				Env:  map[string]Secret{"MY_TOKEN": {FromEnv: "GH_TOKEN"}},
+				File: map[string]Secret{"NETRC": {FromFile: "/home/me/.netrc"}},
 			},
 		},
 		{
 			name: "cross-source combinations",
 			secrets: Secrets{
-				Env:  map[string]EnvSecret{"FILE_KEY": {FromFile: "/abs/key"}},
-				File: map[string]FileSecret{"envkey": {FromEnv: "HOST_KEY"}},
+				Env:  map[string]Secret{"FILE_KEY": {FromFile: "/abs/key"}},
+				File: map[string]Secret{"envkey": {FromEnv: "HOST_KEY"}},
 			},
 		},
 		{
 			name: "same name in env and file",
 			secrets: Secrets{
-				Env:  map[string]EnvSecret{"TOKEN": {FromEnv: "GH_TOKEN"}},
-				File: map[string]FileSecret{"TOKEN": {FromFile: "/abs/token"}},
+				Env:  map[string]Secret{"TOKEN": {FromEnv: "GH_TOKEN"}},
+				File: map[string]Secret{"TOKEN": {FromFile: "/abs/token"}},
 			},
 			wantSubstrs: []string{"TOKEN", "secrets.env", "secrets.file", "only one"},
 		},
 		{
 			name:        "invalid env entry propagates",
-			secrets:     Secrets{Env: map[string]EnvSecret{"gh-token": {FromEnv: "GH_TOKEN"}}},
+			secrets:     Secrets{Env: map[string]Secret{"gh-token": {FromEnv: "GH_TOKEN"}}},
 			wantSubstrs: []string{"gh-token", "^[A-Za-z_][A-Za-z0-9_]*$"},
 		},
 		{
 			name:        "invalid file entry propagates",
-			secrets:     Secrets{File: map[string]FileSecret{"NETRC": {FromFile: "relative/x"}}},
+			secrets:     Secrets{File: map[string]Secret{"NETRC": {FromFile: "relative/x"}}},
 			wantSubstrs: []string{"NETRC", "must be absolute"},
 		},
 	}
@@ -445,7 +445,7 @@ func TestValidateSecretsBlock(t *testing.T) {
 func TestValidateSecretsBlockIteratesSortedNames(t *testing.T) {
 	t.Parallel()
 
-	secrets := Secrets{Env: map[string]EnvSecret{"aaa": {}, "mmm": {}, "zzz": {}}}
+	secrets := Secrets{Env: map[string]Secret{"aaa": {}, "mmm": {}, "zzz": {}}}
 
 	for range 50 {
 		err := validateSecretsBlock(secrets, "defaults")
@@ -463,11 +463,11 @@ func TestExpandSecretsBlockFiles(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	secrets := Secrets{
-		Env: map[string]EnvSecret{
+		Env: map[string]Secret{
 			"FILE_KEY": {FromFile: "~/secrets/env-token"},
 			"TOKEN":    {FromEnv: "~HOST_VAR"},
 		},
-		File: map[string]FileSecret{"NETRC": {FromFile: "~/secrets/netrc"}, "ABS": {FromFile: "/abs/x"}},
+		File: map[string]Secret{"NETRC": {FromFile: "~/secrets/netrc"}, "ABS": {FromFile: "/abs/x"}},
 	}
 
 	if err := expandSecretsBlockFiles(&secrets); err != nil {

@@ -1326,7 +1326,7 @@ func TestResolveSecrets(t *testing.T) {
 		},
 		{
 			name: "defaults only survive",
-			defaultSecrets: config.Secrets{Env: map[string]config.EnvSecret{
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{
 				"GH_TOKEN": {FromEnv: "GH_TOKEN_HOST"},
 			}},
 			want: []workspace.ResolvedSecret{
@@ -1335,7 +1335,7 @@ func TestResolveSecrets(t *testing.T) {
 		},
 		{
 			name: "env destination with file source survives",
-			defaultSecrets: config.Secrets{Env: map[string]config.EnvSecret{
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{
 				"FILE_KEY": {FromFile: "/etc/file-key"},
 			}},
 			want: []workspace.ResolvedSecret{
@@ -1344,14 +1344,14 @@ func TestResolveSecrets(t *testing.T) {
 		},
 		{
 			name:      "workspace only survive",
-			wsSecrets: config.Secrets{File: map[string]config.FileSecret{"key": {FromFile: "/etc/jailoc-key"}}},
+			wsSecrets: config.Secrets{File: map[string]config.Secret{"key": {FromFile: "/etc/jailoc-key"}}},
 			want: []workspace.ResolvedSecret{
 				{Name: "key", Kind: workspace.SecretKindFile, FromFile: "/etc/jailoc-key"},
 			},
 		},
 		{
 			name: "file destination with environment source survives",
-			wsSecrets: config.Secrets{File: map[string]config.FileSecret{
+			wsSecrets: config.Secrets{File: map[string]config.Secret{
 				"envkey": {FromEnv: "HOST_KEY"},
 			}},
 			want: []workspace.ResolvedSecret{
@@ -1361,12 +1361,12 @@ func TestResolveSecrets(t *testing.T) {
 		{
 			name: "both layers survive and are sorted by name",
 			defaultSecrets: config.Secrets{
-				Env:  map[string]config.EnvSecret{"zulu": {FromEnv: "ZULU_HOST"}},
-				File: map[string]config.FileSecret{"bravo": {FromFile: "/etc/bravo"}},
+				Env:  map[string]config.Secret{"zulu": {FromEnv: "ZULU_HOST"}},
+				File: map[string]config.Secret{"bravo": {FromFile: "/etc/bravo"}},
 			},
 			wsSecrets: config.Secrets{
-				Env:  map[string]config.EnvSecret{"alpha": {FromEnv: "ALPHA_HOST"}},
-				File: map[string]config.FileSecret{"charlie": {FromFile: "/etc/charlie"}},
+				Env:  map[string]config.Secret{"alpha": {FromEnv: "ALPHA_HOST"}},
+				File: map[string]config.Secret{"charlie": {FromFile: "/etc/charlie"}},
 			},
 			want: []workspace.ResolvedSecret{
 				{Name: "alpha", Kind: workspace.SecretKindEnv, FromEnv: "ALPHA_HOST"},
@@ -1377,19 +1377,19 @@ func TestResolveSecrets(t *testing.T) {
 		},
 		{
 			name:           "workspace override replaces the whole defaults struct",
-			defaultSecrets: config.Secrets{Env: map[string]config.EnvSecret{"token": {FromEnv: "DEFAULTS_HOST_VAR"}}},
-			wsSecrets:      config.Secrets{File: map[string]config.FileSecret{"token": {FromFile: "/etc/workspace-token"}}},
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{"token": {FromEnv: "DEFAULTS_HOST_VAR"}}},
+			wsSecrets:      config.Secrets{File: map[string]config.Secret{"token": {FromFile: "/etc/workspace-token"}}},
 			want: []workspace.ResolvedSecret{
 				{Name: "token", Kind: workspace.SecretKindFile, FromFile: "/etc/workspace-token"},
 			},
 		},
 		{
 			name: "workspace override drops only the overridden name",
-			defaultSecrets: config.Secrets{Env: map[string]config.EnvSecret{
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{
 				"kept":     {FromEnv: "KEPT_HOST"},
 				"replaced": {FromEnv: "OLD_HOST"},
 			}},
-			wsSecrets: config.Secrets{File: map[string]config.FileSecret{"replaced": {FromFile: "/etc/new"}}},
+			wsSecrets: config.Secrets{File: map[string]config.Secret{"replaced": {FromFile: "/etc/new"}}},
 			want: []workspace.ResolvedSecret{
 				{Name: "kept", Kind: workspace.SecretKindEnv, FromEnv: "KEPT_HOST"},
 				{Name: "replaced", Kind: workspace.SecretKindFile, FromFile: "/etc/new"},
@@ -1435,38 +1435,38 @@ func TestResolveSecretsWorkspaceOverrideAcrossKinds(t *testing.T) {
 	}{
 		{
 			name:     "env replaces env",
-			defaults: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromEnv: "OLD"}}},
-			override: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromEnv: "NEW"}}},
+			defaults: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "OLD"}}},
+			override: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "NEW"}}},
 			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "NEW"},
 		},
 		{
 			name:     "file replaces env",
-			defaults: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromEnv: "OLD"}}},
-			override: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromFile: "/new"}}},
+			defaults: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "OLD"}}},
+			override: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/new"}}},
 			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindFile, FromFile: "/new"},
 		},
 		{
 			name:     "env replaces file",
-			defaults: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromFile: "/old"}}},
-			override: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromEnv: "NEW"}}},
+			defaults: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/old"}}},
+			override: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "NEW"}}},
 			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "NEW"},
 		},
 		{
 			name:     "file source replaces environment source within env destination",
-			defaults: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromEnv: "OLD"}}},
-			override: config.Secrets{Env: map[string]config.EnvSecret{"TOKEN": {FromFile: "/new"}}},
+			defaults: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "OLD"}}},
+			override: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromFile: "/new"}}},
 			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromFile: "/new"},
 		},
 		{
 			name:     "environment source replaces file source within file destination",
-			defaults: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromFile: "/old"}}},
-			override: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromEnv: "NEW"}}},
+			defaults: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/old"}}},
+			override: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromEnv: "NEW"}}},
 			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindFile, FromEnv: "NEW"},
 		},
 		{
 			name:     "file replaces file",
-			defaults: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromFile: "/old"}}},
-			override: config.Secrets{File: map[string]config.FileSecret{"TOKEN": {FromFile: "/new"}}},
+			defaults: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/old"}}},
+			override: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/new"}}},
 			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindFile, FromFile: "/new"},
 		},
 	}

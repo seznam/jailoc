@@ -184,19 +184,11 @@ type Secret struct {
 	FromFile string `toml:"from_file,omitempty"`
 }
 
-// EnvSecret is one [<scope>.secrets.env.<NAME>] entry: the section NAME is the
-// container env var.
-type EnvSecret = Secret
-
-// FileSecret is one [<scope>.secrets.file.<NAME>] entry: the section NAME is the
-// /run/secrets/<NAME> basename. Never exported to env.
-type FileSecret = Secret
-
 // Secrets is a whole [<scope>.secrets] block. The sub-table a secret lives in
 // decides its destination, so env-vs-file is structural, not a validated XOR.
 type Secrets struct {
-	Env  map[string]EnvSecret  `toml:"env,omitempty"`
-	File map[string]FileSecret `toml:"file,omitempty"`
+	Env  map[string]Secret `toml:"env,omitempty"`
+	File map[string]Secret `toml:"file,omitempty"`
 }
 
 // SecretEnvPair maps a Compose secret name to the environment variable every
