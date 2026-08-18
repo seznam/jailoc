@@ -24,7 +24,7 @@ Key facts:
 - [Workspace Configuration](https://seznam.github.io/jailoc/how-to/workspace-configuration/): Add workspaces, set paths, per-workspace options
 - [Custom Images](https://seznam.github.io/jailoc/how-to/custom-images/): URL Dockerfile presets, local Dockerfiles, build context
 - [Network Access](https://seznam.github.io/jailoc/how-to/network-access/): allowed_hosts, allowed_networks, verifying firewall rules
-- [Secrets](https://seznam.github.io/jailoc/how-to/secrets/): Pass secrets via environment variables (secrets.env) or file mounts (secrets.file)
+- [Secrets](https://seznam.github.io/jailoc/how-to/secrets/): Pass secrets from host environment variables (from_env) or files (from_file) into container destination environment variables or file mounts
 - [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward SSH agent (with known_hosts), mount Git config into containers
 - [Access Modes](https://seznam.github.io/jailoc/how-to/access-modes/): Remote vs exec mode configuration
 - [TUI Plugin](https://seznam.github.io/jailoc/how-to/tui-plugin/): Enable the TUI sidebar plugin to show workspace context in the OpenCode sidebar
@@ -36,7 +36,7 @@ Key facts:
 - [Threat Model](https://seznam.github.io/jailoc/explanation/threat-model/): What jailoc protects against and what it does not
 - [Container Architecture](https://seznam.github.io/jailoc/explanation/container-architecture/): Two-container design, volumes, entrypoint phases, DinD sidecar
 - [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): iptables rules, security model, allowed traffic flow
-- [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Two-sub-table secrets model (secrets.env and secrets.file), file permissions, and environment isolation
+- [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Destination×source secret mapping model (destination tables secrets.env and secrets.file; source fields from_env and from_file), file permissions, and environment isolation
 
 ## Optional
 

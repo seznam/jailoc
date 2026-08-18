@@ -58,33 +58,27 @@ The file is mounted read-only at `/run/secrets/db_cert` inside the container. Fi
 
 ---
 
-## Pass a host credential file into an environment variable
+## Pass a host credential file as an environment variable
 
-File secrets defined under `secrets.file` do not export environment variables. To expose the contents of a host credential file as a container environment variable:
+To load the contents of a host file directly into a container environment variable, use `from_file` under `secrets.env.<NAME>`.
 
-1. Read the file into an environment variable on your host system:
-
-    ```bash
-    export HOST_API_KEY="$(cat ~/.secrets/api_key.txt)"
-    ```
-
-2. Reference the host environment variable using `secrets.env`:
+1. Add the secret to your workspace configuration in `~/.config/jailoc/config.toml`:
 
     ```toml
     [workspaces.my-project]
     paths = ["~/projects/my-project"]
 
     [workspaces.my-project.secrets.env.API_KEY]
-    from_env = "HOST_API_KEY"
+    from_file = "~/.secrets/api_key.txt"
     ```
 
-3. Start the workspace:
+2. Start the workspace:
 
     ```bash
     jailoc up my-project
     ```
 
-Inside the container, the value is available as the `API_KEY` environment variable.
+Inside the container, the file contents are exported as the `API_KEY` environment variable. File contents are exported verbatim except that trailing newlines are stripped. The file should contain text, not binary data.
 
 ---
 

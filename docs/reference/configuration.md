@@ -240,15 +240,37 @@ Values are treated as literal strings — no host environment variable expansion
 
 Secrets are configured under `[defaults.secrets.env.<NAME>]`, `[defaults.secrets.file.<NAME>]`, `[workspaces.<ws>.secrets.env.<NAME>]`, or `[workspaces.<ws>.secrets.file.<NAME>]`. Secrets declared at the top level outside `[defaults]` or `[workspaces.<ws>]` are rejected.
 
-The sub-table name (`env` or `file`) determines how the secret is exposed to the container. The section header name (`<NAME>`) specifies the destination inside the container.
+Secret configuration is defined by two independent choices:
+- **Destination** (`env` vs `file` sub-table): Determines how the secret is exposed inside the container.
+  - `secrets.env.<NAME>` exports the secret value as a container environment variable named `<NAME>`.
+  - `secrets.file.<NAME>` mounts the secret as a file at `/run/secrets/<NAME>` inside the container and never exports it as an environment variable.
+- **Source** (`from_env` vs `from_file` field): Determines where the secret value is read from on the host.
+  - `from_env` reads from a host environment variable.
+  - `from_file` reads from a host file path.
 
-#### Environment secrets (`secrets.env.<NAME>`)
+#### Destination × Source Matrix
 
-Environment secrets read values from host environment variables and export them into the container environment as `<NAME>`. Every environment secret is unconditionally exported as a container environment variable.
+Destination and source combine independently into four valid configurations:
+
+| Combination | Destination sub-table | Source field | Behavior inside container | Host permission requirements |
+|---|---|---|---|---|
+| 1 | `secrets.env.<NAME>` | `from_env` | Exported as env var `<NAME>` | Host env var must be set and non-empty |
+| 2 | `secrets.env.<NAME>` | `from_file` | Exported as env var `<NAME>` | Host file must exist; read by root entrypoint |
+| 3 | `secrets.file.<NAME>` | `from_env` | Mounted at `/run/secrets/<NAME>` (0444) | Host env var must be set and non-empty |
+| 4 | `secrets.file.<NAME>` | `from_file` | Mounted at `/run/secrets/<NAME>` | Host file must exist and be world-readable (`o+r`) |
+
+#### Fields
+
+Each secret entry under `secrets.env.<NAME>` or `secrets.file.<NAME>` accepts the following fields. Exactly one source field (`from_env` or `from_file`) must be set per secret entry:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `from_env` | string | (required) | Host environment variable name to read the secret value from. Must not be empty. |
+| `from_env` | string | (optional) | Host environment variable name to read the secret value from. Must not be empty. Mutually exclusive with `from_file`. |
+| `from_file` | string | (optional) | Host file path to read the secret from. Must be absolute (`/...`) or start with `~` (expanded to home directory). Must not contain `$` (Docker Compose interpolation constraint). Must not be empty. Mutually exclusive with `from_env`. |
+
+#### Environment destination (`secrets.env.<NAME>`)
+
+Environment-destination secrets export secret values into the container environment as `<NAME>`, regardless of whether the source is `from_env` or `from_file`. Every environment-destination secret is unconditionally exported as a container environment variable.
 
 ##### `<NAME>` Constraints
 The container environment variable name (`<NAME>`) must match `^[A-Za-z_][A-Za-z0-9_]*$`. The following names are reserved and rejected:
@@ -264,22 +286,20 @@ The container environment variable name (`<NAME>`) must match `^[A-Za-z_][A-Za-z
 - `JAILOC`
 - `JAILOC_WORKSPACE`
 
-##### Source Validation at Up-Time
-When `jailoc up` or `jailoc add` runs, the host environment variable specified by `from_env` must be set and non-empty. Unset or empty host environment variables cause a startup validation error.
+#### File destination (`secrets.file.<NAME>`)
 
-#### File secrets (`secrets.file.<NAME>`)
-
-File secrets mount host files into the container at `/run/secrets/<NAME>`. File secrets are never exported as container environment variables.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `from_file` | string | (required) | Host file path to read the secret from. Must be absolute (`/...`) or start with `~` (expanded to home directory). Must not contain `$` (Docker Compose interpolation constraint). Must not be empty. |
+File-destination secrets mount secret values into the container at `/run/secrets/<NAME>`. File-destination secrets are never exported as container environment variables, regardless of whether the source is `from_env` or `from_file`.
 
 ##### `<NAME>` Constraints
-The secret name (`<NAME>`) must match `^[a-zA-Z0-9_-]+$`.
+The secret file name (`<NAME>`) must match `^[a-zA-Z0-9_-]+$`.
 
-##### Source Validation at Up-Time
-When `jailoc up` or `jailoc add` runs, the host file specified by `from_file` must exist, be a regular file, and be world-readable (`o+r`), because the container agent process runs as unprivileged UID 1000.
+#### Source Validation at Up-Time
+
+When `jailoc up` or `jailoc add` runs, secret sources are validated before starting the container:
+
+- **`from_env` sources**: The host environment variable must be set and non-empty. Unset or empty host environment variables cause a startup validation error.
+- **`from_file` sources**: The host file path must exist and be a regular file.
+- **World-readable permission requirement (`o+r`)**: Applies **only** when both destination is `file` (`secrets.file.<NAME>`) and source is `from_file` (combination 4). In combination 4, the host file is bind-mounted directly to unprivileged UID 1000, requiring world-readable permissions (`o+r`). For combination 2 (`secrets.env.<NAME>` with `from_file`), the file is read by the root entrypoint during startup before dropping privileges, so world-readable permissions are not required.
 
 #### Intra-Scope Constraints
 Within a single scope (`[defaults]` or a specific workspace `[workspaces.<ws>]`), a secret `<NAME>` cannot be declared in both `secrets.env` and `secrets.file`.
