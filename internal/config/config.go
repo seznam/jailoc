@@ -174,17 +174,23 @@ type Mount struct {
 	Mode      string
 }
 
-// EnvSecret is one [<scope>.secrets.env.<NAME>] entry: the section NAME is the
-// container env var, FromEnv is the host env var the value is read from.
-type EnvSecret struct {
-	FromEnv string `toml:"from_env"`
+// Secret is one [<scope>.secrets.<env|file>.<NAME>] entry. The sub-table it
+// lives in decides the destination; FromEnv/FromFile decide the source.
+// FromEnv names the host env var the value is read from, FromFile the absolute
+// host path. Both tags carry omitempty so a whole-config TOML re-encode never
+// injects empty source keys into a user's config.
+type Secret struct {
+	FromEnv  string `toml:"from_env,omitempty"`
+	FromFile string `toml:"from_file,omitempty"`
 }
 
+// EnvSecret is one [<scope>.secrets.env.<NAME>] entry: the section NAME is the
+// container env var.
+type EnvSecret = Secret
+
 // FileSecret is one [<scope>.secrets.file.<NAME>] entry: the section NAME is the
-// /run/secrets/<NAME> basename, FromFile is the absolute host path. Never exported to env.
-type FileSecret struct {
-	FromFile string `toml:"from_file"`
-}
+// /run/secrets/<NAME> basename. Never exported to env.
+type FileSecret = Secret
 
 // Secrets is a whole [<scope>.secrets] block. The sub-table a secret lives in
 // decides its destination, so env-vs-file is structural, not a validated XOR.
