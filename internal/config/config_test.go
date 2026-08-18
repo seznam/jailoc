@@ -464,6 +464,37 @@ func TestAddPathDoesNotEmitEmptySecretsHeaderAfterCreateDefault(t *testing.T) {
 	}
 }
 
+func TestAddPathDoesNotEmitEmptySecretSourceKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `
+[defaults.secrets.env.ENV_TOKEN]
+from_env = "HOST_ENV_TOKEN"
+
+[defaults.secrets.file.FILE_TOKEN]
+from_file = "/abs/token"
+
+[workspaces.default]
+paths = ["/data/workspace"]
+`)
+
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+	if bytes.Contains(data, []byte(`from_file = ""`)) {
+		t.Fatalf("expected file secret source key to stay omitted, got:\n%s", string(data))
+	}
+	if bytes.Contains(data, []byte(`from_env = ""`)) {
+		t.Fatalf("expected env secret source key to stay omitted, got:\n%s", string(data))
+	}
+}
+
 func TestValidateErrorIncludesValue(t *testing.T) {
 	cfg := &Config{Workspaces: map[string]Workspace{
 		"default": {
