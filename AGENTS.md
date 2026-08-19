@@ -76,7 +76,7 @@ Two services per workspace on a shared Docker network:
 ### Embedded assets (`internal/embed/assets/`)
 - `Dockerfile` — fallback base image when registry pull fails
 - `docker-compose.yml.tmpl` — Go template for compose generation (auto-generated, do not edit manually)
-- `entrypoint.sh` — container entrypoint: iptables setup → privilege drop
+- `entrypoint.sh` — container entrypoint: iptables setup → secret-env reading → privilege drop
 - `config.toml.default` — default config written on first run
 - `tui.js` — built TUI plugin JS (from `plugin/index.jsx` via the Babel-based Solid transform in `plugin/build.mjs`)
 - `tui-plugin.json` — minimal package.json for the embedded TUI plugin

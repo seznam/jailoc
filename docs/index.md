@@ -36,6 +36,7 @@ Step-by-step guides for specific tasks once you're up and running.
 - [Workspace Configuration](how-to/workspace-configuration.md)
 - [Custom Images](how-to/custom-images.md)
 - [Network Access](how-to/network-access.md)
+- [Secrets](how-to/secrets.md)
 - [SSH & Git Passthrough](how-to/ssh-git-passthrough.md)
 - [Access Modes](how-to/access-modes.md)
 - [Troubleshooting](how-to/troubleshooting.md)
@@ -58,6 +59,7 @@ Background on how jailoc works and why it's designed the way it is.
 - [Threat Model](explanation/threat-model.md)
 - [Container Architecture](explanation/container-architecture.md)
 - [Network Isolation](explanation/network-isolation.md)
+- [Secrets](explanation/secrets.md)
 - [Access Modes](explanation/access-modes.md)
 
 ### Development

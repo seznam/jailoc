@@ -121,6 +121,12 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
+	// Must run before every generated-file write below: the secret-env manifest
+	// must never be produced for an invalid or colliding configuration.
+	if err := validateSecretSources(ws); err != nil {
+		return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
+	}
+
 	if hostPath, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
 		if err := ensureOCConfigGitignore(hostPath); err != nil {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr,
@@ -142,7 +148,7 @@ func runUp(ctx context.Context, args []string) error {
 		return fmt.Errorf("create compose cache directory %q: %w", cacheDir, err)
 	}
 
-	if err := config.WriteAllowedFiles(ws.Name, cfg); err != nil {
+	if err := config.WriteAllowedFiles(ws.Name, cfg, secretEnvNames(ws)); err != nil {
 		return fmt.Errorf("write allowed files for workspace %q: %w", ws.Name, err)
 	}
 
@@ -185,6 +191,7 @@ func runUp(ctx context.Context, args []string) error {
 		UseCacheVolume:  !compose.MountsContainTarget(ws.Mounts, "/home/agent/.cache"),
 		ExposePort:      ws.ExposePort,
 		EnableDocker:    ws.EnableDocker,
+		Secrets:         secretSpecs(ws),
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Generating compose configuration...\n")

@@ -7,6 +7,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -85,6 +86,9 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", f)
 		}
 	}
+
+	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Secrets:\n")
+	printSecrets(cfg.Defaults.Secrets, "  ")
 
 	defaultsCPU := "(not set, default: 2.0)"
 	if cfg.Defaults.CPU != nil {
@@ -169,6 +173,9 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Secrets:\n")
+		printSecrets(ws.Secrets, "    ")
+
 		wsCPU := "(not set)"
 		if ws.CPU != nil {
 			wsCPU = fmt.Sprintf("%g", *ws.CPU)
@@ -186,6 +193,20 @@ func runConfig(cmd *cobra.Command, args []string) error {
 
 	_ = ctx // silence unused variable warning
 	return nil
+}
+
+// printSecrets writes one [<scope>.secrets] block as source references.
+// Ordering comes from workspace.FlattenSecrets so that jailoc config lists
+// secrets in the same order the compose file and the secret-env manifest use.
+func printSecrets(secrets config.Secrets, indent string) {
+	resolved := workspace.FlattenSecrets(secrets)
+	if len(resolved) == 0 {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
+		return
+	}
+	for _, secret := range resolved {
+		_, _ = fmt.Fprintf(os.Stdout, "%s- %s\n", indent, secretReference(secret))
+	}
 }
 
 func init() {

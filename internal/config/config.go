@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"net"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -43,6 +45,11 @@ const (
 # cpu = 2.0
 # memory = "4g"
 
+# [defaults.secrets.env.MY_TOKEN]
+#   from_env = "HOST_ENV_VAR"   # exported in the container as env var MY_TOKEN
+# [defaults.secrets.file.MY_FILE]
+#   from_file = "/path/to/secret"  # mounted at /run/secrets/MY_FILE
+
 [workspaces.default]
 paths = []
 # image = ""
@@ -59,6 +66,11 @@ paths = []
 # enable_docker = true
 # cpu = 2.0
 # memory = "4g"
+
+# [workspaces.default.secrets.env.MY_TOKEN]
+#   from_env = "HOST_ENV_VAR"   # exported in the container as env var MY_TOKEN
+# [workspaces.default.secrets.file.MY_FILE]
+#   from_file = "/path/to/secret"  # mounted at /run/secrets/MY_FILE
 `
 )
 
@@ -70,6 +82,16 @@ const (
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 var validMemory = regexp.MustCompile(`^[1-9][0-9]*[kmgKMG]?$`)
+
+// secretNameRe is a deliberately safe subset of Docker Compose's own secret-name
+// grammar (`^[a-zA-Z0-9._-]+$`): dots are excluded so a secret name can never be
+// confused with a path segment when it is rendered into /run/secrets/<name>.
+var secretNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// envVarNameRe is the exact POSIX shell identifier grammar. It is stricter than
+// validateEnvEntries (which only guards the KEY=VALUE shape) because env
+// secret names are exported verbatim into the container environment.
+var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var reservedEnvKeys = map[string]bool{
 	"OPENCODE_LOG":             true,
@@ -152,6 +174,23 @@ type Mount struct {
 	Mode      string
 }
 
+// Secret is one [<scope>.secrets.<env|file>.<NAME>] entry. The sub-table it
+// lives in decides the destination; FromEnv/FromFile decide the source.
+// FromEnv names the host env var the value is read from, FromFile the absolute
+// host path. Both tags carry omitempty so a whole-config TOML re-encode never
+// injects empty source keys into a user's config.
+type Secret struct {
+	FromEnv  string `toml:"from_env,omitempty"`
+	FromFile string `toml:"from_file,omitempty"`
+}
+
+// Secrets is a whole [<scope>.secrets] block. The sub-table a secret lives in
+// decides its destination, so env-vs-file is structural, not a validated XOR.
+type Secrets struct {
+	Env  map[string]Secret `toml:"env,omitempty"`
+	File map[string]Secret `toml:"file,omitempty"`
+}
+
 type Config struct {
 	Mode         string               `toml:"mode"`
 	PasswordMode string               `toml:"password_mode"`
@@ -170,6 +209,7 @@ type Defaults struct {
 	Mounts          []string `toml:"mounts"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 	AllowedNetworks []string `toml:"allowed_networks"`
+	Secrets         Secrets  `toml:"secrets,omitempty"`
 	Image           string   `toml:"image"`
 	SSHAuthSock     bool     `toml:"ssh_auth_sock"`
 	GitConfig       *bool    `toml:"git_config"`
@@ -186,6 +226,7 @@ type Workspace struct {
 	AllowedNetworks []string `toml:"allowed_networks"`
 	Env             []string `toml:"env"`
 	EnvFile         []string `toml:"env_file"`
+	Secrets         Secrets  `toml:"secrets,omitempty"`
 	BuildContext    string   `toml:"build_context"`
 	Dockerfile      string   `toml:"dockerfile"`
 	Image           string   `toml:"image"`
@@ -361,6 +402,122 @@ func validateEnvFiles(paths []string, context string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func validateEnvVarName(name string) error {
+	if !envVarNameRe.MatchString(name) {
+		return fmt.Errorf("invalid environment variable name %q: must match ^[A-Za-z_][A-Za-z0-9_]*$", name)
+	}
+	return nil
+}
+
+// validateSecretFile rejects "$" because Docker Compose interpolates the whole
+// YAML document before loading it, and compose.yamlQuote does not escape "$".
+func validateSecretFile(path string) error {
+	if strings.Contains(path, "$") {
+		return fmt.Errorf("file path %q must not contain \"$\": Docker Compose interpolates it before loading the compose file", path)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("file path %q must be absolute", path)
+	}
+	return nil
+}
+
+// reservedSecretEnvName reports container env var names an env secret must
+// never claim. entrypoint.sh execs `env HOME=/home/agent "${secret_envs[@]}"
+// opencode` with a bare command name, so a PATH secret poisons command lookup
+// and a HOME secret overrides the agent home — both break container startup.
+func reservedSecretEnvName(name string) bool {
+	return reservedEnvKeys[name] || name == "HOME" || name == "PATH"
+}
+
+type secretDest int
+
+const (
+	destEnv secretDest = iota
+	destFile
+)
+
+func validateSecret(name string, secret Secret, dest secretDest, context string) error {
+	destLabel := "file"
+	if dest == destEnv {
+		destLabel = "env"
+		if err := validateEnvVarName(name); err != nil {
+			return fmt.Errorf("%s: env secret %q: %w", context, name, err)
+		}
+		if reservedSecretEnvName(name) {
+			return fmt.Errorf("%s: env secret %q: name is reserved and cannot be overridden", context, name)
+		}
+	} else if !secretNameRe.MatchString(name) {
+		return fmt.Errorf("%s: file secret %q: invalid name: must match [a-zA-Z0-9_-]+", context, name)
+	}
+
+	if secret.FromEnv == "" && secret.FromFile == "" {
+		return fmt.Errorf("%s: %s secret %q: exactly one of \"from_env\" or \"from_file\" must be set", context, destLabel, name)
+	}
+	if secret.FromEnv != "" && secret.FromFile != "" {
+		return fmt.Errorf("%s: %s secret %q: \"from_env\" and \"from_file\" are mutually exclusive: set exactly one", context, destLabel, name)
+	}
+	if secret.FromEnv != "" {
+		// The host variable name is rendered verbatim into the compose file, which
+		// Docker Compose interpolates before loading. Enforcing the shell
+		// identifier grammar rejects "$" for the same reason validateSecretFile
+		// does, and rejects names no POSIX shell could have exported anyway.
+		if err := validateEnvVarName(secret.FromEnv); err != nil {
+			return fmt.Errorf("%s: %s secret %q: \"from_env\": %w", context, destLabel, name, err)
+		}
+	}
+	if secret.FromFile != "" {
+		if err := validateSecretFile(secret.FromFile); err != nil {
+			return fmt.Errorf("%s: %s secret %q: %w", context, destLabel, name, err)
+		}
+	}
+	return nil
+}
+
+func validateSecretsBlock(secrets Secrets, context string) error {
+	for _, name := range slices.Sorted(maps.Keys(secrets.Env)) {
+		if _, ok := secrets.File[name]; ok {
+			return fmt.Errorf("%s: secret %q: declared in both \"secrets.env\" and \"secrets.file\": a name may live in only one", context, name)
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(secrets.Env)) {
+		if err := validateSecret(name, secrets.Env[name], destEnv, context); err != nil {
+			return err
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(secrets.File)) {
+		if err := validateSecret(name, secrets.File[name], destFile, context); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func expandSecretsBlockFiles(secrets *Secrets) error {
+	if secrets == nil {
+		return nil
+	}
+
+	for _, secretMap := range []map[string]Secret{secrets.Env, secrets.File} {
+		for _, name := range slices.Sorted(maps.Keys(secretMap)) {
+			secret := secretMap[name]
+			if secret.FromFile == "" {
+				continue
+			}
+			expanded, err := ExpandPath(secret.FromFile)
+			if err != nil {
+				return fmt.Errorf("expand secret file %q: %w", secret.FromFile, err)
+			}
+			secret.FromFile = expanded
+			secretMap[name] = secret
+		}
+	}
+
 	return nil
 }
 
@@ -587,6 +744,14 @@ func Validate(cfg *Config) error {
 		return err
 	}
 
+	if err := expandSecretsBlockFiles(&cfg.Defaults.Secrets); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
+
+	if err := validateSecretsBlock(cfg.Defaults.Secrets, "defaults"); err != nil {
+		return err
+	}
+
 	for i, spec := range cfg.Defaults.Mounts {
 		m, err := ParseMount(spec)
 		if err != nil {
@@ -718,6 +883,9 @@ func Validate(cfg *Config) error {
 		if err := validateEnvFiles(ws.EnvFile, wsContext); err != nil {
 			return err
 		}
+		if err := validateSecretsBlock(ws.Secrets, wsContext); err != nil {
+			return err
+		}
 
 		if ws.CPU != nil && (*ws.CPU <= 0 || math.IsNaN(*ws.CPU) || math.IsInf(*ws.CPU, 0)) {
 			return fmt.Errorf("workspace %q: cpu must be a finite number greater than 0", name)
@@ -793,7 +961,20 @@ func AddPath(workspace, path string) error {
 	return nil
 }
 
-func WriteAllowedFiles(workspace string, cfg *Config) error {
+// WriteAllowedFiles materialises the per-workspace files bind-mounted into the
+// container at /etc/jailoc.
+//
+// secretEnvNames must contain only env-destination secret names and must
+// already be sorted — the manifest is written in the given order verbatim.
+// Callers get that ordering for free from workspace.Resolved.Secrets, which
+// workspace.FlattenSecrets sorts by name.
+//
+// The secret-env manifest holds NAMES ONLY, never values: the same directory is
+// also mounted into the privileged dind sidecar
+// (internal/embed/assets/docker-compose.yml.tmpl:24 and :108), so anything
+// written here is readable by both containers. entrypoint.sh reads each name
+// back out of /run/secrets/<name> inside the container.
+func WriteAllowedFiles(workspace string, cfg *Config, secretEnvNames []string) error {
 	if cfg == nil {
 		return nil
 	}
@@ -828,7 +1009,29 @@ func WriteAllowedFiles(workspace string, cfg *Config) error {
 		}
 	}
 
+	secretEnvPath := filepath.Join(dir, "secret-env")
+	if content := secretEnvFileContent(secretEnvNames); content != "" {
+		if err := os.WriteFile(secretEnvPath, []byte(content), 0o600); err != nil {
+			return fmt.Errorf("write secret-env file: %w", err)
+		}
+	} else {
+		if err := os.Remove(secretEnvPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale secret-env file: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func secretEnvFileContent(secretEnvNames []string) string {
+	var b strings.Builder
+	for _, name := range secretEnvNames {
+		if name == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s\n", name)
+	}
+	return b.String()
 }
 
 // mergeDedup combines two string slices into one, removing duplicates.
@@ -941,6 +1144,10 @@ func expandPaths(ws *Workspace) error {
 			return fmt.Errorf("expand env_file path %q: %w", p, err)
 		}
 		ws.EnvFile[i] = expanded
+	}
+
+	if err := expandSecretsBlockFiles(&ws.Secrets); err != nil {
+		return err
 	}
 
 	for i, spec := range ws.Mounts {

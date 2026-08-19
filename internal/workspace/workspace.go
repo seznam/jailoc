@@ -34,10 +34,26 @@ type Resolved struct {
 	Env             []string
 	SSHAuthSock     bool
 	GitConfig       bool
+	Secrets         []ResolvedSecret
 	CPU             float64
 	Memory          string
 	ExposePort      bool
 	EnableDocker    bool
+}
+
+type SecretKind int
+
+const (
+	SecretKindEnv SecretKind = iota
+	SecretKindFile
+)
+
+// ResolvedSecret is a secret after the defaults+workspace merge.
+type ResolvedSecret struct {
+	Name     string
+	Kind     SecretKind
+	FromEnv  string
+	FromFile string
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -105,6 +121,8 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		return nil, fmt.Errorf("merge mounts for workspace %s: %w", name, err)
 	}
 
+	mergedSecrets := mergeSecrets(cfg.Defaults.Secrets, ws.Secrets)
+
 	r := &Resolved{
 		Name:            name,
 		Paths:           paths,
@@ -116,6 +134,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Dockerfile:      ws.Dockerfile,
 		Image:           ws.Image,
 		Env:             mergedEnv,
+		Secrets:         mergedSecrets,
 		SSHAuthSock:     boolWithOverride(cfg.Defaults.SSHAuthSock, ws.SSHAuthSock),
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
@@ -127,6 +146,61 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))
 
 	return r, nil
+}
+
+// FlattenSecrets converts a single [<scope>.secrets] block into the ordering
+// Resolve produces. Callers that display one scope in isolation (jailoc config)
+// share their ordering with the compose file and the secret-env manifest, so
+// the codebase has exactly one definition of secret order.
+func FlattenSecrets(secrets config.Secrets) []ResolvedSecret {
+	collected := make(map[string]ResolvedSecret, len(secrets.Env)+len(secrets.File))
+	collectSecrets(collected, secrets)
+
+	return sortedSecrets(collected)
+}
+
+func mergeSecrets(defaults, overrides config.Secrets) []ResolvedSecret {
+	merged := make(map[string]ResolvedSecret, len(defaults.Env)+len(defaults.File)+len(overrides.Env)+len(overrides.File))
+	collectSecrets(merged, defaults)
+	collectSecrets(merged, overrides)
+
+	return sortedSecrets(merged)
+}
+
+// collectSecrets folds one scope's secrets into dst, keyed by name. A later
+// call overwrites an earlier one: that is how a workspace entry replaces the
+// default of the same name, including when the two use different destination
+// sub-tables. Within a single scope a name cannot appear in both sub-tables —
+// config.validateSecretsBlock rejects that before Resolve runs.
+func collectSecrets(dst map[string]ResolvedSecret, secrets config.Secrets) {
+	for name, secret := range secrets.Env {
+		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile}
+	}
+	for name, secret := range secrets.File {
+		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile}
+	}
+}
+
+// sortedSecrets sorts by Name across both destination sub-tables. This single
+// sort is what lets internal/cmd hand Resolved.Secrets straight to the compose
+// template and the secret-env manifest without re-sorting.
+func sortedSecrets(secrets map[string]ResolvedSecret) []ResolvedSecret {
+	if len(secrets) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(secrets))
+	for name := range secrets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	resolved := make([]ResolvedSecret, 0, len(names))
+	for _, name := range names {
+		resolved = append(resolved, secrets[name])
+	}
+
+	return resolved
 }
 
 func dedupEnvByKeyLastWins(entries []string) []string {

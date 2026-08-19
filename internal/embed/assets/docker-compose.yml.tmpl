@@ -54,6 +54,12 @@ services:
 {{- range .Env}}
       - {{. | yamlQuote}}
 {{- end}}
+{{- if .Secrets}}
+    secrets:
+{{- range .Secrets}}
+      - {{.Name | yamlQuote}}
+{{- end}}
+{{- end}}
     cap_drop:
       - ALL
     cap_add:
@@ -127,3 +133,16 @@ volumes:
 
 networks:
   jailoc:
+{{- if .Secrets}}
+
+secrets:
+{{- range .Secrets}}
+  {{.Name | yamlQuote}}:
+{{- if .Environment}}
+    environment: {{.Environment | yamlQuote}}
+{{- end}}
+{{- if .File}}
+    file: {{.File | yamlQuote}}
+{{- end}}
+{{- end}}
+{{- end}}

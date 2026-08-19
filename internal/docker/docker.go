@@ -95,8 +95,20 @@ func (c *Client) Up(ctx context.Context) error {
 	// RecreateDiverged (default): containers are recreated only when the
 	// compose configuration changes. RemoveOrphans removes services that are
 	// no longer defined (e.g. dind after disabling enable_docker).
+	//
+	// Start.Project looks redundant next to the project positional argument
+	// above, but it MUST NOT be removed. The Compose SDK forwards only
+	// options.Start into its internal start(), and start() rebuilds the
+	// project from container labels via projectFromName when Start.Project is
+	// nil. That rebuilt project has an empty Secrets field, so env-sourced
+	// secrets resolve to empty content and the SDK silently skips them
+	// (`if content == "" { continue }`) instead of injecting them into
+	// /run/secrets. File-sourced secrets are unaffected because they are baked
+	// into the compose file as bind mounts at container-create time. The
+	// docker compose CLI sets this field for the same reason.
 	if err := c.svc.Up(ctx, project, api.UpOptions{
 		Create: api.CreateOptions{RemoveOrphans: true},
+		Start:  api.StartOptions{Project: project},
 	}); err != nil {
 		return fmt.Errorf("compose up for workspace %q: %w", c.workspace, err)
 	}
