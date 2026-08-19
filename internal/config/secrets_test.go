@@ -248,9 +248,18 @@ func TestValidateEnvSourceSecret(t *testing.T) {
 		{name: "leading underscore", secretName: "_TOKEN9", secret: Secret{FromEnv: "GH_TOKEN"}},
 		{name: "file source", secretName: "FILE_KEY", secret: Secret{FromFile: "/abs/key"}},
 		{
-			name:       "from_env is not grammar checked",
-			secretName: "MY_TOKEN",
-			secret:     Secret{FromEnv: "not-a-valid-shell-identifier"},
+			name:        "from_env with a dash",
+			secretName:  "MY_TOKEN",
+			secret:      Secret{FromEnv: "not-a-valid-shell-identifier"},
+			wantSubstrs: []string{"MY_TOKEN", "from_env", "^[A-Za-z_][A-Za-z0-9_]*$"},
+		},
+		{
+			// The source reference is rendered verbatim into the compose file,
+			// which Docker Compose interpolates before loading it.
+			name:        "from_env containing an interpolation marker",
+			secretName:  "MY_TOKEN",
+			secret:      Secret{FromEnv: "PREFIX$SUFFIX"},
+			wantSubstrs: []string{"MY_TOKEN", "from_env", "^[A-Za-z_][A-Za-z0-9_]*$"},
 		},
 		{
 			name:        "name with a dash",
@@ -330,6 +339,14 @@ func TestValidateFileSourceSecret(t *testing.T) {
 		{name: "absolute path", secretName: "NETRC", secret: Secret{FromFile: "/home/me/.netrc"}},
 		{name: "name with dash and underscore", secretName: "my-secret_1", secret: Secret{FromFile: "/abs/x"}},
 		{name: "environment source", secretName: "envkey", secret: Secret{FromEnv: "HOST_KEY"}},
+		{
+			// The from_env grammar check is destination-independent: a file
+			// destination reads the same interpolated compose field.
+			name:        "from_env with a dash",
+			secretName:  "envkey",
+			secret:      Secret{FromEnv: "host-key"},
+			wantSubstrs: []string{"envkey", "from_env", "^[A-Za-z_][A-Za-z0-9_]*$"},
+		},
 		{
 			name:       "nonexistent file is accepted at the config layer",
 			secretName: "NETRC",

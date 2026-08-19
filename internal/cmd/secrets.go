@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/seznam/jailoc/internal/compose"
-	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -23,32 +22,20 @@ import (
 // It never reads a secret value — only its metadata.
 func validateSecretSources(ws *workspace.Resolved) error {
 	envKeys := envKeySet(ws.Env)
-	envSecretNames := make(map[string]bool, len(ws.Secrets))
 
 	for _, s := range ws.Secrets {
 		if s.FromEnv != "" {
 			if err := validateSecretEnvSource(s); err != nil {
 				return err
 			}
-		} else {
-			if err := validateSecretFileExists(s); err != nil {
-				return err
-			}
-			if s.Kind == workspace.SecretKindFile {
-				if err := validateSecretFileWorldReadable(s); err != nil {
-					return err
-				}
-			}
+		} else if err := validateSecretFileSource(s); err != nil {
+			return err
 		}
 
-		if s.Kind == workspace.SecretKindEnv {
-			if envKeys[s.Name] {
-				return fmt.Errorf("env secret %q collides with an env entry", s.Name)
-			}
-			if envSecretNames[s.Name] {
-				return fmt.Errorf("duplicate env secret %q", s.Name)
-			}
-			envSecretNames[s.Name] = true
+		// Names are unique by construction: workspace.Resolve keys secrets by
+		// name, so only a collision with a plain env entry is possible here.
+		if s.Kind == workspace.SecretKindEnv && envKeys[s.Name] {
+			return fmt.Errorf("env secret %q collides with an env entry", s.Name)
 		}
 	}
 
@@ -69,7 +56,11 @@ func validateSecretEnvSource(s workspace.ResolvedSecret) error {
 	return nil
 }
 
-func validateSecretFileExists(s workspace.ResolvedSecret) error {
+// validateSecretFileSource checks a host file once and applies the
+// world-readable gate only where it matters: a file-destination secret is
+// bind-mounted straight to the unprivileged agent, whereas an env-destination
+// secret is read by entrypoint.sh as root before setpriv drops privileges.
+func validateSecretFileSource(s workspace.ResolvedSecret) error {
 	fi, err := os.Stat(s.FromFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -80,16 +71,10 @@ func validateSecretFileExists(s workspace.ResolvedSecret) error {
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("secret %q: file %q is not a regular file", s.Name, s.FromFile)
 	}
-	return nil
-}
-
-func validateSecretFileWorldReadable(s workspace.ResolvedSecret) error {
-	fi, err := os.Stat(s.FromFile)
-	if err != nil {
-		return fmt.Errorf("secret %q: stat file %q: %w", s.Name, s.FromFile, err)
+	if s.Kind != workspace.SecretKindFile {
+		return nil
 	}
-	mode := fi.Mode().Perm()
-	if mode&0o004 == 0 {
+	if mode := fi.Mode().Perm(); mode&0o004 == 0 {
 		return fmt.Errorf("secret %q: file %q is not world-readable (mode %04o); the agent runs as UID 1000 and this is a conservative check — run 'chmod o+r %s' to make it readable inside the container", s.Name, s.FromFile, mode, s.FromFile)
 	}
 	return nil
@@ -146,19 +131,15 @@ func secretSpecs(ws *workspace.Resolved) []compose.SecretSpec {
 	return specs
 }
 
-// secretEnvPairs returns the name/variable pairs for env secrets.
-func secretEnvPairs(ws *workspace.Resolved) []config.SecretEnvPair {
-	if len(ws.Secrets) == 0 {
-		return nil
-	}
-	pairs := make([]config.SecretEnvPair, 0, len(ws.Secrets))
+// secretEnvNames returns the names of the env-destination secrets, in
+// ws.Secrets order. Every env secret is exported under its own name, so the
+// name is the entire manifest record.
+func secretEnvNames(ws *workspace.Resolved) []string {
+	var names []string
 	for _, s := range ws.Secrets {
 		if s.Kind == workspace.SecretKindEnv {
-			pairs = append(pairs, config.SecretEnvPair{Name: s.Name, Var: s.Name})
+			names = append(names, s.Name)
 		}
 	}
-	if len(pairs) == 0 {
-		return nil
-	}
-	return pairs
+	return names
 }

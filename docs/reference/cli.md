@@ -114,7 +114,7 @@ Print the current resolved configuration.
 jailoc config [flags]
 ```
 
-Reads `~/.config/jailoc/config.toml`, resolves all defaults and `~` expansions, and prints the result. Useful for verifying what values are in effect. Secret definitions are printed as references showing their source configuration (for example, `name (env VAR -> EXPOSE)` or `name (file path)`), never resolving or displaying raw secret values.
+Reads `~/.config/jailoc/config.toml`, resolves all defaults and `~` expansions, and prints the result. Useful for verifying what values are in effect. Secrets are listed per scope — under `Defaults Secrets:` and under each workspace — as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never resolved or displayed.
 
 ---
 

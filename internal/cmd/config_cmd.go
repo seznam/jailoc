@@ -87,6 +87,9 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Secrets:\n")
+	printSecrets(cfg.Defaults.Secrets, "  ")
+
 	defaultsCPU := "(not set, default: 2.0)"
 	if cfg.Defaults.CPU != nil {
 		defaultsCPU = fmt.Sprintf("%g", *cfg.Defaults.CPU)
@@ -171,13 +174,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		}
 
 		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Secrets:\n")
-		if len(ws.Secrets.Env) == 0 && len(ws.Secrets.File) == 0 {
-			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
-		} else {
-			for _, secretName := range sortedSecretNames(ws.Secrets) {
-				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", secretReference(secretName))
-			}
-		}
+		printSecrets(ws.Secrets, "    ")
 
 		wsCPU := "(not set)"
 		if ws.CPU != nil {
@@ -198,27 +195,18 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func sortedSecretNames(secrets config.Secrets) []workspace.ResolvedSecret {
-	resolved := make([]workspace.ResolvedSecret, 0, len(secrets.Env)+len(secrets.File))
-	envNames := make([]string, 0, len(secrets.Env))
-	for name := range secrets.Env {
-		envNames = append(envNames, name)
+// printSecrets writes one [<scope>.secrets] block as source references.
+// Ordering comes from workspace.FlattenSecrets so that jailoc config lists
+// secrets in the same order the compose file and the secret-env manifest use.
+func printSecrets(secrets config.Secrets, indent string) {
+	resolved := workspace.FlattenSecrets(secrets)
+	if len(resolved) == 0 {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
+		return
 	}
-	sort.Strings(envNames)
-	for _, name := range envNames {
-		s := secrets.Env[name]
-		resolved = append(resolved, workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindEnv, FromEnv: s.FromEnv, FromFile: s.FromFile})
+	for _, secret := range resolved {
+		_, _ = fmt.Fprintf(os.Stdout, "%s- %s\n", indent, secretReference(secret))
 	}
-	fileNames := make([]string, 0, len(secrets.File))
-	for name := range secrets.File {
-		fileNames = append(fileNames, name)
-	}
-	sort.Strings(fileNames)
-	for _, name := range fileNames {
-		s := secrets.File[name]
-		resolved = append(resolved, workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindFile, FromEnv: s.FromEnv, FromFile: s.FromFile})
-	}
-	return resolved
 }
 
 func init() {

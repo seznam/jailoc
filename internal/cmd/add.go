@@ -153,7 +153,7 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		Secrets:          secretSpecs(ws2),
 	}
 
-	if err := config.WriteAllowedFiles(ws2.Name, cfg, secretEnvPairs(ws2)); err != nil {
+	if err := config.WriteAllowedFiles(ws2.Name, cfg, secretEnvNames(ws2)); err != nil {
 		return fmt.Errorf("write allowed files for workspace %q: %w", ws2.Name, err)
 	}
 

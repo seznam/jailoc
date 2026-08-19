@@ -265,7 +265,7 @@ Each secret entry under `secrets.env.<NAME>` or `secrets.file.<NAME>` accepts th
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `from_env` | string | (optional) | Host environment variable name to read the secret value from. Must not be empty. Mutually exclusive with `from_file`. |
+| `from_env` | string | (optional) | Host environment variable name to read the secret value from. Must match `^[A-Za-z_][A-Za-z0-9_]*$`, which excludes `$` for the same Docker Compose interpolation reason as `from_file`. Must not be empty. Mutually exclusive with `from_file`. |
 | `from_file` | string | (optional) | Host file path to read the secret from. Must be absolute (`/...`) or start with `~` (expanded to home directory). Must not contain `$` (Docker Compose interpolation constraint). Must not be empty. Mutually exclusive with `from_env`. |
 
 #### Environment destination (`secrets.env.<NAME>`)

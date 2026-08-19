@@ -191,17 +191,6 @@ type Secrets struct {
 	File map[string]Secret `toml:"file,omitempty"`
 }
 
-// SecretEnvPair maps a Compose secret name to the environment variable every
-// env secret exports it as. It carries no secret value — the value is read
-// inside the container from /run/secrets/<Name>.
-//
-// It exists so that WriteAllowedFiles can accept resolved secret metadata
-// without package config importing package workspace.
-type SecretEnvPair struct {
-	Name string
-	Var  string
-}
-
 type Config struct {
 	Mode         string               `toml:"mode"`
 	PasswordMode string               `toml:"password_mode"`
@@ -469,6 +458,15 @@ func validateSecret(name string, secret Secret, dest secretDest, context string)
 	}
 	if secret.FromEnv != "" && secret.FromFile != "" {
 		return fmt.Errorf("%s: %s secret %q: \"from_env\" and \"from_file\" are mutually exclusive: set exactly one", context, destLabel, name)
+	}
+	if secret.FromEnv != "" {
+		// The host variable name is rendered verbatim into the compose file, which
+		// Docker Compose interpolates before loading. Enforcing the shell
+		// identifier grammar rejects "$" for the same reason validateSecretFile
+		// does, and rejects names no POSIX shell could have exported anyway.
+		if err := validateEnvVarName(secret.FromEnv); err != nil {
+			return fmt.Errorf("%s: %s secret %q: \"from_env\": %w", context, destLabel, name, err)
+		}
 	}
 	if secret.FromFile != "" {
 		if err := validateSecretFile(secret.FromFile); err != nil {
@@ -966,15 +964,17 @@ func AddPath(workspace, path string) error {
 // WriteAllowedFiles materialises the per-workspace files bind-mounted into the
 // container at /etc/jailoc.
 //
-// secretEnv must contain only env-secret name pairs and must already be sorted
-// by Name — the manifest is written in the given order verbatim. Callers get
-// that ordering for free from workspace.Resolved.Secrets, which is sorted by Name.
+// secretEnvNames must contain only env-destination secret names and must
+// already be sorted — the manifest is written in the given order verbatim.
+// Callers get that ordering for free from workspace.Resolved.Secrets, which
+// workspace.FlattenSecrets sorts by name.
 //
 // The secret-env manifest holds NAMES ONLY, never values: the same directory is
 // also mounted into the privileged dind sidecar
 // (internal/embed/assets/docker-compose.yml.tmpl:24 and :108), so anything
-// written here is readable by both containers.
-func WriteAllowedFiles(workspace string, cfg *Config, secretEnv []SecretEnvPair) error {
+// written here is readable by both containers. entrypoint.sh reads each name
+// back out of /run/secrets/<name> inside the container.
+func WriteAllowedFiles(workspace string, cfg *Config, secretEnvNames []string) error {
 	if cfg == nil {
 		return nil
 	}
@@ -1010,7 +1010,7 @@ func WriteAllowedFiles(workspace string, cfg *Config, secretEnv []SecretEnvPair)
 	}
 
 	secretEnvPath := filepath.Join(dir, "secret-env")
-	if content := secretEnvFileContent(secretEnv); content != "" {
+	if content := secretEnvFileContent(secretEnvNames); content != "" {
 		if err := os.WriteFile(secretEnvPath, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("write secret-env file: %w", err)
 		}
@@ -1023,13 +1023,13 @@ func WriteAllowedFiles(workspace string, cfg *Config, secretEnv []SecretEnvPair)
 	return nil
 }
 
-func secretEnvFileContent(secretEnv []SecretEnvPair) string {
+func secretEnvFileContent(secretEnvNames []string) string {
 	var b strings.Builder
-	for _, pair := range secretEnv {
-		if pair.Name == "" || pair.Var == "" {
+	for _, name := range secretEnvNames {
+		if name == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "%s %s\n", pair.Name, pair.Var)
+		fmt.Fprintf(&b, "%s\n", name)
 	}
 	return b.String()
 }

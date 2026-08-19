@@ -148,7 +148,7 @@ func runUp(ctx context.Context, args []string) error {
 		return fmt.Errorf("create compose cache directory %q: %w", cacheDir, err)
 	}
 
-	if err := config.WriteAllowedFiles(ws.Name, cfg, secretEnvPairs(ws)); err != nil {
+	if err := config.WriteAllowedFiles(ws.Name, cfg, secretEnvNames(ws)); err != nil {
 		return fmt.Errorf("write allowed files for workspace %q: %w", ws.Name, err)
 	}
 

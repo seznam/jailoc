@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -126,13 +127,14 @@ func TestValidateSecretSources(t *testing.T) {
 			wantErr: `env secret "FILE_KEY" collides with an env entry`,
 		},
 		{
-			name: "duplicate env secret names",
+			// workspace.Resolve keys secrets by name, so a repeated name in
+			// Resolved.Secrets is unrepresentable and needs no runtime check here.
+			// TestResolveSecretsWorkspaceOverrideAcrossKinds covers the dedup.
+			name: "env secret not colliding with a differently named env entry",
 			env:  map[string]string{"JAILOC_TEST_TOKEN": "value"},
-			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_TOKEN"},
+			ws: &workspace.Resolved{Name: "ws", Env: []string{"OTHER=1"}, Secrets: []workspace.ResolvedSecret{
 				{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_TOKEN"},
 			}},
-			wantErr: `duplicate env secret "TOKEN"`,
 		},
 		{
 			name: "distinct env and file secrets pass",
@@ -170,7 +172,7 @@ func TestValidateSecretSources(t *testing.T) {
 	}
 }
 
-func TestSecretSpecsAndEnvPairs(t *testing.T) {
+func TestSecretSpecsAndEnvNames(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil secrets yields nil", func(t *testing.T) {
@@ -179,8 +181,8 @@ func TestSecretSpecsAndEnvPairs(t *testing.T) {
 		if got := secretSpecs(ws); got != nil {
 			t.Fatalf("secretSpecs() = %v, want nil", got)
 		}
-		if got := secretEnvPairs(ws); got != nil {
-			t.Fatalf("secretEnvPairs() = %v, want nil", got)
+		if got := secretEnvNames(ws); got != nil {
+			t.Fatalf("secretEnvNames() = %v, want nil", got)
 		}
 	})
 
@@ -210,25 +212,20 @@ func TestSecretSpecsAndEnvPairs(t *testing.T) {
 			t.Fatalf("secretSpecs()[3] = %+v", specs[3])
 		}
 
-		pairs := secretEnvPairs(ws)
-		want := []config.SecretEnvPair{{Name: "ALPHA", Var: "ALPHA"}, {Name: "BETA", Var: "BETA"}}
-		if len(pairs) != len(want) {
-			t.Fatalf("secretEnvPairs() = %+v, want %+v", pairs, want)
-		}
-		for i := range want {
-			if pairs[i] != want[i] {
-				t.Fatalf("secretEnvPairs()[%d] = %+v, want %+v", i, pairs[i], want[i])
-			}
+		names := secretEnvNames(ws)
+		want := []string{"ALPHA", "BETA"}
+		if !reflect.DeepEqual(names, want) {
+			t.Fatalf("secretEnvNames() = %+v, want %+v", names, want)
 		}
 	})
 
-	t.Run("file secrets yield nil pairs", func(t *testing.T) {
+	t.Run("file secrets yield nil names", func(t *testing.T) {
 		t.Parallel()
 		ws := &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
 			{Name: "beta", Kind: workspace.SecretKindFile, FromFile: "/tmp/beta"},
 		}}
-		if got := secretEnvPairs(ws); got != nil {
-			t.Fatalf("secretEnvPairs() = %v, want nil", got)
+		if got := secretEnvNames(ws); got != nil {
+			t.Fatalf("secretEnvNames() = %v, want nil", got)
 		}
 	})
 }
@@ -254,15 +251,9 @@ func TestSecretSpecsRenderAllSourceDestinationCombinations(t *testing.T) {
 		t.Fatalf("rendered compose file source count = %d, want 2:\n%s", got, yaml)
 	}
 
-	wantPairs := []config.SecretEnvPair{{Name: "FILE_KEY", Var: "FILE_KEY"}, {Name: "GH_TOKEN", Var: "GH_TOKEN"}}
-	gotPairs := secretEnvPairs(ws)
-	if len(gotPairs) != len(wantPairs) {
-		t.Fatalf("secretEnvPairs() = %+v, want %+v", gotPairs, wantPairs)
-	}
-	for i := range wantPairs {
-		if gotPairs[i] != wantPairs[i] {
-			t.Fatalf("secretEnvPairs()[%d] = %+v, want %+v", i, gotPairs[i], wantPairs[i])
-		}
+	wantNames := []string{"FILE_KEY", "GH_TOKEN"}
+	if gotNames := secretEnvNames(ws); !reflect.DeepEqual(gotNames, wantNames) {
+		t.Fatalf("secretEnvNames() = %+v, want %+v", gotNames, wantNames)
 	}
 }
 
@@ -390,6 +381,104 @@ paths = []
 		if strings.Contains(out, secretValue) {
 			t.Fatalf("jailoc config output leaked secret value %q:\n%s", secretValue, out)
 		}
+	}
+}
+
+// TestConfigShowsDefaultsSecrets is not parallel: it uses t.Setenv to point
+// config.Load at a scratch HOME.
+//
+// A secret declared only under [defaults.secrets] applies to every workspace,
+// so jailoc config must surface it. The per-workspace sections print the raw
+// workspace scope and therefore never mention it.
+func TestConfigShowsDefaultsSecrets(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("HOST_GLOBAL", "global-secret-value")
+
+	configDir := filepath.Join(home, ".config", "jailoc")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	content := `[defaults.secrets.env.GLOBAL_TOKEN]
+from_env = "HOST_GLOBAL"
+
+[defaults.secrets.file.global-cert]
+from_file = "/etc/ssl/global.pem"
+
+[workspaces.alpha]
+paths = ["/data/alpha"]
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		if err := runConfig(cmd, nil); err != nil {
+			t.Fatalf("runConfig() = %v", err)
+		}
+	})
+
+	assertContains(t, out, "Defaults Secrets:\n"+
+		"  - GLOBAL_TOKEN (env from_env HOST_GLOBAL)\n"+
+		"  - global-cert (file from_file /etc/ssl/global.pem)\n")
+
+	if strings.Contains(out, "global-secret-value") {
+		t.Fatalf("jailoc config output leaked the default secret value:\n%s", out)
+	}
+}
+
+// TestConfigDefaultsSecretsEmpty is not parallel: it uses t.Setenv to point
+// config.Load at a scratch HOME.
+func TestConfigDefaultsSecretsEmpty(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".config", "jailoc")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[workspaces.alpha]\npaths = [\"/data/alpha\"]\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		if err := runConfig(cmd, nil); err != nil {
+			t.Fatalf("runConfig() = %v", err)
+		}
+	})
+
+	assertContains(t, out, "Defaults Secrets:\n  (none)\n")
+}
+
+// TestPrintSecretsOrderMatchesResolvedOrder locks jailoc config to the single
+// ordering definition in workspace.FlattenSecrets: one sort by name across both
+// destination sub-tables. Grouping by destination first would place ZZZ_TOKEN
+// before aaa-cert, which is what this input distinguishes.
+func TestPrintSecretsOrderMatchesResolvedOrder(t *testing.T) {
+	t.Parallel()
+
+	secrets := config.Secrets{
+		Env:  map[string]config.Secret{"zzz_token": {FromEnv: "HOST_Z"}},
+		File: map[string]config.Secret{"aaa-cert": {FromFile: "/a/cert"}},
+	}
+
+	var names []string
+	for _, s := range workspace.FlattenSecrets(secrets) {
+		names = append(names, s.Name)
+	}
+	want := []string{"aaa-cert", "zzz_token"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("FlattenSecrets order = %v, want %v", names, want)
+	}
+
+	out := captureStdout(t, func() { printSecrets(secrets, "  ") })
+	wantOut := "  - aaa-cert (file from_file /a/cert)\n  - zzz_token (env from_env HOST_Z)\n"
+	if out != wantOut {
+		t.Fatalf("printSecrets() = %q, want %q", out, wantOut)
 	}
 }
 

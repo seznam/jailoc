@@ -8,31 +8,24 @@ import (
 
 func TestWriteSecretEnvManifest(t *testing.T) {
 	tests := []struct {
-		name      string
-		secretEnv []SecretEnvPair
-		want      string
+		name           string
+		secretEnvNames []string
+		want           string
 	}{
 		{
-			name:      "single pair",
-			secretEnv: []SecretEnvPair{{Name: "gh", Var: "GH_TOKEN"}},
-			want:      "gh GH_TOKEN\n",
+			name:           "single name",
+			secretEnvNames: []string{"GH_TOKEN"},
+			want:           "GH_TOKEN\n",
 		},
 		{
-			name: "caller order preserved",
-			secretEnv: []SecretEnvPair{
-				{Name: "anthropic", Var: "ANTHROPIC_API_KEY"},
-				{Name: "gh", Var: "GH_TOKEN"},
-				{Name: "npm", Var: "NPM_TOKEN"},
-			},
-			want: "anthropic ANTHROPIC_API_KEY\ngh GH_TOKEN\nnpm NPM_TOKEN\n",
+			name:           "caller order preserved",
+			secretEnvNames: []string{"ANTHROPIC_API_KEY", "GH_TOKEN", "NPM_TOKEN"},
+			want:           "ANTHROPIC_API_KEY\nGH_TOKEN\nNPM_TOKEN\n",
 		},
 		{
-			name: "pairs without a target var are skipped",
-			secretEnv: []SecretEnvPair{
-				{Name: "gh", Var: "GH_TOKEN"},
-				{Name: "internal-only", Var: ""},
-			},
-			want: "gh GH_TOKEN\n",
+			name:           "empty names are skipped",
+			secretEnvNames: []string{"GH_TOKEN", ""},
+			want:           "GH_TOKEN\n",
 		},
 	}
 
@@ -43,7 +36,7 @@ func TestWriteSecretEnvManifest(t *testing.T) {
 
 			cfg := &Config{Workspaces: map[string]Workspace{"myws": {}}}
 
-			if err := WriteAllowedFiles("myws", cfg, tt.secretEnv); err != nil {
+			if err := WriteAllowedFiles("myws", cfg, tt.secretEnvNames); err != nil {
 				t.Fatalf("WriteAllowedFiles returned error: %v", err)
 			}
 
@@ -70,12 +63,12 @@ func TestWriteSecretEnvManifest(t *testing.T) {
 
 func TestWriteSecretEnvRemovesStaleManifest(t *testing.T) {
 	tests := []struct {
-		name      string
-		secretEnv []SecretEnvPair
+		name           string
+		secretEnvNames []string
 	}{
-		{name: "nil slice", secretEnv: nil},
-		{name: "empty slice", secretEnv: []SecretEnvPair{}},
-		{name: "only pairs without a target var", secretEnv: []SecretEnvPair{{Name: "gh", Var: ""}}},
+		{name: "nil slice", secretEnvNames: nil},
+		{name: "empty slice", secretEnvNames: []string{}},
+		{name: "only empty names", secretEnvNames: []string{""}},
 	}
 
 	for _, tt := range tests {
@@ -85,7 +78,7 @@ func TestWriteSecretEnvRemovesStaleManifest(t *testing.T) {
 
 			cfg := &Config{Workspaces: map[string]Workspace{"myws": {}}}
 
-			if err := WriteAllowedFiles("myws", cfg, []SecretEnvPair{{Name: "gh", Var: "GH_TOKEN"}}); err != nil {
+			if err := WriteAllowedFiles("myws", cfg, []string{"GH_TOKEN"}); err != nil {
 				t.Fatalf("seed WriteAllowedFiles returned error: %v", err)
 			}
 
@@ -94,7 +87,7 @@ func TestWriteSecretEnvRemovesStaleManifest(t *testing.T) {
 				t.Fatalf("expected seeded secret-env to exist: %v", err)
 			}
 
-			if err := WriteAllowedFiles("myws", cfg, tt.secretEnv); err != nil {
+			if err := WriteAllowedFiles("myws", cfg, tt.secretEnvNames); err != nil {
 				t.Fatalf("WriteAllowedFiles returned error: %v", err)
 			}
 
@@ -108,10 +101,13 @@ func TestWriteSecretEnvRemovesStaleManifest(t *testing.T) {
 func TestWriteSecretEnvManifestCarriesNoValues(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("HOST_GH_TOKEN", "supersecret")
 
-	cfg := &Config{Workspaces: map[string]Workspace{"myws": {}}}
+	cfg := &Config{Workspaces: map[string]Workspace{"myws": {
+		Secrets: Secrets{Env: map[string]Secret{"GH_TOKEN": {FromEnv: "HOST_GH_TOKEN"}}},
+	}}}
 
-	if err := WriteAllowedFiles("myws", cfg, []SecretEnvPair{{Name: "gh", Var: "GH_TOKEN"}}); err != nil {
+	if err := WriteAllowedFiles("myws", cfg, []string{"GH_TOKEN"}); err != nil {
 		t.Fatalf("WriteAllowedFiles returned error: %v", err)
 	}
 
@@ -121,7 +117,9 @@ func TestWriteSecretEnvManifestCarriesNoValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read secret-env: %v", err)
 	}
-	if string(data) != "gh GH_TOKEN\n" {
-		t.Fatalf("secret-env content = %q, want only the name/var pair", string(data))
+	// The manifest is also mounted into the privileged dind sidecar, so it must
+	// carry neither the secret value nor the host variable it came from.
+	if string(data) != "GH_TOKEN\n" {
+		t.Fatalf("secret-env content = %q, want only the secret name", string(data))
 	}
 }

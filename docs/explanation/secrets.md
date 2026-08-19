@@ -39,7 +39,7 @@ The secret value is read from a host environment variable and exported as a cont
 When starting a workspace container:
 
 1. Docker Compose reads the source environment variable from the host process and writes its value into an in-memory secret file mounted at `/run/secrets/<NAME>` inside the container.
-2. jailoc generates a manifest file at `/etc/jailoc/secret-env` inside the container. This manifest lists variable mappings without containing any secret values.
+2. jailoc generates a manifest file at `/etc/jailoc/secret-env` inside the container. This manifest lists one environment-destination secret name per line and contains no secret values.
 3. Container startup executes `entrypoint.sh` as root before privileges are dropped.
 4. `entrypoint.sh` reads the value from `/run/secrets/<NAME>` and populates an environment variable array.
 5. `entrypoint.sh` passes the environment variables to `setpriv` when starting the agent process:
@@ -118,6 +118,7 @@ Validation occurs in two phases: structural rules checked when loading configura
 2. **Source Field Selection**: Each secret entry must specify exactly one source field: `from_env` or `from_file`.
 3. **Secret Name Grammar**: The section name `<NAME>` must match `^[a-zA-Z0-9_-]+$`.
 4. **Environment Identifier Grammar**: For secrets declared under `secrets.env`, the section name `<NAME>` must match `^[A-Za-z_][A-Za-z0-9_]*$` and must not conflict with reserved environment variables (`HOME`, `DOCKER_HOST`, `OPENCODE_SERVER_PASSWORD`), workspace `env` entries, or other environment secret names.
+5. **Source Reference Grammar**: A `from_env` value must match `^[A-Za-z_][A-Za-z0-9_]*$`, and a `from_file` value must be an absolute path free of `$`. Both restrictions exist because the source reference is written verbatim into the generated compose file, which Docker Compose interpolates before loading.
 
 ### Source Inspection Rules
 
