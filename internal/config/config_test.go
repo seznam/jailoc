@@ -444,6 +444,57 @@ func TestCreateDefault(t *testing.T) {
 	}
 }
 
+func TestAddPathDoesNotEmitEmptySecretsHeaderAfterCreateDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := CreateDefault(); err != nil {
+		t.Fatalf("CreateDefault failed: %v", err)
+	}
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+	if bytes.Contains(data, []byte("[defaults.secrets")) {
+		t.Fatalf("expected no secrets table header in persisted config, got:\n%s", string(data))
+	}
+}
+
+func TestAddPathDoesNotEmitEmptySecretSourceKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeFile(t, ConfigPath(), `
+[defaults.secrets.env.ENV_TOKEN]
+from_env = "HOST_ENV_TOKEN"
+
+[defaults.secrets.file.FILE_TOKEN]
+from_file = "/abs/token"
+
+[workspaces.default]
+paths = ["/data/workspace"]
+`)
+
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+	if bytes.Contains(data, []byte(`from_file = ""`)) {
+		t.Fatalf("expected file secret source key to stay omitted, got:\n%s", string(data))
+	}
+	if bytes.Contains(data, []byte(`from_env = ""`)) {
+		t.Fatalf("expected env secret source key to stay omitted, got:\n%s", string(data))
+	}
+}
+
 func TestValidateErrorIncludesValue(t *testing.T) {
 	cfg := &Config{Workspaces: map[string]Workspace{
 		"default": {
@@ -794,7 +845,7 @@ func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
 		},
 	}}
 
-	if err := WriteAllowedFiles("myws", cfg); err != nil {
+	if err := WriteAllowedFiles("myws", cfg, nil); err != nil {
 		t.Fatalf("WriteAllowedFiles returned error: %v", err)
 	}
 
@@ -837,7 +888,7 @@ func TestWriteAllowedFilesRemovesStaleFiles(t *testing.T) {
 		"myws": {AllowedHosts: []string{}, AllowedNetworks: []string{}},
 	}}
 
-	if err := WriteAllowedFiles("myws", cfg); err != nil {
+	if err := WriteAllowedFiles("myws", cfg, nil); err != nil {
 		t.Fatalf("WriteAllowedFiles returned error: %v", err)
 	}
 
@@ -853,7 +904,7 @@ func TestWriteAllowedFilesNilConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	if err := WriteAllowedFiles("whatever", nil); err != nil {
+	if err := WriteAllowedFiles("whatever", nil, nil); err != nil {
 		t.Fatalf("WriteAllowedFiles with nil config returned error: %v", err)
 	}
 
@@ -871,7 +922,7 @@ func TestWriteAllowedFilesMissingWorkspace(t *testing.T) {
 		"other": {AllowedHosts: []string{"foo.com"}},
 	}}
 
-	if err := WriteAllowedFiles("nonexistent", cfg); err != nil {
+	if err := WriteAllowedFiles("nonexistent", cfg, nil); err != nil {
 		t.Fatalf("WriteAllowedFiles with missing workspace returned error: %v", err)
 	}
 

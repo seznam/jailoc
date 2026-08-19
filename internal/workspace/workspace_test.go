@@ -1310,3 +1310,184 @@ func TestResolveMountsMergeError(t *testing.T) {
 		t.Fatalf("unexpected error context: %v", err)
 	}
 }
+
+func TestResolveSecrets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		defaultSecrets config.Secrets
+		wsSecrets      config.Secrets
+		want           []workspace.ResolvedSecret
+	}{
+		{
+			name: "no secrets resolves to nil",
+			want: nil,
+		},
+		{
+			name: "defaults only survive",
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{
+				"GH_TOKEN": {FromEnv: "GH_TOKEN_HOST"},
+			}},
+			want: []workspace.ResolvedSecret{
+				{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "GH_TOKEN_HOST"},
+			},
+		},
+		{
+			name: "env destination with file source survives",
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{
+				"FILE_KEY": {FromFile: "/etc/file-key"},
+			}},
+			want: []workspace.ResolvedSecret{
+				{Name: "FILE_KEY", Kind: workspace.SecretKindEnv, FromFile: "/etc/file-key"},
+			},
+		},
+		{
+			name:      "workspace only survive",
+			wsSecrets: config.Secrets{File: map[string]config.Secret{"key": {FromFile: "/etc/jailoc-key"}}},
+			want: []workspace.ResolvedSecret{
+				{Name: "key", Kind: workspace.SecretKindFile, FromFile: "/etc/jailoc-key"},
+			},
+		},
+		{
+			name: "file destination with environment source survives",
+			wsSecrets: config.Secrets{File: map[string]config.Secret{
+				"envkey": {FromEnv: "HOST_KEY"},
+			}},
+			want: []workspace.ResolvedSecret{
+				{Name: "envkey", Kind: workspace.SecretKindFile, FromEnv: "HOST_KEY"},
+			},
+		},
+		{
+			name: "both layers survive and are sorted by name",
+			defaultSecrets: config.Secrets{
+				Env:  map[string]config.Secret{"zulu": {FromEnv: "ZULU_HOST"}},
+				File: map[string]config.Secret{"bravo": {FromFile: "/etc/bravo"}},
+			},
+			wsSecrets: config.Secrets{
+				Env:  map[string]config.Secret{"alpha": {FromEnv: "ALPHA_HOST"}},
+				File: map[string]config.Secret{"charlie": {FromFile: "/etc/charlie"}},
+			},
+			want: []workspace.ResolvedSecret{
+				{Name: "alpha", Kind: workspace.SecretKindEnv, FromEnv: "ALPHA_HOST"},
+				{Name: "bravo", Kind: workspace.SecretKindFile, FromFile: "/etc/bravo"},
+				{Name: "charlie", Kind: workspace.SecretKindFile, FromFile: "/etc/charlie"},
+				{Name: "zulu", Kind: workspace.SecretKindEnv, FromEnv: "ZULU_HOST"},
+			},
+		},
+		{
+			name:           "workspace override replaces the whole defaults struct",
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{"token": {FromEnv: "DEFAULTS_HOST_VAR"}}},
+			wsSecrets:      config.Secrets{File: map[string]config.Secret{"token": {FromFile: "/etc/workspace-token"}}},
+			want: []workspace.ResolvedSecret{
+				{Name: "token", Kind: workspace.SecretKindFile, FromFile: "/etc/workspace-token"},
+			},
+		},
+		{
+			name: "workspace override drops only the overridden name",
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{
+				"kept":     {FromEnv: "KEPT_HOST"},
+				"replaced": {FromEnv: "OLD_HOST"},
+			}},
+			wsSecrets: config.Secrets{File: map[string]config.Secret{"replaced": {FromFile: "/etc/new"}}},
+			want: []workspace.ResolvedSecret{
+				{Name: "kept", Kind: workspace.SecretKindEnv, FromEnv: "KEPT_HOST"},
+				{Name: "replaced", Kind: workspace.SecretKindFile, FromFile: "/etc/new"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{
+					Secrets: tt.defaultSecrets,
+				},
+				Workspaces: map[string]config.Workspace{
+					"default": {
+						Paths:   []string{"/tmp"},
+						Secrets: tt.wsSecrets,
+					},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "default")
+			if err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+			if !reflect.DeepEqual(resolved.Secrets, tt.want) {
+				t.Fatalf("secrets mismatch: got %#v want %#v", resolved.Secrets, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveSecretsWorkspaceOverrideAcrossKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		defaults config.Secrets
+		override config.Secrets
+		want     workspace.ResolvedSecret
+	}{
+		{
+			name:     "env replaces env",
+			defaults: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "OLD"}}},
+			override: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "NEW"}}},
+			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "NEW"},
+		},
+		{
+			name:     "file replaces env",
+			defaults: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "OLD"}}},
+			override: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/new"}}},
+			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindFile, FromFile: "/new"},
+		},
+		{
+			name:     "env replaces file",
+			defaults: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/old"}}},
+			override: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "NEW"}}},
+			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "NEW"},
+		},
+		{
+			name:     "file source replaces environment source within env destination",
+			defaults: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromEnv: "OLD"}}},
+			override: config.Secrets{Env: map[string]config.Secret{"TOKEN": {FromFile: "/new"}}},
+			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromFile: "/new"},
+		},
+		{
+			name:     "environment source replaces file source within file destination",
+			defaults: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/old"}}},
+			override: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromEnv: "NEW"}}},
+			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindFile, FromEnv: "NEW"},
+		},
+		{
+			name:     "file replaces file",
+			defaults: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/old"}}},
+			override: config.Secrets{File: map[string]config.Secret{"TOKEN": {FromFile: "/new"}}},
+			want:     workspace.ResolvedSecret{Name: "TOKEN", Kind: workspace.SecretKindFile, FromFile: "/new"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{
+				Defaults: config.Defaults{Secrets: tt.defaults},
+				Workspaces: map[string]config.Workspace{
+					"default": {Secrets: tt.override},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "default")
+			if err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+			if !reflect.DeepEqual(resolved.Secrets, []workspace.ResolvedSecret{tt.want}) {
+				t.Fatalf("secrets = %#v, want %#v", resolved.Secrets, []workspace.ResolvedSecret{tt.want})
+			}
+		})
+	}
+}

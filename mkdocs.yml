@@ -71,6 +71,7 @@ nav:
     - Workspace Configuration: how-to/workspace-configuration.md
     - Custom Images: how-to/custom-images.md
     - Network Access: how-to/network-access.md
+    - Secrets: how-to/secrets.md
     - SSH & Git Passthrough: how-to/ssh-git-passthrough.md
     - Access Modes: how-to/access-modes.md
     - TUI Plugin: how-to/tui-plugin.md
@@ -86,5 +87,6 @@ nav:
     - Threat Model: explanation/threat-model.md
     - Container Architecture: explanation/container-architecture.md
     - Network Isolation: explanation/network-isolation.md
+    - Secrets: explanation/secrets.md
     - Access Modes: explanation/access-modes.md
   - Development: development.md

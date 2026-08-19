@@ -142,4 +142,22 @@ if [ -d /home/agent/.ssh ]; then
   chown 1000:1000 /home/agent/.ssh 2>/dev/null || true
 fi
 
-exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --no-new-privs -- env HOME=/home/agent "$@"
+# /etc/jailoc/secret-env lists one env-destination secret name per line and
+# never any value. Each name is both the /run/secrets/<name> basename and the
+# environment variable the agent receives.
+SECRET_ENV="/etc/jailoc/secret-env"
+secret_envs=()
+if [ -f "$SECRET_ENV" ]; then
+  while read -r sname || [ -n "$sname" ]; do
+    [ -z "$sname" ] && continue
+    if [ ! -f "/run/secrets/$sname" ]; then
+      echo "jailoc: FATAL: secret file /run/secrets/$sname missing; cannot export $sname" >&2
+      exit 1
+    fi
+    svalue="$(cat "/run/secrets/$sname")" || {
+      echo "jailoc: FATAL: cannot read /run/secrets/$sname" >&2; exit 1; }
+    secret_envs+=("$sname=$svalue")
+  done < "$SECRET_ENV"
+fi
+
+exec setpriv --reuid=1000 --regid=1000 --init-groups --inh-caps=-all --no-new-privs -- env HOME=/home/agent "${secret_envs[@]}" "$@"

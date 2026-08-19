@@ -31,6 +31,16 @@ type ComposeParams struct {
 	UseCacheVolume  bool
 	ExposePort      bool
 	EnableDocker    bool
+	Secrets         []SecretSpec
+}
+
+// SecretSpec references one Docker Compose secret source. Exactly one of
+// Environment or File is non-empty — an invariant established by config
+// validation, not by this type. It never carries a secret value.
+type SecretSpec struct {
+	Name        string // compose secret name, also the /run/secrets/<name> basename
+	Environment string // host environment variable name
+	File        string // host file path
 }
 
 func GenerateCompose(params ComposeParams) ([]byte, error) {
