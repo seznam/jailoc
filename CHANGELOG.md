@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.18.0](https://github.com/seznam/jailoc/compare/v1.17.0...v1.18.0) (2026-08-19)
+
+
+### Features
+
+* config-defined docker-compose secrets ([#215](https://github.com/seznam/jailoc/issues/215)) ([3f1d6df](https://github.com/seznam/jailoc/commit/3f1d6df97de94b510058458d3239bf9d2b2b4898))
+
+
+### Bug Fixes
+
+* **deps:** bump brace-expansion from 2.1.2 to 2.1.4 ([#212](https://github.com/seznam/jailoc/issues/212)) ([309b823](https://github.com/seznam/jailoc/commit/309b823be696bf1a148a080763a5fa53cab9baea))
+* **deps:** bump github.com/moby/go-archive from 0.2.0 to 0.3.0 ([#219](https://github.com/seznam/jailoc/issues/219)) ([e954c2b](https://github.com/seznam/jailoc/commit/e954c2b15bd5effc3debb0f5a230cb7f2a770e2a))
+* **deps:** bump pymdown-extensions in the uv group across 1 directory ([#214](https://github.com/seznam/jailoc/issues/214)) ([66cd755](https://github.com/seznam/jailoc/commit/66cd7555d093ff2704bb45e2286761a4f5653dda))
+* **deps:** bump seroval from 1.5.2 to 1.5.6 ([#211](https://github.com/seznam/jailoc/issues/211)) ([e4610d1](https://github.com/seznam/jailoc/commit/e4610d163b45a5ad985c5af01784c69972abcf28))
+* **deps:** bump the go-minor-patch group across 1 directory with 4 updates ([#218](https://github.com/seznam/jailoc/issues/218)) ([e5ada67](https://github.com/seznam/jailoc/commit/e5ada67d676f8071d4ded1bc89968d321b03804d))
+
 ## [1.17.0](https://github.com/seznam/jailoc/compare/v1.16.0...v1.17.0) (2026-07-24)
 
 
