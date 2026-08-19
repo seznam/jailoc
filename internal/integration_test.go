@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -395,6 +396,289 @@ env_file = [%q]
 	if downErr != nil {
 		t.Fatalf("jailoc down: %v\noutput:\n%s", downErr, downOut)
 	}
+}
+
+// TestSecretsReachContainer exercises all four destination × source secret
+// combinations end to end. Together with
+// TestSecretEnvManifestMissingSecretAbortsStartup it is the only coverage for
+// the entrypoint.sh secret path: manifest parsing, the read of
+// /run/secrets/<name> as root, and the setpriv handover to the agent.
+//
+// The agent's own environment is deliberately not asserted. entrypoint.sh
+// injects env-destination secrets into the agent process only, so a fresh
+// `docker exec` never inherits them, and /proc/1/environ is unreadable once
+// setpriv's UID change clears the process dumpable flag (reading it would need
+// CAP_SYS_PTRACE, which the compose file drops). What is observable is that
+// PID 1 reached the agent at all: entrypoint.sh aborts before setpriv if any
+// manifest entry cannot be resolved, so an agent PID 1 proves the export loop
+// ran over every name in the manifest.
+func TestSecretsReachContainer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	if !dockerAvailable(ctx) {
+		t.Skip("requires Docker daemon")
+	}
+
+	const envSourceValue = "value-from-host-env"
+	t.Setenv("JAILOC_IT_ENV_SOURCE", envSourceValue)
+
+	secretDir := t.TempDir()
+
+	// 0600 on purpose: an env-destination secret is read by entrypoint.sh as
+	// root before setpriv, so it must not require world-readable permissions.
+	envFromFilePath := filepath.Join(secretDir, "env-source")
+	if err := os.WriteFile(envFromFilePath, []byte("value-from-host-file\n"), 0o600); err != nil {
+		t.Fatalf("write env-destination secret file: %v", err)
+	}
+
+	// 0644: a file-destination secret is bind-mounted straight to UID 1000.
+	fileFromFilePath := filepath.Join(secretDir, "file-source")
+	if err := os.WriteFile(fileFromFilePath, []byte("value-mounted-from-host-file"), 0o644); err != nil {
+		t.Fatalf("write file-destination secret file: %v", err)
+	}
+
+	home := testHome(t)
+	workspaceDir := testWorkspaceDir(t)
+
+	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
+	content := fmt.Sprintf(`[base]
+
+[workspaces.default]
+paths = [%q]
+
+[workspaces.default.secrets.env.IT_ENV_FROM_ENV]
+from_env = "JAILOC_IT_ENV_SOURCE"
+
+[workspaces.default.secrets.env.IT_ENV_FROM_FILE]
+from_file = %q
+
+[workspaces.default.secrets.file.it_file_from_env]
+from_env = "JAILOC_IT_ENV_SOURCE"
+
+[workspaces.default.secrets.file.it_file_from_file]
+from_file = %q
+`, workspaceDir, envFromFilePath, fileFromFilePath)
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	upOut, upErr := runJailoc(ctx, home, "up")
+	if upErr != nil {
+		if isImagePullOrAuthFailure(upOut) {
+			t.Skip("requires accessible image registry")
+		}
+		t.Fatalf("jailoc up: %v\noutput:\n%s", upErr, upOut)
+	}
+
+	const containerName = "jailoc-default-opencode-1"
+
+	// PID 1 becomes the agent only after entrypoint.sh resolved every manifest
+	// entry and reached its final exec: the export loop aborts the container
+	// otherwise. jailoc up returns while the entrypoint is still root, setting up
+	// iptables and waiting for dind, so wait for the handover here.
+	waitForAgentPID1(ctx, t, containerName)
+
+	// Environment destinations: entrypoint.sh reads these as root, so the source
+	// file needs no world-readable bit and the value must land in /run/secrets.
+	for name, want := range map[string]string{
+		"IT_ENV_FROM_ENV":  envSourceValue,
+		"IT_ENV_FROM_FILE": "value-from-host-file",
+	} {
+		if got := dockerExec(ctx, t, containerName, "0", "cat /run/secrets/"+name); strings.TrimSpace(got) != want {
+			t.Errorf("/run/secrets/%s: got %q, want %q", name, strings.TrimSpace(got), want)
+		}
+	}
+
+	// File destinations must be readable by the unprivileged agent itself.
+	for name, want := range map[string]string{
+		"it_file_from_env":  envSourceValue,
+		"it_file_from_file": "value-mounted-from-host-file",
+	} {
+		got := dockerExec(ctx, t, containerName, "1000", "cat /run/secrets/"+name)
+		if strings.TrimSpace(got) != want {
+			t.Errorf("/run/secrets/%s: got %q, want %q", name, strings.TrimSpace(got), want)
+		}
+	}
+
+	// The manifest is also mounted into the privileged dind sidecar, so it must
+	// list env-destination secret names only — never a value or a host source.
+	manifestOut := dockerExec(ctx, t, containerName, "0", "cat /etc/jailoc/secret-env")
+	if manifestOut != "IT_ENV_FROM_ENV\nIT_ENV_FROM_FILE\n" {
+		t.Errorf("secret-env manifest = %q, want the two env secret names only", manifestOut)
+	}
+
+	downOut, downErr := runJailoc(ctx, home, "down")
+	if downErr != nil {
+		t.Fatalf("jailoc down: %v\noutput:\n%s", downErr, downOut)
+	}
+}
+
+// TestSecretEnvManifestMissingSecretAbortsStartup covers the fail-closed branch
+// of the entrypoint.sh export loop. jailoc's own up-time validation makes this
+// state unreachable through the CLI, so the manifest is corrupted on the host
+// (it is bind-mounted into the container) and the container restarted directly.
+func TestSecretEnvManifestMissingSecretAbortsStartup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	if !dockerAvailable(ctx) {
+		t.Skip("requires Docker daemon")
+	}
+
+	t.Setenv("JAILOC_IT_ENV_SOURCE", "value-from-host-env")
+
+	home := testHome(t)
+	workspaceDir := testWorkspaceDir(t)
+
+	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
+	content := fmt.Sprintf(`[base]
+
+[workspaces.default]
+paths = [%q]
+
+[workspaces.default.secrets.env.IT_ENV_FROM_ENV]
+from_env = "JAILOC_IT_ENV_SOURCE"
+`, workspaceDir)
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	upOut, upErr := runJailoc(ctx, home, "up")
+	if upErr != nil {
+		if isImagePullOrAuthFailure(upOut) {
+			t.Skip("requires accessible image registry")
+		}
+		t.Fatalf("jailoc up: %v\noutput:\n%s", upErr, upOut)
+	}
+
+	const containerName = "jailoc-default-opencode-1"
+
+	manifestPath := filepath.Join(home, ".config", "jailoc", "workspaces", "default", "secret-env")
+	if err := os.WriteFile(manifestPath, []byte("IT_ENV_FROM_ENV\nIT_NEVER_PROVISIONED\n"), 0o600); err != nil {
+		t.Fatalf("corrupt secret-env manifest: %v", err)
+	}
+
+	if out, err := exec.CommandContext(ctx, "docker", "restart", containerName).CombinedOutput(); err != nil {
+		t.Fatalf("docker restart: %v\noutput:\n%s", err, string(out))
+	}
+
+	exitCode, logs := waitForContainerExit(ctx, t, containerName)
+	if exitCode == 0 {
+		t.Fatalf("container survived a manifest entry with no matching secret; logs:\n%s", logs)
+	}
+	for _, want := range []string{"FATAL", "/run/secrets/IT_NEVER_PROVISIONED"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("container logs are missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+// waitForAgentPID1 blocks until the container's PID 1 runs as the unprivileged
+// agent, which is the observable signal that entrypoint.sh finished its root
+// phase — including the secret export loop — and exec'd through setpriv.
+func waitForAgentPID1(ctx context.Context, t *testing.T, container string) {
+	t.Helper()
+
+	var last string
+	for range 90 {
+		out, err := exec.CommandContext(ctx, "docker", "exec", "-u", "0", container, "ps", "-o", "user=", "-p", "1").CombinedOutput()
+		if err == nil {
+			if last = strings.TrimSpace(string(out)); last == "agent" {
+				return
+			}
+		}
+		time.Sleep(time.Second)
+	}
+
+	logs, _ := exec.CommandContext(ctx, "docker", "logs", container).CombinedOutput()
+	t.Fatalf("PID 1 still runs as %q after 90s, want \"agent\": entrypoint.sh did not complete the setpriv handover; logs:\n%s", last, string(logs))
+}
+
+// waitForContainerExit polls until the container stops, then returns its exit
+// code together with its logs.
+func waitForContainerExit(ctx context.Context, t *testing.T, container string) (int, string) {
+	t.Helper()
+
+	for range 60 {
+		out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}} {{.State.ExitCode}}", container).Output()
+		if err != nil {
+			t.Fatalf("docker inspect %s: %v", container, err)
+		}
+		running, code, found := strings.Cut(strings.TrimSpace(string(out)), " ")
+		if !found {
+			t.Fatalf("unexpected docker inspect output %q", string(out))
+		}
+		if running == "false" {
+			exitCode, err := strconv.Atoi(code)
+			if err != nil {
+				t.Fatalf("parse exit code %q: %v", code, err)
+			}
+			logs, _ := exec.CommandContext(ctx, "docker", "logs", container).CombinedOutput()
+			return exitCode, string(logs)
+		}
+		time.Sleep(time.Second)
+	}
+
+	logs, _ := exec.CommandContext(ctx, "docker", "logs", container).CombinedOutput()
+	t.Fatalf("container %s still running after 60s; logs:\n%s", container, string(logs))
+	return 0, ""
+}
+
+// TestSecretsMissingHostSourceFailsFast asserts that jailoc up rejects an unset
+// host source before starting anything, instead of letting entrypoint.sh abort
+// on a missing /run/secrets/<name>.
+func TestSecretsMissingHostSourceFailsFast(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if !dockerAvailable(ctx) {
+		t.Skip("requires Docker daemon")
+	}
+
+	home := testHome(t)
+	workspaceDir := testWorkspaceDir(t)
+
+	configPath := filepath.Join(home, ".config", "jailoc", "config.toml")
+	content := fmt.Sprintf(`[base]
+
+[workspaces.default]
+paths = [%q]
+
+[workspaces.default.secrets.env.IT_MISSING]
+from_env = "JAILOC_IT_DEFINITELY_UNSET"
+`, workspaceDir)
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	upOut, upErr := runJailoc(ctx, home, "up")
+	if upErr == nil {
+		t.Fatalf("jailoc up succeeded with an unset host source:\n%s", upOut)
+	}
+	for _, want := range []string{"IT_MISSING", "JAILOC_IT_DEFINITELY_UNSET", "is not set"} {
+		if !strings.Contains(upOut, want) {
+			t.Errorf("jailoc up output is missing %q:\n%s", want, upOut)
+		}
+	}
+
+	manifestPath := filepath.Join(home, ".config", "jailoc", "workspaces", "default", "secret-env")
+	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
+		t.Errorf("secret-env manifest was written for a rejected config, stat error = %v", err)
+	}
+}
+
+// dockerExec runs a shell command inside the container as the given UID. Use
+// "1000" to assert what the unprivileged agent can reach and "0" to read files
+// the agent is not meant to open itself.
+func dockerExec(ctx context.Context, t *testing.T, container, uid, script string) string {
+	t.Helper()
+
+	out, err := exec.CommandContext(ctx, "docker", "exec", "-u", uid, container, "sh", "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker exec as uid %s %q: %v\noutput:\n%s", uid, script, err, string(out))
+	}
+	return string(out)
 }
 
 func projectRoot() string {
