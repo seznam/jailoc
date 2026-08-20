@@ -10,8 +10,8 @@
     "prepare": "npm run build"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
-    "@babel/preset-typescript": "^7.29.7",
+    "@babel/core": "^8.0.1",
+    "@babel/preset-typescript": "^8.0.1",
     "babel-preset-solid": "^1.9.12"
   },
   "peerDependencies": {
