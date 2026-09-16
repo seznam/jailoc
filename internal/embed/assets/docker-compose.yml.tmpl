@@ -106,9 +106,6 @@ services:
       - dind-data:/home/rootless/.local/share/docker
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/dind-entrypoint.sh:/usr/local/bin/dind-entrypoint.sh:ro
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
     networks:
       - jailoc
     expose:
