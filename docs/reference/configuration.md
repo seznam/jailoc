@@ -69,6 +69,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `filtered_dns` | bool | `false` | Route DNS for opencode and dind through a CoreDNS sidecar. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
 | `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. Hostnames, loopback, link-local, multicast, and unspecified addresses are rejected. |
 | `dns_blocked_zones` | string[] | `[]` | DNS suffixes blocked by the sidecar with NXDOMAIN, including all subdomains. At least one zone is required when `filtered_dns` is enabled. |
+| `dind_ca_bundle` | bool \| string | `true` | Controls the CA bundle forwarded into the DinD daemon's trust store. Omitted or `true` enables automatic discovery: the non-empty `SSL_CERT_FILE` environment variable is used first, then the non-empty `NIX_SSL_CERT_FILE` environment variable; if neither is set, no bundle is forwarded. `false` disables forwarding. A string selects a custom bundle file (absolute path or `~`-prefixed). The setting has no effect when `enable_docker = false`. See [Network access: forward a CA bundle to DinD](../how-to/network-access.md#forward-a-ca-bundle-to-dind) and [Container Architecture: CA bundle trust](../explanation/container-architecture.md#ca-bundle-trust). |
 | `secrets` | table | `{}` | Secrets configuration map applied to all workspaces. See [secrets](#secrets) validation rules and the [secrets how-to](../how-to/secrets.md). |
 
 ### Example
@@ -118,6 +119,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `dns_upstream` | string | (inherit) | Override the numeric IPv4 upstream resolver for this workspace. |
 | `dns_blocked_zones` | string[] | (inherit) | Override the default blocked DNS suffixes for this workspace. |
 | `secrets` | table | `{}` | Secrets configuration map for this workspace. Overrides default secrets with the same secret name. See [secrets](#secrets) validation rules and the [secrets how-to](../how-to/secrets.md). |
+| `dind_ca_bundle` | bool \| string | (inherit) | Controls the CA bundle forwarded into this workspace's DinD daemon. When not set, inherits from `[defaults]`. Falls back to `true` (automatic discovery) when neither the workspace nor defaults set it. `false` disables forwarding for this workspace; a string overrides with a custom bundle path. See [Network access: forward a CA bundle to DinD](../how-to/network-access.md#forward-a-ca-bundle-to-dind). |
 
 !!! note
     `image` is mutually exclusive with `dockerfile` and `build_context`. Setting `image` alongside either of those fields is a validation error.
@@ -198,6 +200,20 @@ When `filtered_dns = true`, an effective `dns_upstream` and at least one effecti
 When filtering is enabled, each workspace's effective `allowed_hosts` entries (defaults plus workspace) must fall outside its effective `dns_blocked_zones`. An exact match or subdomain match, ignoring case and a trailing dot, is rejected at config load with the workspace, host, and zone named in the error. A workspace zone list replaces the defaults; `filtered_dns = false` skips this cross-check.
 
 The setting controls ordinary port-53 resolution, not DNS over HTTPS, other encrypted DNS protocols, proxies, or direct IP access. It does not replace the private-network firewall.
+
+### `dind_ca_bundle`
+
+Accepted values:
+
+- **Omitted in `[defaults]`**: automatic discovery.
+- **Omitted in a workspace**: inherits `[defaults]`; if both are omitted, automatic discovery applies.
+- **`true`**: automatic discovery. Checks the process environment variable `SSL_CERT_FILE` first (must be non-empty), then `NIX_SSL_CERT_FILE`. If the selected higher-priority variable points at an invalid source, `jailoc up` or a running-workspace `jailoc add` restart fails — there is no fallback to the next variable. If neither variable is set, no bundle is forwarded and no error occurs.
+- **`false`**: disables forwarding for the scope where it is set.
+- **Non-empty string**: a custom bundle path. Must be absolute (`/...`) or start with `~` (expanded to `$HOME`). Must not contain `$`. Symlinks are resolved; the resolved target must be a readable regular file containing at least one `CERTIFICATE` PEM block and no private-key PEM block.
+- **Empty string**: rejected at config load time.
+- Any other TOML type (integer, array, table): rejected at config load time.
+
+`dind_ca_bundle` resolution and validation are skipped entirely when `enable_docker` resolves to `false` for the workspace. Disabled forwarding, disabled Docker, and automatic discovery without a source remove any stale materialized bundle.
 
 ### Workspace `image`
 
@@ -342,7 +358,7 @@ Environment variables from multiple sources are merged in this order (later entr
 
 OpenCode configuration directories are mounted read-write because the agent needs write access to persist settings changes, install tools and MCPs, and update its own configuration at runtime.
 
-`ssh_auth_sock`, `git_config`, `expose_port`, `enable_docker`, and `filtered_dns` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config`, `expose_port`, and `enable_docker` fall back to `true` when neither the workspace nor defaults set it; `filtered_dns` falls back to `false`. An empty workspace `dns_upstream` inherits the default upstream; an omitted `dns_blocked_zones` inherits the default list. These lists replace defaults when specified, rather than merging.
+`ssh_auth_sock`, `git_config`, `expose_port`, `enable_docker`, `filtered_dns`, and `dind_ca_bundle` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config`, `expose_port`, and `enable_docker` fall back to `true` when neither the workspace nor defaults set it; `filtered_dns` falls back to `false` and `dind_ca_bundle` falls back to automatic discovery. An empty workspace `dns_upstream` inherits the default upstream; an omitted `dns_blocked_zones` inherits the default list. These lists replace defaults when specified, rather than merging.
 
 `cpu` and `memory` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `cpu` falls back to `2.0` and `memory` falls back to `"4g"` when neither the workspace nor defaults set them.
 
