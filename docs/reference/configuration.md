@@ -248,6 +248,7 @@ Each entry must be in `KEY=VALUE` format (key cannot be empty, must contain `=`)
 |---|---|
 | `OPENCODE_LOG` | opencode runtime config |
 | `OPENCODE_SERVER_PASSWORD` | managed automatically by jailoc; set to override the automatic password cascade |
+| `NODE_USE_SYSTEM_CA` | managed automatically when `ca_bundle` is active |
 | `DOCKER_HOST` | DinD TLS connection |
 | `DOCKER_TLS_CERTDIR` | DinD TLS certs |
 | `DOCKER_CERT_PATH` | DinD TLS certs |
@@ -309,6 +310,7 @@ The container environment variable name (`<NAME>`) must match `^[A-Za-z_][A-Za-z
 - `PATH`
 - `OPENCODE_LOG`
 - `OPENCODE_SERVER_PASSWORD`
+- `NODE_USE_SYSTEM_CA`
 - `DOCKER_HOST`
 - `DOCKER_TLS_CERTDIR`
 - `DOCKER_CERT_PATH`
