@@ -42,6 +42,7 @@ type Resolved struct {
 	FilteredDNS     bool
 	DNSUpstream     string
 	DNSBlockedZones []string
+	DindCABundle    config.DindCABundle
 }
 
 type SecretKind int
@@ -147,6 +148,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.FilteredDNS, ws.FilteredDNS, false),
 		DNSUpstream:     ws.DNSUpstream,
 		DNSBlockedZones: ws.DNSBlockedZones,
+		DindCABundle:    dindCABundleWithDefault(cfg.Defaults.DindCABundle, ws.DindCABundle),
 	}
 	if r.DNSUpstream == "" {
 		r.DNSUpstream = cfg.Defaults.DNSUpstream
@@ -361,6 +363,16 @@ func boolPtrWithDefault(defaultVal *bool, override *bool, fallback bool) bool {
 		return *defaultVal
 	}
 	return fallback
+}
+
+func dindCABundleWithDefault(defaultVal, override *config.DindCABundle) config.DindCABundle {
+	if override != nil {
+		return *override
+	}
+	if defaultVal != nil {
+		return *defaultVal
+	}
+	return config.AutomaticDindCABundle()
 }
 
 func floatWithDefault(defaultVal *float64, override *float64, fallback float64) float64 {
