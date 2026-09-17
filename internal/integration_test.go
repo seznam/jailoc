@@ -4,7 +4,13 @@ package integration_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
@@ -668,6 +674,87 @@ from_env = "JAILOC_IT_DEFINITELY_UNSET"
 	}
 }
 
+func TestDindCABundleForwardingLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	if !dockerAvailable(ctx) {
+		t.Skip("requires Docker daemon")
+	}
+
+	home := testHome(t)
+	workspaceDir := testWorkspaceDir(t)
+	workspaceName := fmt.Sprintf("dind-ca-%d", os.Getpid())
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cleanupCancel()
+		_, _ = runJailoc(cleanupCtx, home, "down", workspaceName)
+	})
+	bundle := integrationCertificateBundle(t, "jailoc-dind-ca-forwarding")
+	bundlePath := filepath.Join(home, "integration-ca.pem")
+	if err := os.WriteFile(bundlePath, bundle, 0o600); err != nil {
+		t.Fatalf("write CA bundle: %v", err)
+	}
+	writeDindCAIntegrationConfig(t, home, workspaceName, workspaceDir, "true")
+
+	upOut, upErr := runJailocWithEnv(ctx, home, map[string]string{"SSL_CERT_FILE": bundlePath}, "up", workspaceName)
+	if upErr != nil {
+		if isImagePullOrAuthFailure(upOut) {
+			t.Skip("requires accessible image registry")
+		}
+		t.Fatalf("jailoc up: %v\noutput:\n%s", upErr, upOut)
+	}
+
+	materializedPath := filepath.Join(home, ".config", "jailoc", "workspaces", workspaceName, "dind-ca-bundle.pem")
+	materialized, err := os.ReadFile(materializedPath)
+	if err != nil {
+		t.Fatalf("read materialized CA bundle: %v", err)
+	}
+	if string(materialized) != string(bundle) {
+		t.Fatal("materialized CA bundle differs from selected source")
+	}
+	marker := strings.Split(string(bundle), "\n")[1]
+	dindContainer := "jailoc-" + workspaceName + "-dind-1"
+	installed := dockerExec(ctx, t, dindContainer, "0", "grep -F '"+marker+"' /etc/ssl/certs/ca-certificates.crt")
+	if !strings.Contains(installed, marker) {
+		t.Fatalf("DinD system CA bundle does not contain certificate marker %q", marker)
+	}
+	if err := os.Remove(materializedPath); err != nil {
+		t.Fatalf("remove materialized CA bundle for invalid-path probe: %v", err)
+	}
+	if err := os.Mkdir(materializedPath, 0o700); err != nil {
+		t.Fatalf("replace materialized CA bundle with directory: %v", err)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "restart", dindContainer).CombinedOutput(); err != nil {
+		t.Fatalf("restart DinD with invalid CA path: %v\noutput:\n%s", err, out)
+	}
+	exitCode, logs := waitForContainerExit(ctx, t, dindContainer)
+	if exitCode == 0 || !strings.Contains(logs, "jailoc-dind: FATAL:") {
+		t.Fatalf("DinD invalid CA path exit=%d, want non-zero with fatal log; logs:\n%s", exitCode, logs)
+	}
+
+	writeDindCAIntegrationConfig(t, home, workspaceName, workspaceDir, "false")
+	restartOut, restartErr := runJailocWithEnv(ctx, home, nil, "restart", workspaceName)
+	if restartErr != nil {
+		t.Fatalf("jailoc restart with forwarding disabled: %v\noutput:\n%s", restartErr, restartOut)
+	}
+	if _, err := os.Stat(materializedPath); !os.IsNotExist(err) {
+		t.Fatalf("materialized CA bundle after false: stat error = %v, want not exist", err)
+	}
+
+	if err := os.WriteFile(materializedPath, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("write stale CA bundle: %v", err)
+	}
+	writeDindCAIntegrationConfig(t, home, workspaceName, workspaceDir, "true")
+	restartOut, restartErr = runJailocWithEnv(ctx, home, nil, "restart", workspaceName)
+	if restartErr != nil {
+		t.Fatalf("jailoc restart without automatic source: %v\noutput:\n%s", restartErr, restartOut)
+	}
+	if _, err := os.Stat(materializedPath); !os.IsNotExist(err) {
+		t.Fatalf("materialized CA bundle without automatic source: stat error = %v, want not exist", err)
+	}
+}
+
 // dockerExec runs a shell command inside the container as the given UID. Use
 // "1000" to assert what the unprivileged agent can reach and "0" to read files
 // the agent is not meant to open itself.
@@ -760,9 +847,24 @@ func cleanupAllHomes() {
 }
 
 func runJailoc(ctx context.Context, home string, args ...string) (string, error) {
+	return runJailocWithEnv(ctx, home, nil, args...)
+}
+
+func runJailocWithEnv(ctx context.Context, home string, overrides map[string]string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
 	cmd.Dir = projectRoot()
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	env := make([]string, 0, len(os.Environ())+len(overrides)+1)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != "HOME" && key != "SSL_CERT_FILE" && key != "NIX_SSL_CERT_FILE" {
+			env = append(env, entry)
+		}
+	}
+	env = append(env, "HOME="+home)
+	for key, value := range overrides {
+		env = append(env, key+"="+value)
+	}
+	cmd.Env = env
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -770,6 +872,36 @@ func runJailoc(ctx context.Context, home string, args ...string) (string, error)
 	}
 
 	return string(out), nil
+}
+
+func writeDindCAIntegrationConfig(t *testing.T, home, workspaceName, workspacePath, value string) {
+	t.Helper()
+	content := fmt.Sprintf("[base]\n\n[workspaces.%s]\npaths = [%q]\nexpose_port = false\ndind_ca_bundle = %s\n", workspaceName, workspacePath, value)
+	if err := os.WriteFile(filepath.Join(home, ".config", "jailoc", "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write DinD CA integration config: %v", err)
+	}
+}
+
+func integrationCertificateBundle(t *testing.T, commonName string) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate CA private key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: commonName},
+		NotBefore:             time.Unix(0, 0),
+		NotAfter:              time.Unix(3600, 0),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create CA certificate: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 func writeMinimalConfig(home, workspacePath string) error {
