@@ -114,6 +114,19 @@ for d in /certs/ca /certs/client; do
   fi
 done
 
+# --- Install forwarded CA bundle ---
+DIND_CA_BUNDLE="/etc/jailoc/dind-ca-bundle.pem"
+if [ -e "$DIND_CA_BUNDLE" ]; then
+  if [ ! -f "$DIND_CA_BUNDLE" ] || [ ! -s "$DIND_CA_BUNDLE" ]; then
+    echo "jailoc-dind: FATAL: forwarded CA bundle must be a non-empty regular file: $DIND_CA_BUNDLE" >&2
+    exit 1
+  fi
+  if ! cat "$DIND_CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt; then
+    echo "jailoc-dind: FATAL: could not append forwarded CA bundle to /etc/ssl/certs/ca-certificates.crt" >&2
+    exit 1
+  fi
+fi
+
 # --- Clean stale containerd state ---
 # Prevents "containerd is still running" crash loop when PID file persists
 # on volume from prior unclean shutdown.

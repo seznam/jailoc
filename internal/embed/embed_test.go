@@ -55,3 +55,55 @@ func TestFilteredDNSSidecarReachableThroughFirewall(t *testing.T) {
 		})
 	}
 }
+
+func TestDindEntrypointEmbedded(t *testing.T) {
+	t.Parallel()
+
+	b := jailocembed.DindEntrypoint()
+	if len(b) == 0 {
+		t.Fatal("DindEntrypoint() returned empty bytes")
+	}
+	if !strings.HasPrefix(string(b), "#!/bin/sh\n") {
+		t.Fatal("DindEntrypoint() does not contain #!/bin/sh")
+	}
+}
+
+func TestDindEntrypointInstallsCABundleBeforePrivilegeDrop(t *testing.T) {
+	t.Parallel()
+	script := string(jailocembed.DindEntrypoint())
+
+	pathAt := strings.Index(script, `DIND_CA_BUNDLE="/etc/jailoc/dind-ca-bundle.pem"`)
+	certOwnershipAt := strings.Index(script, "for d in /certs/ca /certs/client; do")
+	appendAt := strings.Index(script, `cat "$DIND_CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt`)
+	privilegeDropAt := strings.Index(script, "exec su-exec rootless")
+	if pathAt < 0 || certOwnershipAt < 0 || appendAt < 0 || privilegeDropAt < 0 {
+		t.Fatalf("DinD entrypoint is missing CA installation or existing ownership/privilege-drop steps")
+	}
+	if certOwnershipAt >= appendAt || appendAt >= privilegeDropAt {
+		t.Fatalf("DinD CA append must occur after TLS ownership and before privilege drop")
+	}
+}
+
+func TestDindEntrypointSkipsAbsentAndRejectsInvalidCABundle(t *testing.T) {
+	t.Parallel()
+	script := string(jailocembed.DindEntrypoint())
+
+	if !strings.Contains(script, `if [ -e "$DIND_CA_BUNDLE" ]; then`) {
+		t.Fatal("DinD entrypoint must inspect any present CA bundle path")
+	}
+	if !strings.Contains(script, `[ ! -f "$DIND_CA_BUNDLE" ] || [ ! -s "$DIND_CA_BUNDLE" ]`) {
+		t.Fatal("DinD entrypoint must reject non-regular or empty CA bundles")
+	}
+	if !strings.Contains(script, "jailoc-dind: FATAL:") {
+		t.Fatal("DinD entrypoint must report invalid CA bundles as fatal")
+	}
+}
+
+func TestDindEntrypointDoesNotUseUpdateCACertificates(t *testing.T) {
+	t.Parallel()
+	script := string(jailocembed.DindEntrypoint())
+
+	if strings.Contains(script, "update-ca-certificates") {
+		t.Fatal("DinD entrypoint must append multi-certificate bundles directly")
+	}
+}
