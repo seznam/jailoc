@@ -56,6 +56,37 @@ func TestFilteredDNSSidecarReachableThroughFirewall(t *testing.T) {
 	}
 }
 
+func TestEntrypointInstallsCABundleBeforePrivilegeDrop(t *testing.T) {
+	t.Parallel()
+	script := string(jailocembed.Entrypoint())
+
+	pathAt := strings.Index(script, `CA_BUNDLE="/etc/jailoc/ca-bundle.pem"`)
+	appendAt := strings.Index(script, `cat "$CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt`)
+	nodeTrustAt := strings.Index(script, `NODE_USE_SYSTEM_CA=1`)
+	privilegeDropAt := strings.Index(script, "exec setpriv")
+	if pathAt < 0 || appendAt < 0 || nodeTrustAt < 0 || privilegeDropAt < 0 {
+		t.Fatal("opencode entrypoint is missing CA installation, Node trust, or privilege drop")
+	}
+	if pathAt >= appendAt || appendAt >= nodeTrustAt || nodeTrustAt >= privilegeDropAt {
+		t.Fatal("opencode CA installation and Node trust must occur before privilege drop")
+	}
+}
+
+func TestEntrypointSkipsAbsentAndRejectsInvalidCABundle(t *testing.T) {
+	t.Parallel()
+	script := string(jailocembed.Entrypoint())
+
+	if !strings.Contains(script, `if [ -e "$CA_BUNDLE" ]; then`) {
+		t.Fatal("opencode entrypoint must inspect any present CA bundle path")
+	}
+	if !strings.Contains(script, `[ ! -f "$CA_BUNDLE" ] || [ ! -s "$CA_BUNDLE" ]`) {
+		t.Fatal("opencode entrypoint must reject non-regular or empty CA bundles")
+	}
+	if !strings.Contains(script, "jailoc: FATAL:") {
+		t.Fatal("opencode entrypoint must report invalid CA bundles as fatal")
+	}
+}
+
 func TestDindEntrypointEmbedded(t *testing.T) {
 	t.Parallel()
 
