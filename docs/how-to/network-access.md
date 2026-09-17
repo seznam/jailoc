@@ -128,51 +128,49 @@ See [DNS resolution and filtering](../explanation/network-isolation.md#dns-resol
 
 ---
 
-## Forward a CA bundle to DinD
+## Forward a CA bundle
 
-If your host trusts a private or internal CA (for example, a corporate MITM proxy or an internal registry), the nested Docker daemon (DinD) needs to trust it too, or `docker pull`/`docker build` inside the workspace will fail with certificate errors.
+If your host trusts a private or internal CA (for example, a corporate MITM proxy or an internal registry), the opencode container needs the same trust for HTTPS tools and model-provider connections. When Docker is enabled, the nested Docker daemon (DinD) also needs it for registry operations.
 
-By default, `dind_ca_bundle` is omitted, which enables automatic discovery: jailoc reuses the CA bundle its own process already trusts, taken from the non-empty `SSL_CERT_FILE` environment variable, falling back to `NIX_SSL_CERT_FILE`. No config is required if one of those variables is already set correctly in your shell before running `jailoc up`:
-
-```
+By default, `ca_bundle` is omitted, which enables automatic discovery: jailoc reuses the CA bundle its own process already trusts, taken from the non-empty `SSL_CERT_FILE` environment variable, falling back to `NIX_SSL_CERT_FILE`. No config is required if one of those variables is already set correctly in your shell before running `jailoc up`:
 
 To request automatic discovery explicitly:
 
 ```toml
 [workspaces.api]
 paths = ["/home/you/projects/api"]
-dind_ca_bundle = true
+ca_bundle = true
 ```
 
-To select a specific bundle regardless of environment variables, point `dind_ca_bundle` at a file:
+To select a specific bundle regardless of environment variables, point `ca_bundle` at a file:
 
 ```toml
 [workspaces.api]
 paths = ["/home/you/projects/api"]
-dind_ca_bundle = "~/certs/corp-ca-bundle.pem"
+ca_bundle = "~/certs/corp-ca-bundle.pem"
 ```
 
-To disable CA forwarding for a workspace (for example, when the daemon inside DinD should only trust public roots):
+To disable CA forwarding for a workspace:
 
 ```toml
 [workspaces.api]
 paths = ["/home/you/projects/api"]
-dind_ca_bundle = false
+ca_bundle = false
 ```
 
 To apply the same bundle to every workspace, set it under `[defaults]`; a workspace can still override it:
 
 ```toml
 [defaults]
-dind_ca_bundle = "~/certs/corp-ca-bundle.pem"
+ca_bundle = "~/certs/corp-ca-bundle.pem"
 
 [workspaces.public-only]
 paths = ["/home/you/projects/public-only"]
-dind_ca_bundle = false
+ca_bundle = false
 ```
 
 !!! note
-    Automatic discovery fails `jailoc up` or a running-workspace `jailoc add` restart if the selected environment variable (`SSL_CERT_FILE`, or `NIX_SSL_CERT_FILE` when `SSL_CERT_FILE` is unset or blank) points at an invalid PEM bundle — it does not silently fall through to the next variable. If neither variable is set, no bundle is forwarded and no error occurs. When `enable_docker = false`, jailoc skips source validation and removes any stale materialized bundle.
+    Automatic discovery fails `jailoc up` or a running-workspace `jailoc add` restart if the selected environment variable (`SSL_CERT_FILE`, or `NIX_SSL_CERT_FILE` when `SSL_CERT_FILE` is unset or blank) points at an invalid PEM bundle — it does not silently fall through to the next variable. If neither variable is set, no bundle is forwarded and no error occurs. Setting `enable_docker = false` disables only the DinD consumer; the opencode container still receives and validates the bundle.
 
 !!! warning
-    This bundle is trusted only by the DinD daemon itself. It does not extend to the host, the opencode container, inner containers started with `docker run`, or `RUN` steps executed during a Dockerfile build inside DinD. `SSL_CERT_DIR` is not read as a source. This is unrelated to the `/certs/ca` mutual-TLS material used for opencode-to-dind daemon authentication. Existing `allowed_hosts`/`allowed_networks` firewall rules still apply — forwarding a CA bundle does not open network access to a private registry.
+    The bundle is trusted by tools in the opencode container and by the OpenCode Node.js process. When DinD is enabled, the daemon trusts it too. Trust does not extend to the host, inner containers started with `docker run`, or `RUN` steps executed during a Dockerfile build inside DinD. `SSL_CERT_DIR` is not read as a source. This is unrelated to the `/certs/ca` mutual-TLS material used for opencode-to-dind daemon authentication. Existing `allowed_hosts`/`allowed_networks` firewall rules still apply — forwarding a CA bundle does not open network access to a private endpoint.
