@@ -104,6 +104,7 @@ var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var reservedEnvKeys = map[string]bool{
 	"OPENCODE_LOG":             true,
 	"OPENCODE_SERVER_PASSWORD": true,
+	"NODE_USE_SYSTEM_CA":       true,
 	"DOCKER_HOST":              true,
 	"DOCKER_TLS_CERTDIR":       true,
 	"DOCKER_CERT_PATH":         true,
