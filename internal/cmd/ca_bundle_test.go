@@ -161,6 +161,31 @@ func TestMaterializeCABundleAcceptsMultipleCertificatesAndPreservesBytes(t *test
 	}
 }
 
+func TestMaterializeCABundleWhenDockerDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bundle := writeTestCABundle(t, filepath.Join(t.TempDir(), "company.pem"), "company")
+
+	err := materializeCABundle(resolvedWorkspace(false, config.CustomCABundle(bundle.path)))
+	if err != nil {
+		t.Fatalf("materializeCABundle() error = %v", err)
+	}
+	assertMaterializedBundle(t, home, bundle.data)
+}
+
+func TestMaterializeCABundleRejectsInvalidSourceWhenDockerDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	err := materializeCABundle(resolvedWorkspace(false, config.CustomCABundle("relative.pem")))
+	if err == nil {
+		t.Fatal("materializeCABundle() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("materializeCABundle() error = %q, want absolute-path context", err)
+	}
+}
+
 func TestMaterializeCABundleRemovesStaleFileWhenUnused(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -169,9 +194,8 @@ func TestMaterializeCABundleRemovesStaleFileWhenUnused(t *testing.T) {
 		sslCertEnv string
 	}{
 		{name: "disabled policy", docker: true, policy: config.DisabledCABundle()},
-		{name: "docker disabled skips invalid source", docker: false, policy: config.CustomCABundle("relative.pem")},
-		{name: "docker disabled skips invalid automatic environment", docker: false, policy: config.AutomaticCABundle(), sslCertEnv: "relative.pem"},
 		{name: "automatic without environment", docker: true, policy: config.AutomaticCABundle()},
+		{name: "automatic without environment and Docker disabled", docker: false, policy: config.AutomaticCABundle()},
 	}
 
 	for _, tt := range tests {

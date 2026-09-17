@@ -23,7 +23,7 @@ type caBundleSource struct {
 
 func materializeCABundle(ws *workspace.Resolved) error {
 	destination := filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)
-	if !ws.EnableDocker || !ws.CABundle.Enabled() {
+	if !ws.CABundle.Enabled() {
 		return removeCABundle(destination)
 	}
 
