@@ -31,6 +31,8 @@ var (
 	testHomes   []string
 )
 
+const integrationPassword = "jailoc-integration-password"
+
 type integrationConfig struct {
 	Base struct {
 	} `toml:"base"`
@@ -71,7 +73,6 @@ func TestMain(m *testing.M) {
 		_ = os.RemoveAll(tmpDir)
 		os.Exit(1)
 	}
-
 	code := m.Run()
 
 	cleanupAllHomes()
@@ -916,21 +917,20 @@ func runJailoc(ctx context.Context, home string, args ...string) (string, error)
 	return runJailocWithEnv(ctx, home, nil, args...)
 }
 
+func TestJailocEnvironmentBypassesSystemKeyring(t *testing.T) {
+	t.Setenv("OPENCODE_SERVER_PASSWORD", "host-password")
+
+	env := jailocTestEnv("/test/home", map[string]string{"SSL_CERT_FILE": "/test/ca.pem"})
+
+	assertEnvironmentValue(t, env, "HOME", "/test/home")
+	assertEnvironmentValue(t, env, "OPENCODE_SERVER_PASSWORD", integrationPassword)
+	assertEnvironmentValue(t, env, "SSL_CERT_FILE", "/test/ca.pem")
+}
+
 func runJailocWithEnv(ctx context.Context, home string, overrides map[string]string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
 	cmd.Dir = projectRoot()
-	env := make([]string, 0, len(os.Environ())+len(overrides)+1)
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if key != "HOME" && key != "SSL_CERT_FILE" && key != "NIX_SSL_CERT_FILE" {
-			env = append(env, entry)
-		}
-	}
-	env = append(env, "HOME="+home)
-	for key, value := range overrides {
-		env = append(env, key+"="+value)
-	}
-	cmd.Env = env
+	cmd.Env = jailocTestEnv(home, overrides)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -938,6 +938,41 @@ func runJailocWithEnv(ctx context.Context, home string, overrides map[string]str
 	}
 
 	return string(out), nil
+}
+
+func jailocTestEnv(home string, overrides map[string]string) []string {
+	env := make([]string, 0, len(os.Environ())+len(overrides)+1)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != "HOME" && key != "OPENCODE_SERVER_PASSWORD" && key != "SSL_CERT_FILE" && key != "NIX_SSL_CERT_FILE" {
+			env = append(env, entry)
+		}
+	}
+	env = append(env, "HOME="+home)
+	for key, value := range overrides {
+		if key == "OPENCODE_SERVER_PASSWORD" {
+			continue
+		}
+		env = append(env, key+"="+value)
+	}
+	return append(env, "OPENCODE_SERVER_PASSWORD="+integrationPassword)
+}
+
+func assertEnvironmentValue(t *testing.T, env []string, key, want string) {
+	t.Helper()
+	prefix := key + "="
+	matches := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			matches++
+			if entry != prefix+want {
+				t.Fatalf("%s environment value = %q, want %q", key, strings.TrimPrefix(entry, prefix), want)
+			}
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("%s environment entries = %d, want 1", key, matches)
+	}
 }
 
 func writeCAIntegrationConfig(t *testing.T, home, workspaceName, workspacePath, value string) {
@@ -1041,8 +1076,6 @@ paths = [%q]
 		t.Fatalf("write config: %v", err)
 	}
 
-	t.Setenv("OPENCODE_SERVER_PASSWORD", "integration-test-password")
-
 	upOut, err := runJailoc(ctx, home, "up")
 	if err != nil {
 		if isImagePullOrAuthFailure(upOut) {
@@ -1061,7 +1094,7 @@ paths = [%q]
 		if reqErr != nil {
 			t.Fatalf("create request: %v", reqErr)
 		}
-		req.SetBasicAuth("opencode", "integration-test-password")
+		req.SetBasicAuth("opencode", integrationPassword)
 		resp, doErr := client.Do(req)
 		if doErr != nil {
 			lastErr = doErr
