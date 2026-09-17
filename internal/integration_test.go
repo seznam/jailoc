@@ -674,7 +674,7 @@ from_env = "JAILOC_IT_DEFINITELY_UNSET"
 	}
 }
 
-func TestDindCABundleForwardingLifecycle(t *testing.T) {
+func TestCABundleForwardingLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -684,18 +684,18 @@ func TestDindCABundleForwardingLifecycle(t *testing.T) {
 
 	home := testHome(t)
 	workspaceDir := testWorkspaceDir(t)
-	workspaceName := fmt.Sprintf("dind-ca-%d", os.Getpid())
+	workspaceName := fmt.Sprintf("ca-bundle-%d", os.Getpid())
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cleanupCancel()
 		_, _ = runJailoc(cleanupCtx, home, "down", workspaceName)
 	})
-	bundle := integrationCertificateBundle(t, "jailoc-dind-ca-forwarding")
+	bundle := integrationCertificateBundle(t, "jailoc-ca-forwarding")
 	bundlePath := filepath.Join(home, "integration-ca.pem")
 	if err := os.WriteFile(bundlePath, bundle, 0o600); err != nil {
 		t.Fatalf("write CA bundle: %v", err)
 	}
-	writeDindCAIntegrationConfig(t, home, workspaceName, workspaceDir, "true")
+	writeCAIntegrationConfig(t, home, workspaceName, workspaceDir, "true")
 
 	upOut, upErr := runJailocWithEnv(ctx, home, map[string]string{"SSL_CERT_FILE": bundlePath}, "up", workspaceName)
 	if upErr != nil {
@@ -705,7 +705,7 @@ func TestDindCABundleForwardingLifecycle(t *testing.T) {
 		t.Fatalf("jailoc up: %v\noutput:\n%s", upErr, upOut)
 	}
 
-	materializedPath := filepath.Join(home, ".config", "jailoc", "workspaces", workspaceName, "dind-ca-bundle.pem")
+	materializedPath := filepath.Join(home, ".config", "jailoc", "workspaces", workspaceName, "ca-bundle.pem")
 	materialized, err := os.ReadFile(materializedPath)
 	if err != nil {
 		t.Fatalf("read materialized CA bundle: %v", err)
@@ -733,7 +733,7 @@ func TestDindCABundleForwardingLifecycle(t *testing.T) {
 		t.Fatalf("DinD invalid CA path exit=%d, want non-zero with fatal log; logs:\n%s", exitCode, logs)
 	}
 
-	writeDindCAIntegrationConfig(t, home, workspaceName, workspaceDir, "false")
+	writeCAIntegrationConfig(t, home, workspaceName, workspaceDir, "false")
 	restartOut, restartErr := runJailocWithEnv(ctx, home, nil, "restart", workspaceName)
 	if restartErr != nil {
 		t.Fatalf("jailoc restart with forwarding disabled: %v\noutput:\n%s", restartErr, restartOut)
@@ -745,7 +745,7 @@ func TestDindCABundleForwardingLifecycle(t *testing.T) {
 	if err := os.WriteFile(materializedPath, []byte("stale"), 0o600); err != nil {
 		t.Fatalf("write stale CA bundle: %v", err)
 	}
-	writeDindCAIntegrationConfig(t, home, workspaceName, workspaceDir, "true")
+	writeCAIntegrationConfig(t, home, workspaceName, workspaceDir, "true")
 	restartOut, restartErr = runJailocWithEnv(ctx, home, nil, "restart", workspaceName)
 	if restartErr != nil {
 		t.Fatalf("jailoc restart without automatic source: %v\noutput:\n%s", restartErr, restartOut)
@@ -874,11 +874,11 @@ func runJailocWithEnv(ctx context.Context, home string, overrides map[string]str
 	return string(out), nil
 }
 
-func writeDindCAIntegrationConfig(t *testing.T, home, workspaceName, workspacePath, value string) {
+func writeCAIntegrationConfig(t *testing.T, home, workspaceName, workspacePath, value string) {
 	t.Helper()
-	content := fmt.Sprintf("[base]\n\n[workspaces.%s]\npaths = [%q]\nexpose_port = false\ndind_ca_bundle = %s\n", workspaceName, workspacePath, value)
+	content := fmt.Sprintf("[base]\n\n[workspaces.%s]\npaths = [%q]\nexpose_port = false\nca_bundle = %s\n", workspaceName, workspacePath, value)
 	if err := os.WriteFile(filepath.Join(home, ".config", "jailoc", "config.toml"), []byte(content), 0o600); err != nil {
-		t.Fatalf("write DinD CA integration config: %v", err)
+		t.Fatalf("write CA integration config: %v", err)
 	}
 }
 

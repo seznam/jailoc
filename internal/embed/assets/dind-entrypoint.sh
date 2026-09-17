@@ -115,13 +115,13 @@ for d in /certs/ca /certs/client; do
 done
 
 # --- Install forwarded CA bundle ---
-DIND_CA_BUNDLE="/etc/jailoc/dind-ca-bundle.pem"
-if [ -e "$DIND_CA_BUNDLE" ]; then
-  if [ ! -f "$DIND_CA_BUNDLE" ] || [ ! -s "$DIND_CA_BUNDLE" ]; then
-    echo "jailoc-dind: FATAL: forwarded CA bundle must be a non-empty regular file: $DIND_CA_BUNDLE" >&2
+CA_BUNDLE="/etc/jailoc/ca-bundle.pem"
+if [ -e "$CA_BUNDLE" ]; then
+  if [ ! -f "$CA_BUNDLE" ] || [ ! -s "$CA_BUNDLE" ]; then
+    echo "jailoc-dind: FATAL: forwarded CA bundle must be a non-empty regular file: $CA_BUNDLE" >&2
     exit 1
   fi
-  if ! cat "$DIND_CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt; then
+  if ! cat "$CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt; then
     echo "jailoc-dind: FATAL: could not append forwarded CA bundle to /etc/ssl/certs/ca-certificates.crt" >&2
     exit 1
   fi

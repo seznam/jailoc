@@ -126,8 +126,8 @@ func runUp(ctx context.Context, args []string) error {
 	if err := validateSecretSources(ws); err != nil {
 		return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
 	}
-	if err := materializeDindCABundle(ws); err != nil {
-		return fmt.Errorf("prepare DinD CA bundle for workspace %q: %w", ws.Name, err)
+	if err := materializeCABundle(ws); err != nil {
+		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}
 
 	if hostPath, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {

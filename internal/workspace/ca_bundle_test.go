@@ -7,19 +7,19 @@ import (
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
-func TestResolveDindCABundleAppliesInheritance(t *testing.T) {
+func TestResolveCABundleAppliesInheritance(t *testing.T) {
 	t.Parallel()
 
-	automatic := config.AutomaticDindCABundle()
-	disabled := config.DisabledDindCABundle()
-	defaultCustom := config.CustomDindCABundle("/default.pem")
-	workspaceCustom := config.CustomDindCABundle("/workspace.pem")
+	automatic := config.AutomaticCABundle()
+	disabled := config.DisabledCABundle()
+	defaultCustom := config.CustomCABundle("/default.pem")
+	workspaceCustom := config.CustomCABundle("/workspace.pem")
 
 	tests := []struct {
 		name        string
-		defaultCA   *config.DindCABundle
-		workspaceCA *config.DindCABundle
-		want        config.DindCABundle
+		defaultCA   *config.CABundle
+		workspaceCA *config.CABundle
+		want        config.CABundle
 	}{
 		{name: "both omitted defaults automatic", want: automatic},
 		{name: "workspace inherits automatic", defaultCA: &automatic, want: automatic},
@@ -35,9 +35,9 @@ func TestResolveDindCABundleAppliesInheritance(t *testing.T) {
 			t.Parallel()
 
 			cfg := &config.Config{
-				Defaults: config.Defaults{DindCABundle: tt.defaultCA},
+				Defaults: config.Defaults{CABundle: tt.defaultCA},
 				Workspaces: map[string]config.Workspace{
-					"test": {Paths: []string{"/data"}, DindCABundle: tt.workspaceCA},
+					"test": {Paths: []string{"/data"}, CABundle: tt.workspaceCA},
 				},
 			}
 
@@ -45,8 +45,8 @@ func TestResolveDindCABundleAppliesInheritance(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v", err)
 			}
-			if resolved.DindCABundle != tt.want {
-				t.Fatalf("DindCABundle = %#v, want %#v", resolved.DindCABundle, tt.want)
+			if resolved.CABundle != tt.want {
+				t.Fatalf("CABundle = %#v, want %#v", resolved.CABundle, tt.want)
 			}
 		})
 	}

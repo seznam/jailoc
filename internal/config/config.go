@@ -45,7 +45,7 @@ const (
 # filtered_dns = false
 # dns_upstream = "10.20.30.53"
 # dns_blocked_zones = ["corp.example.com"]
-# dind_ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
+# ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
 # cpu = 2.0
 # memory = "4g"
 
@@ -71,7 +71,7 @@ paths = []
 # filtered_dns = false
 # dns_upstream = "10.20.30.53"
 # dns_blocked_zones = ["corp.example.com"]
-# dind_ca_bundle = true  # omitted: inherit defaults; true/false/string: override
+# ca_bundle = true  # omitted: inherit defaults; true/false/string: override
 # cpu = 2.0
 # memory = "4g"
 
@@ -213,46 +213,46 @@ type BaseConfig struct {
 }
 
 type Defaults struct {
-	Env             []string      `toml:"env"`
-	EnvFile         []string      `toml:"env_file"`
-	Mounts          []string      `toml:"mounts"`
-	AllowedHosts    []string      `toml:"allowed_hosts"`
-	AllowedNetworks []string      `toml:"allowed_networks"`
-	Secrets         Secrets       `toml:"secrets,omitempty"`
-	Image           string        `toml:"image"`
-	SSHAuthSock     bool          `toml:"ssh_auth_sock"`
-	GitConfig       *bool         `toml:"git_config"`
-	CPU             *float64      `toml:"cpu"`
-	Memory          *string       `toml:"memory"`
-	ExposePort      *bool         `toml:"expose_port"`
-	EnableDocker    *bool         `toml:"enable_docker"`
-	FilteredDNS     *bool         `toml:"filtered_dns"`
-	DNSUpstream     string        `toml:"dns_upstream"`
-	DNSBlockedZones []string      `toml:"dns_blocked_zones"`
-	DindCABundle    *DindCABundle `toml:"dind_ca_bundle,omitempty"`
+	Env             []string  `toml:"env"`
+	EnvFile         []string  `toml:"env_file"`
+	Mounts          []string  `toml:"mounts"`
+	AllowedHosts    []string  `toml:"allowed_hosts"`
+	AllowedNetworks []string  `toml:"allowed_networks"`
+	Secrets         Secrets   `toml:"secrets,omitempty"`
+	Image           string    `toml:"image"`
+	SSHAuthSock     bool      `toml:"ssh_auth_sock"`
+	GitConfig       *bool     `toml:"git_config"`
+	CPU             *float64  `toml:"cpu"`
+	Memory          *string   `toml:"memory"`
+	ExposePort      *bool     `toml:"expose_port"`
+	EnableDocker    *bool     `toml:"enable_docker"`
+	FilteredDNS     *bool     `toml:"filtered_dns"`
+	DNSUpstream     string    `toml:"dns_upstream"`
+	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
+	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
 }
 
 type Workspace struct {
-	Paths           []string      `toml:"paths"`
-	Mounts          []string      `toml:"mounts"`
-	AllowedHosts    []string      `toml:"allowed_hosts"`
-	AllowedNetworks []string      `toml:"allowed_networks"`
-	Env             []string      `toml:"env"`
-	EnvFile         []string      `toml:"env_file"`
-	Secrets         Secrets       `toml:"secrets,omitempty"`
-	BuildContext    string        `toml:"build_context"`
-	Dockerfile      string        `toml:"dockerfile"`
-	Image           string        `toml:"image"`
-	SSHAuthSock     *bool         `toml:"ssh_auth_sock"`
-	GitConfig       *bool         `toml:"git_config"`
-	CPU             *float64      `toml:"cpu"`
-	Memory          *string       `toml:"memory"`
-	ExposePort      *bool         `toml:"expose_port"`
-	EnableDocker    *bool         `toml:"enable_docker"`
-	FilteredDNS     *bool         `toml:"filtered_dns"`
-	DNSUpstream     string        `toml:"dns_upstream"`
-	DNSBlockedZones []string      `toml:"dns_blocked_zones"`
-	DindCABundle    *DindCABundle `toml:"dind_ca_bundle,omitempty"`
+	Paths           []string  `toml:"paths"`
+	Mounts          []string  `toml:"mounts"`
+	AllowedHosts    []string  `toml:"allowed_hosts"`
+	AllowedNetworks []string  `toml:"allowed_networks"`
+	Env             []string  `toml:"env"`
+	EnvFile         []string  `toml:"env_file"`
+	Secrets         Secrets   `toml:"secrets,omitempty"`
+	BuildContext    string    `toml:"build_context"`
+	Dockerfile      string    `toml:"dockerfile"`
+	Image           string    `toml:"image"`
+	SSHAuthSock     *bool     `toml:"ssh_auth_sock"`
+	GitConfig       *bool     `toml:"git_config"`
+	CPU             *float64  `toml:"cpu"`
+	Memory          *string   `toml:"memory"`
+	ExposePort      *bool     `toml:"expose_port"`
+	EnableDocker    *bool     `toml:"enable_docker"`
+	FilteredDNS     *bool     `toml:"filtered_dns"`
+	DNSUpstream     string    `toml:"dns_upstream"`
+	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
+	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
 }
 
 func ConfigDir() string {

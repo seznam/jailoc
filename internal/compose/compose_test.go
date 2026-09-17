@@ -937,7 +937,7 @@ func TestGenerateComposeEnableDockerTrue(t *testing.T) {
 	assertContains(t, rendered, "dind-certs-client:/certs/client:ro")
 	assertContains(t, rendered, "dind-data:")
 	assertContains(t, rendered, "${HOME}/.config/jailoc/workspaces/docker-test:/etc/jailoc:ro")
-	assertNotContains(t, rendered, "dind-ca-bundle.pem:")
+	assertNotContains(t, rendered, "ca-bundle.pem:")
 
 	// DinD must not have hardcoded public DNS (inherits host/daemon DNS)
 	assertNotContains(t, rendered, "1.1.1.1")

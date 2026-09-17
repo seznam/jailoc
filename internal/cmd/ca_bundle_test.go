@@ -14,7 +14,7 @@ import (
 	"github.com/seznam/jailoc/internal/config"
 )
 
-func TestMaterializeDindCABundleSelectsAutomaticSource(t *testing.T) {
+func TestMaterializeCABundleSelectsAutomaticSource(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	sslBundle := writeTestCABundle(t, filepath.Join(t.TempDir(), "ssl.pem"), "ssl")
@@ -22,48 +22,46 @@ func TestMaterializeDindCABundleSelectsAutomaticSource(t *testing.T) {
 	t.Setenv("SSL_CERT_FILE", sslBundle.path)
 	t.Setenv("NIX_SSL_CERT_FILE", nixBundle.path)
 
-	err := materializeDindCABundle(resolvedWorkspace(true, config.AutomaticDindCABundle()))
-
+	err := materializeCABundle(resolvedWorkspace(true, config.AutomaticCABundle()))
 	if err != nil {
-		t.Fatalf("materializeDindCABundle() error = %v", err)
+		t.Fatalf("materializeCABundle() error = %v", err)
 	}
 	assertMaterializedBundle(t, home, sslBundle.data)
 }
 
-func TestMaterializeDindCABundleFallsBackFromEmptySSLSource(t *testing.T) {
+func TestMaterializeCABundleFallsBackFromEmptySSLSource(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	nixBundle := writeTestCABundle(t, filepath.Join(t.TempDir(), "nix.pem"), "nix")
 	t.Setenv("SSL_CERT_FILE", "")
 	t.Setenv("NIX_SSL_CERT_FILE", nixBundle.path)
 
-	err := materializeDindCABundle(resolvedWorkspace(true, config.AutomaticDindCABundle()))
-
+	err := materializeCABundle(resolvedWorkspace(true, config.AutomaticCABundle()))
 	if err != nil {
-		t.Fatalf("materializeDindCABundle() error = %v", err)
+		t.Fatalf("materializeCABundle() error = %v", err)
 	}
 	assertMaterializedBundle(t, home, nixBundle.data)
 }
 
-func TestMaterializeDindCABundleDoesNotFallBackFromInvalidSelectedSource(t *testing.T) {
+func TestMaterializeCABundleDoesNotFallBackFromInvalidSelectedSource(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	nixBundle := writeTestCABundle(t, filepath.Join(t.TempDir(), "nix.pem"), "nix")
 	t.Setenv("SSL_CERT_FILE", filepath.Join(t.TempDir(), "missing.pem"))
 	t.Setenv("NIX_SSL_CERT_FILE", nixBundle.path)
 
-	err := materializeDindCABundle(resolvedWorkspace(true, config.AutomaticDindCABundle()))
+	err := materializeCABundle(resolvedWorkspace(true, config.AutomaticCABundle()))
 
 	if err == nil {
-		t.Fatal("materializeDindCABundle() error = nil, want invalid SSL_CERT_FILE error")
+		t.Fatal("materializeCABundle() error = nil, want invalid SSL_CERT_FILE error")
 	}
 	if !strings.Contains(err.Error(), "SSL_CERT_FILE") {
-		t.Fatalf("materializeDindCABundle() error = %q, want SSL_CERT_FILE context", err)
+		t.Fatalf("materializeCABundle() error = %q, want SSL_CERT_FILE context", err)
 	}
 	assertNoMaterializedBundle(t, home)
 }
 
-func TestMaterializeDindCABundleAcceptsCustomTildeAndSymlink(t *testing.T) {
+func TestMaterializeCABundleAcceptsCustomTildeAndSymlink(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	bundle := writeTestCABundle(t, filepath.Join(home, "company.pem"), "company")
@@ -72,15 +70,14 @@ func TestMaterializeDindCABundleAcceptsCustomTildeAndSymlink(t *testing.T) {
 		t.Fatalf("Symlink() error = %v", err)
 	}
 
-	err := materializeDindCABundle(resolvedWorkspace(true, config.CustomDindCABundle("~/linked.pem")))
-
+	err := materializeCABundle(resolvedWorkspace(true, config.CustomCABundle("~/linked.pem")))
 	if err != nil {
-		t.Fatalf("materializeDindCABundle() error = %v", err)
+		t.Fatalf("materializeCABundle() error = %v", err)
 	}
 	assertMaterializedBundle(t, home, bundle.data)
 }
 
-func TestMaterializeDindCABundleRejectsInvalidCustomSources(t *testing.T) {
+func TestMaterializeCABundleRejectsInvalidCustomSources(t *testing.T) {
 	certificate := newTestCertificate(t, "valid")
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -135,29 +132,28 @@ func TestMaterializeDindCABundleRejectsInvalidCustomSources(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
-			err := materializeDindCABundle(resolvedWorkspace(true, config.CustomDindCABundle(tt.path(t))))
+			err := materializeCABundle(resolvedWorkspace(true, config.CustomCABundle(tt.path(t))))
 
 			if err == nil {
-				t.Fatal("materializeDindCABundle() error = nil, want validation error")
+				t.Fatal("materializeCABundle() error = nil, want validation error")
 			}
 			if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.wantErr)) {
-				t.Fatalf("materializeDindCABundle() error = %q, want %q", err, tt.wantErr)
+				t.Fatalf("materializeCABundle() error = %q, want %q", err, tt.wantErr)
 			}
 			assertNoMaterializedBundle(t, home)
 		})
 	}
 }
 
-func TestMaterializeDindCABundleAcceptsMultipleCertificatesAndPreservesBytes(t *testing.T) {
+func TestMaterializeCABundleAcceptsMultipleCertificatesAndPreservesBytes(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	data := append(newTestCertificate(t, "first"), newTestCertificate(t, "second")...)
 	path := writeTestFile(t, filepath.Join(t.TempDir(), "bundle.pem"), data)
 
-	err := materializeDindCABundle(resolvedWorkspace(true, config.CustomDindCABundle(path)))
-
+	err := materializeCABundle(resolvedWorkspace(true, config.CustomCABundle(path)))
 	if err != nil {
-		t.Fatalf("materializeDindCABundle() error = %v", err)
+		t.Fatalf("materializeCABundle() error = %v", err)
 	}
 	assertMaterializedBundle(t, home, data)
 	if source := readTestFile(t, path); !bytes.Equal(source, data) {
@@ -165,17 +161,17 @@ func TestMaterializeDindCABundleAcceptsMultipleCertificatesAndPreservesBytes(t *
 	}
 }
 
-func TestMaterializeDindCABundleRemovesStaleFileWhenUnused(t *testing.T) {
+func TestMaterializeCABundleRemovesStaleFileWhenUnused(t *testing.T) {
 	tests := []struct {
 		name       string
 		docker     bool
-		policy     config.DindCABundle
+		policy     config.CABundle
 		sslCertEnv string
 	}{
-		{name: "disabled policy", docker: true, policy: config.DisabledDindCABundle()},
-		{name: "docker disabled skips invalid source", docker: false, policy: config.CustomDindCABundle("relative.pem")},
-		{name: "docker disabled skips invalid automatic environment", docker: false, policy: config.AutomaticDindCABundle(), sslCertEnv: "relative.pem"},
-		{name: "automatic without environment", docker: true, policy: config.AutomaticDindCABundle()},
+		{name: "disabled policy", docker: true, policy: config.DisabledCABundle()},
+		{name: "docker disabled skips invalid source", docker: false, policy: config.CustomCABundle("relative.pem")},
+		{name: "docker disabled skips invalid automatic environment", docker: false, policy: config.AutomaticCABundle(), sslCertEnv: "relative.pem"},
+		{name: "automatic without environment", docker: true, policy: config.AutomaticCABundle()},
 	}
 
 	for _, tt := range tests {
@@ -192,17 +188,16 @@ func TestMaterializeDindCABundleRemovesStaleFileWhenUnused(t *testing.T) {
 				t.Fatalf("WriteFile() error = %v", err)
 			}
 
-			err := materializeDindCABundle(resolvedWorkspace(tt.docker, tt.policy))
-
+			err := materializeCABundle(resolvedWorkspace(tt.docker, tt.policy))
 			if err != nil {
-				t.Fatalf("materializeDindCABundle() error = %v", err)
+				t.Fatalf("materializeCABundle() error = %v", err)
 			}
 			assertNoMaterializedBundle(t, home)
 		})
 	}
 }
 
-func TestMaterializeDindCABundleLeavesExistingFileUntouchedOnValidationFailure(t *testing.T) {
+func TestMaterializeCABundleLeavesExistingFileUntouchedOnValidationFailure(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := materializedBundlePath(home)
@@ -214,10 +209,10 @@ func TestMaterializeDindCABundleLeavesExistingFileUntouchedOnValidationFailure(t
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	err := materializeDindCABundle(resolvedWorkspace(true, config.CustomDindCABundle(filepath.Join(home, "missing.pem"))))
+	err := materializeCABundle(resolvedWorkspace(true, config.CustomCABundle(filepath.Join(home, "missing.pem"))))
 
 	if err == nil {
-		t.Fatal("materializeDindCABundle() error = nil, want validation error")
+		t.Fatal("materializeCABundle() error = nil, want validation error")
 	}
 	got := readTestFile(t, path)
 	if !bytes.Equal(got, want) {
@@ -225,7 +220,7 @@ func TestMaterializeDindCABundleLeavesExistingFileUntouchedOnValidationFailure(t
 	}
 }
 
-func TestDindCABundleMaterializationPrecedesGeneratedWrites(t *testing.T) {
+func TestCABundleMaterializationPrecedesGeneratedWrites(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -240,14 +235,14 @@ func TestDindCABundleMaterializationPrecedesGeneratedWrites(t *testing.T) {
 		t.Run(tt.file, func(t *testing.T) {
 			t.Parallel()
 			data := readTestFile(t, tt.file)
-			materializeAt := bytes.Index(data, []byte("materializeDindCABundle("))
+			materializeAt := bytes.Index(data, []byte("materializeCABundle("))
 			if materializeAt < 0 {
-				t.Fatalf("%s does not call materializeDindCABundle", tt.file)
+				t.Fatalf("%s does not call materializeCABundle", tt.file)
 			}
 			for _, call := range tt.laterCalls {
 				callAt := bytes.Index(data, []byte(call+"("))
 				if callAt < 0 || callAt < materializeAt {
-					t.Fatalf("%s must call materializeDindCABundle before %s", tt.file, call)
+					t.Fatalf("%s must call materializeCABundle before %s", tt.file, call)
 				}
 			}
 		})

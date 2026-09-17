@@ -59,12 +59,12 @@ func writeTestFile(t *testing.T, path string, data []byte) string {
 	return path
 }
 
-func resolvedWorkspace(enableDocker bool, policy config.DindCABundle) *workspace.Resolved {
-	return &workspace.Resolved{Name: "test", EnableDocker: enableDocker, DindCABundle: policy}
+func resolvedWorkspace(enableDocker bool, policy config.CABundle) *workspace.Resolved {
+	return &workspace.Resolved{Name: "test", EnableDocker: enableDocker, CABundle: policy}
 }
 
 func materializedBundlePath(home string) string {
-	return filepath.Join(home, ".config", "jailoc", "workspaces", "test", "dind-ca-bundle.pem")
+	return filepath.Join(home, ".config", "jailoc", "workspaces", "test", "ca-bundle.pem")
 }
 
 func assertMaterializedBundle(t *testing.T, home string, want []byte) {
@@ -81,7 +81,7 @@ func assertMaterializedBundle(t *testing.T, home string, want []byte) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("materialized mode = %04o, want 0600", info.Mode().Perm())
 	}
-	temporaryFiles, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".dind-ca-bundle.pem-*"))
+	temporaryFiles, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".ca-bundle.pem-*"))
 	if err != nil {
 		t.Fatalf("Glob() error = %v", err)
 	}

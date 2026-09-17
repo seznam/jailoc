@@ -72,9 +72,9 @@ func TestDindEntrypointInstallsCABundleBeforePrivilegeDrop(t *testing.T) {
 	t.Parallel()
 	script := string(jailocembed.DindEntrypoint())
 
-	pathAt := strings.Index(script, `DIND_CA_BUNDLE="/etc/jailoc/dind-ca-bundle.pem"`)
+	pathAt := strings.Index(script, `CA_BUNDLE="/etc/jailoc/ca-bundle.pem"`)
 	certOwnershipAt := strings.Index(script, "for d in /certs/ca /certs/client; do")
-	appendAt := strings.Index(script, `cat "$DIND_CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt`)
+	appendAt := strings.Index(script, `cat "$CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt`)
 	privilegeDropAt := strings.Index(script, "exec su-exec rootless")
 	if pathAt < 0 || certOwnershipAt < 0 || appendAt < 0 || privilegeDropAt < 0 {
 		t.Fatalf("DinD entrypoint is missing CA installation or existing ownership/privilege-drop steps")
@@ -88,10 +88,10 @@ func TestDindEntrypointSkipsAbsentAndRejectsInvalidCABundle(t *testing.T) {
 	t.Parallel()
 	script := string(jailocembed.DindEntrypoint())
 
-	if !strings.Contains(script, `if [ -e "$DIND_CA_BUNDLE" ]; then`) {
+	if !strings.Contains(script, `if [ -e "$CA_BUNDLE" ]; then`) {
 		t.Fatal("DinD entrypoint must inspect any present CA bundle path")
 	}
-	if !strings.Contains(script, `[ ! -f "$DIND_CA_BUNDLE" ] || [ ! -s "$DIND_CA_BUNDLE" ]`) {
+	if !strings.Contains(script, `[ ! -f "$CA_BUNDLE" ] || [ ! -s "$CA_BUNDLE" ]`) {
 		t.Fatal("DinD entrypoint must reject non-regular or empty CA bundles")
 	}
 	if !strings.Contains(script, "jailoc-dind: FATAL:") {
