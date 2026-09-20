@@ -93,11 +93,7 @@ jobs:
         with:
           persist-credentials: false
       - name: git-judge-commits
-        uses: thejoeejoee/git-judge-commits@5c48b94a8db3166e8477d7a303deb96b8cb263ed # v0.3.0
+        uses: thejoeejoee/git-judge-commits@86c725121ef08ceb16d8be17bbb1d5854f01c3b5 # v0.3.1
         with:
           api-key: ${{ secrets.TYPESAFE_API_KEY }}
-          # The action pin fixes the workflow it runs, not the package that
-          # workflow installs -- without this it would take the newest release
-          # from PyPI, whatever that turns out to be.
-          version: 0.3.0
           exclude: dist/tui.js,internal/embed/assets/tui.js
