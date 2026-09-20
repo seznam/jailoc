@@ -73,3 +73,20 @@ jobs:
       - name: Run integration tests
         if: startsWith(github.head_ref || '', 'release-please--branches--')
         run: go test -tags=integration -v -timeout 10m ./internal/...
+
+  judge-commits:
+    name: git-judge-commits
+    runs-on: ubuntu-latest
+    # Dependabot pull requests run with a restricted token that cannot read this
+    # repository's secrets, so there would be no key to judge with -- and a
+    # dependency bump is not the kind of commit worth spending a judgement on.
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: git-judge-commits
+        uses: thejoeejoee/git-judge-commits@2c73b8d030d1d6937e74d2f2cc6740f890f782f9 # v0.2.0
+        with:
+          api-key: ${{ secrets.TYPESAFE_API_KEY }}
+          exclude: dist/tui.js,internal/embed/assets/tui.js
