@@ -138,3 +138,19 @@ func TestDindEntrypointDoesNotUseUpdateCACertificates(t *testing.T) {
 		t.Fatal("DinD entrypoint must append multi-certificate bundles directly")
 	}
 }
+
+func TestDindEntrypointFallsBackToFuseOverlayFSWhenNativeOverlayIsUnavailable(t *testing.T) {
+	t.Parallel()
+	script := string(jailocembed.DindEntrypoint())
+
+	probeAt := strings.Index(script, "unshare -U -m -r")
+	fuseDriverAt := strings.Index(script, `"storage-driver": "fuse-overlayfs"`)
+	disableSnapshotterAt := strings.Index(script, `"containerd-snapshotter": false`)
+	privilegeDropAt := strings.Index(script, "exec su-exec rootless")
+	if probeAt < 0 || fuseDriverAt < 0 || disableSnapshotterAt < 0 || privilegeDropAt < 0 {
+		t.Fatal("DinD entrypoint is missing the native overlay probe or fuse-overlayfs fallback")
+	}
+	if probeAt >= fuseDriverAt || fuseDriverAt >= privilegeDropAt || disableSnapshotterAt >= privilegeDropAt {
+		t.Fatal("DinD overlay compatibility fallback must be configured before privilege drop")
+	}
+}

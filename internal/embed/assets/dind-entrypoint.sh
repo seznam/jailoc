@@ -106,6 +106,30 @@ if [ "$(stat -c '%u' "$ROOTLESS_HOME/.local/share/docker" 2>/dev/null)" != "1000
    [ "$(stat -c '%u' "$ROOTLESS_HOME/.config/docker" 2>/dev/null)" != "1000" ]; then
   chown -R 1000:1000 "$ROOTLESS_HOME/.local/share/docker" "$ROOTLESS_HOME/.config/docker"
 fi
+
+# Native overlayfs requires kernel support for mounts inside user namespaces.
+# Fall back to fuse-overlayfs on older kernels and disable the containerd
+# snapshotter, which only supports native overlayfs.
+OVERLAY_TEST_DIR=$(mktemp -d "$ROOTLESS_HOME/.local/share/docker/.overlay-test.XXXXXX")
+mkdir -p "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR/upper" \
+         "$OVERLAY_TEST_DIR/work" "$OVERLAY_TEST_DIR/merged"
+if ! unshare -U -m -r sh -c \
+  "mount -t overlay overlay -o lowerdir=$OVERLAY_TEST_DIR/lower,upperdir=$OVERLAY_TEST_DIR/upper,workdir=$OVERLAY_TEST_DIR/work $OVERLAY_TEST_DIR/merged && umount $OVERLAY_TEST_DIR/merged" \
+  >/dev/null 2>&1; then
+  cat > "$ROOTLESS_HOME/.config/docker/daemon.json" <<'EOF'
+{
+  "storage-driver": "fuse-overlayfs",
+  "features": {
+    "containerd-snapshotter": false
+  }
+}
+EOF
+  chown 1000:1000 "$ROOTLESS_HOME/.config/docker/daemon.json"
+fi
+rmdir "$OVERLAY_TEST_DIR/work/work" 2>/dev/null || true
+rmdir "$OVERLAY_TEST_DIR/merged" "$OVERLAY_TEST_DIR/work" \
+      "$OVERLAY_TEST_DIR/upper" "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR"
+
 # TLS cert volumes are created as root; the upstream dockerd-entrypoint.sh
 # generates certs and needs write access as UID 1000.
 for d in /certs/ca /certs/client; do
