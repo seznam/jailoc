@@ -107,10 +107,39 @@ if [ "$(stat -c '%u' "$ROOTLESS_HOME/.local/share/docker" 2>/dev/null)" != "1000
   chown -R 1000:1000 "$ROOTLESS_HOME/.local/share/docker" "$ROOTLESS_HOME/.config/docker"
 fi
 
+# TLS cert volumes are created as root; the upstream dockerd-entrypoint.sh
+# generates certs and needs write access as UID 1000.
+for d in /certs/ca /certs/client; do
+  if [ -d "$d" ] && [ "$(stat -c '%u' "$d" 2>/dev/null)" != "1000" ]; then
+    chown -R 1000:1000 "$d"
+  fi
+done
+
+# --- Install forwarded CA bundle ---
+CA_BUNDLE="/etc/jailoc/ca-bundle.pem"
+SYSTEM_CA="/etc/ssl/certs/ca-certificates.crt"
+ORIGINAL_CA="/etc/ssl/certs/ca-certificates.jailoc-original.crt"
+if [ -e "$CA_BUNDLE" ]; then
+  if [ ! -f "$CA_BUNDLE" ] || [ ! -s "$CA_BUNDLE" ]; then
+    echo "jailoc-dind: FATAL: forwarded CA bundle must be a non-empty regular file: $CA_BUNDLE" >&2
+    exit 1
+  fi
+  if [ ! -f "$ORIGINAL_CA" ]; then
+    cp "$SYSTEM_CA" "$ORIGINAL_CA"
+  fi
+  if ! cp "$ORIGINAL_CA" "$SYSTEM_CA" || ! cat "$CA_BUNDLE" >> "$SYSTEM_CA"; then
+    echo "jailoc-dind: FATAL: could not install forwarded CA bundle in $SYSTEM_CA" >&2
+    exit 1
+  fi
+fi
+if [ -f "$ORIGINAL_CA" ] && [ ! -e "$CA_BUNDLE" ]; then
+  cp "$ORIGINAL_CA" "$SYSTEM_CA"
+fi
+
 # Native overlayfs requires kernel support for mounts inside user namespaces.
 # Fall back to fuse-overlayfs on older kernels and disable the containerd
 # snapshotter, which only supports native overlayfs.
-apk add --no-cache su-exec >/dev/null 2>&1 || true
+apk add --no-cache su-exec >/dev/null 2>&1
 
 run_rootless() {
   if command -v su-exec >/dev/null 2>&1; then
@@ -126,6 +155,10 @@ mkdir -p "$(dirname "$FALLBACK_MARKER")"
 
 if [ -L "$DAEMON_CONFIG" ]; then
   echo "jailoc-dind: FATAL: refusing symlinked Docker daemon config at $DAEMON_CONFIG" >&2
+  exit 1
+fi
+if [ -e "$DAEMON_CONFIG" ] && [ ! -f "$DAEMON_CONFIG" ]; then
+  echo "jailoc-dind: FATAL: Docker daemon config must be a regular file: $DAEMON_CONFIG" >&2
   exit 1
 fi
 
@@ -202,35 +235,6 @@ elif [ -f "$FALLBACK_MARKER" ]; then
   else
     rm -f "$FALLBACK_MARKER"
   fi
-fi
-
-# TLS cert volumes are created as root; the upstream dockerd-entrypoint.sh
-# generates certs and needs write access as UID 1000.
-for d in /certs/ca /certs/client; do
-  if [ -d "$d" ] && [ "$(stat -c '%u' "$d" 2>/dev/null)" != "1000" ]; then
-    chown -R 1000:1000 "$d"
-  fi
-done
-
-# --- Install forwarded CA bundle ---
-CA_BUNDLE="/etc/jailoc/ca-bundle.pem"
-SYSTEM_CA="/etc/ssl/certs/ca-certificates.crt"
-ORIGINAL_CA="/etc/ssl/certs/ca-certificates.jailoc-original.crt"
-if [ -e "$CA_BUNDLE" ]; then
-  if [ ! -f "$CA_BUNDLE" ] || [ ! -s "$CA_BUNDLE" ]; then
-    echo "jailoc-dind: FATAL: forwarded CA bundle must be a non-empty regular file: $CA_BUNDLE" >&2
-    exit 1
-  fi
-  if [ ! -f "$ORIGINAL_CA" ]; then
-    cp "$SYSTEM_CA" "$ORIGINAL_CA"
-  fi
-  if ! cp "$ORIGINAL_CA" "$SYSTEM_CA" || ! cat "$CA_BUNDLE" >> "$SYSTEM_CA"; then
-    echo "jailoc-dind: FATAL: could not install forwarded CA bundle in $SYSTEM_CA" >&2
-    exit 1
-  fi
-fi
-if [ -f "$ORIGINAL_CA" ] && [ ! -e "$CA_BUNDLE" ]; then
-  cp "$ORIGINAL_CA" "$SYSTEM_CA"
 fi
 
 # --- Clean stale containerd state ---

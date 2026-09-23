@@ -106,12 +106,15 @@ func TestDindEntrypointInstallsCABundleBeforePrivilegeDrop(t *testing.T) {
 	pathAt := strings.Index(script, `CA_BUNDLE="/etc/jailoc/ca-bundle.pem"`)
 	certOwnershipAt := strings.Index(script, "for d in /certs/ca /certs/client; do")
 	appendAt := strings.Index(script, `cat "$CA_BUNDLE" >> "$SYSTEM_CA"`)
+	restoreAt := strings.Index(script, `if [ -f "$ORIGINAL_CA" ] && [ ! -e "$CA_BUNDLE" ]; then`)
+	installAt := strings.Index(script, "apk add --no-cache su-exec")
+	probeAt := strings.Index(script, "if run_rootless '")
 	privilegeDropAt := strings.Index(script, `exec su-exec rootless env HOME="$ROOTLESS_HOME"`)
-	if pathAt < 0 || certOwnershipAt < 0 || appendAt < 0 || privilegeDropAt < 0 {
+	if pathAt < 0 || certOwnershipAt < 0 || appendAt < 0 || restoreAt < 0 || installAt < 0 || probeAt < 0 || privilegeDropAt < 0 {
 		t.Fatalf("DinD entrypoint is missing CA installation or existing ownership/privilege-drop steps")
 	}
-	if certOwnershipAt >= appendAt || appendAt >= privilegeDropAt {
-		t.Fatalf("DinD CA append must occur after TLS ownership and before privilege drop")
+	if certOwnershipAt >= pathAt || pathAt >= appendAt || appendAt >= restoreAt || restoreAt >= installAt || installAt >= probeAt || probeAt >= privilegeDropAt {
+		t.Fatalf("DinD entrypoint must fix cert ownership, install or restore the CA bundle, install su-exec, probe overlayfs, then drop privileges")
 	}
 }
 
@@ -189,6 +192,11 @@ func TestDindEntrypointReconcilesOnlyGeneratedFallbackConfig(t *testing.T) {
 	}
 	if strings.Contains(script, `[ -f "$DAEMON_CONFIG" ] && [ ! -f "$FALLBACK_MARKER" ] && fallback_config | cmp`) {
 		t.Fatal("DinD entrypoint must not infer config ownership from matching contents")
+	}
+	nonRegularGuardAt := strings.Index(script, `[ -e "$DAEMON_CONFIG" ] && [ ! -f "$DAEMON_CONFIG" ]`)
+	firstCompareAt := strings.Index(script, `fallback_config | cmp -s - "$DAEMON_CONFIG"`)
+	if nonRegularGuardAt < 0 || firstCompareAt < 0 || nonRegularGuardAt >= firstCompareAt {
+		t.Fatal("DinD entrypoint must reject existing non-regular daemon config before comparing its contents")
 	}
 	if strings.Contains(script, `chown 1000:1000 "$FALLBACK_MARKER"`) ||
 		!strings.Contains(script, `if [ -L "$DAEMON_CONFIG" ]; then`) ||
