@@ -66,6 +66,9 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `cpu` | float64 | `2.0` | Number of CPU cores allocated to the opencode container. Must be greater than 0. |
 | `memory` | string | `"4g"` | Memory limit for the opencode container. Accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` suffix (e.g. `512m`, `4g`, `1024`). Must be greater than 0. |
 | `enable_docker` | bool | `true` | Start a Docker-in-Docker sidecar alongside the opencode container. When `false`, the dind service, TLS certificate volumes, and `DOCKER_HOST`/`DOCKER_TLS_*` environment variables are omitted from the generated compose file, so Docker access from inside the container is unavailable by default and `docker` commands will not be able to connect to a daemon. Disabling reduces resource overhead and tightens security when the agent does not need Docker. |
+| `filtered_dns` | bool | `false` | Route DNS for opencode and dind through a CoreDNS sidecar. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
+| `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. Hostnames, loopback, link-local, multicast, and unspecified addresses are rejected. |
+| `dns_blocked_zones` | string[] | `[]` | DNS suffixes blocked by the sidecar with NXDOMAIN, including all subdomains. At least one zone is required when `filtered_dns` is enabled. |
 | `secrets` | table | `{}` | Secrets configuration map applied to all workspaces. See [secrets](#secrets) validation rules and the [secrets how-to](../how-to/secrets.md). |
 
 ### Example
@@ -111,6 +114,9 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `cpu` | float64 | (inherit) | Number of CPU cores allocated to the opencode container. When not set, inherits from `[defaults]`. Falls back to `2.0` when neither the workspace nor defaults set it. |
 | `memory` | string | (inherit) | Memory limit for the opencode container. When not set, inherits from `[defaults]`. Falls back to `"4g"` when neither the workspace nor defaults set it. |
 | `enable_docker` | bool | (inherit) | Start a Docker-in-Docker sidecar for this workspace. When not set, inherits from `[defaults]`. Falls back to `true` when neither the workspace nor defaults set it. When `false`, the dind service, TLS certificate volumes, and `DOCKER_HOST`/`DOCKER_TLS_*` environment variables are omitted. |
+| `filtered_dns` | bool | (inherit; `false`) | Override the default filtered DNS setting for this workspace. `false` disables the DNS sidecar even if enabled in `[defaults]`. |
+| `dns_upstream` | string | (inherit) | Override the numeric IPv4 upstream resolver for this workspace. |
+| `dns_blocked_zones` | string[] | (inherit) | Override the default blocked DNS suffixes for this workspace. |
 | `secrets` | table | `{}` | Secrets configuration map for this workspace. Overrides default secrets with the same secret name. See [secrets](#secrets) validation rules and the [secrets how-to](../how-to/secrets.md). |
 
 !!! note
@@ -185,6 +191,12 @@ Any host path equal to or starting with these prefixes is rejected.
 
 Each entry must be a valid CIDR notation string as accepted by Go's `net.ParseCIDR`. Invalid CIDR values are rejected at config load time.
 
+### Filtered DNS
+
+When `filtered_dns = true`, an effective `dns_upstream` and at least one effective `dns_blocked_zones` entry are required. `dns_upstream` must be a numeric IPv4 address other than unspecified, loopback, link-local, or multicast. Each blocked zone must be a DNS name made of labels containing letters, digits, or internal hyphens (maximum 63 characters per label and 253 characters total); a trailing dot is accepted. A root zone (`"."`) is rejected. An empty workspace `dns_upstream` inherits the default; an omitted workspace zone list inherits the default list. Zones are matched case-insensitively, including their subdomains, and receive NXDOMAIN for all DNS query types. Other queries go to the configured upstream.
+
+The setting controls ordinary port-53 resolution, not DNS over HTTPS, other encrypted DNS protocols, proxies, or direct IP access. It does not replace the private-network firewall.
+
 ### Workspace `image`
 
 The workspace `image` field is mutually exclusive with `dockerfile` and `build_context`. The following combinations are rejected at config load time:
@@ -223,6 +235,7 @@ Each entry must be in `KEY=VALUE` format (key cannot be empty, must contain `=`)
 | `DOCKER_CERT_PATH` | DinD TLS certs |
 | `DOCKER_TLS_VERIFY` | DinD TLS verification |
 | `SSH_AUTH_SOCK` | SSH agent passthrough |
+| `JAILOC_FILTERED_DNS` | filtered DNS firewall selection |
 
 ### `env_file`
 
@@ -285,6 +298,7 @@ The container environment variable name (`<NAME>`) must match `^[A-Za-z_][A-Za-z
 - `SSH_AUTH_SOCK`
 - `JAILOC`
 - `JAILOC_WORKSPACE`
+- `JAILOC_FILTERED_DNS`
 
 #### File destination (`secrets.file.<NAME>`)
 
@@ -326,7 +340,7 @@ Environment variables from multiple sources are merged in this order (later entr
 
 OpenCode configuration directories are mounted read-write because the agent needs write access to persist settings changes, install tools and MCPs, and update its own configuration at runtime.
 
-`ssh_auth_sock`, `git_config`, `expose_port`, and `enable_docker` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config`, `expose_port`, and `enable_docker` fall back to `true` when neither the workspace nor defaults set it.
+`ssh_auth_sock`, `git_config`, `expose_port`, `enable_docker`, and `filtered_dns` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `git_config`, `expose_port`, and `enable_docker` fall back to `true` when neither the workspace nor defaults set it; `filtered_dns` falls back to `false`. An empty workspace `dns_upstream` inherits the default upstream; an omitted `dns_blocked_zones` inherits the default list. These lists replace defaults when specified, rather than merging.
 
 `cpu` and `memory` inherit from `[defaults]` when not set in the workspace. When set explicitly in a workspace, the workspace value takes precedence. `cpu` falls back to `2.0` and `memory` falls back to `"4g"` when neither the workspace nor defaults set them.
 
