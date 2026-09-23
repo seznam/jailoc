@@ -151,6 +151,31 @@ if [ -d /home/agent/.ssh ]; then
   chown 1000:1000 /home/agent/.ssh 2>/dev/null || true
 fi
 
+# --- Install forwarded CA bundle ---
+CA_BUNDLE="/etc/jailoc/ca-bundle.pem"
+SYSTEM_CA="/etc/ssl/certs/ca-certificates.crt"
+ORIGINAL_CA="/etc/ssl/certs/ca-certificates.jailoc-original.crt"
+if [ -e "$CA_BUNDLE" ]; then
+  if [ ! -f "$CA_BUNDLE" ] || [ ! -s "$CA_BUNDLE" ]; then
+    echo "jailoc: FATAL: forwarded CA bundle must be a non-empty regular file: $CA_BUNDLE" >&2
+    exit 1
+  fi
+  if [ ! -f "$ORIGINAL_CA" ]; then
+    cp "$SYSTEM_CA" "$ORIGINAL_CA"
+  fi
+  if ! cp "$ORIGINAL_CA" "$SYSTEM_CA" || ! cat "$CA_BUNDLE" >> "$SYSTEM_CA"; then
+    echo "jailoc: FATAL: could not install forwarded CA bundle in $SYSTEM_CA" >&2
+    exit 1
+  fi
+fi
+if [ -f "$ORIGINAL_CA" ]; then
+  if [ ! -e "$CA_BUNDLE" ]; then
+    cp "$ORIGINAL_CA" "$SYSTEM_CA"
+  else
+    export NODE_USE_SYSTEM_CA=1
+  fi
+fi
+
 # /etc/jailoc/secret-env lists one env-destination secret name per line and
 # never any value. Each name is both the /run/secrets/<name> basename and the
 # environment variable the agent receives.

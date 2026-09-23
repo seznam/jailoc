@@ -903,6 +903,8 @@ func TestGenerateComposeEnableDockerFalse(t *testing.T) {
 	// Basic service must still be present
 	assertContains(t, rendered, "opencode:")
 	assertContains(t, rendered, "- JAILOC=1")
+	assertContains(t, rendered, "${HOME}/.config/jailoc/workspaces/no-docker-test:/etc/jailoc:ro")
+	assertNotContains(t, rendered, "ca-bundle.pem:")
 }
 
 func TestGenerateComposeEnableDockerTrue(t *testing.T) {
@@ -936,6 +938,8 @@ func TestGenerateComposeEnableDockerTrue(t *testing.T) {
 	// DinD volumes must be present
 	assertContains(t, rendered, "dind-certs-client:/certs/client:ro")
 	assertContains(t, rendered, "dind-data:")
+	assertContains(t, rendered, "${HOME}/.config/jailoc/workspaces/docker-test:/etc/jailoc:ro")
+	assertNotContains(t, rendered, "ca-bundle.pem:")
 
 	// DinD must not have hardcoded public DNS (inherits host/daemon DNS)
 	assertNotContains(t, rendered, "1.1.1.1")

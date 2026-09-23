@@ -46,7 +46,7 @@ The opencode container mounts several things at startup:
 |-------|-----------|---------|
 | Workspace paths | read-write | The directories the agent is working in |
 | Configurable mounts | per-mount | Host directories mounted into the container, controlled by the `mounts` config field. Defaults include OpenCode configuration (rw — the agent needs write access to persist settings, install tools, and update its own configuration), session transcripts (rw), and agent tooling (ro). See [Configuration Reference](../reference/configuration.md#mounts) for the full list and merge rules. |
-| `/etc/jailoc` | read-only | jailoc's own runtime config, including allowed hosts |
+| `/etc/jailoc` | read-only | jailoc's per-workspace runtime files, including allowed hosts and the optional materialized CA bundle |
 | SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`). Also mounts `~/.ssh/known_hosts` read-only for host key verification. |
 | `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`, the default) |
 
@@ -80,6 +80,16 @@ The rootless architecture provides a critical security property: inner container
 
 `--no-new-privs` is intentionally omitted from the setpriv invocation because rootlesskit requires setuid `newuidmap`/`newgidmap` for user namespace setup. These binaries are narrowly scoped — they only manipulate UID/GID mappings and cannot escalate to arbitrary capabilities.
 
+## CA bundle trust
+
+jailoc can forward a CA bundle into the opencode container and, when enabled, the DinD daemon. This lets OpenCode, command-line HTTPS clients, and Docker registry operations trust a private or internal CA without altering host trust. This is controlled by the `ca_bundle` config field — see [Configuration Reference](../reference/configuration.md) for the full bool\|string contract and [How-to: Network Access](../how-to/network-access.md#forward-a-ca-bundle) for task-oriented examples.
+
+Before `jailoc up` or `jailoc add` writes any other generated files, jailoc resolves the effective bundle (automatic discovery from `SSL_CERT_FILE`/`NIX_SSL_CERT_FILE`, a custom path, or none), validates that it is a readable regular file containing at least one certificate and no private-key material, and materializes only the validated public bytes to `~/.config/jailoc/workspaces/<workspace>/ca-bundle.pem`. That file reaches both services through the existing read-only `/etc/jailoc` mount — no new bind mount is added. When forwarding is disabled or automatic discovery finds no source, jailoc removes any stale materialized file so a bundle from a previous run cannot linger.
+
+Each entrypoint appends `/etc/jailoc/ca-bundle.pem`, when present, to its system CA bundle (`/etc/ssl/certs/ca-certificates.crt`) while still running as root and before dropping to UID 1000. The opencode entrypoint also enables Node.js system-CA loading with `NODE_USE_SYSTEM_CA=1` before it starts OpenCode. When Docker is enabled, the DinD daemon starts with the same additional roots. This is independent of the `/certs/ca` material used for opencode-to-dind daemon mutual TLS, which this feature does not touch.
+
+!!! warning
+    Trust extends to the opencode container and the DinD daemon only. It does not propagate to the host, containers already running inside DinD when the bundle changes, containers started later with `docker run`, or `RUN` steps executed during a Dockerfile build inside DinD — those inherit whatever trust store their own image ships with, not the daemon's. `SSL_CERT_DIR` is not read as a discovery source. Forwarding a CA bundle does not change firewall behavior: `allowed_hosts` and `allowed_networks` rules still gate which addresses the containers can reach.
 For instructions on configuring which hosts the agent can reach, see [How-to: Network Access](../how-to/network-access.md).
 
 ## Image resolution

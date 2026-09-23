@@ -1608,6 +1608,7 @@ func TestValidateEnvReservedKeys(t *testing.T) {
 	reserved := []string{
 		"OPENCODE_LOG",
 		"OPENCODE_SERVER_PASSWORD",
+		"NODE_USE_SYSTEM_CA",
 		"DOCKER_HOST",
 		"DOCKER_TLS_CERTDIR",
 		"DOCKER_CERT_PATH",

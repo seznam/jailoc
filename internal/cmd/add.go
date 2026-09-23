@@ -122,6 +122,9 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 	if err := validateSecretSources(ws2); err != nil {
 		return fmt.Errorf("validate secrets for workspace %q: %w", ws2.Name, err)
 	}
+	if err := materializeCABundle(ws2); err != nil {
+		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws2.Name, err)
+	}
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
 	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
@@ -192,6 +195,9 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		}
 	}
 
+	if err := client.Down(ctx); err != nil {
+		return fmt.Errorf("stop workspace before restart: %w", err)
+	}
 	if err := client.Up(ctx); err != nil {
 		return fmt.Errorf("restart workspace: %w", err)
 	}
