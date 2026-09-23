@@ -172,5 +172,7 @@ ca_bundle = false
 !!! note
     Automatic discovery fails `jailoc up` or a running-workspace `jailoc add` restart if the selected environment variable (`SSL_CERT_FILE`, or `NIX_SSL_CERT_FILE` when `SSL_CERT_FILE` is unset or blank) points at an invalid PEM bundle — it does not silently fall through to the next variable. If neither variable is set, no bundle is forwarded and no error occurs. Setting `enable_docker = false` disables only the DinD consumer; the opencode container still receives and validates the bundle.
 
+    If automatic discovery selects an unusable bundle, set `ca_bundle = false` for that workspace or set `ca_bundle` to the path of a valid bundle. An ordinary container restart reapplies the configured CA without adding duplicate certificates; removing the bundle restores the container's original trust store on its next start.
+
 !!! warning
     The bundle is trusted by tools in the opencode container and by the OpenCode Node.js process. When DinD is enabled, the daemon trusts it too. Trust does not extend to the host, inner containers started with `docker run`, or `RUN` steps executed during a Dockerfile build inside DinD. `SSL_CERT_DIR` is not read as a source. This is unrelated to the `/certs/ca` mutual-TLS material used for opencode-to-dind daemon authentication. Existing `allowed_hosts`/`allowed_networks` firewall rules still apply — forwarding a CA bundle does not open network access to a private endpoint.
