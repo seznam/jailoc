@@ -91,6 +91,8 @@ $IPT -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
 if [ "${JAILOC_FILTERED_DNS:-}" = 1 ]; then
   $IPT -I JAILOC-OUTPUT -p tcp --dport 53 -j REJECT
   $IPT -I JAILOC-OUTPUT -p udp --dport 53 -j REJECT
+  $IPT -I JAILOC-OUTPUT -p tcp -d 169.254.53.53 --dport 53 -j ACCEPT
+  $IPT -I JAILOC-OUTPUT -p udp -d 169.254.53.53 --dport 53 -j ACCEPT
   $IPT -I JAILOC-OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
   $IPT -I JAILOC-OUTPUT -p udp -d 127.0.0.11 --dport 53 -j ACCEPT
 fi
