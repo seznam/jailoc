@@ -181,6 +181,15 @@ Common causes:
 - TLS certificate volume not properly shared between containers
 - Insufficient disk space for Docker data volume
 
+If the sidecar logs a `jailoc-dind: FATAL` line, the message identifies which startup check failed:
+
+- **`could not install su-exec`**: The image lacks `su-exec` and could not install it from package repositories, often due to network isolation rules or missing connectivity. Install `su-exec` in a [custom image](custom-images.md) so startup does not require network access.
+- **`unmarked substantive Docker data in ...; refusing to change storage backend`**: `dind-data` contains files or directories, but `/var/lib/jailoc/storage/storage-mode` is missing. Confirm that the `dind-storage-meta` and `dind-data` volumes both belong to this workspace and were retained together. Inspect or back up the volumes before recovery; do not delete or reset `dind-data` to bypass the check.
+- **`native overlayfs was previously selected for this volume but is unavailable`**: The backend pin requires native overlayfs, but the current kernel cannot mount it as the rootless user. Restore a compatible kernel/runtime instead of switching to fuse over existing data.
+- **`/home/rootless/.config/docker/daemon.json is not managed by jailoc or was modified`**: A daemon configuration file exists at that path but differs from the config jailoc manages, or was modified after creation. Inspect the file manually to reconcile differences.
+
+The backend pin (`native-snapshotter` or `fuse-overlayfs`) lives on `dind-storage-meta` at `/var/lib/jailoc/storage/storage-mode`. Keep this volume paired with `dind-data` across recreations. Generated `/home/rootless/.config/docker/daemon.json` is container-local and is recreated from the pin when needed.
+
 ---
 
 ## Cleanup stale resources

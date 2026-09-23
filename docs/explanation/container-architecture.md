@@ -18,7 +18,7 @@ flowchart TB
     subgraph dind["dind (privileged)"]
       direction TB
       dind_daemon["Docker daemon<br>TLS on :2376"]
-      dind_vols["Shared volumes:<br>certs (TLS)<br>docker data"]
+      dind_vols["Volumes:<br>certs (TLS, shared)<br>docker data (dind only)<br>storage metadata (dind only, root-owned)"]
     end
   end
 
@@ -50,7 +50,7 @@ The opencode container mounts several things at startup:
 | SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`). Also mounts `~/.ssh/known_hosts` read-only for host key verification. |
 | `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`, the default) |
 
-Two named volumes are shared between both containers when Docker-in-Docker is enabled: one for TLS certificates (so the opencode container can authenticate to the dind daemon) and one for Docker's data directory. When `enable_docker` is `false`, these volumes are not created. A third named volume holds the agent's own data — its SQLite history database and auth tokens. This last volume is intentionally isolated from your host's `~/.local/share/opencode`, so the agent's session history never touches your personal history.
+When Docker-in-Docker is enabled, a TLS certificate volume is shared with the opencode container. The dind container alone mounts `dind-data` for Docker images and containers, and a separate root-owned `dind-storage-meta` volume at `/var/lib/jailoc/storage` for its storage backend selection. Retain these two volumes together: if the metadata volume is missing while Docker data exists, the sidecar refuses to start rather than guess the backend. When `enable_docker` is `false`, these volumes are not created. Another named volume holds the agent's own data — its SQLite history database and auth tokens. This last volume is intentionally isolated from your host's `~/.local/share/opencode`, so the agent's session history never touches your personal history.
 
 Environment variables configured via `env` or `env_file` in the workspace config or the `[defaults]` section are passed to the opencode container alongside the system variables required for dind connectivity. Values are literal strings — no host environment variable expansion is performed. jailoc also injects `JAILOC=1` and `JAILOC_WORKSPACE=<name>` into the opencode container; these are reserved and cannot be overridden by workspace config.
 
@@ -76,7 +76,11 @@ The three-phase sequence matters because iptables manipulation and `chown` both 
 
 Nested Docker requires the `--privileged` flag because it needs to mount cgroups, load kernel modules, and mount an overlay filesystem for its storage driver. There's no way around `--privileged` with current Linux kernel capabilities — caps-only configurations fail when inner containers try to mount `/proc`. The tradeoff is accepted deliberately: the dind container is privileged, but it runs a rootless Docker daemon where the dockerd process and all inner containers operate as UID 1000 inside a user namespace.
 
-Which overlay driver the daemon uses depends on the host kernel rather than being fixed at build time. On every container start, the entrypoint probes native overlayfs support as the rootless UID: it first attempts an overlay mount with the `userxattr` option, which some kernels require for user-namespace extended attributes, then retries a plain mount without it if the first attempt fails. When neither mount succeeds, the entrypoint configures the daemon to use `fuse-overlayfs` instead of `overlay2` and disables the containerd snapshotter, which only supports native overlayfs. Because the probe reruns at every start, the driver selection tracks the kernel actually running the container.
+On first startup with empty data, the entrypoint probes native overlayfs as the rootless UID, trying `userxattr` and then a plain mount. It records `native-snapshotter` or `fuse-overlayfs` in `/var/lib/jailoc/storage/storage-mode` on the separate root-owned `dind-storage-meta` volume. Docker's native snapshotter and fuse-overlayfs image stores are incompatible: changing backends would make existing images and containers appear to disappear. The marker pins the backend across recreation. A native pin requires a successful probe on every startup; a fuse pin stays on fuse even if native overlayfs later becomes available. An unmarked data volume with any existing entry, including a directory, is rejected rather than assigned a backend. Inspect existing data and metadata before attempting recovery; see [Troubleshooting](../how-to/troubleshooting.md#dind-sidecar-not-healthy).
+
+The entrypoint writes a generated `/home/rootless/.config/docker/daemon.json` inside the container. Native mode explicitly enables `containerd-snapshotter`; fuse mode selects `fuse-overlayfs` and disables that snapshotter. Configuration that is not jailoc-managed or has been modified is rejected.
+
+The entrypoint installs `su-exec` only when absent from the image. If installation fails, for example because network restrictions block repository access, the entrypoint exits instead of continuing as root.
 
 The rootless architecture provides a critical security property: inner containers — even those started with `--privileged` or `--network=host` — run inside rootlesskit's user namespace and see their own isolated netfilter tables. An agent that creates a privileged inner container and attempts to flush iptables will only affect the empty netfilter inside that namespace, not the outer rules that enforce network isolation. The dind entrypoint drops all inheritable and bounding capabilities via `setpriv --inh-caps=-all --bounding-set -all` before execing the rootless daemon, so UID 1000 cannot regain `CAP_NET_ADMIN` to modify the outer iptables rules.
 
