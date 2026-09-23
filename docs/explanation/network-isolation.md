@@ -77,4 +77,6 @@ The iptables rules require the container runtime's Linux kernel to support **net
 
 Most Docker runtimes ship kernels with full netfilter support, but some minimal hypervisor configurations do not. Rancher Desktop using VZ virtualization without Rosetta on macOS is a known case — its ARM64 kernel lacks netfilter entirely, so both backends fail with `Protocol not supported`.
 
+Netfilter support is mandatory: without it, jailoc cannot enforce network isolation and refuses to start the container. Native rootless overlayfs support, used by the dind sidecar's Docker storage driver, is optional by contrast — jailoc probes for it at every start and falls back to `fuse-overlayfs` on kernels that lack it when jailoc can safely manage the Docker daemon configuration. See [Container Architecture — Why privileged dind?](container-architecture.md#why-privileged-dind) for that probe and its fallback.
+
 See [Installation — Docker runtime compatibility](../how-to/installation.md#docker-runtime-compatibility) for a full list of tested runtimes.
