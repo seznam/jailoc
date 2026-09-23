@@ -108,6 +108,73 @@ paths = ["/data/workspace"]
 	}
 }
 
+func TestFilteredDNSValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, upstream string
+		zones          []string
+		wantError      string
+	}{
+		{"valid", "10.20.30.53", []string{"corp.example.com", "internal"}, ""},
+		{"missing upstream", "", nil, "dns_upstream"},
+		{"missing blocked zones", "10.20.30.53", nil, "dns_blocked_zones"},
+		{"hostname upstream", "resolver.example.com", []string{"internal"}, "dns_upstream"},
+		{"loopback upstream", "127.0.0.1", []string{"internal"}, "dns_upstream"},
+		{"link-local upstream", "169.254.53.53", []string{"internal"}, "dns_upstream"},
+		{"multicast upstream", "224.0.0.53", []string{"internal"}, "dns_upstream"},
+		{"invalid zone", "10.20.30.53", []string{"."}, "dns_blocked_zones"},
+		{"injected zone", "10.20.30.53", []string{"corp.example.com\nforward . 1.1.1.1"}, "dns_blocked_zones"},
+		{"dotless zone", "10.20.30.53", []string{"internal"}, ""},
+		{"valid trailing dot", "10.20.30.53", []string{"internal.example."}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{Workspaces: map[string]Workspace{"test": {
+				Paths: []string{"/data/work"}, FilteredDNS: new(true), DNSUpstream: tc.upstream, DNSBlockedZones: tc.zones,
+			}}}
+			err := Validate(cfg)
+			if tc.wantError == "" && err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestFilteredDNSFlagCannotBeOverridden(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{Workspaces: map[string]Workspace{"test": {
+		Paths: []string{"/data/work"}, Env: []string{"JAILOC_FILTERED_DNS=0"},
+	}}}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("Validate error = %v, want reserved env key", err)
+	}
+}
+
+func TestLoadFilteredDNSTOML(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `[defaults]
+dns_upstream = "10.20.30.53"
+dns_blocked_zones = ["internal"]
+
+[workspaces.test]
+paths = ["/data/work"]
+filtered_dns = true
+`)
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.Workspaces["test"].FilteredDNS == nil || !*cfg.Workspaces["test"].FilteredDNS ||
+		cfg.Defaults.DNSUpstream != "10.20.30.53" || len(cfg.Defaults.DNSBlockedZones) != 1 {
+		t.Fatalf("filtered DNS settings not loaded: defaults=%+v workspace=%+v", cfg.Defaults, cfg.Workspaces["test"])
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	envGlobal := filepath.Join(dir, "env.global")
