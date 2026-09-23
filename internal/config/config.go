@@ -922,6 +922,21 @@ func Validate(cfg *Config) error {
 		if enabled && len(ws.DNSBlockedZones) == 0 && len(cfg.Defaults.DNSBlockedZones) == 0 {
 			return fmt.Errorf("workspace %q: dns_blocked_zones is required when filtered_dns is enabled", name)
 		}
+		if enabled {
+			zones := ws.DNSBlockedZones
+			if zones == nil {
+				zones = cfg.Defaults.DNSBlockedZones
+			}
+			for _, host := range mergeDedup(cfg.Defaults.AllowedHosts, ws.AllowedHosts) {
+				normalizedHost := strings.TrimSuffix(strings.ToLower(host), ".")
+				for _, zone := range zones {
+					normalizedZone := strings.TrimSuffix(strings.ToLower(zone), ".")
+					if normalizedHost == normalizedZone || strings.HasSuffix(normalizedHost, "."+normalizedZone) {
+						return fmt.Errorf("workspace %q: allowed_hosts entry %q conflicts with dns_blocked_zones entry %q", name, host, zone)
+					}
+				}
+			}
+		}
 
 		cfg.Workspaces[name] = ws
 	}

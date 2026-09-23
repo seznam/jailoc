@@ -144,6 +144,50 @@ func TestFilteredDNSValidation(t *testing.T) {
 	}
 }
 
+func TestFilteredDNSAllowedHostConflict(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name             string
+		defaultHosts     []string
+		workspaceHosts   []string
+		defaultZones     []string
+		workspaceZones   []string
+		workspaceEnabled *bool
+		wantHost         string
+		wantZone         string
+	}{
+		{"exact default host", []string{"corp.example"}, nil, []string{"corp.example"}, nil, nil, "corp.example", "corp.example"},
+		{"subdomain workspace host", nil, []string{"Api.Corp.Example."}, []string{"corp.example."}, nil, nil, "Api.Corp.Example.", "corp.example."},
+		{"inherited host overridden zone", []string{"api.corp.example"}, nil, []string{"internal"}, []string{"corp.example"}, nil, "api.corp.example", "corp.example"},
+		{"sibling host", nil, []string{"notcorp.example"}, []string{"corp.example"}, nil, nil, "", ""},
+		{"workspace zones replace defaults", []string{"api.corp.example"}, nil, []string{"corp.example"}, []string{"internal"}, nil, "", ""},
+		{"disabled workspace", []string{"api.corp.example"}, nil, []string{"corp.example"}, nil, new(false), "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				Defaults: Defaults{FilteredDNS: new(true), DNSUpstream: "1.1.1.1", DNSBlockedZones: tc.defaultZones, AllowedHosts: tc.defaultHosts},
+				Workspaces: map[string]Workspace{"test": {
+					Paths: []string{"/data/work"}, AllowedHosts: tc.workspaceHosts, DNSBlockedZones: tc.workspaceZones, FilteredDNS: tc.workspaceEnabled,
+				}},
+			}
+			err := Validate(cfg)
+			if tc.wantHost == "" {
+				if err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), `workspace "test"`) ||
+				!strings.Contains(err.Error(), tc.wantHost) || !strings.Contains(err.Error(), tc.wantZone) ||
+				!strings.Contains(err.Error(), "allowed_hosts") || !strings.Contains(err.Error(), "dns_blocked_zones") {
+				t.Fatalf("Validate error = %v, want workspace/host/zone conflict", err)
+			}
+		})
+	}
+}
+
 func TestFilteredDNSFlagCannotBeOverridden(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{Workspaces: map[string]Workspace{"test": {
