@@ -184,13 +184,13 @@ if [ -f "$BACKEND_MARKER" ]; then
   fi
   BACKEND=$(cat "$BACKEND_MARKER")
   case "$BACKEND" in
-    native-snapshotter|fuse-overlayfs) ;;
+    native-snapshotter|legacy-overlay2|fuse-overlayfs) ;;
     *) echo "jailoc-dind: FATAL: invalid storage backend in $BACKEND_MARKER" >&2; exit 1 ;;
   esac
 else
   # An unmarked initialized volume cannot reveal which image store owns its data.
   if [ -n "$(find "$DOCKER_DATA_DIR" -mindepth 1 -print -quit)" ]; then
-    echo "jailoc-dind: FATAL: unmarked substantive Docker data in $DOCKER_DATA_DIR; refusing to change storage backend" >&2
+    echo "jailoc-dind: FATAL: unmarked substantive Docker data in $DOCKER_DATA_DIR; refusing to change storage backend. Seed verified storage metadata as described in the troubleshooting guide" >&2
     exit 1
   fi
   find "$BACKEND_DIR" -mindepth 1 -maxdepth 1 -name '.storage-mode.*' -type f -user root -delete
@@ -222,12 +222,23 @@ native_config() {
 EOF
 }
 
+legacy_config() {
+  cat <<'EOF'
+{
+  "storage-driver": "overlay2",
+  "features": {
+    "containerd-snapshotter": false
+  }
+}
+EOF
+}
+
 managed_config() {
-  if [ "$BACKEND" = fuse-overlayfs ]; then
-    fallback_config
-  else
-    native_config
-  fi
+  case "$BACKEND" in
+    fuse-overlayfs) fallback_config ;;
+    legacy-overlay2) legacy_config ;;
+    native-snapshotter) native_config ;;
+  esac
 }
 
 write_backend_marker() {
@@ -286,7 +297,7 @@ if [ -z "$BACKEND" ]; then
     BACKEND=fuse-overlayfs
   fi
 fi
-if [ "$BACKEND" = native-snapshotter ] && [ "$PROBE_STATUS" -ne 0 ]; then
+if { [ "$BACKEND" = native-snapshotter ] || [ "$BACKEND" = legacy-overlay2 ]; } && [ "$PROBE_STATUS" -ne 0 ]; then
   echo "jailoc-dind: FATAL: native overlayfs was previously selected for this volume but is unavailable" >&2
   exit 1
 fi

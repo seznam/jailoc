@@ -246,3 +246,19 @@ func TestDindEntrypointDurableBackendSelection(t *testing.T) {
 		t.Fatal("DinD entrypoint must fail closed for unmarked Docker data, including directory-only volumes")
 	}
 }
+
+func TestDindEntrypointCanPinLegacyOverlay2(t *testing.T) {
+	t.Parallel()
+	script := string(jailocembed.DindEntrypoint())
+
+	if !strings.Contains(script, `native-snapshotter|legacy-overlay2|fuse-overlayfs`) {
+		t.Fatal("DinD must accept a verified classic overlay2 backend pin")
+	}
+	if !strings.Contains(script, `"storage-driver": "overlay2"`) ||
+		!strings.Contains(script, `"containerd-snapshotter": false`) {
+		t.Fatal("classic overlay2 must disable the containerd image store")
+	}
+	if !strings.Contains(script, `"$BACKEND" = legacy-overlay2`) {
+		t.Fatal("legacy overlay2 must require a successful native overlay probe")
+	}
+}
