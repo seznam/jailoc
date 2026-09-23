@@ -733,6 +733,39 @@ func TestCABundleForwardingLifecycle(t *testing.T) {
 		t.Fatalf("DinD system CA bundle does not contain certificate marker %q", marker)
 	}
 	verifyForwardedCATLS(ctx, t, serverCertificate, opencodeContainer, dindContainer)
+	oldDindID, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.Id}}", dindContainer).Output()
+	if err != nil {
+		t.Fatalf("inspect original DinD container: %v", err)
+	}
+	replacement, replacementCertificate := integrationCertificateBundle(t, "jailoc-ca-replacement")
+	if err := os.WriteFile(bundlePath, replacement, 0o600); err != nil {
+		t.Fatalf("write replacement CA bundle: %v", err)
+	}
+	additionalPath := filepath.Join(workspaceDir, "additional")
+	if err := os.Mkdir(additionalPath, 0o755); err != nil {
+		t.Fatalf("create additional workspace path: %v", err)
+	}
+	addOut, addErr := runJailocWithEnv(ctx, home, map[string]string{"SSL_CERT_FILE": bundlePath}, "add", "--workspace", workspaceName, additionalPath)
+	if addErr != nil {
+		t.Fatalf("jailoc add after CA rotation: %v\noutput:\n%s", addErr, addOut)
+	}
+	newDindID, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.Id}}", dindContainer).Output()
+	if err != nil {
+		t.Fatalf("inspect updated DinD container: %v", err)
+	}
+	if string(newDindID) == string(oldDindID) {
+		t.Fatal("jailoc add kept the original DinD container after CA rotation")
+	}
+	replacementMarker := strings.Split(string(replacement), "\n")[1]
+	for _, container := range []string{opencodeContainer, dindContainer} {
+		if container == opencodeContainer {
+			waitForAgentPID1(ctx, t, container)
+		}
+		dockerExec(ctx, t, container, "0", "grep -F '"+replacementMarker+"' /etc/ssl/certs/ca-certificates.crt")
+		dockerExec(ctx, t, container, "0", "if grep -Fq '"+marker+"' /etc/ssl/certs/ca-certificates.crt; then exit 1; fi")
+	}
+	verifyForwardedCATLS(ctx, t, replacementCertificate, opencodeContainer, dindContainer)
+	marker = replacementMarker
 	for _, container := range []string{opencodeContainer, dindContainer} {
 		if out, err := exec.CommandContext(ctx, "docker", "restart", container).CombinedOutput(); err != nil {
 			t.Fatalf("restart %s with valid CA: %v\noutput:\n%s", container, err, out)

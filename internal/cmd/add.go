@@ -195,6 +195,9 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		}
 	}
 
+	if err := client.Down(ctx); err != nil {
+		return fmt.Errorf("stop workspace before restart: %w", err)
+	}
 	if err := client.Up(ctx); err != nil {
 		return fmt.Errorf("restart workspace: %w", err)
 	}
