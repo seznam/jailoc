@@ -149,7 +149,7 @@ func TestDindEntrypointFallsBackToFuseOverlayFSWhenNativeOverlayIsUnavailable(t 
 	probeAt := strings.Index(script, "unshare -U -m -r")
 	fuseDriverAt := strings.Index(script, `"storage-driver": "fuse-overlayfs"`)
 	disableSnapshotterAt := strings.Index(script, `"containerd-snapshotter": false`)
-	fallbackWriteAt := strings.Index(script, `if ! write_fallback_config; then`)
+	fallbackWriteAt := strings.Index(script, `if ! write_managed_config; then`)
 	privilegeDropAt := strings.Index(script, `exec su-exec rootless env HOME="$ROOTLESS_HOME"`)
 	if probeAt < 0 || fuseDriverAt < 0 || disableSnapshotterAt < 0 || fallbackWriteAt < 0 || privilegeDropAt < 0 {
 		t.Fatal("DinD entrypoint is missing the native overlay probe or fuse-overlayfs fallback")
@@ -189,9 +189,9 @@ func TestDindEntrypointReconcilesOnlyGeneratedFallbackConfig(t *testing.T) {
 	t.Parallel()
 	script := string(jailocembed.DindEntrypoint())
 
-	if !strings.Contains(script, `FALLBACK_MARKER="/var/lib/jailoc/dind-overlay-fallback"`) ||
-		!strings.Contains(script, `touch "$FALLBACK_MARKER"`) ||
-		!strings.Contains(script, `[ ! -f "$FALLBACK_MARKER" ] || ! managed_config | cmp -s - "$DAEMON_CONFIG"`) {
+	if !strings.Contains(script, `CONFIG_MARKER="/var/lib/jailoc/dind-overlay-fallback"`) ||
+		!strings.Contains(script, `touch "$CONFIG_MARKER"`) ||
+		!strings.Contains(script, `[ ! -f "$CONFIG_MARKER" ] || ! managed_config | cmp -s - "$DAEMON_CONFIG"`) {
 		t.Fatal("DinD entrypoint must track container-local generated config ownership and refuse unmarked config")
 	}
 	nonRegularGuardAt := strings.Index(script, `[ -e "$DAEMON_CONFIG" ] && [ ! -f "$DAEMON_CONFIG" ]`)
@@ -199,11 +199,11 @@ func TestDindEntrypointReconcilesOnlyGeneratedFallbackConfig(t *testing.T) {
 	if nonRegularGuardAt < 0 || firstCompareAt < 0 || nonRegularGuardAt >= firstCompareAt {
 		t.Fatal("DinD entrypoint must reject existing non-regular daemon config before comparing its contents")
 	}
-	if strings.Contains(script, `chown 1000:1000 "$FALLBACK_MARKER"`) ||
+	if strings.Contains(script, `chown 1000:1000 "$CONFIG_MARKER"`) ||
 		!strings.Contains(script, `if [ -L "$DAEMON_CONFIG" ]; then`) {
 		t.Fatal("DinD entrypoint must keep its marker root-owned, reject config symlinks, and allow a missing generated config to be recreated")
 	}
-	if !strings.Contains(script, `write_fallback_config()`) ||
+	if !strings.Contains(script, `write_managed_config()`) ||
 		!strings.Contains(script, `mv -f "$TEMP_CONFIG" "$DAEMON_CONFIG"`) {
 		t.Fatal("DinD entrypoint must atomically create fallback config and avoid rewriting matching config")
 	}
@@ -234,8 +234,8 @@ func TestDindEntrypointDurableBackendSelection(t *testing.T) {
 	if !strings.Contains(script, `mv -f "$TEMP_MARKER" "$BACKEND_MARKER"`) {
 		t.Fatal("DinD entrypoint must atomically rename temporary marker on same volume")
 	}
-	if !strings.Contains(script, `touch "$FALLBACK_MARKER"`) ||
-		strings.Index(script, `touch "$FALLBACK_MARKER"`) > strings.Index(script, `if ! write_fallback_config; then`) {
+	if !strings.Contains(script, `touch "$CONFIG_MARKER"`) ||
+		strings.Index(script, `touch "$CONFIG_MARKER"`) > strings.Index(script, `if ! write_managed_config; then`) {
 		t.Fatal("DinD entrypoint must record generated config ownership before publishing config")
 	}
 	if !strings.Contains(script, `"$BACKEND" = native-snapshotter`) ||

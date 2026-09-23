@@ -155,11 +155,11 @@ run_rootless() {
 }
 
 DAEMON_CONFIG="$ROOTLESS_HOME/.config/docker/daemon.json"
-FALLBACK_MARKER="/var/lib/jailoc/dind-overlay-fallback"
+CONFIG_MARKER="/var/lib/jailoc/dind-overlay-fallback"
 DOCKER_DATA_DIR="$ROOTLESS_HOME/.local/share/docker"
 BACKEND_DIR="/var/lib/jailoc/storage"
 BACKEND_MARKER="$BACKEND_DIR/storage-mode"
-mkdir -p "$(dirname "$FALLBACK_MARKER")"
+mkdir -p "$(dirname "$CONFIG_MARKER")"
 
 if [ -L "$DAEMON_CONFIG" ]; then
   echo "jailoc-dind: FATAL: refusing symlinked Docker daemon config at $DAEMON_CONFIG" >&2
@@ -250,7 +250,7 @@ write_backend_marker() {
   fi
 }
 
-write_fallback_config() {
+write_managed_config() {
   TEMP_CONFIG=$(mktemp "$ROOTLESS_HOME/.config/docker/.daemon.json.XXXXXX")
   if ! managed_config > "$TEMP_CONFIG" ||
      ! chown 1000:1000 "$TEMP_CONFIG" ||
@@ -302,7 +302,7 @@ if { [ "$BACKEND" = native-snapshotter ] || [ "$BACKEND" = legacy-overlay2 ]; } 
   exit 1
 fi
 if [ -e "$DAEMON_CONFIG" ]; then
-  if [ ! -f "$FALLBACK_MARKER" ] || ! managed_config | cmp -s - "$DAEMON_CONFIG"; then
+  if [ ! -f "$CONFIG_MARKER" ] || ! managed_config | cmp -s - "$DAEMON_CONFIG"; then
     echo "jailoc-dind: FATAL: $DAEMON_CONFIG is not managed by jailoc or was modified" >&2
     exit 1
   fi
@@ -311,12 +311,12 @@ if [ ! -f "$BACKEND_MARKER" ] && ! write_backend_marker; then
   echo "jailoc-dind: FATAL: could not persist Docker storage backend in $BACKEND_MARKER" >&2
   exit 1
 fi
-if [ ! -f "$FALLBACK_MARKER" ] && [ ! -e "$DAEMON_CONFIG" ]; then
-  touch "$FALLBACK_MARKER"
+if [ ! -f "$CONFIG_MARKER" ] && [ ! -e "$DAEMON_CONFIG" ]; then
+  touch "$CONFIG_MARKER"
 fi
 if [ ! -e "$DAEMON_CONFIG" ]; then
-  if ! write_fallback_config; then
-    echo "jailoc-dind: FATAL: could not write fallback Docker daemon config at $DAEMON_CONFIG" >&2
+  if ! write_managed_config; then
+    echo "jailoc-dind: FATAL: could not write managed Docker daemon config at $DAEMON_CONFIG" >&2
     exit 1
   fi
 fi
