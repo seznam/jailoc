@@ -39,6 +39,9 @@ type Resolved struct {
 	Memory          string
 	ExposePort      bool
 	EnableDocker    bool
+	FilteredDNS     bool
+	DNSUpstream     string
+	DNSBlockedZones []string
 }
 
 type SecretKind int
@@ -141,6 +144,15 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
+		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.FilteredDNS, ws.FilteredDNS, false),
+		DNSUpstream:     ws.DNSUpstream,
+		DNSBlockedZones: ws.DNSBlockedZones,
+	}
+	if r.DNSUpstream == "" {
+		r.DNSUpstream = cfg.Defaults.DNSUpstream
+	}
+	if r.DNSBlockedZones == nil {
+		r.DNSBlockedZones = cfg.Defaults.DNSBlockedZones
 	}
 
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))

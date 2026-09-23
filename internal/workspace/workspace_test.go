@@ -38,6 +38,39 @@ func TestResolveValidWorkspace(t *testing.T) {
 	}
 }
 
+func TestResolveFilteredDNS(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Defaults: config.Defaults{FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}},
+		Workspaces: map[string]config.Workspace{
+			"inherited": {Paths: []string{"/data/inherited"}},
+			"disabled":  {Paths: []string{"/data/disabled"}, FilteredDNS: new(false)},
+			"custom":    {Paths: []string{"/data/custom"}, DNSUpstream: "192.0.2.53", DNSBlockedZones: []string{"corp.example.com"}},
+		},
+	}
+	for name, want := range map[string]struct {
+		enabled  bool
+		upstream string
+		zone     string
+	}{
+		"inherited": {true, "10.20.30.53", "internal"},
+		"disabled":  {false, "10.20.30.53", "internal"},
+		"custom":    {true, "192.0.2.53", "corp.example.com"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := workspace.Resolve(cfg, name)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if resolved.FilteredDNS != want.enabled || resolved.DNSUpstream != want.upstream ||
+				len(resolved.DNSBlockedZones) != 1 || resolved.DNSBlockedZones[0] != want.zone {
+				t.Fatalf("DNS policy = enabled:%v upstream:%q zones:%v, want %+v", resolved.FilteredDNS, resolved.DNSUpstream, resolved.DNSBlockedZones, want)
+			}
+		})
+	}
+}
+
 func TestResolveNonexistentWorkspace(t *testing.T) {
 	t.Parallel()
 
