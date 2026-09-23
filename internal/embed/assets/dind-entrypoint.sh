@@ -120,19 +120,17 @@ run_rootless() {
   fi
 }
 
-if ! run_rootless '
-  OVERLAY_TEST_DIR=$(mktemp -d "$HOME/.local/share/docker/.overlay-test.XXXXXX")
-  mkdir -p "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR/upper" \
-           "$OVERLAY_TEST_DIR/work" "$OVERLAY_TEST_DIR/merged"
-  unshare -U -m -r sh -c \
-    "mount -t overlay overlay -o lowerdir=\"$OVERLAY_TEST_DIR/lower\",upperdir=\"$OVERLAY_TEST_DIR/upper\",workdir=\"$OVERLAY_TEST_DIR/work\" \"$OVERLAY_TEST_DIR/merged\" && umount \"$OVERLAY_TEST_DIR/merged\""
-  STATUS=$?
-  rmdir "$OVERLAY_TEST_DIR/work/work" 2>/dev/null || true
-  rmdir "$OVERLAY_TEST_DIR/merged" "$OVERLAY_TEST_DIR/work" \
-        "$OVERLAY_TEST_DIR/upper" "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR"
-  exit $STATUS
-' >/dev/null 2>&1; then
-  cat > "$ROOTLESS_HOME/.config/docker/daemon.json" <<'EOF'
+DAEMON_CONFIG="$ROOTLESS_HOME/.config/docker/daemon.json"
+FALLBACK_MARKER="/var/lib/jailoc/dind-overlay-fallback"
+mkdir -p "$(dirname "$FALLBACK_MARKER")"
+
+if [ -L "$DAEMON_CONFIG" ]; then
+  echo "jailoc-dind: FATAL: refusing symlinked Docker daemon config at $DAEMON_CONFIG" >&2
+  exit 1
+fi
+
+fallback_config() {
+  cat <<'EOF'
 {
   "storage-driver": "fuse-overlayfs",
   "features": {
@@ -140,7 +138,70 @@ if ! run_rootless '
   }
 }
 EOF
-  chown 1000:1000 "$ROOTLESS_HOME/.config/docker/daemon.json"
+}
+
+write_fallback_config() {
+  TEMP_CONFIG=$(mktemp "$ROOTLESS_HOME/.config/docker/.daemon.json.XXXXXX")
+  if ! fallback_config > "$TEMP_CONFIG" ||
+     ! chown 1000:1000 "$TEMP_CONFIG" ||
+     ! mv -f "$TEMP_CONFIG" "$DAEMON_CONFIG"; then
+    rm -f "$TEMP_CONFIG"
+    return 1
+  fi
+}
+
+if run_rootless '
+  OVERLAY_TEST_DIR=$(mktemp -d "$HOME/.local/share/docker/.overlay-test.XXXXXX")
+  mkdir -p "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR/upper" \
+           "$OVERLAY_TEST_DIR/work" "$OVERLAY_TEST_DIR/merged"
+  OVERLAY_SUPPORTED=0
+  for OVERLAY_OPTIONS in "userxattr," ""; do
+    if unshare -U -m -r sh -c \
+      "mount -t overlay overlay -o ${OVERLAY_OPTIONS}lowerdir=\"$OVERLAY_TEST_DIR/lower\",upperdir=\"$OVERLAY_TEST_DIR/upper\",workdir=\"$OVERLAY_TEST_DIR/work\" \"$OVERLAY_TEST_DIR/merged\" && umount \"$OVERLAY_TEST_DIR/merged\""; then
+      OVERLAY_SUPPORTED=1
+      break
+    fi
+    rmdir "$OVERLAY_TEST_DIR/work/work" 2>/dev/null || true
+  done
+  rmdir "$OVERLAY_TEST_DIR/work/work" 2>/dev/null || true
+  if ! rmdir "$OVERLAY_TEST_DIR/merged" "$OVERLAY_TEST_DIR/work" \
+             "$OVERLAY_TEST_DIR/upper" "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR"; then
+    exit 2
+  fi
+  [ "$OVERLAY_SUPPORTED" = 1 ]
+' >/dev/null 2>&1; then
+  PROBE_STATUS=0
+else
+  PROBE_STATUS=$?
+fi
+
+if [ "$PROBE_STATUS" -eq 2 ]; then
+  echo "jailoc-dind: FATAL: could not clean up the native overlayfs probe" >&2
+  exit 1
+fi
+
+if [ "$PROBE_STATUS" -ne 0 ]; then
+  if [ -e "$DAEMON_CONFIG" ] && [ ! -f "$FALLBACK_MARKER" ]; then
+    echo "jailoc-dind: FATAL: native overlayfs is unavailable and $DAEMON_CONFIG is not managed by jailoc" >&2
+    exit 1
+  fi
+  if [ -e "$DAEMON_CONFIG" ] && ! fallback_config | cmp -s - "$DAEMON_CONFIG"; then
+    echo "jailoc-dind: FATAL: native overlayfs is unavailable and $DAEMON_CONFIG was modified after jailoc created it" >&2
+    exit 1
+  fi
+  if [ ! -e "$DAEMON_CONFIG" ]; then
+    if ! write_fallback_config; then
+      echo "jailoc-dind: FATAL: could not write fallback Docker daemon config at $DAEMON_CONFIG" >&2
+      exit 1
+    fi
+  fi
+  touch "$FALLBACK_MARKER"
+elif [ -f "$FALLBACK_MARKER" ]; then
+  if fallback_config | cmp -s - "$DAEMON_CONFIG"; then
+    rm -f "$DAEMON_CONFIG" "$FALLBACK_MARKER"
+  else
+    rm -f "$FALLBACK_MARKER"
+  fi
 fi
 
 # TLS cert volumes are created as root; the upstream dockerd-entrypoint.sh
@@ -188,5 +249,4 @@ rm -f "$ROOTLESS_HOME/.local/share/docker/containerd/containerd.pid" \
 # no file capabilities, so UID 1000 cannot regain CAP_NET_ADMIN to modify
 # iptables rules. --no-new-privs is not set because rootlesskit needs
 # setuid newuidmap/newgidmap for user namespace setup.
-apk add --no-cache su-exec >/dev/null 2>&1 || true
 exec su-exec rootless env HOME="$ROOTLESS_HOME" dockerd-entrypoint.sh "$@"
