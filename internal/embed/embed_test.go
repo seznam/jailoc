@@ -61,7 +61,7 @@ func TestEntrypointInstallsCABundleBeforePrivilegeDrop(t *testing.T) {
 	script := string(jailocembed.Entrypoint())
 
 	pathAt := strings.Index(script, `CA_BUNDLE="/etc/jailoc/ca-bundle.pem"`)
-	appendAt := strings.Index(script, `cat "$CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt`)
+	appendAt := strings.Index(script, `cat "$CA_BUNDLE" >> "$SYSTEM_CA"`)
 	nodeTrustAt := strings.Index(script, `NODE_USE_SYSTEM_CA=1`)
 	privilegeDropAt := strings.Index(script, "exec setpriv")
 	if pathAt < 0 || appendAt < 0 || nodeTrustAt < 0 || privilegeDropAt < 0 {
@@ -105,7 +105,7 @@ func TestDindEntrypointInstallsCABundleBeforePrivilegeDrop(t *testing.T) {
 
 	pathAt := strings.Index(script, `CA_BUNDLE="/etc/jailoc/ca-bundle.pem"`)
 	certOwnershipAt := strings.Index(script, "for d in /certs/ca /certs/client; do")
-	appendAt := strings.Index(script, `cat "$CA_BUNDLE" >> /etc/ssl/certs/ca-certificates.crt`)
+	appendAt := strings.Index(script, `cat "$CA_BUNDLE" >> "$SYSTEM_CA"`)
 	privilegeDropAt := strings.Index(script, "exec su-exec rootless")
 	if pathAt < 0 || certOwnershipAt < 0 || appendAt < 0 || privilegeDropAt < 0 {
 		t.Fatalf("DinD entrypoint is missing CA installation or existing ownership/privilege-drop steps")

@@ -6,11 +6,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -691,7 +693,7 @@ func TestCABundleForwardingLifecycle(t *testing.T) {
 		defer cleanupCancel()
 		_, _ = runJailoc(cleanupCtx, home, "down", workspaceName)
 	})
-	bundle := integrationCertificateBundle(t, "jailoc-ca-forwarding")
+	bundle, serverCertificate := integrationCertificateBundle(t, "jailoc-ca-forwarding")
 	bundlePath := filepath.Join(home, "integration-ca.pem")
 	if err := os.WriteFile(bundlePath, bundle, 0o600); err != nil {
 		t.Fatalf("write CA bundle: %v", err)
@@ -730,8 +732,30 @@ func TestCABundleForwardingLifecycle(t *testing.T) {
 	if !strings.Contains(installed, marker) {
 		t.Fatalf("DinD system CA bundle does not contain certificate marker %q", marker)
 	}
+	verifyForwardedCATLS(ctx, t, serverCertificate, opencodeContainer, dindContainer)
+	for _, container := range []string{opencodeContainer, dindContainer} {
+		if out, err := exec.CommandContext(ctx, "docker", "restart", container).CombinedOutput(); err != nil {
+			t.Fatalf("restart %s with valid CA: %v\noutput:\n%s", container, err, out)
+		}
+		if container == opencodeContainer {
+			waitForAgentPID1(ctx, t, container)
+		}
+		count := strings.TrimSpace(dockerExec(ctx, t, container, "0", "grep -Fc '"+marker+"' /etc/ssl/certs/ca-certificates.crt"))
+		if count != "1" {
+			t.Fatalf("%s CA certificate copies after restart = %s, want 1", container, count)
+		}
+	}
 	if err := os.Remove(materializedPath); err != nil {
 		t.Fatalf("remove materialized CA bundle for invalid-path probe: %v", err)
+	}
+	for _, container := range []string{opencodeContainer, dindContainer} {
+		if out, err := exec.CommandContext(ctx, "docker", "restart", container).CombinedOutput(); err != nil {
+			t.Fatalf("restart %s without CA: %v\noutput:\n%s", container, err, out)
+		}
+		if container == opencodeContainer {
+			waitForAgentPID1(ctx, t, container)
+		}
+		dockerExec(ctx, t, container, "0", "if grep -Fq '"+marker+"' /etc/ssl/certs/ca-certificates.crt; then exit 1; fi")
 	}
 	if err := os.Mkdir(materializedPath, 0o700); err != nil {
 		t.Fatalf("replace materialized CA bundle with directory: %v", err)
@@ -782,7 +806,7 @@ func TestCABundleForwardingWithoutDocker(t *testing.T) {
 		defer cleanupCancel()
 		_, _ = runJailoc(cleanupCtx, home, "down", workspaceName)
 	})
-	bundle := integrationCertificateBundle(t, "jailoc-ca-forwarding-no-docker")
+	bundle, serverCertificate := integrationCertificateBundle(t, "jailoc-ca-forwarding-no-docker")
 	bundlePath := filepath.Join(home, "integration-ca.pem")
 	if err := os.WriteFile(bundlePath, bundle, 0o600); err != nil {
 		t.Fatalf("write CA bundle: %v", err)
@@ -812,6 +836,7 @@ func TestCABundleForwardingWithoutDocker(t *testing.T) {
 	if !strings.Contains(installed, marker) {
 		t.Fatalf("opencode system CA bundle does not contain certificate marker %q", marker)
 	}
+	verifyForwardedCATLS(ctx, t, serverCertificate, opencodeContainer, "")
 	nodeTrust := dockerExec(ctx, t, opencodeContainer, "1000", "tr '\\0' '\\n' < /proc/1/environ | grep '^NODE_USE_SYSTEM_CA=1$'")
 	if !strings.Contains(nodeTrust, "NODE_USE_SYSTEM_CA=1") {
 		t.Fatal("opencode process does not enable Node system CA trust")
@@ -988,7 +1013,7 @@ func writeCAIntegrationConfigWithDocker(t *testing.T, home, workspaceName, works
 	}
 }
 
-func integrationCertificateBundle(t *testing.T, commonName string) []byte {
+func integrationCertificateBundle(t *testing.T, commonName string) ([]byte, tls.Certificate) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -997,8 +1022,8 @@ func integrationCertificateBundle(t *testing.T, commonName string) []byte {
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: commonName},
-		NotBefore:             time.Unix(0, 0),
-		NotAfter:              time.Unix(3600, 0),
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,
 		KeyUsage:              x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
@@ -1007,7 +1032,56 @@ func integrationCertificateBundle(t *testing.T, commonName string) []byte {
 	if err != nil {
 		t.Fatalf("create CA certificate: %v", err)
 	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate TLS server key: %v", err)
+	}
+	leaf := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "host.docker.internal"},
+		DNSNames:     []string{"host.docker.internal"},
+		NotBefore:    template.NotBefore,
+		NotAfter:     template.NotAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, template, &leafKey.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create TLS server certificate: %v", err)
+	}
+	bundle := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return bundle, tls.Certificate{Certificate: [][]byte{leafDER, der}, PrivateKey: leafKey}
+}
+
+func verifyForwardedCATLS(ctx context.Context, t *testing.T, certificate tls.Certificate, opencodeContainer, dindContainer string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("listen for TLS fixture: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("trusted"))
+	}), TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}}}
+	go func() { _ = server.ServeTLS(listener, "", "") }()
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	url := fmt.Sprintf("https://host.docker.internal:%d", listener.Addr().(*net.TCPAddr).Port)
+	for _, container := range []string{opencodeContainer, dindContainer} {
+		if container == "" {
+			continue
+		}
+		client := "curl --fail --silent --show-error --max-time 10 " + url
+		if container == dindContainer {
+			client = "wget -qO- " + url
+		}
+		response := dockerExec(ctx, t, container, "0", "HTTPS_PROXY= HTTP_PROXY= ALL_PROXY= NO_PROXY=host.docker.internal "+client)
+		if response != "trusted" {
+			t.Fatalf("%s trusted TLS response = %q, want trusted", container, response)
+		}
+	}
+	response := dockerExec(ctx, t, opencodeContainer, "1000", "NODE_USE_SYSTEM_CA=1 HTTPS_PROXY= HTTP_PROXY= ALL_PROXY= NO_PROXY=host.docker.internal node -e 'require(\"node:https\").get(process.argv[1], r => { if (r.statusCode !== 200) process.exitCode = 1; r.pipe(process.stdout) }).on(\"error\", e => { console.error(e); process.exitCode = 1 })' "+url)
+	if response != "trusted" {
+		t.Fatalf("Node trusted TLS response = %q, want trusted", response)
+	}
 }
 
 func uniqueWorkspaceName(t *testing.T, prefix string) string {
