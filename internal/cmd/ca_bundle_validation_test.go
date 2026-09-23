@@ -23,6 +23,18 @@ func TestMaterializeCABundleTreatsWhitespaceAutomaticSourceAsEmpty(t *testing.T)
 	assertMaterializedBundle(t, home, nixBundle.data)
 }
 
+func TestMaterializeCABundleInvalidAutomaticSourceExplainsRecovery(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SSL_CERT_FILE", filepath.Join(t.TempDir(), "missing.pem"))
+	t.Setenv("NIX_SSL_CERT_FILE", "")
+
+	err := materializeCABundle(resolvedWorkspace(true, config.AutomaticCABundle()))
+	if err == nil || !strings.Contains(err.Error(), "SSL_CERT_FILE") || !strings.Contains(err.Error(), "ca_bundle = false") {
+		t.Fatalf("materializeCABundle error = %v, want source and recovery hint", err)
+	}
+}
+
 func TestMaterializeCABundleRejectsUnsupportedTildeUserPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

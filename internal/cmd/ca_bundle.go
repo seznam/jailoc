@@ -37,9 +37,15 @@ func materializeCABundle(ws *workspace.Resolved) error {
 
 	content, err := readCABundle(source)
 	if err != nil {
+		if ws.CABundle.Automatic() {
+			return fmt.Errorf("%w; set ca_bundle = false to disable automatic forwarding, or set ca_bundle to a valid bundle path", err)
+		}
 		return err
 	}
 	if err := validateCABundlePEM(content); err != nil {
+		if ws.CABundle.Automatic() {
+			return fmt.Errorf("validate CA bundle from %s %q: %w; set ca_bundle = false to disable automatic forwarding, or set ca_bundle to a valid bundle path", source.origin, source.path, err)
+		}
 		return fmt.Errorf("validate CA bundle from %s %q: %w", source.origin, source.path, err)
 	}
 	if err := writeCABundleAtomically(destination, content); err != nil {
