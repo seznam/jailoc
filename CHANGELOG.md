@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.19.0](https://github.com/seznam/jailoc/compare/v1.18.0...v1.19.0) (2026-09-23)
+
+
+### Features
+
+* **ca:** forward host CA trust to OpenCode and DinD ([#235](https://github.com/seznam/jailoc/issues/235)) ([fd2db2e](https://github.com/seznam/jailoc/commit/fd2db2ef17db9e8ee5a7d5a0a7ce137d460bfc0d))
+* **dns:** add opt-in filtered DNS with configured upstream ([#232](https://github.com/seznam/jailoc/issues/232)) ([81c9a82](https://github.com/seznam/jailoc/commit/81c9a822f0f985d389b626d0a623ba9ae9dd6292))
+
+
+### Bug Fixes
+
+* **deps:** bump browserslist from 4.28.2 to 4.28.9 ([#225](https://github.com/seznam/jailoc/issues/225)) ([36bb37a](https://github.com/seznam/jailoc/commit/36bb37ad2a3f979aefc5f2b721f4e98796bc80a0))
+
 ## [1.18.0](https://github.com/seznam/jailoc/compare/v1.17.0...v1.18.0) (2026-08-19)
 
 
