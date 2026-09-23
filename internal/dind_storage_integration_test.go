@@ -71,7 +71,14 @@ func TestDindStorageSelection(t *testing.T) {
 			}
 
 			start(tc.probeFails)
-			waitForDindDriver(t, caseCtx, container, tc.driver)
+			gotDriver := waitForDindDriver(t, caseCtx, container, tc.driver)
+			if tc.backend == "native-snapshotter" && gotDriver == "fuse-overlayfs" {
+				marker := strings.TrimSpace(dockerStorageCommand(t, caseCtx, "exec", container, "cat", "/var/lib/jailoc/storage/storage-mode"))
+				if marker != "fuse-overlayfs" {
+					t.Fatalf("native overlay unavailable but marker = %q, want fuse-overlayfs", marker)
+				}
+				t.Skip("host kernel does not support native rootless overlayfs")
+			}
 			if tc.backend == "native-snapshotter" {
 				status := dockerStorageCommand(t, caseCtx, "exec", container, "docker", "--host", "unix:///run/user/1000/docker.sock", "info", "--format", "{{json .DriverStatus}}")
 				if !strings.Contains(status, "io.containerd.snapshotter.v1") {
@@ -156,14 +163,17 @@ func dockerStorageCommand(t *testing.T, ctx context.Context, args ...string) str
 	return string(out)
 }
 
-func waitForDindDriver(t *testing.T, ctx context.Context, container, want string) {
+func waitForDindDriver(t *testing.T, ctx context.Context, container, want string) string {
 	t.Helper()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		out, err := exec.CommandContext(ctx, "docker", "exec", container, "docker", "--host", "unix:///run/user/1000/docker.sock", "info", "--format", "{{.Driver}}").CombinedOutput()
-		if err == nil && strings.TrimSpace(string(out)) == want {
-			return
+		if err == nil {
+			driver := strings.TrimSpace(string(out))
+			if driver == want || (want == "overlayfs" && driver == "fuse-overlayfs") {
+				return driver
+			}
 		}
 		state, stateErr := exec.CommandContext(ctx, "docker", "inspect", container, "--format", "{{.State.Status}}").CombinedOutput()
 		if stateErr == nil && strings.TrimSpace(string(state)) == "exited" {
