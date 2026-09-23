@@ -195,6 +195,8 @@ Each entry must be a valid CIDR notation string as accepted by Go's `net.ParseCI
 
 When `filtered_dns = true`, an effective `dns_upstream` and at least one effective `dns_blocked_zones` entry are required. `dns_upstream` must be a numeric IPv4 address other than unspecified, loopback, link-local, or multicast. Each blocked zone must be a DNS name made of labels containing letters, digits, or internal hyphens (maximum 63 characters per label and 253 characters total); a trailing dot is accepted. A root zone (`"."`) is rejected. An empty workspace `dns_upstream` inherits the default; an omitted workspace zone list inherits the default list. Zones are matched case-insensitively, including their subdomains, and receive NXDOMAIN for all DNS query types. Other queries go to the configured upstream.
 
+When filtering is enabled, each workspace's effective `allowed_hosts` entries (defaults plus workspace) must fall outside its effective `dns_blocked_zones`. An exact match or subdomain match, ignoring case and a trailing dot, is rejected at config load with the workspace, host, and zone named in the error. A workspace zone list replaces the defaults; `filtered_dns = false` skips this cross-check.
+
 The setting controls ordinary port-53 resolution, not DNS over HTTPS, other encrypted DNS protocols, proxies, or direct IP access. It does not replace the private-network firewall.
 
 ### Workspace `image`

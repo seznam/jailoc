@@ -119,6 +119,8 @@ dns_blocked_zones = ["corp.example.com", "internal"]
 
 Start the workspace with `jailoc up api`. If it is already running, restart it with `jailoc down api` followed by `jailoc up api` to apply the policy. DNS requests for the blocked suffixes and their subdomains return NXDOMAIN; other DNS requests go to `10.20.30.53`. Docker service names such as `dind` remain resolvable. Set these fields under `[defaults]` to apply the policy to multiple workspaces; a workspace can override the upstream, blocked zones, or `filtered_dns = false` individually.
 
+Do not put a blocked name or one of its subdomains in `allowed_hosts`. jailoc rejects that combination during config validation, including when the host or zone is inherited from `[defaults]`. Remove the host from the blocked zone to permit both name resolution and its firewall rule.
+
 !!! warning
     This filters standard DNS queries only. DNS over HTTPS, proxies, and direct IP addresses bypass name filtering. Keep the private-network firewall enabled, and do not rely on DNS filtering to prevent access to explicitly allowed networks.
 
