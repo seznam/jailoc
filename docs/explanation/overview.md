@@ -1,6 +1,6 @@
 # How jailoc Works
 
-jailoc is a CLI tool that runs headless [OpenCode](https://opencode.ai) coding agents inside sandboxed Docker Compose environments. Each workspace gets its own isolated pair of containers, a dedicated host port, and network rules that block access to private infrastructure while leaving the public internet open.
+jailoc is a CLI tool that runs headless [OpenCode](https://opencode.ai) coding agents inside sandboxed Docker Compose environments. Each workspace gets an agent container, an optional Docker-in-Docker sidecar, a dedicated host port, and network rules that block access to private infrastructure while leaving the public internet open.
 
 The problem it solves is straightforward: running an autonomous coding agent on your machine means trusting it completely. It can read arbitrary files, call any network endpoint, and modify anything your user account can touch. jailoc draws a boundary. The agent runs as an unprivileged user inside a container with capabilities dropped, private network ranges blocked, and its data directory isolated from your host.
 
@@ -16,7 +16,7 @@ When you run `jailoc up`, five things happen in order:
 
 **4. Compose generation.** `compose.WriteCompose` renders a `docker-compose.yml` from a Go template and writes it to `~/.cache/jailoc/{workspace}/docker-compose.yml`. The rendered file captures everything workspace-specific: mount paths, port bindings, image reference, environment variables, resource limits.
 
-**5. Container startup.** `docker.Up` hands the rendered compose file to the Docker Compose SDK. Two containers start: the `opencode` container where the agent runs, and the `dind` sidecar that gives the agent its own Docker daemon. See [Container Architecture](container-architecture.md) for details on how they relate.
+**5. Container startup.** `docker.Up` hands the rendered compose file to the Docker Compose SDK. It starts the `opencode` container, optionally the `dind` sidecar for Docker access, and optionally a `dnsfilter` sidecar for filtered DNS. See [Container Architecture](container-architecture.md) for details on how they relate.
 
 ## Package layout
 

@@ -1,10 +1,10 @@
 # Container Architecture
 
-Every jailoc workspace runs as a Docker Compose project containing one or two containers, depending on whether Docker-in-Docker is enabled. Understanding why two containers exist when they do, and how they interact, helps explain both the security properties and some of the operational behaviour you'll observe when working with jailoc.
+Every jailoc workspace runs as a Docker Compose project containing an opencode container, an optional Docker-in-Docker sidecar, and an optional DNS filter sidecar. Understanding how they interact helps explain both the security properties and some of the operational behaviour you'll observe when working with jailoc.
 
 ## Container layout
 
-The diagram below shows the default two-container setup with Docker-in-Docker enabled. When `enable_docker` is `false`, jailoc starts only the **opencode** container — the dind sidecar, its volumes, and `DOCKER_HOST` environment variables are omitted entirely.
+The diagram below shows the default two-container setup with Docker-in-Docker enabled and DNS filtering disabled. `enable_docker = false` omits the dind sidecar, its volumes, and `DOCKER_HOST` environment variables. `filtered_dns = true` adds a CoreDNS sidecar whether or not Docker-in-Docker is enabled.
 
 ```mermaid
 flowchart TB
@@ -32,11 +32,11 @@ The opencode container runs with configurable resource limits. The `cpu` (defaul
 
 The **dind container** runs a rootless Docker daemon (`docker:dind-rootless`) in privileged mode. The entrypoint installs iptables rules as root, then drops the inheritable and bounding capability sets before execing the rootless Docker daemon as UID 1000. The daemon listens on port 2376 with mutual TLS authentication, and the certificates are shared with the opencode container via a named volume. When the agent runs `docker build` or starts a database for testing, those containers exist entirely within the dind daemon's scope and are invisible to the host. Because the daemon runs rootless, inner containers operate inside a user namespace managed by rootlesskit — even `--privileged` inner containers cannot modify the outer network namespace's iptables rules.
 
-When `enable_docker` is `false`, the dind container is not started. The opencode container runs alone without Docker access — no dind service, no TLS certificate volumes, and no `DOCKER_HOST` environment variable. This reduces resource overhead and removes the privileged sidecar entirely.
+When `enable_docker` is `false`, the dind container is not started. The opencode container has no Docker access — no dind service, no TLS certificate volumes, and no `DOCKER_HOST` environment variable. This reduces resource overhead and removes the privileged sidecar entirely.
 
 ## Network
 
-Both containers share a single Docker network named `jailoc`. The opencode container communicates with the dind daemon over this network via TLS on port 2376, and the same network carries the opencode container's egress traffic to the outside world. Network isolation is handled by iptables rules inside the opencode container rather than by network-level separation — see [Network Isolation](network-isolation.md) for details.
+The containers share a Docker network named `jailoc`. The opencode container communicates with the dind daemon over this network via TLS on port 2376, and the same network carries the opencode container's egress traffic to the outside world. With filtered DNS, Docker's embedded DNS forwards external queries to the CoreDNS sidecar, which rejects configured DNS zones and forwards other queries to the configured upstream. Network isolation is handled by iptables rules inside the opencode container rather than by network-level separation — see [Network Isolation](network-isolation.md) for details.
 
 ## Volume mounts
 
