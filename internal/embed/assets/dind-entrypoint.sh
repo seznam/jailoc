@@ -110,12 +110,28 @@ fi
 # Native overlayfs requires kernel support for mounts inside user namespaces.
 # Fall back to fuse-overlayfs on older kernels and disable the containerd
 # snapshotter, which only supports native overlayfs.
-OVERLAY_TEST_DIR=$(mktemp -d "$ROOTLESS_HOME/.local/share/docker/.overlay-test.XXXXXX")
-mkdir -p "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR/upper" \
-         "$OVERLAY_TEST_DIR/work" "$OVERLAY_TEST_DIR/merged"
-if ! unshare -U -m -r sh -c \
-  "mount -t overlay overlay -o lowerdir=$OVERLAY_TEST_DIR/lower,upperdir=$OVERLAY_TEST_DIR/upper,workdir=$OVERLAY_TEST_DIR/work $OVERLAY_TEST_DIR/merged && umount $OVERLAY_TEST_DIR/merged" \
-  >/dev/null 2>&1; then
+apk add --no-cache su-exec >/dev/null 2>&1 || true
+
+run_rootless() {
+  if command -v su-exec >/dev/null 2>&1; then
+    su-exec rootless sh -c "$1"
+  else
+    su rootless -s /bin/sh -c "$1"
+  fi
+}
+
+if ! run_rootless '
+  OVERLAY_TEST_DIR=$(mktemp -d "$HOME/.local/share/docker/.overlay-test.XXXXXX")
+  mkdir -p "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR/upper" \
+           "$OVERLAY_TEST_DIR/work" "$OVERLAY_TEST_DIR/merged"
+  unshare -U -m -r sh -c \
+    "mount -t overlay overlay -o lowerdir=\"$OVERLAY_TEST_DIR/lower\",upperdir=\"$OVERLAY_TEST_DIR/upper\",workdir=\"$OVERLAY_TEST_DIR/work\" \"$OVERLAY_TEST_DIR/merged\" && umount \"$OVERLAY_TEST_DIR/merged\""
+  STATUS=$?
+  rmdir "$OVERLAY_TEST_DIR/work/work" 2>/dev/null || true
+  rmdir "$OVERLAY_TEST_DIR/merged" "$OVERLAY_TEST_DIR/work" \
+        "$OVERLAY_TEST_DIR/upper" "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR"
+  exit $STATUS
+' >/dev/null 2>&1; then
   cat > "$ROOTLESS_HOME/.config/docker/daemon.json" <<'EOF'
 {
   "storage-driver": "fuse-overlayfs",
@@ -126,9 +142,6 @@ if ! unshare -U -m -r sh -c \
 EOF
   chown 1000:1000 "$ROOTLESS_HOME/.config/docker/daemon.json"
 fi
-rmdir "$OVERLAY_TEST_DIR/work/work" 2>/dev/null || true
-rmdir "$OVERLAY_TEST_DIR/merged" "$OVERLAY_TEST_DIR/work" \
-      "$OVERLAY_TEST_DIR/upper" "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR"
 
 # TLS cert volumes are created as root; the upstream dockerd-entrypoint.sh
 # generates certs and needs write access as UID 1000.

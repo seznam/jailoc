@@ -153,4 +153,7 @@ func TestDindEntrypointFallsBackToFuseOverlayFSWhenNativeOverlayIsUnavailable(t 
 	if probeAt >= fuseDriverAt || fuseDriverAt >= privilegeDropAt || disableSnapshotterAt >= privilegeDropAt {
 		t.Fatal("DinD overlay compatibility fallback must be configured before privilege drop")
 	}
+	if !strings.Contains(script, "run_rootless") {
+		t.Fatal("DinD entrypoint must run overlay probe as rootless user")
+	}
 }
