@@ -140,17 +140,18 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		Mounts:          ws2.Mounts,
 		AllowedHosts:    ws2.AllowedHosts,
 		AllowedNetworks: ws2.AllowedNetworks,
-		Env:              ws2.Env,
-		SSHAuthSock:      resolveSSHAuthSock(ws2.SSHAuthSock),
-		SSHKnownHosts:    resolveSSHKnownHosts(ws2.SSHAuthSock),
-		GitConfig:        resolveGitConfig(ws2.GitConfig),
-		CPU:              ws2.CPU,
-		Memory:           ws2.Memory,
-		UseDataVolume:    !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.local/share/opencode"),
-		UseCacheVolume:   !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.cache"),
-		ExposePort:       ws2.ExposePort,
-		EnableDocker:     ws2.EnableDocker,
-		Secrets:          secretSpecs(ws2),
+		Env:             ws2.Env,
+		SSHAuthSock:     resolveSSHAuthSock(ws2.SSHAuthSock),
+		SSHKnownHosts:   resolveSSHKnownHosts(ws2.SSHAuthSock),
+		GitConfig:       resolveGitConfig(ws2.GitConfig),
+		CPU:             ws2.CPU,
+		Memory:          ws2.Memory,
+		UseDataVolume:   !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.local/share/opencode"),
+		UseCacheVolume:  !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.cache"),
+		ExposePort:      ws2.ExposePort,
+		EnableDocker:    ws2.EnableDocker,
+		FilteredDNS:     ws2.FilteredDNS,
+		Secrets:         secretSpecs(ws2),
 	}
 
 	if err := config.WriteAllowedFiles(ws2.Name, cfg, secretEnvNames(ws2)); err != nil {
@@ -164,6 +165,11 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 	if ws2.EnableDocker {
 		if err := writeDindEntrypoint(filepath.Dir(compPath)); err != nil {
 			return err
+		}
+	}
+	if ws2.FilteredDNS {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(compPath), "Corefile"), []byte(compose.GenerateCorefile(ws2.DNSUpstream, ws2.DNSBlockedZones)), 0o644); err != nil { //nolint:gosec // G306: the nonroot resolver needs read access; the Corefile contains no secrets
+			return fmt.Errorf("write DNS policy: %w", err)
 		}
 	}
 

@@ -28,13 +28,19 @@ Several things get ACCEPT rules before the DROP rules fire:
 - The **dind container's address** — inserted only when `enable_docker` is `true` (so the agent can reach its Docker daemon)
 - Any **hosts or networks** you've explicitly allowed in your workspace config
 
-DNS resolver addresses from `/etc/resolv.conf` also get ACCEPT rules, but only for port 53 (UDP and TCP). This is necessary because some container runtimes (notably Podman) place the DNS resolver at an address inside a blocked private range. Without this rule, hostname resolution would fail and the allowed-hosts mechanism would be useless. The rule is scoped to port 53 so the resolver IP cannot be used as a general-purpose gateway into the private network.
-
 A final ACCEPT rule allows TCP replies on the published service port (4096) for connections that were initiated from outside the container. This exists because port-forwarded traffic from the host arrives with a source address in a private range — without this rule, the container's reply packets would hit the DROP rules and the connection would hang. The rule is scoped to established TCP connections on the service port only, so it does not open any new outbound paths.
 
 If you need the agent to reach an internal service, adding it to `allowed_hosts` or `allowed_networks` in your workspace config causes an ACCEPT rule to be inserted before the DROP rules fire. The agent can then reach that specific address while everything else in the private range stays blocked.
 
 For step-by-step instructions, see [How-to: Network Access](../how-to/network-access.md).
+
+## DNS resolution and filtering
+
+By default, containers use their runtime-provided DNS resolver. Resolver addresses from `/etc/resolv.conf` get ACCEPT rules limited to UDP and TCP port 53. Some runtimes place their DNS resolver inside a blocked private range; this exception permits DNS without opening other ports at the resolver address. Public DNS endpoints are otherwise reachable under the default egress policy.
+
+With `filtered_dns = true`, a CoreDNS sidecar handles external lookups for both opencode and dind. Docker's embedded resolver at `127.0.0.11` resolves Docker service names such as `dind` locally, then forwards other queries to the sidecar at `169.254.53.53`. The sidecar returns NXDOMAIN for configured blocked zones and their subdomains; it forwards other queries to the numeric `dns_upstream`. The entrypoints allow port 53 to Docker's embedded resolver and reject direct port-53 queries to other servers. The sidecar has a read-only filesystem, drops all capabilities except `NET_BIND_SERVICE`, and mounts its generated Corefile read-only. Its fixed link-local address is scoped to each workspace's Docker network.
+
+If the sidecar or upstream resolver is unavailable, filtered DNS queries fail rather than falling back to the host resolver. DNS filtering does not prevent DNS over HTTPS, proxies, or direct IP access. Connections to private addresses returned by DNS remain subject to iptables; names resolving to public addresses do not receive the private-range restriction. See [Restrict internal DNS names](../how-to/network-access.md#restrict-internal-dns-names) to configure the policy and the [configuration reference](../reference/configuration.md#filtered-dns) for validation rules.
 
 ## The dind sidecar
 

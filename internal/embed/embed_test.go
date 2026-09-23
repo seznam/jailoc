@@ -36,3 +36,22 @@ func TestEntrypointEmbedded(t *testing.T) {
 		t.Fatal("Entrypoint() does not contain #!/bin/bash")
 	}
 }
+
+func TestFilteredDNSSidecarReachableThroughFirewall(t *testing.T) {
+	t.Parallel()
+	for name, script := range map[string]string{
+		"opencode": string(jailocembed.Entrypoint()),
+		"dind":     string(jailocembed.DindEntrypoint()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for _, proto := range []string{"udp", "tcp"} {
+				rejectAt := strings.Index(script, "-p "+proto+" --dport 53 -j REJECT")
+				allowAt := strings.Index(script, "-p "+proto+" -d 169.254.53.53 --dport 53 -j ACCEPT")
+				if rejectAt < 0 || allowAt <= rejectAt {
+					t.Errorf("%s: sidecar DNS allow rule must be inserted after catch-all reject so it takes precedence", proto)
+				}
+			}
+		})
+	}
+}

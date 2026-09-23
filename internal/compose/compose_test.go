@@ -11,10 +11,10 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	t.Parallel()
 
 	params := ComposeParams{
-		WorkspaceName:    "alpha",
-		Port:             4111,
-		Image:            "ghcr.io/seznam/jailoc:test",
-		Paths:            []string{"/Users/test/work/project"},
+		WorkspaceName:  "alpha",
+		Port:           4111,
+		Image:          "ghcr.io/seznam/jailoc:test",
+		Paths:          []string{"/Users/test/work/project"},
 		Env:            nil,
 		CPU:            2.0,
 		Memory:         "4g",
@@ -127,14 +127,14 @@ func TestWriteComposeFileHappyPath(t *testing.T) {
 	t.Parallel()
 
 	params := ComposeParams{
-		WorkspaceName:    "test-ws",
-		Port:             4500,
-		Image:            "ghcr.io/seznam/jailoc:test",
-		Paths:            []string{"/tmp/workspace"},
-		Env: nil,
-		CPU:              2.0,
-		Memory:           "4g",
-		ExposePort:       true,
+		WorkspaceName: "test-ws",
+		Port:          4500,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/workspace"},
+		Env:           nil,
+		CPU:           2.0,
+		Memory:        "4g",
+		ExposePort:    true,
 	}
 
 	destPath := filepath.Join(t.TempDir(), "docker-compose.yml")
@@ -240,13 +240,13 @@ func TestGenerateComposeSSHAuthSock(t *testing.T) {
 	t.Run("enabled", func(t *testing.T) {
 		t.Parallel()
 		params := ComposeParams{
-			WorkspaceName:    "ssh-test",
-			Port:             4700,
-			Image:            "ghcr.io/seznam/jailoc:test",
-			Paths:            []string{"/tmp/work"},
-			SSHAuthSock: "/run/host-services/ssh-auth.sock",
-			CPU:              2.0,
-			Memory:           "4g",
+			WorkspaceName: "ssh-test",
+			Port:          4700,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
+			SSHAuthSock:   "/run/host-services/ssh-auth.sock",
+			CPU:           2.0,
+			Memory:        "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -262,13 +262,13 @@ func TestGenerateComposeSSHAuthSock(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		t.Parallel()
 		params := ComposeParams{
-			WorkspaceName:    "no-ssh-test",
-			Port:             4701,
-			Image:            "ghcr.io/seznam/jailoc:test",
-			Paths:            []string{"/tmp/work"},
-			SSHAuthSock: "",
-			CPU:              2.0,
-			Memory:           "4g",
+			WorkspaceName: "no-ssh-test",
+			Port:          4701,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
+			SSHAuthSock:   "",
+			CPU:           2.0,
+			Memory:        "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -292,13 +292,13 @@ func TestGenerateComposeGitConfig(t *testing.T) {
 	t.Run("enabled", func(t *testing.T) {
 		t.Parallel()
 		params := ComposeParams{
-			WorkspaceName:    "git-test",
-			Port:             4702,
-			Image:            "ghcr.io/seznam/jailoc:test",
-			Paths:            []string{"/tmp/work"},
-			GitConfig: "/home/user/.gitconfig",
-			CPU:              2.0,
-			Memory:           "4g",
+			WorkspaceName: "git-test",
+			Port:          4702,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
+			GitConfig:     "/home/user/.gitconfig",
+			CPU:           2.0,
+			Memory:        "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -313,13 +313,13 @@ func TestGenerateComposeGitConfig(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		t.Parallel()
 		params := ComposeParams{
-			WorkspaceName:    "no-git-test",
-			Port:             4703,
-			Image:            "ghcr.io/seznam/jailoc:test",
-			Paths:            []string{"/tmp/work"},
-			GitConfig: "",
-			CPU:              2.0,
-			Memory:           "4g",
+			WorkspaceName: "no-git-test",
+			Port:          4703,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
+			GitConfig:     "",
+			CPU:           2.0,
+			Memory:        "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -340,13 +340,13 @@ func TestGenerateComposeSSHKnownHosts(t *testing.T) {
 	t.Run("enabled", func(t *testing.T) {
 		t.Parallel()
 		params := ComposeParams{
-			WorkspaceName:    "known-hosts-test",
-			Port:             4704,
-			Image:            "ghcr.io/seznam/jailoc:test",
-			Paths:            []string{"/tmp/work"},
+			WorkspaceName: "known-hosts-test",
+			Port:          4704,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
 			SSHKnownHosts: "/home/user/.ssh/known_hosts",
-			CPU:              2.0,
-			Memory:           "4g",
+			CPU:           2.0,
+			Memory:        "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -361,13 +361,13 @@ func TestGenerateComposeSSHKnownHosts(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		t.Parallel()
 		params := ComposeParams{
-			WorkspaceName:    "no-known-hosts-test",
-			Port:             4705,
-			Image:            "ghcr.io/seznam/jailoc:test",
-			Paths:            []string{"/tmp/work"},
+			WorkspaceName: "no-known-hosts-test",
+			Port:          4705,
+			Image:         "ghcr.io/seznam/jailoc:test",
+			Paths:         []string{"/tmp/work"},
 			SSHKnownHosts: "",
-			CPU:              2.0,
-			Memory:           "4g",
+			CPU:           2.0,
+			Memory:        "4g",
 		}
 
 		out, err := GenerateCompose(params)
@@ -386,15 +386,15 @@ func TestGenerateComposeAllSSHGitEnabled(t *testing.T) {
 	t.Parallel()
 
 	params := ComposeParams{
-		WorkspaceName:    "all-ssh-git-test",
-		Port:             4706,
-		Image:            "ghcr.io/seznam/jailoc:test",
-		Paths:            []string{"/tmp/work"},
+		WorkspaceName: "all-ssh-git-test",
+		Port:          4706,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/work"},
 		SSHAuthSock:   "/run/host-services/ssh-auth.sock",
-		GitConfig:        "/home/user/.gitconfig",
-		SSHKnownHosts:    "/home/user/.ssh/known_hosts",
-		CPU:              2.0,
-		Memory:           "4g",
+		GitConfig:     "/home/user/.gitconfig",
+		SSHKnownHosts: "/home/user/.ssh/known_hosts",
+		CPU:           2.0,
+		Memory:        "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -413,14 +413,14 @@ func TestGenerateComposeEnv(t *testing.T) {
 	t.Parallel()
 
 	params := ComposeParams{
-		WorkspaceName:    "env-test",
-		Port:             4600,
-		Image:            "ghcr.io/seznam/jailoc:test",
-		Paths:            []string{"/tmp/work"},
-		Env:    []string{"MY_VAR=hello", "OTHER=world"},
-		CPU:              2.0,
-		Memory:           "4g",
-		EnableDocker:     true,
+		WorkspaceName: "env-test",
+		Port:          4600,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/work"},
+		Env:           []string{"MY_VAR=hello", "OTHER=world"},
+		CPU:           2.0,
+		Memory:        "4g",
+		EnableDocker:  true,
 	}
 
 	out, err := GenerateCompose(params)
@@ -444,14 +444,14 @@ func TestGenerateComposeEmptyEnv(t *testing.T) {
 	t.Parallel()
 
 	params := ComposeParams{
-		WorkspaceName:    "empty-env-test",
-		Port:             4700,
-		Image:            "ghcr.io/seznam/jailoc:test",
-		Paths:            []string{"/tmp/work"},
-		Env:    nil,
-		CPU:              2.0,
-		Memory:           "4g",
-		EnableDocker:     true,
+		WorkspaceName: "empty-env-test",
+		Port:          4700,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/work"},
+		Env:           nil,
+		CPU:           2.0,
+		Memory:        "4g",
+		EnableDocker:  true,
 	}
 
 	out, err := GenerateCompose(params)
@@ -487,13 +487,13 @@ func TestGenerateComposeJailocEnvVars(t *testing.T) {
 	t.Parallel()
 
 	params := ComposeParams{
-		WorkspaceName:    "test-jailoc",
-		Port:             4800,
-		Image:            "ghcr.io/seznam/jailoc:test",
-		Paths:            []string{"/tmp/work"},
-		Env:              nil,
-		CPU:              2.0,
-		Memory:           "4g",
+		WorkspaceName: "test-jailoc",
+		Port:          4800,
+		Image:         "ghcr.io/seznam/jailoc:test",
+		Paths:         []string{"/tmp/work"},
+		Env:           nil,
+		CPU:           2.0,
+		Memory:        "4g",
 	}
 
 	out, err := GenerateCompose(params)
@@ -936,6 +936,50 @@ func TestGenerateComposeEnableDockerTrue(t *testing.T) {
 	// DinD volumes must be present
 	assertContains(t, rendered, "dind-certs-client:/certs/client:ro")
 	assertContains(t, rendered, "dind-data:")
+
+	// DinD must not have hardcoded public DNS (inherits host/daemon DNS)
+	assertNotContains(t, rendered, "1.1.1.1")
+	assertNotContains(t, rendered, "8.8.8.8")
+}
+
+func TestGenerateComposeFilteredDNS(t *testing.T) {
+	t.Parallel()
+	params := ComposeParams{WorkspaceName: "dns-test", Image: "image:test", CPU: 2, Memory: "4g", EnableDocker: true,
+		FilteredDNS: true}
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose: %v", err)
+	}
+	for _, want := range []string{"dnsfilter:", "169.254.53.53", "DOCKER_HOST=tcp://dind:2376", "Corefile:/etc/coredns/Corefile:ro"} {
+		assertContains(t, string(out), want)
+	}
+	params.FilteredDNS = false
+	out, err = GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose disabled: %v", err)
+	}
+	assertNotContains(t, string(out), "dnsfilter:")
+	assertNotContains(t, string(out), "169.254.53.53")
+}
+
+func TestGenerateComposeFilteredDNSWithoutDocker(t *testing.T) {
+	t.Parallel()
+	params := ComposeParams{WorkspaceName: "dns-no-dind", Image: "image:test", CPU: 2, Memory: "4g", FilteredDNS: true}
+	out, err := GenerateCompose(params)
+	if err != nil {
+		t.Fatalf("GenerateCompose: %v", err)
+	}
+	assertContains(t, string(out), "dnsfilter:")
+	assertNotContains(t, string(out), "  dind:")
+}
+
+func TestGenerateCorefileFilteredDNS(t *testing.T) {
+	t.Parallel()
+	got := GenerateCorefile("10.20.30.53", []string{"corp.example.com", "internal"})
+	for _, want := range []string{"template IN ANY corp.example.com internal", "rcode NXDOMAIN", "forward . 10.20.30.53"} {
+		assertContains(t, got, want)
+	}
+	assertNotContains(t, got, "/etc/resolv.conf")
 }
 
 func TestReadOnlyMountCoversPath(t *testing.T) {

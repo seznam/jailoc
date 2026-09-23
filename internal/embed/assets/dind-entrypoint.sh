@@ -88,6 +88,15 @@ $IPT -A JAILOC-OUTPUT -d 192.168.0.0/16 -j DROP
 $IPT -A JAILOC-OUTPUT -d 169.254.0.0/16 -j DROP
 $IPT -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
 
+if [ "${JAILOC_FILTERED_DNS:-}" = 1 ]; then
+  $IPT -I JAILOC-OUTPUT -p tcp --dport 53 -j REJECT
+  $IPT -I JAILOC-OUTPUT -p udp --dport 53 -j REJECT
+  $IPT -I JAILOC-OUTPUT -p tcp -d 169.254.53.53 --dport 53 -j ACCEPT
+  $IPT -I JAILOC-OUTPUT -p udp -d 169.254.53.53 --dport 53 -j ACCEPT
+  $IPT -I JAILOC-OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
+  $IPT -I JAILOC-OUTPUT -p udp -d 127.0.0.11 --dport 53 -j ACCEPT
+fi
+
 # --- Prepare rootless data directories ---
 # The rootless Docker daemon stores data under the rootless user's home.
 # Named volumes are created as root by Docker; fix ownership before dropping.
