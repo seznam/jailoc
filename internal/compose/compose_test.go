@@ -938,6 +938,8 @@ func TestGenerateComposeEnableDockerTrue(t *testing.T) {
 	// DinD volumes must be present
 	assertContains(t, rendered, "dind-certs-client:/certs/client:ro")
 	assertContains(t, rendered, "dind-data:")
+	assertContains(t, rendered, "dind-storage-meta:/var/lib/jailoc/storage")
+	assertContains(t, rendered, "dind-storage-meta:")
 	assertContains(t, rendered, "${HOME}/.config/jailoc/workspaces/docker-test:/etc/jailoc:ro")
 	assertNotContains(t, rendered, "ca-bundle.pem:")
 

@@ -181,6 +181,95 @@ Common causes:
 - TLS certificate volume not properly shared between containers
 - Insufficient disk space for Docker data volume
 
+If the sidecar logs a `jailoc-dind: FATAL` line, the message identifies which startup check failed:
+
+- **`could not install su-exec`**: The image lacks `su-exec` and could not install it from package repositories, often due to network isolation rules or missing connectivity. Install `su-exec` in a [custom image](custom-images.md) so startup does not require network access.
+- **`unmarked substantive Docker data in ...; refusing to change storage backend`**: `dind-data` contains files or directories, but `/var/lib/jailoc/storage/storage-mode` is missing. Keep the data intact and [seed verified storage metadata](#seed-storage-metadata-for-existing-docker-data).
+- **`native overlayfs was previously selected for this volume but is unavailable`**: The `native-snapshotter` or `legacy-overlay2` pin requires native overlayfs, but the current kernel cannot mount it as the rootless user. Restore a compatible kernel/runtime instead of switching to fuse over existing data.
+- **`/home/rootless/.config/docker/daemon.json is not managed by jailoc or was modified`**: A daemon configuration file exists at that path but differs from the config jailoc manages, or was modified after creation. Inspect the file manually to reconcile differences.
+
+The backend pin (`native-snapshotter`, `legacy-overlay2`, or `fuse-overlayfs`) lives on `dind-storage-meta` at `/var/lib/jailoc/storage/storage-mode`. Keep this volume paired with `dind-data` across recreations. Generated `/home/rootless/.config/docker/daemon.json` is container-local and is recreated from the pin when needed.
+
+### Seed storage metadata for existing Docker data
+
+When upgrading a workspace with populated `dind-data`, the metadata volume may be empty. Only seed it after establishing the **old daemon's effective backend**. Switching image stores hides existing images and containers; the current kernel probe and directory names cannot identify the old backend. Never delete `dind-data` to bypass this check.
+
+1. While the old workspace daemon is still running, record its backend and inventory (the host's `docker info` is unrelated):
+
+    ```bash
+    WORKSPACE="<workspace>"
+    PROJECT="jailoc-${WORKSPACE}"
+    docker exec "${PROJECT}-opencode-1" docker info \
+      --format 'Root={{.DockerRootDir}} Driver={{.Driver}} Status={{json .DriverStatus}}'
+    docker exec "${PROJECT}-opencode-1" docker image ls --digests
+    docker exec "${PROJECT}-opencode-1" docker ps -a
+    ```
+
+    Require `Root=/home/rootless/.local/share/docker`. Set `TARGET_BACKEND` to `native-snapshotter` **only** when `Driver=overlayfs` and Status reports `driver-type io.containerd.snapshotter.v1`; to `legacy-overlay2` when `Driver=overlay2` without that status; or to `fuse-overlayfs` when `Driver=fuse-overlayfs` without that status. Stop if the output is ambiguous. If the old daemon is unavailable, use trustworthy saved evidence or restore its previous runtime against a backup to collect `docker info`; do not seed from a guess.
+
+2. Identify the old data volume from that workspace's DinD container, then stop the workspace and locate both named volumes. If the old container is gone, identify the data volume by its Compose labels instead of assuming a name. A first `jailoc up` with the new version creates `dind-storage-meta` and may report success even though DinD exits with the unmarked-data error; stop the workspace again before continuing.
+
+    ```bash
+    DATA_VOLUME=$(docker inspect "${PROJECT}-dind-1" \
+      --format '{{range .Mounts}}{{if eq .Destination "/home/rootless/.local/share/docker"}}{{.Name}}{{end}}{{end}}')
+    jailoc down "$WORKSPACE"
+    jailoc up "$WORKSPACE"   # Creates metadata volume; DinD refuses unmarked data
+    META_VOLUME=$(docker inspect "${PROJECT}-dind-1" \
+      --format '{{range .Mounts}}{{if eq .Destination "/var/lib/jailoc/storage"}}{{.Name}}{{end}}{{end}}')
+    jailoc down "$WORKSPACE"
+    docker volume inspect "$DATA_VOLUME" "$META_VOLUME" \
+      --format '{{.Name}} {{index .Labels "com.docker.compose.project"}} {{index .Labels "com.docker.compose.volume"}}'
+    ```
+
+    Confirm the two labels are respectively `${PROJECT} dind-data` and `${PROJECT} dind-storage-meta`. Abort if a name is empty, either label differs, or the volumes are not the intended pair. Back up both volumes while stopped; do not mount the data volume writable in a helper container. The following uses the locally cached DinD image and creates a backup directory under your home directory:
+
+    ```bash
+    BACKUP_DIR=$(mktemp -d "${HOME}/jailoc-${WORKSPACE}-dind-backup.XXXXXX")
+    docker run --rm --pull=never --network none --user 0:0 \
+      --mount "type=volume,src=${DATA_VOLUME},dst=/data,readonly" \
+      --mount "type=bind,src=${BACKUP_DIR},dst=/backup" \
+      --entrypoint tar docker:dind-rootless -czf /backup/dind-data.tar.gz -C /data .
+    docker run --rm --pull=never --network none --user 0:0 \
+      --mount "type=volume,src=${META_VOLUME},dst=/meta,readonly" \
+      --mount "type=bind,src=${BACKUP_DIR},dst=/backup" \
+      --entrypoint tar docker:dind-rootless -czf /backup/dind-meta.tar.gz -C /meta .
+    ```
+
+3. Seed the **empty** metadata volume with the verified value. Use a locally trusted `docker:dind-rootless` image. This helper has no network and mounts only the metadata volume; it rejects existing files, including hidden files and symlinks. Set `TARGET_BACKEND` to the value determined in step 1:
+
+    ```bash
+    TARGET_BACKEND="legacy-overlay2"  # Replace with verified mode
+    docker run --rm --pull=never --network none --user 0:0 \
+      --mount "type=volume,src=${META_VOLUME},dst=/meta" \
+      --env "TARGET_BACKEND=$TARGET_BACKEND" --entrypoint sh docker:dind-rootless -c '
+        set -eu
+        case "$TARGET_BACKEND" in
+          native-snapshotter|legacy-overlay2|fuse-overlayfs) ;;
+          *) echo "Invalid storage backend" >&2; exit 1 ;;
+        esac
+        [ "$(stat -c %u /meta)" = 0 ] && [ -z "$(find /meta -mindepth 1 -print -quit)" ] || {
+          echo "Metadata volume must be root-owned and empty" >&2; exit 1;
+        }
+        tmp=$(mktemp /meta/.storage-mode.XXXXXX)
+        printf "%s\n" "$TARGET_BACKEND" > "$tmp"
+        chmod 600 "$tmp"
+        mv -n "$tmp" /meta/storage-mode
+      '
+    ```
+
+4. Restart and confirm the selected backend and the recorded images and containers remain visible:
+
+    ```bash
+    jailoc up "$WORKSPACE"
+    docker logs "${PROJECT}-dind-1"
+    docker exec "${PROJECT}-opencode-1" docker info \
+      --format 'Driver={{.Driver}} Status={{json .DriverStatus}}'
+    docker exec "${PROJECT}-opencode-1" docker image ls --digests
+    docker exec "${PROJECT}-opencode-1" docker ps -a
+    ```
+
+    Keep `dind-data` and `dind-storage-meta` together on future recreations. A pinned `legacy-overlay2` or `native-snapshotter` backend requires a kernel that supports rootless overlayfs.
+
 ---
 
 ## Cleanup stale resources

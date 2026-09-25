@@ -77,4 +77,6 @@ The iptables rules require the container runtime's Linux kernel to support **net
 
 Most Docker runtimes ship kernels with full netfilter support, but some minimal hypervisor configurations do not. Rancher Desktop using VZ virtualization without Rosetta on macOS is a known case — its ARM64 kernel lacks netfilter entirely, so both backends fail with `Protocol not supported`.
 
+Netfilter support is mandatory: without it, jailoc cannot enforce network isolation and refuses to start the container. Native rootless overlayfs support is optional for a fresh dind data volume: jailoc can use `fuse-overlayfs` instead. The selected backend is pinned in the separate root-owned `dind-storage-meta` volume and cannot change while `dind-data` persists. If an existing volume is pinned to the native snapshotter or classic overlay2 and the probe later fails, the sidecar stops rather than switch backends. A populated data volume without its metadata also fails closed until its prior backend is verified and pinned. See [Container Architecture — Why privileged dind?](container-architecture.md#why-privileged-dind) for the storage policy.
+
 See [Installation — Docker runtime compatibility](../how-to/installation.md#docker-runtime-compatibility) for a full list of tested runtimes.

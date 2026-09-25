@@ -106,6 +106,7 @@ if [ "$(stat -c '%u' "$ROOTLESS_HOME/.local/share/docker" 2>/dev/null)" != "1000
    [ "$(stat -c '%u' "$ROOTLESS_HOME/.config/docker" 2>/dev/null)" != "1000" ]; then
   chown -R 1000:1000 "$ROOTLESS_HOME/.local/share/docker" "$ROOTLESS_HOME/.config/docker"
 fi
+
 # TLS cert volumes are created as root; the upstream dockerd-entrypoint.sh
 # generates certs and needs write access as UID 1000.
 for d in /certs/ca /certs/client; do
@@ -135,6 +136,191 @@ if [ -f "$ORIGINAL_CA" ] && [ ! -e "$CA_BUNDLE" ]; then
   cp "$ORIGINAL_CA" "$SYSTEM_CA"
 fi
 
+# Native overlayfs requires kernel support for mounts inside user namespaces.
+# Fall back to fuse-overlayfs on older kernels and disable the containerd
+# snapshotter, which only supports native overlayfs.
+if ! command -v su-exec >/dev/null 2>&1; then
+  if ! apk add --no-cache su-exec; then
+    echo "jailoc-dind: FATAL: could not install su-exec" >&2
+    exit 1
+  fi
+fi
+
+run_rootless() {
+  if command -v su-exec >/dev/null 2>&1; then
+    su-exec rootless env HOME="$ROOTLESS_HOME" sh -c "$1"
+  else
+    HOME="$ROOTLESS_HOME" su rootless -s /bin/sh -c "$1"
+  fi
+}
+
+DAEMON_CONFIG="$ROOTLESS_HOME/.config/docker/daemon.json"
+CONFIG_MARKER="/var/lib/jailoc/dind-overlay-fallback"
+DOCKER_DATA_DIR="$ROOTLESS_HOME/.local/share/docker"
+BACKEND_DIR="/var/lib/jailoc/storage"
+BACKEND_MARKER="$BACKEND_DIR/storage-mode"
+mkdir -p "$(dirname "$CONFIG_MARKER")"
+
+if [ -L "$DAEMON_CONFIG" ]; then
+  echo "jailoc-dind: FATAL: refusing symlinked Docker daemon config at $DAEMON_CONFIG" >&2
+  exit 1
+fi
+
+if [ -L "$BACKEND_DIR" ] || [ ! -d "$BACKEND_DIR" ] ||
+   [ -L "$BACKEND_MARKER" ] || { [ -e "$BACKEND_MARKER" ] && [ ! -f "$BACKEND_MARKER" ]; }; then
+  echo "jailoc-dind: FATAL: invalid storage backend metadata in $BACKEND_DIR" >&2
+  exit 1
+fi
+if ! mountpoint -q "$BACKEND_DIR" || [ "$(stat -c '%u' "$BACKEND_DIR")" != 0 ] ||
+   [ -n "$(find "$BACKEND_DIR" -mindepth 1 -maxdepth 1 ! -name storage-mode ! -name '.storage-mode.*' -print -quit)" ]; then
+  echo "jailoc-dind: FATAL: invalid storage backend metadata in $BACKEND_DIR" >&2
+  exit 1
+fi
+chmod 700 "$BACKEND_DIR"
+if [ -f "$BACKEND_MARKER" ]; then
+  if [ "$(stat -c '%u:%a' "$BACKEND_MARKER")" != '0:600' ]; then
+    echo "jailoc-dind: FATAL: invalid storage backend marker ownership in $BACKEND_MARKER" >&2
+    exit 1
+  fi
+  BACKEND=$(cat "$BACKEND_MARKER")
+  case "$BACKEND" in
+    native-snapshotter|legacy-overlay2|fuse-overlayfs) ;;
+    *) echo "jailoc-dind: FATAL: invalid storage backend in $BACKEND_MARKER" >&2; exit 1 ;;
+  esac
+else
+  # An unmarked initialized volume cannot reveal which image store owns its data.
+  if [ -n "$(find "$DOCKER_DATA_DIR" -mindepth 1 -print -quit)" ]; then
+    echo "jailoc-dind: FATAL: unmarked substantive Docker data in $DOCKER_DATA_DIR; refusing to change storage backend. Seed verified storage metadata as described in the troubleshooting guide" >&2
+    exit 1
+  fi
+  find "$BACKEND_DIR" -mindepth 1 -maxdepth 1 -name '.storage-mode.*' -type f -user root -delete
+  BACKEND=
+fi
+if [ -e "$DAEMON_CONFIG" ] && [ ! -f "$DAEMON_CONFIG" ]; then
+  echo "jailoc-dind: FATAL: Docker daemon config must be a regular file: $DAEMON_CONFIG" >&2
+  exit 1
+fi
+
+fallback_config() {
+  cat <<'EOF'
+{
+  "storage-driver": "fuse-overlayfs",
+  "features": {
+    "containerd-snapshotter": false
+  }
+}
+EOF
+}
+
+native_config() {
+  cat <<'EOF'
+{
+  "features": {
+    "containerd-snapshotter": true
+  }
+}
+EOF
+}
+
+legacy_config() {
+  cat <<'EOF'
+{
+  "storage-driver": "overlay2",
+  "features": {
+    "containerd-snapshotter": false
+  }
+}
+EOF
+}
+
+managed_config() {
+  case "$BACKEND" in
+    fuse-overlayfs) fallback_config ;;
+    legacy-overlay2) legacy_config ;;
+    native-snapshotter) native_config ;;
+  esac
+}
+
+write_backend_marker() {
+  TEMP_MARKER=$(mktemp "$BACKEND_DIR/.storage-mode.XXXXXX")
+  if ! printf '%s\n' "$BACKEND" > "$TEMP_MARKER" ||
+     ! mv -f "$TEMP_MARKER" "$BACKEND_MARKER"; then
+    rm -f "$TEMP_MARKER"
+    return 1
+  fi
+}
+
+write_managed_config() {
+  TEMP_CONFIG=$(mktemp "$ROOTLESS_HOME/.config/docker/.daemon.json.XXXXXX")
+  if ! managed_config > "$TEMP_CONFIG" ||
+     ! chown 1000:1000 "$TEMP_CONFIG" ||
+     ! mv -f "$TEMP_CONFIG" "$DAEMON_CONFIG"; then
+    rm -f "$TEMP_CONFIG"
+    return 1
+  fi
+}
+
+if run_rootless '
+  OVERLAY_TEST_DIR=$(mktemp -d "$HOME/.local/share/docker/.overlay-test.XXXXXX")
+  mkdir -p "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR/upper" \
+           "$OVERLAY_TEST_DIR/work" "$OVERLAY_TEST_DIR/merged"
+  OVERLAY_SUPPORTED=0
+  for OVERLAY_OPTIONS in "userxattr," ""; do
+    if unshare -U -m -r sh -c \
+      "mount -t overlay overlay -o ${OVERLAY_OPTIONS}lowerdir=\"$OVERLAY_TEST_DIR/lower\",upperdir=\"$OVERLAY_TEST_DIR/upper\",workdir=\"$OVERLAY_TEST_DIR/work\" \"$OVERLAY_TEST_DIR/merged\" && umount \"$OVERLAY_TEST_DIR/merged\""; then
+      OVERLAY_SUPPORTED=1
+      break
+    fi
+    rmdir "$OVERLAY_TEST_DIR/work/work" 2>/dev/null || true
+  done
+  rmdir "$OVERLAY_TEST_DIR/work/work" 2>/dev/null || true
+  if ! rmdir "$OVERLAY_TEST_DIR/merged" "$OVERLAY_TEST_DIR/work" \
+             "$OVERLAY_TEST_DIR/upper" "$OVERLAY_TEST_DIR/lower" "$OVERLAY_TEST_DIR"; then
+    exit 2
+  fi
+  [ "$OVERLAY_SUPPORTED" = 1 ]
+' >/dev/null 2>&1; then
+  PROBE_STATUS=0
+else
+  PROBE_STATUS=$?
+fi
+
+if [ "$PROBE_STATUS" -eq 2 ]; then
+  echo "jailoc-dind: FATAL: could not clean up the native overlayfs probe" >&2
+  exit 1
+fi
+
+if [ -z "$BACKEND" ]; then
+  if [ "$PROBE_STATUS" -eq 0 ]; then
+    BACKEND=native-snapshotter
+  else
+    BACKEND=fuse-overlayfs
+  fi
+fi
+if { [ "$BACKEND" = native-snapshotter ] || [ "$BACKEND" = legacy-overlay2 ]; } && [ "$PROBE_STATUS" -ne 0 ]; then
+  echo "jailoc-dind: FATAL: native overlayfs was previously selected for this volume but is unavailable" >&2
+  exit 1
+fi
+if [ -e "$DAEMON_CONFIG" ]; then
+  if [ ! -f "$CONFIG_MARKER" ] || ! managed_config | cmp -s - "$DAEMON_CONFIG"; then
+    echo "jailoc-dind: FATAL: $DAEMON_CONFIG is not managed by jailoc or was modified" >&2
+    exit 1
+  fi
+fi
+if [ ! -f "$BACKEND_MARKER" ] && ! write_backend_marker; then
+  echo "jailoc-dind: FATAL: could not persist Docker storage backend in $BACKEND_MARKER" >&2
+  exit 1
+fi
+if [ ! -f "$CONFIG_MARKER" ] && [ ! -e "$DAEMON_CONFIG" ]; then
+  touch "$CONFIG_MARKER"
+fi
+if [ ! -e "$DAEMON_CONFIG" ]; then
+  if ! write_managed_config; then
+    echo "jailoc-dind: FATAL: could not write managed Docker daemon config at $DAEMON_CONFIG" >&2
+    exit 1
+  fi
+fi
+
 # --- Clean stale containerd state ---
 # Prevents "containerd is still running" crash loop when PID file persists
 # on volume from prior unclean shutdown.
@@ -151,5 +337,4 @@ rm -f "$ROOTLESS_HOME/.local/share/docker/containerd/containerd.pid" \
 # no file capabilities, so UID 1000 cannot regain CAP_NET_ADMIN to modify
 # iptables rules. --no-new-privs is not set because rootlesskit needs
 # setuid newuidmap/newgidmap for user namespace setup.
-apk add --no-cache su-exec >/dev/null 2>&1 || true
 exec su-exec rootless env HOME="$ROOTLESS_HOME" dockerd-entrypoint.sh "$@"
