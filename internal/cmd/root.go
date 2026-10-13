@@ -168,7 +168,7 @@ var rootCmd = &cobra.Command{
 		switch mode {
 		case config.ModeExec:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-			attachErr = attachExec(attachCtx, client, ws.Mounts, targetPath, sessionFlag, continueFlag)
+			attachErr = attachExec(attachCtx, client, ws, targetPath, sessionFlag, continueFlag)
 		default:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
 			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode, sessionFlag, continueFlag)
@@ -177,7 +177,7 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("remote mode requires PTY support, which is not available on this platform; use --exec instead")
 				}
 				_, _ = color.New(color.FgYellow).Println("PTY not supported, falling back to exec mode...")
-				attachErr = attachExec(attachCtx, client, ws.Mounts, targetPath, sessionFlag, continueFlag)
+				attachErr = attachExec(attachCtx, client, ws, targetPath, sessionFlag, continueFlag)
 			}
 		}
 		if attachErr != nil {

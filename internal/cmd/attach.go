@@ -70,9 +70,25 @@ func hostPluginEnv(pluginDir string) []string {
 	return cliPluginEnv("file://"+filepath.ToSlash(pluginDir), os.Getenv(cliConfigContentEnv), ocDir)
 }
 
-// containerOCConfigDir is where the OpenCode client inside the container looks
-// for its configuration (the agent's $HOME/.config/opencode).
-const containerOCConfigDir = "/home/agent/.config/opencode"
+// defaultContainerOCConfigDir is where the OpenCode client inside the
+// container looks for its configuration when XDG_CONFIG_HOME is unset.
+const defaultContainerOCConfigDir = "/home/agent/.config/opencode"
+
+// containerOCConfigDir returns the OpenCode config directory the in-container
+// client uses, honoring an absolute XDG_CONFIG_HOME from the workspace env
+// (KEY=VALUE entries; the last one wins, matching how they reach the container).
+func containerOCConfigDir(env []string) string {
+	xdg := ""
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "XDG_CONFIG_HOME="); ok {
+			xdg = value
+		}
+	}
+	if !path.IsAbs(xdg) {
+		return defaultContainerOCConfigDir
+	}
+	return path.Join(xdg, "opencode")
+}
 
 // execPluginEnv returns an OPENCODE_CLI_CONFIG_CONTENT entry that adds the
 // jailoc CLI plugin bind-mounted into the container to the exec'd OpenCode
@@ -80,8 +96,8 @@ const containerOCConfigDir = "/home/agent/.config/opencode"
 // directory, so the plugin must be configured explicitly. The user's plugins
 // are read from the host directory the workspace mounts at the container's
 // OpenCode config directory, so they match what the in-container client sees.
-func execPluginEnv(mounts []string) []string {
-	return cliPluginEnv("file://"+tuiPluginContainerDir, "", mountedHostPath(mounts, containerOCConfigDir))
+func execPluginEnv(mounts, env []string) []string {
+	return cliPluginEnv("file://"+tuiPluginContainerDir, "", mountedHostPath(mounts, containerOCConfigDir(env)))
 }
 
 // mountedHostPath returns the host path backing containerPath through the
@@ -461,7 +477,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	return attachResult(ctx, err)
 }
 
-func attachExec(ctx context.Context, client *docker.Client, mounts []string, dir string, session string, cont bool) error {
+func attachExec(ctx context.Context, client *docker.Client, ws *workspace.Resolved, dir string, session string, cont bool) error {
 	containerID, err := client.CurrentContainerID(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve opencode container for exec: %w", err)
@@ -562,7 +578,7 @@ func attachExec(ctx context.Context, client *docker.Client, mounts []string, dir
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
-	execEnv := append(execPluginEnv(mounts), terminalEnv()...)
+	execEnv := append(execPluginEnv(ws.Mounts, ws.Env), terminalEnv()...)
 	err = client.ExecInteractive(ctx, containerID, attachExecArgs(serverURL, dir, session, cont), execEnv, os.Stdin, rw, resizeCh)
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)

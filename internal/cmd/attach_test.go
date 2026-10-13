@@ -527,11 +527,13 @@ func TestExecPluginEnv(t *testing.T) {
 	writeCLI(defaultDir, "file:///default/plug")
 	overrideDir := filepath.Join(tmp, "team-opencode")
 	writeCLI(overrideDir, "file:///override/plug")
+	writeCLI(filepath.Join(tmp, "team", "opencode"), "file:///override/plug")
 
 	jailocSpec := `"file://` + tuiPluginContainerDir + `"`
 	tests := []struct {
 		name   string
 		mounts []string
+		env    []string
 		want   string
 	}{
 		{
@@ -561,11 +563,32 @@ func TestExecPluginEnv(t *testing.T) {
 			name: "no mount",
 			want: `{"plugins":[` + jailocSpec + `]}`,
 		},
+		{
+			name: "workspace XDG_CONFIG_HOME selects mounted config",
+			mounts: []string{
+				defaultDir + ":/home/agent/.config/opencode:rw",
+				filepath.Join(tmp, "team") + ":/workspace/config:rw",
+			},
+			env:  []string{"XDG_CONFIG_HOME=/ignored", "XDG_CONFIG_HOME=/workspace/config"},
+			want: `{"plugins":["file:///override/plug",` + jailocSpec + `]}`,
+		},
+		{
+			name:   "workspace XDG_CONFIG_HOME without mount",
+			mounts: []string{defaultDir + ":/home/agent/.config/opencode:rw"},
+			env:    []string{"XDG_CONFIG_HOME=/workspace/config"},
+			want:   `{"plugins":[` + jailocSpec + `]}`,
+		},
+		{
+			name:   "relative XDG_CONFIG_HOME is ignored",
+			mounts: []string{defaultDir + ":/home/agent/.config/opencode:rw"},
+			env:    []string{"XDG_CONFIG_HOME=relative"},
+			want:   `{"plugins":["file:///default/plug",` + jailocSpec + `]}`,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := execPluginEnv(tt.mounts)
+			got := execPluginEnv(tt.mounts, tt.env)
 			want := []string{cliConfigContentEnv + "=" + tt.want}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("execPluginEnv() = %v, want %v", got, want)
