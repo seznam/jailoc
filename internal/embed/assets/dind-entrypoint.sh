@@ -88,6 +88,15 @@ $IPT -A JAILOC-OUTPUT -d 192.168.0.0/16 -j DROP
 $IPT -A JAILOC-OUTPUT -d 169.254.0.0/16 -j DROP
 $IPT -A JAILOC-OUTPUT -d 100.64.0.0/10 -j DROP
 
+if [ "${JAILOC_FILTERED_DNS:-}" = 1 ]; then
+  $IPT -I JAILOC-OUTPUT -p tcp --dport 53 -j REJECT
+  $IPT -I JAILOC-OUTPUT -p udp --dport 53 -j REJECT
+  $IPT -I JAILOC-OUTPUT -p tcp -d 169.254.53.53 --dport 53 -j ACCEPT
+  $IPT -I JAILOC-OUTPUT -p udp -d 169.254.53.53 --dport 53 -j ACCEPT
+  $IPT -I JAILOC-OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
+  $IPT -I JAILOC-OUTPUT -p udp -d 127.0.0.11 --dport 53 -j ACCEPT
+fi
+
 # --- Prepare rootless data directories ---
 # The rootless Docker daemon stores data under the rootless user's home.
 # Named volumes are created as root by Docker; fix ownership before dropping.
@@ -104,6 +113,27 @@ for d in /certs/ca /certs/client; do
     chown -R 1000:1000 "$d"
   fi
 done
+
+# --- Install forwarded CA bundle ---
+CA_BUNDLE="/etc/jailoc/ca-bundle.pem"
+SYSTEM_CA="/etc/ssl/certs/ca-certificates.crt"
+ORIGINAL_CA="/etc/ssl/certs/ca-certificates.jailoc-original.crt"
+if [ -e "$CA_BUNDLE" ]; then
+  if [ ! -f "$CA_BUNDLE" ] || [ ! -s "$CA_BUNDLE" ]; then
+    echo "jailoc-dind: FATAL: forwarded CA bundle must be a non-empty regular file: $CA_BUNDLE" >&2
+    exit 1
+  fi
+  if [ ! -f "$ORIGINAL_CA" ]; then
+    cp "$SYSTEM_CA" "$ORIGINAL_CA"
+  fi
+  if ! cp "$ORIGINAL_CA" "$SYSTEM_CA" || ! cat "$CA_BUNDLE" >> "$SYSTEM_CA"; then
+    echo "jailoc-dind: FATAL: could not install forwarded CA bundle in $SYSTEM_CA" >&2
+    exit 1
+  fi
+fi
+if [ -f "$ORIGINAL_CA" ] && [ ! -e "$CA_BUNDLE" ]; then
+  cp "$ORIGINAL_CA" "$SYSTEM_CA"
+fi
 
 # --- Clean stale containerd state ---
 # Prevents "containerd is still running" crash loop when PID file persists
