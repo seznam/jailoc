@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -156,4 +157,48 @@ func TestExecuteUpdateCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute returned unexpected error: %v", err)
 	}
+}
+
+func TestReadyFromStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		code      int
+		wantReady bool
+		wantErr   bool
+	}{
+		{code: 200, wantReady: true},
+		{code: 204, wantReady: true},
+		{code: 401, wantErr: true},
+		{code: 403, wantErr: true},
+		{code: 404},
+		{code: 502},
+		{code: 503},
+	}
+
+	for _, tt := range tests {
+		t.Run(strconv.Itoa(tt.code), func(t *testing.T) {
+			t.Parallel()
+
+			ready, err := readyFromStatus(tt.code)
+			if ready != tt.wantReady {
+				t.Errorf("ready = %v, want %v", ready, tt.wantReady)
+			}
+			if (err != nil) != tt.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestReadyExecProbeArgs(t *testing.T) {
+	t.Parallel()
+
+	got := readyExecProbeArgs(4096)
+	if len(got) != 3 || got[0] != "sh" || got[1] != "-c" {
+		t.Fatalf("readyExecProbeArgs() = %v, want sh -c <script>", got)
+	}
+	assertContains(t, got[2], "http://localhost:4096/api/info")
+	assertContains(t, got[2], `-u "opencode:$OPENCODE_SERVER_PASSWORD"`)
+	assertContains(t, got[2], "curl -sf")
 }

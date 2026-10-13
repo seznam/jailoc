@@ -40,8 +40,13 @@ func TestGenerateComposeSinglePath(t *testing.T) {
 	assertContains(t, rendered, "working_dir: /Users/test/work/project")
 	assertContains(t, rendered, "healthcheck:")
 	assertContains(t, rendered, "$$OPENCODE_SERVER_PASSWORD")
-	assertContains(t, rendered, "/global/health")
+	assertContains(t, rendered, "/api/info")
 	assertContains(t, rendered, "entrypoint.sh:/usr/local/bin/entrypoint.sh:ro")
+	assertContains(t, rendered, "tui-plugin:/etc/jailoc-tui-plugin:ro")
+	assertContains(t, rendered, `"--log-level", "debug"`)
+	assertNotContains(t, rendered, "jailoc-tui.json")
+	assertNotContains(t, rendered, "/etc/opencode/plugins")
+	assertNotContains(t, rendered, "/global/health")
 }
 
 func TestGenerateComposeMultiplePaths(t *testing.T) {
@@ -435,7 +440,7 @@ func TestGenerateComposeEnv(t *testing.T) {
 	assertContains(t, rendered, `- "OTHER=world"`)
 
 	// Check that system env vars are still present
-	assertContains(t, rendered, "- OPENCODE_LOG=debug")
+	assertContains(t, rendered, "- OPENCODE_LOG_LEVEL=debug")
 	assertContains(t, rendered, "- DOCKER_HOST=tcp://dind:2376")
 	assertContains(t, rendered, "- DOCKER_TLS_VERIFY=1")
 }
@@ -462,7 +467,7 @@ func TestGenerateComposeEmptyEnv(t *testing.T) {
 	rendered := string(out)
 
 	// Check that system env vars are still present
-	assertContains(t, rendered, "- OPENCODE_LOG=debug")
+	assertContains(t, rendered, "- OPENCODE_LOG_LEVEL=debug")
 	assertContains(t, rendered, "- DOCKER_HOST=tcp://dind:2376")
 	assertContains(t, rendered, "- DOCKER_TLS_VERIFY=1")
 

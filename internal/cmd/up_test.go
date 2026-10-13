@@ -528,43 +528,20 @@ func TestCheckPortConflict(t *testing.T) {
 	}
 }
 
-func TestWriteTUIConfig(t *testing.T) {
+func TestWriteTUIPlugin(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
 
-	if err := writeTUIConfig(tmpDir); err != nil {
-		t.Fatalf("writeTUIConfig failed: %v", err)
+	if err := writeTUIPlugin(tmpDir); err != nil {
+		t.Fatalf("writeTUIPlugin failed: %v", err)
 	}
 
-	readPluginSpec := func(path string) string {
-		t.Helper()
-		data, err := os.ReadFile(path) //nolint:gosec // test path
-		if err != nil {
-			t.Fatalf("os.ReadFile(%q) failed: %v", path, err)
+	// OpenCode 2 has no tui.json; the generated V1 config files must be gone.
+	for _, name := range []string{"tui.json", "tui-container.json"} {
+		if _, err := os.Stat(filepath.Join(tmpDir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s should not be written, stat err = %v", name, err)
 		}
-		var config map[string][]string
-		if err := json.Unmarshal(data, &config); err != nil {
-			t.Fatalf("json.Unmarshal(%q) failed: %v", path, err)
-		}
-		plugins, ok := config["plugin"]
-		if !ok {
-			t.Fatalf("%s missing 'plugin' key", path)
-		}
-		if len(plugins) != 1 {
-			t.Fatalf("%s: expected 1 plugin, got %d", path, len(plugins))
-		}
-		return plugins[0]
-	}
-
-	wantHost := "file://" + filepath.Join(tmpDir, "tui-plugin")
-	if got := readPluginSpec(filepath.Join(tmpDir, "tui.json")); got != wantHost {
-		t.Fatalf("host tui.json plugin = %q, want %q", got, wantHost)
-	}
-
-	wantContainer := "file:///etc/jailoc-tui-plugin"
-	if got := readPluginSpec(filepath.Join(tmpDir, "tui-container.json")); got != wantContainer {
-		t.Fatalf("container tui.json plugin = %q, want %q", got, wantContainer)
 	}
 
 	pkgJSON, err := os.ReadFile(filepath.Join(tmpDir, "tui-plugin", "package.json")) //nolint:gosec // test path

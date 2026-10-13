@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -21,64 +22,41 @@ func TestAttachHostArgs(t *testing.T) {
 	tests := []struct {
 		name      string
 		serverURL string
-		password  string
 		dir       string
 		session   string
 		cont      bool
 		want      []string
 	}{
 		{
-			name:      "no dir no password",
+			name:      "no dir",
 			serverURL: "http://localhost:4096",
-			password:  "",
-			dir:       "",
-			want:      []string{"attach", "http://localhost:4096"},
+			want:      []string{"--server", "http://localhost:4096"},
 		},
 		{
-			name:      "dir only",
+			name:      "dir is positional",
 			serverURL: "http://localhost:4096",
-			password:  "",
 			dir:       "/home/user/project/sub",
-			want:      []string{"attach", "http://localhost:4096", "--dir", "/home/user/project/sub"},
-		},
-		{
-			name:      "password only",
-			serverURL: "http://localhost:4096",
-			password:  "secret",
-			dir:       "",
-			want:      []string{"attach", "http://localhost:4096", "--password", "secret"},
-		},
-		{
-			name:      "both dir and password",
-			serverURL: "http://localhost:4096",
-			password:  "secret",
-			dir:       "/path",
-			want:      []string{"attach", "http://localhost:4096", "--password", "secret", "--dir", "/path"},
+			want:      []string{"--server", "http://localhost:4096", "/home/user/project/sub"},
 		},
 		{
 			name:      "with session",
 			serverURL: "http://localhost:4096",
-			password:  "",
-			dir:       "",
 			session:   "ses_abc123",
-			want:      []string{"attach", "http://localhost:4096", "--session", "ses_abc123"},
+			want:      []string{"--server", "http://localhost:4096", "--session", "ses_abc123"},
 		},
 		{
 			name:      "with continue",
 			serverURL: "http://localhost:4096",
-			password:  "",
-			dir:       "",
 			cont:      true,
-			want:      []string{"attach", "http://localhost:4096", "--continue"},
+			want:      []string{"--server", "http://localhost:4096", "--continue"},
 		},
 		{
 			name:      "all flags",
 			serverURL: "http://localhost:4096",
-			password:  "secret",
 			dir:       "/path",
 			session:   "ses_abc123",
 			cont:      true,
-			want:      []string{"attach", "http://localhost:4096", "--password", "secret", "--dir", "/path", "--session", "ses_abc123", "--continue"},
+			want:      []string{"--server", "http://localhost:4096", "--session", "ses_abc123", "--continue", "/path"},
 		},
 	}
 
@@ -86,9 +64,14 @@ func TestAttachHostArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := attachHostArgs(tt.serverURL, tt.password, tt.dir, tt.session, tt.cont)
+			got := attachHostArgs(tt.serverURL, tt.dir, tt.session, tt.cont)
 			if !slicesEqual(got, tt.want) {
 				t.Errorf("got %v, want %v", got, tt.want)
+			}
+			for _, arg := range got {
+				if arg == "attach" || arg == "--password" || arg == "--dir" {
+					t.Errorf("args contain OpenCode 1 flag %q: %v", arg, got)
+				}
 			}
 		})
 	}
@@ -108,28 +91,25 @@ func TestAttachExecArgs(t *testing.T) {
 		{
 			name:      "no dir",
 			serverURL: "http://localhost:4096",
-			dir:       "",
-			want:      []string{"opencode", "attach", "http://localhost:4096"},
+			want:      []string{"opencode", "--server", "http://localhost:4096"},
 		},
 		{
 			name:      "with dir",
 			serverURL: "http://localhost:4096",
 			dir:       "/home/user/project",
-			want:      []string{"opencode", "attach", "http://localhost:4096", "--dir", "/home/user/project"},
+			want:      []string{"opencode", "--server", "http://localhost:4096", "/home/user/project"},
 		},
 		{
 			name:      "with session",
 			serverURL: "http://localhost:4096",
-			dir:       "",
 			session:   "ses_abc123",
-			want:      []string{"opencode", "attach", "http://localhost:4096", "--session", "ses_abc123"},
+			want:      []string{"opencode", "--server", "http://localhost:4096", "--session", "ses_abc123"},
 		},
 		{
 			name:      "with continue",
 			serverURL: "http://localhost:4096",
-			dir:       "",
 			cont:      true,
-			want:      []string{"opencode", "attach", "http://localhost:4096", "--continue"},
+			want:      []string{"opencode", "--server", "http://localhost:4096", "--continue"},
 		},
 		{
 			name:      "all flags",
@@ -137,7 +117,7 @@ func TestAttachExecArgs(t *testing.T) {
 			dir:       "/path",
 			session:   "ses_abc123",
 			cont:      true,
-			want:      []string{"opencode", "attach", "http://localhost:4096", "--dir", "/path", "--session", "ses_abc123", "--continue"},
+			want:      []string{"opencode", "--server", "http://localhost:4096", "--session", "ses_abc123", "--continue", "/path"},
 		},
 	}
 
@@ -401,38 +381,53 @@ func assertNotCanceled(t *testing.T, ctx context.Context, wait time.Duration) {
 	}
 }
 
-func TestHostTUIConfigEnv(t *testing.T) {
+func TestHostPluginEnv(t *testing.T) {
 	tests := []struct {
-		name         string
-		createConfig bool
-		createUser   bool
-		existingEnv  string
-		wantEnv      bool
+		name        string
+		noPluginDir bool
+		envContent  string
+		userFiles   map[string]string
+		// wantPlugins is the expected plugins list; "$SPEC" is replaced with the
+		// jailoc plugin specifier. nil means no env entry is expected.
+		wantPlugins []string
+		wantKeys    map[string]string
 	}{
 		{
-			name:         "returns env when generated config exists and user tui json does not",
-			createConfig: true,
-			createUser:   false,
-			wantEnv:      true,
+			name:        "no user config injects only jailoc plugin",
+			wantPlugins: []string{"$SPEC"},
 		},
 		{
-			name:         "returns nil when user tui json exists",
-			createConfig: true,
-			createUser:   true,
-			wantEnv:      false,
+			name:        "missing plugin dir yields nothing",
+			noPluginDir: true,
 		},
 		{
-			name:         "returns nil when generated config does not exist",
-			createConfig: false,
-			createUser:   false,
-			wantEnv:      false,
+			name:        "user cli json plugins are preserved",
+			userFiles:   map[string]string{"cli.json": `{"theme":"x","plugins":["file:///user/plug", ["npm-plug", {"a": 1}]]}`},
+			wantPlugins: []string{"file:///user/plug", `["npm-plug",{"a":1}]`, "$SPEC"},
 		},
 		{
-			name:         "returns nil when env already set",
-			createConfig: true,
-			createUser:   false,
-			existingEnv:  "/custom/tui.json",
-			wantEnv:      false,
+			name:        "jailoc plugin is not duplicated",
+			userFiles:   map[string]string{"cli.json": `{"plugins":["$SPEC"]}`},
+			wantPlugins: []string{"$SPEC"},
+		},
+		{
+			name:      "unparseable cli json is left alone",
+			userFiles: map[string]string{"cli.json": "{\n // comment\n \"plugins\": []\n}"},
+		},
+		{
+			name:      "legacy tui json awaiting migration is left alone",
+			userFiles: map[string]string{"tui.json": `{"plugin":["file:///user/plug"]}`},
+		},
+		{
+			name:        "explicit env content is extended",
+			envContent:  `{"theme":"dark","plugins":["file:///env/plug"]}`,
+			userFiles:   map[string]string{"cli.json": `{"plugins":["file:///ignored"]}`},
+			wantPlugins: []string{"file:///env/plug", "$SPEC"},
+			wantKeys:    map[string]string{"theme": `"dark"`},
+		},
+		{
+			name:       "invalid explicit env content is left alone",
+			envContent: `not json`,
 		},
 	}
 
@@ -441,55 +436,93 @@ func TestHostTUIConfigEnv(t *testing.T) {
 			tmp := t.TempDir()
 			t.Setenv("XDG_CONFIG_HOME", tmp)
 			t.Setenv("HOME", tmp)
+			t.Setenv(cliConfigContentEnv, tt.envContent)
 
-			configPath := filepath.Join(tmp, "generated", "tui.json")
-
-			if tt.createConfig {
-				if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
-					t.Fatalf("create config dir: %v", err)
+			pluginDir := filepath.Join(tmp, "cache", "tui-plugin")
+			if !tt.noPluginDir {
+				if err := os.MkdirAll(pluginDir, 0o750); err != nil {
+					t.Fatalf("create plugin dir: %v", err)
 				}
-				if err := os.WriteFile(configPath, []byte("{}"), 0o600); err != nil {
-					t.Fatalf("create generated tui.json: %v", err)
+			}
+			spec := "file://" + filepath.ToSlash(pluginDir)
+
+			ocDir := filepath.Join(tmp, "opencode")
+			if err := os.MkdirAll(ocDir, 0o750); err != nil {
+				t.Fatalf("create opencode dir: %v", err)
+			}
+			for name, content := range tt.userFiles {
+				content = strings.ReplaceAll(content, "$SPEC", spec)
+				if err := os.WriteFile(filepath.Join(ocDir, name), []byte(content), 0o600); err != nil {
+					t.Fatalf("write %s: %v", name, err)
 				}
 			}
 
-			if tt.createUser {
-				ocDir, err := openCodeConfigDir()
-				if err != nil {
-					t.Fatalf("opencode config dir: %v", err)
+			got := hostPluginEnv(pluginDir)
+			if tt.wantPlugins == nil {
+				if got != nil {
+					t.Fatalf("hostPluginEnv() = %v, want nil", got)
 				}
-				userTUI := filepath.Join(ocDir, "tui.json")
-				if err := os.MkdirAll(filepath.Dir(userTUI), 0o750); err != nil {
-					t.Fatalf("create dir: %v", err)
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("hostPluginEnv() = %v, want one entry", got)
+			}
+			key, value, _ := strings.Cut(got[0], "=")
+			if key != cliConfigContentEnv {
+				t.Fatalf("env key = %q, want %q", key, cliConfigContentEnv)
+			}
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(value), &obj); err != nil {
+				t.Fatalf("env value is not JSON: %v (%s)", err, value)
+			}
+			var plugins []json.RawMessage
+			if err := json.Unmarshal(obj["plugins"], &plugins); err != nil {
+				t.Fatalf("plugins is not an array: %v (%s)", err, value)
+			}
+			if len(plugins) != len(tt.wantPlugins) {
+				t.Fatalf("plugins = %s, want %v", obj["plugins"], tt.wantPlugins)
+			}
+			for i, want := range tt.wantPlugins {
+				want = strings.ReplaceAll(want, "$SPEC", spec)
+				var s string
+				if json.Unmarshal(plugins[i], &s) == nil {
+					if s != want {
+						t.Errorf("plugins[%d] = %q, want %q", i, s, want)
+					}
+					continue
 				}
-				if err := os.WriteFile(userTUI, []byte("{}"), 0o600); err != nil {
-					t.Fatalf("create tui.json: %v", err)
+				if string(plugins[i]) != want {
+					t.Errorf("plugins[%d] = %s, want %s", i, plugins[i], want)
 				}
 			}
-
-			if tt.existingEnv != "" {
-				t.Setenv("OPENCODE_TUI_CONFIG", tt.existingEnv)
-			}
-
-			got := hostTUIConfigEnv(configPath)
-			var want []string
-			if tt.wantEnv {
-				want = []string{"OPENCODE_TUI_CONFIG=" + configPath}
-			}
-			if !slicesEqual(got, want) {
-				t.Errorf("hostTUIConfigEnv(%q) = %v, want %v", configPath, got, want)
+			for k, want := range tt.wantKeys {
+				if string(obj[k]) != want {
+					t.Errorf("key %q = %s, want %s", k, obj[k], want)
+				}
 			}
 		})
 	}
 }
 
-func TestExecTUIConfigEnv(t *testing.T) {
-	t.Setenv("OPENCODE_TUI_CONFIG", "/host/custom.json")
+func TestExecPluginEnv(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("HOME", tmp)
+	// Host-side inline config must not leak into the container session.
+	t.Setenv(cliConfigContentEnv, `{"plugins":["file:///host/only"]}`)
 
-	got := execTUIConfigEnv("/etc/jailoc-tui.json")
-	want := []string{"OPENCODE_TUI_CONFIG=/etc/jailoc-tui.json"}
-	if !slicesEqual(got, want) {
-		t.Fatalf("execTUIConfigEnv() = %v, want %v", got, want)
+	ocDir := filepath.Join(tmp, "opencode")
+	if err := os.MkdirAll(ocDir, 0o750); err != nil {
+		t.Fatalf("create opencode dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ocDir, "cli.json"), []byte(`{"plugins":["file:///user/plug"]}`), 0o600); err != nil {
+		t.Fatalf("write cli.json: %v", err)
+	}
+
+	got := execPluginEnv()
+	want := []string{cliConfigContentEnv + `={"plugins":["file:///user/plug","file://` + tuiPluginContainerDir + `"]}`}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("execPluginEnv() = %v, want %v", got, want)
 	}
 }
 

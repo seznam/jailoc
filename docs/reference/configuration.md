@@ -246,7 +246,8 @@ Each entry must be in `KEY=VALUE` format (key cannot be empty, must contain `=`)
 
 | Reserved key | Reason |
 |---|---|
-| `OPENCODE_LOG` | opencode runtime config |
+| `OPENCODE_LOG_LEVEL` | opencode runtime config |
+| `OPENCODE_PASSWORD` | OpenCode client password; managed by jailoc |
 | `OPENCODE_SERVER_PASSWORD` | managed automatically by jailoc; set to override the automatic password cascade |
 | `NODE_USE_SYSTEM_CA` | managed automatically when `ca_bundle` is active |
 | `DOCKER_HOST` | DinD TLS connection |
@@ -308,7 +309,8 @@ Environment-destination secrets export secret values into the container environm
 The container environment variable name (`<NAME>`) must match `^[A-Za-z_][A-Za-z0-9_]*$`. The following names are reserved and rejected:
 - `HOME`
 - `PATH`
-- `OPENCODE_LOG`
+- `OPENCODE_LOG_LEVEL`
+- `OPENCODE_PASSWORD`
 - `OPENCODE_SERVER_PASSWORD`
 - `NODE_USE_SYSTEM_CA`
 - `DOCKER_HOST`

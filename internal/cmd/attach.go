@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,60 +24,160 @@ import (
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
-func attachHostArgs(serverURL, password, dir, session string, cont bool) []string {
-	args := []string{"attach", serverURL}
-	if password != "" {
-		args = append(args, "--password", password)
-	}
-	if dir != "" {
-		args = append(args, "--dir", dir)
-	}
+// openCodeClientArgs builds the OpenCode 2 CLI arguments that connect the TUI
+// to an existing server. The working directory is positional and must exist on
+// the machine running the CLI. The server password is passed via the
+// OPENCODE_PASSWORD environment variable, never on the command line.
+func openCodeClientArgs(serverURL, dir, session string, cont bool) []string {
+	args := []string{"--server", serverURL}
 	if session != "" {
 		args = append(args, "--session", session)
 	}
 	if cont {
 		args = append(args, "--continue")
 	}
+	if dir != "" {
+		args = append(args, dir)
+	}
 	return args
+}
+
+func attachHostArgs(serverURL, dir, session string, cont bool) []string {
+	return openCodeClientArgs(serverURL, dir, session, cont)
 }
 
 func attachExecArgs(serverURL, dir, session string, cont bool) []string {
-	args := []string{"opencode", "attach", serverURL}
-	if dir != "" {
-		args = append(args, "--dir", dir)
-	}
-	if session != "" {
-		args = append(args, "--session", session)
-	}
-	if cont {
-		args = append(args, "--continue")
-	}
-	return args
+	return append([]string{"opencode"}, openCodeClientArgs(serverURL, dir, session, cont)...)
 }
 
-// hostTUIConfigEnv returns OPENCODE_TUI_CONFIG env var entries for host attach
-// when jailoc's generated tui.json should be used as a fallback. It does not
-// override an explicit env var, and it does not point OpenCode at a missing
-// generated config file.
-func hostTUIConfigEnv(configPath string) []string {
-	if os.Getenv("OPENCODE_TUI_CONFIG") != "" {
+// cliConfigContentEnv is the OpenCode 2 env var holding inline CLI config JSON.
+// Its content is merged over the user's cli.json, but arrays (like "plugins")
+// replace rather than merge.
+const cliConfigContentEnv = "OPENCODE_CLI_CONFIG_CONTENT"
+
+// hostPluginEnv returns an OPENCODE_CLI_CONFIG_CONTENT entry that adds the
+// jailoc CLI plugin at pluginDir to the host-side OpenCode TUI. It returns nil
+// when the plugin directory is missing; see cliPluginEnv for the merge rules.
+func hostPluginEnv(pluginDir string) []string {
+	if _, err := os.Stat(pluginDir); err != nil {
 		return nil
 	}
-	if _, err := os.Stat(configPath); err != nil {
-		return nil
+	return cliPluginEnv("file://"+filepath.ToSlash(pluginDir), os.Getenv(cliConfigContentEnv))
+}
+
+// execPluginEnv returns an OPENCODE_CLI_CONFIG_CONTENT entry that adds the
+// jailoc CLI plugin bind-mounted into the container to the exec'd OpenCode
+// TUI. OpenCode 2 does not discover CLI plugins from its system config
+// directory, so the plugin must be configured explicitly. The host's cli.json is
+// the one the container sees, because ~/.config/opencode is mounted in.
+func execPluginEnv() []string {
+	return cliPluginEnv("file://"+tuiPluginContainerDir, "")
+}
+
+// cliPluginEnv returns an OPENCODE_CLI_CONFIG_CONTENT entry that adds the
+// plugin spec to the OpenCode TUI. Because the inline config replaces the
+// "plugins" array, the user's existing plugins (from inherited inline config,
+// or else from cli.json) are carried over. It returns nil whenever injecting
+// could drop or misread user configuration: unparseable config, or a legacy
+// tui.json that OpenCode has not yet migrated to cli.json.
+func cliPluginEnv(spec, inherited string) []string {
+	if strings.TrimSpace(inherited) != "" {
+		merged, err := withPlugin([]byte(inherited), spec)
+		if err != nil {
+			return nil
+		}
+		return []string{cliConfigContentEnv + "=" + string(merged)}
 	}
 
 	ocDir, err := openCodeConfigDir()
 	if err != nil {
 		return nil
 	}
-	userTUI := filepath.Join(ocDir, "tui.json")
-	if _, err := os.Stat(userTUI); err == nil {
-		return nil // user has their own tui.json — don't override
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil // unreadable or other filesystem error — don't override
+	userCfg, err := os.ReadFile(filepath.Join(ocDir, "cli.json")) //nolint:gosec // G304: path is the user's own OpenCode config
+	switch {
+	case err == nil:
+	case errors.Is(err, os.ErrNotExist):
+		if legacyTUIConfigExists(ocDir) {
+			return nil
+		}
+		userCfg = nil
+	default:
+		return nil
 	}
-	return []string{"OPENCODE_TUI_CONFIG=" + configPath}
+
+	plugins, err := pluginsFromConfig(userCfg)
+	if err != nil {
+		return nil
+	}
+	content, err := json.Marshal(map[string][]json.RawMessage{"plugins": appendPlugin(plugins, spec)})
+	if err != nil {
+		return nil
+	}
+	return []string{cliConfigContentEnv + "=" + string(content)}
+}
+
+// legacyTUIConfigExists reports whether an OpenCode 1 tui.json(c) is present.
+// OpenCode 2 migrates it into cli.json on first start; injecting inline config
+// before that would hide the migrated plugin list.
+func legacyTUIConfigExists(ocDir string) bool {
+	for _, name := range []string{"tui.json", "tui.jsonc", "cli.jsonc"} {
+		if _, err := os.Stat(filepath.Join(ocDir, name)); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
+}
+
+// withPlugin adds spec to the "plugins" array of an inline CLI config object,
+// preserving every other key.
+func withPlugin(raw []byte, spec string) ([]byte, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", cliConfigContentEnv, err)
+	}
+	if obj == nil {
+		obj = map[string]json.RawMessage{}
+	}
+	plugins, err := pluginsFromConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	list, err := json.Marshal(appendPlugin(plugins, spec))
+	if err != nil {
+		return nil, fmt.Errorf("marshal plugins: %w", err)
+	}
+	obj["plugins"] = list
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s: %w", cliConfigContentEnv, err)
+	}
+	return out, nil
+}
+
+// pluginsFromConfig extracts the raw "plugins" entries from a CLI config
+// document. Empty input yields no plugins.
+func pluginsFromConfig(raw []byte) ([]json.RawMessage, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	var cfg struct {
+		Plugins []json.RawMessage `json:"plugins"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parse cli config: %w", err)
+	}
+	return cfg.Plugins, nil
+}
+
+func appendPlugin(plugins []json.RawMessage, spec string) []json.RawMessage {
+	for _, p := range plugins {
+		var s string
+		if json.Unmarshal(p, &s) == nil && s == spec {
+			return plugins
+		}
+	}
+	quoted, _ := json.Marshal(spec) //nolint:errchkjson // marshaling a string cannot fail
+	return append(append([]json.RawMessage{}, plugins...), quoted)
 }
 
 // openCodeConfigDir returns the directory OpenCode uses for its config:
@@ -92,10 +193,6 @@ func openCodeConfigDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".config", "opencode"), nil
-}
-
-func execTUIConfigEnv(configPath string) []string {
-	return []string{"OPENCODE_TUI_CONFIG=" + configPath}
 }
 
 // terminalEnv returns host terminal environment variables (TERM, COLORTERM)
@@ -168,16 +265,19 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	if err != nil {
 		return err
 	}
-	args := attachHostArgs(serverArg, pw, dir, session, cont)
+	args := attachHostArgs(serverArg, dir, session, cont)
 
-	tuiPath := filepath.Join(jailocCacheDir(), "tui.json")
-	env := envWithOverrides(os.Environ(),
+	overrides := []string{
 		"JAILOC=1",
-		"JAILOC_WORKSPACE="+ws.Name,
-	)
-	if tuiEnv := hostTUIConfigEnv(tuiPath); len(tuiEnv) > 0 {
-		env = envWithOverrides(env, tuiEnv...)
+		"JAILOC_WORKSPACE=" + ws.Name,
 	}
+	if pw != "" {
+		// OpenCode 2 clients read either variable; set both so a stale value
+		// inherited from the user's shell cannot win.
+		overrides = append(overrides, "OPENCODE_PASSWORD="+pw, "OPENCODE_SERVER_PASSWORD="+pw)
+	}
+	overrides = append(overrides, hostPluginEnv(filepath.Join(jailocCacheDir(), tuiPluginDirName))...)
+	env := envWithOverrides(os.Environ(), overrides...)
 
 	// PTY keeps isTTY=true for the child (required by opentui) while letting
 	// us intercept stdout through the exitRewriter.
@@ -430,7 +530,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
-	execEnv := append(execTUIConfigEnv("/etc/jailoc-tui.json"), terminalEnv()...)
+	execEnv := append(execPluginEnv(), terminalEnv()...)
 	err = client.ExecInteractive(ctx, containerID, attachExecArgs(serverURL, dir, session, cont), execEnv, os.Stdin, rw, resizeCh)
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)
@@ -439,9 +539,9 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 }
 
 const (
-	attachPollInterval  = 500 * time.Millisecond
-	attachWaitDelay     = 2 * time.Second
-	resizePollInterval  = 250 * time.Millisecond
+	attachPollInterval = 500 * time.Millisecond
+	attachWaitDelay    = 2 * time.Second
+	resizePollInterval = 250 * time.Millisecond
 )
 
 var errUnhealthy = errors.New("opencode process unhealthy inside container")

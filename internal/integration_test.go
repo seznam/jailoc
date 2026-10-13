@@ -1192,7 +1192,7 @@ paths = [%q]
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	url := "http://localhost:4096/global/health"
+	url := "http://localhost:4096/api/info"
 	var lastStatus int
 	var lastErr error
 	deadline := time.Now().Add(90 * time.Second)

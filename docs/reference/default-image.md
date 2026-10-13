@@ -15,6 +15,8 @@ Core tool versions (Node.js, yaml-language-server, OpenCode) are pinned as `ARG`
 
 ## Language servers
 
+OpenCode 2 accepts `lsp` configuration but does not run language servers. The servers below are available to the agent as command-line tools (for example `pyright` as a type checker).
+
 | Server | Install method | Binary |
 |--------|---------------|--------|
 | typescript-language-server | `npm install -g` (builder stage) | `typescript-language-server` |
@@ -40,7 +42,7 @@ Core tool versions (Node.js, yaml-language-server, OpenCode) are pinned as `ARG`
 
 | Tool | Source | Binary |
 |------|--------|--------|
-| OpenCode | `opencode.ai/install` | `opencode` |
+| OpenCode 2 | `@opencode/cli` (npm) | `opencode` |
 
 ## System components
 

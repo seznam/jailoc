@@ -19,7 +19,7 @@ ARG TS_LS_VERSION=5.3.0
 ARG TS_VERSION=6.0.3
 ARG PYRIGHT_VERSION=1.1.411
 ARG BASH_LS_VERSION=5.6.0
-ARG OPENCODE_VERSION=v1.18.4
+ARG OPENCODE_VERSION=v2.0.28
 
 # =============================================================================
 # Builder stage — compile language servers and install npm modules.
@@ -42,8 +42,9 @@ RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
     && curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz \
     | tar -xJC /usr/local --strip-components=1
 
-# Language servers (npm) — OpenCode uses these for code intelligence
-# (go-to-definition, diagnostics, completions) across languages.
+# Language servers and type checkers (npm) — available to the agent as CLI
+# tools (tsc, pyright, ...). OpenCode 2 accepts `lsp` config but does not run
+# language servers itself.
 ARG YAML_LS_VERSION
 ARG TS_LS_VERSION
 ARG TS_VERSION
@@ -111,10 +112,13 @@ RUN (userdel -r ubuntu || true) \
     && mkdir -p /home/agent/.local/state /home/agent/.local/share \
     && chown -R agent:agent /home/agent/.local
 
-# OpenCode — the AI coding agent. Installed via npm for supply-chain safety
-# (avoids curl|bash). The npm package is "opencode-ai".
+# OpenCode 2 — the AI coding agent. Installed via npm for supply-chain safety
+# (avoids curl|bash). The npm package "@opencode/cli" pulls the matching native
+# binary for the platform through its optional dependencies and a postinstall
+# script, which newer npm releases only run when explicitly allowed.
 ARG OPENCODE_VERSION
-RUN npm install -g "opencode-ai@${OPENCODE_VERSION#v}"
+RUN npm install -g --allow-scripts=@opencode/cli "@opencode/cli@${OPENCODE_VERSION#v}" \
+    && opencode --version
 
 # PATH includes agent's local bin dirs for tools installed as the agent user
 # (e.g. uv from preset overlays goes to ~/.local/bin).
