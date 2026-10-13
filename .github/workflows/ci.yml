@@ -56,7 +56,8 @@ jobs:
           node-version: "24"
       - run: npm ci
       - run: npm run build
-      - run: diff dist/tui.js internal/embed/assets/tui.js
+      - run: diff dist/tui-opencode1.js internal/embed/assets/tui-opencode1.js
+      - run: diff dist/tui-opencode2.js internal/embed/assets/tui-opencode2.js
 
   judge-commits:
     name: git-judge-commits
@@ -80,4 +81,4 @@ jobs:
         uses: thejoeejoee/git-judge-commits@86c725121ef08ceb16d8be17bbb1d5854f01c3b5 # v0.3.1
         with:
           api-key: ${{ secrets.TYPESAFE_API_KEY }}
-          exclude: dist/tui.js,internal/embed/assets/tui.js
+          exclude: dist/tui-opencode1.js,dist/tui-opencode2.js,internal/embed/assets/tui-opencode1.js,internal/embed/assets/tui-opencode2.js

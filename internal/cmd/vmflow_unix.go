@@ -19,6 +19,7 @@ import (
 
 	"github.com/fatih/color"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
@@ -425,8 +426,16 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Snapshots: snapshots,
 		Env:       append([]string{"JAILOC=1", "JAILOC_WORKSPACE=" + ws.Name}, ws.Agent.Env...),
 	}
-	if ws.Agent.TUIConfigEnv != "" {
-		g.Env = append(g.Env, ws.Agent.TUIConfigEnv+"="+filepath.Join(guestCacheDir, "tui-container.json"))
+	switch ws.Agent.TUIPlugin {
+	case agent.OpenCode1TUI:
+		g.Env = append(g.Env, ws.Agent.TUIPlugin.Env()+"="+filepath.Join(guestCacheDir, "tui-container.json"))
+	case agent.OpenCode2TUI:
+		content, err := cliConfigContent(ws)
+		if err != nil {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: not loading the jailoc TUI plugin: %v\n", err)
+		} else {
+			g.Env = append(g.Env, ws.Agent.TUIPlugin.Env()+"="+content)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)); err == nil {
 		g.CABundle = filepath.Join(guestConfigDir, caBundleFilename)

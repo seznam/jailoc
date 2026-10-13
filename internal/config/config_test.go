@@ -3234,7 +3234,7 @@ func TestAgentValidation(t *testing.T) {
 		{name: "unset agent", ws: Workspace{}},
 		{name: "workspace agent", ws: Workspace{Agent: "claude"}},
 		{name: "defaults agent", defaults: Defaults{Agent: "omo"}},
-		{name: "unknown workspace agent", ws: Workspace{Agent: "vim"}, wantError: `workspace "test": invalid agent "vim": must be one of opencode, claude, copilot, omo or a custom agent defined under agents`},
+		{name: "unknown workspace agent", ws: Workspace{Agent: "vim"}, wantError: `workspace "test": invalid agent "vim": must be one of opencode, opencode1, opencode2, claude, copilot, omo or a custom agent defined under agents`},
 		{name: "unknown defaults agent", defaults: Defaults{Agent: "vim"}, wantError: `defaults: invalid agent "vim"`},
 		{name: "settings of another agent", ws: Workspace{Agent: "claude", Agents: map[string]AgentSettings{"copilot": {Args: []string{"--banner"}}}}},
 		{name: "custom agent without from", ws: Workspace{Agents: map[string]AgentSettings{"vim": {}}}, wantError: `workspace "test": agents.vim: custom agent needs from`},

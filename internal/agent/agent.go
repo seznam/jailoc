@@ -4,11 +4,67 @@
 package agent
 
 import (
+	"maps"
 	"slices"
 )
 
 // Default is the harness of a workspace that does not set agent.
 const Default = "opencode"
+
+// aliases are agent names that select another built-in harness.
+var aliases = map[string]string{"opencode": "opencode2"}
+
+// PluginDir is the guest directory with the jailoc plugin files of the
+// workspace's agent.
+const PluginDir = "/etc/jailoc-tui-plugin"
+
+// TUIPlugin is how an agent shows the jailoc workspace indicator.
+type TUIPlugin int
+
+const (
+	// NoTUIPlugin: the agent shows no jailoc indicator.
+	NoTUIPlugin TUIPlugin = iota
+	// OpenCode1TUI: OpenCode 1 loads the plugin listed in the tui.json that
+	// OPENCODE_TUI_CONFIG points at.
+	OpenCode1TUI
+	// OpenCode2TUI: OpenCode 2 loads the plugins listed in the cli.json
+	// content of OPENCODE_CLI_CONFIG_CONTENT.
+	OpenCode2TUI
+	// OmOExtension: OmO loads the extension passed with --extension, which
+	// sets a footer status.
+	OmOExtension
+	// ClaudeStatusLine: Claude Code runs the status line command of the
+	// settings file passed with --settings.
+	ClaudeStatusLine
+	// CopilotStatusLine: GitHub Copilot CLI runs the status line command
+	// that jailoc adds to its settings.json.
+	CopilotStatusLine
+)
+
+// Env returns the environment variable that makes the agent load the
+// plugin, or "" when the plugin needs none.
+func (p TUIPlugin) Env() string {
+	switch p {
+	case OpenCode1TUI:
+		return "OPENCODE_TUI_CONFIG"
+	case OpenCode2TUI:
+		return "OPENCODE_CLI_CONFIG_CONTENT"
+	default:
+		return ""
+	}
+}
+
+// Args returns the agent flags that load the plugin.
+func (p TUIPlugin) Args() []string {
+	switch p {
+	case OmOExtension:
+		return []string{"--extension", PluginDir + "/omo.js"}
+	case ClaudeStatusLine:
+		return []string{"--settings", PluginDir + "/claude-settings.json"}
+	default:
+		return nil
+	}
+}
 
 // StateDir is a home directory of the agent kept across VM restarts.
 type StateDir struct {
@@ -45,10 +101,8 @@ type Harness struct {
 	// Mounts are the default mounts added before [defaults] and workspace
 	// mounts.
 	Mounts []string
-	// TUIConfigEnv names the environment variable that points the agent at
-	// the configuration loading the jailoc TUI plugin; empty when the agent
-	// has no TUI plugin.
-	TUIConfigEnv string
+	// TUIPlugin is how the agent loads the jailoc TUI plugin.
+	TUIPlugin TUIPlugin
 	// ConfigDir is the guest path of the agent's configuration directory and
 	// ConfigGitignore the .gitignore the agent writes there on startup. jailoc
 	// creates it on the host when the directory is mounted read-only.
@@ -59,10 +113,24 @@ type Harness struct {
 // sharedMounts are default mounts of every harness.
 var sharedMounts = []string{"~/.agents:/home/agent/.agents:ro"}
 
+// OpenCode 1 and 2 share the configuration directory.
+var openCodeMounts = []string{
+	"~/.config/opencode:/home/agent/.config/opencode:rw",
+	"~/.opencode:/home/agent/.opencode:rw",
+}
+
+const (
+	openCodeConfigDir = "/home/agent/.config/opencode"
+	// OpenCode (v1.14.22+) writes this file on startup and crashes with
+	// EROFS on a read-only config directory without it.
+	// See: https://github.com/anomalyco/opencode/issues/23040
+	openCodeConfigGitignore = "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore\n"
+)
+
 var harnesses = []Harness{
 	{
-		Name:     "opencode",
-		Title:    "OpenCode",
+		Name:     "opencode1",
+		Title:    "OpenCode 1",
 		Binary:   "opencode",
 		Package:  "opencode-ai",
 		Version:  "1.18.4",
@@ -73,16 +141,34 @@ var harnesses = []Harness{
 			{Name: "opencode-data", Path: "/home/agent/.local/share/opencode"},
 			{Name: "opencode-state", Path: "/home/agent/.local/state/opencode"},
 		},
-		Mounts: []string{
-			"~/.config/opencode:/home/agent/.config/opencode:rw",
-			"~/.opencode:/home/agent/.opencode:rw",
+		Mounts:          openCodeMounts,
+		TUIPlugin:       OpenCode1TUI,
+		ConfigDir:       openCodeConfigDir,
+		ConfigGitignore: openCodeConfigGitignore,
+	},
+	{
+		Name:     "opencode2",
+		Title:    "OpenCode 2",
+		Binary:   "opencode",
+		Package:  "@opencode/cli",
+		Version:  "2.2.5",
+		Continue: "--continue",
+		Resume:   "--session",
+		// --standalone runs a private server per session instead of the
+		// shared background service, so every session gets its own
+		// environment, secrets included.
+		Unattended: []string{"--standalone", "--auto"},
+		Env:        []string{"OPENCODE_DISABLE_AUTOUPDATE=1"},
+		// Separate from OpenCode 1: both keep their database in the same
+		// guest paths, in incompatible formats.
+		State: []StateDir{
+			{Name: "opencode2-data", Path: "/home/agent/.local/share/opencode"},
+			{Name: "opencode2-state", Path: "/home/agent/.local/state/opencode"},
 		},
-		TUIConfigEnv: "OPENCODE_TUI_CONFIG",
-		ConfigDir:    "/home/agent/.config/opencode",
-		// OpenCode (v1.14.22+) writes this file on startup and crashes with
-		// EROFS on a read-only config directory without it.
-		// See: https://github.com/anomalyco/opencode/issues/23040
-		ConfigGitignore: "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore\n",
+		Mounts:          openCodeMounts,
+		TUIPlugin:       OpenCode2TUI,
+		ConfigDir:       openCodeConfigDir,
+		ConfigGitignore: openCodeConfigGitignore,
 	},
 	{
 		Name:       "claude",
@@ -95,8 +181,9 @@ var harnesses = []Harness{
 		Unattended: []string{"--dangerously-skip-permissions"},
 		// CLAUDE_CONFIG_DIR also moves ~/.claude.json into the persistent
 		// directory.
-		Env:   []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "DISABLE_AUTOUPDATER=1"},
-		State: []StateDir{{Name: "claude", Path: "/home/agent/.claude"}},
+		Env:       []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "DISABLE_AUTOUPDATER=1"},
+		State:     []StateDir{{Name: "claude", Path: "/home/agent/.claude"}},
+		TUIPlugin: ClaudeStatusLine,
 	},
 	{
 		Name:       "copilot",
@@ -109,6 +196,7 @@ var harnesses = []Harness{
 		Unattended: []string{"--allow-all"},
 		Env:        []string{"COPILOT_AUTO_UPDATE=false"},
 		State:      []StateDir{{Name: "copilot", Path: "/home/agent/.copilot"}},
+		TUIPlugin:  CopilotStatusLine,
 	},
 	{
 		Name:       "omo",
@@ -120,30 +208,38 @@ var harnesses = []Harness{
 		Resume:     "--session",
 		Unattended: []string{"--permission-preset", "full-access"},
 		// The image runs Node.js; OMO_RUNTIME=node silences the Bun notice.
-		Env:   []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
-		State: []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
+		Env:       []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
+		State:     []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
+		TUIPlugin: OmOExtension,
 	},
 }
 
-// Lookup returns the built-in harness name.
+// Lookup returns the built-in harness name. An alias returns the harness it
+// selects under the alias name.
 func Lookup(name string) (Harness, bool) {
-	i := slices.IndexFunc(harnesses, func(h Harness) bool { return h.Name == name })
+	target := name
+	if a, ok := aliases[name]; ok {
+		target = a
+	}
+	i := slices.IndexFunc(harnesses, func(h Harness) bool { return h.Name == target })
 	if i < 0 {
 		return Harness{}, false
 	}
-	return harnesses[i], true
+	h := harnesses[i]
+	h.Name = name
+	return h, true
 }
 
-// Names lists the built-in harnesses.
+// Names lists the built-in harnesses and aliases.
 func Names() []string {
-	names := make([]string, len(harnesses))
-	for i, h := range harnesses {
-		names[i] = h.Name
+	names := slices.Sorted(maps.Keys(aliases))
+	for _, h := range harnesses {
+		names = append(names, h.Name)
 	}
 	return names
 }
 
-// All returns the built-in harnesses.
+// All returns the built-in harnesses, without aliases.
 func All() []Harness { return slices.Clone(harnesses) }
 
 // DefaultMounts returns the mounts every workspace of the harness starts
@@ -152,11 +248,13 @@ func (h Harness) DefaultMounts() []string {
 	return append(slices.Clone(h.Mounts), sharedMounts...)
 }
 
-// Command returns the command line of a new agent session: resume the
-// conversation id when set, otherwise continue the last one when cont is
-// set, followed by args from the configuration.
+// Command returns the command line of a new agent session: the flags that
+// load the jailoc plugin, then resume the conversation id when set,
+// otherwise continue the last one when cont is set, followed by args from
+// the configuration.
 func (h Harness) Command(args []string, id string, cont bool) []string {
 	cmd := append([]string{h.Binary}, h.Unattended...)
+	cmd = append(cmd, h.TUIPlugin.Args()...)
 	switch {
 	case id != "":
 		cmd = append(cmd, h.Resume, id)

@@ -48,7 +48,7 @@ For each Docker workspace, jailoc:
     - `drop`: remove it.
 2. Asks to confirm removing the v1 settings listed above.
 3. Stops the running v1 workspace.
-4. Copies its `opencode-data` and `opencode-cache` Docker volumes into the VM's persistent home directory, so sessions and logins carry over.
+4. Copies its `opencode-data` and `opencode-cache` Docker volumes into the VM's persistent home directory, so sessions and logins carry over to OpenCode 1. The default agent is OpenCode 2, which keeps its sessions separately; set `agent = "opencode1"` to keep working with them (see [Choose a coding agent](coding-agents.md#select-the-agent)).
 5. Sets `backend = "vm"`.
 
 The previous config is kept as `config.toml.pre-vm-migration` next to `config.toml` (a timestamp is appended if that file already exists). Comments in the old file aren't carried over.

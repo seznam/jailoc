@@ -75,7 +75,7 @@ nav:
     - SSH & Git Passthrough: how-to/ssh-git-passthrough.md
     - Sessions: how-to/sessions.md
     - Coding Agents: how-to/coding-agents.md
-    - TUI Plugin: how-to/tui-plugin.md
+    - Workspace Indicator: how-to/tui-plugin.md
     - Migrate from jailoc v1: how-to/migrate-from-v1.md
     - Troubleshooting: how-to/troubleshooting.md
   - Reference:

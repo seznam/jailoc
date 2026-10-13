@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "exports": {
-    "./tui": "./dist/tui.js"
+    "./tui": "./dist/tui-opencode2.js"
   },
   "scripts": {
     "build": "node ./plugin/build.mjs",

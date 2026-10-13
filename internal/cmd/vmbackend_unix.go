@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
@@ -315,6 +316,14 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 			host := filepath.Join(profilesDir(), name, d.Name)
 			if err := os.MkdirAll(host, 0o700); err != nil {
 				return nil, fmt.Errorf("workspace %q: create profile directory %q: %w", ws.Name, host, err)
+			}
+			if ws.Agent.TUIPlugin == agent.CopilotStatusLine {
+				root, err := os.OpenRoot(host)
+				if err != nil {
+					return nil, fmt.Errorf("workspace %q: open profile directory %q: %w", ws.Name, host, err)
+				}
+				addCopilotStatusLine(root, ".")
+				_ = root.Close()
 			}
 			add(host, d.Path, false)
 		}

@@ -12,7 +12,14 @@ paths = ["~/projects/my-project"]
 agent = "claude"
 ```
 
-Values: `opencode`, `claude`, `copilot`, `omo`. Set `agent` in `[defaults]` to change it for every workspace.
+Values: `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo`. Set `agent` in `[defaults]` to change it for every workspace.
+
+`opencode` is an alias of `opencode2`, OpenCode 2. `opencode1` runs OpenCode 1 (`opencode-ai`). The two keep their sessions apart: OpenCode 2 doesn't see the sessions of OpenCode 1, and switching back and forth doesn't mix their databases. Both read the same `~/.config/opencode`. To keep using OpenCode 1 and its existing sessions:
+
+```toml
+[defaults]
+agent = "opencode1"
+```
 
 Start the workspace and open a session:
 

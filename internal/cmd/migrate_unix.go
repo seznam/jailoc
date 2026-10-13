@@ -289,8 +289,8 @@ type volumeTarget struct {
 }
 
 func migrationVolumes(cfg *config.Config, names []string) ([]volumeTarget, error) {
-	// jailoc v1 ran OpenCode only.
-	v1Agent, _ := agent.Lookup("opencode")
+	// jailoc v1 ran OpenCode 1 only.
+	v1Agent, _ := agent.Lookup("opencode1")
 	var out []volumeTarget
 	for _, name := range names {
 		mounts, err := config.MergeMounts(v1Agent.DefaultMounts(), cfg.Defaults.Mounts, cfg.Workspaces[name].Mounts)
