@@ -1,10 +1,10 @@
 # Container Architecture
 
-Every jailoc workspace runs as a Docker Compose project containing one or two containers, depending on whether Docker-in-Docker is enabled. Understanding why two containers exist when they do, and how they interact, helps explain both the security properties and some of the operational behaviour you'll observe when working with jailoc.
+Every jailoc workspace runs as a Docker Compose project containing an opencode container, an optional Docker-in-Docker sidecar, and an optional DNS filter sidecar. Understanding how they interact helps explain both the security properties and some of the operational behaviour you'll observe when working with jailoc.
 
 ## Container layout
 
-The diagram below shows the default two-container setup with Docker-in-Docker enabled. When `enable_docker` is `false`, jailoc starts only the **opencode** container — the dind sidecar, its volumes, and `DOCKER_HOST` environment variables are omitted entirely.
+The diagram below shows the default two-container setup with Docker-in-Docker enabled and DNS filtering disabled. `enable_docker = false` omits the dind sidecar, its volumes, and `DOCKER_HOST` environment variables. `filtered_dns = true` adds a CoreDNS sidecar whether or not Docker-in-Docker is enabled.
 
 ```mermaid
 flowchart TB
@@ -32,11 +32,11 @@ The opencode container runs with configurable resource limits. The `cpu` (defaul
 
 The **dind container** runs a rootless Docker daemon (`docker:dind-rootless`) in privileged mode. The entrypoint installs iptables rules as root, then drops the inheritable and bounding capability sets before execing the rootless Docker daemon as UID 1000. The daemon listens on port 2376 with mutual TLS authentication, and the certificates are shared with the opencode container via a named volume. When the agent runs `docker build` or starts a database for testing, those containers exist entirely within the dind daemon's scope and are invisible to the host. Because the daemon runs rootless, inner containers operate inside a user namespace managed by rootlesskit — even `--privileged` inner containers cannot modify the outer network namespace's iptables rules.
 
-When `enable_docker` is `false`, the dind container is not started. The opencode container runs alone without Docker access — no dind service, no TLS certificate volumes, and no `DOCKER_HOST` environment variable. This reduces resource overhead and removes the privileged sidecar entirely.
+When `enable_docker` is `false`, the dind container is not started. The opencode container has no Docker access — no dind service, no TLS certificate volumes, and no `DOCKER_HOST` environment variable. This reduces resource overhead and removes the privileged sidecar entirely.
 
 ## Network
 
-Both containers share a single Docker network named `jailoc`. The opencode container communicates with the dind daemon over this network via TLS on port 2376, and the same network carries the opencode container's egress traffic to the outside world. Network isolation is handled by iptables rules inside the opencode container rather than by network-level separation — see [Network Isolation](network-isolation.md) for details.
+The containers share a Docker network named `jailoc`. The opencode container communicates with the dind daemon over this network via TLS on port 2376, and the same network carries the opencode container's egress traffic to the outside world. With filtered DNS, Docker's embedded DNS forwards external queries to the CoreDNS sidecar, which rejects configured DNS zones and forwards other queries to the configured upstream. Network isolation is handled by iptables rules inside the opencode container rather than by network-level separation — see [Network Isolation](network-isolation.md) for details.
 
 ## Volume mounts
 
@@ -46,7 +46,7 @@ The opencode container mounts several things at startup:
 |-------|-----------|---------|
 | Workspace paths | read-write | The directories the agent is working in |
 | Configurable mounts | per-mount | Host directories mounted into the container, controlled by the `mounts` config field. Defaults include OpenCode configuration (rw — the agent needs write access to persist settings, install tools, and update its own configuration), session transcripts (rw), and agent tooling (ro). See [Configuration Reference](../reference/configuration.md#mounts) for the full list and merge rules. |
-| `/etc/jailoc` | read-only | jailoc's own runtime config, including allowed hosts |
+| `/etc/jailoc` | read-only | jailoc's per-workspace runtime files, including allowed hosts and the optional materialized CA bundle |
 | SSH agent socket | read-write | Host SSH agent forwarded into the container (when `ssh_auth_sock = true`). Also mounts `~/.ssh/known_hosts` read-only for host key verification. |
 | `~/.gitconfig` | read-only | Host Git configuration (when `git_config = true`, the default) |
 
@@ -80,6 +80,16 @@ The rootless architecture provides a critical security property: inner container
 
 `--no-new-privs` is intentionally omitted from the setpriv invocation because rootlesskit requires setuid `newuidmap`/`newgidmap` for user namespace setup. These binaries are narrowly scoped — they only manipulate UID/GID mappings and cannot escalate to arbitrary capabilities.
 
+## CA bundle trust
+
+jailoc can forward a CA bundle into the opencode container and, when enabled, the DinD daemon. This lets OpenCode, command-line HTTPS clients, and Docker registry operations trust a private or internal CA without altering host trust. This is controlled by the `ca_bundle` config field — see [Configuration Reference](../reference/configuration.md) for the full bool\|string contract and [How-to: Network Access](../how-to/network-access.md#forward-a-ca-bundle) for task-oriented examples.
+
+Before `jailoc up` or `jailoc add` writes any other generated files, jailoc resolves the effective bundle (automatic discovery from `SSL_CERT_FILE`/`NIX_SSL_CERT_FILE`, a custom path, or none), validates that it is a readable regular file containing at least one certificate and no private-key material, and materializes only the validated public bytes to `~/.config/jailoc/workspaces/<workspace>/ca-bundle.pem`. That file reaches both services through the existing read-only `/etc/jailoc` mount — no new bind mount is added. When forwarding is disabled or automatic discovery finds no source, jailoc removes any stale materialized file so a bundle from a previous run cannot linger.
+
+Each entrypoint appends `/etc/jailoc/ca-bundle.pem`, when present, to its system CA bundle (`/etc/ssl/certs/ca-certificates.crt`) while still running as root and before dropping to UID 1000. The opencode entrypoint also enables Node.js system-CA loading with `NODE_USE_SYSTEM_CA=1` before it starts OpenCode. When Docker is enabled, the DinD daemon starts with the same additional roots. This is independent of the `/certs/ca` material used for opencode-to-dind daemon mutual TLS, which this feature does not touch.
+
+!!! warning
+    Trust extends to the opencode container and the DinD daemon only. It does not propagate to the host, containers already running inside DinD when the bundle changes, containers started later with `docker run`, or `RUN` steps executed during a Dockerfile build inside DinD — those inherit whatever trust store their own image ships with, not the daemon's. `SSL_CERT_DIR` is not read as a discovery source. Forwarding a CA bundle does not change firewall behavior: `allowed_hosts` and `allowed_networks` rules still gate which addresses the containers can reach.
 For instructions on configuring which hosts the agent can reach, see [How-to: Network Access](../how-to/network-access.md).
 
 ## Image resolution

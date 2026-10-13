@@ -31,6 +31,7 @@ type ComposeParams struct {
 	UseCacheVolume  bool
 	ExposePort      bool
 	EnableDocker    bool
+	FilteredDNS     bool
 	Secrets         []SecretSpec
 }
 

@@ -4,6 +4,12 @@ name: jailoc-{{.WorkspaceName}}
 services:
   opencode:
     image: {{.Image}}
+{{- if .FilteredDNS}}
+    dns:
+      - 169.254.53.53
+    depends_on:
+      - dnsfilter
+{{- end}}
 {{- if .ExposePort}}
     ports:
       - "127.0.0.1:{{.Port}}:4096"
@@ -48,6 +54,9 @@ services:
 {{- end}}
       - JAILOC=1
       - JAILOC_WORKSPACE={{.WorkspaceName}}
+{{- if .FilteredDNS}}
+      - JAILOC_FILTERED_DNS=1
+{{- end}}
 {{- if .SSHAuthSock}}
       - SSH_AUTH_SOCK=/run/ssh-agent.sock
 {{- end}}
@@ -78,7 +87,11 @@ services:
     cpus: {{printf "%g" .CPU}}
     pids_limit: 256
     networks:
-      - jailoc
+      jailoc:
+{{- if .FilteredDNS}}
+        link_local_ips:
+          - 169.254.53.2
+{{- end}}
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
     command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "DEBUG"]
 {{- if .Paths}}
@@ -94,25 +107,54 @@ services:
 
   dind:
     image: docker:dind-rootless
+{{- if .FilteredDNS}}
+    dns:
+      - 169.254.53.53
+    depends_on:
+      - dnsfilter
+{{- end}}
     user: "0:0"
     privileged: true
     entrypoint: ["/usr/local/bin/dind-entrypoint.sh"]
     environment:
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_TLS_SAN=DNS:dind
+{{- if .FilteredDNS}}
+      - JAILOC_FILTERED_DNS=1
+{{- end}}
     volumes:
       - dind-certs-ca:/certs/ca
       - dind-certs-client:/certs/client
       - dind-data:/home/rootless/.local/share/docker
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/dind-entrypoint.sh:/usr/local/bin/dind-entrypoint.sh:ro
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
     networks:
-      - jailoc
+      jailoc:
+{{- if .FilteredDNS}}
+        link_local_ips:
+          - 169.254.53.3
+{{- end}}
     expose:
       - "2376"
+{{- end}}
+{{- if .FilteredDNS}}
+
+  dnsfilter:
+    image: coredns/coredns:1.12.4
+    command: ["-conf", "/etc/coredns/Corefile"]
+    volumes:
+      - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/Corefile:/etc/coredns/Corefile:ro
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    networks:
+      jailoc:
+        link_local_ips:
+          - 169.254.53.53
 {{- end}}
 
 {{- if or .UseDataVolume .UseCacheVolume .EnableDocker}}
