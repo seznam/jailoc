@@ -126,7 +126,7 @@ Add the current working directory to the target workspace's `paths` list.
 jailoc add [flags]
 ```
 
-Appends the current directory to `workspaces.<name>.paths` in `~/.config/jailoc/config.toml`. The path must not be under a forbidden system prefix. See the [configuration reference](configuration.md) for path validation rules. Validates secret sources for the target workspace before updating configuration.
+Appends the current directory to `workspaces.<name>.paths` in `~/.config/jailoc/config.toml`. The path must not be under a forbidden system prefix. See the [configuration reference](configuration.md) for path validation rules. Validates secret sources for the target workspace before updating configuration. If the workspace is running, stops and recreates its Compose containers so updated CA trust and mounts take effect; named volumes are preserved.
 
 When `--workspace` is not set, resolves the workspace from the path being added (longest prefix). If `--workspace` is set explicitly and the path is not under any of that workspace's configured paths, `jailoc add` returns an error. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 

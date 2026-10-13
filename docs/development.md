@@ -39,6 +39,17 @@ The pipeline runs on GitHub Actions. Most workflows trigger on every branch and 
 
 Integration tests run as part of the CI workflow on `v*` tags with `go test -tags=integration`. GoReleaser builds static binaries (`CGO_ENABLED=0`) for `linux/darwin` x `amd64/arm64`. Configs live in `.goreleaser.yml` and `.github/workflows/`.
 
+### Dependabot Nix vendorHash
+
+[`nix-vendor-hash.yml`](https://github.com/seznam/jailoc/blob/main/.github/workflows/nix-vendor-hash.yml) handles `go.mod`/`go.sum` changes pushed to `main`, manual runs, and same-repository PRs targeting `main` authored by Dependabot. The PR gate checks the author, not the actor, so maintainer-triggered updates also qualify.
+
+- **`calculate`** checks out the exact source commit with read-only repository permissions. It runs `nix-update` and, when `flake.nix` changes, formats, checks, builds, and runs the package. It passes only the updated `vendorHash` string as a job output.
+- **`publish`** checks out the same commit on a fresh runner with write permissions. It validates the hash format and replaces the single `vendorHash` assignment without running Nix or repository scripts. It commits only `flake.nix` to the Dependabot branch, or opens the maintenance PR against `main` for push/manual runs. The Dependabot push uses `--force-with-lease` against the original PR head SHA, so it is rejected if the branch advanced or was deleted while `calculate` ran.
+
+Nix build sandboxing does not isolate the entire job: `nix run` executes the application outside the build sandbox. Separate runners prevent that execution from modifying the publication environment or capturing its write token. The workflow definition itself can still be modified in a PR; the same-repository Dependabot gate is not an absolute trust boundary. Publication uses `GITHUB_TOKEN`; the Dependabot branch commit includes [`[dependabot skip]`](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/manage-dependabot-prs#allowing-dependabot-to-rebase-and-force-push-over-extra-commits), allowing Dependabot to rebase and replace it.
+
+After the token-generated push, a contributor with write access must select **Approve workflows to run** on the PR to start the resulting approval-required `pull_request` CI runs. See [approving workflow runs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/approve-runs-from-forks). [`GITHUB_TOKEN` pushes do not trigger `push` workflows](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs).
+
 ## Default container contents
 
 The embedded Dockerfile defines an Ubuntu 24.04 base image. Exact versions are pinned there.
