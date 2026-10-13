@@ -42,6 +42,10 @@ const (
 # git_config = true
 # expose_port = true
 # enable_docker = true
+# filtered_dns = false
+# dns_upstream = "10.20.30.53"
+# dns_blocked_zones = ["corp.example.com"]
+# ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
 # cpu = 2.0
 # memory = "4g"
 
@@ -64,6 +68,10 @@ paths = []
 # git_config = true
 # expose_port = true
 # enable_docker = true
+# filtered_dns = false
+# dns_upstream = "10.20.30.53"
+# dns_blocked_zones = ["corp.example.com"]
+# ca_bundle = true  # omitted: inherit defaults; true/false/string: override
 # cpu = 2.0
 # memory = "4g"
 
@@ -96,6 +104,7 @@ var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var reservedEnvKeys = map[string]bool{
 	"OPENCODE_LOG":             true,
 	"OPENCODE_SERVER_PASSWORD": true,
+	"NODE_USE_SYSTEM_CA":       true,
 	"DOCKER_HOST":              true,
 	"DOCKER_TLS_CERTDIR":       true,
 	"DOCKER_CERT_PATH":         true,
@@ -103,6 +112,7 @@ var reservedEnvKeys = map[string]bool{
 	"SSH_AUTH_SOCK":            true,
 	"JAILOC":                   true,
 	"JAILOC_WORKSPACE":         true,
+	"JAILOC_FILTERED_DNS":      true,
 }
 
 var forbiddenMountPrefixes = []string{
@@ -204,38 +214,46 @@ type BaseConfig struct {
 }
 
 type Defaults struct {
-	Env             []string `toml:"env"`
-	EnvFile         []string `toml:"env_file"`
-	Mounts          []string `toml:"mounts"`
-	AllowedHosts    []string `toml:"allowed_hosts"`
-	AllowedNetworks []string `toml:"allowed_networks"`
-	Secrets         Secrets  `toml:"secrets,omitempty"`
-	Image           string   `toml:"image"`
-	SSHAuthSock     bool     `toml:"ssh_auth_sock"`
-	GitConfig       *bool    `toml:"git_config"`
-	CPU             *float64 `toml:"cpu"`
-	Memory          *string  `toml:"memory"`
-	ExposePort      *bool    `toml:"expose_port"`
-	EnableDocker    *bool    `toml:"enable_docker"`
+	Env             []string  `toml:"env"`
+	EnvFile         []string  `toml:"env_file"`
+	Mounts          []string  `toml:"mounts"`
+	AllowedHosts    []string  `toml:"allowed_hosts"`
+	AllowedNetworks []string  `toml:"allowed_networks"`
+	Secrets         Secrets   `toml:"secrets,omitempty"`
+	Image           string    `toml:"image"`
+	SSHAuthSock     bool      `toml:"ssh_auth_sock"`
+	GitConfig       *bool     `toml:"git_config"`
+	CPU             *float64  `toml:"cpu"`
+	Memory          *string   `toml:"memory"`
+	ExposePort      *bool     `toml:"expose_port"`
+	EnableDocker    *bool     `toml:"enable_docker"`
+	FilteredDNS     *bool     `toml:"filtered_dns"`
+	DNSUpstream     string    `toml:"dns_upstream"`
+	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
+	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
 }
 
 type Workspace struct {
-	Paths           []string `toml:"paths"`
-	Mounts          []string `toml:"mounts"`
-	AllowedHosts    []string `toml:"allowed_hosts"`
-	AllowedNetworks []string `toml:"allowed_networks"`
-	Env             []string `toml:"env"`
-	EnvFile         []string `toml:"env_file"`
-	Secrets         Secrets  `toml:"secrets,omitempty"`
-	BuildContext    string   `toml:"build_context"`
-	Dockerfile      string   `toml:"dockerfile"`
-	Image           string   `toml:"image"`
-	SSHAuthSock     *bool    `toml:"ssh_auth_sock"`
-	GitConfig       *bool    `toml:"git_config"`
-	CPU             *float64 `toml:"cpu"`
-	Memory          *string  `toml:"memory"`
-	ExposePort      *bool    `toml:"expose_port"`
-	EnableDocker    *bool    `toml:"enable_docker"`
+	Paths           []string  `toml:"paths"`
+	Mounts          []string  `toml:"mounts"`
+	AllowedHosts    []string  `toml:"allowed_hosts"`
+	AllowedNetworks []string  `toml:"allowed_networks"`
+	Env             []string  `toml:"env"`
+	EnvFile         []string  `toml:"env_file"`
+	Secrets         Secrets   `toml:"secrets,omitempty"`
+	BuildContext    string    `toml:"build_context"`
+	Dockerfile      string    `toml:"dockerfile"`
+	Image           string    `toml:"image"`
+	SSHAuthSock     *bool     `toml:"ssh_auth_sock"`
+	GitConfig       *bool     `toml:"git_config"`
+	CPU             *float64  `toml:"cpu"`
+	Memory          *string   `toml:"memory"`
+	ExposePort      *bool     `toml:"expose_port"`
+	EnableDocker    *bool     `toml:"enable_docker"`
+	FilteredDNS     *bool     `toml:"filtered_dns"`
+	DNSUpstream     string    `toml:"dns_upstream"`
+	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
+	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
 }
 
 func ConfigDir() string {
@@ -792,6 +810,9 @@ func Validate(cfg *Config) error {
 	if cfg.Defaults.Memory != nil && !validMemory.MatchString(*cfg.Defaults.Memory) {
 		return fmt.Errorf("defaults: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", *cfg.Defaults.Memory)
 	}
+	if err := validateDNS(cfg.Defaults.DNSUpstream, cfg.Defaults.DNSBlockedZones); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
 
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
@@ -893,10 +914,60 @@ func Validate(cfg *Config) error {
 		if ws.Memory != nil && !validMemory.MatchString(*ws.Memory) {
 			return fmt.Errorf("workspace %q: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", name, *ws.Memory)
 		}
+		if err := validateDNS(ws.DNSUpstream, ws.DNSBlockedZones); err != nil {
+			return fmt.Errorf("workspace %q: %w", name, err)
+		}
+		enabled := cfg.Defaults.FilteredDNS != nil && *cfg.Defaults.FilteredDNS
+		if ws.FilteredDNS != nil {
+			enabled = *ws.FilteredDNS
+		}
+		if enabled && ws.DNSUpstream == "" && cfg.Defaults.DNSUpstream == "" {
+			return fmt.Errorf("workspace %q: dns_upstream is required when filtered_dns is enabled", name)
+		}
+		if enabled && len(ws.DNSBlockedZones) == 0 && len(cfg.Defaults.DNSBlockedZones) == 0 {
+			return fmt.Errorf("workspace %q: dns_blocked_zones is required when filtered_dns is enabled", name)
+		}
+		if enabled {
+			zones := ws.DNSBlockedZones
+			if zones == nil {
+				zones = cfg.Defaults.DNSBlockedZones
+			}
+			for _, host := range mergeDedup(cfg.Defaults.AllowedHosts, ws.AllowedHosts) {
+				normalizedHost := strings.TrimSuffix(strings.ToLower(host), ".")
+				for _, zone := range zones {
+					normalizedZone := strings.TrimSuffix(strings.ToLower(zone), ".")
+					if normalizedHost == normalizedZone || strings.HasSuffix(normalizedHost, "."+normalizedZone) {
+						return fmt.Errorf("workspace %q: allowed_hosts entry %q conflicts with dns_blocked_zones entry %q", name, host, zone)
+					}
+				}
+			}
+		}
 
 		cfg.Workspaces[name] = ws
 	}
 
+	return nil
+}
+
+var dnsLabelRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
+
+func validateDNS(upstream string, zones []string) error {
+	if upstream != "" {
+		ip := net.ParseIP(upstream)
+		if ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+			return fmt.Errorf("dns_upstream must be a routable IPv4 address, got %q", upstream)
+		}
+	}
+	for _, zone := range zones {
+		if len(zone) > 253 || zone == "" || zone == "." || strings.ContainsAny(zone, " \t\r\n{}") {
+			return fmt.Errorf("invalid dns_blocked_zones entry %q", zone)
+		}
+		for _, label := range strings.Split(strings.TrimSuffix(zone, "."), ".") {
+			if !dnsLabelRe.MatchString(label) || len(label) > 63 {
+				return fmt.Errorf("invalid dns_blocked_zones entry %q", zone)
+			}
+		}
+	}
 	return nil
 }
 

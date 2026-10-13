@@ -126,6 +126,9 @@ func runUp(ctx context.Context, args []string) error {
 	if err := validateSecretSources(ws); err != nil {
 		return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
 	}
+	if err := materializeCABundle(ws); err != nil {
+		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
+	}
 
 	if hostPath, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
 		if err := ensureOCConfigGitignore(hostPath); err != nil {
@@ -161,6 +164,11 @@ func runUp(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	if ws.FilteredDNS {
+		if err := os.WriteFile(filepath.Join(cacheDir, "Corefile"), []byte(compose.GenerateCorefile(ws.DNSUpstream, ws.DNSBlockedZones)), 0o644); err != nil { //nolint:gosec // G306: the nonroot resolver needs read access; the Corefile contains no secrets
+			return fmt.Errorf("write DNS policy: %w", err)
+		}
+	}
 
 	if err := writeTUIConfig(jailocCacheDir()); err != nil {
 		return err
@@ -191,6 +199,7 @@ func runUp(ctx context.Context, args []string) error {
 		UseCacheVolume:  !compose.MountsContainTarget(ws.Mounts, "/home/agent/.cache"),
 		ExposePort:      ws.ExposePort,
 		EnableDocker:    ws.EnableDocker,
+		FilteredDNS:     ws.FilteredDNS,
 		Secrets:         secretSpecs(ws),
 	}
 

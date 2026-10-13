@@ -215,7 +215,7 @@ func TestDefaultConfigContentDocumentsSecrets(t *testing.T) {
 func TestLoadFromValidatesSecretNames(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"gh-token", "HOME", "PATH", "DOCKER_HOST"} {
+	for _, name := range []string{"gh-token", "HOME", "PATH", "DOCKER_HOST", "NODE_USE_SYSTEM_CA"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "config.toml")

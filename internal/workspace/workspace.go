@@ -39,6 +39,10 @@ type Resolved struct {
 	Memory          string
 	ExposePort      bool
 	EnableDocker    bool
+	FilteredDNS     bool
+	DNSUpstream     string
+	DNSBlockedZones []string
+	CABundle        config.CABundle
 }
 
 type SecretKind int
@@ -141,6 +145,16 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
+		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.FilteredDNS, ws.FilteredDNS, false),
+		DNSUpstream:     ws.DNSUpstream,
+		DNSBlockedZones: ws.DNSBlockedZones,
+		CABundle:        caBundleWithDefault(cfg.Defaults.CABundle, ws.CABundle),
+	}
+	if r.DNSUpstream == "" {
+		r.DNSUpstream = cfg.Defaults.DNSUpstream
+	}
+	if r.DNSBlockedZones == nil {
+		r.DNSBlockedZones = cfg.Defaults.DNSBlockedZones
 	}
 
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))
@@ -349,6 +363,16 @@ func boolPtrWithDefault(defaultVal *bool, override *bool, fallback bool) bool {
 		return *defaultVal
 	}
 	return fallback
+}
+
+func caBundleWithDefault(defaultVal, override *config.CABundle) config.CABundle {
+	if override != nil {
+		return *override
+	}
+	if defaultVal != nil {
+		return *defaultVal
+	}
+	return config.AutomaticCABundle()
 }
 
 func floatWithDefault(defaultVal *float64, override *float64, fallback float64) float64 {
