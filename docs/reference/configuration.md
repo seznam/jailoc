@@ -248,6 +248,7 @@ Each entry must be in `KEY=VALUE` format (key cannot be empty, must contain `=`)
 |---|---|
 | `OPENCODE_LOG_LEVEL` | opencode runtime config |
 | `OPENCODE_PASSWORD` | OpenCode client password; managed by jailoc |
+| `OPENCODE_CLI_CONFIG_CONTENT` | OpenCode client config; managed by jailoc to load the TUI plugin |
 | `OPENCODE_SERVER_PASSWORD` | managed automatically by jailoc; set to override the automatic password cascade |
 | `NODE_USE_SYSTEM_CA` | managed automatically when `ca_bundle` is active |
 | `DOCKER_HOST` | DinD TLS connection |
@@ -311,6 +312,7 @@ The container environment variable name (`<NAME>`) must match `^[A-Za-z_][A-Za-z
 - `PATH`
 - `OPENCODE_LOG_LEVEL`
 - `OPENCODE_PASSWORD`
+- `OPENCODE_CLI_CONFIG_CONTENT`
 - `OPENCODE_SERVER_PASSWORD`
 - `NODE_USE_SYSTEM_CA`
 - `DOCKER_HOST`

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -167,7 +168,7 @@ var rootCmd = &cobra.Command{
 		switch mode {
 		case config.ModeExec:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-			attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
+			attachErr = attachExec(attachCtx, client, ws.Mounts, targetPath, sessionFlag, continueFlag)
 		default:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
 			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode, sessionFlag, continueFlag)
@@ -176,7 +177,7 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("remote mode requires PTY support, which is not available on this platform; use --exec instead")
 				}
 				_, _ = color.New(color.FgYellow).Println("PTY not supported, falling back to exec mode...")
-				attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
+				attachErr = attachExec(attachCtx, client, ws.Mounts, targetPath, sessionFlag, continueFlag)
 			}
 		}
 		if attachErr != nil {
@@ -408,11 +409,23 @@ func waitForReady(ctx context.Context, port int, pw string, dc *docker.Client) e
 	}
 }
 
-// readyExecProbeArgs builds the in-container readiness probe. The password is
+// readyExecProbeArgs builds the in-container readiness probe. It prints only
+// the HTTP status code ("000" when the server is unreachable) so the caller can
+// tell an auth rejection from a server that is still starting. The password is
 // read from the container's own environment by the shell so it never appears
 // in the exec argument list.
 func readyExecProbeArgs(port int) []string {
-	return []string{"sh", "-c", fmt.Sprintf(`curl -sf -u "opencode:$OPENCODE_SERVER_PASSWORD" http://localhost:%d%s`, port, readyPath)}
+	return []string{"sh", "-c", fmt.Sprintf(`curl -s -o /dev/null -w '%%{http_code}' -u "opencode:$OPENCODE_SERVER_PASSWORD" http://localhost:%d%s`, port, readyPath)}
+}
+
+// readyFromProbeOutput interprets the status code printed by the exec probe.
+// Unparseable output means not ready yet.
+func readyFromProbeOutput(out string) (bool, error) {
+	code, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return false, nil
+	}
+	return readyFromStatus(code)
 }
 
 func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
@@ -434,10 +447,17 @@ func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out after %s waiting for in-container readiness probe", readyPollTimeout)
 		case <-ticker.C:
-			if err := dc.Exec(ctx, probeArgs, nil, nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			var stdout bytes.Buffer
+			if err := dc.Exec(ctx, probeArgs, nil, nil, &stdout, &bytes.Buffer{}); err != nil {
 				continue
 			}
-			return nil
+			ready, statusErr := readyFromProbeOutput(stdout.String())
+			if statusErr != nil {
+				return statusErr
+			}
+			if ready {
+				return nil
+			}
 		}
 	}
 }

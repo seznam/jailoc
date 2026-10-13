@@ -102,18 +102,19 @@ var secretNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var reservedEnvKeys = map[string]bool{
-	"OPENCODE_LOG_LEVEL":       true,
-	"OPENCODE_PASSWORD":        true,
-	"OPENCODE_SERVER_PASSWORD": true,
-	"NODE_USE_SYSTEM_CA":       true,
-	"DOCKER_HOST":              true,
-	"DOCKER_TLS_CERTDIR":       true,
-	"DOCKER_CERT_PATH":         true,
-	"DOCKER_TLS_VERIFY":        true,
-	"SSH_AUTH_SOCK":            true,
-	"JAILOC":                   true,
-	"JAILOC_WORKSPACE":         true,
-	"JAILOC_FILTERED_DNS":      true,
+	"OPENCODE_LOG_LEVEL":          true,
+	"OPENCODE_PASSWORD":           true,
+	"OPENCODE_CLI_CONFIG_CONTENT": true,
+	"OPENCODE_SERVER_PASSWORD":    true,
+	"NODE_USE_SYSTEM_CA":          true,
+	"DOCKER_HOST":                 true,
+	"DOCKER_TLS_CERTDIR":          true,
+	"DOCKER_CERT_PATH":            true,
+	"DOCKER_TLS_VERIFY":           true,
+	"SSH_AUTH_SOCK":               true,
+	"JAILOC":                      true,
+	"JAILOC_WORKSPACE":            true,
+	"JAILOC_FILTERED_DNS":         true,
 }
 
 var forbiddenMountPrefixes = []string{

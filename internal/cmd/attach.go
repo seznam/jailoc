@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -62,25 +63,57 @@ func hostPluginEnv(pluginDir string) []string {
 	if _, err := os.Stat(pluginDir); err != nil {
 		return nil
 	}
-	return cliPluginEnv("file://"+filepath.ToSlash(pluginDir), os.Getenv(cliConfigContentEnv))
+	ocDir, err := openCodeConfigDir()
+	if err != nil {
+		return nil
+	}
+	return cliPluginEnv("file://"+filepath.ToSlash(pluginDir), os.Getenv(cliConfigContentEnv), ocDir)
 }
+
+// containerOCConfigDir is where the OpenCode client inside the container looks
+// for its configuration (the agent's $HOME/.config/opencode).
+const containerOCConfigDir = "/home/agent/.config/opencode"
 
 // execPluginEnv returns an OPENCODE_CLI_CONFIG_CONTENT entry that adds the
 // jailoc CLI plugin bind-mounted into the container to the exec'd OpenCode
 // TUI. OpenCode 2 does not discover CLI plugins from its system config
-// directory, so the plugin must be configured explicitly. The host's cli.json is
-// the one the container sees, because ~/.config/opencode is mounted in.
-func execPluginEnv() []string {
-	return cliPluginEnv("file://"+tuiPluginContainerDir, "")
+// directory, so the plugin must be configured explicitly. The user's plugins
+// are read from the host directory the workspace mounts at the container's
+// OpenCode config directory, so they match what the in-container client sees.
+func execPluginEnv(mounts []string) []string {
+	return cliPluginEnv("file://"+tuiPluginContainerDir, "", mountedHostPath(mounts, containerOCConfigDir))
+}
+
+// mountedHostPath returns the host path backing containerPath through the
+// deepest bind mount that covers it, or "" when no mount covers it.
+func mountedHostPath(mounts []string, containerPath string) string {
+	best, bestLen := "", -1
+	for _, spec := range mounts {
+		m, err := config.ParseMount(spec)
+		if err != nil || m.Host == "" {
+			continue
+		}
+		container := path.Clean(m.Container)
+		if containerPath != container && !strings.HasPrefix(containerPath, strings.TrimSuffix(container, "/")+"/") {
+			continue
+		}
+		if len(container) <= bestLen {
+			continue
+		}
+		rel := strings.TrimPrefix(containerPath, container)
+		best, bestLen = filepath.Join(m.Host, filepath.FromSlash(rel)), len(container)
+	}
+	return best
 }
 
 // cliPluginEnv returns an OPENCODE_CLI_CONFIG_CONTENT entry that adds the
 // plugin spec to the OpenCode TUI. Because the inline config replaces the
 // "plugins" array, the user's existing plugins (from inherited inline config,
-// or else from cli.json) are carried over. It returns nil whenever injecting
-// could drop or misread user configuration: unparseable config, or a legacy
-// tui.json that OpenCode has not yet migrated to cli.json.
-func cliPluginEnv(spec, inherited string) []string {
+// or else from cli.json in ocDir) are carried over; an empty ocDir means there
+// is no user config. It returns nil whenever injecting could drop or misread
+// user configuration: unparseable config, or a legacy tui.json that OpenCode
+// has not yet migrated to cli.json.
+func cliPluginEnv(spec, inherited, ocDir string) []string {
 	if strings.TrimSpace(inherited) != "" {
 		merged, err := withPlugin([]byte(inherited), spec)
 		if err != nil {
@@ -89,20 +122,19 @@ func cliPluginEnv(spec, inherited string) []string {
 		return []string{cliConfigContentEnv + "=" + string(merged)}
 	}
 
-	ocDir, err := openCodeConfigDir()
-	if err != nil {
-		return nil
-	}
-	userCfg, err := os.ReadFile(filepath.Join(ocDir, "cli.json")) //nolint:gosec // G304: path is the user's own OpenCode config
-	switch {
-	case err == nil:
-	case errors.Is(err, os.ErrNotExist):
-		if legacyTUIConfigExists(ocDir) {
+	var userCfg []byte
+	if ocDir != "" {
+		data, err := os.ReadFile(filepath.Join(ocDir, "cli.json")) //nolint:gosec // G304: path is the user's own OpenCode config
+		switch {
+		case err == nil:
+			userCfg = data
+		case errors.Is(err, os.ErrNotExist):
+			if legacyTUIConfigExists(ocDir) {
+				return nil
+			}
+		default:
 			return nil
 		}
-		userCfg = nil
-	default:
-		return nil
 	}
 
 	plugins, err := pluginsFromConfig(userCfg)
@@ -429,7 +461,7 @@ func attachOnHost(ctx context.Context, ws *workspace.Resolved, dir string, passw
 	return attachResult(ctx, err)
 }
 
-func attachExec(ctx context.Context, client *docker.Client, dir string, session string, cont bool) error {
+func attachExec(ctx context.Context, client *docker.Client, mounts []string, dir string, session string, cont bool) error {
 	containerID, err := client.CurrentContainerID(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve opencode container for exec: %w", err)
@@ -530,7 +562,7 @@ func attachExec(ctx context.Context, client *docker.Client, dir string, session 
 
 	serverURL := fmt.Sprintf("http://localhost:%d", workspace.BasePort)
 	rw := &exitRewriter{w: os.Stdout}
-	execEnv := append(execPluginEnv(), terminalEnv()...)
+	execEnv := append(execPluginEnv(mounts), terminalEnv()...)
 	err = client.ExecInteractive(ctx, containerID, attachExecArgs(serverURL, dir, session, cont), execEnv, os.Stdin, rw, resizeCh)
 	if ferr := rw.Flush(); ferr != nil && err == nil {
 		err = fmt.Errorf("flush exit rewriter: %w", ferr)

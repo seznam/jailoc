@@ -506,23 +506,71 @@ func TestHostPluginEnv(t *testing.T) {
 
 func TestExecPluginEnv(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmp)
+	// Host-side config locations must not leak into the container session:
+	// only the workspace mount decides which cli.json the container sees.
+	xdgDir := filepath.Join(tmp, "xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
 	t.Setenv("HOME", tmp)
-	// Host-side inline config must not leak into the container session.
 	t.Setenv(cliConfigContentEnv, `{"plugins":["file:///host/only"]}`)
 
-	ocDir := filepath.Join(tmp, "opencode")
-	if err := os.MkdirAll(ocDir, 0o750); err != nil {
-		t.Fatalf("create opencode dir: %v", err)
+	writeCLI := func(dir, plugin string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "cli.json"), []byte(`{"plugins":["`+plugin+`"]}`), 0o600); err != nil {
+			t.Fatalf("write cli.json: %v", err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(ocDir, "cli.json"), []byte(`{"plugins":["file:///user/plug"]}`), 0o600); err != nil {
-		t.Fatalf("write cli.json: %v", err)
+	writeCLI(filepath.Join(xdgDir, "opencode"), "file:///xdg/plug")
+	defaultDir := filepath.Join(tmp, ".config", "opencode")
+	writeCLI(defaultDir, "file:///default/plug")
+	overrideDir := filepath.Join(tmp, "team-opencode")
+	writeCLI(overrideDir, "file:///override/plug")
+
+	jailocSpec := `"file://` + tuiPluginContainerDir + `"`
+	tests := []struct {
+		name   string
+		mounts []string
+		want   string
+	}{
+		{
+			name:   "default mount",
+			mounts: []string{defaultDir + ":/home/agent/.config/opencode:rw"},
+			want:   `{"plugins":["file:///default/plug",` + jailocSpec + `]}`,
+		},
+		{
+			name:   "overridden mount",
+			mounts: []string{overrideDir + ":/home/agent/.config/opencode:ro"},
+			want:   `{"plugins":["file:///override/plug",` + jailocSpec + `]}`,
+		},
+		{
+			name: "parent mount",
+			mounts: []string{
+				filepath.Join(tmp, ".config") + ":/home/agent/.config:rw",
+				filepath.Join(tmp, "unrelated") + ":/home/agent/.config/other:rw",
+			},
+			want: `{"plugins":["file:///default/plug",` + jailocSpec + `]}`,
+		},
+		{
+			name:   "sibling prefix is not a parent",
+			mounts: []string{overrideDir + ":/home/agent/.config/open:rw"},
+			want:   `{"plugins":[` + jailocSpec + `]}`,
+		},
+		{
+			name: "no mount",
+			want: `{"plugins":[` + jailocSpec + `]}`,
+		},
 	}
 
-	got := execPluginEnv()
-	want := []string{cliConfigContentEnv + `={"plugins":["file:///user/plug","file://` + tuiPluginContainerDir + `"]}`}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("execPluginEnv() = %v, want %v", got, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := execPluginEnv(tt.mounts)
+			want := []string{cliConfigContentEnv + "=" + tt.want}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("execPluginEnv() = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
