@@ -1,16 +1,21 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/embed"
@@ -186,7 +191,7 @@ func logStep(step string, start time.Time, args ...any) {
 	slog.Info("step finished", append([]any{"step", step, "duration", time.Since(start).Round(time.Millisecond)}, args...)...)
 }
 
-const tuiPluginContainerDir = "/etc/jailoc-tui-plugin"
+const tuiPluginContainerDir = agent.PluginDir
 
 // writeAgentFiles prepares the host files the agent of ws reads: the
 // .gitignore of a read-only config directory mount and the TUI plugin.
@@ -197,14 +202,56 @@ func writeAgentFiles(ws *workspace.Resolved, cacheDir string) error {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not pre-create .gitignore in %s: %v\n", hostPath, err)
 		}
 	}
-	if h.TUIConfigEnv == "" {
+	switch h.TUIPlugin {
+	case agent.OpenCode1TUI:
+		return writeTUIConfig(cacheDir)
+	case agent.OpenCode2TUI:
+		return writeTUIPlugin(cacheDir, openCodePluginFiles(embed.TUIPluginOpenCode2JS()))
+	case agent.OmOExtension:
+		return writeTUIPlugin(cacheDir, map[string][]byte{"omo.js": embed.OmOExtensionJS()})
+	case agent.ClaudeStatusLine:
+		settings, err := statusLineSettings("claude")
+		if err != nil {
+			return err
+		}
+		return writeTUIPlugin(cacheDir, map[string][]byte{
+			"statusline.mjs":       embed.StatusLineJS(),
+			"claude-settings.json": settings,
+		})
+	case agent.CopilotStatusLine:
+		return writeTUIPlugin(cacheDir, map[string][]byte{"statusline.mjs": embed.StatusLineJS()})
+	default:
 		return nil
 	}
-	return writeTUIConfig(cacheDir)
+}
+
+// statusLineCommand is the status line command of harness (claude or
+// copilot) that runs the jailoc status line script.
+func statusLineCommand(harness string) string {
+	return "node " + tuiPluginContainerDir + "/statusline.mjs " + harness
+}
+
+// statusLine is the statusLine setting of harness (claude or copilot).
+func statusLine(harness string) map[string]string {
+	return map[string]string{"type": "command", "command": statusLineCommand(harness)}
+}
+
+// statusLineSettings returns the settings file of harness that sets the
+// jailoc status line.
+func statusLineSettings(harness string) ([]byte, error) {
+	data, err := json.Marshal(map[string]any{"statusLine": statusLine(harness)})
+	if err != nil {
+		return nil, fmt.Errorf("encode %s settings: %w", harness, err)
+	}
+	return data, nil
+}
+
+func openCodePluginFiles(js []byte) map[string][]byte {
+	return map[string][]byte{"package.json": embed.TUIPluginJSON(), "tui.js": js}
 }
 
 func writeTUIConfig(baseDir string) error {
-	if err := writeTUIPlugin(baseDir); err != nil {
+	if err := writeTUIPlugin(baseDir, openCodePluginFiles(embed.TUIPluginOpenCode1JS())); err != nil {
 		return err
 	}
 
@@ -254,18 +301,84 @@ func writeTUIJSON(path, specifier string) error {
 	return nil
 }
 
-func writeTUIPlugin(baseDir string) error {
+// writeTUIPlugin writes files into the plugin directory under baseDir that
+// the guest sees at tuiPluginContainerDir.
+func writeTUIPlugin(baseDir string, files map[string][]byte) error {
 	dir := filepath.Join(baseDir, "tui-plugin")
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // 0o755 required: bind-mount preserves host perms, dir must be readable in container
 		return fmt.Errorf("create tui plugin dir: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "package.json"), embed.TUIPluginJSON(), 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JSON
-		return fmt.Errorf("write tui plugin package.json: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "tui.js"), embed.TUIPluginJS(), 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JS
-		return fmt.Errorf("write tui plugin tui.js: %w", err)
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable plugin files
+			return fmt.Errorf("write tui plugin %s: %w", name, err)
+		}
 	}
 	return nil
+}
+
+// cliConfigContent returns the OpenCode 2 cli.json content that loads the
+// jailoc TUI plugin. The content's plugins replace those of the cli.json in
+// the agent's config directory, so they are that file's plugins, or the
+// tui.json plugins OpenCode 2 migrates when there is no cli.json, followed
+// by the jailoc plugin. Relative plugin paths are made absolute against the
+// config directory.
+func cliConfigContent(ws *workspace.Resolved) (string, error) {
+	h := ws.Agent
+	var plugins []json.RawMessage
+	if hostDir, ok := config.MountHostPath(ws.Mounts, h.ConfigDir); ok {
+		var err error
+		plugins, err = configuredTUIPlugins(hostDir, h.ConfigDir)
+		if err != nil {
+			return "", err
+		}
+	}
+	jailoc, err := json.Marshal("file://" + tuiPluginContainerDir)
+	if err != nil {
+		return "", fmt.Errorf("encode tui plugin: %w", err)
+	}
+	if !slices.ContainsFunc(plugins, func(p json.RawMessage) bool { return bytes.Equal(p, jailoc) }) {
+		plugins = append(plugins, jailoc)
+	}
+	data, err := json.Marshal(map[string][]json.RawMessage{"plugins": plugins})
+	if err != nil {
+		return "", fmt.Errorf("encode cli config: %w", err)
+	}
+	return string(data), nil
+}
+
+// configuredTUIPlugins returns the TUI plugins configured in hostDir, the
+// host directory of the guest config directory guestDir.
+func configuredTUIPlugins(hostDir, guestDir string) ([]json.RawMessage, error) {
+	for _, f := range []struct{ name, key string }{{"cli.json", "plugins"}, {"tui.json", "plugin"}} {
+		data, err := os.ReadFile(filepath.Join(hostDir, f.name)) //nolint:gosec // the agent's config directory mounted into the workspace
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", f.name, err)
+		}
+		var cfg map[string]json.RawMessage
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", filepath.Join(hostDir, f.name), err)
+		}
+		var plugins []json.RawMessage
+		if raw, ok := cfg[f.key]; ok {
+			if err := json.Unmarshal(raw, &plugins); err != nil {
+				return nil, fmt.Errorf("parse %s %s: %w", filepath.Join(hostDir, f.name), f.key, err)
+			}
+		}
+		for i, p := range plugins {
+			var spec string
+			if json.Unmarshal(p, &spec) != nil || !strings.HasPrefix(spec, "./") && !strings.HasPrefix(spec, "../") {
+				continue
+			}
+			if plugins[i], err = json.Marshal(path.Join(guestDir, spec)); err != nil {
+				return nil, fmt.Errorf("encode plugin %q: %w", spec, err)
+			}
+		}
+		return plugins, nil
+	}
+	return nil, nil
 }
 
 // ensureConfigGitignore creates hostDir/.gitignore with content unless it

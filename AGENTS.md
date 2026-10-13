@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`jailoc` — CLI tool that runs coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO; one per workspace) in sandboxed libkrun micro-VMs. Each workspace gets its own VM with virtio-fs directory shares, a host-side userspace network broker that denies private networks, and SSH-based agent sessions.
+`jailoc` — CLI tool that runs coding agents (OpenCode 1/2, Claude Code, GitHub Copilot CLI, OmO; one per workspace) in sandboxed libkrun micro-VMs. Each workspace gets its own VM with virtio-fs directory shares, a host-side userspace network broker that denies private networks, and SSH-based agent sessions.
 
 **Module**: `github.com/seznam/jailoc`
 **Language**: Go 1.26+
@@ -18,7 +18,7 @@ cmd/jailoc-guest/           VM init + SSH server inside the guest (embedded via 
 cmd/jailoc-netbroker/       Host-side network broker process, one per workspace VM
 internal/
   cmd/                       Cobra CLI: root (attach/new/continue sessions) + add, config, down, logs, migrate, reload, restart, sessions, status, up
-  agent/                     Built-in coding agent harnesses (opencode, claude, copilot, omo): npm package, session flags, env, persisted dirs, default mounts
+  agent/                     Built-in coding agent harnesses (opencode1, opencode2, claude, copilot, omo; opencode = alias of opencode2): npm package, session flags, env, persisted dirs, default mounts
   config/                    TOML config parsing, validation (rejects v1 settings), mutation (~/.config/jailoc/config.toml), default config content
   workspace/                 Workspace name → resolved paths, allowed hosts/networks, CWD matching
   docker/                    Docker Engine SDK — image resolution/build on the host, v1 volume export for migrate
@@ -73,16 +73,17 @@ Guest IPv4 192.168.127.2/24 (gateway .1), IPv6 fd00:127::2/64. All traffic goes 
 ### Embedded assets (`internal/embed/assets/`)
 - `Dockerfile` — embedded fallback base image for the VM rootfs (no entrypoint/CMD; jailoc-guest is the init)
 - `docker.Dockerfile` — Docker layer stages (pinned, checksum-verified Docker CE, buildx, compose); jailoc appends the final stage and builds it on top of the base only for `enable_docker` workspaces
-- `tui.js` — built TUI plugin JS (from `plugin/index.jsx` via the Babel-based Solid transform in `plugin/build.mjs`)
+- `tui-opencode1.js`, `tui-opencode2.js` — built TUI plugin JS for OpenCode 1 and 2 (from `plugin/opencode1.jsx`, `plugin/opencode2.jsx` via the Babel-based Solid transform in `plugin/build.mjs`)
 - `tui-plugin.json` — minimal package.json for the embedded TUI plugin
+- `omo.js` — OmO extension, `statusline.mjs` — Claude Code / Copilot CLI status line script (workspace indicator, not built)
 
 ### TUI plugin rebuild
-When `plugin/index.jsx` changes, rebuild and update the embedded copy:
+When `plugin/opencode1.jsx` or `plugin/opencode2.jsx` changes, rebuild and update the embedded copies:
 ```sh
 npm run build
-cp dist/tui.js internal/embed/assets/tui.js
+cp dist/tui-opencode1.js dist/tui-opencode2.js internal/embed/assets/
 ```
-`npm run build` runs the Node-based Babel/Solid pipeline in `plugin/build.mjs`. The embedded `tui.js` must stay in sync with the plugin source — `go:embed` picks it up at compile time.
+`npm run build` runs the Node-based Babel/Solid pipeline in `plugin/build.mjs`. The embedded `tui-*.js` must stay in sync with the plugin sources — `go:embed` picks it up at compile time.
 
 ## Testing
 
@@ -114,7 +115,7 @@ Run `go build`, `go test ./...`, and `golangci-lint run` inside as usual.
 ## CI/CD
 
 GitHub Actions workflows:
-- **CI** (`.github/workflows/ci.yml`): runs on push/PR to main — `go test`, golangci-lint v2.15.0, and a TUI plugin sync check (`dist/tui.js` vs embedded copy)
+- **CI** (`.github/workflows/ci.yml`): runs on push/PR to main — `go test`, golangci-lint v2.15.0, and a TUI plugin sync check (`dist/tui-*.js` vs embedded copies)
 - **VM Integration** (`.github/workflows/vm-integration.yml`): PRs/pushes to main touching VM code — boots real workspace VMs on an x64 Linux runner with KVM
 - **VM runtime** (`.github/workflows/vm-runtime.yml`): `vm-runtime-*` tags — builds and publishes the VM runtime bundle
 - **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, then GoReleaser runs `go generate ./internal/guestbin` and publishes binaries (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`)

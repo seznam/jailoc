@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,8 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+
+	"github.com/fatih/color"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -61,7 +64,7 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		{Source: src(guestDataConfig), Target: guestConfigDir, ReadOnly: true},
 		{Source: src(guestDataCache), Target: guestCacheDir, ReadOnly: true},
 	}
-	if ws.Agent.TUIConfigEnv != "" {
+	if ws.Agent.TUIPlugin != agent.NoTUIPlugin {
 		if err := root.MkdirAll(guestDataCache+"/tui-plugin", 0o700); err != nil {
 			return nil, fmt.Errorf("create tui plugin dir: %w", err)
 		}
@@ -84,9 +87,49 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		if err := root.MkdirAll(rel, 0o700); err != nil {
 			return nil, fmt.Errorf("create %s: %w", rel, err)
 		}
+		if ws.Agent.TUIPlugin == agent.CopilotStatusLine && slices.Contains(ws.Agent.State, d) {
+			addCopilotStatusLine(root, rel)
+		}
 		binds = append(binds, guest.Bind{Source: src(rel), Target: d.Path})
 	}
 	return binds, nil
+}
+
+// addCopilotStatusLine sets the jailoc status line in the settings.json of
+// the GitHub Copilot CLI state directory dir inside root, unless the file
+// sets a status line. Copilot reads the status line only from there. A
+// failure leaves the agent without the indicator, so it is only reported.
+func addCopilotStatusLine(root *os.Root, dir string) {
+	if err := setDefaultStatusLine(root, path.Join(dir, "settings.json")); err != nil {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not add the jailoc status line to the Copilot settings: %v\n", err)
+	}
+}
+
+func setDefaultStatusLine(root *os.Root, file string) error {
+	settings := map[string]json.RawMessage{}
+	data, err := root.ReadFile(file)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return err
+	default:
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return fmt.Errorf("parse %s: %w", path.Base(file), err)
+		}
+	}
+	if _, ok := settings["statusLine"]; ok {
+		return nil
+	}
+	line, err := json.Marshal(statusLine("copilot"))
+	if err != nil {
+		return err
+	}
+	settings["statusLine"] = line
+	data, err = json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return root.WriteFile(file, append(data, '\n'), 0o600)
 }
 
 // migrateHomeDirs moves persistent home directories of an older layout

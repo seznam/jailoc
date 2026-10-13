@@ -32,7 +32,7 @@ const (
 # dockerfile = ""
 
 [defaults]
-# agent = "opencode"  # opencode, claude, copilot, omo or an agent defined under agents
+# agent = "opencode"  # opencode (OpenCode 2), opencode1, opencode2, claude, copilot, omo or an agent defined under agents
 # image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
@@ -131,7 +131,7 @@ func reservedEnvKey(key string) bool {
 		return true
 	}
 	for _, h := range agent.All() {
-		if key == h.TUIConfigEnv {
+		if key == h.TUIPlugin.Env() {
 			return true
 		}
 		for _, kv := range h.Env {

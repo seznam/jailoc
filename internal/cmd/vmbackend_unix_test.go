@@ -120,7 +120,7 @@ func TestVMShares(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oc, _ := agent.Lookup("opencode")
+	oc, _ := agent.Lookup("opencode1")
 	guestOpenCodeDir, guestOpenCodeState := oc.State[0].Path, oc.State[1].Path
 	cacheDir := filepath.Join(home, ".cache", "jailoc", "w")
 	ws := &workspace.Resolved{
@@ -188,11 +188,41 @@ func TestVMShares(t *testing.T) {
 	wantBinds = []guest.Bind{
 		{Source: guest.HostDir + "/config", Target: guestConfigDir, ReadOnly: true},
 		{Source: guest.HostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
+		{Source: guest.HostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/home/claude", Target: "/home/agent/.claude"},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
 		t.Fatalf("claude binds =\n%+v\nwant\n%+v", binds, wantBinds)
+	}
+
+	ws.Agent, _ = agent.Lookup("copilot")
+	settings := filepath.Join(data, "home", "copilot", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"model":"m"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	var got map[string]any
+	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
+		t.Fatalf("read copilot settings: %q %v", b, err)
+	}
+	line, _ := got["statusLine"].(map[string]any)
+	if got["model"] != "m" || line["command"] != statusLineCommand("copilot") {
+		t.Fatalf("copilot settings = %v", got)
+	}
+	if err := os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"mine"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	if b, _ := os.ReadFile(settings); !strings.Contains(string(b), `"mine"`) { //nolint:gosec // G304: test file
+		t.Fatalf("user status line replaced: %s", b)
 	}
 
 	ws.Mounts = []string{file + ":/opt/file.txt:ro"}
@@ -204,7 +234,7 @@ func TestVMShares(t *testing.T) {
 func TestVMAgentProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	oc, _ := agent.Lookup("opencode")
+	oc, _ := agent.Lookup("opencode1")
 	dataDir, stateDir := oc.State[0].Path, oc.State[1].Path
 	cacheDir := filepath.Join(home, ".cache", "jailoc", "w")
 	profile := config.NamedProfile("work")

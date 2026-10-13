@@ -23,7 +23,7 @@ func TestDockerLayerEmbedded(t *testing.T) {
 
 func TestTUIPluginEmbedded(t *testing.T) {
 	t.Parallel()
-	if len(jailocembed.TUIPluginJS()) == 0 || len(jailocembed.TUIPluginJSON()) == 0 {
+	if len(jailocembed.TUIPluginOpenCode1JS()) == 0 || len(jailocembed.TUIPluginOpenCode2JS()) == 0 || len(jailocembed.TUIPluginJSON()) == 0 {
 		t.Fatal("TUI plugin assets are empty")
 	}
 }

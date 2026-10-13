@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/embed"
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestWorkspaceCacheDir(t *testing.T) {
@@ -246,7 +248,7 @@ func TestWriteTUIConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading tui-plugin/tui.js: %v", err)
 	}
-	if !bytes.Equal(tuiJS, embed.TUIPluginJS()) {
+	if !bytes.Equal(tuiJS, embed.TUIPluginOpenCode1JS()) {
 		t.Fatalf("tui.js content mismatch")
 	}
 }
@@ -287,4 +289,134 @@ func TestEnsureConfigGitignore(t *testing.T) {
 			t.Fatalf("content changed: got %q, want %q", data, existing)
 		}
 	})
+}
+
+func TestCLIConfigContent(t *testing.T) {
+	t.Parallel()
+
+	oc2, _ := agent.Lookup("opencode2")
+	tests := []struct {
+		name    string
+		files   map[string]string
+		mount   bool
+		want    string
+		wantErr string
+	}{
+		{"config dir not mounted", nil, false, `{"plugins":["file:///etc/jailoc-tui-plugin"]}`, ""},
+		{"no plugin config", nil, true, `{"plugins":["file:///etc/jailoc-tui-plugin"]}`, ""},
+		{
+			"cli.json plugins kept",
+			map[string]string{"cli.json": `{"theme":"x","plugins":["npm-plugin",["opts-plugin",{"a":1}],"./local","/abs"]}`},
+			true,
+			`{"plugins":["npm-plugin",["opts-plugin",{"a":1}],"/home/agent/.config/opencode/local","/abs","file:///etc/jailoc-tui-plugin"]}`,
+			"",
+		},
+		{
+			"cli.json wins over tui.json",
+			map[string]string{"cli.json": `{"plugins":["v2"]}`, "tui.json": `{"plugin":["v1"]}`},
+			true,
+			`{"plugins":["v2","file:///etc/jailoc-tui-plugin"]}`,
+			"",
+		},
+		{
+			"tui.json plugins migrated",
+			map[string]string{"tui.json": `{"plugin":["v1"]}`},
+			true,
+			`{"plugins":["v1","file:///etc/jailoc-tui-plugin"]}`,
+			"",
+		},
+		{
+			"jailoc plugin not duplicated",
+			map[string]string{"cli.json": `{"plugins":["file:///etc/jailoc-tui-plugin"]}`},
+			true,
+			`{"plugins":["file:///etc/jailoc-tui-plugin"]}`,
+			"",
+		},
+		{"invalid cli.json", map[string]string{"cli.json": `{"plugins":`}, true, "", "parse "},
+		{"invalid plugins", map[string]string{"cli.json": `{"plugins":"x"}`}, true, "", "plugins"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			for name, content := range tt.files {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ws := &workspace.Resolved{Agent: oc2}
+			if tt.mount {
+				ws.Mounts = []string{dir + ":/home/agent/.config/opencode:ro"}
+			}
+			got, err := cliConfigContent(ws)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("cliConfigContent() = %q, want error containing %q", got, tt.wantErr)
+				}
+				assertContains(t, err.Error(), tt.wantErr)
+				return
+			}
+			if err != nil {
+				t.Fatalf("cliConfigContent() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("cliConfigContent() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteAgentFilesOpenCode2(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	oc2, _ := agent.Lookup("opencode2")
+	if err := writeAgentFiles(&workspace.Resolved{Agent: oc2}, dir); err != nil {
+		t.Fatalf("writeAgentFiles() error = %v", err)
+	}
+	js, err := os.ReadFile(filepath.Join(dir, "tui-plugin", "tui.js")) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("reading tui-plugin/tui.js: %v", err)
+	}
+	if !bytes.Equal(js, embed.TUIPluginOpenCode2JS()) {
+		t.Fatal("tui.js is not the OpenCode 2 plugin")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tui-container.json")); !os.IsNotExist(err) {
+		t.Fatalf("tui-container.json written for OpenCode 2: %v", err)
+	}
+}
+
+func TestWriteAgentFilesIndicators(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		agent string
+		files map[string][]byte
+	}{
+		{"omo", map[string][]byte{"omo.js": embed.OmOExtensionJS()}},
+		{"copilot", map[string][]byte{"statusline.mjs": embed.StatusLineJS()}},
+		{"claude", map[string][]byte{
+			"statusline.mjs":       embed.StatusLineJS(),
+			"claude-settings.json": []byte(`{"statusLine":{"command":"node /etc/jailoc-tui-plugin/statusline.mjs claude","type":"command"}}`),
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.agent, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			h, _ := agent.Lookup(tt.agent)
+			if err := writeAgentFiles(&workspace.Resolved{Agent: h}, dir); err != nil {
+				t.Fatalf("writeAgentFiles() error = %v", err)
+			}
+			entries, err := os.ReadDir(filepath.Join(dir, "tui-plugin"))
+			if err != nil || len(entries) != len(tt.files) {
+				t.Fatalf("tui-plugin entries = %v, %v", entries, err)
+			}
+			for name, want := range tt.files {
+				if got, err := os.ReadFile(filepath.Join(dir, "tui-plugin", name)); err != nil || !bytes.Equal(got, want) { //nolint:gosec // test path
+					t.Fatalf("%s = %s, %v; want %s", name, got, err, want)
+				}
+			}
+		})
+	}
 }

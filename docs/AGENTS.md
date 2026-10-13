@@ -37,7 +37,7 @@ docs/
     ssh-git-passthrough.md         SSH agent forwarding, Git config and known_hosts snapshots
     sessions.md                    Start, attach, continue and list agent sessions; logs
     coding-agents.md               Choose the coding agent (agent, agents.<name>), several agents per project
-    tui-plugin.md                  TUI sidebar plugin
+    tui-plugin.md                  Workspace indicator in the agent UI
     migrate-from-v1.md             Convert a v1 (Docker) config with jailoc migrate
     troubleshooting.md             Logs, common errors, VM state files
   reference/
