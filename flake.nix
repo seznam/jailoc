@@ -42,7 +42,7 @@
           ];
         };
 
-        vendorHash = "sha256-45hrtF78oh8mM5JjoOUAVvAwrQYsxJ23BXotFPsl6lY=";
+        vendorHash = "sha256-job7H7NqeC0kb4cHiRMmDjd+Cn0oP9KWfCvjOA9hK8w=";
 
         subPackages = ["cmd/jailoc"];
 
