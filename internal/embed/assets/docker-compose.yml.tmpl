@@ -29,7 +29,6 @@ services:
 {{- end}}
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-      - ${HOME}/.cache/jailoc/tui-container.json:/etc/jailoc-tui.json:ro
       - ${HOME}/.cache/jailoc/tui-plugin:/etc/jailoc-tui-plugin:ro
 {{- if .EnableDocker}}
       - dind-certs-client:/certs/client:ro
@@ -44,7 +43,7 @@ services:
       - {{.SSHKnownHosts}}:/home/agent/.ssh/known_hosts:ro
 {{- end}}
     environment:
-      - OPENCODE_LOG=debug
+      - OPENCODE_LOG_LEVEL=debug
       - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD}
 {{- if .EnableDocker}}
       - DOCKER_HOST=tcp://dind:2376
@@ -93,12 +92,12 @@ services:
           - 169.254.53.2
 {{- end}}
     entrypoint: ["/usr/local/bin/entrypoint.sh"]
-    command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "DEBUG"]
+    command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "debug"]
 {{- if .Paths}}
     working_dir: {{index .Paths 0 | containerPath}}
 {{- end}}
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -u \"opencode:$$OPENCODE_SERVER_PASSWORD\" http://localhost:4096/global/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf -u \"opencode:$$OPENCODE_SERVER_PASSWORD\" http://localhost:4096/api/info || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

@@ -3,7 +3,6 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -170,7 +169,7 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
-	if err := writeTUIConfig(jailocCacheDir()); err != nil {
+	if err := writeTUIPlugin(jailocCacheDir()); err != nil {
 		return err
 	}
 
@@ -374,72 +373,20 @@ func writeDindEntrypoint(cacheDir string) error {
 	return nil
 }
 
+// tuiPluginDirName is the directory under the jailoc cache dir holding the
+// OpenCode CLI plugin that renders the jailoc sidebar badge. It is shared by
+// all workspaces — workspace identity comes from JAILOC_WORKSPACE at runtime.
+// Remote mode loads it on the host via OPENCODE_CLI_CONFIG_CONTENT; exec mode
+// bind-mounts it at tuiPluginContainerDir and loads it the same way.
+const tuiPluginDirName = "tui-plugin"
+
+// tuiPluginContainerDir is where the compose template mounts the plugin. It is
+// deliberately outside OpenCode's config directories so the server never
+// tries to load it as a server plugin.
 const tuiPluginContainerDir = "/etc/jailoc-tui-plugin"
 
-func writeTUIConfig(baseDir string) error {
-	if err := writeTUIPlugin(baseDir); err != nil {
-		return err
-	}
-
-	// Host-side tui.json: opencode attach on the host reads this file, so the
-	// plugin path must resolve on the host filesystem. Shared across all
-	// workspaces — the plugin payload is identical and workspace identity
-	// comes from JAILOC_WORKSPACE at runtime.
-	hostPluginDir := filepath.Join(baseDir, "tui-plugin")
-	if err := writeTUIJSON(filepath.Join(baseDir, "tui.json"), "file://"+hostPluginDir); err != nil {
-		return err
-	}
-
-	// Container-side tui.json: mounted into the container where the plugin
-	// directory is bind-mounted at /etc/jailoc-tui-plugin.
-	if err := writeTUIJSON(filepath.Join(baseDir, "tui-container.json"), "file://"+tuiPluginContainerDir); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func writeTUIJSON(path, specifier string) error {
-	config := map[string][]string{
-		"plugin": {specifier},
-	}
-
-	data, err := json.Marshal(config)
-	if err != nil {
-		return fmt.Errorf("write tui config: %w", err)
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tui-*.json")
-	if err != nil {
-		return fmt.Errorf("write tui config: %w", err)
-	}
-	tmpName := filepath.Clean(tmp.Name())
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName) //nolint:gosec // tmpName is from os.CreateTemp in a controlled directory
-		return fmt.Errorf("write tui config: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName) //nolint:gosec // tmpName is from os.CreateTemp in a controlled directory
-		return fmt.Errorf("write tui config: %w", err)
-	}
-
-	if err := os.Chmod(tmpName, 0o644); err != nil { //nolint:gosec // 0o644 is appropriate for non-executable JSON config file
-		_ = os.Remove(tmpName) //nolint:gosec // tmpName is from os.CreateTemp in a controlled directory
-		return fmt.Errorf("write tui config: %w", err)
-	}
-
-	if err := os.Rename(tmpName, path); err != nil { //nolint:gosec // both paths are controlled: tmpName from CreateTemp, path from caller
-		_ = os.Remove(tmpName) //nolint:gosec // tmpName is from os.CreateTemp in a controlled directory
-		return fmt.Errorf("write tui config: %w", err)
-	}
-
-	return nil
-}
-
 func writeTUIPlugin(baseDir string) error {
-	dir := filepath.Join(baseDir, "tui-plugin")
+	dir := filepath.Join(baseDir, tuiPluginDirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // 0o755 required: bind-mount preserves host perms, dir must be readable in container
 		return fmt.Errorf("create tui plugin dir: %w", err)
 	}

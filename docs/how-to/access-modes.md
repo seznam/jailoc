@@ -8,8 +8,11 @@ jailoc supports two ways to attach to a running workspace container. This guide 
 
 By default, jailoc checks whether `opencode` or `opencode-cli` is on your `PATH`:
 
-- If found, it uses **remote** mode (runs whichever binary was found with `attach`).
+- If found, it uses **remote** mode (runs whichever binary was found with `--server`, connecting to the workspace server).
 - If neither is found, it falls back to **exec** mode (`docker exec` into the container).
+
+!!! warning
+    Remote mode requires OpenCode 2 on the host. The OpenCode 1 client cannot connect to the OpenCode 2 server that runs in the workspace container. If your host still has OpenCode 1, upgrade it or use exec mode.
 
 You don't need any config for this. Just run:
 
@@ -34,7 +37,7 @@ Valid values:
 | Value      | Behavior                                      |
 |------------|-----------------------------------------------|
 | `""`       | Auto-detect (default, same as omitting the field) |
-| `"remote"` | Always use `opencode attach` on the host      |
+| `"remote"` | Always use the OpenCode client on the host    |
 | `"exec"`   | Always use `docker exec` into the container   |
 
 ---
@@ -54,13 +57,13 @@ The flag takes precedence over both the config value and auto-detection.
 
 ## Open a specific directory
 
-By default, `opencode attach` opens the workspace root. Use `--dir` to open a subdirectory instead:
+By default, the OpenCode client opens the workspace root. Use `--dir` to open a subdirectory instead:
 
 ```bash
 jailoc --dir /home/you/projects/myproject/src
 ```
 
-The root `jailoc` command does this automatically when run from a subdirectory — it resolves the current working directory and forwards it as `--dir`:
+The root `jailoc` command does this automatically when run from a subdirectory — it resolves the current working directory and forwards it as the client's directory argument:
 
 ```bash
 cd ~/projects/myproject/src
@@ -75,7 +78,7 @@ Because workspace paths are identity-mounted (the host path and the container pa
 
 Both modes fail fast if the `opencode` container stops or is replaced while you are attached.
 
-- In **remote** mode, jailoc terminates the host-side `opencode attach` process instead of leaving it blocked against a dead container.
+- In **remote** mode, jailoc terminates the host-side OpenCode client instead of leaving it blocked against a dead container.
 - In **exec** mode, jailoc cancels the `docker exec` session so your terminal is restored instead of staying stuck in a hung interactive session.
 
 This is most noticeable when you rebuild, bake, or otherwise replace the workspace container while an attach session is active. After the attach command exits, run `jailoc` again to reconnect to the new container.

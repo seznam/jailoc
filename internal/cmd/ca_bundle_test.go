@@ -251,8 +251,8 @@ func TestCABundleMaterializationPrecedesGeneratedWrites(t *testing.T) {
 		file       string
 		laterCalls []string
 	}{
-		{file: "up.go", laterCalls: []string{"ensureOCConfigGitignore", "config.WriteAllowedFiles", "writeEntrypoint", "writeTUIConfig", "compose.WriteComposeFile"}},
-		{file: "add.go", laterCalls: []string{"config.WriteAllowedFiles", "writeEntrypoint", "compose.WriteComposeFile", "writeTUIConfig", "ensureOCConfigGitignore"}},
+		{file: "up.go", laterCalls: []string{"ensureOCConfigGitignore", "config.WriteAllowedFiles", "writeEntrypoint", "writeTUIPlugin", "compose.WriteComposeFile"}},
+		{file: "add.go", laterCalls: []string{"config.WriteAllowedFiles", "writeEntrypoint", "compose.WriteComposeFile", "writeTUIPlugin", "ensureOCConfigGitignore"}},
 	}
 
 	for _, tt := range tests {

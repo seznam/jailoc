@@ -26,11 +26,11 @@ jailoc [flags]
 
 | Flag | Description |
 |------|-------------|
-| `--remote` | Force remote connection mode (runs `opencode attach` on the host). |
+| `--remote` | Force remote connection mode (runs the OpenCode 2 client on the host with `--server`). |
 | `--exec` | Force exec connection mode (runs `docker exec` into the container). |
-| `--dir` | Directory to open in opencode (forwarded as `--dir` to `opencode attach`). |
+| `--dir` | Directory to open in opencode (forwarded as the positional directory argument to the OpenCode client). |
 
-When run from a subdirectory of a workspace path, jailoc resolves the current working directory and passes it as `--dir` to `opencode attach`, so the agent opens that directory instead of the workspace root.
+When run from a subdirectory of a workspace path, jailoc resolves the current working directory and passes it to the OpenCode client as its directory argument, so the agent opens that directory instead of the workspace root.
 
 When neither `--remote` nor `--exec` is specified, the connection mode is determined by the workspace `mode` field in configuration, falling back to auto-detection (checks for `opencode`, then `opencode-cli` on PATH). See the [access modes how-to](../how-to/access-modes.md) for configuration steps, or the [access modes explanation](../explanation/access-modes.md) for the difference between modes.
 

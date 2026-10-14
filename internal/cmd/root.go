@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -167,7 +168,7 @@ var rootCmd = &cobra.Command{
 		switch mode {
 		case config.ModeExec:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-			attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
+			attachErr = attachExec(attachCtx, client, ws, targetPath, sessionFlag, continueFlag)
 		default:
 			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
 			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode, sessionFlag, continueFlag)
@@ -176,7 +177,7 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("remote mode requires PTY support, which is not available on this platform; use --exec instead")
 				}
 				_, _ = color.New(color.FgYellow).Println("PTY not supported, falling back to exec mode...")
-				attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
+				attachErr = attachExec(attachCtx, client, ws, targetPath, sessionFlag, continueFlag)
 			}
 		}
 		if attachErr != nil {
@@ -338,15 +339,35 @@ const (
 	readyPollTimeout  = 60 * time.Second
 )
 
+// readyPath is the OpenCode 2 server endpoint used for readiness probes. It
+// requires authentication, so a 200 proves both that the API is serving and
+// that the workspace password matches. The root path ("/") serves the web UI
+// without authentication and is therefore not a meaningful probe.
+const readyPath = "/api/info"
+
 func waitForReadiness(ctx context.Context, port int, exposePort bool, dc *docker.Client) error {
 	if exposePort {
-		return waitForReady(ctx, port, dc)
+		return waitForReady(ctx, port, os.Getenv("OPENCODE_SERVER_PASSWORD"), dc)
 	}
 	return waitForReadyExec(ctx, workspace.BasePort, dc)
 }
 
-func waitForReady(ctx context.Context, port int, dc *docker.Client) error {
-	url := fmt.Sprintf("http://localhost:%d", port)
+// readyFromStatus interprets an HTTP status returned by the readiness endpoint.
+// It reports ready on 2xx, a terminal error when the server rejects the
+// password, and not-ready (keep polling) for anything else.
+func readyFromStatus(code int) (bool, error) {
+	switch {
+	case code >= 200 && code < 300:
+		return true, nil
+	case code == http.StatusUnauthorized || code == http.StatusForbidden:
+		return false, fmt.Errorf("OpenCode server rejected the workspace password (HTTP %d)", code)
+	default:
+		return false, nil
+	}
+}
+
+func waitForReady(ctx context.Context, port int, pw string, dc *docker.Client) error {
+	url := fmt.Sprintf("http://localhost:%d%s", port, readyPath)
 
 	ctx, cancel := context.WithTimeout(ctx, readyPollTimeout)
 	defer cancel()
@@ -369,14 +390,42 @@ func waitForReady(ctx context.Context, port int, dc *docker.Client) error {
 			if err != nil {
 				return fmt.Errorf("create readiness request: %w", err)
 			}
+			if pw != "" {
+				req.SetBasicAuth("opencode", pw)
+			}
 			resp, err := httpClient.Do(req) //nolint:gosec // URL is localhost with controlled port
 			if err != nil {
 				continue
 			}
 			_ = resp.Body.Close()
-			return nil
+			ready, statusErr := readyFromStatus(resp.StatusCode)
+			if statusErr != nil {
+				return statusErr
+			}
+			if ready {
+				return nil
+			}
 		}
 	}
+}
+
+// readyExecProbeArgs builds the in-container readiness probe. It prints only
+// the HTTP status code ("000" when the server is unreachable) so the caller can
+// tell an auth rejection from a server that is still starting. The password is
+// read from the container's own environment by the shell so it never appears
+// in the exec argument list.
+func readyExecProbeArgs(port int) []string {
+	return []string{"sh", "-c", fmt.Sprintf(`curl -s -o /dev/null -w '%%{http_code}' -u "opencode:$OPENCODE_SERVER_PASSWORD" http://localhost:%d%s`, port, readyPath)}
+}
+
+// readyFromProbeOutput interprets the status code printed by the exec probe.
+// Unparseable output means not ready yet.
+func readyFromProbeOutput(out string) (bool, error) {
+	code, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return false, nil
+	}
+	return readyFromStatus(code)
 }
 
 func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
@@ -386,7 +435,7 @@ func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
 	ticker := time.NewTicker(readyPollInterval)
 	defer ticker.Stop()
 
-	probeArgs := []string{"curl", "-s", fmt.Sprintf("http://localhost:%d", port)}
+	probeArgs := readyExecProbeArgs(port)
 
 	for {
 		state, exitCode, err := dc.ContainerState(ctx)
@@ -398,10 +447,17 @@ func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out after %s waiting for in-container readiness probe", readyPollTimeout)
 		case <-ticker.C:
-			if err := dc.Exec(ctx, probeArgs, nil, nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			var stdout bytes.Buffer
+			if err := dc.Exec(ctx, probeArgs, nil, nil, &stdout, &bytes.Buffer{}); err != nil {
 				continue
 			}
-			return nil
+			ready, statusErr := readyFromProbeOutput(stdout.String())
+			if statusErr != nil {
+				return statusErr
+			}
+			if ready {
+				return nil
+			}
 		}
 	}
 }

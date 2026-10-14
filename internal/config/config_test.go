@@ -1606,7 +1606,9 @@ func TestValidateEnvReservedKeys(t *testing.T) {
 	t.Parallel()
 
 	reserved := []string{
-		"OPENCODE_LOG",
+		"OPENCODE_LOG_LEVEL",
+		"OPENCODE_PASSWORD",
+		"OPENCODE_CLI_CONFIG_CONTENT",
 		"OPENCODE_SERVER_PASSWORD",
 		"NODE_USE_SYSTEM_CA",
 		"DOCKER_HOST",
@@ -3109,9 +3111,9 @@ func TestValidateErrorMessages(t *testing.T) {
 		{
 			name: "defaults env reserved key includes context and key",
 			cfg: &Config{
-				Defaults: Defaults{Env: []string{"OPENCODE_LOG=debug"}},
+				Defaults: Defaults{Env: []string{"OPENCODE_LOG_LEVEL=debug"}},
 			},
-			wantSubstrs: []string{"defaults", "OPENCODE_LOG", "reserved"},
+			wantSubstrs: []string{"defaults", "OPENCODE_LOG_LEVEL", "reserved"},
 		},
 		{
 			name: "defaults env_file relative path includes context",
