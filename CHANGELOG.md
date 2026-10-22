@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.19.1](https://github.com/seznam/jailoc/compare/v1.19.0...v1.19.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **deps:** bump brace-expansion from 2.1.4 to 2.1.7 ([#249](https://github.com/seznam/jailoc/issues/249)) ([526d3a6](https://github.com/seznam/jailoc/commit/526d3a62415610d206e7345a4ec2c1d95969d9b9))
+* **deps:** bump goreleaser/goreleaser-action ([#251](https://github.com/seznam/jailoc/issues/251)) ([d8df5e8](https://github.com/seznam/jailoc/commit/d8df5e89c6ce64fe8376e6c0a02e6e5780845052))
+* **deps:** bump the all group across 1 directory with 4 updates ([#250](https://github.com/seznam/jailoc/issues/250)) ([feb956a](https://github.com/seznam/jailoc/commit/feb956aeb2b63801dfbd68ab61fc589f716eb231))
+* **deps:** bump the uv group across 1 directory with 2 updates ([#248](https://github.com/seznam/jailoc/issues/248)) ([5f81a1d](https://github.com/seznam/jailoc/commit/5f81a1dccc414d62bedc2e0a4116bbe39eabdaae))
+* **nix:** Update `vendorHash` on Dependabot PRs ([#245](https://github.com/seznam/jailoc/issues/245)) ([5e4e39e](https://github.com/seznam/jailoc/commit/5e4e39e8bee5bbc62234b6303f9aa8672209b956))
+
 ## [1.19.0](https://github.com/seznam/jailoc/compare/v1.18.0...v1.19.0) (2026-09-23)
 
 
