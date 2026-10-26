@@ -12,7 +12,7 @@ services:
 {{- end}}
 {{- if .ExposePort}}
     ports:
-      - "127.0.0.1:{{.Port}}:4096"
+      - "{{if .PublishAddr}}{{.PublishAddr}}{{else}}127.0.0.1{{end}}:{{.Port}}:4096"
 {{- end}}
     volumes:
 {{- range .Paths}}
@@ -29,9 +29,11 @@ services:
 {{- end}}
       - ${HOME}/.config/jailoc/workspaces/{{.WorkspaceName}}:/etc/jailoc:ro
       - ${HOME}/.cache/jailoc/{{.WorkspaceName}}/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-      - ${HOME}/.cache/jailoc/tui-container.json:/etc/jailoc-tui.json:ro
-      - ${HOME}/.cache/jailoc/tui-plugin:/etc/jailoc-tui-plugin:ro
-{{- if .EnableDocker}}
+      - {{if .TUIDir}}{{.TUIDir}}{{else}}${HOME}/.cache/jailoc{{end}}/tui-container.json:/etc/jailoc-tui.json:ro
+      - {{if .TUIDir}}{{.TUIDir}}{{else}}${HOME}/.cache/jailoc{{end}}/tui-plugin:/etc/jailoc-tui-plugin:ro
+{{- if and .EnableDocker .VMBackend}}
+      - /var/run/docker.sock:/var/run/docker.sock
+{{- else if .EnableDocker}}
       - dind-certs-client:/certs/client:ro
 {{- end}}
 {{- if .SSHAuthSock}}
@@ -46,7 +48,9 @@ services:
     environment:
       - OPENCODE_LOG=debug
       - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD}
-{{- if .EnableDocker}}
+{{- if and .EnableDocker .VMBackend}}
+      - DOCKER_HOST=unix:///var/run/docker.sock
+{{- else if .EnableDocker}}
       - DOCKER_HOST=tcp://dind:2376
       - DOCKER_TLS_CERTDIR=/certs
       - DOCKER_CERT_PATH=/certs/client
@@ -54,6 +58,9 @@ services:
 {{- end}}
       - JAILOC=1
       - JAILOC_WORKSPACE={{.WorkspaceName}}
+{{- if .VMBackend}}
+      - JAILOC_NETWORK_POLICY=vm
+{{- end}}
 {{- if .FilteredDNS}}
       - JAILOC_FILTERED_DNS=1
 {{- end}}
@@ -103,7 +110,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-{{- if .EnableDocker}}
+{{- if and .EnableDocker (not .VMBackend)}}
 
   dind:
     image: docker:dind-rootless
@@ -157,7 +164,7 @@ services:
           - 169.254.53.53
 {{- end}}
 
-{{- if or .UseDataVolume .UseCacheVolume .EnableDocker}}
+{{- if or .UseDataVolume .UseCacheVolume (and .EnableDocker (not .VMBackend))}}
 
 volumes:
 {{- if .UseDataVolume}}
@@ -166,7 +173,7 @@ volumes:
 {{- if .UseCacheVolume}}
   opencode-cache-{{.WorkspaceName}}:
 {{- end}}
-{{- if .EnableDocker}}
+{{- if and .EnableDocker (not .VMBackend)}}
   dind-certs-ca:
   dind-certs-client:
   dind-data:

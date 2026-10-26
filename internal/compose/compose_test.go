@@ -1179,3 +1179,72 @@ func TestGenerateComposeWindowsPaths(t *testing.T) {
 	assertContains(t, rendered, `- C:\Users\filip\git\project:/C/Users/filip/git/project`)
 	assertContains(t, rendered, "working_dir: /C/Users/filip/git/project")
 }
+
+func TestGenerateComposeVMBackend(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		params  ComposeParams
+		want    []string
+		notWant []string
+	}{
+		{
+			name: "vm docker socket replaces dind",
+			params: ComposeParams{
+				WorkspaceName: "vmws", Port: 4100, Image: "img", CPU: 2, Memory: "4g",
+				ExposePort: true, EnableDocker: true, VMBackend: true,
+				PublishAddr: "192.168.127.2", TUIDir: "${HOME}/.cache/jailoc/vmws",
+			},
+			want: []string{
+				`- "192.168.127.2:4100:4096"`,
+				"- /var/run/docker.sock:/var/run/docker.sock",
+				"- DOCKER_HOST=unix:///var/run/docker.sock",
+				"- ${HOME}/.cache/jailoc/vmws/tui-container.json:/etc/jailoc-tui.json:ro",
+				"- ${HOME}/.cache/jailoc/vmws/tui-plugin:/etc/jailoc-tui-plugin:ro",
+				"- JAILOC_NETWORK_POLICY=vm",
+			},
+			notWant: []string{"dind:", "dind-certs", "tcp://dind:2376"},
+		},
+		{
+			name: "vm without docker has no volumes key for dind",
+			params: ComposeParams{
+				WorkspaceName: "vmws", Port: 4100, Image: "img", CPU: 2, Memory: "4g",
+				VMBackend: true,
+			},
+			notWant: []string{"docker.sock", "DOCKER_HOST", "\nvolumes:"},
+		},
+		{
+			name: "docker backend defaults unchanged",
+			params: ComposeParams{
+				WorkspaceName: "dws", Port: 4101, Image: "img", CPU: 2, Memory: "4g",
+				ExposePort: true, EnableDocker: true,
+			},
+			want: []string{
+				`- "127.0.0.1:4101:4096"`,
+				"- ${HOME}/.cache/jailoc/tui-container.json:/etc/jailoc-tui.json:ro",
+				"- DOCKER_HOST=tcp://dind:2376",
+				"dind-certs-client:/certs/client:ro",
+			},
+			notWant: []string{"/var/run/docker.sock", "JAILOC_NETWORK_POLICY"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			out, err := GenerateCompose(tt.params)
+			if err != nil {
+				t.Fatalf("GenerateCompose: %v", err)
+			}
+			rendered := string(out)
+			for _, w := range tt.want {
+				assertContains(t, rendered, w)
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(rendered, w) {
+					t.Errorf("rendered compose contains %q:\n%s", w, rendered)
+				}
+			}
+		})
+	}
+}

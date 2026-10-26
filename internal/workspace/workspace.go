@@ -23,6 +23,7 @@ const BasePort = 4096
 
 type Resolved struct {
 	Name            string
+	Backend         string
 	Paths           []string
 	Mounts          []string
 	Port            int
@@ -143,6 +144,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
+		Backend:         config.EffectiveBackend(cfg.Defaults.Backend, ws.Backend),
 		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
 		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.FilteredDNS, ws.FilteredDNS, false),

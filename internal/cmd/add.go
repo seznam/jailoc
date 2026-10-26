@@ -96,6 +96,9 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 		return nil
 	}
 
+	if connected, err := connectBackend(ws); err != nil || !connected {
+		return nil
+	}
 	client := docker.NewClient(compPath, "", ws.Name)
 
 	running, err := client.IsRunning(ctx)
@@ -105,6 +108,15 @@ func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
 
 	if !running {
 		return nil
+	}
+
+	if ws.Backend == config.BackendVM {
+		// New paths become VM shares, which needs a fresh VM.
+		_, _ = color.New(color.FgCyan).Printf("Restarting workspace %s with updated mounts...\n", ws.Name)
+		if err := runDownCtxForce(ctx, []string{ws.Name}, true); err != nil {
+			return fmt.Errorf("stop workspace before restart: %w", err)
+		}
+		return runUp(ctx, []string{ws.Name})
 	}
 
 	cfg, err := config.Load()

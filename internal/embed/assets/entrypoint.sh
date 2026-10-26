@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# Container firewall. Backend "vm" sets JAILOC_NETWORK_POLICY=vm: the workspace
+# VM is the boundary and the host-side network broker enforces the policy, so
+# the container runs without its own rules (the VM kernel also lacks the
+# xtables extensions used below).
+setup_firewall() {
 # --- Detect working iptables variant ---
 # Ubuntu 24.04 defaults to iptables-nft, which requires kernel nf_tables support.
 # Some environments (e.g. Rancher Desktop with VZ virtualization) lack this kernel
@@ -118,6 +123,11 @@ if [ "${JAILOC_FILTERED_DNS:-}" = 1 ]; then
   $IPT -I OUTPUT -p udp -d 169.254.53.53 --dport 53 -j ACCEPT
   $IPT -I OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
   $IPT -I OUTPUT -p udp -d 127.0.0.11 --dport 53 -j ACCEPT
+fi
+}
+
+if [ "${JAILOC_NETWORK_POLICY:-}" != "vm" ]; then
+  setup_firewall
 fi
 
 # --- Pre-create OpenCode config directory with .gitignore ---

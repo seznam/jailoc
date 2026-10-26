@@ -46,6 +46,8 @@ jailoc up [flags]
 
 Resolves the container image (see [Image Resolution](image-resolution.md)), validates secret sources (verifying host environment variables exist and are non-empty, and secret files exist with valid permissions), generates a `docker-compose.yml` in `~/.cache/jailoc/{workspace}/`, and starts two containers: `opencode` and `dind`.
 
+For workspaces with `backend = "vm"`, first starts the workspace VM and its network broker (or reuses them when the VM configuration is unchanged), then runs image resolution, builds and the `opencode` container against the Docker daemon inside the VM. No `dind` container is started; see [Run a workspace in a VM](../how-to/vm-backend.md).
+
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
 ---
@@ -59,6 +61,12 @@ jailoc down [flags]
 ```
 
 Equivalent to `docker compose down` on the generated compose file. Does not remove named volumes or the image.
+
+For workspaces with `backend = "vm"`, also shuts down the VM: the guest Docker daemon stops cleanly, then the VM and its network broker exit. The VM's Docker data disk is kept.
+
+| Flag | Description |
+|------|-------------|
+| `--purge` | Also delete the VM state and its Docker data disk, including images, volumes and build cache inside the VM. Applies to `backend = "vm"` only. |
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 

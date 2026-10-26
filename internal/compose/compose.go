@@ -33,6 +33,20 @@ type ComposeParams struct {
 	EnableDocker    bool
 	FilteredDNS     bool
 	Secrets         []SecretSpec
+
+	// PublishAddr is the address the workspace port is published on;
+	// empty means 127.0.0.1. The vm backend publishes on the guest NIC,
+	// where the network broker forwards host loopback traffic to.
+	PublishAddr string
+	// TUIDir holds tui-container.json and tui-plugin; empty means the shared
+	// ${HOME}/.cache/jailoc. The vm backend uses a per-workspace copy so the
+	// guest never sees other workspaces' files.
+	TUIDir string
+	// VMBackend marks a workspace running in its own VM: the agent uses the
+	// VM's dockerd socket instead of a dind sidecar when EnableDocker is set,
+	// and the container skips its own firewall because the VM boundary and
+	// the host-side network broker enforce the policy.
+	VMBackend bool
 }
 
 // SecretSpec references one Docker Compose secret source. Exactly one of

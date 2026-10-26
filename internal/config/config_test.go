@@ -3577,3 +3577,74 @@ func ptrFloat64(v float64) *float64 {
 func ptrString(v string) *string {
 	return &v
 }
+
+func TestBackendValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		defaults  Defaults
+		ws        Workspace
+		vm        VMConfig
+		wantError string
+	}{
+		{name: "default backend", ws: Workspace{}},
+		{name: "docker backend", ws: Workspace{Backend: BackendDocker}},
+		{name: "vm backend", ws: Workspace{Backend: BackendVM}},
+		{name: "vm from defaults", defaults: Defaults{Backend: BackendVM}},
+		{name: "unknown workspace backend", ws: Workspace{Backend: "qemu"}, wantError: `workspace "test": invalid backend "qemu"`},
+		{name: "unknown defaults backend", defaults: Defaults{Backend: "qemu"}, wantError: `defaults: invalid backend "qemu"`},
+		{name: "vm rejects ssh_auth_sock", ws: Workspace{Backend: BackendVM, SSHAuthSock: new(true)}, wantError: "ssh_auth_sock is not supported"},
+		{name: "vm rejects inherited ssh_auth_sock", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM}, wantError: "ssh_auth_sock is not supported"},
+		{name: "vm accepts ssh_auth_sock override off", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM, SSHAuthSock: new(false)}},
+		{name: "docker workspace overrides vm defaults", defaults: Defaults{Backend: BackendVM, SSHAuthSock: true}, ws: Workspace{Backend: BackendDocker}},
+		{name: "vm rejects filtered_dns", ws: Workspace{Backend: BackendVM, FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}, wantError: "filtered_dns is not supported"},
+		{name: "relative runner", ws: Workspace{}, vm: VMConfig{Runner: "bin/runner"}, wantError: "vm: path"},
+		{name: "absolute runner", ws: Workspace{}, vm: VMConfig{Runner: "/opt/jailoc/go-microvm-runner", LibDir: "/opt/homebrew/lib"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ws := tc.ws
+			ws.Paths = []string{"/data/work"}
+			cfg := &Config{VM: tc.vm, Defaults: tc.defaults, Workspaces: map[string]Workspace{"test": ws}}
+			err := Validate(cfg)
+			if tc.wantError == "" && err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestEffectiveBackend(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ defaults, workspace, want string }{
+		{"", "", BackendDocker},
+		{BackendVM, "", BackendVM},
+		{BackendVM, BackendDocker, BackendDocker},
+		{"", BackendVM, BackendVM},
+	}
+	for _, tc := range tests {
+		if got := EffectiveBackend(tc.defaults, tc.workspace); got != tc.want {
+			t.Errorf("EffectiveBackend(%q, %q) = %q, want %q", tc.defaults, tc.workspace, got, tc.want)
+		}
+	}
+}
+
+func TestLoadBackendTOML(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "[vm]\nrunner = \"/opt/jailoc/go-microvm-runner\"\n\n[defaults]\nbackend = \"vm\"\n\n[workspaces.test]\npaths = [\"/data/work\"]\nbackend = \"docker\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.VM.Runner != "/opt/jailoc/go-microvm-runner" || cfg.Defaults.Backend != BackendVM || cfg.Workspaces["test"].Backend != BackendDocker {
+		t.Fatalf("unexpected config: vm=%+v defaults.backend=%q ws.backend=%q", cfg.VM, cfg.Defaults.Backend, cfg.Workspaces["test"].Backend)
+	}
+}

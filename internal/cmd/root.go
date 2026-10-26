@@ -114,12 +114,19 @@ var rootCmd = &cobra.Command{
 
 		composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 		client := docker.NewClient(composePath, "", ws.Name)
-		running, err := client.IsRunning(ctx)
+		connected, err := connectBackend(ws)
 		if err != nil {
-			if !isComposeFileMissing(err) {
-				return fmt.Errorf("check workspace %q running status: %w", ws.Name, err)
+			return fmt.Errorf("connect to workspace %q backend: %w", ws.Name, err)
+		}
+		running := false
+		if connected {
+			running, err = client.IsRunning(ctx)
+			if err != nil {
+				if !isComposeFileMissing(err) {
+					return fmt.Errorf("check workspace %q running status: %w", ws.Name, err)
+				}
+				running = false
 			}
-			running = false
 		}
 
 		if !running {
