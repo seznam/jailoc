@@ -141,13 +141,17 @@ func TestBrokerEndToEnd(t *testing.T) {
 	}
 	log := &syncBuf{}
 	status := &syncBuf{}
+	fwdSock := filepath.Join(t.TempDir(), "fwd.sock")
 	b, err := New(Config{
-		Subnet:   netip.MustParsePrefix("192.168.127.0/24"),
-		Gateway:  netip.MustParseAddr("192.168.127.1"),
-		GuestIP:  netip.MustParseAddr("192.168.127.2"),
-		Forwards: []Forward{{Host: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), ingress), GuestPort: 4096}},
-		Log:      log,
-		Status:   status,
+		Subnet:  netip.MustParsePrefix("192.168.127.0/24"),
+		Gateway: netip.MustParseAddr("192.168.127.1"),
+		GuestIP: netip.MustParseAddr("192.168.127.2"),
+		Forwards: []Forward{
+			{Host: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), ingress), GuestPort: 4096},
+			{UnixPath: fwdSock, GuestPort: 4096},
+		},
+		Log:    log,
+		Status: status,
 	}, pol)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -208,25 +212,29 @@ func TestBrokerEndToEnd(t *testing.T) {
 		}
 		defer func() { _ = gl.Close() }()
 		go func() {
-			c, err := gl.Accept()
-			if err != nil {
-				return
+			for range 2 {
+				c, err := gl.Accept()
+				if err != nil {
+					return
+				}
+				_, _ = c.Write([]byte("hello from guest"))
+				_ = c.Close()
 			}
-			_, _ = c.Write([]byte("hello from guest"))
-			_ = c.Close()
 		}()
-		c, err := net.DialTimeout("tcp", netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), ingress).String(), 5*time.Second)
-		if err != nil {
-			t.Fatalf("dial ingress: %v", err)
-		}
-		defer func() { _ = c.Close() }()
-		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
-		got, err := io.ReadAll(c)
-		if err != nil && !errors.Is(err, io.EOF) {
-			t.Fatalf("read: %v", err)
-		}
-		if string(got) != "hello from guest" {
-			t.Fatalf("ingress got %q", got)
+		for _, target := range [][2]string{{"tcp", netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), ingress).String()}, {"unix", fwdSock}} {
+			c, err := net.DialTimeout(target[0], target[1], 5*time.Second)
+			if err != nil {
+				t.Fatalf("dial ingress %s: %v", target[0], err)
+			}
+			_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			got, err := io.ReadAll(c)
+			_ = c.Close()
+			if err != nil && !errors.Is(err, io.EOF) {
+				t.Fatalf("read %s: %v", target[0], err)
+			}
+			if string(got) != "hello from guest" {
+				t.Fatalf("ingress %s got %q", target[0], got)
+			}
 		}
 	})
 	t.Run("fail-closed policy denies public destinations", func(t *testing.T) {

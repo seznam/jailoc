@@ -2,8 +2,11 @@ package netbroker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -95,12 +98,26 @@ func relayUDP(in *gonet.UDPConn, out *net.UDPConn) {
 	<-done
 }
 
-// startForward publishes guest port f.GuestPort on the host loopback address.
+// startForward publishes guest port f.GuestPort on the host loopback address,
+// or on a host unix socket when f.UnixPath is set.
 func (b *Broker) startForward(ctx context.Context, f Forward) error {
 	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", f.Host.String())
+	network, addr := "tcp", f.Host.String()
+	if f.UnixPath != "" {
+		network, addr = "unix", f.UnixPath
+		if err := os.Remove(addr); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale forward socket: %w", err)
+		}
+	}
+	l, err := lc.Listen(ctx, network, addr)
 	if err != nil {
 		return err
+	}
+	if f.UnixPath != "" {
+		if err := os.Chmod(addr, 0o600); err != nil {
+			_ = l.Close()
+			return fmt.Errorf("chmod forward socket: %w", err)
+		}
 	}
 	go func() {
 		<-ctx.Done()
@@ -121,7 +138,7 @@ func (b *Broker) startForward(ctx context.Context, f Forward) error {
 					_ = c.Close()
 					return
 				}
-				b.record(map[string]any{"event": "ingress", "host": f.Host.String(), "guest_port": f.GuestPort, "peer": c.RemoteAddr().String()})
+				b.record(map[string]any{"event": "ingress", "host": addr, "guest_port": f.GuestPort})
 				splice(c, g)
 			}()
 		}

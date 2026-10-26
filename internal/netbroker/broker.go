@@ -31,9 +31,11 @@ const (
 	hostAddrTTL             = 2 * time.Second
 )
 
-// Forward publishes a guest TCP port on a host loopback address.
+// Forward publishes a guest TCP port on a host loopback address, or on a host
+// unix socket (mode 0600) when UnixPath is set.
 type Forward struct {
 	Host      netip.AddrPort
+	UnixPath  string
 	GuestPort uint16
 }
 
@@ -48,7 +50,7 @@ type Config struct {
 	// HostDNS, when set, supplies the upstreams at query time if neither the
 	// policy nor DNSFallback names any, so host network changes apply.
 	HostDNS func() []netip.AddrPort
-	Log         io.Writer
+	Log     io.Writer
 	// Status, when set, receives one line per lifecycle change for a
 	// supervisor: "ready" once the NIC socket is served, then
 	// "nic connected" and "nic disconnected".
