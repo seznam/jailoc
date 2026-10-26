@@ -1,0 +1,16 @@
+vmType: vz
+nestedVirtualization: true
+arch: aarch64
+cpus: 6
+memory: 8GiB
+disk: 40GiB
+images:
+  - location: https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img
+    arch: aarch64
+mounts:
+  - location: /path/to/jailoc-firecracker
+    writable: true
+mountType: virtiofs
+containerd:
+  system: false
+  user: false
