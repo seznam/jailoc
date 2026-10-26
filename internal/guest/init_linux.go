@@ -59,6 +59,9 @@ func Init(logger *slog.Logger) error {
 		if err := syscall.Sethostname([]byte(cfg.Hostname)); err != nil {
 			logger.Warn("set hostname", "error", err)
 		}
+		if err := addHostsEntry("/etc/hosts", cfg.Hostname); err != nil {
+			logger.Warn("add hostname to /etc/hosts", "error", err)
+		}
 	}
 	if err := netcfg.Configure(logger); err != nil {
 		return fmt.Errorf("network: %w", err)
@@ -86,13 +89,10 @@ func Init(logger *slog.Logger) error {
 		}
 	}
 
+	// The agent may become root through sudo: the VM is the isolation
+	// boundary, and network policy and share permissions are enforced on
+	// the host. Only kernel information leaks are hardened here.
 	harden.KernelDefaults(logger)
-	if err := harden.DropBoundingCaps(harden.CapSetUID, harden.CapSetGID, harden.CapNetBindService); err != nil {
-		return fmt.Errorf("drop capabilities: %w", err)
-	}
-	if err := harden.SetNoNewPrivs(); err != nil {
-		return fmt.Errorf("set no_new_privs: %w", err)
-	}
 
 	srv, err := newSSHServer(logger, cfg, acct, env)
 	if err != nil {

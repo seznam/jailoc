@@ -51,7 +51,7 @@ The root file system is a copy-on-write clone of the unpacked image and is disca
 1. mounts the shared directories,
 2. configures the network address, the broker as gateway and DNS resolver, and the hostname,
 3. creates the `agent` user (UID 1000) when the image has none, copies the Git configuration and adds a forwarded CA bundle to the system trust store,
-4. drops the capabilities that allow changing users or binding privileged ports and sets `no_new_privs`, so nothing started through SSH can gain privileges,
+4. adds the hostname to `/etc/hosts`; it leaves privileges alone, so the agent can use `sudo` from the image, because root in the VM is still inside the VM boundary,
 5. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
 
 `jailoc` opens a session by connecting to the SSH server through a Unix socket that the broker forwards into the VM. It authenticates with a per-workspace key and pins the guest's host key, which is generated anew for every start. The session gets a terminal of its own; window size changes are forwarded. `jailoc down` asks the guest to stop over a control share, so open files are flushed before the VM powers off.

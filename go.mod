@@ -224,5 +224,6 @@ require (
 )
 
 // go-microvm fork: WithDisks (stacklok/go-microvm#128), simplified virtio-fs
-// ownership and the fresh-cache clone fix, until they are merged upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261026213343-5e48d0433bee
+// ownership, the fresh-cache clone fix and read-only file ownership, until
+// they are merged upstream.
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261026231826-2015142a11ce

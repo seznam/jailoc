@@ -48,7 +48,7 @@ The VM gets `cpu` rounded up to whole vCPUs and `memory` plus 1 GiB.
 
 ## What the agent sees
 
-- It runs as `agent` (UID 1000) with no capabilities and no way to gain privileges.
+- It runs as `agent` (UID 1000) and can become root with `sudo` when the image allows it (the built-in image does), for example to install packages with `apt`. Root inside the VM cannot reach host files outside the shares, write read-only shares, or bypass the network rules.
 - Workspace `paths` and the directories of `mounts` appear at their configured paths. Files the agent creates in them belong to your host user.
 - `~/.local/share/opencode` and `~/.cache` persist across `jailoc down` and `jailoc up` unless a mount covers them.
 - Secrets are in `/run/secrets/` (mode `0400`), and environment secrets are also set in the session environment.
