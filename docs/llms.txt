@@ -12,8 +12,8 @@ Key facts:
 
 ## Reference
 
-- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): All subcommands (`up`, `down`, `logs`, `status`, `add`, `config`) with flags and usage
-- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field — `[base]`, `[defaults]`, `[workspaces.<name>]` — types, defaults, validation rules, merge semantics
+- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): All subcommands (`up`, `down`, `logs`, `status`, `add`, `config`) with flags and usage, including `down --purge`
+- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field — `[base]`, `[vm]`, `[defaults]`, `[workspaces.<name>]` — types, defaults, validation rules, merge semantics
 - [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): 5-step resolution cascade with step details, triggers, constraints, and image tag summary
 - [Default Image Contents](https://seznam.github.io/jailoc/reference/default-image/): Tools and runtimes shipped in the embedded base image
 - [Overlay Compatibility](https://seznam.github.io/jailoc/reference/overlay-compatibility/): Rules for workspace Dockerfile overlays
@@ -28,6 +28,7 @@ Key facts:
 - [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward SSH agent (with known_hosts), mount Git config into containers
 - [Access Modes](https://seznam.github.io/jailoc/how-to/access-modes/): Remote vs exec mode configuration
 - [TUI Plugin](https://seznam.github.io/jailoc/how-to/tui-plugin/): Enable the TUI sidebar plugin to show workspace context in the OpenCode sidebar
+- [Run a Workspace in a VM](https://seznam.github.io/jailoc/how-to/vm-backend/): Experimental `backend = "vm"` — managed VM runtime download, switch a workspace, agent running directly in the VM over SSH, shared or isolated builder (`isolated_build`), `down --purge`, restrictions
 - [Troubleshooting](https://seznam.github.io/jailoc/how-to/troubleshooting/): Find logs, debug common errors, fix container issues, clean up stale resources
 
 ## Explanation
@@ -36,6 +37,7 @@ Key facts:
 - [Threat Model](https://seznam.github.io/jailoc/explanation/threat-model/): What jailoc protects against and what it does not
 - [Container Architecture](https://seznam.github.io/jailoc/explanation/container-architecture/): Two-container design, volumes, entrypoint phases, DinD sidecar
 - [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): iptables rules, security model, allowed traffic flow
+- [VM Backend](https://seznam.github.io/jailoc/explanation/vm-backend/): Builder VM and workspace VM, image export, jailoc-guest init and SSH sessions, secrets delivery, virtio-fs sharing, userspace network broker policy, trade-offs
 - [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Destination×source secret mapping model (destination tables secrets.env and secrets.file; source fields from_env and from_file), file permissions, and environment isolation
 
 ## Optional

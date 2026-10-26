@@ -55,6 +55,10 @@ func runDownCtxForce(ctx context.Context, args []string, force bool) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
+	if ws.Backend == config.BackendVM {
+		return downVM(ws, downPurge)
+	}
+
 	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 
 	if _, err := os.Stat(composePath); err != nil {
@@ -84,6 +88,9 @@ func runDownCtxForce(ctx context.Context, args []string, force bool) error {
 	return nil
 }
 
+var downPurge bool
+
 func init() {
+	downCmd.Flags().BoolVar(&downPurge, "purge", false, `also delete the VM state, its persistent home directories and the isolated builder (backend "vm" only)`)
 	rootCmd.AddCommand(downCmd)
 }

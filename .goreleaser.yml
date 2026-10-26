@@ -2,6 +2,11 @@ version: 2
 
 project_name: jailoc
 
+before:
+  hooks:
+    # Embed jailoc-guest (VM backend) for linux/arm64 and linux/amd64.
+    - go generate ./internal/guestbin
+
 builds:
   - id: jailoc
     main: ./cmd/jailoc

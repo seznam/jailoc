@@ -50,6 +50,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
+	if ws.Backend == config.BackendVM {
+		return statusVM(ws)
+	}
+
 	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 
 	if _, err := os.Stat(composePath); err != nil {

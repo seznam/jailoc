@@ -75,6 +75,7 @@ nav:
     - SSH & Git Passthrough: how-to/ssh-git-passthrough.md
     - Access Modes: how-to/access-modes.md
     - TUI Plugin: how-to/tui-plugin.md
+    - Run a Workspace in a VM: how-to/vm-backend.md
     - Troubleshooting: how-to/troubleshooting.md
   - Reference:
     - CLI: reference/cli.md
@@ -89,4 +90,5 @@ nav:
     - Network Isolation: explanation/network-isolation.md
     - Secrets: explanation/secrets.md
     - Access Modes: explanation/access-modes.md
+    - VM Backend: explanation/vm-backend.md
   - Development: development.md

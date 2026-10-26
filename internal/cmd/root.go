@@ -112,6 +112,13 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
+		if ws.Backend == config.BackendVM {
+			if remoteFlag {
+				return fmt.Errorf(`workspace %q: remote mode is not supported with backend "vm"`, ws.Name)
+			}
+			return runSessionVM(ctx, cfg, ws, targetPath, sessionFlag, continueFlag)
+		}
+
 		composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 		client := docker.NewClient(composePath, "", ws.Name)
 		running, err := client.IsRunning(ctx)

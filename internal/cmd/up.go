@@ -63,6 +63,10 @@ func runUp(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
 	}
 
+	if ws.Backend == config.BackendVM {
+		return runUpVM(ctx, cfg, ws)
+	}
+
 	_, _ = color.New(color.FgCyan).Printf("Checking Docker availability...\n")
 	if err := preflightDocker(ctx, ws.Name); err != nil {
 		return fmt.Errorf("docker is not running or not accessible: %w", err)

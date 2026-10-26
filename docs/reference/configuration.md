@@ -24,6 +24,25 @@ password_mode = "auto"
 
 ---
 
+## `[vm]`
+
+Runtime settings for workspaces with `backend = "vm"`. Ignored by the Docker backend. Both fields are optional. See [Run a workspace in a VM](../how-to/vm-backend.md).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `runner` | string | (managed) | Path to a `go-microvm-runner` binary. When empty, jailoc downloads the pinned VM runtime for the platform on first use into `~/.cache/jailoc-vm/runtime/` (macOS on Apple Silicon); on platforms without a pinned runtime, `runner` is required. Must be absolute; supports `~` expansion. |
+| `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Ignored when `runner` is empty. When empty with a configured `runner`, jailoc uses `/opt/homebrew/lib` on macOS if it exists, otherwise the system library path. Must be absolute; supports `~` expansion. |
+
+### Example
+
+```toml
+[vm]
+runner = "~/.local/bin/go-microvm-runner"
+lib_dir = "/opt/homebrew/lib"
+```
+
+---
+
 ## `[base]`
 
 Global base image settings. Controls the fallback image used when no workspace-level `image` is set.
@@ -55,6 +74,8 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image` | string | (none) | Pre-built Docker image used as the base for workspace Dockerfile builds, or pulled directly when no workspace `dockerfile` is set. |
+| `backend` | string | `"docker"` | Where workspaces run: `"docker"` (containers on the host Docker daemon) or `"vm"` (one microVM per workspace, experimental). See [Run a workspace in a VM](../how-to/vm-backend.md). |
+| `isolated_build` | bool | `false` | Backend `"vm"` only. Build workspace images in a builder VM of their own, with its own build cache and the workspace's network policy, instead of the builder VM shared by all workspaces. |
 | `env` | string[] | `[]` | Environment variables applied to all workspaces. Each entry must be in `KEY=VALUE` format. Workspace `env` entries take precedence over defaults with the same key. |
 | `env_file` | string[] | `[]` | Paths to `.env` files loaded for all workspaces. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Parsed before workspace-level `env_file` entries. |
 | `mounts` | string[] | `[]` | Additional bind mounts for all workspaces. Each entry follows `host:container[:mode]` format where mode is `ro` or `rw` (default `rw`). An empty host source removes a default mount matching the container path. Merged with per-workspace `mounts` — see Merge Semantics below. Supports `~` expansion on both host and container sides. |
@@ -100,6 +121,8 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `paths` | string[] | (required) | Directories bind-mounted into the container at their original absolute paths. The first path becomes the container's working directory. Supports `~` expansion. |
+| `backend` | string | (inherit; `"docker"`) | Override the backend for this workspace: `"docker"` or `"vm"`. |
+| `isolated_build` | bool | (inherit; `false`) | Override the default `isolated_build` setting for this workspace. |
 | `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/home/agent/.opencode"`) removes a default mount matching the container path. Container destinations under `/home/agent/...` are allowed (unlike `paths`); see [mounts validation](#mounts) for the full list of forbidden container prefixes. |
 | `allowed_hosts` | string[] | `[]` | Hostnames resolved at container start and added as iptables `ACCEPT` rules before the private-range `DROP` rules. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
@@ -221,6 +244,17 @@ The workspace `image` field is mutually exclusive with `dockerfile` and `build_c
 
 - `image` set together with `dockerfile`
 - `image` set together with `build_context`
+
+### `backend`
+
+Accepted values: `"docker"`, `"vm"`, or empty (`"docker"`). A workspace value overrides `[defaults]`. With an effective backend of `"vm"`:
+
+- `ssh_auth_sock = true` is rejected: Unix sockets cannot cross into the VM.
+- `filtered_dns = true` is rejected.
+- `enable_docker = true` and `expose_port = true`, when set explicitly, are rejected. Both are off for VM workspaces: the agent has no Docker daemon, and sessions run over SSH instead of a published port.
+- Every `mounts` entry with a host source must be a directory; file mounts are rejected at `jailoc up`.
+
+`[vm]` `runner` and `lib_dir` must be absolute paths after `~` expansion.
 
 ### `cpu`
 

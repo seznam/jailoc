@@ -1524,3 +1524,35 @@ func TestResolveSecretsWorkspaceOverrideAcrossKinds(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveVMBackendDisablesPortAndDocker(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		backend      string
+		isolated     *bool
+		wantPort     bool
+		wantDocker   bool
+		wantIsolated bool
+	}{
+		{name: "docker keeps defaults", backend: config.BackendDocker, wantPort: true, wantDocker: true},
+		{name: "vm disables port and docker", backend: config.BackendVM},
+		{name: "vm isolated build", backend: config.BackendVM, isolated: new(true), wantIsolated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{Workspaces: map[string]config.Workspace{
+				"ws": {Backend: tt.backend, Paths: []string{"/data/work"}, IsolatedBuild: tt.isolated},
+			}}
+			r, err := workspace.Resolve(cfg, "ws")
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if r.ExposePort != tt.wantPort || r.EnableDocker != tt.wantDocker || r.IsolatedBuild != tt.wantIsolated {
+				t.Fatalf("ExposePort=%v EnableDocker=%v IsolatedBuild=%v, want %v %v %v",
+					r.ExposePort, r.EnableDocker, r.IsolatedBuild, tt.wantPort, tt.wantDocker, tt.wantIsolated)
+			}
+		})
+	}
+}

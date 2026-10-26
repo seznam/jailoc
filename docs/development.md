@@ -13,6 +13,10 @@ This page is for contributors. It covers how to build and test the project local
 # Build the binary
 go build ./cmd/jailoc
 
+# Embed jailoc-guest for the VM backend (release builds do this automatically)
+go generate ./internal/guestbin
+go build ./cmd/jailoc
+
 # Verify all packages compile (pre-commit)
 go build ./...
 

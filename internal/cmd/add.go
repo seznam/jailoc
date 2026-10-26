@@ -91,6 +91,9 @@ func isDuplicate(paths []string, target string) bool {
 }
 
 func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
+	if ws.Backend == config.BackendVM {
+		return restartVMIfRunning(ctx, ws)
+	}
 	compPath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 	if _, err := os.Stat(compPath); err != nil {
 		return nil

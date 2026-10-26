@@ -87,6 +87,15 @@ const (
 	ModeExec   = "exec"
 )
 
+// Workspace backends. BackendDocker runs the workspace as Docker Compose
+// services on the host Docker engine; BackendVM boots the workspace image as
+// a per-workspace virtual machine behind the jailoc network broker and runs
+// the agent directly in it.
+const (
+	BackendDocker = "docker"
+	BackendVM     = "vm"
+)
+
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 var validMemory = regexp.MustCompile(`^[1-9][0-9]*[kmgKMG]?$`)
@@ -205,8 +214,16 @@ type Config struct {
 	Mode         string               `toml:"mode"`
 	PasswordMode string               `toml:"password_mode"`
 	Base         BaseConfig           `toml:"base"`
+	VM           VMConfig             `toml:"vm"`
 	Defaults     Defaults             `toml:"defaults"`
 	Workspaces   map[string]Workspace `toml:"workspaces"`
+}
+
+// VMConfig locates the host runtime of the vm backend. Empty fields use
+// platform defaults.
+type VMConfig struct {
+	Runner string `toml:"runner"`
+	LibDir string `toml:"lib_dir"`
 }
 
 type BaseConfig struct {
@@ -214,6 +231,7 @@ type BaseConfig struct {
 }
 
 type Defaults struct {
+	Backend         string    `toml:"backend"`
 	Env             []string  `toml:"env"`
 	EnvFile         []string  `toml:"env_file"`
 	Mounts          []string  `toml:"mounts"`
@@ -231,9 +249,11 @@ type Defaults struct {
 	DNSUpstream     string    `toml:"dns_upstream"`
 	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
+	IsolatedBuild   *bool     `toml:"isolated_build"`
 }
 
 type Workspace struct {
+	Backend         string    `toml:"backend"`
 	Paths           []string  `toml:"paths"`
 	Mounts          []string  `toml:"mounts"`
 	AllowedHosts    []string  `toml:"allowed_hosts"`
@@ -254,6 +274,7 @@ type Workspace struct {
 	DNSUpstream     string    `toml:"dns_upstream"`
 	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
+	IsolatedBuild   *bool     `toml:"isolated_build"`
 }
 
 func ConfigDir() string {
@@ -734,6 +755,23 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("invalid password_mode %q: must be \"auto\", \"env\", \"keyring\", \"file\", or empty (auto)", cfg.PasswordMode)
 	}
 
+	if err := validateBackend(cfg.Defaults.Backend); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
+	for _, p := range []*string{&cfg.VM.Runner, &cfg.VM.LibDir} {
+		if *p == "" {
+			continue
+		}
+		expanded, err := ExpandPath(*p)
+		if err != nil {
+			return fmt.Errorf("vm: expand path %q: %w", *p, err)
+		}
+		if !filepath.IsAbs(expanded) {
+			return fmt.Errorf("vm: path %q must be absolute", *p)
+		}
+		*p = expanded
+	}
+
 	if err := validateDockerfileSource(cfg.Base.Dockerfile, "base dockerfile"); err != nil {
 		return err
 	}
@@ -943,10 +981,61 @@ func Validate(cfg *Config) error {
 			}
 		}
 
+		if err := validateBackend(ws.Backend); err != nil {
+			return fmt.Errorf("workspace %q: %w", name, err)
+		}
+		if EffectiveBackend(cfg.Defaults.Backend, ws.Backend) == BackendVM {
+			sshAuthSock := cfg.Defaults.SSHAuthSock
+			if ws.SSHAuthSock != nil {
+				sshAuthSock = *ws.SSHAuthSock
+			}
+			if sshAuthSock {
+				return fmt.Errorf("workspace %q: ssh_auth_sock is not supported with backend %q", name, BackendVM)
+			}
+			if enabled {
+				return fmt.Errorf("workspace %q: filtered_dns is not supported with backend %q", name, BackendVM)
+			}
+			if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) {
+				return fmt.Errorf("workspace %q: enable_docker is not supported with backend %q", name, BackendVM)
+			}
+			if explicitTrue(cfg.Defaults.ExposePort, ws.ExposePort) {
+				return fmt.Errorf("workspace %q: expose_port is not supported with backend %q", name, BackendVM)
+			}
+		}
+
 		cfg.Workspaces[name] = ws
 	}
 
 	return nil
+}
+
+func validateBackend(backend string) error {
+	switch backend {
+	case "", BackendDocker, BackendVM:
+		return nil
+	}
+	return fmt.Errorf("invalid backend %q: must be %q, %q, or empty (%s)", backend, BackendDocker, BackendVM, BackendDocker)
+}
+
+// explicitTrue reports whether a boolean option is set to true, the workspace
+// value taking precedence over the defaults.
+func explicitTrue(defaults, workspace *bool) bool {
+	if workspace != nil {
+		return *workspace
+	}
+	return defaults != nil && *defaults
+}
+
+// EffectiveBackend returns the workspace backend, falling back to the defaults
+// value and then to BackendDocker.
+func EffectiveBackend(defaults, workspace string) string {
+	if workspace != "" {
+		return workspace
+	}
+	if defaults != "" {
+		return defaults
+	}
+	return BackendDocker
 }
 
 var dnsLabelRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$`)

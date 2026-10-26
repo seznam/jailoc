@@ -39,6 +39,7 @@ Step-by-step guides for specific tasks once you're up and running.
 - [Secrets](how-to/secrets.md)
 - [SSH & Git Passthrough](how-to/ssh-git-passthrough.md)
 - [Access Modes](how-to/access-modes.md)
+- [Run a Workspace in a VM](how-to/vm-backend.md)
 - [Troubleshooting](how-to/troubleshooting.md)
 
 ### Reference
@@ -61,6 +62,7 @@ Background on how jailoc works and why it's designed the way it is.
 - [Network Isolation](explanation/network-isolation.md)
 - [Secrets](explanation/secrets.md)
 - [Access Modes](explanation/access-modes.md)
+- [VM Backend](explanation/vm-backend.md)
 
 ### Development
 
