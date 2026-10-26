@@ -40,6 +40,8 @@ changelog:
 release:
   disable: false
   draft: false
+  # Tags such as v1.20.0-rc.1 become GitHub pre-releases.
+  prerelease: auto
   mode: append
   use_existing_draft: true
   github:

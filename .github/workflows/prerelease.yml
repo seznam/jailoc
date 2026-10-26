@@ -1,0 +1,72 @@
+name: Pre-release
+
+# Cuts a release candidate from any ref without release-please: tags the
+# ref as v<version> and publishes the GoReleaser artifacts as a GitHub
+# pre-release. Stable versioning on main is not affected, and the update
+# check ignores pre-releases.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to release
+        required: true
+        default: main
+      version:
+        description: Pre-release version without the leading v (for example 1.20.0-rc.1)
+        required: true
+
+env:
+  # https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: prerelease
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  goreleaser:
+    name: GoReleaser
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      REF: ${{ inputs.ref }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Validate version
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]] || {
+            echo "version must look like 1.20.0-rc.1" >&2; exit 1; }
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "tag v${VERSION} already exists" >&2; exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: Create tag
+        run: |
+          sha=$(git rev-parse HEAD)
+          git tag "v${VERSION}" "$sha"
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/v${VERSION}" -f sha="$sha" >/dev/null
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: "~> v2"
+          args: release --verbose --skip=validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: v${{ inputs.version }}
+      - name: Release notes
+        run: |
+          gh release edit "v${VERSION}" --prerelease --latest=false \
+            --notes "Release candidate built from \`${REF}\` ($(git rev-parse --short HEAD)). Not for general use; the update check does not offer pre-releases."
