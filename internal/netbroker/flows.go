@@ -1,0 +1,151 @@
+package netbroker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"os"
+	"time"
+
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+	"gvisor.dev/gvisor/pkg/waiter"
+)
+
+const (
+	dialTimeout = 10 * time.Second
+	udpIdle     = 60 * time.Second
+)
+
+// handleTCP runs for every new guest TCP connection that no local listener
+// accepted. The host socket is opened only after the policy allows the real
+// destination; denied or unreachable destinations get a RST.
+func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
+	id := r.ID()
+	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
+	if !b.decide(ProtoTCP, src, dst).Allow {
+		r.Complete(true)
+		return
+	}
+	d := net.Dialer{Timeout: dialTimeout}
+	out, err := d.Dial("tcp", dst.String())
+	if err != nil {
+		b.record(map[string]any{"event": "dial-error", "proto": ProtoTCP, "dst": dst.String(), "error": err.Error()})
+		r.Complete(true)
+		return
+	}
+	var wq waiter.Queue
+	ep, terr := r.CreateEndpoint(&wq)
+	if terr != nil {
+		_ = out.Close()
+		r.Complete(true)
+		return
+	}
+	r.Complete(false)
+	go splice(gonet.NewTCPConn(&wq, ep), out)
+}
+
+// handleUDP runs for every new guest UDP flow. A denied flow is dropped: the
+// guest sees a timeout, never a reply.
+func (b *Broker) handleUDP(r *udp.ForwarderRequest) {
+	id := r.ID()
+	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
+	if !b.decide(ProtoUDP, src, dst).Allow {
+		return
+	}
+	out, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(dst))
+	if err != nil {
+		b.record(map[string]any{"event": "dial-error", "proto": ProtoUDP, "dst": dst.String(), "error": err.Error()})
+		return
+	}
+	var wq waiter.Queue
+	ep, terr := r.CreateEndpoint(&wq)
+	if terr != nil {
+		_ = out.Close()
+		return
+	}
+	in := gonet.NewUDPConn(&wq, ep)
+	go relayUDP(in, out)
+}
+
+// relayUDP copies datagrams both ways until the flow is idle.
+func relayUDP(in *gonet.UDPConn, out *net.UDPConn) {
+	done := make(chan struct{}, 2)
+	cp := func(dst, src net.Conn) {
+		buf := make([]byte, 65535)
+		for {
+			_ = src.SetReadDeadline(time.Now().Add(udpIdle))
+			n, err := src.Read(buf)
+			if err != nil {
+				break
+			}
+			if _, err := dst.Write(buf[:n]); err != nil {
+				break
+			}
+		}
+		done <- struct{}{}
+	}
+	go cp(out, in)
+	go cp(in, out)
+	<-done
+	_ = in.Close()
+	_ = out.Close()
+	<-done
+}
+
+// startForward publishes guest port f.GuestPort on the host loopback address,
+// or on a host unix socket when f.UnixPath is set.
+func (b *Broker) startForward(ctx context.Context, f Forward) error {
+	var lc net.ListenConfig
+	network, addr := "tcp", f.Host.String()
+	if f.UnixPath != "" {
+		network, addr = "unix", f.UnixPath
+		if err := os.Remove(addr); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale forward socket: %w", err)
+		}
+	}
+	l, err := lc.Listen(ctx, network, addr)
+	if err != nil {
+		return err
+	}
+	if f.UnixPath != "" {
+		if err := os.Chmod(addr, 0o600); err != nil {
+			_ = l.Close()
+			return fmt.Errorf("chmod forward socket: %w", err)
+		}
+	}
+	go func() {
+		<-ctx.Done()
+		_ = l.Close()
+	}()
+	guest := tcpip.FullAddress{NIC: nicID, Addr: tcpip.AddrFrom4(b.cfg.GuestIP.As4()), Port: f.GuestPort}
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				dctx, cancel := context.WithTimeout(ctx, dialTimeout)
+				defer cancel()
+				g, err := gonet.DialContextTCP(dctx, b.stack, guest, ipv4.ProtocolNumber)
+				if err != nil {
+					_ = c.Close()
+					return
+				}
+				b.record(map[string]any{"event": "ingress", "host": addr, "guest_port": f.GuestPort})
+				splice(c, g)
+			}()
+		}
+	}()
+	return nil
+}
+
+func guestAddr(a netip.Addr, port uint16) *tcpip.FullAddress {
+	return &tcpip.FullAddress{NIC: nicID, Addr: tcpip.AddrFrom4(a.As4()), Port: port}
+}
