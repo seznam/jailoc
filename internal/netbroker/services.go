@@ -24,7 +24,10 @@ func (b *Broker) upstreams() []netip.AddrPort {
 	if p := b.policy.Load(); p != nil && len(p.dnsUpstreams) > 0 {
 		return p.dnsUpstreams
 	}
-	return b.cfg.DNSFallback
+	if len(b.cfg.DNSFallback) > 0 || b.cfg.HostDNS == nil {
+		return b.cfg.DNSFallback
+	}
+	return b.cfg.HostDNS()
 }
 
 // startDNS serves DNS on the gateway over UDP and TCP. Queries are forwarded

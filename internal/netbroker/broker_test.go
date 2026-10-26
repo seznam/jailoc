@@ -140,12 +140,14 @@ func TestBrokerEndToEnd(t *testing.T) {
 		t.Fatalf("policy: %v", err)
 	}
 	log := &syncBuf{}
+	status := &syncBuf{}
 	b, err := New(Config{
 		Subnet:   netip.MustParsePrefix("192.168.127.0/24"),
 		Gateway:  netip.MustParseAddr("192.168.127.1"),
 		GuestIP:  netip.MustParseAddr("192.168.127.2"),
 		Forwards: []Forward{{Host: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), ingress), GuestPort: 4096}},
 		Log:      log,
+		Status:   status,
 	}, pol)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -239,5 +241,8 @@ func TestBrokerEndToEnd(t *testing.T) {
 		if !strings.Contains(log.String(), want) {
 			t.Errorf("decision log missing %s:\n%s", want, log.String())
 		}
+	}
+	if got := status.String(); !strings.HasPrefix(got, "ready\nnic connected\n") {
+		t.Errorf("status lines = %q, want ready then nic connected", got)
 	}
 }

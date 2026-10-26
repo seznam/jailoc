@@ -45,7 +45,14 @@ type Config struct {
 	MTU         uint32
 	Forwards    []Forward
 	DNSFallback []netip.AddrPort // used when the policy names no upstream
+	// HostDNS, when set, supplies the upstreams at query time if neither the
+	// policy nor DNSFallback names any, so host network changes apply.
+	HostDNS func() []netip.AddrPort
 	Log         io.Writer
+	// Status, when set, receives one line per lifecycle change for a
+	// supervisor: "ready" once the NIC socket is served, then
+	// "nic connected" and "nic disconnected".
+	Status io.Writer
 }
 
 // Broker owns the userspace stack for one guest NIC.
@@ -61,6 +68,8 @@ type Broker struct {
 
 	connMu sync.Mutex
 	active bool
+
+	statusMu sync.Mutex
 }
 
 // New builds the stack. It does not open any socket.
@@ -136,6 +145,15 @@ func (b *Broker) record(v map[string]any) {
 	_ = b.log.Encode(v)
 }
 
+func (b *Broker) status(line string) {
+	if b.cfg.Status == nil {
+		return
+	}
+	b.statusMu.Lock()
+	defer b.statusMu.Unlock()
+	_, _ = io.WriteString(b.cfg.Status, line+"\n")
+}
+
 // Run starts the gateway services and ingress forwards, then serves guest
 // NIC connections from l until ctx ends.
 func (b *Broker) Run(ctx context.Context, l net.Listener) error {
@@ -154,6 +172,7 @@ func (b *Broker) Run(ctx context.Context, l net.Listener) error {
 		<-ctx.Done()
 		_ = l.Close()
 	}()
+	b.status("ready")
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -185,6 +204,7 @@ func (b *Broker) serveNIC(ctx context.Context, c net.Conn) {
 		b.connMu.Unlock()
 	}()
 	b.record(map[string]any{"event": "nic", "state": "connected"})
+	b.status("nic connected")
 
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -226,6 +246,7 @@ func (b *Broker) serveNIC(ctx context.Context, c net.Conn) {
 		pkt.DecRef()
 	}
 	b.record(map[string]any{"event": "nic", "state": "disconnected"})
+	b.status("nic disconnected")
 }
 
 // addrCache keeps the set of host interface addresses, refreshed lazily.
@@ -280,4 +301,4 @@ func splice(a, b net.Conn) {
 	_ = b.Close()
 }
 
-var errNoUpstream = errors.New("no dns upstream answered")
+var errNoUpstream = errors.New("no dns upstream configured")

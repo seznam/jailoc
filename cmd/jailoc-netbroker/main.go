@@ -40,6 +40,7 @@ func run() error {
 	gateway := flag.String("gateway", "192.168.127.1", "gateway, DNS and DHCP address served by the broker")
 	guest := flag.String("guest", "192.168.127.2", "address leased to the guest")
 	logPath := flag.String("log", "-", "JSONL decision log, - for stderr")
+	statusFD := flag.Int("status-fd", 0, "inherited file descriptor that receives lifecycle lines (ready, nic connected, nic disconnected) for a supervisor; 0 disables")
 	var forwards, dnsFallback multi
 	flag.Var(&forwards, "forward", "publish a guest TCP port: 127.0.0.1:HOSTPORT=GUESTPORT (repeatable, loopback only)")
 	flag.Var(&dnsFallback, "dns-upstream", "DNS upstream when the policy names none (repeatable, default: host /etc/resolv.conf)")
@@ -69,19 +70,24 @@ func run() error {
 		}
 		cfg.Forwards = append(cfg.Forwards, fw)
 	}
-	if len(dnsFallback) == 0 {
-		dnsFallback = resolvConf("/etc/resolv.conf")
-	}
 	for _, s := range dnsFallback {
-		ap, err := netip.ParseAddrPort(s)
+		ap, err := parseUpstream(s)
 		if err != nil {
-			a, aerr := netip.ParseAddr(s)
-			if aerr != nil {
-				return fmt.Errorf("dns upstream %q: %w", s, aerr)
-			}
-			ap = netip.AddrPortFrom(a, 53)
+			return err
 		}
 		cfg.DNSFallback = append(cfg.DNSFallback, ap)
+	}
+	if len(cfg.DNSFallback) == 0 {
+		// Re-read on every query: the host resolvers change with the network.
+		cfg.HostDNS = func() []netip.AddrPort {
+			var out []netip.AddrPort
+			for _, s := range resolvConf("/etc/resolv.conf") {
+				if ap, err := parseUpstream(s); err == nil {
+					out = append(out, ap)
+				}
+			}
+			return out
+		}
 	}
 	var logw io.Writer = os.Stderr
 	if *logPath != "-" {
@@ -93,6 +99,9 @@ func run() error {
 		logw = f
 	}
 	cfg.Log = logw
+	if *statusFD > 2 {
+		cfg.Status = os.NewFile(uintptr(*statusFD), "status")
+	}
 
 	b, err := netbroker.New(cfg, pol)
 	if err != nil {
@@ -152,6 +161,17 @@ func parseForward(s string) (netbroker.Forward, error) {
 		return netbroker.Forward{}, fmt.Errorf("forward %q: invalid guest port", s)
 	}
 	return netbroker.Forward{Host: hp, GuestPort: uint16(gp)}, nil
+}
+
+func parseUpstream(s string) (netip.AddrPort, error) {
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return ap, nil
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.AddrPort{}, fmt.Errorf("dns upstream %q: %w", s, err)
+	}
+	return netip.AddrPortFrom(a, 53), nil
 }
 
 func resolvConf(path string) []string {

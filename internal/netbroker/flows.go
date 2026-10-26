@@ -47,28 +47,27 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	go splice(gonet.NewTCPConn(&wq, ep), out)
 }
 
-// handleUDP runs for every new guest UDP flow. Returning false makes the
-// stack answer with ICMP port unreachable, so denials fail fast.
-func (b *Broker) handleUDP(r *udp.ForwarderRequest) bool {
+// handleUDP runs for every new guest UDP flow. A denied flow is dropped: the
+// guest sees a timeout, never a reply.
+func (b *Broker) handleUDP(r *udp.ForwarderRequest) {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
 	if !b.decide(ProtoUDP, src, dst).Allow {
-		return false
+		return
 	}
 	out, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(dst))
 	if err != nil {
 		b.record(map[string]any{"event": "dial-error", "proto": ProtoUDP, "dst": dst.String(), "error": err.Error()})
-		return false
+		return
 	}
 	var wq waiter.Queue
 	ep, terr := r.CreateEndpoint(&wq)
 	if terr != nil {
 		_ = out.Close()
-		return true
+		return
 	}
 	in := gonet.NewUDPConn(&wq, ep)
 	go relayUDP(in, out)
-	return true
 }
 
 // relayUDP copies datagrams both ways until the flow is idle.
