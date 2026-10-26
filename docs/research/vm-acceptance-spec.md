@@ -20,7 +20,7 @@ Network policy is enforced by a jailoc-owned broker in front of the candidate's 
 
 First-backend decisions: go-microvm with the broker as its only NIC and block devices for persistent guest storage ([stacklok/go-microvm#128](https://github.com/stacklok/go-microvm/pull/128)); IPv6 mode `disabled`; on macOS the broker ships as a signed helper binary.
 
-P1 spike reports: [Lima](candidates/lima.md), [go-microvm](candidates/go-microvm.md), [smolvm](candidates/smolvm.md), [Firecracker](candidates/firecracker.md). Spike scripts: `scripts/vm-spike/`. P2 broker prototype and run: [p2-broker.md](p2-broker.md).
+P1 spike reports: [Lima](candidates/lima.md), [go-microvm](candidates/go-microvm.md), [smolvm](candidates/smolvm.md), [Firecracker](candidates/firecracker.md). Spike scripts: `scripts/vm-spike/`. P2 broker prototype and run: [p2-broker.md](p2-broker.md). Decision record: [vm-backend-decision.md](vm-backend-decision.md).
 
 ### Firecracker
 
@@ -256,7 +256,7 @@ Network (`N-`), all four contexts:
 | `N-GW-TCP`, `N-GW-UDP` | deny | Guest default gateways |
 | `N-ALIAS-TCP`, `N-ALIAS-UDP` | deny | Runtime host aliases |
 | `N-LAN-TCP`, `N-LAN-UDP` | per exception | LAN sentinels; only excepted proto/port reached |
-| `N-PEER-TCP`, `N-PEER-UDP` | deny | Peer workspace addresses |
+| `N-PEER-TCP`, `N-PEER-UDP` | deny | Peer workspace addresses (`-peer ADDR`) and published peer TCP ports (`-peer ADDR:PORT`) |
 | `N-META-TCP` | deny | Metadata endpoints |
 | `N-LANGW-TCP`, `N-LANGW-DNS` | deny | LAN router (first address of each private host prefix) |
 

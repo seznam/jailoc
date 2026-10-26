@@ -80,12 +80,34 @@ Run 1 (`results-run1-csum/`) exposed a broker bug: libkrun negotiates checksum o
 
 `REVIEW`: `D-RESOLVER-CLASS` (resolver is the broker gateway, as required), `D-REBIND-RESOLVE` (rebinding names resolve; connects are decided by address), `L-FAILCLOSED-PUBLIC` (the outages above), `F-RW-SUID/MKNOD` (host-side checks pass), `S-UNATTRIBUTED` (manual reachability tests against the LAN sentinel).
 
+## Supervision and multiple workspaces
+
+`jailoc-netbroker -status-fd N` writes lifecycle lines (`ready` once the NIC socket is served, then `nic connected` / `nic disconnected`) to an inherited descriptor. `internal/brokerproc` starts the broker, waits for `ready`, waits for the VM NIC to connect, and supervises the pair: when the broker exits or the NIC disconnects it stops the VM, when the VM exits it stops the broker (SIGTERM, then SIGKILL after a grace period).
+
+`scripts/vm-spike/multi/` runs two workspaces at once. Each has its own broker, guest subnet (`192.168.127.0/24`, `192.168.128.0/24`), Docker data on a virtio-blk disk via `WithDisks` from [stacklok/go-microvm#128](https://github.com/stacklok/go-microvm/pull/128), and a probe sentinel inside the guest. Each workspace's plan lists the other workspace's guest address and published ingress port as peers (`-peer`), and its verdict uses the host sentinel plus the **other** workspace's guest sentinel.
+
+| Check | Result |
+|---|---|
+| Start | broker ready 0.4–0.5 s, VM started 0.6–0.7 s, NIC connected 1.2–1.3 s after launch; guest DHCP lease in the first second |
+| Docker on virtio-blk | `/dev/vda` formatted ext4 on first boot and mounted at `/var/lib/docker`; `dockerd` up 2 s after mount |
+| Probes, both workspaces | PASS 634, FAIL 4, WARN 42, REVIEW 11, SKIP 2, MISSING 0 each |
+| `N-PEER-*`, all four contexts | PASS; neither guest sentinel recorded a probe from the other workspace |
+| Ingress | each broker listens only on its own `127.0.0.1` port |
+| Broker SIGKILL | launcher reports `broker-exited`, VM stopped, runner gone |
+| VMM SIGKILL | launcher reports `nic-disconnected`, broker stopped |
+| Invalid policy at start | broker exits before `ready`, launcher exits 1, no VM started |
+| After the run | no broker or VMM process left |
+
+The four FAILs per workspace are `F-MNT-INV` (go-microvm root filesystem is a virtio-fs share) and three self-test probes to one host IPv6 address that does not accept inbound connections. The two SKIPs are `N-GW-*` from `container-bridge`: its gateway is the workspace's own guest, where its own sentinel runs.
+
+This run surfaced a broker bug: the host resolver list was read once at start, so after a host network change every guest DNS query failed. With no explicit `-dns-upstream`, the broker reads the host resolvers on every query.
+
 ## Gaps
 
 - **Allowed exceptions end to end**: the allow path is covered by unit tests, but the acceptance run did not complete an allowed private connection. Re-run with the broker launched so its host-side dials to the LAN are permitted, and with packaging that keeps that true for a signed helper.
-- **Reconnect**: libkrun does not reconnect the NIC socket, so a broker crash takes the workspace offline until restart. Acceptable as fail-closed; a supervisor should restart broker and VM together.
-- **Boot check**: the VMM boots without a NIC peer silently; jailoc has to start and health-check the broker first.
+- **Reconnect**: libkrun does not reconnect the NIC socket, so a broker crash takes the workspace offline until restart. `internal/brokerproc` stops the VM when its broker exits (see [Supervision and multiple workspaces](#supervision-and-multiple-workspaces)); restarting both is left to `jailoc up`.
 - **IPv6**: the broker has no IPv6 stack; the first backend runs with IPv6 `disabled`.
+- **Denied UDP**: the broker drops denied UDP silently (the guest sees a timeout, not ICMP unreachable), because it pins the gVisor version used by go-microvm's network stack.
 - **ICMP**: gVisor in promiscuous mode may answer ICMP echo for any destination locally; not verified, and ICMP carries no host traffic.
 - **Logs**: the broker's own DHCP broadcast replies appear as denied UDP flows to `255.255.255.255:68`.
 - **Linux**: the same broker serves libkrun on Linux (`krun_add_net_unixstream` is platform-independent); a TAP-based VMM (Firecracker, QEMU) would need a TAP or `vhost-user` front end. Not run.
