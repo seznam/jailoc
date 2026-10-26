@@ -18,7 +18,7 @@ Changing a rule in this document creates the next version. Results produced unde
 
 Network policy is enforced by a jailoc-owned broker in front of the candidate's single guest NIC, not by candidate-specific policy features. Candidates are evaluated for how cleanly they hand that one network path to the broker.
 
-P1 spike reports: [Lima](candidates/lima.md), [go-microvm](candidates/go-microvm.md), [smolvm](candidates/smolvm.md), [Firecracker](candidates/firecracker.md). Spike scripts: `scripts/vm-spike/`.
+P1 spike reports: [Lima](candidates/lima.md), [go-microvm](candidates/go-microvm.md), [smolvm](candidates/smolvm.md), [Firecracker](candidates/firecracker.md). Spike scripts: `scripts/vm-spike/`. P2 broker prototype and run: [p2-broker.md](p2-broker.md).
 
 ### Firecracker
 
