@@ -32,6 +32,8 @@ jailoc [flags]
 
 When run from a subdirectory of a workspace path, jailoc resolves the current working directory and passes it as `--dir` to `opencode attach`, so the agent opens that directory instead of the workspace root.
 
+For workspaces with `backend = "vm"`, runs `opencode` inside the workspace VM over SSH with a terminal of its own; `--remote` is rejected and `mode` is ignored.
+
 When neither `--remote` nor `--exec` is specified, the connection mode is determined by the workspace `mode` field in configuration, falling back to auto-detection (checks for `opencode`, then `opencode-cli` on PATH). See the [access modes how-to](../how-to/access-modes.md) for configuration steps, or the [access modes explanation](../explanation/access-modes.md) for the difference between modes.
 
 ---
@@ -46,7 +48,7 @@ jailoc up [flags]
 
 Resolves the container image (see [Image Resolution](image-resolution.md)), validates secret sources (verifying host environment variables exist and are non-empty, and secret files exist with valid permissions), generates a `docker-compose.yml` in `~/.cache/jailoc/{workspace}/`, and starts two containers: `opencode` and `dind`.
 
-For workspaces with `backend = "vm"`, first starts the workspace VM and its network broker (or reuses them when the VM configuration is unchanged), then runs image resolution, builds and the `opencode` container against the Docker daemon inside the VM. No `dind` container is started; see [Run a workspace in a VM](../how-to/vm-backend.md).
+For workspaces with `backend = "vm"`, builds the workspace image in a builder VM, then boots the image as the root file system of the workspace VM and delivers secrets to it. No containers or compose file are involved; see [Run a workspace in a VM](../how-to/vm-backend.md).
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
@@ -62,11 +64,11 @@ jailoc down [flags]
 
 Equivalent to `docker compose down` on the generated compose file. Does not remove named volumes or the image.
 
-For workspaces with `backend = "vm"`, also shuts down the VM: the guest Docker daemon stops cleanly, then the VM and its network broker exit. The VM's Docker data disk is kept.
+For workspaces with `backend = "vm"`, shuts down the workspace VM and its network broker instead. The persistent home directories (`~/.local/share/opencode` and `~/.cache` of the agent) are kept.
 
 | Flag | Description |
 |------|-------------|
-| `--purge` | Also delete the VM state and its Docker data disk, including images, volumes and build cache inside the VM. Applies to `backend = "vm"` only. |
+| `--purge` | Also delete the VM state, the persistent home directories and, with `isolated_build`, the workspace's builder VM and build cache. Applies to `backend = "vm"` only. |
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
@@ -96,6 +98,8 @@ jailoc status [flags]
 
 Output shows the container state (running, stopped, or unknown) and the assigned host port for the resolved workspace. Workspaces with `expose_port = false` show "not exposed (exec-only)" instead of a port number.
 
+For workspaces with `backend = "vm"`, shows the backend and whether the workspace VM is running.
+
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
 ---
@@ -109,6 +113,8 @@ jailoc logs [flags]
 ```
 
 Streams combined stdout and stderr from the `opencode` and `dind` containers. Follows log output until interrupted.
+
+For workspaces with `backend = "vm"`, prints the VM supervisor log and the guest console log instead.
 
 When no positional workspace argument and `--workspace` is not set, resolves the workspace from the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 

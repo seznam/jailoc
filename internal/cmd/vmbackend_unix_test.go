@@ -5,9 +5,11 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/seznam/jailoc/internal/vm"
@@ -87,35 +89,46 @@ func TestVMShares(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	cacheDir := filepath.Join(home, ".cache", "jailoc", "w")
 	ws := &workspace.Resolved{
 		Name:  "w",
 		Paths: []string{project},
 		Mounts: []string{
 			tools + ":/opt/tools:ro",
-			project + ":/opt/project:ro",
+			project + ":" + project + ":ro",
 			"~/created:/opt/created",
+			"~/data:" + guestOpenCodeDir,
 		},
 	}
-	shares, err := vmShares(ws)
+	shares, err := vmShares(ws, cacheDir)
 	if err != nil {
 		t.Fatalf("vmShares: %v", err)
 	}
 	want := []vm.Share{
-		{HostPath: filepath.Join(home, ".cache", "jailoc", "w"), ReadOnly: true},
-		{HostPath: filepath.Join(home, ".config", "jailoc", "workspaces", "w"), ReadOnly: true},
-		{HostPath: filepath.Join(home, "created")},
-		{HostPath: project},
-		{HostPath: tools, ReadOnly: true},
+		{HostPath: filepath.Join(home, ".config", "jailoc", "workspaces", "w"), GuestPath: guestConfigDir, ReadOnly: true},
+		{HostPath: cacheDir, GuestPath: guestCacheDir, ReadOnly: true},
+		{HostPath: filepath.Join(cacheDir, "tui-plugin"), GuestPath: tuiPluginContainerDir, ReadOnly: true},
+		{HostPath: filepath.Join(vmStateDir("w"), "home", "cache"), GuestPath: guestUserCache},
+		{HostPath: filepath.Join(home, "data"), GuestPath: guestOpenCodeDir},
+		{HostPath: filepath.Join(home, "created"), GuestPath: "/opt/created"},
+		{HostPath: tools, GuestPath: "/opt/tools", ReadOnly: true},
+		{HostPath: project, GuestPath: project},
 	}
+	slices.SortFunc(want, func(a, b vm.Share) int { return strings.Compare(a.GuestPath, b.GuestPath) })
 	if !slices.Equal(shares, want) {
-		t.Fatalf("shares = %+v, want %+v", shares, want)
+		t.Fatalf("shares =\n%+v\nwant\n%+v", shares, want)
 	}
-	if info, err := os.Stat(filepath.Join(home, "created")); err != nil || !info.IsDir() {
-		t.Fatalf("missing mount source not created: %v", err)
+	for _, dir := range []string{filepath.Join(home, "created"), filepath.Join(vmStateDir("w"), "home", "cache")} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("directory %s not created: %v", dir, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(vmStateDir("w"), "home", "opencode-data")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("opencode-data created although a mount covers it: %v", err)
 	}
 
 	ws.Mounts = []string{file + ":/opt/file.txt:ro"}
-	if _, err := vmShares(ws); err == nil {
+	if _, err := vmShares(ws, cacheDir); err == nil {
 		t.Fatal("vmShares accepted a file mount")
 	}
 }

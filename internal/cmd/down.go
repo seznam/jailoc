@@ -14,8 +14,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var downPurge bool
-
 var downCmd = &cobra.Command{
 	Use:   "down [workspace]",
 	Short: "Stop a workspace environment",
@@ -57,11 +55,11 @@ func runDownCtxForce(ctx context.Context, args []string, force bool) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
-	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-
 	if ws.Backend == config.BackendVM {
-		return downVM(ctx, ws, composePath, downPurge)
+		return downVM(ws, downPurge)
 	}
+
+	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 
 	if _, err := os.Stat(composePath); err != nil {
 		if os.IsNotExist(err) {
@@ -90,39 +88,9 @@ func runDownCtxForce(ctx context.Context, args []string, force bool) error {
 	return nil
 }
 
-// downVM stops the workspace containers inside the VM, then the VM and its
-// network broker. With purge it also deletes the VM state and data disk.
-func downVM(ctx context.Context, ws *workspace.Resolved, composePath string, purge bool) error {
-	connected, err := connectBackend(ws)
-	if err != nil {
-		return fmt.Errorf("connect to workspace %q vm: %w", ws.Name, err)
-	}
-	if !connected {
-		if purge {
-			if err := stopVM(ws.Name, true); err != nil {
-				return err
-			}
-			_, _ = color.New(color.FgGreen).Printf("Workspace %s VM state deleted\n", ws.Name)
-			return nil
-		}
-		_, _ = color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
-		return nil
-	}
-
-	_, _ = color.New(color.FgCyan).Printf("Stopping workspace %s...\n", ws.Name)
-	if _, err := os.Stat(composePath); err == nil {
-		if err := docker.NewClient(composePath, "", ws.Name).Down(ctx); err != nil {
-			return fmt.Errorf("stop workspace: %w", err)
-		}
-	}
-	if err := stopVM(ws.Name, purge); err != nil {
-		return err
-	}
-	_, _ = color.New(color.FgGreen).Printf("Workspace %s stopped\n", ws.Name)
-	return nil
-}
+var downPurge bool
 
 func init() {
-	downCmd.Flags().BoolVar(&downPurge, "purge", false, `also delete the VM and its Docker data disk (backend "vm" only)`)
+	downCmd.Flags().BoolVar(&downPurge, "purge", false, `also delete the VM state, its persistent home directories and the isolated builder (backend "vm" only)`)
 	rootCmd.AddCommand(downCmd)
 }

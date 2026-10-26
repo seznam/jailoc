@@ -88,8 +88,9 @@ const (
 )
 
 // Workspace backends. BackendDocker runs the workspace as Docker Compose
-// services on the host Docker engine; BackendVM runs the same services in a
-// per-workspace virtual machine behind the jailoc network broker.
+// services on the host Docker engine; BackendVM boots the workspace image as
+// a per-workspace virtual machine behind the jailoc network broker and runs
+// the agent directly in it.
 const (
 	BackendDocker = "docker"
 	BackendVM     = "vm"
@@ -248,6 +249,7 @@ type Defaults struct {
 	DNSUpstream     string    `toml:"dns_upstream"`
 	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
+	IsolatedBuild   *bool     `toml:"isolated_build"`
 }
 
 type Workspace struct {
@@ -272,6 +274,7 @@ type Workspace struct {
 	DNSUpstream     string    `toml:"dns_upstream"`
 	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
+	IsolatedBuild   *bool     `toml:"isolated_build"`
 }
 
 func ConfigDir() string {
@@ -992,6 +995,12 @@ func Validate(cfg *Config) error {
 			if enabled {
 				return fmt.Errorf("workspace %q: filtered_dns is not supported with backend %q", name, BackendVM)
 			}
+			if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) {
+				return fmt.Errorf("workspace %q: enable_docker is not supported with backend %q", name, BackendVM)
+			}
+			if explicitTrue(cfg.Defaults.ExposePort, ws.ExposePort) {
+				return fmt.Errorf("workspace %q: expose_port is not supported with backend %q", name, BackendVM)
+			}
 		}
 
 		cfg.Workspaces[name] = ws
@@ -1006,6 +1015,15 @@ func validateBackend(backend string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid backend %q: must be %q, %q, or empty (%s)", backend, BackendDocker, BackendVM, BackendDocker)
+}
+
+// explicitTrue reports whether a boolean option is set to true, the workspace
+// value taking precedence over the defaults.
+func explicitTrue(defaults, workspace *bool) bool {
+	if workspace != nil {
+		return *workspace
+	}
+	return defaults != nil && *defaults
 }
 
 // EffectiveBackend returns the workspace backend, falling back to the defaults

@@ -3598,6 +3598,12 @@ func TestBackendValidation(t *testing.T) {
 		{name: "vm accepts ssh_auth_sock override off", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM, SSHAuthSock: new(false)}},
 		{name: "docker workspace overrides vm defaults", defaults: Defaults{Backend: BackendVM, SSHAuthSock: true}, ws: Workspace{Backend: BackendDocker}},
 		{name: "vm rejects filtered_dns", ws: Workspace{Backend: BackendVM, FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}, wantError: "filtered_dns is not supported"},
+		{name: "vm rejects enable_docker", ws: Workspace{Backend: BackendVM, EnableDocker: new(true)}, wantError: "enable_docker is not supported"},
+		{name: "vm rejects inherited enable_docker", defaults: Defaults{EnableDocker: new(true)}, ws: Workspace{Backend: BackendVM}, wantError: "enable_docker is not supported"},
+		{name: "vm accepts enable_docker override off", defaults: Defaults{EnableDocker: new(true)}, ws: Workspace{Backend: BackendVM, EnableDocker: new(false)}},
+		{name: "vm rejects expose_port", ws: Workspace{Backend: BackendVM, ExposePort: new(true)}, wantError: "expose_port is not supported"},
+		{name: "docker accepts expose_port", defaults: Defaults{ExposePort: new(true)}, ws: Workspace{Backend: BackendDocker}},
+		{name: "vm accepts isolated_build", ws: Workspace{Backend: BackendVM, IsolatedBuild: new(true)}},
 		{name: "relative runner", ws: Workspace{}, vm: VMConfig{Runner: "bin/runner"}, wantError: "vm: path"},
 		{name: "absolute runner", ws: Workspace{}, vm: VMConfig{Runner: "/opt/jailoc/go-microvm-runner", LibDir: "/opt/homebrew/lib"}},
 	}

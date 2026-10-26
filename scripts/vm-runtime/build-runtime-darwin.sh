@@ -5,7 +5,8 @@
 # The bundle reuses libkrun and its GPU dependencies from a go-microvm release
 # and replaces the runner with one built from the go-microvm revision jailoc
 # pins in go.mod. The firmware tarball (libkrunfw, GPL-2.0) is used unchanged
-# from the same go-microvm release.
+# from the same go-microvm release. jailoc-guest, the init and SSH server of
+# workspace VMs, is built from the jailoc checkout containing this script.
 #
 # Usage: build-runtime-darwin.sh GO_MICROVM_CHECKOUT UPSTREAM_TAG OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
@@ -24,6 +25,7 @@ name=go-microvm-runtime-darwin-arm64
 [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ] || { echo "must run on macOS arm64" >&2; exit 1; }
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -r "$work"' EXIT
 
@@ -38,7 +40,9 @@ cp "$src/bin/go-microvm-runner" "$work/$name/go-microvm-runner"
 install_name_tool -change "$(brew --prefix libkrun)/lib/libkrun.1.dylib" \
   @loader_path/libkrun.1.dylib "$work/$name/go-microvm-runner"
 codesign --force -s - --entitlements "$src/assets/entitlements.plist" "$work/$name/go-microvm-runner"
-echo "$tag+$(git -C "$src" rev-parse --short HEAD)" > "$work/$name/VERSION"
+(cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" \
+  -o "$work/$name/jailoc-guest" ./cmd/jailoc-guest)
+echo "$tag+$(git -C "$src" rev-parse --short HEAD) jailoc-guest+$(git -C "$root" rev-parse --short HEAD)" > "$work/$name/VERSION"
 
 if otool -L "$work/$name/go-microvm-runner" | grep -q /opt/homebrew; then
   echo "runner still links Homebrew libraries" >&2

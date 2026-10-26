@@ -53,13 +53,11 @@ func runLogs(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
-	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-
-	if connected, err := connectBackend(ws); err != nil {
-		return fmt.Errorf("connect to workspace %q backend: %w", ws.Name, err)
-	} else if !connected {
-		return fmt.Errorf("workspace %q is not running; start it with 'jailoc up'", ws.Name)
+	if ws.Backend == config.BackendVM {
+		return logsVM(ctx, ws, followLogs, os.Stdout)
 	}
+
+	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 
 	// Check if compose file exists (workspace was started at some point)
 	if _, err := os.Stat(composePath); err != nil {

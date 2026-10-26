@@ -50,14 +50,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
-	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-
-	if connected, err := connectBackend(ws); err != nil {
-		return fmt.Errorf("connect to workspace %q backend: %w", ws.Name, err)
-	} else if !connected {
-		_, _ = color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
-		return nil
+	if ws.Backend == config.BackendVM {
+		return statusVM(ws)
 	}
+
+	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
 
 	if _, err := os.Stat(composePath); err != nil {
 		if os.IsNotExist(err) {

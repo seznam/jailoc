@@ -1,7 +1,11 @@
-// Package vm runs a workspace in a per-workspace virtual machine: a
-// go-microvm/libkrun guest whose only network path is the jailoc network
-// broker, with Docker state on a virtio-blk data disk and host directories
-// shared over virtio-fs at their host paths.
+// Package vm runs jailoc's go-microvm/libkrun guests. Every VM's only
+// network path is a jailoc network broker. Two kinds exist:
+//
+//   - builder: a pinned docker:dind guest whose dockerd, reached through a
+//     broker-forwarded unix socket, builds workspace images; Docker state
+//     lives on a virtio-blk data disk;
+//   - workspace: the built workspace image booted as the root file system,
+//     with jailoc-guest as init and an SSH server for agent sessions.
 package vm
 
 import (
@@ -20,6 +24,7 @@ import (
 	"time"
 
 	"github.com/seznam/jailoc/internal/brokerproc"
+	"github.com/seznam/jailoc/internal/guest"
 	microvm "github.com/stacklok/go-microvm"
 	"github.com/stacklok/go-microvm/hypervisor/libkrun"
 	"github.com/stacklok/go-microvm/image"
@@ -49,10 +54,25 @@ const (
 //go:embed init.sh
 var initScript string
 
-// Share is a host directory mounted in the guest at the same path.
+// VM kinds.
+const (
+	KindBuilder   = "builder"
+	KindWorkspace = "workspace"
+)
+
+// Share is a host directory mounted in the guest at GuestPath, or at the
+// host path when GuestPath is empty.
 type Share struct {
-	HostPath string `json:"host_path"`
-	ReadOnly bool   `json:"read_only,omitempty"`
+	HostPath  string `json:"host_path"`
+	GuestPath string `json:"guest_path,omitempty"`
+	ReadOnly  bool   `json:"read_only,omitempty"`
+}
+
+func (s Share) guestPath() string {
+	if s.GuestPath != "" {
+		return s.GuestPath
+	}
+	return s.HostPath
 }
 
 // Forward publishes a guest TCP port on a host loopback port.
@@ -64,6 +84,7 @@ type Forward struct {
 // Spec describes one workspace VM. jailoc writes it to the state directory
 // and the supervisor process reads it back.
 type Spec struct {
+	Kind       string          `json:"kind"`
 	Workspace  string          `json:"workspace"`
 	StateDir   string          `json:"state_dir"`
 	Image      string          `json:"image"`
@@ -79,6 +100,11 @@ type Spec struct {
 	// Broker is the command that runs the network broker, e.g. the jailoc
 	// executable followed by "netbroker".
 	Broker []string `json:"broker"`
+	// GuestBinary is the host path of jailoc-guest (workspace VMs).
+	GuestBinary string `json:"guest_binary,omitempty"`
+	// Guest is the guest configuration (workspace VMs); the supervisor
+	// fills in the authorized key.
+	Guest *guest.Config `json:"guest,omitempty"`
 	// Log receives lifecycle messages and the broker's output.
 	Log io.Writer `json:"-"`
 }
@@ -117,6 +143,7 @@ func ReadSpec(stateDir string) (*Spec, error) {
 // Paths of the files a VM keeps in its state directory.
 func StateFile(stateDir string) string    { return filepath.Join(stateDir, "state.json") }
 func DockerSocket(stateDir string) string { return filepath.Join(stateDir, "docker.sock") }
+func SSHSocket(stateDir string) string    { return filepath.Join(stateDir, "ssh.sock") }
 func nicSocket(stateDir string) string    { return filepath.Join(stateDir, "nic.sock") }
 func diskPath(stateDir string) string     { return filepath.Join(stateDir, "docker.img") }
 
@@ -124,7 +151,8 @@ func diskPath(stateDir string) string     { return filepath.Join(stateDir, "dock
 type State struct {
 	PID          int       `json:"pid"`
 	BrokerPID    int       `json:"broker_pid,omitempty"`
-	DockerSocket string    `json:"docker_socket"`
+	DockerSocket string    `json:"docker_socket,omitempty"`
+	SSHSocket    string    `json:"ssh_socket,omitempty"`
 	Ready        bool      `json:"ready"`
 	Error        string    `json:"error,omitempty"`
 	Updated      time.Time `json:"updated"`
@@ -159,8 +187,9 @@ func writeState(stateDir string, st State) error {
 	return nil
 }
 
-// Run starts the broker and the VM, waits until the guest dockerd answers on
-// the host Docker socket, and then supervises both until ctx is cancelled or
+// Run starts the broker and the VM, waits until the guest is ready (the
+// builder's dockerd answers on the Docker socket, the workspace's SSH server
+// completes a handshake), and then supervises both until ctx is cancelled or
 // either side exits. The state file tracks progress for other processes.
 func Run(ctx context.Context, spec Spec) (err error) {
 	logf := func(format string, args ...any) {
@@ -168,7 +197,16 @@ func Run(ctx context.Context, spec Spec) (err error) {
 			_, _ = fmt.Fprintf(spec.Log, "%s "+format+"\n", append([]any{time.Now().UTC().Format(time.RFC3339)}, args...)...)
 		}
 	}
-	st := State{PID: os.Getpid(), DockerSocket: DockerSocket(spec.StateDir)}
+	workspace := spec.Kind == KindWorkspace
+	st := State{PID: os.Getpid()}
+	sockets := []string{nicSocket(spec.StateDir)}
+	if workspace {
+		st.SSHSocket = SSHSocket(spec.StateDir)
+		sockets = append(sockets, st.SSHSocket)
+	} else {
+		st.DockerSocket = DockerSocket(spec.StateDir)
+		sockets = append(sockets, st.DockerSocket)
+	}
 	defer func() {
 		st.Ready = false
 		if err != nil {
@@ -184,17 +222,25 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	if err := writeState(spec.StateDir, st); err != nil {
 		return err
 	}
-	for _, p := range []string{st.DockerSocket, nicSocket(spec.StateDir)} {
+	for _, p := range sockets {
 		if len(p) > maxSocketPath {
 			return fmt.Errorf("socket path %q is longer than %d bytes", p, maxSocketPath)
 		}
 	}
-	diskSize := spec.DiskSize
-	if diskSize == 0 {
-		diskSize = DefaultDiskSize
+	if !workspace {
+		diskSize := spec.DiskSize
+		if diskSize == 0 {
+			diskSize = DefaultDiskSize
+		}
+		if err := ensureDisk(diskPath(spec.StateDir), diskSize); err != nil {
+			return err
+		}
 	}
-	if err := ensureDisk(diskPath(spec.StateDir), diskSize); err != nil {
-		return err
+	var guestFiles map[string]fileContent
+	if workspace {
+		if guestFiles, err = prepareGuest(spec); err != nil {
+			return err
+		}
 	}
 	ctl := controlDir(spec.StateDir)
 	if err := os.RemoveAll(ctl); err != nil {
@@ -215,7 +261,11 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	st.BrokerPID = bp.PID()
 	logf("broker ready pid=%d", bp.PID())
 
-	vm, err := microvm.Run(ctx, imageRef(spec), vmOptions(spec)...)
+	opts := builderOptions(spec)
+	if workspace {
+		opts = workspaceOptions(spec, guestFiles)
+	}
+	vm, err := microvm.Run(ctx, imageRef(spec), opts...)
 	if err != nil {
 		_ = bp.Stop(5 * time.Second)
 		return fmt.Errorf("start vm: %w", err)
@@ -231,7 +281,12 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		stopBoth()
 		return err
 	}
-	if err := waitDocker(ctx, st.DockerSocket, 3*time.Minute); err != nil {
+	if workspace {
+		err = waitSSH(ctx, spec.StateDir, 2*time.Minute)
+	} else {
+		err = waitDocker(ctx, st.DockerSocket, 3*time.Minute)
+	}
+	if err != nil {
 		stopBoth()
 		return err
 	}
@@ -240,14 +295,14 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		stopBoth()
 		return err
 	}
-	logf("docker ready socket=%s", st.DockerSocket)
+	logf("%s ready", spec.Kind)
 
 	out := brokerproc.Supervise(ctx, bp, vmHandle{vm: vm, control: ctl}, 500*time.Millisecond, stopGrace)
 	logf("supervise %s", out.Reason)
 	if out.Reason == "shutdown" {
 		return nil
 	}
-	return fmt.Errorf("workspace vm stopped: %s", out.Reason)
+	return fmt.Errorf("%s vm stopped: %s", spec.Kind, out.Reason)
 }
 
 func imageRef(spec Spec) string {
@@ -266,8 +321,12 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 		"-policy", policyPath,
 		"-subnet", Subnet, "-gateway", Gateway, "-guest", GuestIP,
 		"-log", filepath.Join(spec.StateDir, "broker.jsonl"),
-		"-forward-unix", DockerSocket(spec.StateDir)+"="+strconv.Itoa(DockerPort),
 	)
+	if spec.Kind == KindWorkspace {
+		args = append(args, "-forward-unix", SSHSocket(spec.StateDir)+"="+strconv.Itoa(guest.SSHPort))
+	} else {
+		args = append(args, "-forward-unix", DockerSocket(spec.StateDir)+"="+strconv.Itoa(DockerPort))
+	}
 	for _, f := range spec.Forwards {
 		args = append(args, "-forward", fmt.Sprintf("127.0.0.1:%d=%d", f.HostPort, f.GuestPort))
 	}
@@ -281,7 +340,31 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 	return bp, nil
 }
 
-func vmOptions(spec Spec) []microvm.Option {
+// commonOptions are shared by both VM kinds.
+func commonOptions(spec Spec) []microvm.Option {
+	backend := []libkrun.Option{}
+	if spec.RunnerPath != "" {
+		backend = append(backend, libkrun.WithRunnerPath(spec.RunnerPath))
+	}
+	if spec.LibDir != "" {
+		backend = append(backend, libkrun.WithLibDir(spec.LibDir))
+	}
+	opts := []microvm.Option{
+		microvm.WithName("jailoc-" + spec.Workspace),
+		microvm.WithCPUs(spec.CPUs),
+		microvm.WithMemory(spec.MemoryMiB),
+		microvm.WithDataDir(filepath.Join(spec.StateDir, "microvm")),
+		microvm.WithCleanDataDir(),
+		microvm.WithBackend(libkrun.NewBackend(backend...)),
+		microvm.WithNetProvider(brokerProvider{path: nicSocket(spec.StateDir)}),
+	}
+	if spec.ImageCache != "" {
+		opts = append(opts, microvm.WithImageCache(image.NewCache(spec.ImageCache)))
+	}
+	return opts
+}
+
+func builderOptions(spec Spec) []microvm.Option {
 	script := strings.NewReplacer(
 		"@GATEWAY@", Gateway, "@GUEST@", GuestIP,
 		"@DOCKER_PORT@", strconv.Itoa(DockerPort), "@AGENT_GID@", strconv.Itoa(agentGID),
@@ -298,27 +381,13 @@ func vmOptions(spec Spec) []microvm.Option {
 		if s.ReadOnly {
 			mode = "ro"
 		}
-		fmt.Fprintf(&table, "%s\t%s\t%s\n", tag, mode, s.HostPath)
+		fmt.Fprintf(&table, "%s\t%s\t%s\n", tag, mode, s.guestPath())
 	}
 	// The control share carries the shutdown request from the supervisor to
 	// the guest init; it is the only state-dir content the guest sees.
 	mounts = append(mounts, microvm.VirtioFSMount{Tag: "jailocctl", HostPath: controlDir(spec.StateDir), SimplifiedOwnership: true})
 	fmt.Fprintf(&table, "%s\t%s\t%s\n", "jailocctl", "rw", controlDir(spec.StateDir))
-	backend := []libkrun.Option{}
-	if spec.RunnerPath != "" {
-		backend = append(backend, libkrun.WithRunnerPath(spec.RunnerPath))
-	}
-	if spec.LibDir != "" {
-		backend = append(backend, libkrun.WithLibDir(spec.LibDir))
-	}
-	opts := []microvm.Option{
-		microvm.WithName("jailoc-" + spec.Workspace),
-		microvm.WithCPUs(spec.CPUs),
-		microvm.WithMemory(spec.MemoryMiB),
-		microvm.WithDataDir(filepath.Join(spec.StateDir, "microvm")),
-		microvm.WithCleanDataDir(),
-		microvm.WithBackend(libkrun.NewBackend(backend...)),
-		microvm.WithNetProvider(brokerProvider{path: nicSocket(spec.StateDir)}),
+	return append(commonOptions(spec),
 		microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}),
 		microvm.WithVirtioFS(mounts...),
 		microvm.WithInitOverride("/bin/sh", "/jailoc-init.sh"),
@@ -331,11 +400,7 @@ func vmOptions(spec Spec) []microvm.Option {
 			}
 			return nil
 		}),
-	}
-	if spec.ImageCache != "" {
-		opts = append(opts, microvm.WithImageCache(image.NewCache(spec.ImageCache)))
-	}
-	return opts
+	)
 }
 
 // ensureDisk creates the sparse data disk, or grows it back to size. libkrun
@@ -432,8 +497,9 @@ func (h vmHandle) Alive() bool {
 	return err == nil && info.Active
 }
 
-// Stop asks the guest init to shut down cleanly through the control share, so
-// dockerd flushes its state to the data disk, then stops the VM.
+// Stop asks the guest init to shut down cleanly through the control share
+// (the builder's dockerd flushes its state to the data disk, the workspace
+// guest ends its sessions and syncs), then stops the VM.
 func (h vmHandle) Stop(ctx context.Context) error {
 	if h.Alive() {
 		if err := os.WriteFile(filepath.Join(h.control, "shutdown"), nil, 0o600); err == nil {

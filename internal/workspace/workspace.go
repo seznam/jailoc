@@ -40,6 +40,9 @@ type Resolved struct {
 	Memory          string
 	ExposePort      bool
 	EnableDocker    bool
+	// IsolatedBuild builds the image of a backend "vm" workspace in its own
+	// builder VM instead of the builder shared by all workspaces.
+	IsolatedBuild   bool
 	FilteredDNS     bool
 	DNSUpstream     string
 	DNSBlockedZones []string
@@ -147,6 +150,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Backend:         config.EffectiveBackend(cfg.Defaults.Backend, ws.Backend),
 		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
+		IsolatedBuild:   boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
 		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.FilteredDNS, ws.FilteredDNS, false),
 		DNSUpstream:     ws.DNSUpstream,
 		DNSBlockedZones: ws.DNSBlockedZones,
@@ -157,6 +161,12 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	}
 	if r.DNSBlockedZones == nil {
 		r.DNSBlockedZones = cfg.Defaults.DNSBlockedZones
+	}
+	if r.Backend == config.BackendVM {
+		// The VM backend runs the agent directly in the VM and is reached
+		// over SSH: no published port and no Docker daemon for the agent.
+		r.ExposePort = false
+		r.EnableDocker = false
 	}
 
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))

@@ -138,19 +138,3 @@ func TestDindEntrypointDoesNotUseUpdateCACertificates(t *testing.T) {
 		t.Fatal("DinD entrypoint must append multi-certificate bundles directly")
 	}
 }
-
-func TestEntrypointSkipsFirewallOnlyForVMBackend(t *testing.T) {
-	t.Parallel()
-	script := string(jailocembed.Entrypoint())
-
-	defAt := strings.Index(script, "setup_firewall() {")
-	guardAt := strings.Index(script, `if [ "${JAILOC_NETWORK_POLICY:-}" != "vm" ]; then`)
-	callAt := strings.LastIndex(script, "\n  setup_firewall\n")
-	dropAt := strings.Index(script, "exec setpriv")
-	if defAt < 0 || guardAt < 0 || callAt < 0 || dropAt < 0 {
-		t.Fatal("entrypoint must define setup_firewall and call it unless JAILOC_NETWORK_POLICY=vm")
-	}
-	if defAt >= guardAt || guardAt >= callAt || callAt >= dropAt {
-		t.Fatal("firewall must be set up before the privilege drop")
-	}
-}

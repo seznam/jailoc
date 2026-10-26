@@ -63,29 +63,23 @@ func runUp(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
 	}
 
-	vmBackend := ws.Backend == config.BackendVM
-	if !vmBackend {
-		_, _ = color.New(color.FgCyan).Printf("Checking Docker availability...\n")
-		if err := preflightDocker(ctx, ws.Name); err != nil {
-			return fmt.Errorf("docker is not running or not accessible: %w", err)
-		}
+	if ws.Backend == config.BackendVM {
+		return runUpVM(ctx, cfg, ws)
+	}
+
+	_, _ = color.New(color.FgCyan).Printf("Checking Docker availability...\n")
+	if err := preflightDocker(ctx, ws.Name); err != nil {
+		return fmt.Errorf("docker is not running or not accessible: %w", err)
 	}
 
 	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-	connected, err := connectBackend(ws)
+	runningClient := docker.NewClient(composePath, "", ws.Name)
+	running, err := runningClient.IsRunning(ctx)
 	if err != nil {
-		return fmt.Errorf("connect to workspace %q backend: %w", ws.Name, err)
-	}
-	running := false
-	if connected {
-		runningClient := docker.NewClient(composePath, "", ws.Name)
-		running, err = runningClient.IsRunning(ctx)
-		if err != nil {
-			if !isComposeFileMissing(err) {
-				return fmt.Errorf("check workspace %q running status: %w", ws.Name, err)
-			}
-			running = false
+		if !isComposeFileMissing(err) {
+			return fmt.Errorf("check workspace %q running status: %w", ws.Name, err)
 		}
+		running = false
 	}
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
@@ -121,9 +115,7 @@ func runUp(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	// Port conflicts of VM workspaces surface when the broker cannot bind
-	// the host port; the host Docker daemon does not know about them.
-	if ws.ExposePort && !vmBackend {
+	if ws.ExposePort {
 		runningPorts, err := docker.RunningWorkspacePorts(ctx)
 		if err != nil {
 			return fmt.Errorf("check running workspace ports: %w", err)
@@ -151,20 +143,6 @@ func runUp(ctx context.Context, args []string) error {
 		}
 	}
 
-	cacheDir := ComposeCacheDir(ws.Name)
-	if vmBackend {
-		// The VM shares these directories, so they must exist before it starts.
-		if err := os.MkdirAll(cacheDir, 0o750); err != nil {
-			return fmt.Errorf("create compose cache directory %q: %w", cacheDir, err)
-		}
-		if err := config.WriteAllowedFiles(ws.Name, cfg, secretEnvNames(ws)); err != nil {
-			return fmt.Errorf("write allowed files for workspace %q: %w", ws.Name, err)
-		}
-		if err := startVM(ctx, cfg, ws); err != nil {
-			return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
-		}
-	}
-
 	_, _ = color.New(color.FgCyan).Printf("Resolving image for workspace %s...\n", ws.Name)
 	finalImage, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
 	if err != nil {
@@ -172,6 +150,7 @@ func runUp(ctx context.Context, args []string) error {
 	}
 	slog.Debug("image resolved", "image", finalImage)
 
+	cacheDir := ComposeCacheDir(ws.Name)
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		return fmt.Errorf("create compose cache directory %q: %w", cacheDir, err)
 	}
@@ -197,12 +176,6 @@ func runUp(ctx context.Context, args []string) error {
 
 	if err := writeTUIConfig(jailocCacheDir()); err != nil {
 		return err
-	}
-	if vmBackend {
-		// The guest shares only this workspace's cache directory.
-		if err := writeTUIConfig(cacheDir); err != nil {
-			return err
-		}
 	}
 
 	pw, _, err := resolver.Resolve(ws.Name)
@@ -232,11 +205,6 @@ func runUp(ctx context.Context, args []string) error {
 		EnableDocker:    ws.EnableDocker,
 		FilteredDNS:     ws.FilteredDNS,
 		Secrets:         secretSpecs(ws),
-	}
-	if vmBackend {
-		if err := vmComposeParams(&params, cacheDir); err != nil {
-			return fmt.Errorf("prepare workspace %q for vm: %w", ws.Name, err)
-		}
 	}
 
 	_, _ = color.New(color.FgCyan).Printf("Generating compose configuration...\n")
