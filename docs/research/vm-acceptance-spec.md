@@ -18,6 +18,8 @@ Changing a rule in this document creates the next version. Results produced unde
 
 Network policy is enforced by a jailoc-owned broker in front of the candidate's single guest NIC, not by candidate-specific policy features. Candidates are evaluated for how cleanly they hand that one network path to the broker.
 
+First-backend decisions: go-microvm with the broker as its only NIC and block devices for persistent guest storage ([stacklok/go-microvm#128](https://github.com/stacklok/go-microvm/pull/128)); IPv6 mode `disabled`; on macOS the broker ships as a signed helper binary.
+
 P1 spike reports: [Lima](candidates/lima.md), [go-microvm](candidates/go-microvm.md), [smolvm](candidates/smolvm.md), [Firecracker](candidates/firecracker.md). Spike scripts: `scripts/vm-spike/`. P2 broker prototype and run: [p2-broker.md](p2-broker.md).
 
 ### Firecracker

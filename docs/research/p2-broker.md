@@ -85,8 +85,9 @@ Run 1 (`results-run1-csum/`) exposed a broker bug: libkrun negotiates checksum o
 - **Allowed exceptions end to end**: the allow path is covered by unit tests, but the acceptance run did not complete an allowed private connection. Re-run with the broker launched so its host-side dials to the LAN are permitted, and with packaging that keeps that true for a signed helper.
 - **Reconnect**: libkrun does not reconnect the NIC socket, so a broker crash takes the workspace offline until restart. Acceptable as fail-closed; a supervisor should restart broker and VM together.
 - **Boot check**: the VMM boots without a NIC peer silently; jailoc has to start and health-check the broker first.
-- **IPv6**: the broker has no IPv6 stack; IPv6 is disabled, not enforced.
+- **IPv6**: the broker has no IPv6 stack; the first backend runs with IPv6 `disabled`.
 - **ICMP**: gVisor in promiscuous mode may answer ICMP echo for any destination locally; not verified, and ICMP carries no host traffic.
 - **Logs**: the broker's own DHCP broadcast replies appear as denied UDP flows to `255.255.255.255:68`.
 - **Linux**: the same broker serves libkrun on Linux (`krun_add_net_unixstream` is platform-independent); a TAP-based VMM (Firecracker, QEMU) would need a TAP or `vhost-user` front end. Not run.
+- **Persistent storage**: go-microvm's root filesystem is a virtio-fs share (`F-MNT-INV`). Block-device support is proposed upstream in [stacklok/go-microvm#128](https://github.com/stacklok/go-microvm/pull/128).
 - **Other candidates**: smolvm cannot replace its network stack (it only offers an external allow/deny decider); Lima always adds its own user-mode NIC next to a socket network, which breaks the single-path rule.
