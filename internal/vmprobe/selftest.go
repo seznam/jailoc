@@ -2,6 +2,7 @@ package vmprobe
 
 import (
 	"context"
+	"net"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -15,7 +16,7 @@ import (
 func RunSelfTest(ctx context.Context, p *Plan, timeout time.Duration) *Report {
 	rep := NewReport(p, "selftest", "host")
 	i := 0
-	probe := func(id string, a netip.Addr, proto string, port int, linkLocal bool) {
+	probe := func(id string, a netip.Addr, proto string, port int, soft string) {
 		key := id + "#" + strconv.Itoa(i)
 		i++
 		target := hostPort(a, port)
@@ -29,9 +30,9 @@ func RunSelfTest(ctx context.Context, p *Plan, timeout time.Duration) *Report {
 		if st == StatusFail && detail == "address not available" {
 			st = StatusWarn
 			detail += "; interface address is not dialable from the host"
-		} else if st == StatusFail && linkLocal {
+		} else if st == StatusFail && soft != "" {
 			st = StatusWarn
-			detail += "; link-local sentinel unreachable from the host, guest link-local deny checks are not conclusive"
+			detail += "; " + soft
 		}
 		rep.Add(Result{ID: id, Key: key, Target: target, Proto: proto, Expect: ExpectAllow, Observation: obs, Status: st, Detail: detail})
 	}
@@ -40,20 +41,24 @@ func RunSelfTest(ctx context.Context, p *Plan, timeout time.Duration) *Report {
 		if err != nil {
 			continue
 		}
-		ll := a.Is6() && a.IsLinkLocalUnicast()
-		if ll {
+		var soft string
+		if a.Is6() && a.IsLinkLocalUnicast() {
 			a = a.WithZone(h.Iface)
+			soft = "link-local sentinel unreachable from the host, guest link-local deny checks are not conclusive"
+		}
+		if ifc, err := net.InterfaceByName(h.Iface); err == nil && ifc.Flags&net.FlagUp == 0 {
+			soft = "host interface " + h.Iface + " is down, deny checks for this address are not conclusive"
 		}
 		for _, port := range []int{p.PrimaryPort, p.AltPort} {
-			probe("S-SELFTEST-HOST-TCP", a, kindTCP, port, ll)
+			probe("S-SELFTEST-HOST-TCP", a, kindTCP, port, soft)
 		}
-		probe("S-SELFTEST-HOST-UDP", a, kindUDP, p.PrimaryPort, ll)
+		probe("S-SELFTEST-HOST-UDP", a, kindUDP, p.PrimaryPort, soft)
 	}
 	for _, s := range p.LANSentinels {
 		if a, err := netip.ParseAddr(s); err == nil {
 			for _, proto := range []string{kindTCP, kindUDP} {
 				for _, port := range []int{p.PrimaryPort, p.AltPort} {
-					probe("S-SELFTEST-LAN-"+strings.ToUpper(proto), a, proto, port, false)
+					probe("S-SELFTEST-LAN-"+strings.ToUpper(proto), a, proto, port, "")
 				}
 			}
 		}

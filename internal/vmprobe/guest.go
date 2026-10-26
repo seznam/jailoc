@@ -41,6 +41,10 @@ var HostAliasNames = []string{
 // MetadataTargets are cloud metadata endpoints.
 var MetadataTargets = []string{"169.254.169.254:80", "[fd00:ec2::254]:80", "169.254.170.2:80"}
 
+// DNSInterceptTarget is a TEST-NET-1 address that never runs a resolver. A
+// DNS answer from it proves the runtime intercepts DNS sent to any address.
+const DNSInterceptTarget = "192.0.2.53"
+
 type probe struct {
 	id         string
 	kind       string
@@ -57,12 +61,20 @@ type GuestOptions struct {
 	Timeout     time.Duration
 	Parallelism int
 	Checks      []string // subset of: net, dns, iface, vsock, fs
+
+	dnsIntercepted bool
 }
 
 // RunGuest executes the selected guest checks.
 func RunGuest(ctx context.Context, p *Plan, opts GuestOptions) *Report {
 	rep := NewReport(p, "guest", opts.Context)
+	rep.LocalAddrs = localAddrs()
 	want := func(c string) bool { return len(opts.Checks) == 0 || slices.Contains(opts.Checks, c) }
+	if want("net") || want("dns") {
+		res, intercepted := dnsInterception(ctx, opts.Timeout)
+		rep.Add(res...)
+		opts.dnsIntercepted = intercepted
+	}
 	var probes []probe
 	if want("net") {
 		probes = append(probes, netProbes(p)...)
@@ -88,6 +100,41 @@ func RunGuest(ctx context.Context, p *Plan, opts GuestOptions) *Report {
 
 func hostPort(a netip.Addr, port int) string {
 	return net.JoinHostPort(a.String(), strconv.Itoa(port))
+}
+
+// localAddrs returns the addresses assigned in the current network namespace.
+func localAddrs() []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range addrs {
+		if pfx, err := netip.ParsePrefix(a.String()); err == nil {
+			out = append(out, pfx.Addr().String())
+		}
+	}
+	return out
+}
+
+// dnsInterception queries a TEST-NET address that never runs a resolver.
+// Runtimes that answer DNS sent to any destination make a DNS response from a
+// denied address meaningless, so such responses become REVIEW instead of FAIL.
+func dnsInterception(ctx context.Context, timeout time.Duration) ([]Result, bool) {
+	target := net.JoinHostPort(DNSInterceptTarget, "53")
+	var out []Result
+	intercepted := false
+	for _, proto := range []string{"udp", "tcp"} {
+		obs, detail, _ := ProbeDNS(ctx, target, proto, PublicDNSName, timeout)
+		r := Result{ID: "D-DNS-INTERCEPT-" + strings.ToUpper(proto), Target: target, Proto: "dns-" + proto, Expect: ExpectInfo, Observation: obs, Status: StatusPass, Detail: detail}
+		if obs == ObsReached {
+			intercepted = true
+			r.Status = StatusReview
+			r.Detail = "runtime answers DNS sent to a non-routable address; DNS answers from denied destinations are not evidence of reachability"
+		}
+		out = append(out, r)
+	}
+	return out, intercepted
 }
 
 // expectFor returns the expectation for a non-hard-deny destination.
@@ -257,7 +304,9 @@ func dnsProbes(ctx context.Context, p *Plan, timeout time.Duration) ([]probe, []
 		if err != nil || isGuestResolver(a) {
 			continue
 		}
-		probes = append(probes, probe{id: "D-HOST-DNS", kind: kindDNSUDP, target: hostPort(a, 53), dnsName: PublicDNSName, expect: ExpectDeny})
+		for _, za := range zoned(a) {
+			probes = append(probes, probe{id: "D-HOST-DNS", kind: kindDNSUDP, target: hostPort(za, 53), dnsName: PublicDNSName, expect: ExpectDeny})
+		}
 	}
 
 	// DNS rebinding: a public name resolving to a denied address must not open it.
@@ -333,6 +382,10 @@ func execProbe(ctx context.Context, p *Plan, opts GuestOptions, pr probe, key st
 	}
 	elapsed := time.Since(start)
 	st := Evaluate(pr.expect, obs)
+	if st == StatusFail && opts.dnsIntercepted && obs == ObsReached && (pr.kind == kindDNSUDP || pr.kind == kindDNSTCP) {
+		st = StatusReview
+		detail += "; answered while the runtime intercepts DNS (D-DNS-INTERCEPT), the destination itself may be unreachable"
+	}
 	if st == StatusPass && pr.failFast > 0 && elapsed > pr.failFast {
 		st = StatusWarn
 		detail += fmt.Sprintf("; denial took %s (want < %s)", elapsed.Round(time.Millisecond), pr.failFast)

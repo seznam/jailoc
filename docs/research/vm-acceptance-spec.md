@@ -1,10 +1,10 @@
 # VM backend acceptance specification
 
-Spec version: `vm-acceptance/1` (frozen). Source decision: [seznam/jailoc#244](https://github.com/seznam/jailoc/issues/244#issuecomment-6349301366).
+Spec version: `vm-acceptance/2` (frozen). Source decision: [seznam/jailoc#244](https://github.com/seznam/jailoc/issues/244#issuecomment-6349301366). Changes from `vm-acceptance/1` are listed under [Revisions](#revisions).
 
 This document is the single pass/fail contract for every VM backend candidate (see [Candidates](#candidates)). Every candidate runs the same probe binary, `jailoc-vmprobe`, with the same plan format and is judged by the same verdict rules. A candidate that cannot run a check counts as failing that check.
 
-Changing a rule in this document creates `vm-acceptance/2`. Results produced under different spec versions are not comparable.
+Changing a rule in this document creates the next version. Results produced under different spec versions are not comparable.
 
 ## Candidates
 
@@ -13,8 +13,12 @@ Changing a rule in this document creates `vm-acceptance/2`. Results produced und
 | [Lima](https://github.com/lima-vm/lima) | first (baseline) | Linux, macOS |
 | [Stacklok go-microvm](https://github.com/stacklok/go-microvm) | first | Linux, macOS |
 | [smolvm](https://github.com/smol-machines/smolvm) | first | Linux, macOS |
-| [Firecracker](https://github.com/firecracker-microvm/firecracker) | first, Linux only | Linux (KVM, x86_64 and aarch64) |
+| [Firecracker](https://github.com/firecracker-microvm/firecracker) | deferred (Linux only, no file sharing) | Linux (KVM, x86_64 and aarch64) |
 | Hypeman, Gondolin, microsandbox, direct libkrun/vfkit/QEMU | secondary | varies |
+
+Network policy is enforced by a jailoc-owned broker in front of the candidate's single guest NIC, not by candidate-specific policy features. Candidates are evaluated for how cleanly they hand that one network path to the broker.
+
+P1 spike reports: [Lima](candidates/lima.md), [go-microvm](candidates/go-microvm.md), [smolvm](candidates/smolvm.md), [Firecracker](candidates/firecracker.md). Spike scripts: `scripts/vm-spike/`.
 
 ### Firecracker
 
@@ -53,7 +57,7 @@ Each check result has one status:
 | `MISSING` | Required evidence absent (context, self-test, ingress or watch report not supplied) | Candidate fails |
 | `WARN` | Requirement met but operability is degraded (e.g. slow IPv6 denial) | Recorded, does not fail |
 | `REVIEW` | Needs a human decision recorded in the evaluation (e.g. open vsock ports, guest resolver class) | Must be resolved in writing before the ADR |
-| `SKIP` | Check not applicable in this context | — |
+| `SKIP` | Check not applicable in this context, or a deny probe whose target is assigned inside the workspace domain (see [Verdict rules](#verdict-rules)) | — |
 
 Network probes classify every attempt into one observation:
 
@@ -137,6 +141,7 @@ An exception is `{cidr, proto (tcp|udp|any), ports}`; an empty port list means a
 - Private resolvers of the host or LAN are denied unless an exception covers them.
 - A name resolving to a denied address (rebinding, e.g. `10-0-0-1.sslip.io`) may resolve, but the connection to the resulting address is denied.
 - `filtered_dns` parity is optional for this spec.
+- A runtime may intercept DNS sent to any address and answer it itself. The probe detects this by querying `192.0.2.53` (TEST-NET-1, never a resolver). When intercepted, a DNS answer from a denied destination is `REVIEW` instead of `FAIL`, because it does not prove the destination is reachable; whether the interceptor forwards to private resolvers is then judged from the broker configuration.
 
 ### IPv6
 
@@ -193,10 +198,10 @@ All commands are `jailoc-vmprobe <subcommand>`. Build the guest binary with `CGO
     jailoc-vmprobe sentinel -plan plan.json -name host -log hits-host.jsonl
     ```
 
-    On macOS the application firewall silently drops unsigned binaries on non-loopback addresses. Allow the sentinel first:
-    `sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add <bin> --unblockapp <bin>`.
+    On macOS the application firewall silently drops unsigned binaries on non-loopback addresses, which makes every host-address deny check vacuous. Run the equivalent Python sentinel under the Apple-signed interpreter, which the firewall allows by default:
+    `/usr/bin/python3 cmd/jailoc-vmprobe/sentinel.py host hits-host.jsonl 47801 47802`.
 
-3. **Self-test** (host). Proves the sentinels are reachable, so deny results are not vacuous:
+3. **Self-test** (host). Proves the sentinels are reachable, so deny results are not vacuous. Addresses on interfaces that are down and link-local addresses the host cannot dial are `WARN`, and deny results for them are not conclusive:
    `jailoc-vmprobe selftest -plan plan.json -out r-selftest.json`.
 
 4. **Guest probes**, one per context:
@@ -208,6 +213,8 @@ All commands are `jailoc-vmprobe <subcommand>`. Build the guest binary with `CGO
     docker run --rm --privileged --network=host -v ...:/p <img> \
       /p/jailoc-vmprobe guest -context container-hostnet-privileged ...
     ```
+
+    The default per-probe timeout is 3 s. A guest too slow to complete the public positive controls in 3 s may run with a longer `-timeout`; the value is recorded in the evaluation.
 
 5. **Fail-closed watch.** Run in the guest while the operator kills the broker, restarts it, loads an invalid policy, and stops/starts the VM from cache:
    `jailoc-vmprobe watch -plan plan.json -context guest-root -duration 5m -timeline tl.jsonl -out r-watch.json`.
@@ -261,6 +268,7 @@ DNS (`D-`), all four contexts:
 | `D-HOST-DNS` | deny | DNS on host interface addresses |
 | `D-REBIND-RESOLVE` | review | Rebinding name resolution recorded |
 | `D-REBIND-TCP` | deny | Connect to rebinding name fails |
+| `D-DNS-INTERCEPT-UDP`, `D-DNS-INTERCEPT-TCP` | review if answered | DNS to `192.0.2.53` detects runtime DNS interception |
 
 Interfaces (`I-`), `guest-root` only:
 
@@ -307,3 +315,11 @@ Lifecycle (`L-`), self-test (`S-`) and coverage (`C-`):
 2. Any `FAIL` or `MISSING` fails the candidate.
 3. Every `REVIEW` item is resolved in writing in the candidate evaluation.
 4. Candidate configuration may be tuned and re-run, but the spec, plan options other than addresses, and probe binary may not be changed per candidate.
+5. Every guest report records the addresses assigned in its network namespace. A deny probe that fails without a sentinel hit, and whose target is one of those addresses in any guest context, becomes `SKIP`: it reached the guest or one of its containers, not the host. This happens when host and guest use the same private range, e.g. both run Docker's `172.17.0.0/16` bridge. A sentinel hit always fails the probe, because sentinels only run outside the domain.
+
+## Revisions
+
+| Version | Changes |
+|---|---|
+| `vm-acceptance/1` | Initial contract. |
+| `vm-acceptance/2` | DNS interception detection (`D-DNS-INTERCEPT-*`, interception turns DNS-to-denied answers into `REVIEW`); deny probes to addresses inside the workspace domain become `SKIP` unless a sentinel saw them; self-test `WARN` for host interfaces that are down; `D-HOST-DNS` probes IPv6 link-local host addresses per guest interface; Python sentinel for macOS hosts; guest `-timeout` may be raised for slow guests; Firecracker deferred; network policy comes from a jailoc-owned broker. |

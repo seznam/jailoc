@@ -54,6 +54,10 @@ type Report struct {
 	Started     time.Time `json:"started"`
 	Finished    time.Time `json:"finished"`
 	Results     []Result  `json:"results"`
+	// LocalAddrs lists the addresses assigned in the network namespace the
+	// probe ran in. The verdict uses them to recognise targets inside the
+	// workspace domain rather than on the host.
+	LocalAddrs []string `json:"local_addrs,omitempty"`
 }
 
 // NewReport starts a report for the given plan, kind and context.

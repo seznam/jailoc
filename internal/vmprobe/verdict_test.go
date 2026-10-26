@@ -168,3 +168,37 @@ func TestVerdictHostFixtureChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestVerdictSkipsDomainTargets(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		hit    bool
+		target string
+		want   Status
+	}{
+		{name: "guest-internal target is skipped", target: "172.17.0.1:22", want: StatusSkip},
+		{name: "host target still fails", target: "172.16.0.1:22", want: StatusFail},
+		{name: "sentinel hit overrides skip", target: "172.17.0.1:47801", hit: true, want: StatusFail},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := testPlan(t)
+			reps := fullReports(p)
+			reps[0].LocalAddrs = []string{"127.0.0.1", "172.16.0.2", "172.17.0.1"}
+			reps[0].Results = append(reps[0].Results, Result{ID: "N-LANGW-TCP", Key: "N-LANGW-TCP#9", Target: tt.target, Expect: ExpectDeny, Observation: ObsReached, Status: StatusFail})
+			var hits []Hit
+			if tt.hit {
+				hits = []Hit{{Sentinel: "host", Proto: "tcp", Payload: "JLP1 " + p.Nonce + " N-LANGW-TCP#9 " + reps[0].Context}}
+			}
+			v, err := BuildVerdict(p, reps, hits)
+			if err != nil {
+				t.Fatalf("BuildVerdict: %v", err)
+			}
+			if got := statusOf(v, "N-LANGW-TCP", reps[0].Context); !slices.Equal(got, []Status{tt.want}) {
+				t.Fatalf("N-LANGW-TCP = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

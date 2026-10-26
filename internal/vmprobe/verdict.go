@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -46,6 +48,8 @@ func BuildVerdict(p *Plan, reports []*Report, hits []Hit) (*Verdict, error) {
 			}
 		}
 	}
+	markDomainTargets(v.Results, reports)
+
 
 	for _, h := range hits {
 		nonce, key, ctxName, ok := ParsePayload(h.Payload)
@@ -77,6 +81,38 @@ func BuildVerdict(p *Plan, reports []*Report, hits []Hit) (*Verdict, error) {
 	v.Results = append(v.Results, hostFixtureChecks(p, reports)...)
 	v.Results = append(v.Results, coverage(reports)...)
 	return v, nil
+}
+
+// markDomainTargets turns deny failures whose target is assigned inside the
+// workspace domain (any guest context) into SKIP: such a probe reaches the
+// guest or one of its containers, not the host. Sentinel hits applied later
+// still fail the result, because a sentinel only runs on real hosts.
+func markDomainTargets(results []Result, reports []*Report) {
+	domain := map[netip.Addr]bool{}
+	for _, rep := range reports {
+		if rep.Kind != "guest" {
+			continue
+		}
+		for _, s := range rep.LocalAddrs {
+			if a, err := netip.ParseAddr(s); err == nil {
+				domain[a.WithZone("").Unmap()] = true
+			}
+		}
+	}
+	for i := range results {
+		r := &results[i]
+		if r.Expect != ExpectDeny || r.Status != StatusFail {
+			continue
+		}
+		host, _, err := net.SplitHostPort(r.Target)
+		if err != nil {
+			continue
+		}
+		if a, err := netip.ParseAddr(host); err == nil && domain[a.WithZone("").Unmap()] {
+			r.Status = StatusSkip
+			r.Detail += "; target is assigned inside the workspace domain, not a host destination"
+		}
+	}
 }
 
 func coverage(reports []*Report) []Result {

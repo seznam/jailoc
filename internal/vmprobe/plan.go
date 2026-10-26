@@ -16,7 +16,7 @@ import (
 )
 
 // SpecVersion identifies the acceptance specification revision the probes implement.
-const SpecVersion = "vm-acceptance/1"
+const SpecVersion = "vm-acceptance/2"
 
 // IPv6 modes a candidate may declare.
 const (
