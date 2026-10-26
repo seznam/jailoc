@@ -50,7 +50,6 @@ func BuildVerdict(p *Plan, reports []*Report, hits []Hit) (*Verdict, error) {
 	}
 	markDomainTargets(v.Results, reports)
 
-
 	for _, h := range hits {
 		nonce, key, ctxName, ok := ParsePayload(h.Payload)
 		where := fmt.Sprintf("sentinel %s %s %s <- %s", h.Sentinel, h.Proto, h.Local, h.Remote)

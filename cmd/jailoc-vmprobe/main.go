@@ -121,7 +121,7 @@ func cmdPlan(args []string) error {
 	fs.StringVar(&opts.IPv6Mode, "ipv6", "", "candidate IPv6 mode: enforced or disabled (required)")
 	fs.StringVar(&opts.VsockPorts, "vsock-ports", "1-8192", "host vsock ports to scan from the guest")
 	fs.Var(&lan, "lan-sentinel", "address of a sentinel on another LAN machine (repeatable)")
-	fs.Var(&peers, "peer", "address of a peer workspace running a sentinel (repeatable)")
+	fs.Var(&peers, "peer", "peer workspace: ADDR running a sentinel, or ADDR:PORT of a published peer TCP port (repeatable)")
 	fs.Var(&resolvers, "host-resolver", "host resolver address (repeatable, default: /etc/resolv.conf)")
 	fs.Var(&excs, "exception", "policy exception cidr,proto[,port...] configured on the candidate (repeatable)")
 	fs.Var(&exports, "export", "additional declared share host:guest:rw|ro (repeatable)")

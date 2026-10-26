@@ -238,6 +238,9 @@ func netProbes(p *Plan) []probe {
 	for _, s := range p.PeerAddrs {
 		if a, err := netip.ParseAddr(s); err == nil {
 			probes = append(probes, sentinelProbes(p, "N-PEER", a, true, primary, []string{kindTCP, kindUDP})...)
+		} else if ap, err := netip.ParseAddrPort(s); err == nil {
+			// A peer's published TCP port, e.g. its ingress forward.
+			probes = append(probes, sentinelProbes(p, "N-PEER", ap.Addr(), true, []int{int(ap.Port())}, []string{kindTCP})...)
 		}
 	}
 	for _, t := range MetadataTargets {
