@@ -5,31 +5,19 @@
 
 With `backend = "vm"`, each workspace runs in its own lightweight virtual machine instead of on the host Docker daemon. The VM is the security boundary: the agent container, its Docker builds and any containers it starts all run inside the VM, and all network traffic leaves through a jailoc-owned network broker on the host. No host Docker installation is needed. See [VM Backend](../explanation/vm-backend.md) for the design.
 
-## Install the VM runtime
+## VM runtime
 
-1. Install libkrun and its kernel bundle:
+On macOS (Apple Silicon), jailoc needs nothing besides itself. The first `jailoc up` of a VM workspace downloads the pinned VM runtime (about 25 MB: the `go-microvm-runner` process that hosts the VM, libkrun, and the libkrunfw guest kernel), verifies its SHA-256 checksums and unpacks it into `~/.cache/jailoc-vm/runtime/`. Later starts reuse it.
 
-    ```bash
-    brew tap slp/krun
-    brew trust slp/krun
-    brew install libkrun libkrunfw
-    ```
+To use your own runner and libraries instead, for example on Linux where no runtime is pinned, set them in [`[vm]`](../reference/configuration.md#vm):
 
-2. Install `go-microvm-runner`, the process that hosts the VM. It must be built from the go-microvm revision jailoc pins in its `go.mod` and code-signed with the hypervisor entitlement. In a checkout of that revision:
+```toml
+[vm]
+runner = "~/.local/bin/go-microvm-runner"
+lib_dir = "/opt/homebrew/lib"
+```
 
-    ```bash
-    task build-dev-darwin
-    cp bin/go-microvm-runner ~/.local/bin/
-    ```
-
-3. Put the runner next to the `jailoc` binary or on `PATH`, or point jailoc at it:
-
-    ```toml
-    [vm]
-    runner = "~/.local/bin/go-microvm-runner"
-    ```
-
-    Set `lib_dir` when libkrun is not installed in `/opt/homebrew/lib`. See [`[vm]`](../reference/configuration.md#vm).
+On Linux, the user running jailoc also needs read and write access to `/dev/kvm`.
 
 ## Switch a workspace to the VM backend
 

@@ -28,6 +28,8 @@ flowchart LR
 
 `jailoc up` starts a detached supervisor process per workspace. The supervisor starts the network broker, boots the VM, waits until the guest Docker daemon answers, and from then on keeps the two together: when either the VM or the broker exits, it stops the other. `jailoc down` asks the guest to stop its Docker daemon cleanly before the VM powers off, so the data disk stays consistent.
 
+The VM runtime (the runner process, libkrun and the libkrunfw guest kernel) is a separate download: jailoc pins its URL and SHA-256 per platform and fetches it on first use, so the jailoc binary stays small and free of C dependencies for users of the Docker backend.
+
 The rest of jailoc is unchanged. Image resolution, overlay builds, `docker compose up`, `logs`, `exec` and `attach` all use the regular Docker client code, pointed at the guest Docker daemon through a Unix socket that the broker forwards into the VM. Builds and image pulls happen inside the VM; nothing touches a host Docker daemon.
 
 ## Guest

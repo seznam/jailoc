@@ -29,7 +29,6 @@ import (
 )
 
 const (
-	vmRunnerBinary   = "go-microvm-runner"
 	vmStartTimeout   = 5 * time.Minute
 	vmStopTimeout    = 45 * time.Second
 	vmMemoryOverhead = 1024 // MiB added to the workspace memory limit
@@ -239,7 +238,7 @@ func buildVMSpec(ctx context.Context, cfg *config.Config, ws *workspace.Resolved
 	if err != nil {
 		return vm.Spec{}, fmt.Errorf("locate jailoc executable: %w", err)
 	}
-	runner, err := vmRunnerPath(cfg.VM.Runner, exe)
+	runner, libDir, err := vmRuntime(ctx, cfg)
 	if err != nil {
 		return vm.Spec{}, err
 	}
@@ -265,7 +264,7 @@ func buildVMSpec(ctx context.Context, cfg *config.Config, ws *workspace.Resolved
 		Shares:     shares,
 		Policy:     policy,
 		RunnerPath: runner,
-		LibDir:     vmLibDir(cfg.VM.LibDir),
+		LibDir:     libDir,
 		ImageCache: filepath.Join(vmRootDir(), "images"),
 		Broker:     []string{exe, "netbroker"},
 	}
@@ -275,18 +274,17 @@ func buildVMSpec(ctx context.Context, cfg *config.Config, ws *workspace.Resolved
 	return spec, nil
 }
 
-func vmRunnerPath(configured, exe string) (string, error) {
-	if configured != "" {
-		return configured, nil
+// vmRuntime returns the runner and library directory: the configured runner
+// with its lib_dir, or the pinned runtime jailoc downloads on first use.
+func vmRuntime(ctx context.Context, cfg *config.Config) (string, string, error) {
+	if cfg.VM.Runner != "" {
+		return cfg.VM.Runner, vmLibDir(cfg.VM.LibDir), nil
 	}
-	next := filepath.Join(filepath.Dir(exe), vmRunnerBinary)
-	if _, err := os.Stat(next); err == nil {
-		return next, nil
+	runner, libDir, err := vm.EnsureRuntime(ctx, filepath.Join(vmRootDir(), "runtime"), os.Stdout)
+	if err != nil {
+		return "", "", fmt.Errorf("prepare VM runtime: %w", err)
 	}
-	if p, err := exec.LookPath(vmRunnerBinary); err == nil {
-		return p, nil
-	}
-	return "", fmt.Errorf("%s not found next to jailoc or on PATH; set runner in the [vm] section of the config", vmRunnerBinary)
+	return runner, libDir, nil
 }
 
 func vmLibDir(configured string) string {

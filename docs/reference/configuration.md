@@ -26,12 +26,12 @@ password_mode = "auto"
 
 ## `[vm]`
 
-Runtime settings for workspaces with `backend = "vm"`. Ignored by the Docker backend. See [Run a workspace in a VM](../how-to/vm-backend.md).
+Runtime settings for workspaces with `backend = "vm"`. Ignored by the Docker backend. Both fields are optional. See [Run a workspace in a VM](../how-to/vm-backend.md).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `runner` | string | (auto) | Path to the `go-microvm-runner` binary. When empty, jailoc uses the runner next to its own executable, then the first one on `PATH`. Must be absolute; supports `~` expansion. |
-| `lib_dir` | string | (auto) | Directory containing `libkrun` and `libkrunfw`. When empty, jailoc uses `/opt/homebrew/lib` on macOS if it exists, otherwise the system library path. Must be absolute; supports `~` expansion. |
+| `runner` | string | (managed) | Path to a `go-microvm-runner` binary. When empty, jailoc downloads the pinned VM runtime for the platform on first use into `~/.cache/jailoc-vm/runtime/` (macOS on Apple Silicon); on platforms without a pinned runtime, `runner` is required. Must be absolute; supports `~` expansion. |
+| `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Ignored when `runner` is empty. When empty with a configured `runner`, jailoc uses `/opt/homebrew/lib` on macOS if it exists, otherwise the system library path. Must be absolute; supports `~` expansion. |
 
 ### Example
 
