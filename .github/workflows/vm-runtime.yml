@@ -1,0 +1,79 @@
+name: VM runtime
+
+# Builds the VM runtime bundle that jailoc downloads for backend = "vm"
+# (internal/vm/runtime.go) and attaches it to a pre-release.
+#
+# Push a tag named vm-runtime-<go-microvm release>-jailoc.<n>, for example
+# vm-runtime-v0.0.41-jailoc.1. The runner is built from the go-microvm
+# revision that go.mod pins at the tagged commit; libkrun comes from the
+# go-microvm release named in the tag.
+
+on:
+  push:
+    tags: ["vm-runtime-*"]
+
+permissions:
+  contents: read
+
+env:
+  # https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  darwin-arm64:
+    name: Build darwin-arm64 runtime
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve versions
+        id: versions
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          upstream="${tag#vm-runtime-}"
+          upstream="${upstream%-jailoc.*}"
+          read -r path version < <(go list -m -f '{{if .Replace}}{{.Replace.Path}} {{.Replace.Version}}{{else}}{{.Path}} {{.Version}}{{end}}' github.com/stacklok/go-microvm)
+          echo "upstream=${upstream}" >> "$GITHUB_OUTPUT"
+          echo "repo=${path}" >> "$GITHUB_OUTPUT"
+          echo "rev=${version##*-}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out go-microvm
+        env:
+          REPO: ${{ steps.versions.outputs.repo }}
+          REV: ${{ steps.versions.outputs.rev }}
+        run: |
+          git clone --quiet "https://${REPO}" "$RUNNER_TEMP/go-microvm"
+          git -C "$RUNNER_TEMP/go-microvm" checkout --quiet "$REV"
+
+      - name: Install libkrun and Task
+        run: |
+          brew tap slp/krun
+          brew trust slp/krun
+          brew install libkrun libkrunfw go-task
+
+      - name: Build bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ steps.versions.outputs.upstream }}
+        run: |
+          scripts/vm-runtime/build-runtime-darwin.sh "$RUNNER_TEMP/go-microvm" "$UPSTREAM" dist
+          (cd dist && shasum -a 256 go-microvm-runtime-darwin-arm64.tar.gz > sha256sums.txt)
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ steps.versions.outputs.upstream }}
+          REPO: ${{ steps.versions.outputs.repo }}
+          REV: ${{ steps.versions.outputs.rev }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/go-microvm-runtime-darwin-arm64.tar.gz dist/sha256sums.txt \
+            --prerelease --latest=false \
+            --title "VM runtime ${GITHUB_REF_NAME#vm-runtime-}" \
+            --notes "VM runtime for jailoc's experimental \`backend = \"vm\"\`: go-microvm-runner built from ${REPO}@${REV}, with libkrun and its libraries from stacklok/go-microvm ${UPSTREAM}. The firmware (libkrunfw) is downloaded from the stacklok/go-microvm ${UPSTREAM} release."
