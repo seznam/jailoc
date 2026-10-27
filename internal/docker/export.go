@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"runtime"
 
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 )
 
@@ -45,4 +48,62 @@ func ImageID(ctx context.Context, ref string) (string, error) {
 		return "", fmt.Errorf("inspect image %s: %w", ref, err)
 	}
 	return inspect.ID, nil
+}
+
+// HostArchitecture checks that the Docker daemon selected by the environment
+// answers and builds Linux images for the CPU architecture jailoc runs on,
+// which is the architecture of its VMs.
+func HostArchitecture(ctx context.Context) error {
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("create Docker Engine client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+	info, err := cli.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("query Docker daemon: %w", err)
+	}
+	if info.OSType != "linux" {
+		return fmt.Errorf("docker daemon runs %s containers, need linux", info.OSType)
+	}
+	if want := linuxArch(runtime.GOARCH); info.Architecture != want {
+		return fmt.Errorf("docker daemon architecture is %s, VMs need %s", info.Architecture, want)
+	}
+	return nil
+}
+
+// linuxArch maps a Go architecture to the uname -m name the daemon reports.
+func linuxArch(goarch string) string {
+	switch goarch {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	default:
+		return goarch
+	}
+}
+
+// EnsureImage pulls ref for linux/<host architecture> unless the daemon
+// already has it.
+func EnsureImage(ctx context.Context, ref string) error {
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("create Docker Engine client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+	if _, err := cli.ImageInspect(ctx, ref); err == nil {
+		return nil
+	} else if !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("inspect image %s: %w", ref, err)
+	}
+	rc, err := cli.ImagePull(ctx, ref, image.PullOptions{Platform: "linux/" + runtime.GOARCH})
+	if err != nil {
+		return fmt.Errorf("pull image %s: %w", ref, err)
+	}
+	defer func() { _ = rc.Close() }()
+	if err := displayStream(rc); err != nil {
+		return fmt.Errorf("pull image %s: %w", ref, err)
+	}
+	return nil
 }

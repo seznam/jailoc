@@ -225,7 +225,18 @@ type Config struct {
 type VMConfig struct {
 	Runner string `toml:"runner,omitempty"`
 	LibDir string `toml:"lib_dir,omitempty"`
+	// Builder selects where workspace images are built: BuilderAuto (host
+	// Docker when usable, otherwise a builder VM), BuilderDocker or
+	// BuilderVM. Empty means BuilderAuto.
+	Builder string `toml:"builder,omitempty"`
 }
+
+// Image builders of the VM backend.
+const (
+	BuilderAuto   = "auto"
+	BuilderDocker = "docker"
+	BuilderVM     = "vm"
+)
 
 type BaseConfig struct {
 	Dockerfile string `toml:"dockerfile,omitempty"`
@@ -817,6 +828,11 @@ func Validate(cfg *Config) error {
 
 	if err := validateBackend(cfg.Defaults.Backend); err != nil {
 		return fmt.Errorf("defaults: %w", err)
+	}
+	switch cfg.VM.Builder {
+	case "", BuilderAuto, BuilderDocker, BuilderVM:
+	default:
+		return fmt.Errorf("vm: invalid builder %q: must be %q, %q, %q, or empty (%s)", cfg.VM.Builder, BuilderAuto, BuilderDocker, BuilderVM, BuilderAuto)
 	}
 	for _, p := range []*string{&cfg.VM.Runner, &cfg.VM.LibDir} {
 		if *p == "" {

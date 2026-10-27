@@ -3606,6 +3606,10 @@ func TestBackendValidation(t *testing.T) {
 		{name: "vm accepts isolated_build", ws: Workspace{Backend: BackendVM, IsolatedBuild: new(true)}},
 		{name: "relative runner", ws: Workspace{}, vm: VMConfig{Runner: "bin/runner"}, wantError: "vm: path"},
 		{name: "absolute runner", ws: Workspace{}, vm: VMConfig{Runner: "/opt/jailoc/go-microvm-runner", LibDir: "/opt/homebrew/lib"}},
+		{name: "builder auto", ws: Workspace{}, vm: VMConfig{Builder: BuilderAuto}},
+		{name: "builder docker", ws: Workspace{}, vm: VMConfig{Builder: BuilderDocker}},
+		{name: "builder vm", ws: Workspace{}, vm: VMConfig{Builder: BuilderVM}},
+		{name: "builder unknown", ws: Workspace{}, vm: VMConfig{Builder: "podman"}, wantError: `vm: invalid builder "podman"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

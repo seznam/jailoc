@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"os/signal"
@@ -119,6 +120,22 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 // buildWorkspaceImage runs the image cascade in a builder VM and unpacks the
 // result into the image cache. It returns the image-cache reference.
 func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, rt vmRuntimeFiles) (string, error) {
+	var hostErr error
+	if !ws.IsolatedBuild && cfg.VM.Builder != config.BuilderVM {
+		hostErr = docker.HostArchitecture(ctx)
+	}
+	host, err := useHostDocker(cfg.VM.Builder, ws.IsolatedBuild, hostErr)
+	if err != nil {
+		return "", err
+	}
+	if host {
+		_, _ = color.New(color.FgCyan).Printf("Building image for workspace %s with the host Docker daemon...\n", ws.Name)
+		return importWorkspaceImage(ctx, cfg, ws)
+	}
+	if hostErr != nil {
+		slog.Debug("host Docker not used for the image build", "reason", hostErr)
+	}
+
 	dir := builderStateDir(ws)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create builder state dir: %w", err)
@@ -173,11 +190,34 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	if err := setDockerHost(st.DockerSocket); err != nil {
 		return "", err
 	}
+	return importWorkspaceImage(ctx, cfg, ws)
+}
 
+// useHostDocker reports whether the workspace image is built with the host
+// Docker daemon. isolated_build always uses its own builder VM; "auto" uses
+// the host daemon when hostErr is nil.
+func useHostDocker(builder string, isolated bool, hostErr error) (bool, error) {
+	switch {
+	case isolated || builder == config.BuilderVM:
+		return false, nil
+	case builder == config.BuilderDocker && hostErr != nil:
+		return false, fmt.Errorf(`[vm] builder = "docker": %w`, hostErr)
+	default:
+		return hostErr == nil, nil
+	}
+}
+
+// importWorkspaceImage resolves and builds the workspace image with the
+// Docker daemon selected by DOCKER_HOST and unpacks it into the VM image
+// cache.
+func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (string, error) {
 	_, _ = color.New(color.FgCyan).Printf("Resolving image for workspace %s...\n", ws.Name)
 	finalImage, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
 	if err != nil {
 		return "", fmt.Errorf("resolve image for workspace %q: %w", ws.Name, err)
+	}
+	if err := docker.EnsureImage(ctx, finalImage); err != nil {
+		return "", err
 	}
 	id, err := docker.ImageID(ctx, finalImage)
 	if err != nil {

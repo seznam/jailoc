@@ -48,7 +48,7 @@ jailoc up [flags]
 
 Resolves the container image (see [Image Resolution](image-resolution.md)), validates secret sources (verifying host environment variables exist and are non-empty, and secret files exist with valid permissions), generates a `docker-compose.yml` in `~/.cache/jailoc/{workspace}/`, and starts two containers: `opencode` and `dind`.
 
-For workspaces with `backend = "vm"`, builds the workspace image in a builder VM, then boots the image as the root file system of the workspace VM and delivers secrets to it. No containers or compose file are involved; see [Run a workspace in a VM](../how-to/vm-backend.md).
+For workspaces with `backend = "vm"`, builds the workspace image with the host Docker daemon or in a builder VM (see `[vm] builder`), then boots the image as the root file system of the workspace VM and delivers secrets to it. No containers or compose file are involved; see [Run a workspace in a VM](../how-to/vm-backend.md).
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 

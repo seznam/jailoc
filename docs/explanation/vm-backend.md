@@ -33,7 +33,7 @@ flowchart LR
 
 `jailoc up` runs in two phases:
 
-1. **Build.** A builder VM boots a pinned `docker:dind` image with a persistent data disk. jailoc runs its regular image resolution against the builder's Docker daemon through a Unix socket that the network broker forwards into the VM, so workspace images, Dockerfile overlays and their build cache behave as with the Docker backend. The finished image is exported and unpacked into a local image cache, and the builder shuts down.
+1. **Build.** jailoc runs its regular image resolution, so workspace images, Dockerfile overlays and their build cache behave as with the Docker backend. It uses the host Docker daemon when one is available (`[vm] builder`), otherwise a builder VM: a pinned `docker:dind` image with a persistent data disk, reached through a Unix socket that the network broker forwards into the VM. The finished image is exported and unpacked into a local image cache; a builder VM then shuts down.
 2. **Run.** The workspace VM boots the unpacked image as its root file system, with `jailoc-guest` as its init process. jailoc then delivers secrets over SSH.
 
 Every VM is owned by a detached supervisor process that starts its network broker, boots the VM, waits until the VM is ready, and from then on keeps the two together: when either the VM or the broker exits, it stops the other.
@@ -42,7 +42,9 @@ The VM runtime (the runner process, libkrun and the libkrunfw guest kernel) is a
 
 ## Builder
 
-All VM workspaces share one builder by default. It keeps one build cache for all of them and reaches public addresses only. With `isolated_build`, a workspace gets a builder of its own, with a separate data disk and the workspace's `allowed_hosts` and `allowed_networks`, so build steps of one workspace cannot read another workspace's build cache or private network access. Builds of the same builder are serialized.
+Building with the host Docker daemon is fastest and shares the build cache with the Docker backend, but Dockerfile `RUN` steps then run with Docker-backend isolation and unrestricted host networking. A builder VM keeps build steps inside a VM boundary instead.
+
+All VM workspaces share one builder VM. It keeps one build cache for all of them and reaches public addresses only. With `isolated_build`, a workspace gets a builder of its own, with a separate data disk and the workspace's `allowed_hosts` and `allowed_networks`, so build steps of one workspace cannot read another workspace's build cache or private network access. Builds of the same builder are serialized.
 
 ## Workspace VM
 
@@ -84,8 +86,8 @@ No port is published on the host. An invalid policy file at start prevents the V
 
 ## Trade-offs
 
-- **Start time:** a cached start takes about 15 seconds on Apple Silicon, most of it checking the image in the builder; the first start builds the image.
-- **Resources:** each workspace reserves its own VM memory (`memory` + 1 GiB) and vCPUs (`cpu` rounded up); a running build adds the builder (4 vCPUs, 4 GiB).
+- **Start time:** a cached start takes about 7 seconds on Apple Silicon with the host Docker daemon and about 15 seconds with the builder VM, which has to boot first; the first start builds the image.
+- **Resources:** each workspace reserves its own VM memory (`memory` + 1 GiB) and vCPUs (`cpu` rounded up); a build in the builder VM adds the builder (4 vCPUs, 4 GiB).
 - **No Docker for the agent:** the workspace VM has no Docker daemon.
 - **No remote mode:** sessions run OpenCode inside the VM; there is no OpenCode server port on the host.
 - **Platform:** tested on macOS with libkrun. The broker is IPv4 only.

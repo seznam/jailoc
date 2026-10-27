@@ -51,7 +51,7 @@ jailoc up myproject
 jailoc
 ```
 
-The first `jailoc up` builds the workspace image in a builder VM, exactly as the Docker backend would build it (see [Image Resolution](../reference/image-resolution.md)), unpacks it and boots the workspace VM from it. Later starts reuse the build cache and the unpacked image and take a few seconds.
+The first `jailoc up` builds the workspace image exactly as the Docker backend would build it (see [Image Resolution](../reference/image-resolution.md)), with the host Docker daemon when one is available and otherwise in a builder VM. It then unpacks the image and boots the workspace VM from it. Later starts reuse the build cache and the unpacked image and take a few seconds.
 
 `jailoc` then opens OpenCode inside the VM over SSH, in the directory you started it from. Closing OpenCode ends the session; the VM keeps running until `jailoc down`.
 
@@ -83,18 +83,34 @@ Each copy is taken when the VM starts and is read-only in the workspace, even fo
 
 A copy destination cannot overlap a shared path, so it cannot point into a workspace path or a `mounts` destination.
 
-## Share a builder or isolate it
+## Choose where images are built
 
-By default, all VM workspaces share one builder VM and its build cache. The shared builder can reach public addresses only, regardless of `allowed_hosts` and `allowed_networks`.
+`[vm] builder` selects where workspace images are built:
 
-To build a workspace's image in a builder of its own, with its own build cache and the workspace's network rules, set:
+| Value | Builds with |
+|-------|-------------|
+| `"auto"` (default) | the host Docker daemon when it answers and builds Linux images for the host's CPU architecture, otherwise the builder VM |
+| `"docker"` | the host Docker daemon; `jailoc up` fails when it is not usable |
+| `"vm"` | always the builder VM |
+
+```toml
+[vm]
+builder = "vm"
+```
+
+!!! warning
+    With the host Docker daemon, Dockerfile `RUN` steps of workspace images run with the isolation of the Docker backend, not inside a VM, and the build reaches every network the host reaches. Use `builder = "vm"` or `isolated_build` for Dockerfiles you do not trust.
+
+The builder VM is shared by all VM workspaces, keeps one build cache, and reaches public addresses only, regardless of `allowed_hosts` and `allowed_networks`.
+
+To build a workspace's image in a builder VM of its own, with its own build cache and the workspace's network rules, set:
 
 ```toml
 [workspaces.myproject]
 isolated_build = true
 ```
 
-Set `isolated_build = true` in `[defaults]` to isolate every workspace. Each builder runs only while an image is built.
+Set `isolated_build = true` in `[defaults]` to isolate every workspace. `isolated_build` always uses a builder VM, whatever `[vm] builder` says. Each builder VM runs only while an image is built.
 
 ## Stop and remove the VM
 

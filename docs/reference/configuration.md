@@ -26,12 +26,13 @@ password_mode = "auto"
 
 ## `[vm]`
 
-Runtime settings for workspaces with `backend = "vm"`. Ignored by the Docker backend. Both fields are optional. See [Run a workspace in a VM](../how-to/vm-backend.md).
+Runtime settings for workspaces with `backend = "vm"`. Ignored by the Docker backend. All fields are optional. See [Run a workspace in a VM](../how-to/vm-backend.md).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `runner` | string | (managed) | Path to a `go-microvm-runner` binary. When empty, jailoc downloads the pinned VM runtime for the platform on first use into `~/.cache/jailoc-vm/runtime/` (macOS on Apple Silicon); on platforms without a pinned runtime, `runner` is required. Must be absolute; supports `~` expansion. |
 | `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Ignored when `runner` is empty. When empty with a configured `runner`, jailoc uses `/opt/homebrew/lib` on macOS if it exists, otherwise the system library path. Must be absolute; supports `~` expansion. |
+| `builder` | string | `"auto"` | Where workspace images are built: `"auto"` uses the host Docker daemon when it answers and runs Linux on the host's CPU architecture, otherwise a builder VM; `"docker"` requires the host daemon; `"vm"` always uses the builder VM. `isolated_build` always uses a builder VM. Host builds run Dockerfile steps with Docker-backend isolation. |
 
 ### Example
 
@@ -75,7 +76,7 @@ Global defaults applied to all workspaces. All fields are optional and default t
 |-------|------|---------|-------------|
 | `image` | string | (none) | Pre-built Docker image used as the base for workspace Dockerfile builds, or pulled directly when no workspace `dockerfile` is set. |
 | `backend` | string | `"docker"` | Where workspaces run: `"docker"` (containers on the host Docker daemon) or `"vm"` (one microVM per workspace, experimental). See [Run a workspace in a VM](../how-to/vm-backend.md). |
-| `isolated_build` | bool | `false` | Backend `"vm"` only. Build workspace images in a builder VM of their own, with its own build cache and the workspace's network policy, instead of the builder VM shared by all workspaces. |
+| `isolated_build` | bool | `false` | Backend `"vm"` only. Build workspace images in a builder VM of their own (overrides `[vm] builder`), with its own build cache and the workspace's network policy, instead of the builder VM shared by all workspaces. |
 | `env` | string[] | `[]` | Environment variables applied to all workspaces. Each entry must be in `KEY=VALUE` format. Workspace `env` entries take precedence over defaults with the same key. |
 | `env_file` | string[] | `[]` | Paths to `.env` files loaded for all workspaces. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Parsed before workspace-level `env_file` entries. |
 | `mounts` | string[] | `[]` | Additional bind mounts for all workspaces. Each entry follows `host:container[:mode]` format where mode is `ro` or `rw` (default `rw`). An empty host source removes a default mount matching the container path. Merged with per-workspace `mounts` — see Merge Semantics below. Supports `~` expansion on both host and container sides. |
@@ -257,7 +258,7 @@ Accepted values: `"docker"`, `"vm"`, or empty (`"docker"`). A workspace value ov
 - Every `mounts` entry with a host source must be a directory; file mounts are rejected at `jailoc up`. Use [`copies`](#copies) for files.
 - `git_config` is delivered as a copy to `/home/agent/.gitconfig`.
 
-`[vm]` `runner` and `lib_dir` must be absolute paths after `~` expansion.
+`[vm]` `runner` and `lib_dir` must be absolute paths after `~` expansion. `[vm]` `builder` must be `"auto"`, `"docker"`, `"vm"` or empty.
 
 ### `copies`
 
