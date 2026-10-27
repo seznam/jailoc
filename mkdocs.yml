@@ -1,5 +1,5 @@
 site_name: jailoc
-site_description: Sandboxed Docker Compose environments for headless OpenCode coding agents
+site_description: Sandboxed micro-VMs for headless OpenCode coding agents
 site_dir: public
 repo_url: https://github.com/seznam/jailoc
 repo_name: seznam/jailoc
@@ -73,9 +73,9 @@ nav:
     - Network Access: how-to/network-access.md
     - Secrets: how-to/secrets.md
     - SSH & Git Passthrough: how-to/ssh-git-passthrough.md
-    - Access Modes: how-to/access-modes.md
+    - Sessions: how-to/sessions.md
     - TUI Plugin: how-to/tui-plugin.md
-    - Run a Workspace in a VM: how-to/vm-backend.md
+    - Migrate from jailoc v1: how-to/migrate-from-v1.md
     - Troubleshooting: how-to/troubleshooting.md
   - Reference:
     - CLI: reference/cli.md
@@ -86,9 +86,7 @@ nav:
   - Explanation:
     - Overview: explanation/overview.md
     - Threat Model: explanation/threat-model.md
-    - Container Architecture: explanation/container-architecture.md
+    - Architecture: explanation/architecture.md
     - Network Isolation: explanation/network-isolation.md
     - Secrets: explanation/secrets.md
-    - Access Modes: explanation/access-modes.md
-    - VM Backend: explanation/vm-backend.md
   - Development: development.md

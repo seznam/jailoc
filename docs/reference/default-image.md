@@ -1,8 +1,10 @@
 # Default Image Contents
 
-The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below. This is the image used when no custom `image`, `defaults.image`, or `base.dockerfile` is configured — [step 5 of image resolution](image-resolution.md#step-5-embedded-fallback).
+The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below. This image is used when no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile). jailoc unpacks it into the VM image cache and boots it as the root file system of the workspace VM.
 
-Core tool versions (Node.js, yaml-language-server, OpenCode) are pinned as `ARG` declarations at the top of the Dockerfile. Other npm-installed language servers use the latest version at build time.
+Core tool versions (Node.js, the npm language servers, OpenCode, Docker, Buildx, Compose) are pinned as `ARG` declarations at the top of the Dockerfile.
+
+The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of the VM and starts sessions over SSH.
 
 ---
 
@@ -38,7 +40,7 @@ Core tool versions (Node.js, yaml-language-server, OpenCode) are pinned as `ARG`
 
 ## Docker
 
-Docker CE static binaries, pinned and checksum-verified as `ARG` declarations at the top of the Dockerfile. The CLI talks to the Docker-in-Docker sidecar with the Docker backend; with backend `"vm"`, `dockerd` runs inside the workspace VM.
+Docker CE static binaries, checksum-verified. With `enable_docker = true`, jailoc-guest starts `dockerd` from these binaries inside the workspace VM.
 
 | Tool | Source | Binary |
 |------|--------|--------|
@@ -50,22 +52,28 @@ Docker CE static binaries, pinned and checksum-verified as `ARG` declarations at
 
 | Tool | Source | Binary |
 |------|--------|--------|
-| OpenCode | `opencode.ai/install` | `opencode` |
+| OpenCode | npm package `opencode-ai` | `opencode` |
+
+## User and environment
+
+| Item | Value |
+|------|-------|
+| Agent user | `agent`, UID 1000, home `/home/agent`, shell `/bin/bash` |
+| sudo | passwordless for `agent` (disabled at runtime by `protect_git`) |
+| `PATH` | `/home/agent/.local/bin` prepended |
 
 ## System components
 
-These are installed for container operation, not direct agent use.
-
 | Tool | Purpose |
 |------|---------|
-| `iptables` | Network isolation (entrypoint.sh) |
-| `nftables` | Firewall backend of `dockerd` in VM workspaces |
-| `ca-certificates` | TLS certificate store |
+| `nftables` | Firewall backend of `dockerd` inside the VM |
+| `ca-certificates` | TLS certificate store; a forwarded `ca_bundle` is added to it |
+| `libatomic1` | Required by the Node.js runtime |
 
 ---
 
 ## Related pages
 
-- [Image Resolution](image-resolution.md) — the 5-step cascade that selects which image to use
-- [Custom Images](../how-to/custom-images.md) — how to build overlay Dockerfiles that extend the base
-- [Overlay Compatibility](overlay-compatibility.md) — which Dockerfile instructions survive into the final container
+- [Image Resolution](image-resolution.md): the cascade that selects which image to use
+- [Custom Images](../how-to/custom-images.md): overlay Dockerfiles that extend the base
+- [Overlay Compatibility](overlay-compatibility.md): which image settings the VM uses

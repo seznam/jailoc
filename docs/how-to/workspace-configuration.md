@@ -1,8 +1,8 @@
 # How to configure workspaces
 
-This guide shows how to define and tune workspaces in jailoc's configuration file. For a full reference of every field and its type, see [Configuration reference](../reference/configuration.md).
+This guide shows how to define and tune workspaces in jailoc's configuration file. For every field, its type and its validation rules, see the [Configuration reference](../reference/configuration.md).
 
-## Config file location
+## Find the config file
 
 jailoc stores its configuration at:
 
@@ -10,17 +10,15 @@ jailoc stores its configuration at:
 ~/.config/jailoc/config.toml
 ```
 
-The file is created automatically on first run with a `default` workspace already in place. You can edit it with any text editor.
+The file is created on first run with a `default` workspace already in place. Edit it with any text editor.
 
----
+## Understand workspace detection
 
-## Automatic workspace detection
+Most commands accept `--workspace`. When it's omitted, jailoc picks the workspace in this order:
 
-Most commands accept an explicit `--workspace` flag. When omitted, jailoc selects the workspace automatically using this resolution order:
-
-1. **Explicit `--workspace` flag** — if set, use that workspace.
-2. **Longest-prefix CWD match** — compare the current working directory against every workspace's configured `paths`. The workspace whose path is the longest matching prefix wins. Equal-length matches break alphabetically.
-3. **`default` fallback** — if no path matches, the `default` workspace is used.
+1. **Explicit `--workspace` flag**: use that workspace.
+2. **Longest-prefix match of the current directory**: compare the current directory against every workspace's `paths`. The longest matching prefix wins; equal-length matches break alphabetically.
+3. **`default` fallback**: if no path matches, use the `default` workspace.
 
 Given these two workspaces:
 
@@ -32,58 +30,27 @@ paths = ["/home/you/projects"]
 paths = ["/home/you/projects/api"]
 ```
 
-Running `jailoc up` from `/home/you/projects/api/src` selects `specific` (longer prefix match). Running from `/home/you/projects/other` selects `broad`.
+Running `jailoc up` from `/home/you/projects/api/src` selects `specific`. Running it from `/home/you/projects/other` selects `broad`.
 
-`jailoc add` uses the path being added (not the raw CWD) for detection. If `--workspace` is set explicitly and the path being added is not under any of that workspace's configured paths, jailoc returns an error.
-
----
+`jailoc add` uses the path being added, not the current directory, for detection. If `--workspace` is set and the added path isn't under one of that workspace's paths, jailoc returns an error.
 
 ## Define a workspace
 
-Each workspace is a `[workspaces.<name>]` section. The only required field is `paths`.
+Each workspace is a `[workspaces.<name>]` section. The only required field is `paths`:
 
 ```toml
 [workspaces.default]
 paths = ["/home/you/projects/myproject"]
 ```
 
-The first entry in `paths` becomes the container's working directory. All paths are bind-mounted inside the container at their original absolute path, so `/home/you/projects/myproject` is accessible at the same path inside the container.
+Each path is shared into the VM read-write at its original absolute path, so `/home/you/projects/myproject` has the same path inside the guest. Files the agent creates there belong to your host user.
 
 !!! note
-    `~` is expanded to your home directory. Paths under system directories (`/usr`, `/etc`, `/var`, `/home/agent`, and similar) are rejected.
+    `~` expands to your home directory. Paths under system directories (`/usr`, `/etc`, `/var`, `/home/agent`, `/tmp` and similar) are rejected.
 
----
+## Give a workspace several paths
 
-## Define multiple workspaces
-
-Add as many `[workspaces.<name>]` sections as you need:
-
-```toml
-[workspaces.api]
-paths = ["/home/you/projects/api", "/home/you/projects/shared-libs"]
-
-[workspaces.frontend]
-paths = ["/home/you/projects/frontend"]
-```
-
-Each workspace gets its own isolated container environment.
-
-### Port allocation
-
-jailoc assigns ports starting at `4096`, sorted alphabetically by workspace name. Given the example above:
-
-| Workspace  | Port |
-|------------|------|
-| `api`      | 4096 |
-| `frontend` | 4097 |
-
-Adding a workspace with a name that sorts earlier shifts the ports of those that follow.
-
----
-
-## Add multiple paths
-
-Pass more than one directory to `paths` when an agent needs access to several repositories at once:
+List more than one directory when the agent needs several repositories at once:
 
 ```toml
 [workspaces.api]
@@ -93,13 +60,11 @@ paths = [
 ]
 ```
 
-All listed paths are mounted read-write. The first is the working directory.
-
----
+Each workspace gets its own VM. Define as many `[workspaces.<name>]` sections as you need.
 
 ## Allow specific hosts or networks
 
-By default, containers cannot reach private networks. To grant access to specific services, use `allowed_hosts` or `allowed_networks`.
+The guest can't reach private or reserved addresses by default. Open specific ones with `allowed_hosts` and `allowed_networks`:
 
 ```toml
 [workspaces.api]
@@ -108,13 +73,11 @@ allowed_hosts = ["internal-registry.example.com"]
 allowed_networks = ["10.10.5.0/24"]
 ```
 
-See [How to allow specific hosts or networks](network-access.md) for step-by-step instructions.
-
----
+See [How to allow specific hosts or networks](network-access.md).
 
 ## Set a custom image
 
-To use a pre-built image directly, set `image` in the workspace block:
+Use a pre-built image:
 
 ```toml
 [workspaces.myproject]
@@ -122,157 +85,117 @@ paths = ["/home/you/projects/myproject"]
 image = "myregistry.example.com/myteam/myimage:v1.2.3"
 ```
 
-To build from a custom Dockerfile instead, use `dockerfile`:
+Or build an overlay from a Dockerfile, optionally with its own build context:
 
 ```toml
 [workspaces.myproject]
 paths = ["/home/you/projects/myproject"]
-dockerfile = "https://git.example.com/team/dockerfiles/-/raw/main/myproject.Dockerfile"
+dockerfile = "~/projects/myproject/docker/overlay.Dockerfile"
+build_context = "~/projects/myproject"
 ```
 
-See [How to use a custom Docker image](custom-images.md) for all image customization options.
-
----
-
-## Set a build context
-
-When building a workspace-specific image layer, jailoc uses the parent directory of the workspace `dockerfile` as the Docker build context by default. Override it with `build_context`:
-
-```toml
-[workspaces.myproject]
-paths = ["/home/you/projects/myproject"]
-build_context = "/home/you/projects/myproject/docker"
-```
-
----
-
-## Set a connection mode
-
-Control how `jailoc` connects to the running container:
-
-```toml
-[workspaces.myproject]
-paths = ["/home/you/projects/myproject"]
-mode = "remote"   # or "exec", or omit for auto-detect
-```
-
-See [How to switch between remote and exec mode](access-modes.md) for details.
-
----
+See [How to use a custom image](custom-images.md).
 
 ## Set environment variables
 
-Pass environment variables to the agent container using the `env` field:
-
-```toml
-[workspaces.api]
-paths = ["/home/you/projects/api"]
-env = ["MY_TOKEN=abc123", "LOG_LEVEL=debug"]
-```
-
-To load variables from a file, use `env_file`. The file must exist at config load time and follow Docker `.env` format (KEY=VALUE, `#` comments, quoted values):
-
-```toml
-[workspaces.api]
-paths = ["/home/you/projects/api"]
-env_file = ["~/.config/jailoc/api.env"]
-```
-
-Both can be combined. `env` entries override `env_file` entries with the same key.
-
-To apply env vars to all workspaces, use the `[defaults]` section:
+Pass variables to agent sessions with `env`, or load them from files with `env_file`. Env files must exist at config load time and use `.env` format (`KEY=VALUE`, `#` comments, quoted values):
 
 ```toml
 [defaults]
 env = ["GOPRIVATE=*.example.com"]
 env_file = ["~/.config/jailoc/shared.env"]
+
+[workspaces.api]
+paths = ["/home/you/projects/api"]
+env = ["LOG_LEVEL=debug"]
 ```
+
+`env` entries override `env_file` entries with the same key.
 
 !!! note
-    Several keys are reserved and cannot be set: `OPENCODE_LOG`, `OPENCODE_SERVER_PASSWORD`, `DOCKER_HOST`, `DOCKER_TLS_CERTDIR`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `SSH_AUTH_SOCK`. Setting any of these causes a config validation error. `OPENCODE_SERVER_PASSWORD` is managed automatically by jailoc. Setting it in `env` or `env_file` is rejected, but it can be set as an OS environment variable to override the automatic cascade (useful for CI/CD).
+    Keys jailoc sets itself are rejected: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `OPENCODE_TUI_CONFIG`, `SSH_AUTH_SOCK`.
 
----
+For tokens and passwords, use [secrets](secrets.md) instead of `env`.
 
-## Configure mounts
+## Share extra directories with mounts
 
-jailoc mounts several host directories into the container by default (OpenCode config, session transcripts, agent tooling). To add extra mounts or override the defaults, use the `mounts` field.
-
-Add a host directory to the container:
-
-```toml
-[workspaces.my-project]
-paths = ["/home/you/projects/my-project"]
-mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode"]
-```
-
-Each entry follows `host:container[:mode]` format. The mode is `ro` (read-only) or `rw` (read-write, the default).
-
-To remove a default mount, set an empty host source for that container path:
-
-```toml
-[workspaces.my-project]
-paths = ["/home/you/projects/my-project"]
-mounts = [":/home/agent/.opencode"]
-```
-
-This removes the `~/.opencode` mount for the `my-project` workspace.
-
-Mounts set in `[defaults]` apply to all workspaces. Per-workspace `mounts` override defaults for the same container path:
-
-```toml
-[defaults]
-mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode:ro"]
-
-[workspaces.my-project]
-paths = ["/home/you/projects/my-project"]
-mounts = ["~/.local/share/opencode:/home/agent/.local/share/opencode:rw"]
-```
-
-### Pass through OpenCode auth credentials
-
-The container's `~/.local/share/opencode` is a named Docker volume by default — your host `auth.json` is not available inside. To pass it through without replacing the entire volume, mount just the file:
-
-```toml
-[defaults]
-mounts = ["~/.local/share/opencode/auth.json:/home/agent/.local/share/opencode/auth.json:ro"]
-```
-
-The bind mount overlays the single file on top of the named volume. The rest of the data directory (sessions, state) stays in the named Docker volume.
-
-### Share additional paths
-
-To make additional host directories (e.g. shared AI instruction files consumed by both Copilot and OpenCode) available inside the container, mount the directory read-only:
+`mounts` are live, two-way shares. Each entry has the form `host:guest[:mode]`, where `mode` is `ro` or `rw` (the default):
 
 ```toml
 [defaults]
 mounts = ["~/.config/ai-instructions:/home/agent/.config/ai-instructions:ro"]
 ```
 
-`~` on the host side expands to your home directory. The container path must use an absolute path — the agent's home is `/home/agent`.
+Per-workspace `mounts` override `[defaults]` entries with the same guest path. To drop a default mount for one workspace, give it an empty host side:
+
+```toml
+[workspaces.my-project]
+paths = ["/home/you/projects/my-project"]
+mounts = [":/home/agent/.config/ai-instructions"]
+```
+
+!!! warning
+    Mounts share directories only. A mount whose host side is a file fails `jailoc up` with `shares directories only; use snapshots`. Use [`snapshots`](#snapshot-files-into-the-workspace) for single files.
 
 !!! note
-    Dangerous host paths are forbidden in mounts: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Container destinations under `/home/agent/...` are allowed; other system directories (`/usr`, `/etc`, `/var`, etc.) are forbidden.
+    Dangerous host paths are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Guest destinations under `/home/agent/...` are allowed; other system directories are rejected.
 
-See [Configuration reference](../reference/configuration.md) for the full mount format, merge semantics, and validation rules.
+## Snapshot files into the workspace
 
----
+For single files, or when the workspace should get a frozen copy instead of the host original, use `snapshots`:
 
-## Forward SSH agent and Git config
+```toml
+[workspaces.myproject]
+paths = ["~/src/myproject"]
+snapshots = [
+  "~/.npmrc:/home/agent/.npmrc",
+  "~/.config/gh:/home/agent/.config/gh",
+]
+```
 
-To let the agent clone private repositories or push over SSH, enable SSH agent forwarding. Git configuration is mounted by default.
+Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original. A snapshot destination can't overlap a shared path, so it can't point into a workspace path or a `mounts` destination. To pick up host edits, or added and removed entries, run `jailoc reload`.
+
+## Publish ports
+
+To reach a service in the VM from the host, publish its port:
+
+```toml
+[workspaces.myproject]
+ports = [3000, "8080:80"]
+```
+
+`3000` makes guest port 3000 available on host `127.0.0.1:3000`. `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. The service must listen on `0.0.0.0` (or the guest address `192.168.127.2`), not on `127.0.0.1`. Containers started with `docker run -p` inside the guest are reachable the same way.
+
+## Protect Git hooks and configuration
+
+Workspace paths are shared read-write, including `.git`. Git on the host runs hooks and commands named in `.git/config` (such as `core.fsmonitor`), so an agent that writes there can run code on your host. Prevent it with:
+
+```toml
+[workspaces.myproject]
+protect_git = true
+```
+
+At every `jailoc up`, jailoc finds the repositories under the workspace paths and, inside the VM, makes `.git/hooks`, `.git/config` (and the same files of submodules and worktrees) read-only, and makes the `.git` directories and their parents impossible to rename or remove. `sudo` and Docker are disabled in that workspace, and `enable_docker = true` together with `protect_git = true` is rejected.
+
+!!! warning
+    Only repositories that exist at `jailoc up` are covered. Repositories the agent creates or clones later aren't protected until the next restart. Files that tools run from the working tree, such as `Makefile` or `package.json` scripts, aren't covered either.
+
+## Use Docker inside the VM
+
+With `enable_docker = true` (the default), the guest runs its own Docker daemon when the image contains `dockerd`. The built-in image ships Docker CE with the `buildx` and `compose` plugins. Images, containers and volumes live on a 20 GiB data disk that survives `jailoc down`; `jailoc down --purge` deletes it.
+
+A custom image without `dockerd` starts without Docker and prints a warning. Set `enable_docker = false` to silence it. With an explicit `enable_docker = true`, such an image fails `jailoc up`.
+
+## Forward the SSH agent
 
 ```toml
 [defaults]
 ssh_auth_sock = true
 ```
 
-These can also be set per-workspace. See [How to pass through SSH and Git config](ssh-git-passthrough.md) for details.
+See [How to pass through SSH and Git config](ssh-git-passthrough.md).
 
----
-
-## Set resource limits
-
-Control the CPU and memory allocated to the opencode container with `cpu` and `memory`:
+## Set CPU and memory
 
 ```toml
 [defaults]
@@ -284,4 +207,14 @@ cpu = 8.0
 memory = "16g"
 ```
 
-Both fields are optional. Workspace values override defaults; when neither is set, the fallback is `2.0` CPU cores and `"4g"` memory. The `memory` field accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` (e.g. `512m`, `4g`, `1024`).
+Workspace values override defaults. Without either, the VM gets 2 vCPUs and `4g`. `cpu` is rounded up to whole vCPUs. `memory` is a positive integer optionally followed by `k`, `m` or `g`, and must be at least `512m`. The limits apply to the whole VM, including its Docker daemon.
+
+## Apply changes to a running workspace
+
+After editing the config, apply it without restarting:
+
+```bash
+jailoc reload myproject
+```
+
+Network rules, DNS filtering, `ports`, `ssh_auth_sock`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets apply live. Running sessions keep their old environment. Other changes, such as `paths`, `mounts`, `cpu`, `memory`, `enable_docker`, `protect_git` and the image, need a new VM. `jailoc reload` lists them; apply them with `jailoc restart`, which ends running sessions.

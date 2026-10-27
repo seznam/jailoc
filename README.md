@@ -5,24 +5,24 @@
 [![CI](https://github.com/seznam/jailoc/actions/workflows/ci.yml/badge.svg)](https://github.com/seznam/jailoc/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/seznam/jailoc)](https://github.com/seznam/jailoc/releases/latest)
 
-Manage sandboxed Docker Compose environments for headless OpenCode coding agents.
+Run headless OpenCode coding agents in sandboxed micro-VMs.
 
 📖 **[Full documentation](https://seznam.github.io/jailoc/)**
 
 ## What is this?
 
-`jailoc` wraps OpenCode agents in isolated Docker containers so they can run autonomously, isolated from your host system except for explicitly mounted paths. Each workspace gets its own sandboxed environment with network isolation that blocks private networks by default, letting you control exactly which internal services the agent can reach. You configure which directories to mount as workspaces, which hosts to allowlist, and the agent runs inside with your OpenCode config available read-write.
+`jailoc` runs OpenCode agents in isolated libkrun micro-VMs so they can work autonomously, isolated from your host system except for the directories you share. Each workspace boots its own VM with a network policy that blocks private networks by default, letting you control exactly which internal services the agent can reach. You configure which directories to share, which hosts to allowlist, and the agent runs inside the VM in detachable sessions you attach to over SSH.
 
 ## Why jailoc
 
-- 📁 **File isolation** — the agent only sees directories you explicitly mount. SSH keys, browser profiles, and other projects are invisible. It runs as UID 1000 with all Linux capabilities dropped and `no_new_privs` set.
-- 🌐 **Network isolation** — private networks (RFC 1918, link-local, CGNAT) are blocked by default via iptables. You allowlist only what the agent needs. No pivoting to internal infrastructure.
-- 🐳 **Sandboxed Docker** — each workspace gets its own Docker daemon via a DinD sidecar. No host socket mounting, no sandbox escape through container breakout.
-- ⚡ **Zero config to start** — `jailoc up` handles image resolution, compose generation, firewall setup, and privilege dropping automatically.
+- 📁 **File isolation**: each workspace is a separate VM with its own kernel. The agent only sees directories you explicitly share and files you copy in. SSH keys, browser profiles, and other projects are invisible.
+- 🌐 **Network isolation**: all VM traffic goes through a host-side network broker that blocks private and reserved IPv4 and IPv6 ranges by default. You allowlist only what the agent needs. No pivoting to internal infrastructure.
+- 🐳 **Sandboxed Docker**: with `enable_docker`, the Docker daemon runs inside the workspace VM. No host socket mounting.
+- ⚡ **Zero config to start**: `jailoc` downloads the VM runtime, builds the image, boots the VM and attaches you to the agent.
 
 ## Installation
 
-**Prerequisites:** Docker Engine must be running. No `docker compose` CLI plugin needed — jailoc embeds the Compose SDK.
+**Requirements:** macOS on Apple Silicon, or Linux amd64 with KVM (`/dev/kvm` access). Docker Engine must be running on the host to build workspace images. Upgrading from jailoc v1? Run `jailoc migrate`.
 
 ### go install
 
@@ -67,11 +67,12 @@ go build ./cmd/jailoc
 # Run unit tests
 go test ./...
 
-# Run integration tests (requires Docker)
-go test -tags=integration ./...
+# Run VM integration tests (requires KVM or macOS and a go-microvm runtime)
+JAILOC_VM_RUNNER=/path/to/go-microvm-runner JAILOC_VM_LIBDIR=/path/to/libs \
+  go test -tags vmintegration -timeout 45m ./internal/vmintegration/
 ```
 
-## 📦 What's in the default container
+## 📦 What's in the default image
 
 The default base image (Ubuntu 24.04) ships with:
 

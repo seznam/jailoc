@@ -1,84 +1,111 @@
 # Troubleshooting
 
-Common issues and debugging steps for jailoc workspaces.
+Common failures of jailoc workspaces and how to fix them.
 
----
+## Find the logs
 
-## Find log files
+jailoc writes its own structured log to `~/.cache/jailoc/jailoc.log`. It rotates at startup above 5 MB to `jailoc.log.1`; if the rename fails, the file is truncated instead. Without a home directory, the log goes to `$TMPDIR/jailoc/jailoc.log`. Look for `level=ERROR` lines.
 
-jailoc writes structured logs to:
+Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/`:
 
-```
-~/.cache/jailoc/jailoc.log
-```
+| File | Content |
+|------|---------|
+| `supervisor.log` | VM supervisor output: broker and VM start, readiness, shutdown reason |
+| `microvm/console.log` | Guest console: boot and SSH connections |
+| `broker.jsonl` | Network broker decisions, one JSON object per line |
+| `state.json` | Supervisor PID and readiness |
 
-The log file rotates at startup when it exceeds 5 MB — the previous file is renamed to `jailoc.log.1`. If the rename fails, the log file is truncated instead (so `.1` may not exist on every system). If your home directory cannot be determined, logs fall back to `$TMPDIR/jailoc/jailoc.log`. If the log file still cannot be opened, logging is silently disabled.
-
-All log entries use `slog` text format with timestamps, levels, and key-value pairs. Look for `level=ERROR` lines to find failures.
-
----
-
-## Docker daemon not running
-
-**Symptom:** `jailoc up` fails immediately with a Docker connection error.
-
-**Fix:** Start the Docker daemon:
+Print the two logs with:
 
 ```bash
-# Linux (systemd)
-sudo systemctl start docker
-
-# macOS (Docker Desktop)
-open -a Docker
+jailoc logs <workspace>
+jailoc logs -f <workspace>   # follow
 ```
 
-Verify with `docker info` before retrying.
+## Config rejects a jailoc v1 setting
 
----
+**Symptom:** any command fails with:
 
-## Port conflicts
+```
+mode is a jailoc v1 setting; run `jailoc migrate` to update the config
+```
 
-**Symptom:** `jailoc up` fails with "address already in use" or the container starts but attach fails with connection refused.
+The same error appears for `backend = "docker"`, `password_mode` and `expose_port`.
 
-Ports are assigned as `4096 + alphabetical index` among all configured workspaces. If another process occupies that port:
+**Fix:** run the migration, which rewrites these settings and carries over v1 Docker workspaces:
 
 ```bash
-# Find what's using the port (e.g. 4096)
-lsof -i :4096
+jailoc migrate --dry-run   # preview
+jailoc migrate
 ```
 
-**Fix:** Stop the conflicting process, or add/remove/rename workspaces to shift the port assignment. Run `jailoc status` to see the assigned port for each workspace.
+See [Migrate from jailoc v1](migrate-from-v1.md).
 
----
+## Platform isn't supported
 
-## Permission denied on bind mounts
+**Symptom:** `jailoc up` fails with:
 
-**Symptom:** Container starts but the agent reports permission errors reading or writing mounted paths.
+```
+VM runtime is not supported on <os>/<arch> (supported: darwin/arm64, linux/amd64); set runner and lib_dir in the [vm] section of the config to use a self-built runtime
+```
 
-The agent runs as UID 1000 inside the container. The mounted host directories must be readable (and writable, for workspace paths) by UID 1000.
+**Fix:** run jailoc on macOS (Apple Silicon) or Linux (amd64), or set `[vm] runner` and `[vm] lib_dir` to a runtime you built yourself. See [How to install jailoc](installation.md#check-your-platform).
+
+## VM can't open /dev/kvm
+
+**Symptom:** on Linux, the VM fails to start and `supervisor.log` reports that `/dev/kvm` is missing or permission is denied.
 
 **Fix:**
 
-```bash
-# Check ownership
-ls -ln /path/to/mounted/dir
+- If `/dev/kvm` doesn't exist, enable virtualization (VT-x/AMD-V) in the firmware and load the `kvm_intel` or `kvm_amd` module. Inside a cloud VM, nested virtualization must be enabled.
+- If it exists but isn't accessible, add your user to its group and log in again:
 
-# Fix if needed
-sudo chown -R 1000:1000 /path/to/mounted/dir
+```bash
+ls -l /dev/kvm
+sudo usermod -aG kvm "$USER"
 ```
 
-!!! note
-    On macOS with Docker Desktop, file sharing handles UID mapping automatically. This issue primarily affects Linux hosts.
+## VM runtime download fails
 
----
+**Symptom:** the first `jailoc up` fails while `Downloading VM runtime ...` with `download ...: HTTP <code>` or `checksum mismatch for ...`.
 
-## Network restrictions blocking required hosts
+jailoc downloads a pinned runtime and checks its SHA-256 before unpacking it into `~/.cache/jailoc-vm/runtime/`. A failed or mismatching download is discarded and nothing is installed.
 
-**Symptom:** The agent cannot reach an internal service (registry, MCP server, API) — connections time out or get refused.
+**Fix:** check that the host reaches GitHub (and your proxy settings), then run `jailoc up` again. A persistent checksum mismatch means the download is altered on the way, for example by a proxy that rewrites responses. Don't work around it; fix the network path.
 
-jailoc blocks all RFC 1918, link-local, and CGNAT addresses by default. If a required service lives on a private address, it must be explicitly allowed.
+## VM doesn't become ready
 
-**Fix:** Add the host or network to your workspace config:
+**Symptom:** `jailoc up` fails with `vm not ready after ...`, `vm supervisor exited ...`, `VM NIC did not connect within ...` or `broker not ready after ...`.
+
+**Debugging:**
+
+```bash
+jailoc logs <workspace>
+tail -n 50 ~/.cache/jailoc-vm/workspaces/<workspace>/supervisor.log
+```
+
+Common causes:
+
+- the hypervisor isn't available (see [/dev/kvm](#vm-cant-open-devkvm) on Linux);
+- too little memory for the requested `memory`;
+- a custom image without the UID 1000 `agent` user or `opencode` (see [How to use a custom image](custom-images.md#know-what-the-image-must-provide));
+- a stale VM left over from a crash.
+
+Clear a stale VM with `jailoc down <workspace>` and start again.
+
+## A mount fails at start
+
+**Symptom:** `jailoc up` fails with `mount "...": backend "vm" shares directories only; use snapshots for a read-only copy of a file`.
+
+**Fix:** move file entries from `mounts` to `snapshots`. See [Snapshot files into the workspace](workspace-configuration.md#snapshot-files-into-the-workspace).
+
+## Network rules block a required host
+
+**Symptom:** the agent can't reach an internal service; connections are refused or time out.
+
+Private and reserved addresses, IPv4 and IPv6 (including ULA `fc00::/7`), are blocked by default.
+
+**Fix:** add the host or range, then reload:
 
 ```toml
 [workspaces.myproject]
@@ -86,129 +113,45 @@ allowed_hosts = ["internal-registry.example.com"]
 allowed_networks = ["10.10.5.0/24"]
 ```
 
-Then restart the workspace:
-
 ```bash
-jailoc restart myproject
+jailoc reload myproject
 ```
 
-See [How to allow specific hosts or networks](network-access.md) for details.
+`broker.jsonl` shows every denied connection with its reason. On macOS, local-network hosts also need the Local Network permission. See [How to allow specific hosts or networks](network-access.md).
 
----
+## Image build fails
 
-## Image pull failures
+**Symptom:** `jailoc up` reports errors pulling or building the image.
 
-**Symptom:** `jailoc up` reports errors pulling or building the container image.
+The first matching image source wins, and a failure there is fatal. Common causes:
 
-Image resolution uses a priority cascade — the first matching configuration wins, and build/pull failures at that step are fatal. Common causes:
-
-- Registry unreachable (network issues, auth required)
-- URL Dockerfile returns HTTP errors
-- Local Dockerfile path does not exist
-
-**Debugging:**
+- a registry that isn't reachable or needs authentication;
+- a URL Dockerfile returning an HTTP error;
+- a local Dockerfile path that doesn't exist;
+- `[vm] builder = "docker"` without a usable host Docker daemon;
+- the shared builder VM pulling from a private registry it can't reach (use `isolated_build = true` with the host in `allowed_hosts`).
 
 ```bash
-# Check the log for image resolution errors
 grep -Ei "image|pull|build|dockerfile" ~/.cache/jailoc/jailoc.log
 ```
 
-See [Image resolution reference](../reference/image-resolution.md) for the full cascade order.
+See the [Image resolution reference](../reference/image-resolution.md).
 
----
+## Docker inside the VM fails
 
-## Container does not start
+**Symptom:** `jailoc up` fails with `enable_docker is on, but the workspace image has no dockerd`, or `docker` commands fail in the guest.
 
-**Symptom:** `jailoc up` completes but `jailoc status` shows the workspace is not running.
+**Fix:** install Docker in the image, or set `enable_docker = false`. Docker is also off when `protect_git = true`. See [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm).
 
-**Debugging:**
+## Clean up
 
-```bash
-# Check container logs for startup errors
-jailoc logs <workspace>
-```
-
-Common causes:
-
-- Entrypoint script fails (iptables errors if running without required capabilities)
-- Bind-mount source path does not exist on host
-- Insufficient disk space for volumes
-
----
-
-## Attach fails or connection refused
-
-**Symptom:** `jailoc attach` exits immediately or reports connection refused.
-
-**Debugging:**
-
-1. Confirm the workspace is running:
-
-    ```bash
-    jailoc status
-    ```
-
-2. Check that the opencode process started inside the container:
-
-    ```bash
-    jailoc logs <workspace>
-    ```
-
-3. Verify the port is listening:
-
-    ```bash
-    lsof -i :<port>
-    ```
-
-If the container is running but opencode did not start, check the container logs for entrypoint errors (e.g. permission issues, missing config).
-
----
-
-## DinD sidecar not healthy
-
-**Symptom:** Docker commands inside the workspace fail — the agent cannot build images or run containers.
-
-The DinD (Docker-in-Docker) sidecar runs a separate Docker daemon on TLS port 2376. If it is unhealthy:
+Stop a workspace and delete its persistent home, Docker data and isolated builder:
 
 ```bash
-# Check sidecar logs
-jailoc logs <workspace>
+jailoc down <workspace> --purge
 ```
 
-Common causes:
-
-- Host does not support privileged containers (some CI environments)
-- TLS certificate volume not properly shared between containers
-- Insufficient disk space for Docker data volume
-
----
-
-## Cleanup stale resources
-
-Over time, stopped workspaces may leave behind containers, volumes, and cached files.
-
-### Remove cached compose files
-
-```bash
-rm -rf ~/.cache/jailoc/<workspace>/
-```
-
-### Remove jailoc Docker resources
-
-```bash
-# Stop each workspace first (repeat for every running workspace)
-jailoc down <workspace>
-
-# Remove exited jailoc containers
-docker ps -a --filter "label=com.docker.compose.project" --filter "status=exited" \
-  --format '{{.Names}}' | grep '^jailoc-' | xargs docker rm
-
-# Remove jailoc volumes (all workspaces must be stopped)
-docker volume ls --format '{{.Name}}' \
-  | grep '^jailoc-' | xargs docker volume rm
-```
-
-### Remove the log file
+Remove the log file:
 
 ```bash
 rm -f ~/.cache/jailoc/jailoc.log ~/.cache/jailoc/jailoc.log.1

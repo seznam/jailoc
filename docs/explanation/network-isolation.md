@@ -1,80 +1,60 @@
 # Network Isolation
 
-jailoc's network model is built around a simple premise: a coding agent needs the public internet to do its job (fetching packages, cloning repos, calling APIs), but it should never be able to reach your internal infrastructure. The isolation isn't about locking the agent in a box with no network. It's about making a specific cut between "things an agent legitimately needs" and "things it shouldn't touch".
+A workspace VM has one network interface, and the only thing on the other end is the workspace's network broker on the host. The broker runs a userspace TCP/IP stack (gVisor). It terminates every guest connection itself and opens a real host socket only after the destination passes the workspace policy. Nothing in the guest can change that policy, not even root, because it isn't enforced in the guest.
 
-For the security rationale behind why network controls matter for AI agents specifically, see [Threat Model](threat-model.md).
+When the broker isn't running the guest has no network at all, and the supervisor stops the VM if the broker exits.
 
-## What gets blocked and why
+## The virtual network
 
-The iptables rules installed during container startup drop traffic to three address ranges:
+| | IPv4 | IPv6 |
+|---|---|---|
+| Guest address | `192.168.127.2/24` | `fd00:127::2/64` |
+| Gateway (broker) | `192.168.127.1` | `fd00:127::1`, default route via `fe80::1` |
 
-| Range | Description | Why blocked |
-|-------|-------------|------------|
-| `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | RFC 1918 private addresses | Covers most home routers, office LANs, and cloud VPC internals |
-| `169.254.0.0/16` | Link-local (including AWS/GCP metadata endpoints) | Cloud metadata services expose credentials and IAM roles |
-| `100.64.0.0/10` | CGNAT / Tailscale / shared address space | Commonly used by VPNs and overlay networks |
+The gateway serves DHCP and DNS. Everything else the guest sends is a new flow the broker has to decide on.
 
-These ranges are blocked because they're where internal services live. Your Kubernetes cluster, your database, your CI runner, your cloud provider's metadata API that hands out instance credentials — they're all in RFC 1918 or adjacent space. Blocking these ranges at the iptables level means the agent can't reach them even if it tries, regardless of what it discovers about the host's network configuration.
+## The policy
 
-Public internet traffic is not blocked. The DROP rules are appended after the ACCEPT rules, so anything not matching the private ranges goes through normally. The agent can `go get`, `npm install`, `pip install`, clone from GitHub, call OpenAI's API, and reach any public MCP server without any special configuration.
+Every new TCP connection and UDP flow gets one decision. The broker checks, in order:
 
-## How the allowlist works
+| Destination | Decision |
+|-------------|----------|
+| The gateway, the guest's own subnet, any address of a host interface | denied |
+| Hard-denied ranges (below) | denied, no allow list opens them |
+| Port 53 anywhere, when filtered DNS is on | denied |
+| Private and reserved ranges | denied unless covered by `allowed_networks` or a resolved `allowed_hosts` address |
+| Everything else (public addresses) | allowed |
 
-The rule ordering is the key mechanism. When the entrypoint installs iptables rules, it inserts ACCEPT rules at the top of the chain before adding the DROP rules at the bottom. Rules are evaluated in order, so an ACCEPT for a specific host wins against a later DROP for its containing range.
+### IPv4
 
-Several things get ACCEPT rules before the DROP rules fire:
+Private and reserved IPv4 ranges: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10` (CGNAT), `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.88.99.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`.
 
-- The **host gateway** (so DNS and the Docker bridge work) — always inserted
-- The **dind container's address** — inserted only when `enable_docker` is `true` (so the agent can reach its Docker daemon)
-- Any **hosts or networks** you've explicitly allowed in your workspace config
+Hard-denied: `0.0.0.0/8`, loopback `127.0.0.0/8`, multicast `224.0.0.0/4`, `240.0.0.0/4`, and the cloud metadata endpoints `169.254.169.254` and `169.254.170.2`.
 
-A final ACCEPT rule allows TCP replies on the published service port (4096) for connections that were initiated from outside the container. This exists because port-forwarded traffic from the host arrives with a source address in a private range — without this rule, the container's reply packets would hit the DROP rules and the connection would hang. The rule is scoped to established TCP connections on the service port only, so it does not open any new outbound paths.
+### IPv6
 
-If you need the agent to reach an internal service, adding it to `allowed_hosts` or `allowed_networks` in your workspace config causes an ACCEPT rule to be inserted before the DROP rules fire. The agent can then reach that specific address while everything else in the private range stays blocked.
+Hard-denied regardless of allow lists: unspecified `::`, loopback `::1`, IPv4-compatible `::/96`, link-local `fe80::/10`, site-local `fec0::/10`, multicast `ff00::/8`, documentation `2001:db8::/32` and `3fff::/20`, discard `100::/64`, ORCHID `2001:10::/28` and `2001:20::/28`, benchmarking `2001:2::/48`, Teredo `2001::/32`, local-use NAT64 `64:ff9b:1::/48`, and the cloud metadata addresses `fd00:ec2::254` and `fd00:ec2::23`.
 
-For step-by-step instructions, see [How-to: Network Access](../how-to/network-access.md).
+IPv6 addresses that carry an IPv4 address (IPv4-mapped `::ffff:0:0/96`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) are judged by the IPv4 rules for the embedded address, so they can't be used to reach a blocked IPv4 range.
 
-## DNS resolution and filtering
+Unique local addresses (`fc00::/7`) count as private: they're reachable only through `allowed_networks` or `allowed_hosts`. Anything outside global unicast `2000::/3` is denied. The rest of `2000::/3` is public and allowed.
 
-By default, containers use their runtime-provided DNS resolver. Resolver addresses from `/etc/resolv.conf` get ACCEPT rules limited to UDP and TCP port 53. Some runtimes place their DNS resolver inside a blocked private range; this exception permits DNS without opening other ports at the resolver address. Public DNS endpoints are otherwise reachable under the default egress policy.
+## Allow lists
 
-With `filtered_dns = true`, a CoreDNS sidecar handles external lookups for both opencode and dind. Docker's embedded resolver at `127.0.0.11` resolves Docker service names such as `dind` locally, then forwards other queries to the sidecar at `169.254.53.53`. The sidecar returns NXDOMAIN for configured blocked zones and their subdomains; it forwards other queries to the numeric `dns_upstream`. The entrypoints allow port 53 to Docker's embedded resolver and reject direct port-53 queries to other servers. The sidecar has a read-only filesystem, drops all capabilities except `NET_BIND_SERVICE`, and mounts its generated Corefile read-only. Its fixed link-local address is scoped to each workspace's Docker network.
+`allowed_networks` takes IPv4 and IPv6 CIDRs. `allowed_hosts` names are resolved on the host when the VM starts and on `jailoc reload`; each A record becomes a `/32` and each AAAA record a `/128`. A name that doesn't resolve produces a warning and is skipped. Allow lists open private ranges only; they can't open hard-denied ones.
 
-If the sidecar or upstream resolver is unavailable, filtered DNS queries fail rather than falling back to the host resolver. DNS filtering does not prevent DNS over HTTPS, proxies, or direct IP access. Connections to private addresses returned by DNS remain subject to iptables; names resolving to public addresses do not receive the private-range restriction. See [Restrict internal DNS names](../how-to/network-access.md#restrict-internal-dns-names) to configure the policy and the [configuration reference](../reference/configuration.md#filtered-dns) for validation rules.
+DNS answers never change a decision on their own. A public name that resolves to a private address is still blocked unless that address is allowed.
 
-## The dind sidecar
+## Filtered DNS
 
-The dind container runs a rootless Docker daemon. Its entrypoint installs iptables rules on the OUTPUT chain (via a `JAILOC-OUTPUT` custom chain) as root, then drops all inheritable and bounding capabilities and execs the rootless daemon as UID 1000.
+With `filtered_dns`, the broker's resolver forwards queries to the configured upstream and answers NXDOMAIN for names in `dns_blocked_zones` and their subdomains, for both A and AAAA queries. DNS to port 53 on any other address is denied, so the guest can't bypass the filter by choosing its own resolver.
 
-Because the daemon is rootless, all inner containers run inside rootlesskit's user namespace. Their network traffic is routed through vpnkit, which exits via the outer network namespace's OUTPUT chain — where `JAILOC-OUTPUT` catches it. This means a single set of iptables rules controls egress for both the dind container itself and any containers the agent starts inside it.
+## Enforcement details
 
-An agent that creates a `--privileged` inner container and attempts to flush iptables will only see the empty netfilter tables inside rootlesskit's namespace. The outer rules remain intact. Similarly, `--network=host` inside the user namespace refers to rootlesskit's network namespace, not the dind container's actual network namespace.
+Denied TCP connections are reset and denied UDP gets ICMP port unreachable, so tools fail fast instead of hanging. Each decision is written to `broker.jsonl` in the workspace's VM state directory.
 
-The dind container's allowed hosts and networks are configured from the same `/etc/jailoc/allowed-hosts` and `/etc/jailoc/allowed-networks` files as the opencode container, mounted read-only from the host.
+An invalid policy at start keeps the VM from starting. If a policy reload fails, the broker switches to a deny-all policy rather than keep the old one.
 
-## What is isolated
+Containers started by the guest's own Docker daemon (`enable_docker`) send their traffic through the same interface, so the same policy applies to them.
 
-- The agent runs as an unprivileged user (UID 1000) with all Linux capabilities dropped and `no_new_privs` set
-- Resource limits apply: 4 GB RAM, 2 CPUs, 256 PIDs
-- OpenCode configuration directories are mounted read-write — the agent needs write access to persist settings changes, install tools and MCPs, and update its own configuration at runtime
-- The agent's data volume (SQLite history, auth tokens) is a named Docker volume, completely separate from your host's `~/.local/share/opencode`
-- The agent gets its own Docker daemon through dind — it never touches the host Docker socket, so containers it starts cannot escape to the host
-- Network egress to private and internal ranges is blocked by iptables
-
-## What is not isolated
-
-- The dind container runs `--privileged` (required for nested Docker), but the Docker daemon inside runs rootless — inner containers cannot modify the outer network namespace's iptables rules
-- The public internet is fully open from the opencode container
-- API keys present in your mounted `opencode.json` are readable inside the container (the agent needs them to function)
-- No seccomp profile or AppArmor profile is applied beyond Docker's defaults
-- The root filesystem is not read-only
-
-These gaps are intentional or accepted tradeoffs, not oversights. The goal of jailoc is to protect your internal network and keep the agent's state from bleeding into your host environment — not to prevent the agent from doing its job on the public internet.
-
-## Kernel requirements
-
-The iptables rules require the container runtime's Linux kernel to support **netfilter**. On startup, jailoc probes the default `iptables` (nft backend) first; if that fails, it falls back to `iptables-legacy`. If neither backend works, the container aborts because network isolation cannot be enforced.
-
-Most Docker runtimes ship kernels with full netfilter support, but some minimal hypervisor configurations do not. Rancher Desktop using VZ virtualization without Rosetta on macOS is a known case — its ARM64 kernel lacks netfilter entirely, so both backends fail with `Protocol not supported`.
-
-See [Installation — Docker runtime compatibility](../how-to/installation.md#docker-runtime-compatibility) for a full list of tested runtimes.
+See [Configure network access](../how-to/network-access.md) for setup and [Threat Model](threat-model.md) for why the policy looks like this.

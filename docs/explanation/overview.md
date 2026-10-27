@@ -1,40 +1,31 @@
 # How jailoc Works
 
-jailoc is a CLI tool that runs headless [OpenCode](https://opencode.ai) coding agents inside sandboxed Docker Compose environments. Each workspace gets an agent container, an optional Docker-in-Docker sidecar, a dedicated host port, and network rules that block access to private infrastructure while leaving the public internet open.
+jailoc is a CLI tool that runs [OpenCode](https://opencode.ai) coding agents inside per-workspace micro-VMs. Each workspace boots its own libkrun virtual machine with its own kernel, sees only the host directories shared with it, and reaches the network only through a host-side broker that blocks private infrastructure while leaving the public internet open.
 
-The problem it solves is straightforward: running an autonomous coding agent on your machine means trusting it completely. It can read arbitrary files, call any network endpoint, and modify anything your user account can touch. jailoc draws a boundary. The agent runs as an unprivileged user inside a container with capabilities dropped, private network ranges blocked, and its data directory isolated from your host.
+The problem it solves is simple to state. An autonomous coding agent running directly on a machine can read any file the user can read, call any network endpoint, and change anything the user can touch. jailoc draws a hardware-virtualization boundary around it. Inside the VM the agent can do what it likes, including becoming root. Outside it, the agent has only what the workspace configuration grants.
 
 ## The startup sequence
 
-When you run `jailoc up`, five things happen in order:
+`jailoc up` runs these steps in order:
 
-**1. Config loading.** `config.Load` reads `~/.config/jailoc/config.toml`. This file defines your workspaces: which directories to mount, which hosts to allow, which image to use. If the file doesn't exist yet, jailoc writes a default config on first run.
+**1. Config loading.** jailoc reads `~/.config/jailoc/config.toml`, writing a default one on first run. jailoc v1 settings (`backend = "docker"`, `mode`, `password_mode`, `expose_port`) are rejected with a pointer to [`jailoc migrate`](../how-to/migrate-from-v1.md).
 
-**2. Workspace resolution.** `workspace.Resolve` turns a workspace name into everything needed to describe a running environment: the mount paths, the host port (derived as `4096 + alphabetical index` among all workspaces), and the list of allowed hosts and networks the agent may reach.
+**2. Workspace resolution.** The workspace name becomes a resolved description: shared paths and mounts, snapshots, allowed hosts and networks, secrets, CPU and memory.
 
-**3. Image resolution.** `docker.ResolveBaseImage` and `docker.BuildOverlayImage` decide what container image to use. If a workspace sets `image`, that value is used directly and all build steps are skipped. If `defaults.image` is set, it serves as the base for any workspace `dockerfile` overlay, or is used directly when no workspace Dockerfile exists. Otherwise, resolution falls back to a `[base].dockerfile` (local path or HTTP URL), and finally to the Dockerfile embedded in the binary. See [Image Resolution](../reference/image-resolution.md) for the full rules.
+**3. Runtime check.** On first use jailoc downloads the pinned VM runtime (the go-microvm runner, libkrun and the libkrunfw guest kernel) and verifies its SHA-256. Supported hosts are Apple Silicon Macs (Hypervisor.framework) and Linux on amd64 (KVM).
 
-**4. Compose generation.** `compose.WriteCompose` renders a `docker-compose.yml` from a Go template and writes it to `~/.cache/jailoc/{workspace}/docker-compose.yml`. The rendered file captures everything workspace-specific: mount paths, port bindings, image reference, environment variables, resource limits.
+**4. Image build and export.** The workspace image is built with Docker, either on the host daemon or inside a builder VM, then exported and unpacked into a local image cache. See [Image Resolution](../reference/image-resolution.md).
 
-**5. Container startup.** `docker.Up` hands the rendered compose file to the Docker Compose SDK. It starts the `opencode` container, optionally the `dind` sidecar for Docker access, and optionally a `dnsfilter` sidecar for filtered DNS. See [Container Architecture](container-architecture.md) for details on how they relate.
+**5. VM start.** A detached supervisor starts the network broker and boots the VM from a copy-on-write clone of the unpacked image. `jailoc-guest`, the VM's init process, mounts the shares, prepares the `agent` user and starts an SSH server. jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
 
-## Package layout
+Sessions run over SSH: `jailoc` attaches to a running OpenCode session or starts a new one. No OpenCode server port is published on the host and no server password exists. See [Manage sessions](../how-to/sessions.md).
 
-jailoc's code lives entirely under `internal/` — nothing is exported for use as a library. The packages follow the data flow closely:
+`jailoc reload` applies network policy, published ports, the SSH agent, the CA bundle, snapshots, environment and secrets to a running VM. Changes to shares, CPU, memory, `enable_docker` or `protect_git` take effect after `jailoc restart`.
 
-| Package | Responsibility |
-|---------|---------------|
-| `cmd/` | Cobra CLI commands: `up`, `down`, `attach`, `logs`, `status`, `add`, `config` |
-| `config/` | TOML parsing, validation, and mutation for `~/.config/jailoc/config.toml` |
-| `workspace/` | Name-to-environment resolution: paths, port assignment, CWD detection |
-| `compose/` | Docker Compose YAML generation from a Go template |
-| `docker/` | Docker Compose SDK and Engine SDK client: image resolution, lifecycle management |
-| `embed/` | Embedded assets via `go:embed`: Dockerfile, compose template, entrypoint script, default config |
+## Why a VM?
 
-One deliberate constraint runs through all of this: jailoc never shells out. There's no `exec.Command("docker", ...)` anywhere. Every Docker interaction goes through the Go SDK directly. This keeps the behavior predictable and testable without a Docker CLI binary present.
+A container shares the host kernel, so a kernel exploit or a misconfigured privilege ends on the host. A VM has its own kernel, and the host exposes only a narrow set of devices to it: virtio-fs shares, one virtio-net interface whose only peer is the broker, and a few Unix sockets the broker forwards. That boundary lets jailoc give the agent root and `sudo` inside the guest without giving it anything on the host. It also lets the agent run its own Docker daemon (`enable_docker`) without touching the host's.
 
-## Why two containers?
+Docker on the host is used only to build images (unless the builder VM does it) and by `jailoc migrate`. Workspaces never run on it.
 
-The short answer is capability isolation. If the agent needs Docker (to run tests, build images, spin up databases), it needs a Docker daemon. Sharing the host daemon would let the agent escape its sandbox trivially, since a container with access to the host Docker socket can mount any host path. The `dind` sidecar gives the agent a completely separate Docker daemon that knows nothing about the host. Any containers it starts exist only inside that daemon's scope.
-
-The full two-container design, including how they communicate and what each mounts, is covered in [Container Architecture](container-architecture.md).
+See [Architecture](architecture.md) for the components and [Threat Model](threat-model.md) for what the boundary protects against.

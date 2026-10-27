@@ -2,54 +2,51 @@
 
 ## Project Overview
 
-`jailoc` — CLI tool that manages sandboxed Docker Compose environments for headless OpenCode coding agents. Each workspace gets isolated containers with network restrictions, privilege dropping, and bind-mounted project paths.
+`jailoc` — CLI tool that runs headless OpenCode coding agents in sandboxed libkrun micro-VMs. Each workspace gets its own VM with virtio-fs directory shares, a host-side userspace network broker that denies private networks, and SSH-based agent sessions.
 
 **Module**: `github.com/seznam/jailoc`
 **Language**: Go 1.26+
-**Key deps**: docker/compose/v5, docker/docker, docker/cli, BurntSushi/toml, spf13/cobra
+**Key deps**: stacklok/go-microvm (libkrun), gvisor.dev/gvisor (netbroker stack), docker/docker (image builds, migrate), google/go-containerregistry, golang.org/x/crypto/ssh, BurntSushi/toml, spf13/cobra
+
+**Hosts**: darwin/arm64 (Hypervisor.framework) and linux/amd64 (KVM). jailoc downloads a pinned go-microvm runner + libkrun + libkrunfw runtime and verifies its SHA-256 (`internal/vm/runtime.go`).
 
 ## Architecture
 
 ```
 cmd/jailoc/main.go          Entry point → cmd.Execute(version, commit, date)
+cmd/jailoc-guest/           VM init + SSH server inside the guest (embedded via internal/guestbin)
+cmd/jailoc-netbroker/       Host-side network broker process, one per workspace VM
 internal/
-  cmd/                       Cobra CLI: root.go + 7 subcommands (up, down, attach, logs, status, add, config_cmd)
-  config/                    TOML config parsing, validation, mutation (~/.config/jailoc/config.toml)
-  workspace/                 Workspace name → resolved paths, port assignment, CWD matching
-  compose/                   docker-compose.yml generation from Go template
-  docker/                    Docker Compose SDK + Engine SDK — image build/pull, compose lifecycle
-  embed/                     go:embed assets (Dockerfile, compose template, entrypoint.sh, default config)
-  integration_test.go        //go:build integration — end-to-end with real Docker
+  cmd/                       Cobra CLI: root (attach/new/continue sessions) + add, config, down, logs, migrate, reload, restart, sessions, status, up
+  config/                    TOML config parsing, validation (rejects v1 settings), mutation (~/.config/jailoc/config.toml), default config content
+  workspace/                 Workspace name → resolved paths, allowed hosts/networks, CWD matching
+  docker/                    Docker Engine SDK — image resolution/build on the host, v1 volume export for migrate
+  embed/                     go:embed assets (Dockerfile, TUI plugin)
+  vm/                        go-microvm/libkrun VM lifecycle, runtime download, image export into rootfs
+  guest/                     jailoc-guest: init, SSH sessions, secrets, Docker in the VM
+  guestbin/                  go:generate-embedded jailoc-guest binaries
+  netbroker/                 gVisor userspace network stack + IPv4/IPv6 egress policy + filtered DNS
+  brokerproc/                Starts a jailoc-netbroker process for one workspace
+  vmnet/, logging/, update/  Supporting packages
+  vmintegration/             //go:build vmintegration — boots real VMs
 docs/                        MkDocs documentation (Diátaxis framework, see docs/AGENTS.md)
 ```
 
-### Package dependency graph
-
-```
-embed, config  →  no internal deps
-workspace      →  config
-compose        →  embed
-docker         →  config, embed
-cmd            →  all of the above
-```
-
-No dependency cycles. Shared types cross package boundaries: `config.Config`, `config.Workspace`, `workspace.Resolved`, `compose.ComposeParams`, `docker.Client`.
-
 ### Data flow (`jailoc up`)
 
-1. `config.Load` → read `~/.config/jailoc/config.toml`
-2. `workspace.Resolve` → name → paths, port (`4096 + alphabetical index`), allowed hosts/networks
-3. `docker.ResolveImage` → 5-step cascade: **URL preset** → local Dockerfile → registry pull → embedded fallback → workspace layer
-4. `compose.WriteCompose` → render template → `~/.cache/jailoc/{workspace}/docker-compose.yml`
-5. `docker.Up` → Compose SDK starts two containers: `opencode` + `dind` sidecar
+1. `config.Load` → read `~/.config/jailoc/config.toml`; v1 settings fail validation with a hint to run `jailoc migrate`
+2. `workspace.Resolve` → name → paths, mounts, snapshots, allowed hosts/networks
+3. Validate secret sources, prepare CA bundle and TUI plugin config, compute virtio-fs shares and staged `snapshots`
+4. `vmRuntime` → download/verify the pinned VM runtime (or use `[vm] runner` / `lib_dir`)
+5. `buildWorkspaceImage` → build the image with host Docker (or a builder VM with `isolated_build`) and unpack it into the VM image cache
+6. `startSupervisor` → boot the workspace VM (jailoc-guest as init) with its netbroker; persistent home under `~/.cache/jailoc-vm/workspaces/<ws>/home`
+7. `secretsPayload` (read on the host before boot, incl. `from_command`) → `deliverSecrets` over SSH; the guest writes file secrets to `/run/secrets` (tmpfs) and env secrets to the session environment
 
-### Container architecture
+If the VM is already running, `up` reloads it instead (`internal/cmd/vmreload_unix.go`). Sessions attach over SSH; there is no published OpenCode port or server password.
 
-Two services per workspace on a shared Docker network:
+### Network
 
-- **opencode container**: runs `opencode serve` as UID 1000 (agent), workspace paths bind-mounted (rw), OC config mounted (ro), port exposed to host
-- **dind container**: privileged Docker daemon on TLS :2376, shared TLS certs + docker data via named volumes
-- **entrypoint.sh**: runs as root → iptables ACCEPT for DinD/gateway/allowed hosts → DROP for RFC 1918/link-local/CGNAT → chown data dirs → `setpriv --reuid=1000 --regid=1000 --inh-caps=-all --no-new-privs`
+Guest IPv4 192.168.127.2/24 (gateway .1), IPv6 fd00:127::2/64. All traffic goes through the netbroker: public destinations allowed, private/reserved denied unless listed in `allowed_networks` or resolved from `allowed_hosts`. See `internal/netbroker/policy.go` and `policy_ipv6.go`.
 
 ## Conventions
 
@@ -59,12 +56,11 @@ Two services per workspace on a shared Docker network:
 - No logging library — `fmt.Printf` for user output, errors propagate up the stack
 
 ### Code organization
-- One file per package concern: `docker.go`, `compose.go`, `workspace.go`, `config.go`
+- One file per package concern: `docker.go`, `workspace.go`, `config.go`
 - Separate files for distinct concerns within a package (e.g. `fetch.go` for HTTP fetching in `docker/`)
 - All packages under `internal/` — nothing exported
-- No `exec.Command` shellouts — everything via Go SDK
+- Prefer Go SDKs over `exec.Command` shellouts; shellouts are limited to the VM runner, broker process, and guest-side tools
 - No external dependencies for stdlib-solvable problems (e.g. `net/http` for fetching, not a third-party client)
-- Lazy init via `sync.Once` in docker client (`svcOnce`, `svcErr`, `svc`)
 
 ### Validation rules
 - Workspace names: `^[a-z0-9-]+$`
@@ -74,10 +70,7 @@ Two services per workspace on a shared Docker network:
 - Path expansion: `~` → `$HOME` (skip URL fields — they must not be expanded)
 
 ### Embedded assets (`internal/embed/assets/`)
-- `Dockerfile` — fallback base image when registry pull fails
-- `docker-compose.yml.tmpl` — Go template for compose generation (auto-generated, do not edit manually)
-- `entrypoint.sh` — container entrypoint: iptables setup → secret-env reading → privilege drop
-- `config.toml.default` — default config written on first run
+- `Dockerfile` — embedded fallback base image for the VM rootfs (no entrypoint/CMD; jailoc-guest is the init)
 - `tui.js` — built TUI plugin JS (from `plugin/index.jsx` via the Babel-based Solid transform in `plugin/build.mjs`)
 - `tui-plugin.json` — minimal package.json for the embedded TUI plugin
 
@@ -92,7 +85,8 @@ cp dist/tui.js internal/embed/assets/tui.js
 ## Testing
 
 - Unit tests: `*_test.go` beside source, `t.Parallel()`, table-driven with `t.Run`
-- Integration tests: `internal/integration_test.go`, build tag `//go:build integration`, `TestMain` for setup/teardown, builds the binary and runs against real Docker
+- Docker integration tests: build tag `//go:build integration` (e.g. `internal/docker/docker_integration_test.go`), need a Docker daemon, not run in CI
+- VM integration tests: `internal/vmintegration/`, build tag `vmintegration`, need KVM or macOS plus a go-microvm runtime (`JAILOC_VM_RUNNER`, `JAILOC_VM_LIBDIR`); run by `.github/workflows/vm-integration.yml`
 - Custom `assertContains` helper — no testify
 - No mocks, fixtures, or testdata directories
 - `t.Setenv()` is incompatible with `t.Parallel()` — tests using `t.Setenv` must NOT be parallel
@@ -101,7 +95,7 @@ cp dist/tui.js internal/embed/assets/tui.js
 ## Development environment
 
 `dev/Dockerfile.jailoc` is a workspace overlay for developing jailoc
-inside a jailoc container. It extends the base image with the Go toolchain, gopls,
+inside a jailoc workspace. It extends the base image with the Go toolchain, gopls,
 and golangci-lint matching CI.
 
 Add to `~/.config/jailoc/config.toml`:
@@ -112,14 +106,16 @@ paths = ["/path/to/jailoc"]
 dockerfile = "https://raw.githubusercontent.com/seznam/jailoc/main/dev/Dockerfile.jailoc"
 ```
 
-`jailoc up jailoc` starts a container with Go, gopls, and golangci-lint on PATH.
+`jailoc up jailoc` starts a VM with Go, gopls, and golangci-lint on PATH.
 Run `go build`, `go test ./...`, and `golangci-lint run` inside as usual.
 
 ## CI/CD
 
 GitHub Actions workflows:
-- **CI** (`.github/workflows/ci.yml`): runs on push/PR to master — `go build`, `go test`, `go vet`, and golangci-lint v2.12.2 (gosec, staticcheck, gocritic)
-- **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, then GoReleaser publishes binaries (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`)
+- **CI** (`.github/workflows/ci.yml`): runs on push/PR to main — `go test`, golangci-lint v2.12.2, and a TUI plugin sync check (`dist/tui.js` vs embedded copy)
+- **VM Integration** (`.github/workflows/vm-integration.yml`): PRs/pushes to main touching VM code — boots real workspace VMs on an x64 Linux runner with KVM
+- **VM runtime** (`.github/workflows/vm-runtime.yml`): `vm-runtime-*` tags — builds and publishes the VM runtime bundle
+- **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, then GoReleaser runs `go generate ./internal/guestbin` and publishes binaries (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`)
 - **Re-release** (`.github/workflows/release.yml`): manual `workflow_dispatch` fallback — re-runs GoReleaser for an existing tag
 - **Docs** (`.github/workflows/release-please.yml`): runs as part of the release process — zensical + mkdocs-macros-plugin → GitHub Pages
 
@@ -144,9 +140,9 @@ Docs follow the [Diátaxis](https://diataxis.fr/) framework. See `docs/AGENTS.md
 
 When adding or changing user-facing features, update the corresponding docs in `docs/`:
 - `docs/tutorials/` — learning-oriented walkthroughs (Getting Started)
-- `docs/how-to/` — goal-oriented guides (installation, workspace config, custom images, network access, access modes)
+- `docs/how-to/` — goal-oriented guides (installation, workspace config, custom images, network access, sessions, migration from v1)
 - `docs/reference/` — exact technical descriptions (CLI, configuration fields, image resolution)
-- `docs/explanation/` — understanding-oriented context (overview, container architecture, network isolation, access modes)
+- `docs/explanation/` — understanding-oriented context (overview, threat model, architecture, network isolation, secrets)
 
 Keep docs in sync with code changes — a feature without updated docs is incomplete.
 

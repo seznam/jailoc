@@ -40,13 +40,27 @@ The only reliable mitigation available to end users is **avoiding the trifecta c
 
 ## How jailoc addresses this
 
-jailoc's isolation model targets two legs of the trifecta:
+jailoc puts each workspace in its own micro-VM and targets two legs of the trifecta.
 
-**Restricting external communication.** The [iptables rules](network-isolation.md) block egress to all private network ranges (RFC 1918, link-local, CGNAT). Even if an attacker's instructions reach the agent, the agent cannot send stolen data to internal infrastructure. Public internet egress remains open (the agent needs it to function), but the internal network — where the most sensitive services live — is unreachable. The DinD sidecar runs a rootless Docker daemon, so inner containers — even those started with `--privileged` or `--network=host` — are subject to the same iptables restrictions and cannot bypass them.
+### The boundary is the VM
 
-**Limiting private data access.** The agent only sees directories explicitly mounted in the workspace configuration. Host credentials, SSH keys, and unrelated project directories are not available inside the container. OpenCode configuration is mounted read-write. The agent runs as an unprivileged user with dropped capabilities and `no_new_privs`.
+The agent runs as `agent` (UID 1000), but it can use `sudo` from the image and become root inside the guest. That is by design: root in the guest controls the guest kernel and nothing more. Everything the guest can reach on the host passes through a narrow interface that the host enforces: virtio-fs shares, one network interface whose only peer is the broker, and Unix sockets the broker forwards. Read-only shares stay read-only even for guest root, because the VMM enforces them. With `protect_git`, `jailoc-guest` removes privilege escalation so that Git hooks and config in the shares stay read-only too. See [Architecture](architecture.md).
 
-These controls do not eliminate prompt injection. They reduce the blast radius by ensuring that even a successfully manipulated agent cannot reach internal services or access data outside its designated workspace.
+What the boundary does not cover is a bug in the hypervisor, libkrun or the broker itself. Those run on the host as the user who started jailoc.
+
+### Restricting external communication
+
+All guest traffic, IPv4 and IPv6, goes through the host-side [network broker](network-isolation.md). It allows public addresses and denies private and reserved ranges (RFC 1918, CGNAT, link-local, IPv6 unique local and more) unless `allowed_networks` or `allowed_hosts` opens them. Loopback, multicast, cloud metadata endpoints and a set of special IPv6 ranges are denied no matter what is allowed, and IPv6 addresses that embed an IPv4 address are judged by the IPv4 rules. Because the policy runs on the host, guest root can't change it, and containers started by an in-VM Docker daemon (`enable_docker`) are subject to it as well. With `filtered_dns`, internal zones don't resolve and the guest can't use another resolver.
+
+Public internet egress stays open, since the agent needs it to work. Data can still leave through it: the broker keeps a manipulated agent away from internal infrastructure, it doesn't stop exfiltration to the internet.
+
+### Limiting private data access
+
+The agent sees only the directories shared through `paths` and `mounts`, the files staged through `snapshots`, and the secrets configured for the workspace. Host credentials, SSH keys and unrelated projects aren't in the VM. The SSH agent, when forwarded, signs on the host and never hands keys to the guest, but anything in the guest can ask it to sign while it is forwarded.
+
+Shared directories are live: anything the agent writes there lands on the host. Snapshots are read-only and never write back. Secrets live in guest memory under `/run/secrets` and in session environments, so anything running as `agent` can read them, and the agent can use `sudo` unless `protect_git` is set; treat every configured secret as visible to the agent. See [Secrets](secrets.md).
+
+These controls don't stop prompt injection. They limit the blast radius, so a manipulated agent can't reach internal services, the host system or data outside its workspace.
 
 ## Further reading
 

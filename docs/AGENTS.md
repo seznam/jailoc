@@ -29,21 +29,28 @@ docs/
   tutorials/
     getting-started.md             Install + first workspace walkthrough
   how-to/
-    installation.md                go install + pre-built binaries
-    workspace-configuration.md     Add workspaces, set paths, per-workspace options
-    custom-images.md               URL Dockerfile presets, local Dockerfiles, build context
-    network-access.md              allowed_hosts, allowed_networks, verifying rules
-    ssh-git-passthrough.md         SSH agent forwarding, Git config and known_hosts mounting
-    access-modes.md                remote vs exec mode configuration
+    installation.md                Install, host requirements, VM runtime
+    workspace-configuration.md     Paths, mounts, snapshots, ports, protect_git, Docker, reload vs restart
+    custom-images.md               URL Dockerfile presets, local Dockerfiles, build context, isolated builds
+    network-access.md              allowed_hosts, allowed_networks, filtered DNS, verifying rules
+    secrets.md                     from_env / from_file / from_command secrets, rotation with reload
+    ssh-git-passthrough.md         SSH agent forwarding, Git config and known_hosts snapshots
+    sessions.md                    Start, attach, continue and list agent sessions; logs
+    tui-plugin.md                  TUI sidebar plugin
+    migrate-from-v1.md             Convert a v1 (Docker) config with jailoc migrate
+    troubleshooting.md             Logs, common errors, VM state files
   reference/
     cli.md                         All subcommands with flags and examples
     configuration.md               Every config.toml field, types, defaults, validation rules
-    image-resolution.md            5-step resolution cascade, step-by-step
+    image-resolution.md            How the workspace image is chosen, built and exported
+    default-image.md               Tools in the embedded base image
+    overlay-compatibility.md       Rules for workspace Dockerfile overlays
   explanation/
-    overview.md                    Startup sequence, package layout, two-container rationale
-    container-architecture.md      Mermaid diagram, volumes, entrypoint phases, dind rationale
-    network-isolation.md           iptables rules, security model
-    access-modes.md                Remote vs exec — why two modes exist
+    overview.md                    Startup sequence, package layout
+    threat-model.md                What jailoc protects against and what it does not
+    architecture.md                Builder/workspace VMs, jailoc-guest, shares, persistent home
+    network-isolation.md           Userspace network broker, IPv4/IPv6 policy, filtered DNS
+    secrets.md                     Secret delivery over SSH, tmpfs storage in the guest
 ```
 
 ## Writing Conventions

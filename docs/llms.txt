@@ -1,47 +1,46 @@
 # jailoc
 
-> jailoc is a Go CLI tool that manages sandboxed Docker Compose environments for headless OpenCode coding agents. Each workspace gets isolated containers with network restrictions, privilege dropping, and bind-mounted project paths.
+> jailoc is a Go CLI tool that runs headless OpenCode coding agents in sandboxed micro-VMs. Each workspace boots its own libkrun VM with directory shares for project paths, a userspace network broker that blocks private networks, and SSH-based agent sessions.
 
 Key facts:
 
-- jailoc runs two containers per workspace: an `opencode` container (the agent, UID 1000, capabilities dropped) and an optional `dind` sidecar (isolated Docker daemon, enabled by default via `enable_docker`)
-- Private networks (RFC 1918, link-local, CGNAT) are blocked by default via iptables; you allowlist specific hosts and CIDR ranges
-- Image resolution follows a 5-step cascade: workspace image → defaults image + workspace overlay → defaults image direct → base Dockerfile → embedded fallback
-- Config lives at `~/.config/jailoc/config.toml` (TOML); compose files are generated to `~/.cache/jailoc/{workspace}/docker-compose.yml`
-- Port assignment: `4096 + alphabetical index` among all configured workspaces
+- Every workspace is a per-workspace libkrun micro-VM; `jailoc-guest` is the VM init and agent sessions run over SSH into the guest
+- Supported hosts: macOS on Apple Silicon (Hypervisor.framework) and Linux amd64 (KVM, `/dev/kvm` access required); jailoc downloads a pinned, SHA-256-verified VM runtime
+- Workspace images are built with Docker Engine on the host (or in a builder VM with `isolated_build`) and exported into the VM root filesystem
+- All guest traffic passes through a host-side network broker: public destinations are allowed, private and reserved IPv4/IPv6 ranges are denied unless listed in `allowed_hosts` or `allowed_networks`
+- Config lives at `~/.config/jailoc/config.toml` (TOML); persistent VM home state lives under `~/.cache/jailoc-vm/workspaces/<workspace>/home`
+- `jailoc migrate` converts a jailoc v1 (Docker) configuration
 
 ## Reference
 
-- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): All subcommands (`up`, `down`, `logs`, `status`, `add`, `config`, `migrate`) with flags and usage, including `down --purge` and `reload`, `sessions`, `--new`/`--attach`
-- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field — `[base]`, `[vm]`, `[defaults]`, `[workspaces.<name>]` — types, defaults, validation rules, merge semantics
-- [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): 5-step resolution cascade with step details, triggers, constraints, and image tag summary
+- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): Root command (`--new`, `--attach`, `-c`, `-s`, `-w`) and all subcommands (`up`, `down --purge`, `restart`, `reload`, `sessions`, `logs`, `status`, `add`, `config`, `migrate`) with flags
+- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field in `[base]`, `[vm]`, `[defaults]` and `[workspaces.<name>]`, with types, defaults, validation rules and merge semantics
+- [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): How the workspace image is chosen, built and exported into the VM
 - [Default Image Contents](https://seznam.github.io/jailoc/reference/default-image/): Tools and runtimes shipped in the embedded base image
 - [Overlay Compatibility](https://seznam.github.io/jailoc/reference/overlay-compatibility/): Rules for workspace Dockerfile overlays
 
 ## How-to Guides
 
-- [Installation](https://seznam.github.io/jailoc/how-to/installation/): go install and pre-built binaries
-- [Workspace Configuration](https://seznam.github.io/jailoc/how-to/workspace-configuration/): Add workspaces, set paths, per-workspace options
-- [Custom Images](https://seznam.github.io/jailoc/how-to/custom-images/): URL Dockerfile presets, local Dockerfiles, build context
-- [Network Access](https://seznam.github.io/jailoc/how-to/network-access/): allowed_hosts, allowed_networks, verifying firewall rules
-- [Secrets](https://seznam.github.io/jailoc/how-to/secrets/): Pass secrets from host environment variables (from_env) or files (from_file) into container destination environment variables or file mounts
-- [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward SSH agent (with known_hosts), mount Git config into containers
-- [Access Modes](https://seznam.github.io/jailoc/how-to/access-modes/): Remote vs exec mode configuration
+- [Installation](https://seznam.github.io/jailoc/how-to/installation/): go install, Nix and pre-built binaries, host requirements
+- [Workspace Configuration](https://seznam.github.io/jailoc/how-to/workspace-configuration/): Add workspaces, set paths, mounts, snapshots, ports and per-workspace options
+- [Custom Images](https://seznam.github.io/jailoc/how-to/custom-images/): URL Dockerfile presets, local Dockerfiles, build context, isolated builds
+- [Network Access](https://seznam.github.io/jailoc/how-to/network-access/): allowed_hosts, allowed_networks, filtered DNS, verifying the policy
+- [Secrets](https://seznam.github.io/jailoc/how-to/secrets/): Pass secrets from host environment variables (from_env), files (from_file) or commands such as password managers (from_command) into the VM as session environment variables or /run/secrets files; rotate with reload
+- [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward the SSH agent and known_hosts, copy Git config into the VM
+- [Sessions](https://seznam.github.io/jailoc/how-to/sessions/): Attach to, start, continue and list agent sessions; read logs
 - [TUI Plugin](https://seznam.github.io/jailoc/how-to/tui-plugin/): Enable the TUI sidebar plugin to show workspace context in the OpenCode sidebar
-- [Run a Workspace in a VM](https://seznam.github.io/jailoc/how-to/vm-backend/): Experimental `backend = "vm"` — managed VM runtime download, switch a workspace, agent running directly in the VM in detachable sessions (`Ctrl-\` detach, `jailoc sessions`), read-only `copies` for files, shared or isolated builder (`isolated_build`), Git hooks and config protection (`protect_git`), Docker inside the VM (`enable_docker`), published ports (`ports`), background processes, live `jailoc reload`, `down --purge`, restrictions
-- [Troubleshooting](https://seznam.github.io/jailoc/how-to/troubleshooting/): Find logs, debug common errors, fix container issues, clean up stale resources
+- [Migrate from jailoc v1](https://seznam.github.io/jailoc/how-to/migrate-from-v1/): Convert a Docker-based configuration with `jailoc migrate`
+- [Troubleshooting](https://seznam.github.io/jailoc/how-to/troubleshooting/): Find logs, debug common errors, clean up stale state
 
 ## Explanation
 
-- [Overview](https://seznam.github.io/jailoc/explanation/overview/): Startup sequence, package layout, two-container rationale
+- [Overview](https://seznam.github.io/jailoc/explanation/overview/): Startup sequence and package layout
 - [Threat Model](https://seznam.github.io/jailoc/explanation/threat-model/): What jailoc protects against and what it does not
-- [Container Architecture](https://seznam.github.io/jailoc/explanation/container-architecture/): Two-container design, volumes, entrypoint phases, DinD sidecar
-- [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): iptables rules, security model, allowed traffic flow
-- [VM Backend](https://seznam.github.io/jailoc/explanation/vm-backend/): Builder VM and workspace VM, image export, jailoc-guest init and SSH sessions, Docker daemon on a data disk, secrets delivery, virtio-fs sharing, userspace network broker policy, trade-offs
-- [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Destination×source secret mapping model (destination tables secrets.env and secrets.file; source fields from_env and from_file), file permissions, and environment isolation
+- [Architecture](https://seznam.github.io/jailoc/explanation/architecture/): Builder and workspace VMs, image export, jailoc-guest init, SSH sessions, virtio-fs shares, persistent home, Docker inside the VM
+- [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): Userspace network broker, IPv4 and IPv6 policy, filtered DNS
+- [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Destination and source secret mapping, delivery over SSH, tmpfs storage in the guest
 
 ## Optional
 
 - [Getting Started Tutorial](https://seznam.github.io/jailoc/tutorials/getting-started/): Step-by-step walkthrough for first-time users
 - [Development Guide](https://seznam.github.io/jailoc/development/): Build from source, run tests, CI pipeline, contribution conventions
-- [Access Modes Explanation](https://seznam.github.io/jailoc/explanation/access-modes/): Why two connection modes exist and how they differ

@@ -1,59 +1,37 @@
-# How to enable the TUI sidebar plugin
+# How to use the TUI sidebar plugin
 
-The TUI sidebar plugin displays the workspace name in the OpenCode sidebar when running inside a jailoc container. Use this guide with a `jailoc` v1.x release that includes the bundled TUI sidebar plugin and a workspace configured in `~/.config/jailoc/config.toml`.
+The TUI sidebar plugin shows the workspace name in the OpenCode sidebar of a jailoc session.
 
----
+## Setup
 
-## Automatic setup
-
-The plugin is bundled with jailoc — no separate download is needed. When you run `jailoc`, jailoc sets `OPENCODE_TUI_CONFIG` to a generated plugin configuration when your host does not already provide a custom `~/.config/opencode/tui.json`.
-
-If you don't have a custom `~/.config/opencode/tui.json` on the host, the plugin works with no additional configuration.
-
----
-
-## Manual setup (custom tui.json)
-
-If you have a custom `~/.config/opencode/tui.json`, jailoc does not override it. Add the shared plugin directory to your `tui.json` manually:
-
-```json
-{
-  "plugin": ["file:///Users/<you>/.cache/jailoc/tui-plugin"]
-}
-```
-
-The `tui-plugin` directory is shared across all workspaces — jailoc writes it once to `~/.cache/jailoc/tui-plugin/` during startup.
-
----
+The plugin is bundled with jailoc and needs no configuration. At `jailoc up`, jailoc writes the plugin and a TUI config to its cache directory and shares them read-only into the VM. Every session starts with `OPENCODE_TUI_CONFIG` pointing at that config, so OpenCode loads the plugin automatically.
 
 ## Apply changes
 
-Restart the workspace to apply the plugin configuration:
+The plugin files are written at `jailoc up`. After upgrading jailoc, restart the workspace:
 
 ```bash
 jailoc restart <name>
 ```
 
----
-
 ## Troubleshooting
 
 ### Plugin not showing in sidebar
 
-Verify the `JAILOC` environment variable is set inside the container:
+Check the environment inside a session:
 
 ```bash
-env | grep JAILOC
+env | grep -E 'JAILOC|OPENCODE_TUI_CONFIG'
 ```
 
-You should see `JAILOC=1` and `JAILOC_WORKSPACE=<name>`. The plugin renders nothing when `JAILOC` is absent.
+You should see `JAILOC=1`, `JAILOC_WORKSPACE=<name>` and `OPENCODE_TUI_CONFIG=/etc/jailoc-cache/tui-container.json`. The plugin renders nothing without `JAILOC`.
 
 ### Plugin not loading
 
-Verify jailoc generated the TUI config and plugin files:
+Check that the plugin directory is visible in the VM:
 
 ```bash
-ls ~/.cache/jailoc/tui.json ~/.cache/jailoc/tui-container.json ~/.cache/jailoc/tui-plugin/
+ls /etc/jailoc-tui-plugin/
 ```
 
-If they are missing, restart any workspace with `jailoc restart <name>`.
+If it's empty or missing, run `jailoc restart <name>`. See [Troubleshooting](troubleshooting.md) for other session problems.

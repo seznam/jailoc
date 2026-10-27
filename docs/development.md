@@ -1,11 +1,12 @@
 # Development
 
-This page is for contributors. It covers how to build and test the project locally, the CI/CD pipeline, what ships inside the default container image, and the coding conventions the codebase follows.
+This page is for contributors. It covers how to build and test the project locally, the CI/CD pipeline, what ships inside the default workspace image, and the coding conventions the codebase follows.
 
 ## Prerequisites
 
 - Go 1.26+
-- Docker with Compose V2
+- Docker Engine, for building workspace images
+- macOS on Apple Silicon or Linux amd64 with KVM, for running workspace VMs
 
 ## Building and testing
 
@@ -13,7 +14,7 @@ This page is for contributors. It covers how to build and test the project local
 # Build the binary
 go build ./cmd/jailoc
 
-# Embed jailoc-guest for the VM backend (release builds do this automatically)
+# Embed jailoc-guest, the VM init (release builds do this automatically)
 go generate ./internal/guestbin
 go build ./cmd/jailoc
 
@@ -22,9 +23,6 @@ go build ./...
 
 # Run unit tests
 go test ./...
-
-# Run integration tests (requires a running Docker daemon)
-go test -tags=integration ./internal/...
 
 # Run the VM integration tests (needs KVM or macOS, a go-microvm runner and host Docker)
 JAILOC_VM_RUNNER=/path/to/go-microvm-runner JAILOC_VM_LIBDIR=/path/to/libs \
@@ -41,14 +39,14 @@ The pipeline runs on GitHub Actions. Most workflows trigger on every branch and 
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| CI | Every branch/PR — runs on `push` and `pull_request` events | Build (`go build` with ldflags), test (`go test` + `go vet`), and lint with golangci-lint |
+| CI | Pushes and pull requests to `main` | Unit tests (`go test`), golangci-lint, and a check that the embedded TUI plugin matches its source |
 | Release | Tags matching `v*` — runs on `push` with `v*` ref | GoReleaser publishes static binaries and generates a GitHub Release with changelog |
 | Docs | Tags matching `v*` — runs on `push` with `v*` ref | Builds documentation with MkDocs and deploys to GitHub Pages |
 | Pre-release | Manual (`workflow_dispatch`) with a ref and a version such as `1.20.0-rc.1` | Tags the ref and publishes GoReleaser binaries as a GitHub pre-release; no docs deploy, no release-please involvement |
 | VM Integration | PRs and pushes to `main` touching VM code, manual | Builds the go-microvm runner and libkrun from the pinned revision and boots real workspace VMs on a GitHub-hosted x64 Linux runner with KVM (`go test -tags vmintegration ./internal/vmintegration/`) |
 | VM runtime | Tags matching `vm-runtime-*` | Builds the macOS VM runtime bundle (go-microvm runner and libkrun) and publishes it as a pre-release |
 
-Integration tests run as part of the CI workflow on `v*` tags with `go test -tags=integration`. GoReleaser builds static binaries (`CGO_ENABLED=0`) for `linux/darwin` x `amd64/arm64`. Configs live in `.goreleaser.yml` and `.github/workflows/`.
+GoReleaser runs `go generate ./internal/guestbin` before building, so release binaries embed `jailoc-guest`. It builds static binaries (`CGO_ENABLED=0`) for `linux/darwin` x `amd64/arm64`. Configs live in `.goreleaser.yml` and `.github/workflows/`.
 
 ### Dependabot Nix vendorHash
 
@@ -61,7 +59,7 @@ Nix build sandboxing does not isolate the entire job: `nix run` executes the app
 
 After the token-generated push, a contributor with write access must select **Approve workflows to run** on the PR to start the resulting approval-required `pull_request` CI runs. See [approving workflow runs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/approve-runs-from-forks). [`GITHUB_TOKEN` pushes do not trigger `push` workflows](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs).
 
-## Default container contents
+## Default image contents
 
 The embedded Dockerfile defines an Ubuntu 24.04 base image. Exact versions are pinned there.
 
@@ -107,15 +105,15 @@ There are no custom error types in this codebase. `fmt.Errorf` wrapping is the o
 
 ### File organization
 
-One file per package concern: `docker.go`, `compose.go`, `workspace.go`, `config.go`. When a concern grows large enough to split, create a new file with a descriptive name (e.g. `fetch.go` for HTTP fetching inside the `docker` package). All packages live under `internal/` — nothing is exported.
+One file per package concern: `docker.go`, `workspace.go`, `config.go`. When a concern grows large enough to split, create a new file with a descriptive name (e.g. `fetch.go` for HTTP fetching inside the `docker` package). All packages live under `internal/` — nothing is exported.
 
 ### Testing
 
-Unit tests live beside their source files as `*_test.go`. Integration tests live in `internal/integration_test.go` and require the `//go:build integration` build tag. Tests use `t.Parallel()` and a table-driven style with `t.Run`. There are no mocks, fixtures, or testdata directories.
+Unit tests live beside their source files as `*_test.go`. VM integration tests live in `internal/vmintegration/` and require the `vmintegration` build tag. Tests use `t.Parallel()` and a table-driven style with `t.Run`. There are no mocks, fixtures, or testdata directories.
 
-## Developing inside a jailoc container
+## Developing inside a jailoc workspace
 
-`dev/Dockerfile.jailoc` is a workspace overlay that extends the default image with the Go toolchain, gopls, and golangci-lint. It lets you develop jailoc inside a jailoc container.
+`dev/Dockerfile.jailoc` is a workspace overlay that extends the default image with the Go toolchain, gopls, and golangci-lint. It lets you develop jailoc inside a jailoc workspace.
 
 Add to `~/.config/jailoc/config.toml`:
 
@@ -125,4 +123,4 @@ paths = ["/path/to/jailoc"]
 dockerfile = "https://raw.githubusercontent.com/seznam/jailoc/main/dev/Dockerfile.jailoc"
 ```
 
-Then run `jailoc up jailoc`. The standard build and test commands work inside the container unchanged.
+Then run `jailoc up jailoc`. The standard build and test commands work inside the VM unchanged.

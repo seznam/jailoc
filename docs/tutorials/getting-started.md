@@ -1,12 +1,15 @@
 # Getting Started
 
-This tutorial walks you through installing jailoc and running your first sandboxed workspace. By the end, you'll have an OpenCode agent running in an isolated container, connected to your project directory.
+This tutorial walks you through installing jailoc and running your first sandboxed workspace. By the end, you'll have an OpenCode agent running in an isolated micro-VM, working on your project directory.
 
 ## Prerequisites
 
-You need **Docker Engine** (the daemon) running on your machine. jailoc embeds the Compose SDK directly, so you don't need the `docker compose` CLI plugin installed separately.
+You need one of these hosts:
 
-Verify Docker is running:
+- **macOS on Apple Silicon**. jailoc uses Hypervisor.framework.
+- **Linux on amd64** with KVM. Your user needs read and write access to `/dev/kvm`.
+
+You also need **Docker Engine** running on the host. jailoc uses it to build the workspace image, which it then exports into the VM. Verify Docker is running:
 
 ```bash
 docker info
@@ -20,7 +23,7 @@ Install the latest release with `go install`:
 go install github.com/seznam/jailoc/cmd/jailoc@{{ version }}
 ```
 
-Alternatively, download a pre-built binary from [GitHub Releases](https://github.com/seznam/jailoc/releases). GoReleaser produces binaries for Linux and macOS on both amd64 and arm64.
+Alternatively, download a pre-built binary from [GitHub Releases](https://github.com/seznam/jailoc/releases).
 
 After installation, confirm it's on your `PATH`:
 
@@ -39,47 +42,60 @@ jailoc
 
 Here's what happens on first run:
 
-1. **Config creation** — jailoc writes a default config to `~/.config/jailoc/config.toml` if it doesn't exist yet.
-2. **Workspace prompt** — if the current directory isn't part of any configured workspace, jailoc asks whether to add it. Confirm, and the workspace is saved to your config.
-3. **Container start** — jailoc renders a `docker-compose.yml` from its embedded template and starts the `opencode` and `dind` containers.
-4. **Attach** — once the containers are healthy, jailoc attaches your local OpenCode TUI to the agent running inside.
+1. **Config creation**: jailoc writes a default config to `~/.config/jailoc/config.toml` if it doesn't exist yet.
+2. **Workspace prompt**: if the current directory isn't part of any configured workspace, jailoc asks whether to add it. Confirm, and the workspace is saved to your config.
+3. **Runtime download**: jailoc downloads its pinned VM runtime and checks its SHA-256 digest. This happens once.
+4. **Image build**: jailoc builds the workspace image with Docker and unpacks it into a VM root filesystem.
+5. **VM start**: jailoc boots the workspace VM, shares your project directory into it, and starts the network broker.
+6. **Attach**: jailoc opens an agent session over SSH and attaches your terminal to it.
 
-> **Tip:** Your project directory is bind-mounted at its original path inside the container. If your project lives at `/home/you/myproject`, the agent sees it at the same path. Running `jailoc` from a subdirectory (e.g. `~/myproject/src`) opens that subdirectory in the agent instead of the workspace root.
+!!! note
+    Your project directory is shared at its original path inside the VM. If your project lives at `/home/you/myproject`, the agent sees it at the same path. Running `jailoc` from a subdirectory (for example `~/myproject/src`) opens that subdirectory in the agent instead of the workspace root.
+
+## Detach and come back
+
+Press `Ctrl-\` to detach from the session. The agent keeps running inside the VM. Run `jailoc` again from the same directory to reattach to it.
+
+To see the sessions running in the workspace:
+
+```bash
+jailoc sessions
+```
 
 ## Use subcommands directly
 
 The bare `jailoc` shortcut is convenient, but you can also drive each step explicitly:
 
 ```bash
-# Start the environment in the background
+# Start the workspace VM in the background
 jailoc up
 ```
 
-This separation is useful when you want to start the workspace and come back to it later, or when you're scripting workspace lifecycle from CI.
+This separation is useful when you want to start the workspace and come back to it later.
 
 Other subcommands worth knowing:
 
 ```bash
-jailoc status   # show running workspaces and their ports
-jailoc logs     # tail container logs
-jailoc down     # stop and remove the workspace containers
+jailoc status   # show the state of the workspace VM
+jailoc logs     # show workspace logs
+jailoc down     # stop the workspace VM
 ```
 
-## What's running inside
+`jailoc down` keeps the VM's home state, such as OpenCode sessions and caches, for the next start. `jailoc down --purge` deletes it.
 
-When the workspace is up, two containers are active on an isolated Docker network:
+## What's running
 
-- **opencode container** — runs `opencode serve` as UID 1000 with your workspace paths mounted read-write and your OpenCode config mounted read-write.
-- **dind container** — provides a privileged Docker daemon over TLS on port 2376, so the agent can build and run containers if needed.
+When the workspace is up, these pieces are active:
 
-The entrypoint script sets iptables rules that block private network ranges by default before dropping privileges. The agent can reach the internet, but not your internal network, unless you explicitly allow it.
+- **The workspace VM** runs `jailoc-guest` as its init. It serves SSH to jailoc, and each agent session runs as the `agent` user (UID 1000), which can use `sudo` inside the VM.
+- **The network broker** runs on the host. All of the VM's traffic goes through it. Public destinations are reachable, but private and reserved address ranges are blocked unless you allow them.
 
 ## Next steps
 
 Now that you have a workspace running, you can dig into configuration:
 
-- [Workspace Configuration](../how-to/workspace-configuration.md) — add more workspaces, set mount paths, and tune per-workspace options
-- [Network Access](../how-to/network-access.md) — allow specific internal hosts or CIDR ranges
-- [Custom Images](../how-to/custom-images.md) — build or pull a custom base image with your own toolchain
-- [Access Modes](../how-to/access-modes.md) — control what the agent is allowed to do
-- [Configuration Reference](../reference/configuration.md) — full reference for every config field
+- [Workspace Configuration](../how-to/workspace-configuration.md): add more workspaces, set paths, and tune per-workspace options
+- [Sessions](../how-to/sessions.md): start new sessions, continue old ones, and attach by ID
+- [Network Access](../how-to/network-access.md): allow specific internal hosts or CIDR ranges
+- [Custom Images](../how-to/custom-images.md): add your own toolchain to the workspace image
+- [Configuration Reference](../reference/configuration.md): full reference for every config field

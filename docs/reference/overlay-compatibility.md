@@ -1,61 +1,47 @@
-# Overlay compatibility
+# Overlay Compatibility
 
-This page describes which Dockerfile instructions are inherited from a parent image, which jailoc overrides at runtime, and which overlay changes break container functionality.
+jailoc builds the workspace image with Docker and unpacks its file system into the VM. This page lists which image settings carry over into the workspace VM and which overlay changes break it.
 
-## Docker instruction inheritance
+## Image settings in the VM
 
-When an overlay Dockerfile uses `FROM <parent>`, the following instructions are either carried forward from the parent or replaced by the overlay layer.
+| Instruction | Used in the VM | Notes |
+|-------------|----------------|-------|
+| `ENV` | Yes | Passed to jailoc-guest and inherited by every session; config `env` and secrets are added on top |
+| `RUN`, `COPY`, `ADD` | Yes | The resulting file system is the VM's root file system |
+| `LABEL` | No | Metadata only |
+| `ENTRYPOINT`, `CMD` | No | jailoc-guest is the VM's init; sessions run `opencode` over SSH |
+| `USER` | No | Sessions run as UID 1000 |
+| `WORKDIR` | No | The working directory is the first workspace path, or the target directory of a session |
+| `EXPOSE` | No | Publish guest ports with `ports` in the configuration |
+| `VOLUME` | No | Persistent state lives in the VM's persistent home; see [configuration](configuration.md#persistent-state) |
+| `HEALTHCHECK`, `STOPSIGNAL`, `SHELL` | No | |
 
-| Instruction | Inherited | Notes |
-|-------------|-----------|-------|
-| `ENV` | Yes | Overlay can extend or override individual variables |
-| `EXPOSE` | Yes | All exposed ports from the parent remain declared |
-| `VOLUME` | Yes | Parent-declared volumes persist; see incompatible changes below |
-| `LABEL` | Yes | Parent labels are merged; overlay labels take precedence on collision |
-| `ENTRYPOINT` | Overridden | Compose template sets the entrypoint to a bind-mounted script at runtime |
-| `CMD` | Overridden | Compose template forces `opencode serve ...` at runtime |
-| `USER` | Overridden | Entrypoint drops to UID 1000 via `setpriv`; `USER` instruction has no effect |
-| `WORKDIR` | Overridden | Compose template sets `working_dir` to the first workspace path at runtime |
-| `SHELL` | Overridden | Entrypoint runs under `/bin/sh` regardless of `SHELL` declaration |
-| `HEALTHCHECK` | Overridden | No healthcheck is applied; the Compose template does not preserve it |
-| `STOPSIGNAL` | Overridden | Default `SIGTERM` applies; overlay `STOPSIGNAL` declarations are ignored |
+## User account
 
-## jailoc runtime overrides
-
-The generated `docker-compose.yml` unconditionally sets the following fields for the `opencode` service, regardless of what the Dockerfile declares.
-
-| Compose field | Value | Source |
-|---------------|-------|--------|
-| `entrypoint` | `["/usr/local/bin/entrypoint.sh"]` | Compose template; script is bind-mounted from the host |
-| `command` | `["opencode", "serve", ...]` | Compose template |
-| `working_dir` | First workspace path from config | Resolved workspace |
-
-These values cannot be changed by modifying the overlay Dockerfile. They are rendered from the embedded compose template at `jailoc up` time.
+jailoc-guest looks for the user with UID 1000 in the image's `/etc/passwd` and uses its name, group, home directory and shell. When the image has no such user, jailoc-guest adds `agent` (UID and GID 1000, home `/home/agent`, shell `/bin/bash` if present, otherwise `/bin/sh`).
 
 ## Incompatible changes
 
-The table below lists overlay actions that affect runtime behaviour. Severity levels apply regardless of whether the action is intentional.
-
 | Action | Severity | Effect |
 |--------|----------|--------|
-| Delete `/home/agent` or UID 1000 user | Fatal | Entrypoint `chown` and `setpriv` calls fail; container exits before agent starts |
-| Remove `iptables` package | Fatal | Network isolation setup fails; entrypoint exits with error |
-| Remove `setpriv` package | Fatal | Privilege drop from root to UID 1000 fails; entrypoint cannot continue |
-| Override `ENV PATH` without `/home/agent/.local/bin` | Breaking | OpenCode and installed tools are not found on `PATH` |
-| Add `VOLUME` on workspace mount paths | Breaking | Docker named volumes shadow the bind-mount; workspace writes do not reach the host |
-| Remove `sudo` package | Degraded | Agent cannot install packages at runtime; existing functionality unaffected |
+| Remove `opencode` from `PATH` | Fatal | Sessions fail to start |
+| Override `ENV PATH` without `/home/agent/.local/bin` | Breaking | Tools installed by the agent under `~/.local/bin` are not found |
+| Remove `dockerd` with `enable_docker = true` set explicitly | Fatal | `jailoc up` fails; with the default value only a warning is printed |
+| Remove `nftables` while `enable_docker` is on | Breaking | `dockerd` cannot set up container networking |
+| Remove `ca-certificates` | Breaking | TLS fails, and a forwarded `ca_bundle` has no trust store to join |
+| Remove `sudo` | Degraded | The agent cannot install packages at runtime |
+| Build for a CPU architecture other than the host's | Fatal | The VM cannot run the image |
 
 **Severity definitions:**
 
 | Severity | Meaning |
 |----------|---------|
-| Fatal | Container fails to start or exits immediately |
-| Breaking | Container starts but core functionality is unavailable |
-| Degraded | Container starts; partial functionality is lost |
+| Fatal | The VM or the session does not start |
+| Breaking | The VM starts but core functionality is unavailable |
+| Degraded | The VM starts; partial functionality is lost |
 
 ## Related pages
 
-- [Custom images](../how-to/custom-images.md) — how to build and configure overlay Dockerfiles
-- [Base image requirements](../how-to/custom-images.md#base-image-requirements) — components a custom base image must provide
-- [Container architecture](../explanation/container-architecture.md) — entrypoint phases, volume layout, and the DinD sidecar
-- [Image resolution](image-resolution.md) — the two-tier model that resolves base and overlay images
+- [Custom images](../how-to/custom-images.md): build and configure overlay Dockerfiles
+- [Image resolution](image-resolution.md): how base and overlay images are resolved
+- [Architecture](../explanation/architecture.md): VM boot, guest init and sessions

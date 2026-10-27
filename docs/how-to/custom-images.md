@@ -1,36 +1,26 @@
-# How to use a custom Docker image
+# How to use a custom image
 
-By default, jailoc builds a base image from the Dockerfile embedded in the binary. This guide shows how to replace or extend that image at each level of customization. For the full resolution rules, see [Image resolution reference](../reference/image-resolution.md).
+By default, jailoc builds the workspace image from the Dockerfile embedded in the binary, exports it and boots the workspace VM from it as its root file system. This guide shows how to replace or extend that image. For the full resolution rules, see the [Image resolution reference](../reference/image-resolution.md).
 
----
+## Know what the image must provide
 
-## Base image requirements
+The image is a root file system, not a container. jailoc ignores its `ENTRYPOINT`, `CMD`, `EXPOSE` and `USER`; `jailoc-guest` is the VM init and starts every session itself. Overlay Dockerfiles that extend the jailoc base (`ARG BASE` / `FROM ${BASE}`) inherit everything below.
 
-Any image used directly (`image` or `defaults.image`) or built from a custom Dockerfile (`[base].dockerfile`) must provide the components below. Overlay Dockerfiles that extend the default jailoc base (`ARG BASE` / `FROM ${BASE}`) inherit all of these automatically.
+An image used directly (`image`) or built from a custom base Dockerfile (`[base] dockerfile`) needs:
 
-| Component | Source (Debian/Ubuntu) | Role |
-|---|---|---|
-| `bash` | `bash` | Entrypoint interpreter |
-| `iptables` or `iptables-legacy` | `iptables` | Network isolation setup |
-| `setpriv` | `util-linux` | Privilege drop from root to UID 1000 |
-| `getent` | `libc-bin` | Hostname resolution in entrypoint |
-| `awk` | `gawk` or `mawk` | Route table parsing in entrypoint |
-| `opencode` | any method providing the binary on `PATH` | Agent runtime (`opencode serve`) |
-
-The image must also have:
-
-- A user with **UID 1000** and home directory `/home/agent`
-- Directories `/home/agent/.local` and `/home/agent/.cache`
-- `PATH` including `/home/agent/.local/bin` and `/home/agent/.opencode/bin`
+- a user `agent` with UID 1000 and home directory `/home/agent`;
+- `opencode` on `PATH`;
+- `PATH` including `/home/agent/.local/bin` and `/home/agent/.opencode/bin`;
+- `dockerd` if you want Docker inside the VM (see [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm)).
 
 !!! warning
-    A plain OS image like `ubuntu:24.04` does not satisfy these requirements. The container will fail to start without iptables, setpriv, the UID 1000 user, and opencode on PATH.
+    A plain OS image like `ubuntu:24.04` doesn't meet these requirements. Start from the jailoc base with an overlay unless you need full control.
 
----
+See the [Overlay compatibility reference](../reference/overlay-compatibility.md) and the [Default image reference](../reference/default-image.md).
 
-## Use a pre-built image directly
+## Use a pre-built image
 
-Set `image` in the workspace block to skip all build steps. Compose pulls the image from its registry at container startup.
+Set `image` to skip the build of the workspace layer:
 
 ```toml
 [workspaces.myproject]
@@ -39,61 +29,34 @@ image = "myregistry.example.com/myteam/myapp:v1.2.3"
 ```
 
 !!! warning
-    `image` cannot be combined with `dockerfile` or `build_context` in the same workspace block. Setting both is a validation error.
-
----
+    `image` can't be combined with `dockerfile` or `build_context` in the same workspace. Setting both is a validation error.
 
 ## Set a default base image
 
-Set `image` in `[defaults]` to use a pre-built image as the starting point for all workspaces. Workspaces that have their own `dockerfile` will use this as the `BASE` build argument; workspaces without a `dockerfile` will use it directly.
+Set `image` in `[defaults]` to start every workspace from a pre-built image. Workspaces with their own `dockerfile` get it as the `BASE` build argument; workspaces without one use it as-is:
 
 ```toml
 [defaults]
 image = "myregistry.example.com/myteam/opencode-base:v1.2.3"
 ```
 
-The image must meet the [base image requirements](#base-image-requirements). When `defaults.image` is not set, jailoc builds from its embedded Dockerfile automatically.
+## Build the base from your own Dockerfile
 
-With this set, a workspace that adds its own `dockerfile` builds on top of the specified image:
-
-```toml
-[workspaces.myproject]
-paths = ["~/projects/myproject"]
-dockerfile = "~/projects/myproject/overlay.Dockerfile"
-```
-
-A workspace without a `dockerfile` receives the specified image as-is.
-
----
-
-## Use a custom Dockerfile as the base image
-
-Set `dockerfile` in the global `[base]` section to a local path or HTTP(S) URL. jailoc reads (or downloads) the file, builds it locally, and tags the result with a content-based hash (`jailoc-base:preset-<hash>`).
-
-```toml
-[base]
-dockerfile = "/opt/myorg/base.Dockerfile"
-```
-
-Tilde paths and HTTP(S) URLs work too:
+Set `dockerfile` in `[base]` to a local path or HTTP(S) URL. jailoc reads or downloads it, builds it and tags the result with a content hash (`jailoc-base:preset-<hash>`):
 
 ```toml
 [base]
 dockerfile = "~/dockerfiles/base.Dockerfile"
 # or
-dockerfile = "https://git.example.com/team/dockerfiles/-/raw/main/opencode.Dockerfile"
+# dockerfile = "https://git.example.com/team/dockerfiles/-/raw/main/opencode.Dockerfile"
 ```
 
 !!! warning
-    If the file doesn't exist, the download fails (or exceeds 1 MiB), or the build fails, jailoc aborts. There is no fallback to the embedded image.
+    If the file doesn't exist, the download fails or exceeds 1 MiB, or the build fails, `jailoc up` aborts. There's no fallback to the embedded image.
 
-The resulting image must meet the [base image requirements](#base-image-requirements).
+## Add a workspace layer
 
----
-
-## Add a workspace-specific layer
-
-Set `dockerfile` in a `[workspaces.<name>]` block. jailoc builds this Dockerfile on top of whatever base image was resolved (from `[base]` settings, or `defaults.image` if set), passing the base tag as a build argument.
+Set `dockerfile` on the workspace. jailoc builds it on top of the resolved base and passes the base tag as `BASE`:
 
 ```toml
 [workspaces.myproject]
@@ -101,7 +64,7 @@ paths = ["~/projects/myproject"]
 dockerfile = "~/projects/myproject/overlay.Dockerfile"
 ```
 
-The workspace Dockerfile must begin with:
+The Dockerfile must start with:
 
 ```dockerfile
 ARG BASE
@@ -112,21 +75,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-jailoc runs the build with `--build-arg BASE=<resolved-base-tag>` and tags the result as `jailoc-myproject:<content-hash>`.
+The result is tagged `jailoc-myproject:<content-hash>`. HTTP(S) URLs work here too.
 
-HTTP URLs work here too:
+Packages installed with `sudo apt` inside a running VM are lost at the next start. Put lasting tools in this Dockerfile.
 
-```toml
-[workspaces.myproject]
-paths = ["~/projects/myproject"]
-dockerfile = "https://git.example.com/team/dockerfiles/-/raw/main/myproject-overlay.Dockerfile"
-```
+## Set the build context
 
----
-
-## Set an explicit build context for the workspace overlay
-
-By default, the build context for a workspace overlay is the parent directory of the `dockerfile` (for local paths). Set `build_context` explicitly to control which files are available during the build.
+For a local `dockerfile`, the build context defaults to its parent directory. Set `build_context` to choose which files `COPY` can see:
 
 ```toml
 [workspaces.myproject]
@@ -135,17 +90,46 @@ dockerfile = "~/projects/myproject/docker/overlay.Dockerfile"
 build_context = "~/projects/myproject"
 ```
 
-With this configuration, files from `~/projects/myproject` are accessible via `COPY` instructions in the Dockerfile.
+## Choose where images are built
 
----
+`[vm] builder` selects the build engine:
+
+| Value | Builds with |
+|-------|-------------|
+| `"auto"` (default) | the host Docker daemon when it answers and builds Linux images for the host's CPU architecture, otherwise the builder VM |
+| `"docker"` | the host Docker daemon; `jailoc up` fails when it isn't usable |
+| `"vm"` | always the builder VM |
+
+```toml
+[vm]
+builder = "vm"
+```
+
+!!! warning
+    With the host Docker daemon, `RUN` steps run on the host daemon, not inside a VM, and reach every network the host reaches. Use `builder = "vm"` or `isolated_build` for Dockerfiles you don't trust.
+
+The shared builder VM serves all workspaces, keeps one build cache and reaches public addresses only, regardless of `allowed_hosts` and `allowed_networks`. To build in a builder VM of the workspace's own, with its own cache and the workspace's network rules, set:
+
+```toml
+[workspaces.myproject]
+isolated_build = true
+```
+
+`isolated_build` always uses a builder VM, whatever `[vm] builder` says. Images that pull from private registries need `isolated_build = true` with the hosts in `allowed_hosts`, or `builder = "docker"`.
+
+## Apply an image change
+
+Images are built only at `jailoc up` of a stopped workspace and at `jailoc restart`. After changing `dockerfile`, `image` or the base, run:
+
+```bash
+jailoc restart myproject
+```
 
 ## Write a good overlay Dockerfile
 
 ### Keep layers small and cache-friendly
 
-Order instructions from least to most volatile. Put package installs before copying project files, and copy files before running project-specific setup. Build tools and package managers should come last.
-
-Combine related `RUN` commands into a single layer:
+Order instructions from least to most volatile, and combine related `RUN` commands into one layer:
 
 ```dockerfile
 ARG BASE
@@ -158,27 +142,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-For pip, suppress the cache directory:
+Skip package manager caches in the same layer:
 
 ```dockerfile
 RUN pip install --no-cache-dir -r requirements.txt
-```
-
-For npm, use `--prefer-offline` or clean the cache in the same layer:
-
-```dockerfile
 RUN npm ci --prefer-offline && npm cache clean --force
-```
-
-For apk (Alpine-derived layers):
-
-```dockerfile
-RUN apk add --no-cache curl jq
 ```
 
 ### Use multi-stage builds for compiled tools
 
-If you need a compiled binary, build it in a separate stage and copy only the output:
+Build a binary in a separate stage and copy only the output:
 
 ```dockerfile
 ARG BASE
@@ -191,50 +164,26 @@ FROM ${BASE}
 COPY --from=builder /bin/mytool /usr/local/bin/mytool
 ```
 
-This keeps the final image free of compilers and intermediate artifacts.
-
-### Install a custom binary
-
-To add a pre-built binary from a release URL, download and install it in a single `RUN` layer:
+### Install a release binary
 
 ```dockerfile
 ARG BASE
 FROM ${BASE}
 
-RUN curl -fsSL https://github.com/org/tool/releases/download/v1.0/tool-linux-amd64 \
-    -o /usr/local/bin/tool \
-    && chmod +x /usr/local/bin/tool
-```
-
-For archives that need extraction:
-
-```dockerfile
 RUN curl -fsSL https://github.com/org/tool/releases/download/v1.0/tool-linux-amd64.tar.gz \
     | tar -xzf - -C /usr/local/bin tool
 ```
 
-If the tool requires compilation, use a [multi-stage build](#use-multi-stage-builds-for-compiled-tools) instead to keep the final image small.
+### Use a proxy during builds
 
-### Proxy support during builds
+jailoc forwards the host's `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY` and their lowercase variants as build arguments to every image build. No `ARG` declarations are needed; Docker treats them as [predefined build arguments](https://docs.docker.com/build/building/variables/#proxy-arguments).
 
-If your host environment has proxy variables set (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY`, and their lowercase variants), jailoc forwards them as build arguments to all image builds — base, preset, and workspace overlay. No `ARG` declarations are needed in the Dockerfile; Docker treats these as [predefined build arguments](https://docs.docker.com/build/building/variables/#proxy-arguments).
+### Avoid these changes
 
-### What to avoid
+!!! danger "Fatal"
+    - **Deleting `/home/agent` or the UID 1000 `agent` user**: sessions run as this user and fail to start without it.
+    - **Removing `opencode`**: sessions have nothing to run.
 
-!!! danger "Fatal: breaks the container entirely"
-    These changes cause the container to fail at startup or make the agent unusable:
-
-    - **Deleting `/home/agent` or removing UID 1000** — the entrypoint drops privileges to UID 1000 and all agent tools run as this user; without it, startup fails.
-    - **Removing `iptables`** — the entrypoint uses iptables to enforce network isolation rules; without it, the container exits immediately.
-    - **Removing `setpriv`** — the entrypoint calls `setpriv` to drop capabilities and switch to UID 1000; without it, the agent runs as root or the container fails to start.
-
-!!! warning "Breaking: causes silent misbehaviour"
-    These changes don't prevent the container from starting, but they break expected behaviour in non-obvious ways:
-
-    - **Overriding `ENV PATH` without including `/home/agent/.local/bin` and `/home/agent/.opencode/bin`** — the agent's local pip tools and opencode plugins won't be found.
-    - **Adding `VOLUME` on workspace mount paths** — Docker volumes shadow bind mounts, so your project files won't appear inside the container.
-
-!!! warning "Degraded: reduces functionality"
-    - **Removing `sudo`** — the entrypoint uses sudo to set up iptables rules before dropping privileges. Removing it degrades the network isolation setup.
-
-For the full compatibility matrix, see [Overlay compatibility reference](../reference/overlay-compatibility.md).
+!!! warning "Breaking"
+    - **Overriding `ENV PATH` without `/home/agent/.local/bin` and `/home/agent/.opencode/bin`**: OpenCode and its plugins aren't found.
+    - **Removing `sudo`**: the agent can't become root inside the VM.
