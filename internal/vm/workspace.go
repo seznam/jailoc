@@ -124,7 +124,12 @@ func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option 
 		mounts = append(mounts, microvm.VirtioFSMount{Tag: shareTag(i), HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: true})
 	}
 	mounts = append(mounts, microvm.VirtioFSMount{Tag: controlTag, HostPath: controlDir(spec.StateDir), SimplifiedOwnership: true})
-	return append(commonOptions(spec),
+	opts := commonOptions(spec)
+	if spec.Docker {
+		// The only disk, so the guest sees it as /dev/vda (guest.DockerDisk).
+		opts = append(opts, microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}))
+	}
+	return append(opts,
 		microvm.WithVirtioFS(mounts...),
 		microvm.WithImageFetcher(cacheOnlyFetcher{}),
 		microvm.WithInitOverride(guest.BinaryPath),

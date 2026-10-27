@@ -70,7 +70,7 @@ For workspaces with `backend = "vm"`, shuts down the workspace VM and its networ
 
 | Flag | Description |
 |------|-------------|
-| `--purge` | Also delete the VM state, the persistent home directories and, with `isolated_build`, the workspace's builder VM and build cache. Applies to `backend = "vm"` only. |
+| `--purge` | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM and, with `isolated_build`, the workspace's builder VM and build cache. Applies to `backend = "vm"` only. |
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
@@ -179,7 +179,7 @@ jailoc migrate [flags]
 Rewrites `~/.config/jailoc/config.toml`:
 
 - Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
-- Lists settings the VM backend rejects or ignores (`mode = "remote"`, `ssh_auth_sock`, `filtered_dns`, `enable_docker = true`, `expose_port = true`) per scope and removes them after confirmation. Declining stops the migration.
+- Lists settings the VM backend rejects or ignores (`mode = "remote"`, `ssh_auth_sock`, `filtered_dns`, `expose_port = true`) per scope and removes them after confirmation. Declining stops the migration.
 - Asks for every `mounts` entry of `[defaults]` and of each Docker workspace whether it stays a mount (default for directories), becomes a read-only [copy](configuration.md#copies) (default for files), or is dropped. Files cannot stay mounts.
 
 For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories, unless a mount covers those paths or VM data already exists there. The volumes are left in place. Without a reachable Docker daemon, these steps are skipped after confirmation.

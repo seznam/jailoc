@@ -264,6 +264,7 @@ type Defaults struct {
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
 	IsolatedBuild   *bool     `toml:"isolated_build,omitempty"`
 	ProtectGit      *bool     `toml:"protect_git,omitempty"`
+	Ports           []Port    `toml:"ports,omitempty"`
 }
 
 type Workspace struct {
@@ -291,6 +292,7 @@ type Workspace struct {
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
 	IsolatedBuild   *bool     `toml:"isolated_build,omitempty"`
 	ProtectGit      *bool     `toml:"protect_git,omitempty"`
+	Ports           []Port    `toml:"ports,omitempty"`
 }
 
 func ConfigDir() string {
@@ -927,6 +929,9 @@ func Validate(cfg *Config) error {
 		}
 		cfg.Defaults.Copies[i] = normalized
 	}
+	if err := validatePorts(cfg.Defaults.Ports); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
 
 	if cfg.Defaults.CPU != nil && (*cfg.Defaults.CPU <= 0 || math.IsNaN(*cfg.Defaults.CPU) || math.IsInf(*cfg.Defaults.CPU, 0)) {
 		return fmt.Errorf("defaults: cpu must be a finite number greater than 0")
@@ -1083,6 +1088,12 @@ func Validate(cfg *Config) error {
 		if ws.ProtectGit != nil && *ws.ProtectGit && EffectiveBackend(cfg.Defaults.Backend, ws.Backend) != BackendVM {
 			return fmt.Errorf("workspace %q: protect_git is only supported with backend %q", name, BackendVM)
 		}
+		if err := validatePorts(ws.Ports); err != nil {
+			return fmt.Errorf("workspace %q: %w", name, err)
+		}
+		if len(ws.Ports) > 0 && EffectiveBackend(cfg.Defaults.Backend, ws.Backend) != BackendVM {
+			return fmt.Errorf("workspace %q: ports is only supported with backend %q", name, BackendVM)
+		}
 		if EffectiveBackend(cfg.Defaults.Backend, ws.Backend) == BackendVM {
 			sshAuthSock := cfg.Defaults.SSHAuthSock
 			if ws.SSHAuthSock != nil {
@@ -1094,8 +1105,8 @@ func Validate(cfg *Config) error {
 			if enabled {
 				return fmt.Errorf("workspace %q: filtered_dns is not supported with backend %q", name, BackendVM)
 			}
-			if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) {
-				return fmt.Errorf("workspace %q: enable_docker is not supported with backend %q", name, BackendVM)
+			if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) && explicitTrue(cfg.Defaults.ProtectGit, ws.ProtectGit) {
+				return fmt.Errorf("workspace %q: enable_docker cannot be combined with protect_git: Docker access is root access in the VM", name)
 			}
 			if explicitTrue(cfg.Defaults.ExposePort, ws.ExposePort) {
 				return fmt.Errorf("workspace %q: expose_port is not supported with backend %q", name, BackendVM)

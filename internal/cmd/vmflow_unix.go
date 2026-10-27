@@ -102,6 +102,9 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
+	if err := configureVMDocker(cfg, ws, &spec); err != nil {
+		return err
+	}
 	if ws.ProtectGit {
 		pins, readOnly, err := gitProtection(ws.Paths)
 		if err != nil {
@@ -116,7 +119,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 				repos++
 			}
 		}
-		_, _ = color.New(color.FgCyan).Printf("Protecting Git hooks and config of %d repositories; sudo is disabled\n", repos)
+		_, _ = color.New(color.FgCyan).Printf("Protecting Git hooks and config of %d repositories; sudo and Docker are disabled\n", repos)
 	}
 	if _, err := startSupervisor(ctx, spec, "VM for workspace "+ws.Name); err != nil {
 		return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
@@ -317,6 +320,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Broker:      []string{exe, "netbroker"},
 		GuestBinary: rt.guest,
 		Guest:       g,
+		Forwards:    vmForwards(ws.Ports),
 	}, nil
 }
 
@@ -470,4 +474,39 @@ func restartVMIfRunning(ctx context.Context, ws *workspace.Resolved) error {
 		return fmt.Errorf("re-resolve workspace for restart: %w", err)
 	}
 	return runUpVM(ctx, cfg, ws2)
+}
+
+// dockerdPaths are where images install dockerd.
+var dockerdPaths = []string{"usr/local/bin/dockerd", "usr/bin/dockerd", "usr/sbin/dockerd", "bin/dockerd"}
+
+// configureVMDocker enables the Docker daemon of the workspace VM when
+// enable_docker is on and the image ships dockerd. Without dockerd an
+// explicit enable_docker = true is an error and the default only a warning.
+func configureVMDocker(cfg *config.Config, ws *workspace.Resolved, spec *vm.Spec) error {
+	if !ws.EnableDocker {
+		return nil
+	}
+	has, err := vm.ImageHasFile(spec.ImageCache, spec.Image, dockerdPaths...)
+	if err != nil {
+		return fmt.Errorf("workspace %q: %w", ws.Name, err)
+	}
+	if !has {
+		explicit := cfg.Defaults.EnableDocker != nil || cfg.Workspaces[ws.Name].EnableDocker != nil
+		if explicit {
+			return fmt.Errorf("workspace %q: enable_docker is on, but the workspace image has no dockerd; install Docker in the image or set enable_docker = false", ws.Name)
+		}
+		_, _ = color.New(color.FgYellow).Printf("Docker is not available in workspace %s: the image has no dockerd (set enable_docker = false to silence this)\n", ws.Name)
+		return nil
+	}
+	spec.Docker = true
+	spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
+	return nil
+}
+
+func vmForwards(ports []config.PortForward) []vm.Forward {
+	out := make([]vm.Forward, 0, len(ports))
+	for _, p := range ports {
+		out = append(out, vm.Forward{HostPort: p.Host, GuestPort: p.Guest})
+	}
+	return out
 }

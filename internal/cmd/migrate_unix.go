@@ -135,9 +135,6 @@ func defaultsIncompatibilities(cfg *config.Config) []incompatibility {
 	if d.FilteredDNS != nil && *d.FilteredDNS {
 		out = append(out, incompatibility{"filtered_dns = true", "DNS goes through the VM network broker", func() { d.FilteredDNS = nil }})
 	}
-	if d.EnableDocker != nil && *d.EnableDocker {
-		out = append(out, incompatibility{"enable_docker = true", "the agent has no Docker daemon in the VM", func() { d.EnableDocker = nil }})
-	}
 	if d.ExposePort != nil && *d.ExposePort {
 		out = append(out, incompatibility{"expose_port = true", "sessions run over SSH; there is no published port", func() { d.ExposePort = nil }})
 	}
@@ -151,9 +148,6 @@ func workspaceIncompatibilities(ws *config.Workspace) []incompatibility {
 	}
 	if ws.FilteredDNS != nil && *ws.FilteredDNS {
 		out = append(out, incompatibility{"filtered_dns = true", "DNS goes through the VM network broker", func() { ws.FilteredDNS = nil }})
-	}
-	if ws.EnableDocker != nil && *ws.EnableDocker {
-		out = append(out, incompatibility{"enable_docker = true", "the agent has no Docker daemon in the VM", func() { ws.EnableDocker = nil }})
 	}
 	if ws.ExposePort != nil && *ws.ExposePort {
 		out = append(out, incompatibility{"expose_port = true", "sessions run over SSH; there is no published port", func() { ws.ExposePort = nil }})

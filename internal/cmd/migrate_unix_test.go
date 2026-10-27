@@ -36,7 +36,7 @@ func migrationFixture(t *testing.T) (string, string, *config.Config) {
 		Mode:     config.ModeRemote,
 		Defaults: config.Defaults{SSHAuthSock: true},
 		Workspaces: map[string]config.Workspace{
-			"api": {Backend: config.BackendDocker, Paths: []string{"/src/api"}, EnableDocker: new(true),
+			"api": {Backend: config.BackendDocker, Paths: []string{"/src/api"}, ExposePort: new(true), EnableDocker: new(true),
 				Mounts: []string{file + ":/home/agent/.npmrc:ro", data + ":/data:rw", ":/home/agent/.opencode"}},
 			"web": {Backend: config.BackendVM, Paths: []string{"/src/web"}},
 		},
@@ -61,8 +61,8 @@ func TestPlanMigration(t *testing.T) {
 		t.Fatalf("defaults not migrated: backend=%q mode=%q ssh=%v", cfg.Defaults.Backend, cfg.Mode, cfg.Defaults.SSHAuthSock)
 	}
 	api := cfg.Workspaces["api"]
-	if api.Backend != "" || api.EnableDocker != nil {
-		t.Fatalf("api not migrated: backend=%q enable_docker=%v", api.Backend, api.EnableDocker)
+	if api.Backend != "" || api.ExposePort != nil || api.EnableDocker == nil {
+		t.Fatalf("api not migrated: backend=%q expose_port=%v enable_docker=%v", api.Backend, api.ExposePort, api.EnableDocker)
 	}
 	if !slices.Equal(api.Mounts, []string{":/home/agent/.opencode"}) {
 		t.Fatalf("api mounts = %v", api.Mounts)

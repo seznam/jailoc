@@ -1526,25 +1526,27 @@ func TestResolveSecretsWorkspaceOverrideAcrossKinds(t *testing.T) {
 	}
 }
 
-func TestResolveVMBackendDisablesPortAndDocker(t *testing.T) {
+func TestResolveVMBackendPortAndDocker(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name         string
 		backend      string
 		isolated     *bool
+		protectGit   *bool
 		wantPort     bool
 		wantDocker   bool
 		wantIsolated bool
 	}{
 		{name: "docker keeps defaults", backend: config.BackendDocker, wantPort: true, wantDocker: true},
-		{name: "vm disables port and docker", backend: config.BackendVM},
-		{name: "vm isolated build", backend: config.BackendVM, isolated: new(true), wantIsolated: true},
+		{name: "vm disables port, keeps docker", backend: config.BackendVM, wantDocker: true},
+		{name: "vm protect_git disables docker", backend: config.BackendVM, protectGit: new(true)},
+		{name: "vm isolated build", backend: config.BackendVM, isolated: new(true), wantDocker: true, wantIsolated: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &config.Config{Workspaces: map[string]config.Workspace{
-				"ws": {Backend: tt.backend, Paths: []string{"/data/work"}, IsolatedBuild: tt.isolated},
+				"ws": {Backend: tt.backend, Paths: []string{"/data/work"}, IsolatedBuild: tt.isolated, ProtectGit: tt.protectGit},
 			}}
 			r, err := workspace.Resolve(cfg, "ws")
 			if err != nil {
@@ -1621,5 +1623,31 @@ func TestResolveVMBackendMergesAllowedDestinations(t *testing.T) {
 				t.Fatalf("hosts=%v networks=%v, want %v %v", r.AllowedHosts, r.AllowedNetworks, tt.wantHosts, tt.wantNetworks)
 			}
 		})
+	}
+}
+
+func TestResolveVMPorts(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Defaults: config.Defaults{Ports: []config.Port{"3000", "8080:80"}},
+		Workspaces: map[string]config.Workspace{
+			"vm":     {Backend: config.BackendVM, Paths: []string{"/data/work"}, Ports: []config.Port{"8080:8000"}},
+			"docker": {Paths: []string{"/data/other"}},
+		},
+	}
+	r, err := workspace.Resolve(cfg, "vm")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := []config.PortForward{{Host: 3000, Guest: 3000}, {Host: 8080, Guest: 8000}}
+	if !slices.Equal(r.Ports, want) {
+		t.Fatalf("Ports = %v, want %v", r.Ports, want)
+	}
+	d, err := workspace.Resolve(cfg, "docker")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(d.Ports) != 0 {
+		t.Fatalf("docker Ports = %v, want none", d.Ports)
 	}
 }

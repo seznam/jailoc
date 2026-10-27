@@ -48,14 +48,15 @@ All VM workspaces share one builder VM. It keeps one build cache for all of them
 
 ## Workspace VM
 
-The root file system is a copy-on-write clone of the unpacked image and is discarded on every start; only `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` of the agent persist, in the workspace's VM state directory. `jailoc-guest` prepares the system and then serves SSH:
+The root file system is a copy-on-write clone of the unpacked image and is discarded on every start; only `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` of the agent persist, in the workspace's VM state directory, together with the Docker data disk. `jailoc-guest` prepares the system and then serves SSH:
 
 1. configures the network address, the broker as gateway and DNS resolver, and the hostname,
 2. creates the `agent` user (UID 1000) when the image has none and its home directory,
 3. mounts the shared directories, binds the copies (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
 4. adds the hostname to `/etc/hosts`; it leaves privileges alone, so the agent can use `sudo` from the image, because root in the VM is still inside the VM boundary,
    With `protect_git`, it first bind-mounts `.git/hooks` and `.git/config` of every repository in the shares read-only over themselves, turns the `.git` directories, repositories and their parent directories into mount points that cannot be renamed, and sets `no_new_privs` on all its threads, so no session can become root and undo the binds. Guest root could otherwise unmount them, which is why the protection and `sudo` exclude each other.
-5. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
+5. with `enable_docker`, formats the Docker data disk on first use, mounts it at `/var/lib/docker` and starts `dockerd` with its nftables firewall backend, with the socket owned by the `agent` group; IP forwarding is on, so containers get bridge networking behind the broker,
+6. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
 
 `jailoc` opens a session by connecting to the SSH server through a Unix socket that the broker forwards into the VM. It authenticates with a per-workspace key and pins the guest's host key, which is generated anew for every start. The agent runs in a session held by `jailoc-guest`: a small process inside the VM owns the agent's terminal, so the agent keeps running when the SSH connection ends. jailoc relays keystrokes, output and window size changes to it. When a terminal re-attaches, the holder replays the terminal modes the agent had switched on (alternate screen, mouse reporting, bracketed paste, keyboard protocols) and makes the agent redraw by briefly changing the window size. Sessions live in VM memory and end when the VM stops. `jailoc down` asks the guest to stop over a control share, so open files are flushed before the VM powers off.
 
@@ -89,7 +90,7 @@ No port is published on the host. An invalid policy file at start prevents the V
 
 - **Start time:** a cached start takes about 7 seconds on Apple Silicon with the host Docker daemon and about 15 seconds with the builder VM, which has to boot first; the first start builds the image.
 - **Resources:** each workspace reserves its own VM memory (`memory` + 1 GiB) and vCPUs (`cpu` rounded up); a build in the builder VM adds the builder (4 vCPUs, 4 GiB).
-- **No Docker for the agent:** the workspace VM has no Docker daemon.
+- **Docker inside the VM:** with `enable_docker`, the workspace VM runs its own Docker daemon on a persistent data disk; containers share the VM's CPU and memory and its network rules. `protect_git` turns it off, because Docker access is root access in the VM.
 - **No remote mode:** sessions run OpenCode inside the VM; there is no OpenCode server port on the host.
 - **Platform:** tested on macOS with libkrun. The broker is IPv4 only.
 

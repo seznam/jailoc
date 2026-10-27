@@ -105,6 +105,9 @@ type Spec struct {
 	// Guest is the guest configuration (workspace VMs); the supervisor
 	// fills in the authorized key.
 	Guest *guest.Config `json:"guest,omitempty"`
+	// Docker attaches a persistent data disk for the Docker daemon of a
+	// workspace VM (the builder always has one).
+	Docker bool `json:"docker,omitempty"`
 	// Log receives lifecycle messages and the broker's output.
 	Log io.Writer `json:"-"`
 }
@@ -227,7 +230,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 			return fmt.Errorf("socket path %q is longer than %d bytes", p, maxSocketPath)
 		}
 	}
-	if !workspace {
+	if !workspace || spec.Docker {
 		diskSize := spec.DiskSize
 		if diskSize == 0 {
 			diskSize = DefaultDiskSize

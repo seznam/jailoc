@@ -46,7 +46,9 @@ type Resolved struct {
 	IsolatedBuild bool
 	// ProtectGit makes .git/hooks and .git/config of the repositories in
 	// a backend "vm" workspace read-only in the VM and disables sudo there.
-	ProtectGit      bool
+	ProtectGit bool
+	// Ports are guest ports published on host 127.0.0.1 (backend "vm").
+	Ports           []config.PortForward
 	FilteredDNS     bool
 	DNSUpstream     string
 	DNSBlockedZones []string
@@ -169,9 +171,13 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	}
 	if r.Backend == config.BackendVM {
 		// The VM backend runs the agent directly in the VM and is reached
-		// over SSH: no published port and no Docker daemon for the agent.
+		// over SSH: no published OpenCode port. Docker runs inside the VM
+		// unless protect_git is on, because Docker access is root access.
 		r.ExposePort = false
-		r.EnableDocker = false
+		if r.ProtectGit {
+			r.EnableDocker = false
+		}
+		r.Ports = config.MergePorts(cfg.Defaults.Ports, ws.Ports)
 		// The broker policy is built from the resolved lists, so they carry
 		// the [defaults] entries too (the Docker backend merges them when
 		// writing the allowed-hosts and allowed-networks files).

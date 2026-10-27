@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -59,3 +60,18 @@ func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer)
 type staticFetcher struct{ img v1.Image }
 
 func (f staticFetcher) Pull(context.Context, string) (v1.Image, error) { return f.img, nil }
+
+// ImageHasFile reports whether the unpacked image ref in the image cache
+// contains any of the given paths (relative to the root file system).
+func ImageHasFile(cacheDir, ref string, paths ...string) (bool, error) {
+	rootfs := image.NewCache(cacheDir).LookupRef(ref)
+	if rootfs == nil {
+		return false, fmt.Errorf("image %s is not in the image cache", ref)
+	}
+	for _, p := range paths {
+		if _, err := os.Lstat(filepath.Join(rootfs.Path, filepath.FromSlash(p))); err == nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}

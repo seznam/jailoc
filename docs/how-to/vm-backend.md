@@ -137,15 +137,42 @@ At every `jailoc up`, jailoc finds the Git repositories under the workspace `pat
 - `.git/hooks`, `.git/config`, the same files of submodules, and `.git` files of worktrees and submodule checkouts read-only (a missing `hooks` directory is created first);
 - the `.git` directories, the repositories and the directories between a workspace path and a repository impossible to rename or remove, so the agent cannot swap a protected `.git` for its own.
 
-`sudo` is disabled in the workspace, because root inside the VM could lift these protections. The agent can still commit, branch, fetch and push; Git commands that change `.git/config`, such as `git remote add` or `git config`, fail.
+`sudo` and Docker are disabled in the workspace, because root inside the VM, which Docker access amounts to, could lift these protections. Setting `enable_docker = true` together with `protect_git = true` is rejected. The agent can still commit, branch, fetch and push; Git commands that change `.git/config`, such as `git remote add` or `git config`, fail.
 
 The protection covers repositories that exist at `jailoc up`. Repositories created later, including those the agent clones, are not protected; restart the workspace to include them. Files in the working tree that tools run, such as `Makefile` or `package.json` scripts, are not covered either.
+
+## Use Docker in the VM
+
+With `enable_docker = true`, the default, the workspace VM runs its own Docker daemon when the workspace image contains `dockerd`. The built-in image ships Docker CE with the `buildx` and `compose` plugins; a custom image needs Docker installed to use it. The agent reaches the daemon through `/var/run/docker.sock` without `sudo`, so `docker build`, `docker compose` and Testcontainers work inside the workspace.
+
+Images, containers and volumes live on a 20 GiB data disk of the workspace VM and persist across `jailoc down` and `jailoc up`; `jailoc down --purge` deletes them. Containers get bridge networking, and their traffic passes the same broker rules as the agent's.
+
+A workspace image without `dockerd` starts without Docker and prints a warning; set `enable_docker = false` to silence it. With an explicit `enable_docker = true`, such an image fails `jailoc up`.
+
+## Publish ports
+
+To reach a service in the VM from the host, publish its port:
+
+```toml
+[workspaces.myproject]
+ports = [3000, "8080:80"]
+```
+
+`3000` makes guest port 3000 available on host `127.0.0.1:3000`; `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. Ports are bound when the VM starts, so changing `ports` restarts the VM at the next `jailoc up`. The service must listen on `0.0.0.0` (or the VM address `192.168.127.2`), not on `127.0.0.1`. Docker containers published with `docker run -p 3000:3000` are reachable the same way.
+
+## Run background processes
+
+The VM has no init system: nothing restarts a process that exits, and every process ends with the VM. To keep a dev server or watcher running:
+
+- run it in its own session: `jailoc --new` opens a second session, start the server there and detach with `Ctrl-\`;
+- or start it detached from a shell, for example `setsid npm run dev > /tmp/dev.log 2>&1 &`;
+- or run it as a Docker container with `docker run -d --restart unless-stopped`, which Docker restarts when it exits.
 
 ## Stop and remove the VM
 
 ```bash
 jailoc down myproject           # stop the VM, keep home directories and build cache
-jailoc down myproject --purge   # also delete the VM state, home directories and isolated builder
+jailoc down myproject --purge   # also delete the VM state, home directories, Docker data and isolated builder
 ```
 
 ## Allow private hosts and networks
@@ -160,7 +187,8 @@ Host addresses, the broker gateway and cloud metadata endpoints stay blocked reg
 ## Restrictions
 
 - Sessions use exec mode only; `jailoc --remote` is rejected and `expose_port = true` is rejected.
-- The agent has no Docker daemon; `enable_docker = true` is rejected. Testcontainers and `docker build` inside the workspace do not work.
+- The VM kernel is the libkrun kernel: no `systemd` or other init system, no loadable kernel modules, no swap, no nested virtualization (`/dev/kvm`), and `dmesg` is not readable.
+- The built-in image has no compilers or extra debugging tools such as `gcc`, `pip` or `strace`. Install them with `sudo apt-get install` for the current run, or add them to the workspace Dockerfile to keep them.
 - `ssh_auth_sock` is rejected: the host SSH agent socket cannot cross into the VM. Git over SSH (`git@host:repo` remotes) fails; use HTTPS remotes with a token, for example a `~/.netrc` added through `copies`.
 - `filtered_dns` is rejected: DNS goes through the broker.
 - `mounts` must name directories. A file mount is rejected at `jailoc up`; use `copies` for files.

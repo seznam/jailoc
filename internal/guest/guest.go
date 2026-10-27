@@ -70,6 +70,19 @@ type Config struct {
 	// NoPrivilegeEscalation removes privilege escalation, including sudo,
 	// from sessions, so the agent cannot undo Pins and ReadOnly.
 	NoPrivilegeEscalation bool `json:"no_privilege_escalation,omitempty"`
+	// Docker, when set, makes the guest run dockerd with its data on a
+	// block device.
+	Docker *Docker `json:"docker,omitempty"`
+}
+
+// DockerDisk is the block device of the workspace VM's Docker data disk.
+const DockerDisk = "/dev/vda"
+
+// Docker configures the Docker daemon of a workspace VM.
+type Docker struct {
+	// Disk is the block device mounted at /var/lib/docker; it is
+	// formatted as ext4 when it has no file system yet.
+	Disk string `json:"disk"`
 }
 
 // Secrets is the payload of "jailoc-guest secrets": environment entries

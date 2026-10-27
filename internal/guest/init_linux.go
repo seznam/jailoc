@@ -67,6 +67,11 @@ func Init(logger *slog.Logger) error {
 	if err := netcfg.Configure(logger); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
+	// Containers and other guest-side routing (Docker bridge networks)
+	// need forwarding; it does not reach past the broker's policy.
+	if err := harden.Set("net.ipv4.ip_forward", "1"); err != nil {
+		logger.Warn("enable ip forwarding", "error", err)
+	}
 	acct, err := ensureAccount(cfg)
 	if err != nil {
 		return err
@@ -101,6 +106,12 @@ func Init(logger *slog.Logger) error {
 	// enforced on the host. Guest-side protections (Pins, ReadOnly) only
 	// hold while sessions cannot gain privileges.
 	harden.KernelDefaults(logger)
+	var docker *dockerDaemon
+	if cfg.Docker != nil {
+		if docker, err = startDocker(logger, cfg.Docker, acct); err != nil {
+			return err
+		}
+	}
 	if cfg.NoPrivilegeEscalation {
 		if err := disablePrivilegeEscalation(); err != nil {
 			return err
@@ -128,6 +139,7 @@ func Init(logger *slog.Logger) error {
 		if _, err := os.Stat(filepath.Join(ControlDir, "shutdown")); err == nil {
 			logger.Info("shutdown requested")
 			srv.Close()
+			docker.stop(logger)
 			syscall.Sync()
 			return nil
 		}

@@ -36,6 +36,16 @@ Core tool versions (Node.js, yaml-language-server, OpenCode) are pinned as `ARG`
 | unzip | `unzip` (apt) | `unzip` |
 | xz-utils | `xz-utils` (apt) | `xz` |
 
+## Docker
+
+Docker CE static binaries, pinned and checksum-verified as `ARG` declarations at the top of the Dockerfile. The CLI talks to the Docker-in-Docker sidecar with the Docker backend; with backend `"vm"`, `dockerd` runs inside the workspace VM.
+
+| Tool | Source | Binary |
+|------|--------|--------|
+| Docker CE | `download.docker.com` static release | `docker`, `dockerd`, `containerd`, `runc`, `docker-init`, `docker-proxy` in `/usr/local/bin` |
+| Docker Buildx | `docker/buildx` GitHub release | `docker buildx` (CLI plugin) |
+| Docker Compose | `docker/compose` GitHub release | `docker compose` (CLI plugin) |
+
 ## Agent stack
 
 | Tool | Source | Binary |
@@ -49,6 +59,7 @@ These are installed for container operation, not direct agent use.
 | Tool | Purpose |
 |------|---------|
 | `iptables` | Network isolation (entrypoint.sh) |
+| `nftables` | Firewall backend of `dockerd` in VM workspaces |
 | `ca-certificates` | TLS certificate store |
 
 ---
