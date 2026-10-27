@@ -232,7 +232,31 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	if err != nil {
 		return "", err
 	}
+	pruneImageCache(ref)
 	return ref, nil
+}
+
+// pruneImageCache removes unpacked workspace images that no workspace or
+// builder spec uses any more. Failures only warn: the cache is an
+// optimisation.
+func pruneImageCache(current string) {
+	keep := []string{current}
+	specs, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", vm.SpecFile("")))
+	more, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", "builder", vm.SpecFile("")))
+	specs = append(append(specs, more...), filepath.Join(vmRootDir(), "builder", vm.SpecFile("")))
+	for _, path := range specs {
+		if spec, err := vm.ReadSpec(filepath.Dir(path)); err == nil {
+			keep = append(keep, spec.Image)
+		}
+	}
+	res, err := vm.PruneImages(filepath.Join(vmRootDir(), "images"), keep)
+	if err != nil {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: prune VM image cache: %v\n", err)
+		return
+	}
+	if res.Images > 0 || res.Layers > 0 {
+		_, _ = color.New(color.FgCyan).Printf("Removed %d unused workspace image(s) and %d unused layer(s) from the VM image cache\n", res.Images, res.Layers)
+	}
 }
 
 // workspaceSpec describes the workspace VM booting ref.

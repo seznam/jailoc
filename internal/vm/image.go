@@ -25,12 +25,14 @@ func RootFSRef(imageID string) string {
 // ref, unless it is already there. save writes the image as a `docker save`
 // tarball.
 func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer) error) error {
+	unlock, err := lockCache(cacheDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	cache := image.NewCache(cacheDir)
 	if cache.LookupRef(ref) != nil {
 		return nil
-	}
-	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
-		return fmt.Errorf("create image cache: %w", err)
 	}
 	tmp, err := os.CreateTemp(cacheDir, ".save-*.tar")
 	if err != nil {
