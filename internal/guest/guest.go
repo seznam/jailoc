@@ -24,6 +24,9 @@ const (
 	SecretsDir = "/run/secrets"
 	// EnvFile holds KEY=VALUE lines added to every agent session.
 	EnvFile = "/run/jailoc/env"
+	// MTU of the guest network interface. It matches the broker's MTU;
+	// large frames cut per-packet work in the broker roughly in half.
+	MTU = 65520
 	// SSHPort is the guest port of the SSH server.
 	SSHPort = 22
 	// SSHAgentPort is the gateway port the broker relays to the host SSH

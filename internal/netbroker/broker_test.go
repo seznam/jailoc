@@ -50,12 +50,18 @@ func (s *syncBuf) String() string {
 // the same framing a VMM uses.
 func fakeGuest(t *testing.T, ctx context.Context, sock string) *stack.Stack {
 	t.Helper()
+	return fakeGuestMTU(t, ctx, sock, 1500)
+}
+
+// fakeGuestMTU is fakeGuest with an interface MTU.
+func fakeGuestMTU(t *testing.T, ctx context.Context, sock string, mtu uint32) *stack.Stack {
+	t.Helper()
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
 	t.Cleanup(s.Close)
-	link := channel.New(256, 1514, tcpip.LinkAddress("\x02\x00\x00\x00\x00\x02"))
+	link := channel.New(256, mtu+14, tcpip.LinkAddress("\x02\x00\x00\x00\x00\x02"))
 	if err := s.CreateNIC(1, ethernet.New(link)); err != nil {
 		t.Fatalf("guest nic: %s", err)
 	}

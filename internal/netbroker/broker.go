@@ -1,6 +1,7 @@
 package netbroker
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -27,10 +28,14 @@ import (
 )
 
 const (
-	nicID       tcpip.NICID = 1
-	gatewayMAC              = tcpip.LinkAddress("\x5a\x94\xef\xe4\x0c\xdd")
-	maxFrame                = 65535
-	hostAddrTTL             = 2 * time.Second
+	nicID      tcpip.NICID = 1
+	gatewayMAC             = tcpip.LinkAddress("\x5a\x94\xef\xe4\x0c\xdd")
+	maxFrame               = 65535
+	// readBuffer holds several frames read from the VMM in one syscall.
+	readBuffer = 256 << 10
+	// MaxMTU is the largest MTU whose Ethernet frames fit the framing.
+	MaxMTU      = maxFrame - 14
+	hostAddrTTL = 2 * time.Second
 )
 
 // Forward publishes a guest TCP port on a host loopback address, or on a host
@@ -249,6 +254,10 @@ func (b *Broker) serveNIC(ctx context.Context, c net.Conn) {
 	defer cancel()
 	go func() {
 		defer cancel()
+		// One write per frame: libkrun stops reading the socket when the
+		// guest's receive queue is full and may not resume until new data
+		// arrives, so frames are never held back to be batched.
+		out := make([]byte, 0, 4+maxFrame)
 		for {
 			pkt := b.link.ReadContext(cctx)
 			if pkt == nil {
@@ -256,31 +265,33 @@ func (b *Broker) serveNIC(ctx context.Context, c net.Conn) {
 			}
 			v := pkt.ToView()
 			frame := v.AsSlice()
-			hdr := make([]byte, 4, 4+len(frame))
-			binary.BigEndian.PutUint32(hdr, uint32(len(frame))) //nolint:gosec // G115: frame length is bounded by the MTU
-			_, err := c.Write(append(hdr, frame...))
+			out = binary.BigEndian.AppendUint32(out[:0], uint32(len(frame))) //nolint:gosec // G115: frame length is bounded by the MTU
+			out = append(out, frame...)
 			v.Release()
 			pkt.DecRef()
-			if err != nil {
+			if _, err := c.Write(out); err != nil {
 				return
 			}
 		}
 	}()
 
+	// Buffered reads take several frames per syscall; the frame buffer is
+	// reused because MakeWithData copies it.
+	br := bufio.NewReaderSize(c, readBuffer)
+	frame := make([]byte, maxFrame)
 	var hdr [4]byte
 	for {
-		if _, err := io.ReadFull(c, hdr[:]); err != nil {
+		if _, err := io.ReadFull(br, hdr[:]); err != nil {
 			break
 		}
 		n := binary.BigEndian.Uint32(hdr[:])
 		if n == 0 || n > maxFrame {
 			break
 		}
-		frame := make([]byte, n)
-		if _, err := io.ReadFull(c, frame); err != nil {
+		if _, err := io.ReadFull(br, frame[:n]); err != nil {
 			break
 		}
-		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(frame)})
+		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(frame[:n])})
 		b.link.InjectInbound(0, pkt)
 		pkt.DecRef()
 	}

@@ -25,6 +25,8 @@ done < /jailoc-shares
 
 ip link set lo up
 ip link set eth0 up
+# Match the broker's MTU; large frames cut the broker's per-packet work.
+ip link set eth0 mtu @MTU@
 until udhcpc -i eth0 -n -q -t 10; do log "dhcp failed, retrying"; sleep 1; done
 
 mkdir -p /var/lib/docker

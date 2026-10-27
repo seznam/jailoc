@@ -33,6 +33,7 @@ func Main(args []string) error {
 	gateway := fs.String("gateway", "192.168.127.1", "gateway, DNS and DHCP address served by the broker")
 	guest := fs.String("guest", "192.168.127.2", "address leased to the guest")
 	logPath := fs.String("log", "-", "JSONL decision log, - for stderr")
+	mtu := fs.Uint("mtu", 1500, fmt.Sprintf("MTU of the virtual network, 576-%d; the guest must use the same MTU", MaxMTU))
 	statusFD := fs.Int("status-fd", 0, "inherited file descriptor that receives lifecycle lines (ready, nic connected, nic disconnected) for a supervisor; 0 disables")
 	var forwards, unixForwards, services, dnsFallback multi
 	fs.Var(&forwards, "forward", "publish a guest TCP port: 127.0.0.1:HOSTPORT=GUESTPORT (repeatable, loopback only)")
@@ -50,7 +51,10 @@ func Main(args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg := Config{}
+	if *mtu < 576 || *mtu > MaxMTU {
+		return fmt.Errorf("-mtu %d: want 576-%d", *mtu, MaxMTU)
+	}
+	cfg := Config{MTU: uint32(*mtu)} //nolint:gosec // G115: checked above
 	if cfg.Subnet, err = netip.ParsePrefix(*subnet); err != nil {
 		return fmt.Errorf("subnet: %w", err)
 	}

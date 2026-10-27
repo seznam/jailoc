@@ -337,6 +337,7 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 		"-runtime", BrokerRuntimeFile(spec.StateDir),
 		"-subnet", Subnet, "-gateway", Gateway, "-guest", GuestIP,
 		"-log", TrafficLog(spec.StateDir),
+		"-mtu", strconv.Itoa(guest.MTU),
 	)
 	if spec.Kind == KindWorkspace {
 		args = append(args, "-forward-unix", SSHSocket(spec.StateDir)+"="+strconv.Itoa(guest.SSHPort))
@@ -381,7 +382,7 @@ func builderOptions(spec Spec) []microvm.Option {
 	script := strings.NewReplacer(
 		"@GATEWAY@", Gateway, "@GUEST@", GuestIP,
 		"@DOCKER_PORT@", strconv.Itoa(DockerPort), "@AGENT_GID@", strconv.Itoa(agentGID),
-		"@CONTROL@", controlDir(spec.StateDir),
+		"@CONTROL@", controlDir(spec.StateDir), "@MTU@", strconv.Itoa(guest.MTU),
 	).Replace(initScript)
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares))
 	var table strings.Builder

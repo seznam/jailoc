@@ -67,6 +67,9 @@ func Init(logger *slog.Logger) error {
 	if err := netcfg.Configure(logger); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
+	if err := os.WriteFile("/sys/class/net/eth0/mtu", []byte(strconv.Itoa(MTU)), 0o644); err != nil { //nolint:gosec // G306: sysfs attribute
+		logger.Warn("set MTU", "error", err)
+	}
 	if err := configureIPv6(); err != nil {
 		return fmt.Errorf("network IPv6: %w", err)
 	}
