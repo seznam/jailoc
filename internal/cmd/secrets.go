@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/seznam/jailoc/internal/compose"
+	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -28,7 +29,7 @@ func validateSecretSources(ws *workspace.Resolved) error {
 			if err := validateSecretEnvSource(s); err != nil {
 				return err
 			}
-		} else if err := validateSecretFileSource(s); err != nil {
+		} else if err := validateSecretFileSource(s, ws.Backend); err != nil {
 			return err
 		}
 
@@ -60,7 +61,8 @@ func validateSecretEnvSource(s workspace.ResolvedSecret) error {
 // world-readable gate only where it matters: a file-destination secret is
 // bind-mounted straight to the unprivileged agent, whereas an env-destination
 // secret is read by entrypoint.sh as root before setpriv drops privileges.
-func validateSecretFileSource(s workspace.ResolvedSecret) error {
+// The VM backend reads every secret file on the host, so it skips the gate.
+func validateSecretFileSource(s workspace.ResolvedSecret, backend string) error {
 	fi, err := os.Stat(s.FromFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -71,7 +73,9 @@ func validateSecretFileSource(s workspace.ResolvedSecret) error {
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("secret %q: file %q is not a regular file", s.Name, s.FromFile)
 	}
-	if s.Kind != workspace.SecretKindFile {
+	if s.Kind != workspace.SecretKindFile || backend == config.BackendVM {
+		// The VM backend reads secret files on the host and writes them into
+		// the guest's /run/secrets owned by the agent.
 		return nil
 	}
 	if mode := fi.Mode().Perm(); mode&0o004 == 0 {

@@ -333,7 +333,7 @@ Destination and source combine independently into four valid configurations:
 | 1 | `secrets.env.<NAME>` | `from_env` | Exported as env var `<NAME>` | Host env var must be set and non-empty |
 | 2 | `secrets.env.<NAME>` | `from_file` | Exported as env var `<NAME>` | Host file must exist; read by root entrypoint |
 | 3 | `secrets.file.<NAME>` | `from_env` | Mounted at `/run/secrets/<NAME>` (0444) | Host env var must be set and non-empty |
-| 4 | `secrets.file.<NAME>` | `from_file` | Mounted at `/run/secrets/<NAME>` | Host file must exist and be world-readable (`o+r`) |
+| 4 | `secrets.file.<NAME>` | `from_file` | Mounted at `/run/secrets/<NAME>` | Host file must exist and be world-readable (`o+r`); not required with `backend = "vm"` |
 
 #### Fields
 
@@ -377,7 +377,7 @@ When `jailoc up` or `jailoc add` runs, secret sources are validated before start
 
 - **`from_env` sources**: The host environment variable must be set and non-empty. Unset or empty host environment variables cause a startup validation error.
 - **`from_file` sources**: The host file path must exist and be a regular file.
-- **World-readable permission requirement (`o+r`)**: Applies **only** when both destination is `file` (`secrets.file.<NAME>`) and source is `from_file` (combination 4). In combination 4, the host file is bind-mounted directly to unprivileged UID 1000, requiring world-readable permissions (`o+r`). For combination 2 (`secrets.env.<NAME>` with `from_file`), the file is read by the root entrypoint during startup before dropping privileges, so world-readable permissions are not required.
+- **World-readable permission requirement (`o+r`)**: Applies **only** when both destination is `file` (`secrets.file.<NAME>`) and source is `from_file` (combination 4). In combination 4, the host file is bind-mounted directly to unprivileged UID 1000, requiring world-readable permissions (`o+r`). For combination 2 (`secrets.env.<NAME>` with `from_file`), the file is read by the root entrypoint during startup before dropping privileges, so world-readable permissions are not required. With `backend = "vm"`, jailoc reads every secret file on the host and writes it into the VM owned by the agent, so the requirement does not apply.
 
 #### Intra-Scope Constraints
 Within a single scope (`[defaults]` or a specific workspace `[workspaces.<ws>]`), a secret `<NAME>` cannot be declared in both `secrets.env` and `secrets.file`.

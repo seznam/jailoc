@@ -104,6 +104,12 @@ func TestValidateSecretSources(t *testing.T) {
 			wantErr: fmt.Sprintf("secret %q: file %q is not world-readable (mode 0600); the agent runs as UID 1000 and this is a conservative check — run 'chmod o+r %s' to make it readable inside the container", "key", ownerOnly, ownerOnly),
 		},
 		{
+			name: "vm backend file destination need not be world readable",
+			ws: &workspace.Resolved{Name: "ws", Backend: config.BackendVM, Secrets: []workspace.ResolvedSecret{
+				{Name: "key", Kind: workspace.SecretKindFile, FromFile: ownerOnly},
+			}},
+		},
+		{
 			name: "env secret name collides with env entry",
 			env:  map[string]string{"JAILOC_TEST_TOKEN": "value"},
 			ws: &workspace.Resolved{
