@@ -47,8 +47,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if st, err := runningVM(stateDir); err != nil {
 		return err
 	} else if st != nil {
-		_, _ = color.New(color.FgYellow).Printf("Workspace %s is already running\n", ws.Name)
-		return nil
+		return reloadVM(ctx, ws)
 	}
 
 	// Must run before every generated-file write below.
@@ -124,7 +123,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if _, err := startSupervisor(ctx, spec, "VM for workspace "+ws.Name); err != nil {
 		return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
 	}
-	if err := pushSecrets(ctx, ws); err != nil {
+	if err := pushSecrets(ctx, ws, spec); err != nil {
 		_ = stopSupervisor(stateDir)
 		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
@@ -355,8 +354,14 @@ func workspaceCABundle(ws *workspace.Resolved) string {
 
 // pushSecrets delivers the workspace environment and secrets to the guest
 // over SSH; they live only in guest memory.
-func pushSecrets(ctx context.Context, ws *workspace.Resolved) error {
+func pushSecrets(ctx context.Context, ws *workspace.Resolved, spec vm.Spec) error {
 	payload := guest.Secrets{Env: append([]string{}, ws.Env...), Files: map[string][]byte{}}
+	if spec.SSHAgent != "" {
+		payload.Env = append(payload.Env, "SSH_AUTH_SOCK="+guest.SSHAgentSocket)
+	}
+	if spec.Guest != nil && spec.Guest.CABundle != "" {
+		payload.Env = append(payload.Env, "NODE_USE_SYSTEM_CA=1")
+	}
 	for _, s := range ws.Secrets {
 		var value []byte
 		if s.FromEnv != "" {

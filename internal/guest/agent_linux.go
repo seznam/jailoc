@@ -15,21 +15,22 @@ import (
 
 // startAgentRelay serves SSHAgentSocket for the agent user and relays every
 // connection to the broker gateway, which forwards it to the host SSH agent.
-func startAgentRelay(logger *slog.Logger, acct account) error {
+// The returned function stops serving and removes the socket.
+func startAgentRelay(logger *slog.Logger, acct account) (func(), error) {
 	if err := os.Remove(SSHAgentSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("ssh agent: remove stale socket: %w", err)
+		return nil, fmt.Errorf("ssh agent: remove stale socket: %w", err)
 	}
 	l, err := net.Listen("unix", SSHAgentSocket)
 	if err != nil {
-		return fmt.Errorf("ssh agent: listen: %w", err)
+		return nil, fmt.Errorf("ssh agent: listen: %w", err)
 	}
 	if err := os.Chown(SSHAgentSocket, int(acct.uid), int(acct.gid)); err != nil {
 		_ = l.Close()
-		return fmt.Errorf("ssh agent: chown socket: %w", err)
+		return nil, fmt.Errorf("ssh agent: chown socket: %w", err)
 	}
 	if err := os.Chmod(SSHAgentSocket, 0o600); err != nil {
 		_ = l.Close()
-		return fmt.Errorf("ssh agent: chmod socket: %w", err)
+		return nil, fmt.Errorf("ssh agent: chmod socket: %w", err)
 	}
 	upstream := net.JoinHostPort(topology.GatewayIP, strconv.Itoa(SSHAgentPort))
 	go func() {
@@ -53,5 +54,8 @@ func startAgentRelay(logger *slog.Logger, acct account) error {
 			}()
 		}
 	}()
-	return nil
+	return func() {
+		_ = l.Close()
+		_ = os.Remove(SSHAgentSocket)
+	}, nil
 }

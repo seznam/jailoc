@@ -87,3 +87,27 @@ func TestParsePolicyRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRuntime(t *testing.T) {
+	t.Parallel()
+	ok := `{"forwards":[{"host":"127.0.0.1:18080","guest_port":8080}],"services":[{"guest_port":7022,"path":"/tmp/agent.sock"}]}`
+	if rt, err := ParseRuntime([]byte(ok), "ok"); err != nil || len(rt.Forwards) != 1 || len(rt.Services) != 1 {
+		t.Fatalf("ParseRuntime(ok) = %+v, %v", rt, err)
+	}
+	for name, in := range map[string]string{
+		"unknown field":     `{"forward":[]}`,
+		"public host":       `{"forwards":[{"host":"0.0.0.0:80","guest_port":80}]}`,
+		"zero guest port":   `{"forwards":[{"host":"127.0.0.1:80","guest_port":0}]}`,
+		"duplicate host":    `{"forwards":[{"host":"127.0.0.1:80","guest_port":80},{"host":"127.0.0.1:80","guest_port":81}]}`,
+		"dns service":       `{"services":[{"guest_port":53,"path":"/tmp/x"}]}`,
+		"relative path":     `{"services":[{"guest_port":7022,"path":"agent.sock"}]}`,
+		"duplicate service": `{"services":[{"guest_port":7022,"path":"/a"},{"guest_port":7022,"path":"/b"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := ParseRuntime([]byte(in), name); err == nil {
+				t.Fatalf("ParseRuntime(%s) accepted invalid runtime", in)
+			}
+		})
+	}
+}

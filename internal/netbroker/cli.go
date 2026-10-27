@@ -28,6 +28,7 @@ func Main(args []string) error {
 	fs := flag.NewFlagSet("netbroker", flag.ContinueOnError)
 	socket := fs.String("socket", "", "unix socket the VMM connects its virtio-net device to (QEMU stream framing)")
 	policyPath := fs.String("policy", "", "JSON policy file; reloaded on SIGHUP, an invalid reload denies all new flows")
+	runtimePath := fs.String("runtime", "", "optional JSON file with published ports and gateway services; reapplied on SIGHUP")
 	subnet := fs.String("subnet", "192.168.127.0/24", "virtual guest network")
 	gateway := fs.String("gateway", "192.168.127.1", "gateway, DNS and DHCP address served by the broker")
 	guest := fs.String("guest", "192.168.127.2", "address leased to the guest")
@@ -131,19 +132,52 @@ func Main(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *runtimePath != "" {
+		rt, err := loadRuntime(*runtimePath)
+		if err != nil {
+			return err
+		}
+		if errs := b.ApplyRuntime(ctx, rt); len(errs) > 0 {
+			return fmt.Errorf("apply runtime: %w", errors.Join(errs...))
+		}
+	}
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for range hup {
+			event := map[string]any{"event": "reload"}
 			p, err := loadPolicy(*policyPath)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "netbroker: reload failed, denying all new flows:", err)
 				p = DenyAll("invalid reload: " + err.Error())
+				event["policy_error"] = err.Error()
 			}
 			b.SetPolicy(p)
+			if *runtimePath != "" {
+				var errs []string
+				if rt, err := loadRuntime(*runtimePath); err != nil {
+					errs = append(errs, err.Error())
+				} else {
+					for _, e := range b.ApplyRuntime(ctx, rt) {
+						errs = append(errs, e.Error())
+					}
+				}
+				if len(errs) > 0 {
+					event["runtime_errors"] = errs
+				}
+			}
+			b.record(event)
 		}
 	}()
 	return b.Run(ctx, l)
+}
+
+func loadRuntime(path string) (*Runtime, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied runtime path
+	if err != nil {
+		return nil, fmt.Errorf("read runtime: %w", err)
+	}
+	return ParseRuntime(data, path)
 }
 
 func loadPolicy(path string) (*Policy, error) {

@@ -257,11 +257,14 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	if err := os.MkdirAll(ctl, 0o700); err != nil {
 		return fmt.Errorf("create vm control dir: %w", err)
 	}
-	policyPath := filepath.Join(spec.StateDir, "policy.json")
-	if err := os.WriteFile(policyPath, spec.Policy, 0o600); err != nil {
+	policyPath := PolicyFile(spec.StateDir)
+	if err := WritePolicy(spec); err != nil {
 		return fmt.Errorf("write broker policy: %w", err)
 	}
 
+	if err := WriteBrokerRuntime(spec); err != nil {
+		return err
+	}
 	bp, err := startBroker(ctx, spec, policyPath)
 	if err != nil {
 		return err
@@ -327,19 +330,14 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 	args := append(append([]string{}, spec.Broker[1:]...),
 		"-socket", nicSocket(spec.StateDir),
 		"-policy", policyPath,
+		"-runtime", BrokerRuntimeFile(spec.StateDir),
 		"-subnet", Subnet, "-gateway", Gateway, "-guest", GuestIP,
 		"-log", filepath.Join(spec.StateDir, "broker.jsonl"),
 	)
 	if spec.Kind == KindWorkspace {
 		args = append(args, "-forward-unix", SSHSocket(spec.StateDir)+"="+strconv.Itoa(guest.SSHPort))
-		if spec.SSHAgent != "" {
-			args = append(args, "-service", strconv.Itoa(guest.SSHAgentPort)+"="+spec.SSHAgent)
-		}
 	} else {
 		args = append(args, "-forward-unix", DockerSocket(spec.StateDir)+"="+strconv.Itoa(DockerPort))
-	}
-	for _, f := range spec.Forwards {
-		args = append(args, "-forward", fmt.Sprintf("127.0.0.1:%d=%d", f.HostPort, f.GuestPort))
 	}
 	bp, err := brokerproc.Start(ctx, brokerproc.Options{
 		Binary: spec.Broker[0], Args: args, ReadyTimeout: 10 * time.Second,
@@ -506,6 +504,60 @@ const stopGrace = 30 * time.Second
 const guestShutdownWait = 20 * time.Second
 
 func controlDir(stateDir string) string { return filepath.Join(stateDir, "control") }
+
+// ControlDir is the directory shared read-write with the workspace guest
+// for shutdown and reload requests.
+func ControlDir(stateDir string) string { return controlDir(stateDir) }
+
+// PolicyFile is the network policy the broker reloads on SIGHUP.
+func PolicyFile(stateDir string) string { return filepath.Join(stateDir, "policy.json") }
+
+// BrokerRuntimeFile lists the published ports and the SSH agent service the
+// broker reapplies on SIGHUP.
+func BrokerRuntimeFile(stateDir string) string { return filepath.Join(stateDir, "runtime.json") }
+
+// WriteBrokerRuntime writes the broker runtime file of spec.
+func WriteBrokerRuntime(spec Spec) error {
+	type forward struct {
+		Host      string `json:"host"`
+		GuestPort int    `json:"guest_port"`
+	}
+	type service struct {
+		GuestPort uint16 `json:"guest_port"`
+		Path      string `json:"path"`
+	}
+	rt := struct {
+		Forwards []forward `json:"forwards"`
+		Services []service `json:"services"`
+	}{Forwards: []forward{}, Services: []service{}}
+	for _, f := range spec.Forwards {
+		rt.Forwards = append(rt.Forwards, forward{Host: fmt.Sprintf("127.0.0.1:%d", f.HostPort), GuestPort: f.GuestPort})
+	}
+	if spec.Kind == KindWorkspace && spec.SSHAgent != "" {
+		rt.Services = append(rt.Services, service{GuestPort: guest.SSHAgentPort, Path: spec.SSHAgent})
+	}
+	data, err := json.Marshal(rt)
+	if err != nil {
+		return fmt.Errorf("encode broker runtime: %w", err)
+	}
+	return writeFileAtomic(BrokerRuntimeFile(spec.StateDir), data)
+}
+
+// WritePolicy writes the network policy of spec.
+func WritePolicy(spec Spec) error {
+	return writeFileAtomic(PolicyFile(spec.StateDir), spec.Policy)
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("install %s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
 
 type vmHandle struct {
 	vm      *microvm.VM

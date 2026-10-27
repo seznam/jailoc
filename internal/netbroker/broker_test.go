@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -266,6 +267,100 @@ func TestBrokerEndToEnd(t *testing.T) {
 		_ = c.Close()
 		if string(got) != "hello from host" {
 			t.Fatalf("service got %q", got)
+		}
+	})
+	t.Run("runtime reload adds, moves and removes listeners", func(t *testing.T) {
+		sockDir, err := os.MkdirTemp("", "nb")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+		echo := func(name string) string {
+			path := filepath.Join(sockDir, name+".sock")
+			l, err := net.Listen("unix", path)
+			if err != nil {
+				t.Fatalf("listen %s: %v", name, err)
+			}
+			t.Cleanup(func() { _ = l.Close() })
+			go func() {
+				for {
+					c, err := l.Accept()
+					if err != nil {
+						return
+					}
+					_, _ = c.Write([]byte(name))
+					_ = c.Close()
+				}
+			}()
+			return path
+		}
+		first, second := echo("first"), echo("second")
+		readService := func() string {
+			dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+			defer dcancel()
+			c, err := gonet.DialContextTCP(dctx, g, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), Port: 7023}, ipv4.ProtocolNumber)
+			if err != nil {
+				return "dial: " + err.Error()
+			}
+			_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			got, _ := io.ReadAll(c)
+			_ = c.Close()
+			return string(got)
+		}
+		gl, err := gonet.ListenTCP(g, tcpip.FullAddress{NIC: 1, Port: 5000}, ipv4.ProtocolNumber)
+		if err != nil {
+			t.Fatalf("guest listen: %v", err)
+		}
+		defer func() { _ = gl.Close() }()
+		go func() {
+			for {
+				c, err := gl.Accept()
+				if err != nil {
+					return
+				}
+				_, _ = c.Write([]byte("guest 5000"))
+				_ = c.Close()
+			}
+		}()
+		hostPort := freePort(t)
+		host := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), hostPort).String()
+
+		rt := &Runtime{
+			Forwards: []RuntimeForward{{Host: host, GuestPort: 5000}},
+			Services: []RuntimeService{{GuestPort: 7023, Path: first}},
+		}
+		if errs := b.ApplyRuntime(ctx, rt); len(errs) > 0 {
+			t.Fatalf("apply: %v", errs)
+		}
+		c, err := net.DialTimeout("tcp", host, 5*time.Second)
+		if err != nil {
+			t.Fatalf("dial forward: %v", err)
+		}
+		got, _ := io.ReadAll(c)
+		_ = c.Close()
+		if string(got) != "guest 5000" {
+			t.Fatalf("forward got %q", got)
+		}
+		if got := readService(); got != "first" {
+			t.Fatalf("service got %q, want first", got)
+		}
+
+		rt = &Runtime{Services: []RuntimeService{{GuestPort: 7023, Path: second}}}
+		if errs := b.ApplyRuntime(ctx, rt); len(errs) > 0 {
+			t.Fatalf("apply: %v", errs)
+		}
+		if got := readService(); got != "second" {
+			t.Fatalf("service after path change got %q, want second", got)
+		}
+		if c, err := net.DialTimeout("tcp", host, time.Second); err == nil {
+			_ = c.Close()
+			t.Fatalf("removed forward %s still accepts connections", host)
+		}
+		if errs := b.ApplyRuntime(ctx, &Runtime{}); len(errs) > 0 {
+			t.Fatalf("apply empty: %v", errs)
+		}
+		if got := readService(); !strings.Contains(got, "refused") {
+			t.Fatalf("removed service got %q, want refused", got)
 		}
 	})
 	t.Run("blocked DNS zone gets NXDOMAIN", func(t *testing.T) {

@@ -82,6 +82,8 @@ type Broker struct {
 	active bool
 
 	statusMu sync.Mutex
+
+	runtime runtimeState
 }
 
 // New builds the stack. It does not open any socket.

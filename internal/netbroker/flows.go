@@ -149,6 +149,13 @@ func (b *Broker) startForward(ctx context.Context, f Forward) error {
 // startService accepts guest connections to the gateway's s.GuestPort and
 // relays each to the host unix socket s.UnixPath.
 func (b *Broker) startService(ctx context.Context, s Service) error {
+	return b.startServicePath(ctx, s.GuestPort, func() string { return s.UnixPath })
+}
+
+// startServicePath is startService with the socket path looked up for every
+// connection, so a runtime reload can change it without a restart.
+func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() string) error {
+	s := Service{GuestPort: port}
 	l, err := gonet.ListenTCP(b.stack, *guestAddr(b.cfg.Gateway, s.GuestPort), ipv4.ProtocolNumber)
 	if err != nil {
 		return fmt.Errorf("service listener on port %d: %w", s.GuestPort, err)
@@ -166,7 +173,7 @@ func (b *Broker) startService(ctx context.Context, s Service) error {
 			go func() {
 				var d net.Dialer
 				dctx, cancel := context.WithTimeout(ctx, dialTimeout)
-				h, err := d.DialContext(dctx, "unix", s.UnixPath)
+				h, err := d.DialContext(dctx, "unix", path())
 				cancel()
 				if err != nil {
 					b.record(map[string]any{"event": "service-error", "guest_port": s.GuestPort, "error": err.Error()})

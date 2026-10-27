@@ -31,3 +31,17 @@ func TestExtMagicAt(t *testing.T) {
 		})
 	}
 }
+
+func TestLastWins(t *testing.T) {
+	t.Parallel()
+	got := lastWins([]string{"A=1", "B=2", "A=3", "C", "B=4"})
+	want := []string{"A=3", "C", "B=4"}
+	if len(got) != len(want) {
+		t.Fatalf("lastWins = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("lastWins = %v, want %v", got, want)
+		}
+	}
+}

@@ -88,23 +88,17 @@ func Init(logger *slog.Logger) error {
 	if err := protectPaths(cfg.Pins, cfg.ReadOnly); err != nil {
 		return err
 	}
+	// SSH_AUTH_SOCK and NODE_USE_SYSTEM_CA reach sessions through EnvFile,
+	// which the host rewrites when the settings change on a reload.
 	env := sessionEnv(cfg)
-	if cfg.CABundle != "" {
-		if err := installCABundle(cfg.CABundle); err != nil {
-			return err
-		}
-		env = append(env, "NODE_USE_SYSTEM_CA=1")
-	}
 	for _, dir := range []string{SecretsDir, filepath.Dir(EnvFile)} {
 		if err := ownedDir(dir, acct, 0o700); err != nil {
 			return err
 		}
 	}
-	if cfg.SSHAgent {
-		if err := startAgentRelay(logger, acct); err != nil {
-			return err
-		}
-		env = append(env, "SSH_AUTH_SOCK="+SSHAgentSocket)
+	live := &liveState{logger: logger, acct: acct}
+	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent}); err != nil {
+		return err
 	}
 
 	// By default the agent may become root through sudo: the VM is the
@@ -142,6 +136,7 @@ func Init(logger *slog.Logger) error {
 	logger.Info("jailoc guest ready", "user", acct.name, "workdir", cfg.WorkDir)
 
 	for {
+		live.poll()
 		if _, err := os.Stat(filepath.Join(ControlDir, "shutdown")); err == nil {
 			logger.Info("shutdown requested")
 			srv.Close()
@@ -394,29 +389,6 @@ func chown(path string, acct account) error {
 	return nil
 }
 
-// installCABundle appends the forwarded bundle to the system trust store.
-func installCABundle(path string) error {
-	b, err := os.ReadFile(path) //nolint:gosec // G304: path from the host-written guest config
-	if err != nil {
-		return fmt.Errorf("read CA bundle %s: %w", path, err)
-	}
-	if len(b) == 0 {
-		return fmt.Errorf("CA bundle %s is empty", path)
-	}
-	f, err := os.OpenFile(systemCA, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644) //nolint:gosec // G302: the system CA bundle is world-readable
-	if err != nil {
-		return fmt.Errorf("open %s: %w", systemCA, err)
-	}
-	if _, err := f.Write(append([]byte("\n"), b...)); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("append CA bundle: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", systemCA, err)
-	}
-	return nil
-}
-
 // sessionEnv is the base environment of every session: the image
 // environment that libkrun passes to init, plus the configured entries.
 func sessionEnv(cfg *Config) []string {
@@ -480,6 +452,14 @@ func WriteSecrets(r io.Reader) error {
 			return err
 		}
 	}
+	// A reload delivers the complete set: secrets no longer configured go.
+	if entries, err := os.ReadDir(SecretsDir); err == nil {
+		for _, e := range entries {
+			if _, keep := s.Files[e.Name()]; !keep && !strings.HasPrefix(e.Name(), ".tmp-") {
+				_ = os.Remove(filepath.Join(SecretsDir, e.Name()))
+			}
+		}
+	}
 	var b strings.Builder
 	for _, kv := range s.Env {
 		if strings.ContainsAny(kv, "\n\x00") || !strings.Contains(kv, "=") {
@@ -531,7 +511,7 @@ func Exec(dir string, extraEnv, args []string) error {
 			}
 		}
 	}
-	env = append(env, extraEnv...)
+	env = lastWins(append(env, extraEnv...))
 	if dir != "" {
 		if err := os.Chdir(dir); err != nil {
 			return fmt.Errorf("run: %w", err)

@@ -172,11 +172,35 @@ The VM has no init system: nothing restarts a process that exits, and every proc
 
 With `ssh_auth_sock = true`, jailoc relays the host SSH agent named by `SSH_AUTH_SOCK` into the VM: sessions see it at `/run/ssh-agent.sock`, so `git@host:repo` remotes and `ssh` work with your keys. The private keys stay on the host. `~/.ssh/known_hosts` is copied to the agent's home at `jailoc up`.
 
-The agent is available as long as the VM runs, also to detached sessions and to containers that mount `/run/ssh-agent.sock`. jailoc reads `SSH_AUTH_SOCK` when it starts the VM; after the host agent moves (for example a new login session), run `jailoc restart`.
+The agent is available as long as the VM runs, also to detached sessions and to containers that mount `/run/ssh-agent.sock`. jailoc reads `SSH_AUTH_SOCK` when it starts or reloads the VM; after the host agent moves (for example a new login session), run `jailoc reload` from a terminal with the new `SSH_AUTH_SOCK`.
 
 ## Filter DNS
 
 `filtered_dns`, `dns_upstream` and `dns_blocked_zones` work as with the Docker backend, enforced by the network broker: names in the blocked zones get NXDOMAIN, other names are resolved through `dns_upstream`, and DNS (port 53) to any other resolver is blocked. The shared builder VM does not filter DNS; use `isolated_build = true` to apply the filter to builds.
+
+## Change settings of a running workspace
+
+After editing the configuration, apply it without restarting:
+
+```bash
+jailoc reload myproject   # or: jailoc up myproject
+```
+
+Running sessions and processes keep running. Applied live:
+
+| Setting | Effect |
+|---------|--------|
+| `allowed_hosts`, `allowed_networks` | New connections follow the new rules; `allowed_hosts` names are resolved again |
+| `filtered_dns`, `dns_upstream`, `dns_blocked_zones` | New DNS queries follow the new filter |
+| `ports` | Added ports open, removed ports close, changed ones move |
+| `ssh_auth_sock` | The agent socket appears or disappears in the VM; the host socket is read again from `SSH_AUTH_SOCK` |
+| `ca_bundle` | The system trust store of the VM is updated; processes that already loaded it, including the Docker daemon, keep the old one until they restart |
+| `env`, `secrets` | `/run/secrets` and the environment of new sessions; running sessions keep their environment |
+
+Other settings need a new VM. `jailoc reload` lists the ones that changed; apply them with `jailoc restart`, which ends running sessions:
+
+- `paths` and `mounts`, `copies` (including the `known_hosts` copy that comes with `ssh_auth_sock`), `cpu`, `memory`, `enable_docker`, `protect_git`;
+- the workspace image: `dockerfile`, `image` and the base image are only built at `jailoc up` of a stopped workspace and at `jailoc restart`.
 
 ## Stop and remove the VM
 
@@ -190,7 +214,7 @@ jailoc down myproject --purge   # also delete the VM state, home directories, Do
 `allowed_hosts` and `allowed_networks` become rules of the network broker:
 
 - `allowed_networks` entries open the CIDR for all ports. IPv6 entries are ignored, because the VM has no IPv6 connectivity.
-- `allowed_hosts` names are resolved on the host when the VM starts. Their IPv4 addresses are allowed for all ports. Restart the workspace after the addresses change.
+- `allowed_hosts` names are resolved on the host when the VM starts or reloads. Their IPv4 addresses are allowed for all ports. Run `jailoc reload` after the addresses change.
 
 Host addresses, the broker gateway and cloud metadata endpoints stay blocked regardless of these settings.
 

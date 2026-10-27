@@ -50,7 +50,7 @@ jailoc up [flags]
 
 Resolves the container image (see [Image Resolution](image-resolution.md)), validates secret sources (verifying host environment variables exist and are non-empty, and secret files exist with valid permissions), generates a `docker-compose.yml` in `~/.cache/jailoc/{workspace}/`, and starts two containers: `opencode` and `dind`.
 
-For workspaces with `backend = "vm"`, builds the workspace image with the host Docker daemon or in a builder VM (see `[vm] builder`), then boots the image as the root file system of the workspace VM and delivers secrets to it. No containers or compose file are involved; see [Run a workspace in a VM](../how-to/vm-backend.md).
+For workspaces with `backend = "vm"`, builds the workspace image with the host Docker daemon or in a builder VM (see `[vm] builder`), then boots the image as the root file system of the workspace VM and delivers secrets to it. No containers or compose file are involved; see [Run a workspace in a VM](../how-to/vm-backend.md). When the VM already runs, `jailoc up` does what [`jailoc reload`](#jailoc-reload) does.
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
 
@@ -87,6 +87,20 @@ jailoc restart [flags]
 Equivalent to `jailoc down` followed by `jailoc up`. Regenerates the compose configuration from the current `config.toml` before bringing the workspace back up. If the workspace is not running, starts it without error.
 
 When `--workspace` is not set, resolves the workspace whose configured path best matches the current working directory (longest prefix). Falls back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
+
+---
+
+### `jailoc reload`
+
+Apply configuration changes to a running workspace without restarting it (backend `"vm"` only).
+
+```
+jailoc reload [workspace] [flags]
+```
+
+Updates the network policy (`allowed_hosts`, `allowed_networks`, `filtered_dns`), published `ports`, the SSH agent (`ssh_auth_sock`, read again from `$SSH_AUTH_SOCK`), the CA bundle, `env` and secrets. Running sessions keep running. Settings that need a new VM (paths, mounts, copies, `cpu`, `memory`, `enable_docker`, `protect_git`, the workspace image) are listed and applied by `jailoc restart`. Fails when the workspace is not running or uses the Docker backend.
+
+When no workspace argument and `--workspace` is not set, resolves the workspace from the current working directory (longest prefix). Falls back to `default`.
 
 ---
 

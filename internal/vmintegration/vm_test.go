@@ -322,7 +322,7 @@ func TestWorkspaceVM(t *testing.T) {
 	})
 
 	t.Run("SSH agent", func(t *testing.T) {
-		if got := mustGuest(ctx, t, "ssh-add -l"); !strings.Contains(got, agentComment) {
+		if got := mustGuest(ctx, t, "/.jailoc/jailoc-guest run -- ssh-add -l"); !strings.Contains(got, agentComment) {
 			t.Fatalf("ssh-add -l = %q", got)
 		}
 	})

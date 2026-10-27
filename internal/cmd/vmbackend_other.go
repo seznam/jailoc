@@ -30,3 +30,5 @@ func statusVM(*workspace.Resolved) error { return errVMUnsupported }
 func logsVM(context.Context, *workspace.Resolved, bool, io.Writer) error { return errVMUnsupported }
 
 func restartVMIfRunning(context.Context, *workspace.Resolved) error { return errVMUnsupported }
+
+func reloadVM(context.Context, *workspace.Resolved) error { return errVMUnsupported }

@@ -12,7 +12,7 @@ Key facts:
 
 ## Reference
 
-- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): All subcommands (`up`, `down`, `logs`, `status`, `add`, `config`, `migrate`) with flags and usage, including `down --purge`, `sessions`, `--new`/`--attach`
+- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): All subcommands (`up`, `down`, `logs`, `status`, `add`, `config`, `migrate`) with flags and usage, including `down --purge` and `reload`, `sessions`, `--new`/`--attach`
 - [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field — `[base]`, `[vm]`, `[defaults]`, `[workspaces.<name>]` — types, defaults, validation rules, merge semantics
 - [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): 5-step resolution cascade with step details, triggers, constraints, and image tag summary
 - [Default Image Contents](https://seznam.github.io/jailoc/reference/default-image/): Tools and runtimes shipped in the embedded base image
@@ -28,7 +28,7 @@ Key facts:
 - [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward SSH agent (with known_hosts), mount Git config into containers
 - [Access Modes](https://seznam.github.io/jailoc/how-to/access-modes/): Remote vs exec mode configuration
 - [TUI Plugin](https://seznam.github.io/jailoc/how-to/tui-plugin/): Enable the TUI sidebar plugin to show workspace context in the OpenCode sidebar
-- [Run a Workspace in a VM](https://seznam.github.io/jailoc/how-to/vm-backend/): Experimental `backend = "vm"` — managed VM runtime download, switch a workspace, agent running directly in the VM in detachable sessions (`Ctrl-\` detach, `jailoc sessions`), read-only `copies` for files, shared or isolated builder (`isolated_build`), Git hooks and config protection (`protect_git`), Docker inside the VM (`enable_docker`), published ports (`ports`), background processes, `down --purge`, restrictions
+- [Run a Workspace in a VM](https://seznam.github.io/jailoc/how-to/vm-backend/): Experimental `backend = "vm"` — managed VM runtime download, switch a workspace, agent running directly in the VM in detachable sessions (`Ctrl-\` detach, `jailoc sessions`), read-only `copies` for files, shared or isolated builder (`isolated_build`), Git hooks and config protection (`protect_git`), Docker inside the VM (`enable_docker`), published ports (`ports`), background processes, live `jailoc reload`, `down --purge`, restrictions
 - [Troubleshooting](https://seznam.github.io/jailoc/how-to/troubleshooting/): Find logs, debug common errors, fix container issues, clean up stale resources
 
 ## Explanation
