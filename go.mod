@@ -91,4 +91,4 @@ require (
 // go-microvm fork: simplified virtio-fs ownership (stacklok/go-microvm#135)
 // and exec-session exit status (#143) on top of upstream main, until they
 // are merged upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261027145821-8949b932286a
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261027220309-9d3cca171297
