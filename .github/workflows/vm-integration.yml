@@ -59,8 +59,14 @@ env:
 
 jobs:
   vm-integration:
-    name: VM Integration Test
-    runs-on: ubuntu-24.04
+    name: VM Integration Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # libkrun's own integration tests run on ubuntu-26.04 because of KVM
+        # bugs in older runner kernels (libkrun/libkrun#314).
+        os: [ubuntu-26.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,8 +84,9 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           sudo udevadm settle
+          uname -r
           ls -l /dev/kvm || true
-          grep -cE 'vmx|svm' /proc/cpuinfo || true
+          grep -m1 -oE 'vmx|svm' /proc/cpuinfo || true
           test -w /dev/kvm || { echo "/dev/kvm is not available on this runner" >&2; exit 1; }
 
       - name: Resolve go-microvm revision
@@ -108,4 +115,6 @@ jobs:
         env:
           JAILOC_VM_RUNNER: ${{ runner.temp }}/go-microvm/bin/go-microvm-runner
           JAILOC_VM_LIBDIR: ${{ runner.temp }}/go-microvm/bin
+          # libkrun logs to microvm/vm.log, printed when the test fails.
+          JAILOC_VM_LOG_LEVEL: "3"
         run: go test -tags vmintegration -v -count=1 -timeout 50m ./internal/vmintegration/

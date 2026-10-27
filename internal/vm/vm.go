@@ -375,6 +375,11 @@ func commonOptions(spec Spec) []microvm.Option {
 	if spec.ImageCache != "" {
 		opts = append(opts, microvm.WithImageCache(image.NewCache(spec.ImageCache)))
 	}
+	// JAILOC_VM_LOG_LEVEL (1=error ... 5=trace) makes libkrun log to the
+	// runner log (microvm/vm.log) for diagnosing VMs that fail to start.
+	if lvl, err := strconv.ParseUint(os.Getenv("JAILOC_VM_LOG_LEVEL"), 10, 32); err == nil && lvl > 0 && lvl <= 5 {
+		opts = append(opts, microvm.WithLogLevel(uint32(lvl)))
+	}
 	return opts
 }
 
