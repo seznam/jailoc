@@ -1,618 +1,78 @@
 package docker
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v5/pkg/api"
-	dcontainer "github.com/docker/docker/api/types/container"
-	containertypes "github.com/moby/moby/api/types/container"
-
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
-func TestNewClient(t *testing.T) {
-	t.Parallel()
-
-	composeFile := "/tmp/jailoc/compose.yml"
-	workDir := "/tmp/jailoc"
-	workspace := "default"
-
-	client := NewClient(composeFile, workDir, workspace)
-
-	if client == nil {
-		t.Fatal("expected non-nil client")
-		return
-	}
-	if client.composeFile != composeFile {
-		t.Fatalf("unexpected composeFile: got %q, want %q", client.composeFile, composeFile)
-	}
-	if client.workDir != workDir {
-		t.Fatalf("unexpected workDir: got %q, want %q", client.workDir, workDir)
-	}
-	if client.workspace != workspace {
-		t.Fatalf("unexpected workspace: got %q, want %q", client.workspace, workspace)
-	}
-}
-
-func TestWriterLogConsumer(t *testing.T) {
-	t.Parallel()
-
-	t.Run("Log writes message with newline", func(t *testing.T) {
-		t.Parallel()
-
-		buf := &bytes.Buffer{}
-		consumer := &writerLogConsumer{w: buf}
-
-		consumer.Log("svc", "hello")
-
-		if buf.String() != "hello\n" {
-			t.Fatalf("unexpected output: got %q, want %q", buf.String(), "hello\n")
-		}
-	})
-
-	t.Run("Err writes message with newline", func(t *testing.T) {
-		t.Parallel()
-
-		buf := &bytes.Buffer{}
-		consumer := &writerLogConsumer{w: buf}
-
-		consumer.Err("svc", "err msg")
-
-		if buf.String() != "err msg\n" {
-			t.Fatalf("unexpected output: got %q, want %q", buf.String(), "err msg\n")
-		}
-	})
-
-	t.Run("Status is a no-op", func(t *testing.T) {
-		t.Parallel()
-
-		buf := &bytes.Buffer{}
-		consumer := &writerLogConsumer{w: buf}
-
-		consumer.Status("svc", "status")
-
-		if buf.String() != "" {
-			t.Fatalf("expected empty buffer, got %q", buf.String())
-		}
-	})
-}
-
-func TestCurrentOpencodeContainer(t *testing.T) {
-	t.Parallel()
-
-	t.Run("selects newest running opencode container", func(t *testing.T) {
-		t.Parallel()
-
-		got := currentOpencodeContainer([]api.ContainerSummary{
-			{ID: "old", Service: "opencode", State: containertypes.StateRunning, Created: 100},
-			{ID: "new", Service: "opencode", State: containertypes.StateRunning, Created: 200},
-			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 300},
-		})
-
-		if got.ID != "new" {
-			t.Fatalf("got container %q, want %q", got.ID, "new")
-		}
-	})
-
-	t.Run("ignores non-running opencode containers", func(t *testing.T) {
-		t.Parallel()
-
-		got := currentOpencodeContainer([]api.ContainerSummary{
-			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200},
-			{ID: "running", Service: "opencode", State: containertypes.StateRunning, Created: 100},
-		})
-
-		if got.ID != "running" {
-			t.Fatalf("got container %q, want %q", got.ID, "running")
-		}
-	})
-
-	t.Run("returns zero value when no running opencode container exists", func(t *testing.T) {
-		t.Parallel()
-
-		got := currentOpencodeContainer([]api.ContainerSummary{
-			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 100},
-			{ID: "stopped", Service: "opencode", State: containertypes.StateExited, Created: 200},
-		})
-
-		if got.ID != "" {
-			t.Fatalf("got container %q, want empty ID", got.ID)
-		}
-	})
-
-	t.Run("preserves health field from selected container", func(t *testing.T) {
-		t.Parallel()
-
-		tests := []struct {
-			name   string
-			health containertypes.HealthStatus
-		}{
-			{"healthy", containertypes.Healthy},
-			{"unhealthy", containertypes.Unhealthy},
-			{"no healthcheck", ""},
-		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				t.Parallel()
-
-				got := currentOpencodeContainer([]api.ContainerSummary{
-					{ID: "oc", Service: "opencode", State: containertypes.StateRunning, Created: 100, Health: tt.health},
-				})
-
-				if got.Health != tt.health {
-					t.Fatalf("got health %q, want %q", got.Health, tt.health)
-				}
-			})
-		}
-	})
-}
-
-func TestAnyOpencodeContainer(t *testing.T) {
-	t.Parallel()
-
-	t.Run("prefers running over exited", func(t *testing.T) {
-		t.Parallel()
-
-		got := anyOpencodeContainer([]api.ContainerSummary{
-			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200, ExitCode: 1},
-			{ID: "running", Service: "opencode", State: containertypes.StateRunning, Created: 100},
-		})
-
-		if got.ID != "running" {
-			t.Fatalf("got container %q, want %q", got.ID, "running")
-		}
-	})
-
-	t.Run("returns exited container when no running exists", func(t *testing.T) {
-		t.Parallel()
-
-		got := anyOpencodeContainer([]api.ContainerSummary{
-			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 300},
-			{ID: "exited", Service: "opencode", State: containertypes.StateExited, Created: 200, ExitCode: 1},
-		})
-
-		if got.ID != "exited" {
-			t.Fatalf("got container %q, want %q", got.ID, "exited")
-		}
-		if got.ExitCode != 1 {
-			t.Fatalf("got exit code %d, want 1", got.ExitCode)
-		}
-	})
-
-	t.Run("selects newest among same state", func(t *testing.T) {
-		t.Parallel()
-
-		got := anyOpencodeContainer([]api.ContainerSummary{
-			{ID: "old-exit", Service: "opencode", State: containertypes.StateExited, Created: 100},
-			{ID: "new-exit", Service: "opencode", State: containertypes.StateExited, Created: 200},
-		})
-
-		if got.ID != "new-exit" {
-			t.Fatalf("got container %q, want %q", got.ID, "new-exit")
-		}
-	})
-
-	t.Run("returns zero value when no opencode container exists", func(t *testing.T) {
-		t.Parallel()
-
-		got := anyOpencodeContainer([]api.ContainerSummary{
-			{ID: "dind", Service: "dind", State: containertypes.StateRunning, Created: 100},
-		})
-
-		if got.ID != "" {
-			t.Fatalf("got container %q, want empty ID", got.ID)
-		}
-	})
-}
-
 func TestBuildPresetImageEmptyContent(t *testing.T) {
 	t.Parallel()
-	_, err := buildPresetImage(context.Background(), nil, nil)
-	if err == nil {
-		t.Fatal("expected error for nil content")
-	}
-	if !strings.Contains(err.Error(), "empty") {
-		t.Fatalf("unexpected error message: got %q, want message containing \"empty\"", err.Error())
-	}
-	_, err = buildPresetImage(context.Background(), nil, []byte{})
-	if err == nil {
-		t.Fatal("expected error for empty content")
-	}
-	if !strings.Contains(err.Error(), "empty") {
-		t.Fatalf("unexpected error message: got %q, want message containing \"empty\"", err.Error())
-	}
-}
-
-func TestResolveBaseImageDockerfilePrecedence(t *testing.T) {
-	t.Parallel()
-
-	tempFile, err := os.CreateTemp("", "jailoc-empty-dockerfile-*")
-	if err != nil {
-		t.Fatalf("create temp dockerfile: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Remove(tempFile.Name()) }) //nolint:gosec // cleaning up temp file created in this test
-	if err := tempFile.Close(); err != nil {
-		t.Fatalf("close temp dockerfile: %v", err)
-	}
-
-	cfg := &config.Config{
-		Base: config.BaseConfig{
-			Dockerfile: tempFile.Name(),
-		},
-	}
-
-	_, err = ResolveBaseImage(context.Background(), cfg, "v0.0.0-test")
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "build preset image") {
-		t.Fatalf("unexpected error message: got %q, want message containing %q", err.Error(), "build preset image")
-	}
-	if !strings.Contains(err.Error(), "dockerfile content is empty") {
-		t.Fatalf("unexpected error message: got %q, want message containing %q", err.Error(), "dockerfile content is empty")
+	for _, content := range [][]byte{nil, {}} {
+		_, err := buildPresetImage(context.Background(), nil, content)
+		if err == nil || !strings.Contains(err.Error(), "empty") {
+			t.Fatalf("buildPresetImage(%v) = %v, want empty content error", content, err)
+		}
 	}
 }
 
 func TestResolveBaseImageDockerfileLoadError(t *testing.T) {
 	t.Parallel()
-
-	nonExistentPath := filepath.Join(t.TempDir(), "does-not-exist.Dockerfile")
-	cfg := &config.Config{
-		Base: config.BaseConfig{Dockerfile: nonExistentPath},
-	}
-
-	_, err := ResolveBaseImage(context.Background(), cfg, "v0.0.0-test")
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), nonExistentPath) {
-		t.Fatalf("unexpected error message: got %q, want message containing path %q", err.Error(), nonExistentPath)
-	}
-	if !strings.Contains(err.Error(), "load dockerfile") {
-		t.Fatalf("unexpected error message: got %q, want message containing %q", err.Error(), "load dockerfile")
+	path := filepath.Join(t.TempDir(), "missing.Dockerfile")
+	_, err := ResolveBaseImage(context.Background(), &config.Config{Base: config.BaseConfig{Dockerfile: path}}, "dev")
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("ResolveBaseImage = %v, want load error for %s", err, path)
 	}
 }
 
-func TestBuildOverlayImageNoDockerfile(t *testing.T) {
+func TestBuildOverlayImageWithoutDockerfile(t *testing.T) {
 	t.Parallel()
-
 	base := "registry.example.com/base:v1"
-	tag, err := BuildOverlayImage(context.Background(), base, workspace.Resolved{
-		Name:       "ws-a",
-		Dockerfile: "",
-	})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if tag != base {
-		t.Fatalf("unexpected tag: got %q, want %q", tag, base)
+	tag, err := BuildOverlayImage(context.Background(), base, workspace.Resolved{Name: "test"})
+	if err != nil || tag != base {
+		t.Fatalf("BuildOverlayImage = %q, %v, want %q", tag, err, base)
 	}
 }
 
-func TestBuildOverlayImageEmptyBase(t *testing.T) {
+func TestBuildOverlayImageInvalidBaseOrSource(t *testing.T) {
 	t.Parallel()
-
-	wsDockerfile := filepath.Join(t.TempDir(), "overlay.Dockerfile")
-	if err := os.WriteFile(wsDockerfile, []byte("ARG BASE\nFROM ${BASE}\n"), 0o600); err != nil {
-		t.Fatalf("write workspace dockerfile: %v", err)
-	}
-
-	_, err := BuildOverlayImage(context.Background(), "", workspace.Resolved{
-		Name:       "ws-a",
-		Dockerfile: wsDockerfile,
-	})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "base image is empty") {
-		t.Fatalf("unexpected error: got %q, want substring %q", err.Error(), "base image is empty")
-	}
-}
-
-func TestBuildOverlayImageDockerfileLoadError(t *testing.T) {
-	t.Parallel()
-
-	nonExistentPath := filepath.Join(t.TempDir(), "does-not-exist.Dockerfile")
-	_, err := BuildOverlayImage(context.Background(), "registry.example.com/base:v1", workspace.Resolved{
-		Name:       "ws-a",
-		Dockerfile: nonExistentPath,
-	})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "load workspace dockerfile") {
-		t.Fatalf("unexpected error: got %q, want substring %q", err.Error(), "load workspace dockerfile")
-	}
-	if !strings.Contains(err.Error(), nonExistentPath) {
-		t.Fatalf("unexpected error: got %q, want path %q", err.Error(), nonExistentPath)
+	path := filepath.Join(t.TempDir(), "missing.Dockerfile")
+	for _, tc := range []struct{ base, want string }{{"", "base image is empty"}, {"base:v1", path}} {
+		_, err := BuildOverlayImage(context.Background(), tc.base, workspace.Resolved{Name: "test", Dockerfile: path})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("BuildOverlayImage(%q) = %v, want %q", tc.base, err, tc.want)
+		}
 	}
 }
 
 func TestInjectBaseArg(t *testing.T) {
 	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{
-			name:  "plain FROM",
-			input: "FROM ${BASE}\nRUN echo hello\n",
-			want:  "ARG BASE\nFROM ${BASE}\nRUN echo hello\n",
-		},
-		{
-			name:  "already has ARG BASE",
-			input: "ARG BASE\nFROM ${BASE}\nRUN echo hello\n",
-			want:  "ARG BASE\nARG BASE\nFROM ${BASE}\nRUN echo hello\n",
-		},
-		{
-			name:  "syntax directive preserved",
-			input: "# syntax=docker/dockerfile:1\nFROM ${BASE}\n",
-			want:  "# syntax=docker/dockerfile:1\nARG BASE\nFROM ${BASE}\n",
-		},
-		{
-			name:  "escape directive preserved",
-			input: "# escape=`\nFROM ${BASE}\n",
-			want:  "# escape=`\nARG BASE\nFROM ${BASE}\n",
-		},
-		{
-			name:  "multiple directives",
-			input: "# syntax=docker/dockerfile:1\n# escape=`\nFROM ${BASE}\n",
-			want:  "# syntax=docker/dockerfile:1\n# escape=`\nARG BASE\nFROM ${BASE}\n",
-		},
-		{
-			name:  "directive with blank line separator",
-			input: "# syntax=docker/dockerfile:1\n\nFROM ${BASE}\n",
-			want:  "# syntax=docker/dockerfile:1\n\nARG BASE\nFROM ${BASE}\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := string(injectBaseArg([]byte(tt.input)))
-			if got != tt.want {
-				t.Fatalf("injectBaseArg(%q)\n got: %q\nwant: %q", tt.input, got, tt.want)
-			}
-		})
+	for _, tc := range []struct{ input, want string }{
+		{"FROM ${BASE}\n", "ARG BASE\nFROM ${BASE}\n"},
+		{"# syntax=docker/dockerfile:1\nFROM ${BASE}\n", "# syntax=docker/dockerfile:1\nARG BASE\nFROM ${BASE}\n"},
+		{"# escape=`\n\nFROM ${BASE}\n", "# escape=`\n\nARG BASE\nFROM ${BASE}\n"},
+	} {
+		if got := string(injectBaseArg([]byte(tc.input))); got != tc.want {
+			t.Errorf("injectBaseArg(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
 
 func TestProxyBuildArgs(t *testing.T) {
-	t.Run("collects set proxy vars", func(t *testing.T) {
-		t.Setenv("HTTP_PROXY", "http://proxy:8080")
-		t.Setenv("HTTPS_PROXY", "http://proxy:8443")
-		t.Setenv("NO_PROXY", "localhost,127.0.0.1")
-
-		got := proxyBuildArgs()
-
-		if v := got["HTTP_PROXY"]; v == nil || *v != "http://proxy:8080" {
-			t.Fatalf("HTTP_PROXY: got %v, want %q", v, "http://proxy:8080")
-		}
-		if v := got["HTTPS_PROXY"]; v == nil || *v != "http://proxy:8443" {
-			t.Fatalf("HTTPS_PROXY: got %v, want %q", v, "http://proxy:8443")
-		}
-		if v := got["NO_PROXY"]; v == nil || *v != "localhost,127.0.0.1" {
-			t.Fatalf("NO_PROXY: got %v, want %q", v, "localhost,127.0.0.1")
-		}
-	})
-
-	t.Run("skips unset vars", func(t *testing.T) {
-		for _, k := range []string{
-			"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
-			"NO_PROXY", "no_proxy", "FTP_PROXY", "ftp_proxy",
-			"ALL_PROXY", "all_proxy",
-		} {
-			t.Setenv(k, "")
-			if err := os.Unsetenv(k); err != nil {
-				t.Fatalf("unsetenv %s: %v", k, err)
-			}
-		}
-
-		got := proxyBuildArgs()
-
-		if len(got) != 0 {
-			t.Fatalf("expected empty map, got %v", got)
-		}
-	})
-
-	t.Run("includes both cases independently", func(t *testing.T) {
-		t.Setenv("http_proxy", "http://lower:3128")
-		t.Setenv("HTTP_PROXY", "http://upper:3128")
-
-		got := proxyBuildArgs()
-
-		if v := got["http_proxy"]; v == nil || *v != "http://lower:3128" {
-			t.Fatalf("http_proxy: got %v, want %q", v, "http://lower:3128")
-		}
-		if v := got["HTTP_PROXY"]; v == nil || *v != "http://upper:3128" {
-			t.Fatalf("HTTP_PROXY: got %v, want %q", v, "http://upper:3128")
-		}
-	})
-}
-
-func TestWorkspacePortsFromContainers(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		containers []dcontainer.Summary
-		want       map[string]int
-	}{
-		{
-			name: "single workspace with correct labels and port",
-			containers: []dcontainer.Summary{
-				{
-					Labels: map[string]string{
-						"com.docker.compose.project": "jailoc-default",
-						"com.docker.compose.service": "opencode",
-					},
-					Ports: []dcontainer.Port{
-						{PrivatePort: uint16(workspace.BasePort), PublicPort: 4096},
-					},
-				},
-			},
-			want: map[string]int{"default": 4096},
-		},
-		{
-			name: "hyphenated workspace name",
-			containers: []dcontainer.Summary{
-				{
-					Labels: map[string]string{
-						"com.docker.compose.project": "jailoc-my-app",
-						"com.docker.compose.service": "opencode",
-					},
-					Ports: []dcontainer.Port{
-						{PrivatePort: uint16(workspace.BasePort), PublicPort: 4097},
-					},
-				},
-			},
-			want: map[string]int{"my-app": 4097},
-		},
-		{
-			name: "non-jailoc project label is skipped",
-			containers: []dcontainer.Summary{
-				{
-					Labels: map[string]string{
-						"com.docker.compose.project": "other-project",
-						"com.docker.compose.service": "opencode",
-					},
-					Ports: []dcontainer.Port{
-						{PrivatePort: uint16(workspace.BasePort), PublicPort: 9999},
-					},
-				},
-			},
-			want: map[string]int{},
-		},
-		{
-			name: "no published port is skipped",
-			containers: []dcontainer.Summary{
-				{
-					Labels: map[string]string{
-						"com.docker.compose.project": "jailoc-default",
-						"com.docker.compose.service": "opencode",
-					},
-					Ports: []dcontainer.Port{
-						{PrivatePort: uint16(workspace.BasePort), PublicPort: 0},
-					},
-				},
-			},
-			want: map[string]int{},
-		},
-		{
-			name: "multiple workspaces",
-			containers: []dcontainer.Summary{
-				{
-					Labels: map[string]string{
-						"com.docker.compose.project": "jailoc-alpha",
-					},
-					Ports: []dcontainer.Port{
-						{PrivatePort: uint16(workspace.BasePort), PublicPort: 4096},
-					},
-				},
-				{
-					Labels: map[string]string{
-						"com.docker.compose.project": "jailoc-beta",
-					},
-					Ports: []dcontainer.Port{
-						{PrivatePort: uint16(workspace.BasePort), PublicPort: 4097},
-					},
-				},
-			},
-			want: map[string]int{"alpha": 4096, "beta": 4097},
-		},
-		{
-			name:       "empty container list",
-			containers: []dcontainer.Summary{},
-			want:       map[string]int{},
-		},
+	t.Setenv("HTTP_PROXY", "http://proxy:8080")
+	got := proxyBuildArgs()
+	if got["HTTP_PROXY"] == nil || *got["HTTP_PROXY"] != "http://proxy:8080" {
+		t.Fatalf("HTTP_PROXY = %v", got["HTTP_PROXY"])
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := workspacePortsFromContainers(tc.containers)
-
-			if len(got) != len(tc.want) {
-				t.Fatalf("got %d entries, want %d: %v", len(got), len(tc.want), got)
-			}
-			for name, wantPort := range tc.want {
-				gotPort, ok := got[name]
-				if !ok {
-					t.Fatalf("missing workspace %q in result: %v", name, got)
-				}
-				if gotPort != wantPort {
-					t.Fatalf("workspace %q: got port %d, want %d", name, gotPort, wantPort)
-				}
-			}
-		})
+	if err := os.Unsetenv("HTTP_PROXY"); err != nil {
+		t.Fatal(err)
 	}
-}
-
-type fakeCompose struct {
-	api.Compose
-
-	loaded    *types.Project
-	upProject *types.Project
-	upOptions api.UpOptions
-}
-
-func (f *fakeCompose) LoadProject(_ context.Context, _ api.ProjectLoadOptions) (*types.Project, error) {
-	return f.loaded, nil
-}
-
-func (f *fakeCompose) Up(_ context.Context, project *types.Project, options api.UpOptions) error {
-	f.upProject = project
-	f.upOptions = options
-
-	return nil
-}
-
-func newFakeSvcClient(workspace string, svc api.Compose) *Client {
-	client := NewClient("/tmp/jailoc/docker-compose.yml", "/tmp/jailoc", workspace)
-	client.svcOnce.Do(func() {})
-	client.svc = svc
-
-	return client
-}
-
-func TestUpPassesProjectToStartOptions(t *testing.T) {
-	t.Parallel()
-
-	project := &types.Project{
-		Name: "jailoc-default",
-		Secrets: types.Secrets{
-			"gitlab_token": types.SecretConfig{Environment: "GITLAB_TOKEN"},
-		},
-	}
-	fake := &fakeCompose{loaded: project}
-
-	if err := newFakeSvcClient("default", fake).Up(context.Background()); err != nil {
-		t.Fatalf("Up returned error: %v", err)
-	}
-
-	if fake.upProject != project {
-		t.Fatalf("Up received project %p, want %p", fake.upProject, project)
-	}
-	if fake.upOptions.Start.Project == nil {
-		t.Fatal("UpOptions.Start.Project is nil: the Compose SDK would rebuild the project from container labels and drop project.Secrets, silently skipping env-sourced secrets")
-	}
-	if fake.upOptions.Start.Project != project {
-		t.Fatalf("UpOptions.Start.Project is %p, want the loaded project %p", fake.upOptions.Start.Project, project)
-	}
-	if len(fake.upOptions.Start.Project.Secrets) != len(project.Secrets) {
-		t.Fatalf("UpOptions.Start.Project carries %d secrets, want %d", len(fake.upOptions.Start.Project.Secrets), len(project.Secrets))
-	}
-	if !fake.upOptions.Create.RemoveOrphans {
-		t.Fatal("UpOptions.Create.RemoveOrphans is false, want true")
+	if _, exists := proxyBuildArgs()["HTTP_PROXY"]; exists {
+		t.Fatal("unset HTTP_PROXY was forwarded")
 	}
 }

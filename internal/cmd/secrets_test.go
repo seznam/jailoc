@@ -4,19 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/fatih/color"
-	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
@@ -74,7 +69,7 @@ func TestValidateSecretSources(t *testing.T) {
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
 				{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "JAILOC_TEST_EMPTY"},
 			}},
-			wantErr: `secret "GH_TOKEN": host environment variable "JAILOC_TEST_EMPTY" is set but empty; Docker Compose omits empty secrets, so /run/secrets/GH_TOKEN would not exist`,
+			wantErr: `secret "GH_TOKEN": host environment variable "JAILOC_TEST_EMPTY" is set but empty`,
 		},
 		{
 			name: "file destination from file source world readable",
@@ -99,13 +94,6 @@ func TestValidateSecretSources(t *testing.T) {
 		{
 			name: "file source not world readable",
 			ws: &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-				{Name: "key", Kind: workspace.SecretKindFile, FromFile: ownerOnly},
-			}},
-			wantErr: fmt.Sprintf("secret %q: file %q is not world-readable (mode 0600); the agent runs as UID 1000 and this is a conservative check — run 'chmod o+r %s' to make it readable inside the container", "key", ownerOnly, ownerOnly),
-		},
-		{
-			name: "vm backend file destination need not be world readable",
-			ws: &workspace.Resolved{Name: "ws", Backend: config.BackendVM, Secrets: []workspace.ResolvedSecret{
 				{Name: "key", Kind: workspace.SecretKindFile, FromFile: ownerOnly},
 			}},
 		},
@@ -175,91 +163,6 @@ func TestValidateSecretSources(t *testing.T) {
 				t.Fatalf("validateSecretSources() error =\n  %q\nwant\n  %q", err.Error(), tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestSecretSpecsAndEnvNames(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil secrets yields nil", func(t *testing.T) {
-		t.Parallel()
-		ws := &workspace.Resolved{Name: "ws"}
-		if got := secretSpecs(ws); got != nil {
-			t.Fatalf("secretSpecs() = %v, want nil", got)
-		}
-		if got := secretEnvNames(ws); got != nil {
-			t.Fatalf("secretEnvNames() = %v, want nil", got)
-		}
-	})
-
-	t.Run("preserves resolved order and maps fields", func(t *testing.T) {
-		t.Parallel()
-		ws := &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-			{Name: "ALPHA", Kind: workspace.SecretKindEnv, FromEnv: "ALPHA_VAR"},
-			{Name: "BETA", Kind: workspace.SecretKindEnv, FromFile: "/tmp/beta"},
-			{Name: "gamma", Kind: workspace.SecretKindFile, FromEnv: "GAMMA_VAR"},
-			{Name: "delta", Kind: workspace.SecretKindFile, FromFile: "/tmp/delta"},
-		}}
-
-		specs := secretSpecs(ws)
-		if len(specs) != 4 {
-			t.Fatalf("secretSpecs() len = %d, want 4", len(specs))
-		}
-		if specs[0].Name != "ALPHA" || specs[0].Environment != "ALPHA_VAR" || specs[0].File != "" {
-			t.Fatalf("secretSpecs()[0] = %+v", specs[0])
-		}
-		if specs[1].Name != "BETA" || specs[1].File != "/tmp/beta" || specs[1].Environment != "" {
-			t.Fatalf("secretSpecs()[1] = %+v", specs[1])
-		}
-		if specs[2].Name != "gamma" || specs[2].Environment != "GAMMA_VAR" || specs[2].File != "" {
-			t.Fatalf("secretSpecs()[2] = %+v", specs[2])
-		}
-		if specs[3].Name != "delta" || specs[3].File != "/tmp/delta" || specs[3].Environment != "" {
-			t.Fatalf("secretSpecs()[3] = %+v", specs[3])
-		}
-
-		names := secretEnvNames(ws)
-		want := []string{"ALPHA", "BETA"}
-		if !reflect.DeepEqual(names, want) {
-			t.Fatalf("secretEnvNames() = %+v, want %+v", names, want)
-		}
-	})
-
-	t.Run("file secrets yield nil names", func(t *testing.T) {
-		t.Parallel()
-		ws := &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-			{Name: "beta", Kind: workspace.SecretKindFile, FromFile: "/tmp/beta"},
-		}}
-		if got := secretEnvNames(ws); got != nil {
-			t.Fatalf("secretEnvNames() = %v, want nil", got)
-		}
-	})
-}
-
-func TestSecretSpecsRenderAllSourceDestinationCombinations(t *testing.T) {
-	t.Parallel()
-
-	ws := &workspace.Resolved{Name: "ws", Secrets: []workspace.ResolvedSecret{
-		{Name: "FILE_KEY", Kind: workspace.SecretKindEnv, FromFile: "/tmp/x"},
-		{Name: "GH_TOKEN", Kind: workspace.SecretKindEnv, FromEnv: "GITHUB_TOKEN"},
-		{Name: "envkey", Kind: workspace.SecretKindFile, FromEnv: "HOST_A"},
-		{Name: "key", Kind: workspace.SecretKindFile, FromFile: "/tmp/x"},
-	}}
-
-	rendered, err := compose.GenerateCompose(compose.ComposeParams{WorkspaceName: "ws", Secrets: secretSpecs(ws)})
-	if err != nil {
-		t.Fatalf("GenerateCompose() = %v", err)
-	}
-	yaml := string(rendered)
-	assertContains(t, yaml, `environment: "GITHUB_TOKEN"`)
-	assertContains(t, yaml, `environment: "HOST_A"`)
-	if got := strings.Count(yaml, `file: "/tmp/x"`); got != 2 {
-		t.Fatalf("rendered compose file source count = %d, want 2:\n%s", got, yaml)
-	}
-
-	wantNames := []string{"FILE_KEY", "GH_TOKEN"}
-	if gotNames := secretEnvNames(ws); !reflect.DeepEqual(gotNames, wantNames) {
-		t.Fatalf("secretEnvNames() = %+v, want %+v", gotNames, wantNames)
 	}
 }
 
@@ -488,82 +391,69 @@ func TestPrintSecretsOrderMatchesResolvedOrder(t *testing.T) {
 	}
 }
 
-// TestComposeParamsParity fails when up.go and add.go stop assigning the same
-// set of compose.ComposeParams fields. Image is excluded: add.go deliberately
-// hardcodes jailoc-base:embedded while up.go resolves the image.
-func TestComposeParamsParity(t *testing.T) {
+func TestReadSecret(t *testing.T) {
 	t.Parallel()
-
-	upFields := composeParamsFields(t, "up.go")
-	addFields := composeParamsFields(t, "add.go")
-
-	delete(upFields, "Image")
-	delete(addFields, "Image")
-
-	if missing := setDifference(upFields, addFields); len(missing) > 0 {
-		t.Errorf("add.go is missing ComposeParams fields set in up.go: %v", missing)
+	pem := writeSecretFile(t, "line1\nline2\n", 0o600)
+	tests := []struct {
+		name    string
+		secret  workspace.ResolvedSecret
+		want    string
+		wantErr string
+	}{
+		{
+			name:   "env secret drops the trailing line break",
+			secret: workspace.ResolvedSecret{Name: "T", Kind: workspace.SecretKindEnv, FromCommand: "printf 'tok\\r\\n'"},
+			want:   "tok",
+		},
+		{
+			name:   "file secret keeps the output",
+			secret: workspace.ResolvedSecret{Name: "t", Kind: workspace.SecretKindFile, FromCommand: "echo tok"},
+			want:   "tok\n",
+		},
+		{
+			name:   "command runs in a shell",
+			secret: workspace.ResolvedSecret{Name: "T", Kind: workspace.SecretKindEnv, FromCommand: "echo abc | tr a-c x-z"},
+			want:   "xyz",
+		},
+		{
+			name:    "failing command",
+			secret:  workspace.ResolvedSecret{Name: "T", Kind: workspace.SecretKindEnv, FromCommand: "exit 3"},
+			wantErr: "exit status 3",
+		},
+		{
+			name:    "silent command",
+			secret:  workspace.ResolvedSecret{Name: "T", Kind: workspace.SecretKindEnv, FromCommand: "true"},
+			wantErr: "printed nothing",
+		},
+		{
+			name:    "multi-line env secret",
+			secret:  workspace.ResolvedSecret{Name: "T", Kind: workspace.SecretKindEnv, FromFile: pem},
+			wantErr: "use a file secret",
+		},
+		{
+			name:   "multi-line file secret",
+			secret: workspace.ResolvedSecret{Name: "t", Kind: workspace.SecretKindFile, FromFile: pem},
+			want:   "line1\nline2\n",
+		},
 	}
-	if extra := setDifference(addFields, upFields); len(extra) > 0 {
-		t.Errorf("add.go sets ComposeParams fields absent from up.go: %v", extra)
-	}
-}
-
-// composeParamsFields returns the field names assigned in every
-// compose.ComposeParams composite literal in the given file of this package.
-func composeParamsFields(t *testing.T, filename string) map[string]bool {
-	t.Helper()
-
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", filename, err)
-	}
-
-	fields := make(map[string]bool)
-	found := false
-	ast.Inspect(file, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		sel, ok := lit.Type.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok || pkg.Name != "compose" || sel.Sel.Name != "ComposeParams" {
-			return true
-		}
-		found = true
-		for _, elt := range lit.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				t.Fatalf("%s: compose.ComposeParams uses a positional literal; the parity check requires keyed fields", filename)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := readSecret(context.Background(), tt.secret)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("readSecret error = %v, want %q", err, tt.wantErr)
+				}
+				return
 			}
-			key, ok := kv.Key.(*ast.Ident)
-			if !ok {
-				t.Fatalf("%s: compose.ComposeParams has a non-identifier field key", filename)
+			if err != nil {
+				t.Fatalf("readSecret: %v", err)
 			}
-			fields[key.Name] = true
-		}
-		return true
-	})
-
-	if !found {
-		t.Fatalf("%s: no compose.ComposeParams composite literal found", filename)
+			if string(got) != tt.want {
+				t.Fatalf("readSecret = %q, want %q", got, tt.want)
+			}
+		})
 	}
-	return fields
-}
-
-func setDifference(a, b map[string]bool) []string {
-	var diff []string
-	for k := range a {
-		if !b[k] {
-			diff = append(diff, k)
-		}
-	}
-	sort.Strings(diff)
-	return diff
 }
 
 func writeSecretFile(t *testing.T, content string, mode os.FileMode) string {

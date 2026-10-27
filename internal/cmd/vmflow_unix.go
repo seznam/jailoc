@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/fatih/color"
 
-	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
@@ -57,12 +57,12 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err := materializeCABundle(ws); err != nil {
 		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}
-	if hostPath, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
+	if hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
 		if err := ensureOCConfigGitignore(hostPath); err != nil {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not pre-create .gitignore in %s: %v\n", hostPath, err)
 		}
 	}
-	cacheDir := filepath.Clean(ComposeCacheDir(ws.Name))
+	cacheDir := workspaceCacheDir(ws.Name)
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		return fmt.Errorf("create cache directory %q: %w", cacheDir, err)
 	}
@@ -73,11 +73,11 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
-	copies, err := vmCopies(ws)
+	snapshots, err := vmSnapshots(ws)
 	if err != nil {
 		return err
 	}
-	if err := checkCopies(ws, copies, shares); err != nil {
+	if err := checkSnapshots(ws, snapshots, shares); err != nil {
 		return err
 	}
 
@@ -90,13 +90,11 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		return err
 	}
 
-	stagedDir, binds, err := stageCopies(stateDir, copies)
+	binds, err := stageSnapshots(stateDir, snapshots, "")
 	if err != nil {
 		return fmt.Errorf("workspace %q: %w", ws.Name, err)
 	}
-	if stagedDir != "" {
-		shares = append(shares, vm.Share{HostPath: stagedDir, GuestPath: guest.CopiesDir, ReadOnly: true})
-	}
+	shares = append(shares, snapshotsShare(stateDir))
 	spec, err := workspaceSpec(ctx, ws, rt, ref, shares, binds)
 	if err != nil {
 		return err
@@ -120,10 +118,18 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		}
 		_, _ = color.New(color.FgCyan).Printf("Protecting Git hooks and config of %d repositories; sudo and Docker are disabled\n", repos)
 	}
+	payload, err := secretsPayload(ctx, ws, spec)
+	if err != nil {
+		return err
+	}
+	// A marker left by an earlier VM would hide an interrupted delivery.
+	if err := os.Remove(secretsMarker(stateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reset secrets marker: %w", err)
+	}
 	if _, err := startSupervisor(ctx, spec, "VM for workspace "+ws.Name); err != nil {
 		return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
 	}
-	if err := pushSecrets(ctx, ws, spec); err != nil {
+	if err := deliverSecrets(ctx, stateDir, payload); err != nil {
 		_ = stopSupervisor(stateDir)
 		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
@@ -277,7 +283,7 @@ func pruneImageCache(current string) {
 }
 
 // workspaceSpec describes the workspace VM booting ref.
-func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFiles, ref string, shares []vm.Share, copies []guest.Copy) (vm.Spec, error) {
+func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFiles, ref string, shares []vm.Share, snapshots []guest.Snapshot) (vm.Spec, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return vm.Spec{}, fmt.Errorf("locate jailoc executable: %w", err)
@@ -291,13 +297,13 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		return vm.Spec{}, err
 	}
 	g := &guest.Config{
-		Hostname: ws.Name,
-		User:     "agent",
-		UID:      agentUID,
-		GID:      agentUID,
-		Home:     "/home/agent",
-		WorkDir:  ws.Paths[0],
-		Copies:   copies,
+		Hostname:  ws.Name,
+		User:      "agent",
+		UID:       agentUID,
+		GID:       agentUID,
+		Home:      "/home/agent",
+		WorkDir:   ws.Paths[0],
+		Snapshots: snapshots,
 		Env: []string{
 			"JAILOC=1",
 			"JAILOC_WORKSPACE=" + ws.Name,
@@ -352,9 +358,10 @@ func workspaceCABundle(ws *workspace.Resolved) string {
 	return path
 }
 
-// pushSecrets delivers the workspace environment and secrets to the guest
-// over SSH; they live only in guest memory.
-func pushSecrets(ctx context.Context, ws *workspace.Resolved, spec vm.Spec) error {
+// secretsPayload reads the workspace environment and secret values on the
+// host. Env secrets go to the session environment only, file secrets to
+// /run/secrets. Values stay in memory.
+func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec) (guest.Secrets, error) {
 	payload := guest.Secrets{Env: append([]string{}, ws.Env...), Files: map[string][]byte{}}
 	if spec.SSHAgent != "" {
 		payload.Env = append(payload.Env, "SSH_AUTH_SOCK="+guest.SSHAgentSocket)
@@ -363,26 +370,31 @@ func pushSecrets(ctx context.Context, ws *workspace.Resolved, spec vm.Spec) erro
 		payload.Env = append(payload.Env, "NODE_USE_SYSTEM_CA=1")
 	}
 	for _, s := range ws.Secrets {
-		var value []byte
-		if s.FromEnv != "" {
-			value = []byte(os.Getenv(s.FromEnv))
-		} else {
-			data, err := os.ReadFile(s.FromFile)
-			if err != nil {
-				return fmt.Errorf("read secret %q: %w", s.Name, err)
-			}
-			value = data
+		value, err := readSecret(ctx, s)
+		if err != nil {
+			return guest.Secrets{}, err
 		}
-		payload.Files[s.Name] = value
 		if s.Kind == workspace.SecretKindEnv {
 			payload.Env = append(payload.Env, s.Name+"="+string(value))
+		} else {
+			payload.Files[s.Name] = value
 		}
 	}
+	return payload, nil
+}
+
+// secretsMarker exists while the running workspace VM holds the secrets of
+// its latest delivery.
+func secretsMarker(stateDir string) string { return filepath.Join(stateDir, "secrets-delivered") }
+
+// deliverSecrets sends payload to the guest over SSH, which replaces the
+// previous environment and secrets, and records the delivery.
+func deliverSecrets(ctx context.Context, stateDir string, payload guest.Secrets) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode secrets: %w", err)
 	}
-	client, err := vm.DialSSH(ctx, vmStateDir(ws.Name))
+	client, err := vm.DialSSH(ctx, stateDir)
 	if err != nil {
 		return err
 	}
@@ -397,6 +409,34 @@ func pushSecrets(ctx context.Context, ws *workspace.Resolved, spec vm.Spec) erro
 	sess.Stderr = &stderr
 	if err := sess.Run(guest.BinaryPath + " secrets"); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if err := os.WriteFile(secretsMarker(stateDir), nil, 0o600); err != nil {
+		return fmt.Errorf("record secrets delivery: %w", err)
+	}
+	return nil
+}
+
+// ensureSecrets delivers the secrets to a running workspace VM that never
+// received them, for example when jailoc was interrupted between booting the
+// VM and delivering them.
+func ensureSecrets(ctx context.Context, ws *workspace.Resolved) error {
+	stateDir := vmStateDir(ws.Name)
+	if _, err := os.Stat(secretsMarker(stateDir)); err == nil {
+		return nil
+	}
+	if err := validateSecretSources(ws); err != nil {
+		return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
+	}
+	spec, err := vm.ReadSpec(stateDir)
+	if err != nil {
+		return err
+	}
+	payload, err := secretsPayload(ctx, ws, *spec)
+	if err != nil {
+		return err
+	}
+	if err := deliverSecrets(ctx, stateDir, payload); err != nil {
+		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
 	return nil
 }

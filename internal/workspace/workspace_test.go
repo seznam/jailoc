@@ -918,94 +918,6 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 	}
 }
 
-func TestResolveExposePortDefaultsTrue(t *testing.T) {
-	t.Parallel()
-
-	cfg := &config.Config{
-		Workspaces: map[string]config.Workspace{
-			"test": {Paths: []string{"/tmp"}},
-		},
-	}
-
-	resolved, err := workspace.Resolve(cfg, "test")
-	if err != nil {
-		t.Fatalf("Resolve returned error: %v", err)
-	}
-	if !resolved.ExposePort {
-		t.Fatal("expected ExposePort = true by default")
-	}
-}
-
-func TestResolveExposePortWorkspaceOverride(t *testing.T) {
-	t.Parallel()
-
-	boolFalse := false
-	cfg := &config.Config{
-		Workspaces: map[string]config.Workspace{
-			"test": {
-				Paths:      []string{"/tmp"},
-				ExposePort: &boolFalse,
-			},
-		},
-	}
-
-	resolved, err := workspace.Resolve(cfg, "test")
-	if err != nil {
-		t.Fatalf("Resolve returned error: %v", err)
-	}
-	if resolved.ExposePort {
-		t.Fatal("expected ExposePort = false when workspace sets it false")
-	}
-}
-
-func TestResolveExposePortDefaultsOverride(t *testing.T) {
-	t.Parallel()
-
-	boolFalse := false
-	cfg := &config.Config{
-		Defaults: config.Defaults{
-			ExposePort: &boolFalse,
-		},
-		Workspaces: map[string]config.Workspace{
-			"test": {Paths: []string{"/tmp"}},
-		},
-	}
-
-	resolved, err := workspace.Resolve(cfg, "test")
-	if err != nil {
-		t.Fatalf("Resolve returned error: %v", err)
-	}
-	if resolved.ExposePort {
-		t.Fatal("expected ExposePort = false when defaults set it false and workspace leaves it unset")
-	}
-}
-
-func TestResolveExposePortWorkspaceOverridesDefaults(t *testing.T) {
-	t.Parallel()
-
-	boolFalse := false
-	boolTrue := true
-	cfg := &config.Config{
-		Defaults: config.Defaults{
-			ExposePort: &boolFalse,
-		},
-		Workspaces: map[string]config.Workspace{
-			"test": {
-				Paths:      []string{"/tmp"},
-				ExposePort: &boolTrue,
-			},
-		},
-	}
-
-	resolved, err := workspace.Resolve(cfg, "test")
-	if err != nil {
-		t.Fatalf("Resolve returned error: %v", err)
-	}
-	if !resolved.ExposePort {
-		t.Fatal("expected ExposePort = true when workspace sets it true and defaults set it false")
-	}
-}
-
 func TestResolveImagePropagation(t *testing.T) {
 	t.Parallel()
 
@@ -1530,31 +1442,28 @@ func TestResolveVMBackendPortAndDocker(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name         string
-		backend      string
 		isolated     *bool
 		protectGit   *bool
-		wantPort     bool
 		wantDocker   bool
 		wantIsolated bool
 	}{
-		{name: "docker keeps defaults", backend: config.BackendDocker, wantPort: true, wantDocker: true},
-		{name: "vm disables port, keeps docker", backend: config.BackendVM, wantDocker: true},
-		{name: "vm protect_git disables docker", backend: config.BackendVM, protectGit: new(true)},
-		{name: "vm isolated build", backend: config.BackendVM, isolated: new(true), wantDocker: true, wantIsolated: true},
+		{name: "default keeps docker", wantDocker: true},
+		{name: "protect_git disables docker", protectGit: new(true)},
+		{name: "isolated build", isolated: new(true), wantDocker: true, wantIsolated: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &config.Config{Workspaces: map[string]config.Workspace{
-				"ws": {Backend: tt.backend, Paths: []string{"/data/work"}, IsolatedBuild: tt.isolated, ProtectGit: tt.protectGit},
+				"ws": {Paths: []string{"/data/work"}, IsolatedBuild: tt.isolated, ProtectGit: tt.protectGit},
 			}}
 			r, err := workspace.Resolve(cfg, "ws")
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
 			}
-			if r.ExposePort != tt.wantPort || r.EnableDocker != tt.wantDocker || r.IsolatedBuild != tt.wantIsolated {
-				t.Fatalf("ExposePort=%v EnableDocker=%v IsolatedBuild=%v, want %v %v %v",
-					r.ExposePort, r.EnableDocker, r.IsolatedBuild, tt.wantPort, tt.wantDocker, tt.wantIsolated)
+			if r.EnableDocker != tt.wantDocker || r.IsolatedBuild != tt.wantIsolated {
+				t.Fatalf("EnableDocker=%v IsolatedBuild=%v, want %v %v",
+					r.EnableDocker, r.IsolatedBuild, tt.wantDocker, tt.wantIsolated)
 			}
 		})
 	}
@@ -1562,33 +1471,31 @@ func TestResolveVMBackendPortAndDocker(t *testing.T) {
 
 func TestResolveCopies(t *testing.T) {
 	t.Parallel()
-	defaults := config.Defaults{Copies: []string{"/data/npmrc:/home/agent/.npmrc:ro", "/data/gh:/home/agent/.config/gh:ro"}}
+	defaults := config.Defaults{Snapshots: []string{"/data/npmrc:/home/agent/.npmrc:ro", "/data/gh:/home/agent/.config/gh:ro"}}
 	tests := []struct {
-		name    string
-		backend string
-		copies  []string
-		want    []string
+		name      string
+		snapshots []string
+		want      []string
 	}{
-		{name: "docker ignores default copies", backend: config.BackendDocker},
-		{name: "vm inherits defaults", backend: config.BackendVM, want: []string{"/data/npmrc:/home/agent/.npmrc:ro", "/data/gh:/home/agent/.config/gh:ro"}},
+		{name: "inherits defaults", want: []string{"/data/npmrc:/home/agent/.npmrc:ro", "/data/gh:/home/agent/.config/gh:ro"}},
 		{
-			name: "workspace overrides and removes", backend: config.BackendVM,
-			copies: []string{"/data/other-npmrc:/home/agent/.npmrc:ro", ":/home/agent/.config/gh:ro", "/data/tool:/opt-tool/cfg:ro"},
-			want:   []string{"/data/other-npmrc:/home/agent/.npmrc:ro", "/data/tool:/opt-tool/cfg:ro"},
+			name:      "workspace overrides and removes",
+			snapshots: []string{"/data/other-npmrc:/home/agent/.npmrc:ro", ":/home/agent/.config/gh:ro", "/data/tool:/opt-tool/cfg:ro"},
+			want:      []string{"/data/other-npmrc:/home/agent/.npmrc:ro", "/data/tool:/opt-tool/cfg:ro"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &config.Config{Defaults: defaults, Workspaces: map[string]config.Workspace{
-				"ws": {Backend: tt.backend, Paths: []string{"/data/work"}, Copies: tt.copies},
+				"ws": {Paths: []string{"/data/work"}, Snapshots: tt.snapshots},
 			}}
 			r, err := workspace.Resolve(cfg, "ws")
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
 			}
-			if strings.Join(r.Copies, ",") != strings.Join(tt.want, ",") {
-				t.Fatalf("Copies = %v, want %v", r.Copies, tt.want)
+			if strings.Join(r.Snapshots, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("Snapshots = %v, want %v", r.Snapshots, tt.want)
 			}
 		})
 	}
@@ -1598,12 +1505,10 @@ func TestResolveVMBackendMergesAllowedDestinations(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name         string
-		backend      string
 		wantHosts    []string
 		wantNetworks []string
 	}{
-		{name: "docker keeps workspace lists", backend: config.BackendDocker, wantHosts: []string{"ws.example", "both.example"}, wantNetworks: []string{"10.2.0.0/16"}},
-		{name: "vm merges defaults", backend: config.BackendVM, wantHosts: []string{"defaults.example", "both.example", "ws.example"}, wantNetworks: []string{"10.1.0.0/16", "10.2.0.0/16"}},
+		{name: "merges defaults", wantHosts: []string{"defaults.example", "both.example", "ws.example"}, wantNetworks: []string{"10.1.0.0/16", "10.2.0.0/16"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1611,7 +1516,7 @@ func TestResolveVMBackendMergesAllowedDestinations(t *testing.T) {
 			cfg := &config.Config{
 				Defaults: config.Defaults{AllowedHosts: []string{"defaults.example", "both.example"}, AllowedNetworks: []string{"10.1.0.0/16"}},
 				Workspaces: map[string]config.Workspace{"ws": {
-					Backend: tt.backend, Paths: []string{"/data/work"},
+					Paths:        []string{"/data/work"},
 					AllowedHosts: []string{"ws.example", "both.example"}, AllowedNetworks: []string{"10.2.0.0/16"},
 				}},
 			}
@@ -1631,8 +1536,8 @@ func TestResolveVMPorts(t *testing.T) {
 	cfg := &config.Config{
 		Defaults: config.Defaults{Ports: []config.Port{"3000", "8080:80"}},
 		Workspaces: map[string]config.Workspace{
-			"vm":     {Backend: config.BackendVM, Paths: []string{"/data/work"}, Ports: []config.Port{"8080:8000"}},
-			"docker": {Paths: []string{"/data/other"}},
+			"vm":    {Paths: []string{"/data/work"}, Ports: []config.Port{"8080:8000"}},
+			"other": {Paths: []string{"/data/other"}},
 		},
 	}
 	r, err := workspace.Resolve(cfg, "vm")
@@ -1643,11 +1548,11 @@ func TestResolveVMPorts(t *testing.T) {
 	if !slices.Equal(r.Ports, want) {
 		t.Fatalf("Ports = %v, want %v", r.Ports, want)
 	}
-	d, err := workspace.Resolve(cfg, "docker")
+	d, err := workspace.Resolve(cfg, "other")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if len(d.Ports) != 0 {
-		t.Fatalf("docker Ports = %v, want none", d.Ports)
+	if !slices.Equal(d.Ports, []config.PortForward{{Host: 3000, Guest: 3000}, {Host: 8080, Guest: 80}}) {
+		t.Fatalf("inherited Ports = %v", d.Ports)
 	}
 }

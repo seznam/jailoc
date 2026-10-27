@@ -4,30 +4,24 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
-	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
-	"github.com/seznam/jailoc/internal/docker"
-	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 var statusCmd = &cobra.Command{
 	Use:   "status [workspace]",
-	Short: "Show status of workspace environments",
+	Short: "Show status of a workspace VM",
 	Args:  cobra.MaximumNArgs(1),
 	RunE:  runStatus,
 }
 
-func runStatus(cmd *cobra.Command, args []string) error {
+func runStatus(_ *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-
 	if len(args) > 0 {
 		workspaceFlag = args[0]
 	} else if !workspaceExplicit {
@@ -38,144 +32,16 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			case cwdErr == nil:
 				workspaceFlag = resolved.Name
 			case errors.Is(cwdErr, workspace.ErrNoMatch):
-				// no workspace matches CWD — keep default
 			default:
 				return fmt.Errorf("resolve workspace from current directory: %w", cwdErr)
 			}
 		}
 	}
-
 	ws, err := workspace.Resolve(cfg, workspaceFlag)
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
-
-	if ws.Backend == config.BackendVM {
-		return statusVM(ws)
-	}
-
-	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-
-	if _, err := os.Stat(composePath); err != nil {
-		if os.IsNotExist(err) {
-			_, _ = color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
-			return nil
-		}
-		return fmt.Errorf("stat compose file: %w", err)
-	}
-
-	client := docker.NewClient(composePath, "", ws.Name)
-	ctx := cmd.Context()
-
-	state, exitCode, err := client.ContainerState(ctx)
-	if err != nil {
-		return fmt.Errorf("check container state: %w", err)
-	}
-
-	if state == "" {
-		_, _ = color.New(color.FgYellow).Printf("Workspace %s is not running\n", ws.Name)
-		return nil
-	}
-
-	_, _ = color.New(color.FgCyan).Printf("Workspace: %s\n", ws.Name)
-	if ws.ExposePort {
-		_, _ = color.New(color.FgCyan).Printf("Port:      %d\n", ws.Port)
-	} else {
-		_, _ = color.New(color.FgCyan).Printf("Port:      not exposed (exec-only)\n")
-	}
-
-	// Peek at password source without generating or persisting (status is read-only).
-	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
-	pwResolver := password.DefaultResolver(interactive, cfg.PasswordMode)
-	pwSource, pwErr := pwResolver.Peek(ws.Name)
-
-	_, _ = color.New(color.FgCyan).Printf("Password:  ")
-	if pwErr != nil {
-		_, _ = color.New(color.FgYellow).Printf("unknown\n")
-	} else {
-		switch pwSource {
-		case password.SourceEnv:
-			_, _ = color.New(color.FgYellow).Printf("%s\n", pwSource)
-		default:
-			_, _ = color.New(color.FgGreen).Printf("%s\n", pwSource)
-		}
-	}
-
-	var showLogsHint bool
-
-	switch state {
-	case "running":
-		health, err := client.HealthStatus(ctx)
-		if err != nil {
-			return fmt.Errorf("check health status: %w", err)
-		}
-
-		switch health {
-		case "unhealthy":
-			_, _ = color.New(color.FgCyan).Printf("Status:    ")
-			_, _ = color.New(color.FgRed).Printf("running (unhealthy)\n")
-			showLogsHint = true
-		case "starting":
-			_, _ = color.New(color.FgCyan).Printf("Status:    ")
-			_, _ = color.New(color.FgYellow).Printf("running (starting)\n")
-		default:
-			_, _ = color.New(color.FgCyan).Printf("Status:    ")
-			_, _ = color.New(color.FgGreen).Printf("running\n")
-		}
-
-		stats, statsErr := client.ContainerStats(ctx)
-		if statsErr == nil {
-			printContainerStats(stats)
-		} else {
-			_, _ = color.New(color.FgCyan).Printf("Stats:     ")
-			_, _ = color.New(color.FgYellow).Printf("unavailable (%v)\n", statsErr)
-		}
-	case "exited":
-		_, _ = color.New(color.FgCyan).Printf("Status:    ")
-		_, _ = color.New(color.FgRed).Printf("exited (code %d)\n", exitCode)
-		showLogsHint = true
-	default:
-		_, _ = color.New(color.FgCyan).Printf("Status:    ")
-		_, _ = color.New(color.FgYellow).Printf("%s\n", state)
-		showLogsHint = true
-	}
-
-	if showLogsHint {
-		fmt.Printf("\nRun 'jailoc logs %s' to inspect container output.\n", ws.Name)
-	}
-
-	return nil
-}
-
-func printContainerStats(s docker.ContainerStats) {
-	label := color.New(color.FgCyan)
-	value := color.New(color.FgWhite)
-
-	_, _ = label.Printf("CPU:       ")
-	if s.CPULimit > 0 {
-		_, _ = value.Printf("%.1f%% (limit: %.1f cores)\n", s.CPUPercent, s.CPULimit)
-	} else {
-		_, _ = value.Printf("%.1f%%\n", s.CPUPercent)
-	}
-
-	_, _ = label.Printf("Memory:    ")
-	_, _ = value.Printf("%s / %s (%.1f%%)\n", docker.FormatBytes(s.MemUsage), docker.FormatBytes(s.MemLimit), s.MemPercent)
-
-	_, _ = label.Printf("PIDs:      ")
-	if s.PIDsLimit > 0 {
-		_, _ = value.Printf("%d / %d\n", s.PIDsCurrent, s.PIDsLimit)
-	} else {
-		_, _ = value.Printf("%d / unlimited\n", s.PIDsCurrent)
-	}
-
-	_, _ = label.Printf("Net I/O:   ")
-	_, _ = value.Printf("%s rx / %s tx\n", docker.FormatBytes(s.NetRx), docker.FormatBytes(s.NetTx))
-
-	_, _ = label.Printf("Block I/O: ")
-	_, _ = value.Printf("%s read / %s write\n", docker.FormatBytes(s.BlockRead), docker.FormatBytes(s.BlockWrite))
-
-	_, _ = label.Printf("Uptime:    ")
-	_, _ = value.Printf("%s\n", docker.FormatUptime(s.Uptime))
+	return statusVM(ws)
 }
 
 func init() {

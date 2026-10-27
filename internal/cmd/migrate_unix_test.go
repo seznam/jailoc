@@ -33,7 +33,7 @@ func migrationFixture(t *testing.T) (string, string, *config.Config) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{
-		Mode:     config.ModeRemote,
+		Mode:     "remote",
 		Defaults: config.Defaults{SSHAuthSock: true},
 		Workspaces: map[string]config.Workspace{
 			"api": {Backend: config.BackendDocker, Paths: []string{"/src/api"}, ExposePort: new(true), EnableDocker: new(true),
@@ -47,9 +47,9 @@ func migrationFixture(t *testing.T) (string, string, *config.Config) {
 func TestPlanMigration(t *testing.T) {
 	t.Parallel()
 	file, data, cfg := migrationFixture(t)
-	// defaults: remove incompatible; api: remove incompatible, npmrc -> copy (default),
-	// data -> invalid answer, then "copy".
-	p, out := scripted("", "y", "", "maybe", "c")
+	// defaults: remove incompatible; api: remove incompatible, npmrc -> snapshot (default),
+	// data -> invalid answer, then "snapshot".
+	p, out := scripted("", "y", "", "maybe", "s")
 	m, err := planMigration(cfg, p, os.Stat)
 	if err != nil {
 		t.Fatalf("planMigration: %v\n%s", err, out)
@@ -67,8 +67,8 @@ func TestPlanMigration(t *testing.T) {
 	if !slices.Equal(api.Mounts, []string{":/home/agent/.opencode"}) {
 		t.Fatalf("api mounts = %v", api.Mounts)
 	}
-	if want := []string{file + ":/home/agent/.npmrc", data + ":/data"}; !slices.Equal(api.Copies, want) {
-		t.Fatalf("api copies = %v, want %v", api.Copies, want)
+	if want := []string{file + ":/home/agent/.npmrc", data + ":/data"}; !slices.Equal(api.Snapshots, want) {
+		t.Fatalf("api snapshots = %v, want %v", api.Snapshots, want)
 	}
 	if cfg.Workspaces["web"].Backend != "" {
 		t.Fatal("explicit vm backend override not removed")
@@ -90,8 +90,8 @@ func TestPlanMigrationDefaults(t *testing.T) {
 	if want := []string{data + ":/data:rw", ":/home/agent/.opencode"}; !slices.Equal(api.Mounts, want) {
 		t.Fatalf("mounts = %v, want %v", api.Mounts, want)
 	}
-	if want := []string{file + ":/home/agent/.npmrc"}; !slices.Equal(api.Copies, want) {
-		t.Fatalf("copies = %v, want %v", api.Copies, want)
+	if want := []string{file + ":/home/agent/.npmrc"}; !slices.Equal(api.Snapshots, want) {
+		t.Fatalf("snapshots = %v, want %v", api.Snapshots, want)
 	}
 }
 

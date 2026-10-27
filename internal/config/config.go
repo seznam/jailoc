@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -25,10 +24,6 @@ const (
 	defaultConfigContent = `# jailoc configuration
 # See: https://github.com/seznam/jailoc
 
-# Access mode: "remote" (host opencode attach), "exec" (docker exec opencode), or "" (auto-detect)
-# mode = ""
-# password_mode = "auto"
-
 [base]
 # dockerfile = ""
 
@@ -41,7 +36,6 @@ const (
 # allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
 # git_config = true
-# expose_port = true
 # enable_docker = true
 # filtered_dns = false
 # dns_upstream = "10.20.30.53"
@@ -51,9 +45,9 @@ const (
 # memory = "4g"
 
 # [defaults.secrets.env.MY_TOKEN]
-#   from_env = "HOST_ENV_VAR"   # exported in the container as env var MY_TOKEN
+#   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
 # [defaults.secrets.file.MY_FILE]
-#   from_file = "/path/to/secret"  # mounted at /run/secrets/MY_FILE
+#   from_file = "/path/to/secret"  # written to /run/secrets/MY_FILE
 
 [workspaces.default]
 paths = []
@@ -67,7 +61,6 @@ paths = []
 # dockerfile = ""
 # ssh_auth_sock = false
 # git_config = true
-# expose_port = true
 # enable_docker = true
 # filtered_dns = false
 # dns_upstream = "10.20.30.53"
@@ -77,21 +70,19 @@ paths = []
 # memory = "4g"
 
 # [workspaces.default.secrets.env.MY_TOKEN]
-#   from_env = "HOST_ENV_VAR"   # exported in the container as env var MY_TOKEN
+#   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
+# [workspaces.default.secrets.env.GH_TOKEN]
+#   from_command = "gh auth token"  # run on the host; its output becomes GH_TOKEN
 # [workspaces.default.secrets.file.MY_FILE]
-#   from_file = "/path/to/secret"  # mounted at /run/secrets/MY_FILE
+#   from_file = "/path/to/secret"  # written to /run/secrets/MY_FILE
 `
 )
 
-const (
-	ModeRemote = "remote"
-	ModeExec   = "exec"
-)
-
-// Workspace backends. BackendDocker runs the workspace as Docker Compose
-// services on the host Docker engine; BackendVM boots the workspace image as
-// a per-workspace virtual machine behind the jailoc network broker and runs
-// the agent directly in it.
+// Workspace backends. BackendVM boots the workspace image as a per-workspace
+// virtual machine behind the jailoc network broker and runs the agent directly
+// in it; it is the only backend. BackendDocker is the jailoc v1 Docker Compose
+// backend: configurations naming it are rejected with a pointer to
+// `jailoc migrate`.
 const (
 	BackendDocker = "docker"
 	BackendVM     = "vm"
@@ -101,28 +92,22 @@ var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 var validMemory = regexp.MustCompile(`^[1-9][0-9]*[kmgKMG]?$`)
 
-// secretNameRe is a deliberately safe subset of Docker Compose's own secret-name
-// grammar (`^[a-zA-Z0-9._-]+$`): dots are excluded so a secret name can never be
-// confused with a path segment when it is rendered into /run/secrets/<name>.
+// secretNameRe excludes dots so a secret name can never be confused with a path
+// segment when it becomes /run/secrets/<name> in the guest.
 var secretNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // envVarNameRe is the exact POSIX shell identifier grammar. It is stricter than
 // validateEnvEntries (which only guards the KEY=VALUE shape) because env
-// secret names are exported verbatim into the container environment.
+// secret names are exported verbatim into the session environment in the VM.
 var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// reservedEnvKeys are the session variables jailoc sets itself.
 var reservedEnvKeys = map[string]bool{
-	"OPENCODE_LOG":             true,
-	"OPENCODE_SERVER_PASSWORD": true,
-	"NODE_USE_SYSTEM_CA":       true,
-	"DOCKER_HOST":              true,
-	"DOCKER_TLS_CERTDIR":       true,
-	"DOCKER_CERT_PATH":         true,
-	"DOCKER_TLS_VERIFY":        true,
-	"SSH_AUTH_SOCK":            true,
-	"JAILOC":                   true,
-	"JAILOC_WORKSPACE":         true,
-	"JAILOC_FILTERED_DNS":      true,
+	"NODE_USE_SYSTEM_CA":  true,
+	"OPENCODE_TUI_CONFIG": true,
+	"SSH_AUTH_SOCK":       true,
+	"JAILOC":              true,
+	"JAILOC_WORKSPACE":    true,
 }
 
 var forbiddenMountPrefixes = []string{
@@ -195,13 +180,16 @@ type Mount struct {
 }
 
 // Secret is one [<scope>.secrets.<env|file>.<NAME>] entry. The sub-table it
-// lives in decides the destination; FromEnv/FromFile decide the source.
-// FromEnv names the host env var the value is read from, FromFile the absolute
-// host path. Both tags carry omitempty so a whole-config TOML re-encode never
-// injects empty source keys into a user's config.
+// lives in decides the destination; exactly one From* field decides the
+// source. FromEnv names the host env var the value is read from, FromFile the
+// absolute host path, FromCommand a command run on the host with /bin/sh -c
+// whose standard output is the value. The tags carry omitempty so a
+// whole-config TOML re-encode never injects empty source keys into a user's
+// config.
 type Secret struct {
-	FromEnv  string `toml:"from_env,omitempty"`
-	FromFile string `toml:"from_file,omitempty"`
+	FromEnv     string `toml:"from_env,omitempty"`
+	FromFile    string `toml:"from_file,omitempty"`
+	FromCommand string `toml:"from_command,omitempty"`
 }
 
 // Secrets is a whole [<scope>.secrets] block. The sub-table a secret lives in
@@ -247,7 +235,7 @@ type Defaults struct {
 	Env             []string  `toml:"env,omitempty"`
 	EnvFile         []string  `toml:"env_file,omitempty"`
 	Mounts          []string  `toml:"mounts,omitempty"`
-	Copies          []string  `toml:"copies,omitempty"`
+	Snapshots       []string  `toml:"snapshots,omitempty"`
 	AllowedHosts    []string  `toml:"allowed_hosts,omitempty"`
 	AllowedNetworks []string  `toml:"allowed_networks,omitempty"`
 	Secrets         Secrets   `toml:"secrets,omitempty"`
@@ -271,7 +259,7 @@ type Workspace struct {
 	Backend         string    `toml:"backend,omitempty"`
 	Paths           []string  `toml:"paths,omitempty"`
 	Mounts          []string  `toml:"mounts,omitempty"`
-	Copies          []string  `toml:"copies,omitempty"`
+	Snapshots       []string  `toml:"snapshots,omitempty"`
 	AllowedHosts    []string  `toml:"allowed_hosts,omitempty"`
 	AllowedNetworks []string  `toml:"allowed_networks,omitempty"`
 	Env             []string  `toml:"env,omitempty"`
@@ -526,22 +514,15 @@ func validateEnvVarName(name string) error {
 	return nil
 }
 
-// validateSecretFile rejects "$" because Docker Compose interpolates the whole
-// YAML document before loading it, and compose.yamlQuote does not escape "$".
 func validateSecretFile(path string) error {
-	if strings.Contains(path, "$") {
-		return fmt.Errorf("file path %q must not contain \"$\": Docker Compose interpolates it before loading the compose file", path)
-	}
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("file path %q must be absolute", path)
 	}
 	return nil
 }
 
-// reservedSecretEnvName reports container env var names an env secret must
-// never claim. entrypoint.sh execs `env HOME=/home/agent "${secret_envs[@]}"
-// opencode` with a bare command name, so a PATH secret poisons command lookup
-// and a HOME secret overrides the agent home — both break container startup.
+// reservedSecretEnvName reports env var names an env secret must never claim:
+// jailoc sets them itself, and HOME or PATH secrets would break every session.
 func reservedSecretEnvName(name string) bool {
 	return reservedEnvKeys[name] || name == "HOME" || name == "PATH"
 }
@@ -567,17 +548,19 @@ func validateSecret(name string, secret Secret, dest secretDest, context string)
 		return fmt.Errorf("%s: file secret %q: invalid name: must match [a-zA-Z0-9_-]+", context, name)
 	}
 
-	if secret.FromEnv == "" && secret.FromFile == "" {
-		return fmt.Errorf("%s: %s secret %q: exactly one of \"from_env\" or \"from_file\" must be set", context, destLabel, name)
+	sources := 0
+	for _, s := range []string{secret.FromEnv, secret.FromFile, secret.FromCommand} {
+		if s != "" {
+			sources++
+		}
 	}
-	if secret.FromEnv != "" && secret.FromFile != "" {
-		return fmt.Errorf("%s: %s secret %q: \"from_env\" and \"from_file\" are mutually exclusive: set exactly one", context, destLabel, name)
+	if sources != 1 {
+		return fmt.Errorf("%s: %s secret %q: exactly one of \"from_env\", \"from_file\" or \"from_command\" must be set", context, destLabel, name)
+	}
+	if secret.FromCommand != "" && strings.TrimSpace(secret.FromCommand) == "" {
+		return fmt.Errorf("%s: %s secret %q: \"from_command\" must not be blank", context, destLabel, name)
 	}
 	if secret.FromEnv != "" {
-		// The host variable name is rendered verbatim into the compose file, which
-		// Docker Compose interpolates before loading. Enforcing the shell
-		// identifier grammar rejects "$" for the same reason validateSecretFile
-		// does, and rejects names no POSIX shell could have exported anyway.
 		if err := validateEnvVarName(secret.FromEnv); err != nil {
 			return fmt.Errorf("%s: %s secret %q: \"from_env\": %w", context, destLabel, name, err)
 		}
@@ -822,12 +805,13 @@ func Validate(cfg *Config) error {
 		cfg.Workspaces = map[string]Workspace{}
 	}
 
-	if cfg.Mode != "" && cfg.Mode != ModeRemote && cfg.Mode != ModeExec {
-		return fmt.Errorf("invalid mode %q: must be %q, %q, or empty (auto-detect)", cfg.Mode, ModeRemote, ModeExec)
-	}
-	validPasswordModes := map[string]bool{"": true, "auto": true, "env": true, "keyring": true, "file": true}
-	if !validPasswordModes[cfg.PasswordMode] {
-		return fmt.Errorf("invalid password_mode %q: must be \"auto\", \"env\", \"keyring\", \"file\", or empty (auto)", cfg.PasswordMode)
+	switch {
+	case cfg.Mode != "":
+		return v1Setting("mode")
+	case cfg.PasswordMode != "":
+		return v1Setting("password_mode")
+	case cfg.Defaults.ExposePort != nil:
+		return v1Setting("defaults: expose_port")
 	}
 
 	if err := validateBackend(cfg.Defaults.Backend); err != nil {
@@ -922,12 +906,12 @@ func Validate(cfg *Config) error {
 		cfg.Defaults.Mounts[i] = formatMount(m)
 	}
 
-	for i, spec := range cfg.Defaults.Copies {
-		normalized, err := normalizeCopy(spec, "defaults")
+	for i, spec := range cfg.Defaults.Snapshots {
+		normalized, err := normalizeSnapshot(spec, "defaults")
 		if err != nil {
 			return err
 		}
-		cfg.Defaults.Copies[i] = normalized
+		cfg.Defaults.Snapshots[i] = normalized
 	}
 	if err := validatePorts(cfg.Defaults.Ports); err != nil {
 		return fmt.Errorf("defaults: %w", err)
@@ -1072,35 +1056,24 @@ func Validate(cfg *Config) error {
 			}
 		}
 
+		if ws.ExposePort != nil {
+			return fmt.Errorf("workspace %q: %w", name, v1Setting("expose_port"))
+		}
 		if err := validateBackend(ws.Backend); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
-		for i, spec := range ws.Copies {
-			normalized, err := normalizeCopy(spec, fmt.Sprintf("workspace %q", name))
+		for i, spec := range ws.Snapshots {
+			normalized, err := normalizeSnapshot(spec, fmt.Sprintf("workspace %q", name))
 			if err != nil {
 				return err
 			}
-			ws.Copies[i] = normalized
-		}
-		if len(ws.Copies) > 0 && EffectiveBackend(cfg.Defaults.Backend, ws.Backend) != BackendVM {
-			return fmt.Errorf("workspace %q: copies is only supported with backend %q; use mounts with the Docker backend", name, BackendVM)
-		}
-		if ws.ProtectGit != nil && *ws.ProtectGit && EffectiveBackend(cfg.Defaults.Backend, ws.Backend) != BackendVM {
-			return fmt.Errorf("workspace %q: protect_git is only supported with backend %q", name, BackendVM)
+			ws.Snapshots[i] = normalized
 		}
 		if err := validatePorts(ws.Ports); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
-		if len(ws.Ports) > 0 && EffectiveBackend(cfg.Defaults.Backend, ws.Backend) != BackendVM {
-			return fmt.Errorf("workspace %q: ports is only supported with backend %q", name, BackendVM)
-		}
-		if EffectiveBackend(cfg.Defaults.Backend, ws.Backend) == BackendVM {
-			if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) && explicitTrue(cfg.Defaults.ProtectGit, ws.ProtectGit) {
-				return fmt.Errorf("workspace %q: enable_docker cannot be combined with protect_git: Docker access is root access in the VM", name)
-			}
-			if explicitTrue(cfg.Defaults.ExposePort, ws.ExposePort) {
-				return fmt.Errorf("workspace %q: expose_port is not supported with backend %q", name, BackendVM)
-			}
+		if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) && explicitTrue(cfg.Defaults.ProtectGit, ws.ProtectGit) {
+			return fmt.Errorf("workspace %q: enable_docker cannot be combined with protect_git: Docker access is root access in the VM", name)
 		}
 
 		cfg.Workspaces[name] = ws
@@ -1109,32 +1082,32 @@ func Validate(cfg *Config) error {
 	return nil
 }
 
-// normalizeCopy validates a copies entry "host:container" (":ro" accepted,
-// ":rw" rejected because copies are read-only) or a removal entry
+// normalizeSnapshot validates a snapshots entry "host:container" (":ro"
+// accepted, ":rw" rejected because snapshots are read-only) or a removal entry
 // ":container", and returns it as "host:container:ro" with expanded paths.
-func normalizeCopy(spec, context string) (string, error) {
+func normalizeSnapshot(spec, context string) (string, error) {
 	if strings.HasSuffix(spec, ":rw") {
-		return "", fmt.Errorf("%s: copy %q: copies are read-only snapshots; remove \":rw\" or use mounts", context, spec)
+		return "", fmt.Errorf("%s: snapshot %q: snapshots are read-only; remove \":rw\" or use mounts", context, spec)
 	}
 	m, err := ParseMount(spec)
 	if err != nil {
-		return "", fmt.Errorf("%s: copy %q: %w", context, spec, err)
+		return "", fmt.Errorf("%s: snapshot %q: %w", context, spec, err)
 	}
 	if err := validateMountHostPath(m.Host, context); err != nil {
 		return "", err
 	}
 	host, err := ExpandPath(m.Host)
 	if err != nil {
-		return "", fmt.Errorf("%s: expand copy host path %q: %w", context, m.Host, err)
+		return "", fmt.Errorf("%s: expand snapshot host path %q: %w", context, m.Host, err)
 	}
 	container, err := ExpandPath(m.Container)
 	if err != nil {
-		return "", fmt.Errorf("%s: expand copy destination %q: %w", context, m.Container, err)
+		return "", fmt.Errorf("%s: expand snapshot destination %q: %w", context, m.Container, err)
 	}
 	container = filepath.Clean(container)
 	for _, prefix := range forbiddenMountContainerPrefixes {
 		if container == prefix || strings.HasPrefix(container, prefix+"/") {
-			return "", fmt.Errorf("%s: copy destination %q is not allowed (conflicts with system directory %q)", context, container, prefix)
+			return "", fmt.Errorf("%s: snapshot destination %q is not allowed (conflicts with system directory %q)", context, container, prefix)
 		}
 	}
 	return formatMount(Mount{Host: host, Container: container, Mode: "ro"}), nil
@@ -1142,10 +1115,18 @@ func normalizeCopy(spec, context string) (string, error) {
 
 func validateBackend(backend string) error {
 	switch backend {
-	case "", BackendDocker, BackendVM:
+	case "", BackendVM:
 		return nil
+	case BackendDocker:
+		return v1Setting(`backend = "docker"`)
 	}
-	return fmt.Errorf("invalid backend %q: must be %q, %q, or empty (%s)", backend, BackendDocker, BackendVM, BackendDocker)
+	return fmt.Errorf("invalid backend %q: must be %q or empty", backend, BackendVM)
+}
+
+// v1Setting reports a setting of the jailoc v1 Docker backend, which
+// `jailoc migrate` rewrites for the VM.
+func v1Setting(setting string) error {
+	return fmt.Errorf("%s is a jailoc v1 setting; run `jailoc migrate` to update the config", setting)
 }
 
 // explicitTrue reports whether a boolean option is set to true, the workspace
@@ -1155,18 +1136,6 @@ func explicitTrue(defaults, workspace *bool) bool {
 		return *workspace
 	}
 	return defaults != nil && *defaults
-}
-
-// EffectiveBackend returns the workspace backend, falling back to the defaults
-// value and then to BackendDocker.
-func EffectiveBackend(defaults, workspace string) string {
-	if workspace != "" {
-		return workspace
-	}
-	if defaults != "" {
-		return defaults
-	}
-	return BackendDocker
 }
 
 var dnsLabelRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
@@ -1189,36 +1158,6 @@ func validateDNS(upstream string, zones []string) error {
 		}
 	}
 	return nil
-}
-
-var lookPath = exec.LookPath
-
-// opencodeBinaries is the ordered list of binary names to search for on PATH.
-var opencodeBinaries = []string{"opencode", "opencode-cli"}
-
-// ResolveBinary returns the first opencode binary found on PATH.
-// It checks "opencode" first, then "opencode-cli" as a fallback.
-// Returns ("", error) if neither is found.
-func ResolveBinary() (string, error) {
-	for _, name := range opencodeBinaries {
-		if path, err := lookPath(name); err == nil {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("neither opencode nor opencode-cli found on PATH")
-}
-
-// ResolveMode returns the effective access mode.
-// If configured is non-empty, it is returned directly.
-// Otherwise auto-detect: returns ModeRemote if opencode or opencode-cli is on PATH, ModeExec otherwise.
-func ResolveMode(configured string) string {
-	if configured != "" {
-		return configured
-	}
-	if _, err := ResolveBinary(); err == nil {
-		return ModeRemote
-	}
-	return ModeExec
 }
 
 func AddPath(workspace, path string) error {
@@ -1252,79 +1191,6 @@ func AddPath(workspace, path string) error {
 	return nil
 }
 
-// WriteAllowedFiles materialises the per-workspace files bind-mounted into the
-// container at /etc/jailoc.
-//
-// secretEnvNames must contain only env-destination secret names and must
-// already be sorted — the manifest is written in the given order verbatim.
-// Callers get that ordering for free from workspace.Resolved.Secrets, which
-// workspace.FlattenSecrets sorts by name.
-//
-// The secret-env manifest holds NAMES ONLY, never values: the same directory is
-// also mounted into the privileged dind sidecar
-// (internal/embed/assets/docker-compose.yml.tmpl:24 and :108), so anything
-// written here is readable by both containers. entrypoint.sh reads each name
-// back out of /run/secrets/<name> inside the container.
-func WriteAllowedFiles(workspace string, cfg *Config, secretEnvNames []string) error {
-	if cfg == nil {
-		return nil
-	}
-	if _, ok := cfg.Workspaces[workspace]; !ok {
-		return nil
-	}
-
-	dir := filepath.Join(ConfigDir(), "workspaces", workspace)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create workspace config directory %q: %w", dir, err)
-	}
-
-	hostsPath := filepath.Join(dir, "allowed-hosts")
-	if content := AllowedHostsFileContent(workspace, cfg); content != "" {
-		if err := os.WriteFile(hostsPath, []byte(content), 0o600); err != nil {
-			return fmt.Errorf("write allowed-hosts file: %w", err)
-		}
-	} else {
-		if err := os.Remove(hostsPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove stale allowed-hosts file: %w", err)
-		}
-	}
-
-	networksPath := filepath.Join(dir, "allowed-networks")
-	if content := AllowedNetworksFileContent(workspace, cfg); content != "" {
-		if err := os.WriteFile(networksPath, []byte(content), 0o600); err != nil {
-			return fmt.Errorf("write allowed-networks file: %w", err)
-		}
-	} else {
-		if err := os.Remove(networksPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove stale allowed-networks file: %w", err)
-		}
-	}
-
-	secretEnvPath := filepath.Join(dir, "secret-env")
-	if content := secretEnvFileContent(secretEnvNames); content != "" {
-		if err := os.WriteFile(secretEnvPath, []byte(content), 0o600); err != nil {
-			return fmt.Errorf("write secret-env file: %w", err)
-		}
-	} else {
-		if err := os.Remove(secretEnvPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove stale secret-env file: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func secretEnvFileContent(secretEnvNames []string) string {
-	var b strings.Builder
-	for _, name := range secretEnvNames {
-		if name == "" {
-			continue
-		}
-		fmt.Fprintf(&b, "%s\n", name)
-	}
-	return b.String()
-}
-
 // mergeDedup combines two string slices into one, removing duplicates.
 // Order is preserved: items from `a` appear first, followed by items from `b` that weren't in `a`.
 func mergeDedup(a, b []string) []string {
@@ -1353,42 +1219,6 @@ func mergeDedup(a, b []string) []string {
 	}
 
 	return result
-}
-
-func AllowedHostsFileContent(workspace string, cfg *Config) string {
-	if cfg == nil {
-		return ""
-	}
-
-	ws, ok := cfg.Workspaces[workspace]
-	if !ok {
-		return ""
-	}
-
-	merged := mergeDedup(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
-	if len(merged) == 0 {
-		return ""
-	}
-
-	return strings.Join(merged, "\n") + "\n"
-}
-
-func AllowedNetworksFileContent(workspace string, cfg *Config) string {
-	if cfg == nil {
-		return ""
-	}
-
-	ws, ok := cfg.Workspaces[workspace]
-	if !ok {
-		return ""
-	}
-
-	merged := mergeDedup(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
-	if len(merged) == 0 {
-		return ""
-	}
-
-	return strings.Join(merged, "\n") + "\n"
 }
 
 func ExpandPath(path string) (string, error) {

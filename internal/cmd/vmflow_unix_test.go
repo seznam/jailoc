@@ -3,10 +3,15 @@
 package cmd
 
 import (
+	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/vm"
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestUseHostDocker(t *testing.T) {
@@ -36,5 +41,29 @@ func TestUseHostDocker(t *testing.T) {
 				t.Fatalf("useHostDocker = %v, %v; want %v, error %v", got, err, tt.want, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestSecretsPayload(t *testing.T) {
+	t.Parallel()
+	ws := &workspace.Resolved{
+		Name: "ws",
+		Env:  []string{"PLAIN=1"},
+		Secrets: []workspace.ResolvedSecret{
+			{Name: "TOKEN", Kind: workspace.SecretKindEnv, FromCommand: "echo env-value"},
+			{Name: "netrc", Kind: workspace.SecretKindFile, FromCommand: "echo file-value"},
+		},
+	}
+	spec := vm.Spec{SSHAgent: "/tmp/agent.sock", Guest: &guest.Config{CABundle: "/ca.pem"}}
+	got, err := secretsPayload(context.Background(), ws, spec)
+	if err != nil {
+		t.Fatalf("secretsPayload: %v", err)
+	}
+	wantEnv := []string{"PLAIN=1", "SSH_AUTH_SOCK=" + guest.SSHAgentSocket, "NODE_USE_SYSTEM_CA=1", "TOKEN=env-value"}
+	if !slices.Equal(got.Env, wantEnv) {
+		t.Errorf("Env = %q, want %q", got.Env, wantEnv)
+	}
+	if len(got.Files) != 1 || string(got.Files["netrc"]) != "file-value\n" {
+		t.Errorf("Files = %q, want only netrc with the command output", got.Files)
 	}
 }

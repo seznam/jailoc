@@ -188,16 +188,6 @@ func TestFilteredDNSAllowedHostConflict(t *testing.T) {
 	}
 }
 
-func TestFilteredDNSFlagCannotBeOverridden(t *testing.T) {
-	t.Parallel()
-	cfg := &Config{Workspaces: map[string]Workspace{"test": {
-		Paths: []string{"/data/work"}, Env: []string{"JAILOC_FILTERED_DNS=0"},
-	}}}
-	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Fatalf("Validate error = %v, want reserved env key", err)
-	}
-}
-
 func TestLoadFilteredDNSTOML(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -490,28 +480,6 @@ func TestAddPathPersists(t *testing.T) {
 	}
 }
 
-func TestAllowedHostsContent(t *testing.T) {
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"default": {AllowedHosts: []string{"foo.com", "bar.com"}},
-	}}
-
-	got := AllowedHostsFileContent("default", cfg)
-	if got != "foo.com\nbar.com\n" {
-		t.Fatalf("unexpected allowed hosts content: %q", got)
-	}
-}
-
-func TestAllowedNetworksContent(t *testing.T) {
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"default": {AllowedNetworks: []string{"10.0.0.0/8"}},
-	}}
-
-	got := AllowedNetworksFileContent("default", cfg)
-	if got != "10.0.0.0/8\n" {
-		t.Fatalf("unexpected allowed networks content: %q", got)
-	}
-}
-
 func TestTildeExpansion(t *testing.T) {
 	// Use a safe temp directory outside of /var (macOS puts tmp in /var/folders)
 	home := "/data/home_test_" + strings.ReplaceAll(t.Name(), "/", "_")
@@ -684,152 +652,6 @@ func TestValidateAllowsSafePaths(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsValidModes(t *testing.T) {
-	for _, mode := range []string{"", ModeRemote, ModeExec} {
-		cfg := &Config{Mode: mode, Workspaces: map[string]Workspace{"default": {Paths: []string{"/data/workspace"}}}}
-		if err := Validate(cfg); err != nil {
-			t.Errorf("mode %q: unexpected error: %v", mode, err)
-		}
-	}
-}
-
-func TestValidateRejectsInvalidMode(t *testing.T) {
-	cfg := &Config{Mode: "banana", Workspaces: map[string]Workspace{"default": {Paths: []string{"/data/workspace"}}}}
-	err := Validate(cfg)
-	if err == nil {
-		t.Fatal("expected error for invalid mode, got nil")
-	}
-	if !strings.Contains(err.Error(), "invalid mode") {
-		t.Errorf("error %q does not contain 'invalid mode'", err.Error())
-	}
-}
-
-func TestValidateAcceptsValidPasswordModes(t *testing.T) {
-	for _, mode := range []string{"", "auto", "env", "keyring", "file"} {
-		cfg := &Config{PasswordMode: mode, Workspaces: map[string]Workspace{"default": {Paths: []string{"/data/workspace"}}}}
-		if err := Validate(cfg); err != nil {
-			t.Errorf("password_mode %q: unexpected error: %v", mode, err)
-		}
-	}
-}
-
-func TestValidateRejectsInvalidPasswordMode(t *testing.T) {
-	cfg := &Config{PasswordMode: "banana", Workspaces: map[string]Workspace{"default": {Paths: []string{"/data/workspace"}}}}
-	err := Validate(cfg)
-	if err == nil {
-		t.Fatal("expected error for invalid password_mode, got nil")
-	}
-	if !strings.Contains(err.Error(), "invalid password_mode") {
-		t.Errorf("error %q does not contain 'invalid password_mode'", err.Error())
-	}
-}
-
-func TestResolveModeWithOpenCodeOnPath(t *testing.T) {
-	orig := lookPath
-	t.Cleanup(func() { lookPath = orig })
-	lookPath = func(file string) (string, error) { return "/usr/local/bin/opencode", nil }
-	if got := ResolveMode(""); got != ModeRemote {
-		t.Errorf("got %q, want %q", got, ModeRemote)
-	}
-}
-
-func TestResolveModeWithOpenCodeCLIFallback(t *testing.T) {
-	orig := lookPath
-	t.Cleanup(func() { lookPath = orig })
-	lookPath = func(file string) (string, error) {
-		if file == "opencode-cli" {
-			return "/usr/local/bin/opencode-cli", nil
-		}
-		return "", fmt.Errorf("not found")
-	}
-	if got := ResolveMode(""); got != ModeRemote {
-		t.Errorf("got %q, want %q", got, ModeRemote)
-	}
-}
-
-func TestResolveModeWithoutOpenCode(t *testing.T) {
-	orig := lookPath
-	t.Cleanup(func() { lookPath = orig })
-	lookPath = func(file string) (string, error) { return "", fmt.Errorf("not found") }
-	if got := ResolveMode(""); got != ModeExec {
-		t.Errorf("got %q, want %q", got, ModeExec)
-	}
-}
-
-func TestResolveModeExplicitOverridesDetection(t *testing.T) {
-	orig := lookPath
-	t.Cleanup(func() { lookPath = orig })
-	lookPath = func(file string) (string, error) { return "", fmt.Errorf("not found") }
-	if got := ResolveMode(ModeRemote); got != ModeRemote {
-		t.Errorf("explicit remote: got %q, want %q", got, ModeRemote)
-	}
-	if got := ResolveMode(ModeExec); got != ModeExec {
-		t.Errorf("explicit exec: got %q, want %q", got, ModeExec)
-	}
-}
-
-func TestResolveBinaryPrefersOpenCode(t *testing.T) {
-	orig := lookPath
-	t.Cleanup(func() { lookPath = orig })
-	lookPath = func(file string) (string, error) { return "/usr/local/bin/" + file, nil }
-	got, err := ResolveBinary()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "/usr/local/bin/opencode" {
-		t.Errorf("got %q, want %q", got, "/usr/local/bin/opencode")
-	}
-}
-
-func TestResolveBinaryFallsBackToOpenCodeCLI(t *testing.T) {
-	orig := lookPath
-	t.Cleanup(func() { lookPath = orig })
-	lookPath = func(file string) (string, error) {
-		if file == "opencode-cli" {
-			return "/usr/local/bin/opencode-cli", nil
-		}
-		return "", fmt.Errorf("not found")
-	}
-	got, err := ResolveBinary()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "/usr/local/bin/opencode-cli" {
-		t.Errorf("got %q, want %q", got, "/usr/local/bin/opencode-cli")
-	}
-}
-
-func TestResolveBinaryNeitherFound(t *testing.T) {
-	orig := lookPath
-	t.Cleanup(func() { lookPath = orig })
-	lookPath = func(file string) (string, error) { return "", fmt.Errorf("not found") }
-	_, err := ResolveBinary()
-	if err == nil {
-		t.Fatal("expected error when neither binary is found")
-	}
-}
-
-func TestConfigRoundTripWithMode(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	writeFile(t, ConfigPath(), `
-mode = "exec"
-
-[workspaces.default]
-paths = ["/data/workspace"]
-`)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	if cfg.Mode != ModeExec {
-		t.Fatalf("expected mode %q, got %q", ModeExec, cfg.Mode)
-	}
-}
-
 func TestValidateNilConfig(t *testing.T) {
 	err := Validate(nil)
 	if err == nil {
@@ -837,42 +659,6 @@ func TestValidateNilConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "nil") {
 		t.Fatalf("expected error to mention nil, got: %v", err)
-	}
-}
-
-func TestAllowedHostsFileContentNilConfig(t *testing.T) {
-	got := AllowedHostsFileContent("default", nil)
-	if got != "" {
-		t.Fatalf("expected empty string for nil config, got %q", got)
-	}
-}
-
-func TestAllowedHostsFileContentMissingWorkspace(t *testing.T) {
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"default": {AllowedHosts: []string{"foo.com"}},
-	}}
-
-	got := AllowedHostsFileContent("nonexistent", cfg)
-	if got != "" {
-		t.Fatalf("expected empty string for missing workspace, got %q", got)
-	}
-}
-
-func TestAllowedNetworksFileContentNilConfig(t *testing.T) {
-	got := AllowedNetworksFileContent("default", nil)
-	if got != "" {
-		t.Fatalf("expected empty string for nil config, got %q", got)
-	}
-}
-
-func TestAllowedNetworksFileContentMissingWorkspace(t *testing.T) {
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"default": {AllowedNetworks: []string{"10.0.0.0/8"}},
-	}}
-
-	got := AllowedNetworksFileContent("nonexistent", cfg)
-	if got != "" {
-		t.Fatalf("expected empty string for missing workspace, got %q", got)
 	}
 }
 
@@ -920,126 +706,6 @@ func TestValidateRejectsEmptyPathString(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty path") {
 		t.Fatalf("expected error to mention empty path, got: %v", err)
-	}
-}
-
-func TestAllowedHostsFileContentEmptyList(t *testing.T) {
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"default": {AllowedHosts: []string{}},
-	}}
-
-	got := AllowedHostsFileContent("default", cfg)
-	if got != "" {
-		t.Fatalf("expected empty string for empty hosts list, got %q", got)
-	}
-}
-
-func TestAllowedNetworksFileContentEmptyList(t *testing.T) {
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"default": {AllowedNetworks: []string{}},
-	}}
-
-	got := AllowedNetworksFileContent("default", cfg)
-	if got != "" {
-		t.Fatalf("expected empty string for empty networks list, got %q", got)
-	}
-}
-
-func TestWriteAllowedFilesWritesBothFiles(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"myws": {
-			AllowedHosts:    []string{"foo.com", "bar.com"},
-			AllowedNetworks: []string{"10.0.0.0/8", "172.16.0.0/12"},
-		},
-	}}
-
-	if err := WriteAllowedFiles("myws", cfg, nil); err != nil {
-		t.Fatalf("WriteAllowedFiles returned error: %v", err)
-	}
-
-	dir := filepath.Join(ConfigDir(), "workspaces", "myws")
-
-	hostsData, err := os.ReadFile(filepath.Join(dir, "allowed-hosts")) //nolint:gosec // test reads from t.TempDir()
-	if err != nil {
-		t.Fatalf("read allowed-hosts: %v", err)
-	}
-	if string(hostsData) != "foo.com\nbar.com\n" {
-		t.Fatalf("unexpected allowed-hosts content: %q", string(hostsData))
-	}
-
-	networksData, err := os.ReadFile(filepath.Join(dir, "allowed-networks")) //nolint:gosec // test reads from t.TempDir()
-	if err != nil {
-		t.Fatalf("read allowed-networks: %v", err)
-	}
-	if string(networksData) != "10.0.0.0/8\n172.16.0.0/12\n" {
-		t.Fatalf("unexpected allowed-networks content: %q", string(networksData))
-	}
-}
-
-func TestWriteAllowedFilesRemovesStaleFiles(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	dir := filepath.Join(ConfigDir(), "workspaces", "myws")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatalf("create workspace config dir: %v", err)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, "allowed-hosts"), []byte("old.com\n"), 0o600); err != nil {
-		t.Fatalf("write stale allowed-hosts: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "allowed-networks"), []byte("192.168.0.0/16\n"), 0o600); err != nil {
-		t.Fatalf("write stale allowed-networks: %v", err)
-	}
-
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"myws": {AllowedHosts: []string{}, AllowedNetworks: []string{}},
-	}}
-
-	if err := WriteAllowedFiles("myws", cfg, nil); err != nil {
-		t.Fatalf("WriteAllowedFiles returned error: %v", err)
-	}
-
-	if _, err := os.Stat(filepath.Join(dir, "allowed-hosts")); !os.IsNotExist(err) {
-		t.Fatal("expected allowed-hosts to be removed for empty list")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "allowed-networks")); !os.IsNotExist(err) {
-		t.Fatal("expected allowed-networks to be removed for empty list")
-	}
-}
-
-func TestWriteAllowedFilesNilConfig(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	if err := WriteAllowedFiles("whatever", nil, nil); err != nil {
-		t.Fatalf("WriteAllowedFiles with nil config returned error: %v", err)
-	}
-
-	dir := filepath.Join(ConfigDir(), "workspaces", "whatever")
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatal("expected no workspace directory for nil config")
-	}
-}
-
-func TestWriteAllowedFilesMissingWorkspace(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	cfg := &Config{Workspaces: map[string]Workspace{
-		"other": {AllowedHosts: []string{"foo.com"}},
-	}}
-
-	if err := WriteAllowedFiles("nonexistent", cfg, nil); err != nil {
-		t.Fatalf("WriteAllowedFiles with missing workspace returned error: %v", err)
-	}
-
-	dir := filepath.Join(ConfigDir(), "workspaces", "nonexistent")
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatal("expected no workspace directory for missing workspace")
 	}
 }
 
@@ -1391,134 +1057,6 @@ func TestImageDockerfileLocalPathExpandsTilde(t *testing.T) {
 	}
 }
 
-func TestAllowedHostsMerge(t *testing.T) {
-	tests := []struct {
-		name         string
-		defaults     []string
-		workspace    []string
-		expectedRepr string
-	}{
-		{
-			name:         "global only (no workspace hosts)",
-			defaults:     []string{"api.example.com", "db.example.com"},
-			workspace:    []string{},
-			expectedRepr: "api.example.com\ndb.example.com\n",
-		},
-		{
-			name:         "workspace only (no defaults)",
-			defaults:     []string{},
-			workspace:    []string{"foo.com", "bar.com"},
-			expectedRepr: "foo.com\nbar.com\n",
-		},
-		{
-			name:         "both with overlap",
-			defaults:     []string{"api.example.com", "shared.com"},
-			workspace:    []string{"shared.com", "local.com"},
-			expectedRepr: "api.example.com\nshared.com\nlocal.com\n",
-		},
-		{
-			name:         "both with no overlap",
-			defaults:     []string{"api.example.com", "db.example.com"},
-			workspace:    []string{"foo.com", "bar.com"},
-			expectedRepr: "api.example.com\ndb.example.com\nfoo.com\nbar.com\n",
-		},
-		{
-			name:         "empty defaults (backward compatible)",
-			defaults:     []string{},
-			workspace:    []string{"foo.com", "bar.com"},
-			expectedRepr: "foo.com\nbar.com\n",
-		},
-		{
-			name:         "all empty",
-			defaults:     []string{},
-			workspace:    []string{},
-			expectedRepr: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				Defaults: Defaults{
-					AllowedHosts: tt.defaults,
-				},
-				Workspaces: map[string]Workspace{
-					"test": {AllowedHosts: tt.workspace},
-				},
-			}
-
-			got := AllowedHostsFileContent("test", cfg)
-			if got != tt.expectedRepr {
-				t.Fatalf("expected %q, got %q", tt.expectedRepr, got)
-			}
-		})
-	}
-}
-
-func TestAllowedNetworksMerge(t *testing.T) {
-	tests := []struct {
-		name         string
-		defaults     []string
-		workspace    []string
-		expectedRepr string
-	}{
-		{
-			name:         "global only (no workspace networks)",
-			defaults:     []string{"10.0.0.0/8", "172.16.0.0/12"},
-			workspace:    []string{},
-			expectedRepr: "10.0.0.0/8\n172.16.0.0/12\n",
-		},
-		{
-			name:         "workspace only (no defaults)",
-			defaults:     []string{},
-			workspace:    []string{"192.168.0.0/16"},
-			expectedRepr: "192.168.0.0/16\n",
-		},
-		{
-			name:         "both with overlap",
-			defaults:     []string{"10.0.0.0/8", "172.20.0.0/16"},
-			workspace:    []string{"172.20.0.0/16", "192.168.0.0/16"},
-			expectedRepr: "10.0.0.0/8\n172.20.0.0/16\n192.168.0.0/16\n",
-		},
-		{
-			name:         "both with no overlap",
-			defaults:     []string{"10.0.0.0/8", "172.16.0.0/12"},
-			workspace:    []string{"192.168.0.0/16", "172.20.0.0/16"},
-			expectedRepr: "10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16\n172.20.0.0/16\n",
-		},
-		{
-			name:         "empty defaults (backward compatible)",
-			defaults:     []string{},
-			workspace:    []string{"192.168.0.0/16"},
-			expectedRepr: "192.168.0.0/16\n",
-		},
-		{
-			name:         "all empty",
-			defaults:     []string{},
-			workspace:    []string{},
-			expectedRepr: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				Defaults: Defaults{
-					AllowedNetworks: tt.defaults,
-				},
-				Workspaces: map[string]Workspace{
-					"test": {AllowedNetworks: tt.workspace},
-				},
-			}
-
-			got := AllowedNetworksFileContent("test", cfg)
-			if got != tt.expectedRepr {
-				t.Fatalf("expected %q, got %q", tt.expectedRepr, got)
-			}
-		})
-	}
-}
-
 func TestValidateEnvFormat(t *testing.T) {
 	t.Parallel()
 
@@ -1606,13 +1144,8 @@ func TestValidateEnvReservedKeys(t *testing.T) {
 	t.Parallel()
 
 	reserved := []string{
-		"OPENCODE_LOG",
-		"OPENCODE_SERVER_PASSWORD",
 		"NODE_USE_SYSTEM_CA",
-		"DOCKER_HOST",
-		"DOCKER_TLS_CERTDIR",
-		"DOCKER_CERT_PATH",
-		"DOCKER_TLS_VERIFY",
+		"OPENCODE_TUI_CONFIG",
 		"SSH_AUTH_SOCK",
 	}
 
@@ -3052,7 +2585,7 @@ func TestValidateErrorMessages(t *testing.T) {
 				Mode:       "banana",
 				Workspaces: map[string]Workspace{},
 			},
-			wantSubstrs: []string{"banana", "invalid mode"},
+			wantSubstrs: []string{"mode", "jailoc migrate"},
 		},
 		{
 			name: "env missing equals includes workspace and entry",
@@ -3076,10 +2609,10 @@ func TestValidateErrorMessages(t *testing.T) {
 			name: "env reserved key includes workspace and key name",
 			cfg: &Config{
 				Workspaces: map[string]Workspace{
-					"myws": {Env: []string{"DOCKER_HOST=tcp://localhost:2376"}},
+					"myws": {Env: []string{"SSH_AUTH_SOCK=/tmp/agent.sock"}},
 				},
 			},
-			wantSubstrs: []string{"myws", "DOCKER_HOST", "reserved"},
+			wantSubstrs: []string{"myws", "SSH_AUTH_SOCK", "reserved"},
 		},
 		{
 			name: "env_file relative path includes workspace and path",
@@ -3109,9 +2642,9 @@ func TestValidateErrorMessages(t *testing.T) {
 		{
 			name: "defaults env reserved key includes context and key",
 			cfg: &Config{
-				Defaults: Defaults{Env: []string{"OPENCODE_LOG=debug"}},
+				Defaults: Defaults{Env: []string{"NODE_USE_SYSTEM_CA=0"}},
 			},
-			wantSubstrs: []string{"defaults", "OPENCODE_LOG", "reserved"},
+			wantSubstrs: []string{"defaults", "NODE_USE_SYSTEM_CA", "reserved"},
 		},
 		{
 			name: "defaults env_file relative path includes context",
@@ -3588,7 +3121,7 @@ func TestBackendValidation(t *testing.T) {
 		wantError string
 	}{
 		{name: "default backend", ws: Workspace{}},
-		{name: "docker backend", ws: Workspace{Backend: BackendDocker}},
+		{name: "docker backend", ws: Workspace{Backend: BackendDocker}, wantError: "run `jailoc migrate`"},
 		{name: "vm backend", ws: Workspace{Backend: BackendVM}},
 		{name: "vm from defaults", defaults: Defaults{Backend: BackendVM}},
 		{name: "unknown workspace backend", ws: Workspace{Backend: "qemu"}, wantError: `workspace "test": invalid backend "qemu"`},
@@ -3596,13 +3129,13 @@ func TestBackendValidation(t *testing.T) {
 		{name: "vm accepts ssh_auth_sock", ws: Workspace{Backend: BackendVM, SSHAuthSock: new(true)}},
 		{name: "vm accepts inherited ssh_auth_sock", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM}},
 		{name: "vm accepts ssh_auth_sock override off", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM, SSHAuthSock: new(false)}},
-		{name: "docker workspace overrides vm defaults", defaults: Defaults{Backend: BackendVM, SSHAuthSock: true}, ws: Workspace{Backend: BackendDocker}},
+		{name: "docker workspace overrides vm defaults", defaults: Defaults{Backend: BackendVM, SSHAuthSock: true}, ws: Workspace{Backend: BackendDocker}, wantError: "run `jailoc migrate`"},
 		{name: "vm accepts filtered_dns", ws: Workspace{Backend: BackendVM, FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}},
 		{name: "vm accepts enable_docker", ws: Workspace{Backend: BackendVM, EnableDocker: new(true)}},
 		{name: "vm rejects enable_docker with protect_git", defaults: Defaults{EnableDocker: new(true)}, ws: Workspace{Backend: BackendVM, ProtectGit: new(true)}, wantError: "cannot be combined with protect_git"},
 		{name: "vm accepts enable_docker override off", defaults: Defaults{EnableDocker: new(true)}, ws: Workspace{Backend: BackendVM, EnableDocker: new(false)}},
-		{name: "vm rejects expose_port", ws: Workspace{Backend: BackendVM, ExposePort: new(true)}, wantError: "expose_port is not supported"},
-		{name: "docker accepts expose_port", defaults: Defaults{ExposePort: new(true)}, ws: Workspace{Backend: BackendDocker}},
+		{name: "vm rejects expose_port", ws: Workspace{Backend: BackendVM, ExposePort: new(true)}, wantError: "expose_port is a jailoc v1 setting"},
+		{name: "defaults reject expose_port", defaults: Defaults{ExposePort: new(true)}, wantError: "run `jailoc migrate`"},
 		{name: "vm accepts isolated_build", ws: Workspace{Backend: BackendVM, IsolatedBuild: new(true)}},
 		{name: "relative runner", ws: Workspace{}, vm: VMConfig{Runner: "bin/runner"}, wantError: "vm: path"},
 		{name: "absolute runner", ws: Workspace{}, vm: VMConfig{Runner: "/opt/jailoc/go-microvm-runner", LibDir: "/opt/homebrew/lib"}},
@@ -3628,25 +3161,10 @@ func TestBackendValidation(t *testing.T) {
 	}
 }
 
-func TestEffectiveBackend(t *testing.T) {
-	t.Parallel()
-	tests := []struct{ defaults, workspace, want string }{
-		{"", "", BackendDocker},
-		{BackendVM, "", BackendVM},
-		{BackendVM, BackendDocker, BackendDocker},
-		{"", BackendVM, BackendVM},
-	}
-	for _, tc := range tests {
-		if got := EffectiveBackend(tc.defaults, tc.workspace); got != tc.want {
-			t.Errorf("EffectiveBackend(%q, %q) = %q, want %q", tc.defaults, tc.workspace, got, tc.want)
-		}
-	}
-}
-
 func TestLoadBackendTOML(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.toml")
-	content := "[vm]\nrunner = \"/opt/jailoc/go-microvm-runner\"\n\n[defaults]\nbackend = \"vm\"\n\n[workspaces.test]\npaths = [\"/data/work\"]\nbackend = \"docker\"\n"
+	content := "[vm]\nrunner = \"/opt/jailoc/go-microvm-runner\"\n\n[defaults]\nbackend = \"vm\"\n\n[workspaces.test]\npaths = [\"/data/work\"]\nbackend = \"vm\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -3654,7 +3172,7 @@ func TestLoadBackendTOML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if cfg.VM.Runner != "/opt/jailoc/go-microvm-runner" || cfg.Defaults.Backend != BackendVM || cfg.Workspaces["test"].Backend != BackendDocker {
+	if cfg.VM.Runner != "/opt/jailoc/go-microvm-runner" || cfg.Defaults.Backend != BackendVM || cfg.Workspaces["test"].Backend != BackendVM {
 		t.Fatalf("unexpected config: vm=%+v defaults.backend=%q ws.backend=%q", cfg.VM, cfg.Defaults.Backend, cfg.Workspaces["test"].Backend)
 	}
 }
@@ -3668,18 +3186,18 @@ func TestCopiesValidation(t *testing.T) {
 		want      []string
 		wantError string
 	}{
-		{name: "vm copy normalized read-only", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/npmrc:/home/agent/.npmrc"}}, want: []string{"/data/npmrc:/home/agent/.npmrc:ro"}},
-		{name: "explicit ro accepted", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/gh:/home/agent/.config/gh:ro"}}, want: []string{"/data/gh:/home/agent/.config/gh:ro"}},
-		{name: "removal entry", ws: Workspace{Backend: BackendVM, Copies: []string{":/home/agent/.gitconfig"}}, want: []string{":/home/agent/.gitconfig:ro"}},
-		{name: "rw rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/npmrc:/home/agent/.npmrc:rw"}}, wantError: "copies are read-only snapshots"},
-		{name: "relative destination rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/npmrc:npmrc"}}, wantError: "must be absolute"},
-		{name: "system destination rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/hosts:/etc/hosts"}}, wantError: "is not allowed"},
-		{name: "forbidden source rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/etc/passwd:/home/agent/passwd"}}, wantError: "is forbidden"},
-		{name: "docker workspace rejects copies", ws: Workspace{Copies: []string{"/data/npmrc:/home/agent/.npmrc"}}, wantError: `copies is only supported with backend "vm"`},
-		{name: "docker workspace rejects protect_git", ws: Workspace{ProtectGit: new(true)}, wantError: `protect_git is only supported with backend "vm"`},
+		{name: "vm snapshot normalized read-only", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/npmrc:/home/agent/.npmrc"}}, want: []string{"/data/npmrc:/home/agent/.npmrc:ro"}},
+		{name: "explicit ro accepted", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/gh:/home/agent/.config/gh:ro"}}, want: []string{"/data/gh:/home/agent/.config/gh:ro"}},
+		{name: "removal entry", ws: Workspace{Backend: BackendVM, Snapshots: []string{":/home/agent/.gitconfig"}}, want: []string{":/home/agent/.gitconfig:ro"}},
+		{name: "rw rejected", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/npmrc:/home/agent/.npmrc:rw"}}, wantError: "snapshots are read-only"},
+		{name: "relative destination rejected", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/npmrc:npmrc"}}, wantError: "must be absolute"},
+		{name: "system destination rejected", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/hosts:/etc/hosts"}}, wantError: "is not allowed"},
+		{name: "forbidden source rejected", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/etc/passwd:/home/agent/passwd"}}, wantError: "is forbidden"},
+		{name: "default workspace accepts snapshots", ws: Workspace{Snapshots: []string{"/data/npmrc:/home/agent/.npmrc"}}, want: []string{"/data/npmrc:/home/agent/.npmrc:ro"}},
+		{name: "default workspace accepts protect_git", ws: Workspace{ProtectGit: new(true)}},
 		{name: "vm workspace accepts protect_git", ws: Workspace{Backend: BackendVM, ProtectGit: new(true)}},
 		{name: "docker defaults ignore protect_git", defaults: Defaults{ProtectGit: new(true)}},
-		{name: "defaults copies allowed with docker workspace", defaults: Defaults{Copies: []string{"/data/npmrc:/home/agent/.npmrc"}}, ws: Workspace{}},
+		{name: "defaults snapshots allowed", defaults: Defaults{Snapshots: []string{"/data/npmrc:/home/agent/.npmrc"}}, ws: Workspace{}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3697,8 +3215,8 @@ func TestCopiesValidation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Validate: %v", err)
 			}
-			if got := cfg.Workspaces["test"].Copies; tc.want != nil && strings.Join(got, ",") != strings.Join(tc.want, ",") {
-				t.Fatalf("copies = %v, want %v", got, tc.want)
+			if got := cfg.Workspaces["test"].Snapshots; tc.want != nil && strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("snapshots = %v, want %v", got, tc.want)
 			}
 		})
 	}

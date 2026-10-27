@@ -10,12 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/seznam/jailoc/internal/compose"
+	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
@@ -26,8 +25,9 @@ const reloadTimeout = 15 * time.Second
 
 // reloadVM applies the current configuration to a running workspace VM
 // without restarting it: network policy (allowed_hosts, allowed_networks,
-// filtered_dns), published ports, the SSH agent, the CA bundle, environment
-// and secrets. Settings that need a new VM are reported, not applied.
+// filtered_dns), published ports, the SSH agent, the CA bundle, snapshots,
+// environment and secrets. Settings that need a new VM are reported, not
+// applied.
 func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
 	stateDir := vmStateDir(ws.Name)
 	st, err := runningVM(stateDir)
@@ -45,9 +45,19 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
 	if running.Guest == nil {
 		return fmt.Errorf("workspace %q: running VM has no guest configuration; run `jailoc restart %s`", ws.Name, ws.Name)
 	}
-	want, err := reloadSpec(ctx, ws, running)
+	want, snapshots, err := reloadSpec(ctx, ws, running)
 	if err != nil {
 		return err
+	}
+	payload, err := secretsPayload(ctx, ws, want)
+	if err != nil {
+		return err
+	}
+	binds := running.Guest.Snapshots
+	if snapshotsReloadable(running) {
+		if binds, err = stageSnapshots(stateDir, snapshots, snapshotGeneration(running.Guest.Snapshots)); err != nil {
+			return fmt.Errorf("workspace %q: %w", ws.Name, err)
+		}
 	}
 
 	next := running
@@ -57,6 +67,7 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
 	g := *running.Guest
 	g.CABundle = want.Guest.CABundle
 	g.SSHAgent = want.Guest.SSHAgent
+	g.Snapshots = binds
 	next.Guest = &g
 
 	if err := reloadBroker(next, st.BrokerPID); err != nil {
@@ -68,7 +79,7 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
 	if err := vm.WriteSpec(next); err != nil {
 		return err
 	}
-	if err := pushSecrets(ctx, ws, next); err != nil {
+	if err := deliverSecrets(ctx, stateDir, payload); err != nil {
 		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s reloaded\n", ws.Name)
@@ -79,50 +90,55 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
 }
 
 // reloadSpec computes the workspace spec for the current configuration
-// without building an image or staging copies.
-func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (vm.Spec, error) {
+// without building an image, and the snapshots to stage.
+func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (vm.Spec, []config.Mount, error) {
 	if err := validateSecretSources(ws); err != nil {
-		return vm.Spec{}, fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
+		return vm.Spec{}, nil, fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
 	}
 	if err := materializeCABundle(ws); err != nil {
-		return vm.Spec{}, fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
+		return vm.Spec{}, nil, fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}
-	if hostPath, ok := compose.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
+	if hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
 		_ = ensureOCConfigGitignore(hostPath)
 	}
-	cacheDir := filepath.Clean(ComposeCacheDir(ws.Name))
+	cacheDir := workspaceCacheDir(ws.Name)
 	if err := writeTUIConfig(cacheDir); err != nil {
-		return vm.Spec{}, err
+		return vm.Spec{}, nil, err
 	}
 	shares, err := vmShares(ws, cacheDir)
 	if err != nil {
-		return vm.Spec{}, err
+		return vm.Spec{}, nil, err
 	}
-	copies, err := vmCopies(ws)
+	snapshots, err := vmSnapshots(ws)
 	if err != nil {
-		return vm.Spec{}, err
+		return vm.Spec{}, nil, err
 	}
-	if err := checkCopies(ws, copies, shares); err != nil {
-		return vm.Spec{}, err
+	if err := checkSnapshots(ws, snapshots, shares); err != nil {
+		return vm.Spec{}, nil, err
 	}
-	binds := make([]guest.Copy, 0, len(copies))
-	for i, c := range copies {
-		binds = append(binds, guest.Copy{Source: guest.CopiesDir + "/" + strconv.Itoa(i), Target: c.Container})
-	}
-	if len(copies) > 0 {
-		shares = append(shares, vm.Share{HostPath: filepath.Join(vmStateDir(ws.Name), "copies"), GuestPath: guest.CopiesDir, ReadOnly: true})
-	}
+	shares = append(shares, snapshotsShare(vmStateDir(ws.Name)))
 	rt := vmRuntimeFiles{runner: running.RunnerPath, libDir: running.LibDir, guest: running.GuestBinary}
-	spec, err := workspaceSpec(ctx, ws, rt, running.Image, shares, binds)
+	spec, err := workspaceSpec(ctx, ws, rt, running.Image, shares, nil)
 	if err != nil {
-		return vm.Spec{}, err
+		return vm.Spec{}, nil, err
 	}
 	spec.Docker = ws.EnableDocker
 	if spec.Docker {
 		spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
 	}
 	spec.Guest.NoPrivilegeEscalation = ws.ProtectGit
-	return spec, nil
+	return spec, snapshots, nil
+}
+
+// snapshotsReloadable reports whether the running VM can rebind snapshots:
+// it has the snapshots share and runs the current jailoc guest. Otherwise
+// restartOnlyChanges reports the share or guest difference.
+func snapshotsReloadable(running vm.Spec) bool {
+	if !slices.Contains(running.Shares, snapshotsShare(running.StateDir)) {
+		return false
+	}
+	current, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
+	return err == nil && filepath.Clean(current) == filepath.Clean(running.GuestBinary)
 }
 
 // restartOnlyChanges names the settings that differ between the running VM
@@ -131,9 +147,6 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	var out []string
 	if !slices.Equal(sortedShares(running.Shares), sortedShares(want.Shares)) {
 		out = append(out, "paths and mounts")
-	}
-	if !slices.Equal(running.Guest.Copies, want.Guest.Copies) {
-		out = append(out, "copies")
 	}
 	if running.CPUs != want.CPUs {
 		out = append(out, "cpu")
@@ -254,11 +267,11 @@ func brokerReloadEvent(path string, offset int64) (brokerReload, bool) {
 	return brokerReload{}, false
 }
 
-// reloadGuest asks the guest init to apply the CA bundle and SSH agent of g
+// reloadGuest asks the guest init to apply the CA bundle, SSH agent and snapshots of g
 // and waits for its answer.
 func reloadGuest(stateDir string, g guest.Config) error {
 	dir := vm.ControlDir(stateDir)
-	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent}
+	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, Snapshots: g.Snapshots}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode reload request: %w", err)

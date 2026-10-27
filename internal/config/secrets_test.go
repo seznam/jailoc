@@ -215,7 +215,7 @@ func TestDefaultConfigContentDocumentsSecrets(t *testing.T) {
 func TestLoadFromValidatesSecretNames(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"gh-token", "HOME", "PATH", "DOCKER_HOST", "NODE_USE_SYSTEM_CA"} {
+	for _, name := range []string{"gh-token", "HOME", "PATH", "OPENCODE_TUI_CONFIG", "NODE_USE_SYSTEM_CA"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "config.toml")
@@ -254,8 +254,8 @@ func TestValidateEnvSourceSecret(t *testing.T) {
 			wantSubstrs: []string{"MY_TOKEN", "from_env", "^[A-Za-z_][A-Za-z0-9_]*$"},
 		},
 		{
-			// The source reference is rendered verbatim into the compose file,
-			// which Docker Compose interpolates before loading it.
+			// from_env names a host environment variable, so it must be a valid
+			// shell identifier.
 			name:        "from_env containing an interpolation marker",
 			secretName:  "MY_TOKEN",
 			secret:      Secret{FromEnv: "PREFIX$SUFFIX"},
@@ -291,11 +291,30 @@ func TestValidateEnvSourceSecret(t *testing.T) {
 			secret:      Secret{FromEnv: "GH_TOKEN"},
 			wantSubstrs: []string{"PATH", "reserved"},
 		},
-		{ //nolint:gosec // DOCKER_HOST is the reserved-name test input, not a credential.
-			name:        "DOCKER_HOST is reserved",
-			secretName:  "DOCKER_HOST",
+		{
+			name:        "JAILOC_WORKSPACE is reserved",
+			secretName:  "JAILOC_WORKSPACE",
 			secret:      Secret{FromEnv: "HOST_VALUE"},
-			wantSubstrs: []string{"DOCKER_HOST", "reserved"},
+			wantSubstrs: []string{"JAILOC_WORKSPACE", "reserved"},
+		},
+		{ //nolint:gosec // DOCKER_HOST is the test input name, not a credential.
+			// The Docker client settings are the user's own inside the VM.
+			name:       "DOCKER_HOST is allowed",
+			secretName: "DOCKER_HOST",
+			secret:     Secret{FromEnv: "HOST_VALUE"},
+		},
+		{name: "command source", secretName: "GH_TOKEN", secret: Secret{FromCommand: "gh auth token"}},
+		{
+			name:        "blank command",
+			secretName:  "GH_TOKEN",
+			secret:      Secret{FromCommand: "  "},
+			wantSubstrs: []string{"GH_TOKEN", "from_command", "blank"},
+		},
+		{
+			name:        "command and env sources",
+			secretName:  "GH_TOKEN",
+			secret:      Secret{FromEnv: "GH_TOKEN", FromCommand: "gh auth token"},
+			wantSubstrs: []string{"GH_TOKEN", "exactly one of", "from_command"},
 		},
 		{ //nolint:gosec // SSH_AUTH_SOCK is the reserved-name test input, not a credential.
 			name:        "SSH_AUTH_SOCK is reserved",
@@ -313,7 +332,7 @@ func TestValidateEnvSourceSecret(t *testing.T) {
 			name:        "both sources",
 			secretName:  "MY_TOKEN",
 			secret:      Secret{FromEnv: "GH_TOKEN", FromFile: "/abs/key"},
-			wantSubstrs: []string{"MY_TOKEN", "mutually exclusive", "from_env", "from_file"},
+			wantSubstrs: []string{"MY_TOKEN", "exactly one of", "from_env", "from_file"},
 		},
 	}
 
@@ -340,8 +359,7 @@ func TestValidateFileSourceSecret(t *testing.T) {
 		{name: "name with dash and underscore", secretName: "my-secret_1", secret: Secret{FromFile: "/abs/x"}},
 		{name: "environment source", secretName: "envkey", secret: Secret{FromEnv: "HOST_KEY"}},
 		{
-			// The from_env grammar check is destination-independent: a file
-			// destination reads the same interpolated compose field.
+			// The from_env grammar check is destination-independent.
 			name:        "from_env with a dash",
 			secretName:  "envkey",
 			secret:      Secret{FromEnv: "host-key"},
@@ -380,19 +398,13 @@ func TestValidateFileSourceSecret(t *testing.T) {
 			name:        "both sources",
 			secretName:  "NETRC",
 			secret:      Secret{FromEnv: "HOST_KEY", FromFile: "/abs/x"},
-			wantSubstrs: []string{"NETRC", "mutually exclusive", "from_env", "from_file"},
+			wantSubstrs: []string{"NETRC", "exactly one of", "from_env", "from_file"},
 		},
 		{
 			name:        "relative from_file",
 			secretName:  "NETRC",
 			secret:      Secret{FromFile: "relative/secret"},
 			wantSubstrs: []string{"NETRC", "relative/secret", "must be absolute"},
-		},
-		{
-			name:        "from_file containing a dollar sign",
-			secretName:  "NETRC",
-			secret:      Secret{FromFile: "/secrets/$USER/token"},
-			wantSubstrs: []string{"NETRC", "/secrets/$USER/token", "$", "interpolates"},
 		},
 	}
 

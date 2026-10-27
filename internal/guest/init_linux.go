@@ -67,6 +67,9 @@ func Init(logger *slog.Logger) error {
 	if err := netcfg.Configure(logger); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
+	if err := configureIPv6(); err != nil {
+		return fmt.Errorf("network IPv6: %w", err)
+	}
 	// Containers and other guest-side routing (Docker bridge networks)
 	// need forwarding; it does not reach past the broker's policy.
 	if err := harden.Set("net.ipv4.ip_forward", "1"); err != nil {
@@ -82,7 +85,8 @@ func Init(logger *slog.Logger) error {
 	if err := mountShares(logger, cfg.Shares, acct); err != nil {
 		return err
 	}
-	if err := bindCopies(cfg.Copies, acct); err != nil {
+	live := &liveState{logger: logger, acct: acct, created: map[string]bool{}}
+	if err := live.setSnapshots(cfg.Snapshots); err != nil {
 		return err
 	}
 	if err := protectPaths(cfg.Pins, cfg.ReadOnly); err != nil {
@@ -96,8 +100,7 @@ func Init(logger *slog.Logger) error {
 			return err
 		}
 	}
-	live := &liveState{logger: logger, acct: acct}
-	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent}); err != nil {
+	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, Snapshots: cfg.Snapshots}); err != nil {
 		return err
 	}
 
@@ -244,30 +247,31 @@ func appendLine(path, line string) error {
 	return nil
 }
 
-// bindCopies binds every staged copy read-only at its destination.
-// Missing parent directories are created; those inside the agent's home
-// belong to the agent.
-func bindCopies(copies []Copy, acct account) error {
-	for _, c := range copies {
-		info, err := os.Stat(c.Source)
-		if err != nil {
-			return fmt.Errorf("copy %s: %w", c.Target, err)
-		}
-		if err := makeParents(filepath.Dir(c.Target), acct); err != nil {
-			return fmt.Errorf("copy %s: %w", c.Target, err)
-		}
-		if err := mountPoint(c.Target, info.IsDir()); err != nil {
-			return fmt.Errorf("copy %s: %w", c.Target, err)
-		}
-		if err := syscall.Mount(c.Source, c.Target, "", syscall.MS_BIND, ""); err != nil {
-			return fmt.Errorf("copy %s: bind: %w", c.Target, err)
-		}
-		flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
-		if err := syscall.Mount("", c.Target, "", flags, ""); err != nil {
-			return fmt.Errorf("copy %s: remount read-only: %w", c.Target, err)
-		}
+// bindSnapshot binds a staged snapshot read-only at its destination and
+// reports whether it created the mount point. Missing parent directories are
+// created; those inside the agent's home belong to the agent.
+func bindSnapshot(c Snapshot, acct account) (bool, error) {
+	info, err := os.Stat(c.Source)
+	if err != nil {
+		return false, fmt.Errorf("snapshot %s: %w", c.Target, err)
 	}
-	return nil
+	if err := makeParents(filepath.Dir(c.Target), acct); err != nil {
+		return false, fmt.Errorf("snapshot %s: %w", c.Target, err)
+	}
+	_, err = os.Lstat(c.Target)
+	created := os.IsNotExist(err)
+	if err := mountPoint(c.Target, info.IsDir()); err != nil {
+		return false, fmt.Errorf("snapshot %s: %w", c.Target, err)
+	}
+	if err := syscall.Mount(c.Source, c.Target, "", syscall.MS_BIND, ""); err != nil {
+		return created, fmt.Errorf("snapshot %s: bind: %w", c.Target, err)
+	}
+	flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
+	if err := syscall.Mount("", c.Target, "", flags, ""); err != nil {
+		_ = syscall.Unmount(c.Target, syscall.MNT_DETACH)
+		return created, fmt.Errorf("snapshot %s: remount read-only: %w", c.Target, err)
+	}
+	return created, nil
 }
 
 // disablePrivilegeEscalation sets no_new_privs and drops every capability

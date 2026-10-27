@@ -4,17 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/fatih/color"
-	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
-	"github.com/seznam/jailoc/internal/docker"
-	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 var addCmd = &cobra.Command{
@@ -91,122 +85,7 @@ func isDuplicate(paths []string, target string) bool {
 }
 
 func maybeRestartWorkspace(ctx context.Context, ws *workspace.Resolved) error {
-	if ws.Backend == config.BackendVM {
-		return restartVMIfRunning(ctx, ws)
-	}
-	compPath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-	if _, err := os.Stat(compPath); err != nil {
-		return nil
-	}
-
-	client := docker.NewClient(compPath, "", ws.Name)
-
-	running, err := client.IsRunning(ctx)
-	if err != nil {
-		return nil
-	}
-
-	if !running {
-		return nil
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("reload config for restart: %w", err)
-	}
-
-	ws2, err := workspace.Resolve(cfg, workspaceFlag)
-	if err != nil {
-		return fmt.Errorf("re-resolve workspace for restart: %w", err)
-	}
-
-	// Must run before every generated-file write below: the secret-env manifest
-	// must never be produced for an invalid or colliding configuration.
-	if err := validateSecretSources(ws2); err != nil {
-		return fmt.Errorf("validate secrets for workspace %q: %w", ws2.Name, err)
-	}
-	if err := materializeCABundle(ws2); err != nil {
-		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws2.Name, err)
-	}
-
-	interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
-	resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
-	pw, _, err := resolver.Resolve(ws2.Name)
-	if err != nil {
-		return err
-	}
-
-	os.Setenv("OPENCODE_SERVER_PASSWORD", pw) //nolint:gosec,errcheck // only fails if key is empty
-
-	params := compose.ComposeParams{
-		WorkspaceName:   ws2.Name,
-		Port:            ws2.Port,
-		Image:           "jailoc-base:embedded",
-		Paths:           ws2.Paths,
-		Mounts:          ws2.Mounts,
-		AllowedHosts:    ws2.AllowedHosts,
-		AllowedNetworks: ws2.AllowedNetworks,
-		Env:             ws2.Env,
-		SSHAuthSock:     resolveSSHAuthSock(ws2.SSHAuthSock),
-		SSHKnownHosts:   resolveSSHKnownHosts(ws2.SSHAuthSock),
-		GitConfig:       resolveGitConfig(ws2.GitConfig),
-		CPU:             ws2.CPU,
-		Memory:          ws2.Memory,
-		UseDataVolume:   !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.local/share/opencode"),
-		UseCacheVolume:  !compose.MountsContainTarget(ws2.Mounts, "/home/agent/.cache"),
-		ExposePort:      ws2.ExposePort,
-		EnableDocker:    ws2.EnableDocker,
-		FilteredDNS:     ws2.FilteredDNS,
-		Secrets:         secretSpecs(ws2),
-	}
-
-	if err := config.WriteAllowedFiles(ws2.Name, cfg, secretEnvNames(ws2)); err != nil {
-		return fmt.Errorf("write allowed files for workspace %q: %w", ws2.Name, err)
-	}
-
-	if err := writeEntrypoint(filepath.Dir(compPath)); err != nil {
-		return err
-	}
-
-	if ws2.EnableDocker {
-		if err := writeDindEntrypoint(filepath.Dir(compPath)); err != nil {
-			return err
-		}
-	}
-	if ws2.FilteredDNS {
-		if err := os.WriteFile(filepath.Join(filepath.Dir(compPath), "Corefile"), []byte(compose.GenerateCorefile(ws2.DNSUpstream, ws2.DNSBlockedZones)), 0o644); err != nil { //nolint:gosec // G306: the nonroot resolver needs read access; the Corefile contains no secrets
-			return fmt.Errorf("write DNS policy: %w", err)
-		}
-	}
-
-	if err := compose.WriteComposeFile(params, compPath); err != nil {
-		return fmt.Errorf("regenerate compose file: %w", err)
-	}
-
-	if err := writeTUIConfig(jailocCacheDir()); err != nil {
-		return fmt.Errorf("write tui config for restart: %w", err)
-	}
-
-	_, _ = color.New(color.FgCyan).Printf("Restarting workspace %s with updated mounts...\n", ws.Name)
-
-	if hostPath, ok := compose.ReadOnlyMountCoversPath(ws2.Mounts, ocConfigContainerPath); ok {
-		if err := ensureOCConfigGitignore(hostPath); err != nil {
-			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr,
-				"WARNING: could not pre-create .gitignore in %s: %v\n"+
-					"OpenCode (shipped since jailoc 1.13) may fail to start — see https://github.com/anomalyco/opencode/issues/23040\n",
-				hostPath, err)
-		}
-	}
-
-	if err := client.Down(ctx); err != nil {
-		return fmt.Errorf("stop workspace before restart: %w", err)
-	}
-	if err := client.Up(ctx); err != nil {
-		return fmt.Errorf("restart workspace: %w", err)
-	}
-
-	_, _ = color.New(color.FgGreen).Printf("Workspace %q restarted with updated mounts\n", ws.Name)
-	return nil
+	return restartVMIfRunning(ctx, ws)
 }
 
 func init() {

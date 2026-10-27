@@ -9,6 +9,9 @@ type Reload struct {
 	Seq      int64  `json:"seq"`
 	CABundle string `json:"ca_bundle,omitempty"`
 	SSHAgent bool   `json:"ssh_agent,omitempty"`
+	// Snapshots replace the bound snapshots when they differ from the
+	// current set. The host stages every reload into new sources.
+	Snapshots []Snapshot `json:"snapshots,omitempty"`
 }
 
 // ReloadDone reports the result of applying the Reload with Seq.

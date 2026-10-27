@@ -4,10 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/seznam/jailoc/internal/config"
-	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -53,28 +51,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
 
-	if ws.Backend == config.BackendVM {
-		return logsVM(ctx, ws, followLogs, os.Stdout)
-	}
-
-	composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-
-	// Check if compose file exists (workspace was started at some point)
-	if _, err := os.Stat(composePath); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("workspace %q is not running; start it with 'jailoc up'", ws.Name)
-		}
-		return fmt.Errorf("check compose file %q: %w", composePath, err)
-	}
-
-	client := docker.NewClient(composePath, "", ws.Name)
-
-	// Stream logs
-	if err := client.Logs(ctx, followLogs, os.Stdout); err != nil {
-		return fmt.Errorf("stream logs: %w", err)
-	}
-
-	return nil
+	return logsVM(ctx, ws, followLogs, os.Stdout)
 }
 
 func init() {

@@ -12,6 +12,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
@@ -35,6 +36,50 @@ func Ping(ctx context.Context) error {
 	defer func() { _ = cli.Close() }()
 	if _, err := cli.Ping(ctx); err != nil {
 		return fmt.Errorf("ping Docker daemon: %w", err)
+	}
+	return nil
+}
+
+func RunningComposeContainers(ctx context.Context, workspace string) ([]container.Summary, error) {
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("create Docker Engine client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+	containers, err := cli.ContainerList(ctx, container.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("label", "com.docker.compose.project=jailoc-"+workspace),
+			filters.Arg("status", "running"),
+		),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list workspace %q containers: %w", workspace, err)
+	}
+	return containers, nil
+}
+
+func StopComposeContainers(ctx context.Context, workspace string) error {
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("create Docker Engine client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+	containers, err := cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", "com.docker.compose.project=jailoc-"+workspace)),
+	})
+	if err != nil {
+		return fmt.Errorf("list workspace %q containers: %w", workspace, err)
+	}
+	for _, current := range containers {
+		if current.State == "running" {
+			if err := cli.ContainerStop(ctx, current.ID, container.StopOptions{}); err != nil {
+				return fmt.Errorf("stop workspace %q container %s: %w", workspace, current.ID, err)
+			}
+		}
+		if err := cli.ContainerRemove(ctx, current.ID, container.RemoveOptions{}); err != nil {
+			return fmt.Errorf("remove workspace %q container %s: %w", workspace, current.ID, err)
+		}
 	}
 	return nil
 }

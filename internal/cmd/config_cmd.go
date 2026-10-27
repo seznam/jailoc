@@ -196,8 +196,8 @@ func runConfig(cmd *cobra.Command, args []string) error {
 }
 
 // printSecrets writes one [<scope>.secrets] block as source references.
-// Ordering comes from workspace.FlattenSecrets so that jailoc config lists
-// secrets in the same order the compose file and the secret-env manifest use.
+// Ordering comes from workspace.FlattenSecrets, the single definition of
+// secret order.
 func printSecrets(secrets config.Secrets, indent string) {
 	resolved := workspace.FlattenSecrets(secrets)
 	if len(resolved) == 0 {

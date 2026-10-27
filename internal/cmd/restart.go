@@ -7,12 +7,12 @@ import (
 var restartCmd = &cobra.Command{
 	Use:   "restart [workspace]",
 	Short: "Restart a workspace environment",
-	Long:  "Stop and restart the Docker Compose environment for a workspace. Regenerates the compose configuration from the current config. If the workspace is not running, starts it.",
+	Long:  "Stop and restart a workspace VM with the current configuration. If the workspace is not running, start it.",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		if err := runDownCtxForce(ctx, args, true); err != nil {
+		if err := runDownCtx(ctx, args); err != nil {
 			return err
 		}
 

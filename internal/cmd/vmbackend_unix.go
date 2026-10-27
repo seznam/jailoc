@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	vmStartTimeout   = 5 * time.Minute
-	vmStopTimeout    = 45 * time.Second
+	vmStartTimeout = 5 * time.Minute
+	vmStopTimeout  = 45 * time.Second
 )
 
 // vmSuperviseCmd is the detached process that owns a workspace VM and its
@@ -301,7 +301,7 @@ func vmShares(ws *workspace.Resolved, cacheDir string) ([]vm.Share, error) {
 		case err != nil:
 			return nil, fmt.Errorf("workspace %q: mount source %q: %w", ws.Name, host, err)
 		case !info.IsDir():
-			return nil, fmt.Errorf("workspace %q: mount %q: backend \"vm\" shares directories only; use copies for a read-only snapshot of a file", ws.Name, spec)
+			return nil, fmt.Errorf("workspace %q: mount %q: backend \"vm\" shares directories only; use snapshots for a read-only copy of a file", ws.Name, spec)
 		}
 		add(host, m.Container, m.Mode == "ro")
 	}
@@ -392,18 +392,20 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("allowed network %q: %w", n, err)
 		}
-		if ipnet.IP.To4() != nil {
-			add(ipnet.String())
-		}
+		add(ipnet.String())
 	}
 	for _, h := range ws.AllowedHosts {
-		ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", h)
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", h)
 		if err != nil {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: cannot resolve allowed host %q: %v\n", h, err)
 			continue
 		}
 		for _, ip := range ips {
-			add(ip.String() + "/32")
+			prefix := "/128"
+			if ip.To4() != nil {
+				prefix = "/32"
+			}
+			add(ip.String() + prefix)
 		}
 	}
 	policy := struct {

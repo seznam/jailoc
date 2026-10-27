@@ -109,7 +109,9 @@ func projectRoot() (string, error) {
 	}
 }
 
-func writeConfig(t *testing.T) {
+// writeConfig writes the test configuration; extra is appended to the
+// workspace table.
+func writeConfig(t *testing.T, extra string) {
 	t.Helper()
 	cfg := fmt.Sprintf(`[vm]
 runner = %q
@@ -125,10 +127,17 @@ ssh_auth_sock = true
 filtered_dns = true
 dns_upstream = "1.1.1.1"
 dns_blocked_zones = ["example.org"]
+%s
 
-[workspaces.%s.secrets.env.VMTEST_TOKEN]
+[workspaces.%[7]s.secrets.env.VMTEST_TOKEN]
 from_env = "VMTEST_HOST_TOKEN"
-`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), workspaceName, project, hostPort, workspaceName)
+
+[workspaces.%[7]s.secrets.env.VMTEST_CMD]
+from_command = "echo cmd-token"
+
+[workspaces.%[7]s.secrets.file.vmtest-file]
+from_command = "printf 'line1\\nline2'"
+`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), workspaceName, project, hostPort, extra, workspaceName)
 	dir := filepath.Join(home, ".config", "jailoc")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -259,7 +268,11 @@ func dumpLogs(t *testing.T) {
 func TestWorkspaceVM(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	defer cancel()
-	writeConfig(t)
+	snapshot := filepath.Join(home, "snapshot.txt")
+	if err := os.WriteFile(snapshot, []byte("first\n"), 0o600); err != nil { //nolint:gosec // G703: test directory
+		t.Fatal(err)
+	}
+	writeConfig(t, fmt.Sprintf(`snapshots = ["%s:/home/agent/.vmtest-snapshot"]`, snapshot))
 	agentSock := startAgent(t)
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -297,8 +310,8 @@ func TestWorkspaceVM(t *testing.T) {
 	})
 
 	t.Run("secrets", func(t *testing.T) {
-		got := mustGuest(ctx, t, `/.jailoc/jailoc-guest run -- sh -c 'echo "$VMTEST_TOKEN"; cat /run/secrets/VMTEST_TOKEN'`)
-		if got != "token-from-host\ntoken-from-host" {
+		got := mustGuest(ctx, t, `/.jailoc/jailoc-guest run -- sh -c 'echo "$VMTEST_TOKEN $VMTEST_CMD"; ls /run/secrets; cat /run/secrets/vmtest-file'`)
+		if got != "token-from-host cmd-token\nvmtest-file\nline1\nline2" {
 			t.Fatalf("secrets = %q", got)
 		}
 	})
@@ -319,6 +332,33 @@ func TestWorkspaceVM(t *testing.T) {
 			t.Fatalf("blocked zone resolved: %s", out)
 		}
 		mustGuest(ctx, t, "getent hosts example.com")
+	})
+
+	t.Run("IPv6 configuration and policy", func(t *testing.T) {
+		// The image has no iproute2; read the kernel tables directly.
+		mustGuest(ctx, t, "grep -E '^fd000127000000000000000000000002 [0-9a-f]+ 40 .*eth0$' /proc/net/if_inet6")
+		mustGuest(ctx, t, "grep -E '^0{32} 00 0{32} 00 fe800000000000000000000000000001 .*eth0$' /proc/net/ipv6_route")
+		mustGuest(ctx, t, `python3 - <<'PY'
+import errno
+import socket
+for target in ["fd42::1", "fd00:127::1", "fd00:ec2::254", "2001:db8::1"]:
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as conn:
+        conn.settimeout(3)
+        result = conn.connect_ex((target, 443))
+        assert result == errno.ECONNREFUSED, (target, result)
+print("ipv6-policy-ok")
+PY`)
+		mustGuest(ctx, t, `python3 - <<'PY'
+import socket
+assert socket.getaddrinfo("example.com", 443, socket.AF_INET6)
+try:
+    socket.getaddrinfo("example.org", 443, socket.AF_INET6)
+except socket.gaierror:
+    pass
+else:
+    raise AssertionError("blocked AAAA resolved")
+print("ipv6-dns-ok")
+PY`)
 	})
 
 	t.Run("SSH agent", func(t *testing.T) {
@@ -349,6 +389,42 @@ func TestWorkspaceVM(t *testing.T) {
 			time.Sleep(time.Second)
 		}
 		t.Fatalf("published port answered %q", body)
+	})
+
+	t.Run("reload re-copies snapshots and applies env", func(t *testing.T) {
+		if got := mustGuest(ctx, t, "cat ~/.vmtest-snapshot"); got != "first" {
+			t.Fatalf("snapshot = %q", got)
+		}
+		if out, err := guest(ctx, t, "echo x > ~/.vmtest-snapshot"); err == nil {
+			t.Fatalf("snapshot writable: %s", out)
+		}
+		if err := os.WriteFile(snapshot, []byte("second\n"), 0o600); err != nil { //nolint:gosec // G703: test directory
+			t.Fatal(err)
+		}
+		extra := filepath.Join(home, "extra.txt")
+		if err := os.WriteFile(extra, []byte("extra\n"), 0o600); err != nil { //nolint:gosec // G703: test directory
+			t.Fatal(err)
+		}
+		writeConfig(t, fmt.Sprintf(`snapshots = ["%s:/home/agent/.vmtest-snapshot", "%s:/home/agent/.config/vmtest/extra.txt"]
+env = ["VMTEST_RELOADED=yes"]`, snapshot, extra))
+		if out := jailoc(ctx, t, agentSock, "reload", workspaceName); strings.Contains(out, "jailoc restart") {
+			t.Fatalf("reload asks for a restart:\n%s", out)
+		}
+		if got := mustGuest(ctx, t, "cat ~/.vmtest-snapshot ~/.config/vmtest/extra.txt"); got != "second\nextra" {
+			t.Fatalf("snapshots after reload = %q", got)
+		}
+		if got := mustGuest(ctx, t, `/.jailoc/jailoc-guest run -- sh -c 'echo "$VMTEST_RELOADED"'`); got != "yes" {
+			t.Fatalf("env after reload = %q", got)
+		}
+
+		writeConfig(t, fmt.Sprintf(`snapshots = ["%s:/home/agent/.vmtest-snapshot"]`, snapshot))
+		jailoc(ctx, t, agentSock, "reload", workspaceName)
+		if out, err := guest(ctx, t, "test -e ~/.config/vmtest/extra.txt"); err == nil {
+			t.Fatalf("removed snapshot still present: %s", out)
+		}
+		if got := mustGuest(ctx, t, `/.jailoc/jailoc-guest run -- sh -c 'echo "${VMTEST_RELOADED:-unset}"'`); got != "unset" {
+			t.Fatalf("removed env after reload = %q", got)
+		}
 	})
 
 	t.Run("restart keeps home and Docker data", func(t *testing.T) {

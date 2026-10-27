@@ -77,7 +77,7 @@ func TestPortsValidation(t *testing.T) {
 		wantErr string
 	}{
 		{name: "vm ports", toml: "[workspaces.w]\nbackend = \"vm\"\npaths = [\"/home/u/p\"]\nports = [3000, \"8080:80\"]\n"},
-		{name: "docker rejects", toml: "[workspaces.w]\npaths = [\"/home/u/p\"]\nports = [3000]\n", wantErr: "ports is only supported"},
+		{name: "default backend", toml: "[workspaces.w]\npaths = [\"/home/u/p\"]\nports = [3000]\n"},
 		{name: "duplicate host port", toml: "[workspaces.w]\nbackend = \"vm\"\npaths = [\"/home/u/p\"]\nports = [3000, \"3000:80\"]\n", wantErr: "listed twice"},
 		{name: "invalid", toml: "[defaults]\nports = [\"99999\"]\n", wantErr: "invalid port"},
 		{name: "docker with protect_git", toml: "[workspaces.w]\nbackend = \"vm\"\npaths = [\"/home/u/p\"]\nprotect_git = true\nenable_docker = true\n", wantErr: "cannot be combined with protect_git"},

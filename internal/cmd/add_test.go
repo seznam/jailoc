@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -65,57 +63,4 @@ func TestIsDuplicate(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestAddComposePath(t *testing.T) {
-	tests := []struct {
-		name      string
-		workspace string
-	}{
-		{
-			name:      "default workspace",
-			workspace: "default",
-		},
-		{
-			name:      "api workspace",
-			workspace: "api",
-		},
-		{
-			name:      "custom workspace name",
-			workspace: "my-production-env",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-
-			got := filepath.Join(ComposeCacheDir(tc.workspace), "docker-compose.yml")
-			expected := filepath.Join(home, ".cache", "jailoc", tc.workspace, "docker-compose.yml")
-
-			if got != expected {
-				t.Errorf("ComposeCacheDir(%q) compose path = %q, want %q", tc.workspace, got, expected)
-			}
-
-			if !filepath.IsAbs(got) {
-				t.Errorf("expected absolute path, got %q", got)
-			}
-		})
-	}
-
-	t.Run("fallback to TempDir when UserHomeDir fails", func(t *testing.T) {
-		t.Setenv("HOME", "")
-
-		got := filepath.Join(ComposeCacheDir("test-workspace"), "docker-compose.yml")
-
-		if !filepath.IsAbs(got) {
-			t.Fatalf("expected absolute path, got %q", got)
-		}
-
-		expected := filepath.Join(os.TempDir(), "jailoc", "test-workspace", "docker-compose.yml")
-		if got != expected {
-			t.Errorf("fallback compose path = %q, want %q", got, expected)
-		}
-	})
 }

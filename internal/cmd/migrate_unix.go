@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -19,7 +20,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 )
@@ -31,12 +31,12 @@ var (
 
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
-	Short: `Move all workspaces to the VM backend (backend = "vm")`,
-	Long: `Rewrite config.toml so that every workspace uses backend = "vm".
+	Short: "Migrate a jailoc v1 (Docker) configuration to the VM backend",
+	Long: `Rewrite a jailoc v1 config.toml for the VM backend (backend = "vm").
 
 For each Docker workspace, migrate asks how to carry over every mount (a live
-directory mount, or a read-only copy), removes settings the VM backend does not
-support after confirmation, stops running Docker workspaces, and copies the
+directory mount, or a read-only snapshot), removes v1 settings (mode, password_mode,
+expose_port) after confirmation, stops running Docker workspaces, and copies the
 OpenCode data and cache volumes into the VM's persistent home directories.
 The previous config.toml is kept as a backup; comments in it are not carried
 over.`,
@@ -126,19 +126,22 @@ type incompatibility struct {
 func defaultsIncompatibilities(cfg *config.Config) []incompatibility {
 	d := &cfg.Defaults
 	var out []incompatibility
-	if cfg.Mode == config.ModeRemote {
-		out = append(out, incompatibility{`mode = "remote"`, "sessions run inside the VM (exec mode)", func() { cfg.Mode = "" }})
+	if cfg.Mode != "" {
+		out = append(out, incompatibility{"mode", "sessions run inside the VM", func() { cfg.Mode = "" }})
 	}
-	if d.ExposePort != nil && *d.ExposePort {
-		out = append(out, incompatibility{"expose_port = true", "sessions run over SSH; there is no published port", func() { d.ExposePort = nil }})
+	if cfg.PasswordMode != "" {
+		out = append(out, incompatibility{"password_mode", "the VM does not use a server password", func() { cfg.PasswordMode = "" }})
+	}
+	if d.ExposePort != nil {
+		out = append(out, incompatibility{"expose_port", "sessions run over SSH; there is no published port", func() { d.ExposePort = nil }})
 	}
 	return out
 }
 
 func workspaceIncompatibilities(ws *config.Workspace) []incompatibility {
 	var out []incompatibility
-	if ws.ExposePort != nil && *ws.ExposePort {
-		out = append(out, incompatibility{"expose_port = true", "sessions run over SSH; there is no published port", func() { ws.ExposePort = nil }})
+	if ws.ExposePort != nil {
+		out = append(out, incompatibility{"expose_port", "sessions run over SSH; there is no published port", func() { ws.ExposePort = nil }})
 	}
 	return out
 }
@@ -153,7 +156,9 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 	}
 	slices.Sort(names)
 	for _, name := range names {
-		if config.EffectiveBackend(cfg.Defaults.Backend, cfg.Workspaces[name].Backend) != config.BackendVM {
+		// In jailoc v1 an unset backend meant Docker; only an explicit
+		// "vm" marks a workspace that needs no migration.
+		if cmp.Or(cfg.Workspaces[name].Backend, cfg.Defaults.Backend) != config.BackendVM {
 			m.workspaces = append(m.workspaces, name)
 		}
 	}
@@ -161,7 +166,7 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 	if err := resolveIncompatibilities(p, "[defaults]", defaultsIncompatibilities(cfg), m); err != nil {
 		return nil, err
 	}
-	if err := carryMounts(p, "[defaults]", &cfg.Defaults.Mounts, &cfg.Defaults.Copies, stat, m); err != nil {
+	if err := carryMounts(p, "[defaults]", &cfg.Defaults.Mounts, &cfg.Defaults.Snapshots, stat, m); err != nil {
 		return nil, err
 	}
 	for _, name := range m.workspaces {
@@ -170,7 +175,7 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		if err := resolveIncompatibilities(p, label, workspaceIncompatibilities(&ws), m); err != nil {
 			return nil, err
 		}
-		if err := carryMounts(p, label, &ws.Mounts, &ws.Copies, stat, m); err != nil {
+		if err := carryMounts(p, label, &ws.Mounts, &ws.Snapshots, stat, m); err != nil {
 			return nil, err
 		}
 		cfg.Workspaces[name] = ws
@@ -214,8 +219,8 @@ func resolveIncompatibilities(p *prompter, label string, items []incompatibility
 }
 
 // carryMounts asks for every mount with a host source whether it stays a
-// live mount (directories only) or becomes a read-only copy, or is dropped.
-func carryMounts(p *prompter, label string, mounts, copies *[]string, stat func(string) (fs.FileInfo, error), m *migration) error {
+// live mount (directories only) or becomes a read-only snapshot, or is dropped.
+func carryMounts(p *prompter, label string, mounts, snapshots *[]string, stat func(string) (fs.FileInfo, error), m *migration) error {
 	var kept []string
 	for _, spec := range *mounts {
 		mt, err := config.ParseMount(spec)
@@ -234,24 +239,24 @@ func carryMounts(p *prompter, label string, mounts, copies *[]string, stat func(
 		if info, err := stat(host); err == nil && !info.IsDir() {
 			isFile = true
 		}
-		copySpec := mt.Host + ":" + mt.Container
+		snapshotSpec := mt.Host + ":" + mt.Container
 		desc := fmt.Sprintf("%s mount %s -> %s (%s)", label, mt.Host, mt.Container, mt.Mode)
 		var options []string
 		if isFile {
 			_, _ = fmt.Fprintf(p.out, "\n%s is a file; the VM shares directories only.\n", desc)
-			_, _ = fmt.Fprintln(p.out, "  copy: read-only snapshot taken at every VM start")
+			_, _ = fmt.Fprintln(p.out, "  snapshot: read-only copy taken at every VM start")
 			_, _ = fmt.Fprintln(p.out, "  drop: remove the mount")
-			options = []string{"copy", "drop"}
+			options = []string{"snapshot", "drop"}
 		} else {
 			_, _ = fmt.Fprintf(p.out, "\n%s\n", desc)
 			_, _ = fmt.Fprintln(p.out, "  mount: live, two-way share of the directory")
 			if mt.Mode == "rw" {
-				_, _ = fmt.Fprintln(p.out, "  copy: read-only snapshot taken at every VM start; workspace writes no longer reach the host")
+				_, _ = fmt.Fprintln(p.out, "  snapshot: read-only copy taken at every VM start; workspace writes no longer reach the host")
 			} else {
-				_, _ = fmt.Fprintln(p.out, "  copy: read-only snapshot taken at every VM start")
+				_, _ = fmt.Fprintln(p.out, "  snapshot: read-only copy taken at every VM start")
 			}
 			_, _ = fmt.Fprintln(p.out, "  drop: remove the mount")
-			options = []string{"mount", "copy", "drop"}
+			options = []string{"mount", "snapshot", "drop"}
 		}
 		i, err := p.choose("Keep as", options, 0)
 		if err != nil {
@@ -260,9 +265,9 @@ func carryMounts(p *prompter, label string, mounts, copies *[]string, stat func(
 		switch options[i] {
 		case "mount":
 			kept = append(kept, spec)
-		case "copy":
-			*copies = append(*copies, copySpec)
-			m.changes = append(m.changes, fmt.Sprintf("%s: mount %s -> copy %s", label, spec, copySpec))
+		case "snapshot":
+			*snapshots = append(*snapshots, snapshotSpec)
+			m.changes = append(m.changes, fmt.Sprintf("%s: mount %s -> snapshot %s", label, spec, snapshotSpec))
 		case "drop":
 			m.changes = append(m.changes, fmt.Sprintf("%s: drop mount %s", label, spec))
 		}
@@ -288,7 +293,7 @@ func migrationVolumes(cfg *config.Config, names []string) ([]volumeTarget, error
 			{"opencode-data-" + name, "opencode-data", guestOpenCodeDir},
 			{"opencode-cache-" + name, "cache", guestUserCache},
 		} {
-			if compose.MountsContainTarget(mounts, v.guestPath) {
+			if config.MountsContainTarget(mounts, v.guestPath) {
 				continue
 			}
 			out = append(out, volumeTarget{
@@ -380,15 +385,11 @@ func migrateDockerState(ctx context.Context, cfg *config.Config, names []string,
 
 	var running []string
 	for _, name := range names {
-		composePath := filepath.Join(ComposeCacheDir(name), "docker-compose.yml")
-		if _, err := os.Stat(composePath); err != nil {
-			continue
-		}
-		up, err := docker.NewClient(composePath, "", name).IsRunning(ctx)
+		containers, err := docker.RunningComposeContainers(ctx, name)
 		if err != nil {
 			return fmt.Errorf("check workspace %q: %w", name, err)
 		}
-		if up {
+		if len(containers) > 0 {
 			running = append(running, name)
 		}
 	}
@@ -401,9 +402,8 @@ func migrateDockerState(ctx context.Context, cfg *config.Config, names []string,
 			return errors.New("stop the running workspaces first (jailoc down), then run migrate again")
 		}
 		for _, name := range running {
-			composePath := filepath.Join(ComposeCacheDir(name), "docker-compose.yml")
 			_, _ = color.New(color.FgCyan).Fprintf(p.out, "Stopping workspace %s...\n", name)
-			if err := docker.NewClient(composePath, "", name).Down(ctx); err != nil {
+			if err := docker.StopComposeContainers(ctx, name); err != nil {
 				return fmt.Errorf("stop workspace %q: %w", name, err)
 			}
 		}

@@ -56,6 +56,8 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 		}
 	} else if err := checkGuestCurrent(ws.Name); err != nil {
 		return err
+	} else if err := ensureSecrets(ctx, ws); err != nil {
+		return err
 	}
 	client, err := vm.DialSSH(ctx, vmStateDir(ws.Name))
 	if err != nil {

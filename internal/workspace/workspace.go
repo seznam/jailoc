@@ -23,10 +23,9 @@ const BasePort = 4096
 
 type Resolved struct {
 	Name            string
-	Backend         string
 	Paths           []string
 	Mounts          []string
-	Copies          []string // read-only snapshots (host:container:ro); backend "vm" only
+	Snapshots       []string // read-only snapshots (host:container:ro)
 	Port            int
 	AllowedHosts    []string
 	AllowedNetworks []string
@@ -39,7 +38,6 @@ type Resolved struct {
 	Secrets         []ResolvedSecret
 	CPU             float64
 	Memory          string
-	ExposePort      bool
 	EnableDocker    bool
 	// IsolatedBuild builds the image of a backend "vm" workspace in its own
 	// builder VM instead of the builder shared by all workspaces.
@@ -62,12 +60,14 @@ const (
 	SecretKindFile
 )
 
-// ResolvedSecret is a secret after the defaults+workspace merge.
+// ResolvedSecret is a secret after the defaults+workspace merge. Exactly one
+// From* field is set.
 type ResolvedSecret struct {
-	Name     string
-	Kind     SecretKind
-	FromEnv  string
-	FromFile string
+	Name        string
+	Kind        SecretKind
+	FromEnv     string
+	FromFile    string
+	FromCommand string
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -153,8 +153,6 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
-		Backend:         config.EffectiveBackend(cfg.Defaults.Backend, ws.Backend),
-		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
 		IsolatedBuild:   boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
 		ProtectGit:      boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),
@@ -169,26 +167,17 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	if r.DNSBlockedZones == nil {
 		r.DNSBlockedZones = cfg.Defaults.DNSBlockedZones
 	}
-	if r.Backend == config.BackendVM {
-		// The VM backend runs the agent directly in the VM and is reached
-		// over SSH: no published OpenCode port. Docker runs inside the VM
-		// unless protect_git is on, because Docker access is root access.
-		r.ExposePort = false
-		if r.ProtectGit {
-			r.EnableDocker = false
-		}
-		r.Ports = config.MergePorts(cfg.Defaults.Ports, ws.Ports)
-		// The broker policy is built from the resolved lists, so they carry
-		// the [defaults] entries too (the Docker backend merges them when
-		// writing the allowed-hosts and allowed-networks files).
-		r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
-		r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
-		copies, err := config.MergeMounts(cfg.Defaults.Copies, ws.Copies)
-		if err != nil {
-			return nil, fmt.Errorf("merge copies for workspace %s: %w", name, err)
-		}
-		r.Copies = copies
+	if r.ProtectGit {
+		r.EnableDocker = false
 	}
+	r.Ports = config.MergePorts(cfg.Defaults.Ports, ws.Ports)
+	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
+	r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
+	snapshots, err := config.MergeMounts(cfg.Defaults.Snapshots, ws.Snapshots)
+	if err != nil {
+		return nil, fmt.Errorf("merge snapshots for workspace %s: %w", name, err)
+	}
+	r.Snapshots = snapshots
 
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))
 
@@ -210,8 +199,8 @@ func mergeUnique(a, b []string) []string {
 
 // FlattenSecrets converts a single [<scope>.secrets] block into the ordering
 // Resolve produces. Callers that display one scope in isolation (jailoc config)
-// share their ordering with the compose file and the secret-env manifest, so
-// the codebase has exactly one definition of secret order.
+// share that ordering, so the codebase has exactly one definition of secret
+// order.
 func FlattenSecrets(secrets config.Secrets) []ResolvedSecret {
 	collected := make(map[string]ResolvedSecret, len(secrets.Env)+len(secrets.File))
 	collectSecrets(collected, secrets)
@@ -234,16 +223,15 @@ func mergeSecrets(defaults, overrides config.Secrets) []ResolvedSecret {
 // config.validateSecretsBlock rejects that before Resolve runs.
 func collectSecrets(dst map[string]ResolvedSecret, secrets config.Secrets) {
 	for name, secret := range secrets.Env {
-		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile}
+		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand}
 	}
 	for name, secret := range secrets.File {
-		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile}
+		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand}
 	}
 }
 
-// sortedSecrets sorts by Name across both destination sub-tables. This single
-// sort is what lets internal/cmd hand Resolved.Secrets straight to the compose
-// template and the secret-env manifest without re-sorting.
+// sortedSecrets sorts by Name across both destination sub-tables, so callers
+// can use Resolved.Secrets without re-sorting.
 func sortedSecrets(secrets map[string]ResolvedSecret) []ResolvedSecret {
 	if len(secrets) == 0 {
 		return nil

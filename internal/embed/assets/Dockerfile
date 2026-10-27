@@ -3,8 +3,8 @@
 #
 # Core sandbox image for jailoc workspaces. Provides the runtime environment
 # for headless OpenCode coding agents: Node.js, language servers, CLI tools,
-# a non-root "agent" user (UID 1000), and an entrypoint that configures
-# network isolation via iptables before dropping privileges.
+# a non-root "agent" user (UID 1000). The VM guest manages the agent process
+# and the network broker enforces isolation outside the image.
 #
 # Preset/overlay images (e.g. jailoc-szn-preset) extend this with additional
 # language runtimes and tooling via `FROM <this-image>`.
@@ -61,8 +61,7 @@ RUN npm install -g \
 
 # =============================================================================
 # Docker stage — Docker CE static binaries with the buildx and compose
-# plugins, checksum-verified. The VM backend runs dockerd from them inside
-# the workspace VM; with the Docker backend the CLI talks to the dind sidecar.
+# plugins, checksum-verified. The VM guest runs dockerd from these binaries.
 # =============================================================================
 FROM ubuntu:24.04 AS docker
 
@@ -107,12 +106,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   python3                — Python runtime for pyright and user scripts
 #   ripgrep (rg), fd-find, jq — fast search/filter tools used by OpenCode
 #   unzip, xz-utils        — archive extraction for runtime downloads
-#   iptables               — network isolation: entrypoint.sh blocks RFC 1918
 #   libatomic1             — required by Node.js 26+ runtime
 #   nftables               — firewall backend of dockerd in VM workspaces
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git openssh-client sudo \
-    python3 ripgrep fd-find jq unzip xz-utils iptables libatomic1 nftables \
+    python3 ripgrep fd-find jq unzip xz-utils libatomic1 nftables \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI with buildx and compose, plus dockerd for VM workspaces.
@@ -144,7 +142,6 @@ RUN ln -sf /usr/local/lib/node_modules/yaml-language-server/bin/yaml-language-se
     && ln -sf /usr/local/lib/node_modules/bash-language-server/out/cli.js /usr/local/bin/bash-language-server
 
 # Agent user (UID 1000) — the non-root identity the agent process runs as.
-# entrypoint.sh drops privileges from root to this user via setpriv.
 # UID 1000 matches the default host user for bind-mount permission compatibility.
 # Passwordless sudo allows the agent to install packages when needed.
 RUN (userdel -r ubuntu || true) \
@@ -162,7 +159,3 @@ RUN npm install -g "opencode-ai@${OPENCODE_VERSION#v}"
 # PATH includes agent's local bin dirs for tools installed as the agent user
 # (e.g. uv from preset overlays goes to ~/.local/bin).
 ENV PATH="/home/agent/.local/bin:${PATH}"
-
-# Default OpenCode serve port — jailoc assigns ports starting at 4096.
-EXPOSE 4096
-CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]

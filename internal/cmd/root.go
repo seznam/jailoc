@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,9 +15,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
-	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/logging"
-	"github.com/seznam/jailoc/internal/password"
 	"github.com/seznam/jailoc/internal/update"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
@@ -29,7 +25,6 @@ import (
 var workspaceFlag string
 var workspaceExplicit bool
 var appVersion string
-var remoteFlag, execFlag bool
 var sessionFlag string
 var continueFlag bool
 var newSessionFlag bool
@@ -37,7 +32,7 @@ var attachSessionFlag string
 
 var rootCmd = &cobra.Command{
 	Use:          "jailoc [path]",
-	Short:        "Manage sandboxed OpenCode Docker environments",
+	Short:        "Manage sandboxed OpenCode virtual machines",
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -114,104 +109,20 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		if ws.Backend == config.BackendVM {
-			if remoteFlag {
-				return fmt.Errorf(`workspace %q: remote mode is not supported with backend "vm"`, ws.Name)
-			}
-			return runSessionVM(ctx, cfg, ws, vmSessionOptions{
-				dir: targetPath, session: sessionFlag, cont: continueFlag,
-				newAgent: newSessionFlag, attach: attachSessionFlag,
-			})
-		}
-		if newSessionFlag || attachSessionFlag != "" {
-			return fmt.Errorf(`workspace %q: --new and --attach need backend "vm"`, ws.Name)
-		}
-
-		composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
-		client := docker.NewClient(composePath, "", ws.Name)
-		running, err := client.IsRunning(ctx)
-		if err != nil {
-			if !isComposeFileMissing(err) {
-				return fmt.Errorf("check workspace %q running status: %w", ws.Name, err)
-			}
-			running = false
-		}
-
-		if !running {
-			workspaceExplicit = true
-			if err := runUp(ctx, nil); err != nil {
-				return err
-			}
-			_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready...\n")
-			if err := waitForReadiness(ctx, ws.Port, ws.ExposePort, client); err != nil {
-				return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
-			}
-		} else {
-			interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
-			resolver := password.DefaultResolver(interactive, cfg.PasswordMode)
-			pwSource, peekErr := resolver.Peek(ws.Name)
-			if peekErr != nil {
-				return fmt.Errorf("check password for workspace %q: %w", ws.Name, peekErr)
-			}
-			if pwSource == "" {
-				workspaceExplicit = true
-				if err := runUp(ctx, nil); err != nil {
-					return fmt.Errorf("migrate workspace %q: %w", ws.Name, err)
-				}
-				_, _ = color.New(color.FgCyan).Printf("Waiting for OpenCode to be ready...\n")
-				if err := waitForReadiness(ctx, ws.Port, ws.ExposePort, client); err != nil {
-					return fmt.Errorf("wait for workspace %q readiness: %w", ws.Name, err)
-				}
-			}
-		}
-
-		mode := resolveFromFlags(cmd, cfg)
-		if !ws.ExposePort && mode != config.ModeExec {
-			if remoteFlag {
-				return fmt.Errorf("remote mode is unavailable for workspace %q because the port is not exposed", ws.Name)
-			}
-			mode = config.ModeExec
-		}
-		attachCtx, stop, err := startAttachWatch(ctx, client, ws.Name)
-		if err != nil {
-			return err
-		}
-		defer stop()
-
-		var attachErr error
-		switch mode {
-		case config.ModeExec:
-			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (exec mode)...\n", ws.Name)
-			attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
-		default:
-			_, _ = color.New(color.FgCyan).Printf("Attaching to workspace %s (remote mode)...\n", ws.Name)
-			attachErr = attachOnHost(attachCtx, ws, targetPath, cfg.PasswordMode, sessionFlag, continueFlag)
-			if errors.Is(attachErr, errPTYUnsupported) {
-				if remoteFlag {
-					return fmt.Errorf("remote mode requires PTY support, which is not available on this platform; use --exec instead")
-				}
-				_, _ = color.New(color.FgYellow).Println("PTY not supported, falling back to exec mode...")
-				attachErr = attachExec(attachCtx, client, targetPath, sessionFlag, continueFlag)
-			}
-		}
-		if attachErr != nil {
-			return fmt.Errorf("attach to workspace %q: %w", ws.Name, attachErr)
-		}
-
-		return nil
+		return runSessionVM(ctx, cfg, ws, vmSessionOptions{
+			dir: targetPath, session: sessionFlag, cont: continueFlag,
+			newAgent: newSessionFlag, attach: attachSessionFlag,
+		})
 	},
 }
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&workspaceFlag, "workspace", "w", "default", "workspace name")
-	rootCmd.PersistentFlags().BoolVar(&remoteFlag, "remote", false, "Use remote mode (host-side opencode attach)")
-	rootCmd.PersistentFlags().BoolVar(&execFlag, "exec", false, "Use exec mode (docker exec opencode inside container)")
 	rootCmd.PersistentFlags().Bool("no-color", false, "disable colored output")
 	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "session ID to continue")
 	rootCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "continue the last session")
-	rootCmd.MarkFlagsMutuallyExclusive("remote", "exec")
-	rootCmd.Flags().BoolVar(&newSessionFlag, "new", false, `start a new agent session instead of attaching to the running one (backend "vm")`)
-	rootCmd.Flags().StringVar(&attachSessionFlag, "attach", "", `attach to the agent session with this ID (backend "vm"; see jailoc sessions)`)
+	rootCmd.Flags().BoolVar(&newSessionFlag, "new", false, "start a new agent session instead of attaching to the running one")
+	rootCmd.Flags().StringVar(&attachSessionFlag, "attach", "", "attach to the agent session with this ID (see jailoc sessions)")
 	rootCmd.MarkFlagsMutuallyExclusive("session", "continue")
 	rootCmd.MarkFlagsMutuallyExclusive("new", "attach")
 	rootCmd.MarkFlagsMutuallyExclusive("attach", "session")
@@ -270,7 +181,7 @@ func confirmBroadPath(ctx context.Context, path string) (bool, error) {
 		return true, nil
 	}
 
-	_, _ = color.New(color.FgYellow).Printf("WARNING: %q is a very broad path — this will mount your entire directory tree into the container.\n", path)
+	_, _ = color.New(color.FgYellow).Printf("WARNING: %q is a very broad path — this will share your entire directory tree with the VM.\n", path)
 	_, _ = color.New(color.FgYellow, color.Bold).Print("Are you sure? [y/N]: ")
 
 	answer, err := readLineCtx(ctx)
@@ -309,18 +220,6 @@ func readLineCtx(ctx context.Context) (string, error) {
 	}
 }
 
-// resolveFromFlags returns the effective access mode based on CLI flags and config.
-// Priority: --remote/--exec flag → config mode → auto-detect via LookPath.
-func resolveFromFlags(_ *cobra.Command, cfg *config.Config) string {
-	if remoteFlag {
-		return config.ModeRemote
-	}
-	if execFlag {
-		return config.ModeExec
-	}
-	return config.ResolveMode(cfg.Mode)
-}
-
 // Execute is the entrypoint for the CLI. Version info is passed from main via ldflags.
 func Execute(version, commit, date string) error {
 	appVersion = version
@@ -351,77 +250,4 @@ func Execute(version, commit, date string) error {
 	}()
 
 	return rootCmd.Execute()
-}
-
-const (
-	readyPollInterval = 200 * time.Millisecond
-	readyPollTimeout  = 60 * time.Second
-)
-
-func waitForReadiness(ctx context.Context, port int, exposePort bool, dc *docker.Client) error {
-	if exposePort {
-		return waitForReady(ctx, port, dc)
-	}
-	return waitForReadyExec(ctx, workspace.BasePort, dc)
-}
-
-func waitForReady(ctx context.Context, port int, dc *docker.Client) error {
-	url := fmt.Sprintf("http://localhost:%d", port)
-
-	ctx, cancel := context.WithTimeout(ctx, readyPollTimeout)
-	defer cancel()
-
-	httpClient := &http.Client{Timeout: 2 * time.Second}
-	ticker := time.NewTicker(readyPollInterval)
-	defer ticker.Stop()
-
-	for {
-		state, exitCode, err := dc.ContainerState(ctx)
-		if err == nil && state == "exited" {
-			return fmt.Errorf("container exited with code %d before becoming ready", exitCode)
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out after %s waiting for %s", readyPollTimeout, url)
-		case <-ticker.C:
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				return fmt.Errorf("create readiness request: %w", err)
-			}
-			resp, err := httpClient.Do(req) //nolint:gosec // URL is localhost with controlled port
-			if err != nil {
-				continue
-			}
-			_ = resp.Body.Close()
-			return nil
-		}
-	}
-}
-
-func waitForReadyExec(ctx context.Context, port int, dc *docker.Client) error {
-	ctx, cancel := context.WithTimeout(ctx, readyPollTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(readyPollInterval)
-	defer ticker.Stop()
-
-	probeArgs := []string{"curl", "-s", fmt.Sprintf("http://localhost:%d", port)}
-
-	for {
-		state, exitCode, err := dc.ContainerState(ctx)
-		if err == nil && state == "exited" {
-			return fmt.Errorf("container exited with code %d before becoming ready", exitCode)
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out after %s waiting for in-container readiness probe", readyPollTimeout)
-		case <-ticker.C:
-			if err := dc.Exec(ctx, probeArgs, nil, nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
-				continue
-			}
-			return nil
-		}
-	}
 }

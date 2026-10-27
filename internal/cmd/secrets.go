@@ -1,36 +1,30 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 
-	"github.com/seznam/jailoc/internal/compose"
-	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
-// validateSecretSources performs the up-time checks that config.Validate cannot
-// do: it inspects the live host environment and file system so that jailoc up
-// and jailoc add fail fast instead of leaving the container to die on a missing
-// /run/secrets/<name>.
-//
-// It is shared by runUp and maybeRestartWorkspace and MUST be called before any
-// generated file is written (compose file, entrypoint, allowed-hosts and the
-// secret-env manifest) so an invalid or colliding configuration can never leave
-// a stale manifest behind.
-//
-// It never reads a secret value — only its metadata.
 func validateSecretSources(ws *workspace.Resolved) error {
 	envKeys := envKeySet(ws.Env)
 
 	for _, s := range ws.Secrets {
-		if s.FromEnv != "" {
+		switch {
+		case s.FromEnv != "":
 			if err := validateSecretEnvSource(s); err != nil {
 				return err
 			}
-		} else if err := validateSecretFileSource(s, ws.Backend); err != nil {
-			return err
+		case s.FromFile != "":
+			if err := validateSecretFileSource(s); err != nil {
+				return err
+			}
 		}
 
 		// Names are unique by construction: workspace.Resolve keys secrets by
@@ -43,26 +37,18 @@ func validateSecretSources(ws *workspace.Resolved) error {
 	return nil
 }
 
-// validateSecretEnvSource rejects a host environment variable that is unset or
-// set-but-empty. Docker Compose silently omits an empty environment-sourced
-// secret, so /run/secrets/<name> would simply not exist inside the container.
 func validateSecretEnvSource(s workspace.ResolvedSecret) error {
 	value, ok := os.LookupEnv(s.FromEnv)
 	if !ok {
 		return fmt.Errorf("secret %q: host environment variable %q is not set", s.Name, s.FromEnv)
 	}
 	if value == "" {
-		return fmt.Errorf("secret %q: host environment variable %q is set but empty; Docker Compose omits empty secrets, so /run/secrets/%s would not exist", s.Name, s.FromEnv, s.Name)
+		return fmt.Errorf("secret %q: host environment variable %q is set but empty", s.Name, s.FromEnv)
 	}
 	return nil
 }
 
-// validateSecretFileSource checks a host file once and applies the
-// world-readable gate only where it matters: a file-destination secret is
-// bind-mounted straight to the unprivileged agent, whereas an env-destination
-// secret is read by entrypoint.sh as root before setpriv drops privileges.
-// The VM backend reads every secret file on the host, so it skips the gate.
-func validateSecretFileSource(s workspace.ResolvedSecret, backend string) error {
+func validateSecretFileSource(s workspace.ResolvedSecret) error {
 	fi, err := os.Stat(s.FromFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -72,14 +58,6 @@ func validateSecretFileSource(s workspace.ResolvedSecret, backend string) error 
 	}
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("secret %q: file %q is not a regular file", s.Name, s.FromFile)
-	}
-	if s.Kind != workspace.SecretKindFile || backend == config.BackendVM {
-		// The VM backend reads secret files on the host and writes them into
-		// the guest's /run/secrets owned by the agent.
-		return nil
-	}
-	if mode := fi.Mode().Perm(); mode&0o004 == 0 {
-		return fmt.Errorf("secret %q: file %q is not world-readable (mode %04o); the agent runs as UID 1000 and this is a conservative check — run 'chmod o+r %s' to make it readable inside the container", s.Name, s.FromFile, mode, s.FromFile)
 	}
 	return nil
 }
@@ -100,50 +78,61 @@ func envKeySet(env []string) map[string]bool {
 }
 
 // secretReference renders a secret for jailoc config output. It emits the
-// source REFERENCE (host variable name or host path) and never resolves it, so
-// no secret value can reach stdout.
+// source REFERENCE (host variable name, host path or command) and never
+// resolves it, so no secret value can reach stdout.
 func secretReference(s workspace.ResolvedSecret) string {
 	destWord := "file"
 	if s.Kind == workspace.SecretKindEnv {
 		destWord = "env"
 	}
-	sourceWord := "file"
-	value := s.FromFile
-	if s.FromEnv != "" {
-		sourceWord = "env"
-		value = s.FromEnv
+	switch {
+	case s.FromEnv != "":
+		return fmt.Sprintf("%s (%s from_env %s)", s.Name, destWord, s.FromEnv)
+	case s.FromCommand != "":
+		return fmt.Sprintf("%s (%s from_command %q)", s.Name, destWord, s.FromCommand)
+	default:
+		return fmt.Sprintf("%s (%s from_file %s)", s.Name, destWord, s.FromFile)
 	}
-	return fmt.Sprintf("%s (%s from_%s %s)", s.Name, destWord, sourceWord, value)
 }
 
-// secretSpecs maps resolved secrets onto compose secret sources. The order of
-// ws.Secrets is preserved: workspace.Resolve already sorts it by Name, and that
-// sort is the single source of ordering for the compose file, so re-sorting
-// here would be redundant.
-func secretSpecs(ws *workspace.Resolved) []compose.SecretSpec {
-	if len(ws.Secrets) == 0 {
-		return nil
-	}
-	specs := make([]compose.SecretSpec, 0, len(ws.Secrets))
-	for _, s := range ws.Secrets {
-		if s.FromEnv != "" {
-			specs = append(specs, compose.SecretSpec{Name: s.Name, Environment: s.FromEnv})
-		} else {
-			specs = append(specs, compose.SecretSpec{Name: s.Name, File: s.FromFile})
-		}
-	}
-	return specs
-}
+// secretCommandTimeout bounds a from_command run, which may wait for the
+// user to unlock a password manager.
+const secretCommandTimeout = 2 * time.Minute
 
-// secretEnvNames returns the names of the env-destination secrets, in
-// ws.Secrets order. Every env secret is exported under its own name, so the
-// name is the entire manifest record.
-func secretEnvNames(ws *workspace.Resolved) []string {
-	var names []string
-	for _, s := range ws.Secrets {
-		if s.Kind == workspace.SecretKindEnv {
-			names = append(names, s.Name)
+// readSecret returns the value of s from its host source. A from_command
+// runs with the terminal attached, so password managers can prompt. Env
+// secret values lose their trailing line break and must fit on one line.
+func readSecret(ctx context.Context, s workspace.ResolvedSecret) ([]byte, error) {
+	var value []byte
+	switch {
+	case s.FromEnv != "":
+		value = []byte(os.Getenv(s.FromEnv))
+	case s.FromFile != "":
+		data, err := os.ReadFile(s.FromFile)
+		if err != nil {
+			return nil, fmt.Errorf("read secret %q: %w", s.Name, err)
+		}
+		value = data
+	default:
+		ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
+		cmd.Stdin = os.Stdin
+		cmd.Stderr = os.Stderr
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("secret %q: from_command %q printed nothing", s.Name, s.FromCommand)
+		}
+		value = out
+	}
+	if s.Kind == workspace.SecretKindEnv {
+		value = bytes.TrimRight(value, "\r\n")
+		if bytes.ContainsAny(value, "\r\n\x00") {
+			return nil, fmt.Errorf("env secret %q: value spans several lines or contains NUL; use a file secret", s.Name)
 		}
 	}
-	return names
+	return value, nil
 }

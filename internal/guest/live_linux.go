@@ -9,24 +9,36 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"syscall"
 )
 
 // originalCA keeps the image's system CA bundle so a changed or removed
 // workspace bundle can be applied on top of the original.
 const originalCA = "/run/jailoc-system-ca.crt"
 
-// liveState applies Reload requests: the CA bundle and the SSH agent relay.
+// liveState applies Reload requests: the CA bundle, the SSH agent relay and
+// the snapshot binds.
 type liveState struct {
 	logger    *slog.Logger
 	acct      account
 	seq       int64
 	applied   Reload
 	stopAgent func()
+	// snapshots are the bound snapshots, in bind order.
+	snapshots []Snapshot
+	// created holds the snapshot mount points the guest created.
+	created map[string]bool
 }
 
 func (l *liveState) apply(r Reload) error {
 	if err := setCABundle(r.CABundle); err != nil {
 		return err
+	}
+	if !slices.Equal(r.Snapshots, l.snapshots) {
+		if err := l.setSnapshots(r.Snapshots); err != nil {
+			return err
+		}
 	}
 	switch {
 	case r.SSHAgent && l.stopAgent == nil:
@@ -40,6 +52,34 @@ func (l *liveState) apply(r Reload) error {
 		l.stopAgent = nil
 	}
 	l.applied = r
+	return nil
+}
+
+// setSnapshots replaces the bound snapshots with next. Old binds are detached
+// lazily, so open files keep their content; mount points the guest created
+// for snapshots that are gone are removed.
+func (l *liveState) setSnapshots(next []Snapshot) error {
+	for i := len(l.snapshots) - 1; i >= 0; i-- {
+		target := l.snapshots[i].Target
+		if err := syscall.Unmount(target, syscall.MNT_DETACH); err != nil && !errors.Is(err, syscall.EINVAL) {
+			return fmt.Errorf("snapshot %s: unmount: %w", target, err)
+		}
+		l.snapshots = l.snapshots[:i]
+		if l.created[target] && !slices.ContainsFunc(next, func(s Snapshot) bool { return s.Target == target }) {
+			_ = os.Remove(target)
+			delete(l.created, target)
+		}
+	}
+	for _, s := range next {
+		created, err := bindSnapshot(s, l.acct)
+		if created {
+			l.created[s.Target] = true
+		}
+		if err != nil {
+			return err
+		}
+		l.snapshots = append(l.snapshots, s)
+	}
 	return nil
 }
 
@@ -59,7 +99,7 @@ func (l *liveState) poll() {
 		l.logger.Error("reload", "error", err)
 		done.Error = err.Error()
 	} else {
-		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent)
+		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "snapshots", len(r.Snapshots))
 	}
 	out, _ := json.Marshal(done)
 	tmp := filepath.Join(ControlDir, ReloadDoneFile+".tmp")

@@ -53,7 +53,7 @@ func TestVMPolicy(t *testing.T) {
 	ws := &workspace.Resolved{
 		Name:            "w",
 		AllowedNetworks: []string{"10.1.0.0/16", "10.1.0.5/16", "fd00::/8"},
-		AllowedHosts:    []string{"192.168.1.10", "10.1.0.0"},
+		AllowedHosts:    []string{"192.168.1.10", "10.1.0.0", "fd12::7"},
 	}
 	data, err := vmPolicy(context.Background(), ws)
 	if err != nil {
@@ -67,8 +67,10 @@ func TestVMPolicy(t *testing.T) {
 	}
 	want := []vmException{
 		{CIDR: "10.1.0.0/16", Proto: "any"},
+		{CIDR: "fd00::/8", Proto: "any"},
 		{CIDR: "192.168.1.10/32", Proto: "any"},
 		{CIDR: "10.1.0.0/32", Proto: "any"},
+		{CIDR: "fd12::7/128", Proto: "any"},
 	}
 	if !slices.Equal(got.Exceptions, want) {
 		t.Fatalf("exceptions = %v, want %v", got.Exceptions, want)

@@ -40,13 +40,13 @@ type Share struct {
 	ReadOnly  bool   `json:"read_only,omitempty"`
 }
 
-// CopiesDir is the guest path of the read-only share holding the staged
-// copies.
-const CopiesDir = Dir + "/copies"
+// SnapshotsDir is the guest path of the read-only share holding the staged
+// snapshots.
+const SnapshotsDir = Dir + "/snapshots"
 
-// Copy binds Source, a file or directory inside CopiesDir, read-only at
+// Snapshot binds Source, a file or directory inside SnapshotsDir, read-only at
 // Target.
-type Copy struct {
+type Snapshot struct {
 	Source string `json:"source"`
 	Target string `json:"target"`
 }
@@ -62,9 +62,9 @@ type Config struct {
 	Shares        []Share  `json:"shares"`
 	AuthorizedKey string   `json:"authorized_key"`
 	Env           []string `json:"env,omitempty"`
-	// Copies are read-only snapshots bound from the staged copies share
-	// to their destinations.
-	Copies []Copy `json:"copies,omitempty"`
+	// Snapshots are read-only host files and directories bound from the
+	// staged snapshots share to their destinations.
+	Snapshots []Snapshot `json:"snapshots,omitempty"`
 	// CABundle is a guest path appended to the system CA bundle.
 	CABundle string `json:"ca_bundle,omitempty"`
 	// SSHAgent exposes the host SSH agent at SSHAgentSocket, relayed

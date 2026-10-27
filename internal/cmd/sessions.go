@@ -21,7 +21,7 @@ type vmSessionOptions struct {
 
 var sessionsCmd = &cobra.Command{
 	Use:   "sessions",
-	Short: `List agent sessions running in a workspace VM (backend "vm")`,
+	Short: "List agent sessions running in a workspace VM",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		ws, err := resolveVMWorkspace()
@@ -46,7 +46,7 @@ var sessionsStopCmd = &cobra.Command{
 }
 
 // resolveVMWorkspace resolves --workspace or the workspace of the current
-// directory and requires backend "vm".
+// directory.
 func resolveVMWorkspace() (*workspace.Resolved, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -68,9 +68,6 @@ func resolveVMWorkspace() (*workspace.Resolved, error) {
 	ws, err := workspace.Resolve(cfg, name)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace: %w", err)
-	}
-	if ws.Backend != config.BackendVM {
-		return nil, fmt.Errorf(`workspace %q: agent sessions need backend "vm"`, ws.Name)
 	}
 	return ws, nil
 }
