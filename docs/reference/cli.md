@@ -150,6 +150,66 @@ jailoc logs [workspace] [flags]
 
 ---
 
+### `jailoc traffic`
+
+Print the network activity of a workspace VM from the network broker's log: allowed and denied connections with the DNS name they were looked up by, the TLS server name and ALPN or the HTTP method, host and path (without query string) of allowed TCP connections, DNS answers, names blocked by `filtered_dns`, failed dials and connections to published ports. The log persists after the VM stops.
+
+```
+jailoc traffic [workspace] [flags]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--follow` | `-f` | Keep printing new events until interrupted. |
+| `--lines N` | `-n` | Number of past events to print. Default `100`; `0` prints none, `-1` all. |
+| `--json` | | Print the shown events as their JSON log lines. |
+| `--all` | | Also show DHCP, NIC, gateway service and jailoc's own SSH connections. |
+
+TLS connections are identified from the unencrypted ClientHello only; their content is not decrypted.
+
+---
+
+### `jailoc strace`
+
+Print the processes started in a workspace VM: time, PID, parent PID, user, working directory and command line. The guest records every process start from boot; the log of the previous boot is kept as `exec.prev.jsonl` in the VM state directory.
+
+```
+jailoc strace [workspace] [flags]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--follow` | `-f` | Keep printing new processes until interrupted. |
+| `--lines N` | `-n` | Number of past processes to print. Default `100`; `0` prints none, `-1` all. |
+| `--json` | | Print the shown records as JSON lines. |
+| `--all` | | Also show jailoc's own guest processes. |
+
+The record is written inside the VM: root in the VM (`sudo`) can stop or alter it. Processes that exit before the guest reads their details show only their name.
+
+---
+
+### `jailoc exec`
+
+Run a command as the agent user in a running workspace VM.
+
+```
+jailoc exec [flags] -- COMMAND [ARG...]
+```
+
+The command runs with the session environment and secrets, in the current directory when a workspace path contains it, otherwise in the first workspace path. When standard input is a terminal, the command gets one, including window size changes. The command's exit status becomes jailoc's exit status. Flags must come before the command.
+
+---
+
+### `jailoc shell`
+
+Open a login shell as the agent user in a running workspace VM, in the same directory as `jailoc exec`. The shell is not a detachable session: closing the terminal ends it.
+
+```
+jailoc shell [workspace] [flags]
+```
+
+---
+
 ### `jailoc sessions`
 
 List the agent sessions running in a workspace VM, or stop one.

@@ -251,6 +251,10 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		}
 	}
 	ctl := controlDir(spec.StateDir)
+	// Keep the process log of the previous boot next to the new one.
+	if err := os.Rename(filepath.Join(ctl, guest.ExecLogFile), PrevExecLog(spec.StateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("keep previous exec log: %w", err)
+	}
 	if err := os.RemoveAll(ctl); err != nil {
 		return fmt.Errorf("reset vm control dir: %w", err)
 	}
@@ -332,7 +336,7 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 		"-policy", policyPath,
 		"-runtime", BrokerRuntimeFile(spec.StateDir),
 		"-subnet", Subnet, "-gateway", Gateway, "-guest", GuestIP,
-		"-log", filepath.Join(spec.StateDir, "broker.jsonl"),
+		"-log", TrafficLog(spec.StateDir),
 	)
 	if spec.Kind == KindWorkspace {
 		args = append(args, "-forward-unix", SSHSocket(spec.StateDir)+"="+strconv.Itoa(guest.SSHPort))
@@ -504,6 +508,15 @@ const stopGrace = 30 * time.Second
 const guestShutdownWait = 20 * time.Second
 
 func controlDir(stateDir string) string { return filepath.Join(stateDir, "control") }
+
+// ExecLog is the guest's process log of the running boot.
+func ExecLog(stateDir string) string { return filepath.Join(controlDir(stateDir), guest.ExecLogFile) }
+
+// PrevExecLog is the process log of the previous boot.
+func PrevExecLog(stateDir string) string { return filepath.Join(stateDir, "exec.prev.jsonl") }
+
+// TrafficLog is the network broker's event log.
+func TrafficLog(stateDir string) string { return filepath.Join(stateDir, "broker.jsonl") }
 
 // ControlDir is the directory shared read-write with the workspace guest
 // for shutdown and reload requests.

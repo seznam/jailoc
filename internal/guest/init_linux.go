@@ -109,6 +109,13 @@ func Init(logger *slog.Logger) error {
 	// enforced on the host. Guest-side protections (Pins, ReadOnly) only
 	// hold while sessions cannot gain privileges.
 	harden.KernelDefaults(logger)
+	// Record process starts before anything else runs; a kernel without the
+	// proc connector only loses the log.
+	if stopExecLog, err := startExecLog(logger); err != nil {
+		logger.Warn("exec log disabled", "error", err)
+	} else {
+		defer stopExecLog()
+	}
 	var docker *dockerDaemon
 	if cfg.Docker != nil {
 		if docker, err = startDocker(logger, cfg.Docker, acct); err != nil {

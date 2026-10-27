@@ -327,6 +327,28 @@ func TestWorkspaceVM(t *testing.T) {
 		}
 	})
 
+	t.Run("traffic, strace and exec", func(t *testing.T) {
+		traffic := jailoc(ctx, t, agentSock, "traffic", "-n", "-1", "--json")
+		for _, want := range []string{`"event":"l7"`, `"sni":"example.com"`, `"reason":"denied-range"`} {
+			if !strings.Contains(traffic, want) {
+				t.Fatalf("traffic log misses %s:\n%s", want, tail([]byte(traffic), 4000))
+			}
+		}
+		if procs := jailoc(ctx, t, agentSock, "strace", "-n", "-1"); !strings.Contains(procs, "curl -sS -m 20") {
+			t.Fatalf("strace misses the curl command:\n%s", tail([]byte(procs), 4000))
+		}
+		if got := strings.TrimSpace(jailoc(ctx, t, agentSock, "exec", "--", "sh", "-c", "id -un; pwd")); got != "agent\n"+project {
+			t.Fatalf("exec output = %q", got)
+		}
+		cmd := exec.CommandContext(ctx, binaryPath, "exec", "--", "sh", "-c", "exit 5") //nolint:gosec // G204: the jailoc binary under test
+		cmd.Dir = project
+		cmd.Env = append(os.Environ(), "HOME="+home)
+		var exitErr *exec.ExitError
+		if err := cmd.Run(); !errors.As(err, &exitErr) || exitErr.ExitCode() != 5 {
+			t.Fatalf("exec exit status = %v, want 5", err)
+		}
+	})
+
 	t.Run("filtered DNS", func(t *testing.T) {
 		if out, err := guest(ctx, t, "getent hosts example.org"); err == nil {
 			t.Fatalf("blocked zone resolved: %s", out)

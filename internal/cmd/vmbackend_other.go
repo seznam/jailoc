@@ -9,6 +9,7 @@ import (
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 var errVMUnsupported = errors.New(`backend "vm" is supported on macOS and Linux only`)
@@ -32,3 +33,13 @@ func logsVM(context.Context, *workspace.Resolved, bool, io.Writer) error { retur
 func restartVMIfRunning(context.Context, *workspace.Resolved) error { return errVMUnsupported }
 
 func reloadVM(context.Context, *workspace.Resolved) error { return errVMUnsupported }
+
+func trafficVM(context.Context, *workspace.Resolved, logView, bool, io.Writer) error {
+	return errVMUnsupported
+}
+
+func execLogVM(context.Context, *workspace.Resolved, logView, bool, io.Writer) error {
+	return errVMUnsupported
+}
+
+func execVM(*cobra.Command, *workspace.Resolved, []string) error { return errVMUnsupported }

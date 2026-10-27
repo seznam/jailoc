@@ -13,7 +13,7 @@ Key facts:
 
 ## Reference
 
-- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): Root command (`--new`, `--attach`, `-c`, `-s`, `-w`) and all subcommands (`up`, `down --purge`, `restart`, `reload`, `sessions`, `logs`, `status`, `add`, `config`, `migrate`) with flags
+- [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): Root command (`--new`, `--attach`, `-c`, `-s`, `-w`) and all subcommands (`up`, `down --purge`, `restart`, `reload`, `sessions`, `logs`, `traffic`, `strace`, `exec`, `shell`, `status`, `add`, `config`, `migrate`) with flags
 - [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field in `[base]`, `[vm]`, `[defaults]` and `[workspaces.<name>]`, with types, defaults, validation rules and merge semantics
 - [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): How the workspace image is chosen, built and exported into the VM
 - [Default Image Contents](https://seznam.github.io/jailoc/reference/default-image/): Tools and runtimes shipped in the embedded base image

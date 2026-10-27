@@ -60,7 +60,7 @@ func main() {
 	}
 
 	if err := cmd.Execute(version, commit, date); err != nil {
-		os.Exit(1)
+		os.Exit(cmd.ExitCode(err))
 	}
 }
 

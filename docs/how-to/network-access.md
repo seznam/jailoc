@@ -20,6 +20,14 @@ jailoc resolves each name on the host when the VM starts or reloads, and allows 
 !!! note
     Addresses aren't re-resolved while the VM runs. If a host's address changes, run `jailoc reload <workspace>`.
 
+## See what the agent connects to
+
+```bash
+jailoc traffic -f
+```
+
+Each line shows a connection with the name it was looked up by and the verdict; denied ones show the reason (for example `denied-range`), which tells you which host or range to allow. See [`jailoc traffic`](../reference/cli.md#jailoc-traffic).
+
 ## Allow a CIDR range
 
 Use `allowed_networks` to open a whole subnet on all ports. IPv4 and IPv6 ranges are both accepted:

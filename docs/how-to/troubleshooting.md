@@ -12,7 +12,8 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 |------|---------|
 | `supervisor.log` | VM supervisor output: broker and VM start, readiness, shutdown reason |
 | `microvm/console.log` | Guest console: boot and SSH connections |
-| `broker.jsonl` | Network broker decisions, one JSON object per line |
+| `broker.jsonl` | Network broker decisions, one JSON object per line; read it with `jailoc traffic` |
+| `control/exec.jsonl` | Processes started in the guest; read it with `jailoc strace` |
 | `state.json` | Supervisor PID and readiness |
 
 Print the two logs with:
@@ -20,6 +21,15 @@ Print the two logs with:
 ```bash
 jailoc logs <workspace>
 jailoc logs -f <workspace>   # follow
+```
+
+Inspect what runs inside the VM:
+
+```bash
+jailoc traffic -f            # connections and DNS lookups, live
+jailoc strace -n 50          # the last 50 processes started
+jailoc shell                 # a shell as the agent user
+jailoc exec -- ps aux        # one command
 ```
 
 ## Config rejects a jailoc v1 setting
@@ -117,7 +127,7 @@ allowed_networks = ["10.10.5.0/24"]
 jailoc reload myproject
 ```
 
-`broker.jsonl` shows every denied connection with its reason. On macOS, local-network hosts also need the Local Network permission. See [How to allow specific hosts or networks](network-access.md).
+`jailoc traffic` shows every denied connection with its reason. On macOS, local-network hosts also need the Local Network permission. See [How to allow specific hosts or networks](network-access.md).
 
 ## Image build fails
 
