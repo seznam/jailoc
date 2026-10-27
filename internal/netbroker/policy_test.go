@@ -44,7 +44,7 @@ func TestDecide(t *testing.T) {
 		{"metadata", p, ProtoTCP, "169.254.169.254:80", false, "hard-deny"},
 		{"gateway", p, ProtoTCP, "192.168.127.1:22", false, "gateway"},
 		{"guest network", p, ProtoTCP, "192.168.127.7:22", false, "guest-network"},
-		{"ipv6", p, ProtoTCP, "[2606:4700:4700::1111]:443", false, "ipv6"},
+		{"ipv6", p, ProtoTCP, "[2606:4700:4700::1111]:443", true, "public"},
 		{"mapped v4 evaluated as v4", p, ProtoTCP, "[::ffff:10.1.2.3]:80", false, "denied-range"},
 		{"cgnat", p, ProtoTCP, "100.100.1.1:80", false, "denied-range"},
 		{"broadcast", p, ProtoUDP, "255.255.255.255:67", false, "hard-deny"},
@@ -70,7 +70,7 @@ func TestParsePolicyRejects(t *testing.T) {
 	for name, in := range map[string]string{
 		"unknown field":          `{"exceptoins":[]}`,
 		"bad cidr":               `{"exceptions":[{"cidr":"10.0.0.0/33","proto":"tcp"}]}`,
-		"ipv6 cidr":              `{"exceptions":[{"cidr":"fd00::/8","proto":"tcp"}]}`,
+		"bad ipv6 cidr":          `{"exceptions":[{"cidr":"fd00::/129","proto":"tcp"}]}`,
 		"bad proto":              `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"icmp"}]}`,
 		"bad port":               `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"tcp","ports":["0"]}]}`,
 		"reversed":               `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"tcp","ports":["90-80"]}]}`,

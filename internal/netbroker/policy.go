@@ -67,9 +67,6 @@ func (e *Exception) compile() error {
 	if err != nil {
 		return fmt.Errorf("exception cidr %q: %w", e.CIDR, err)
 	}
-	if !pfx.Addr().Is4() {
-		return fmt.Errorf("exception cidr %q: only IPv4 is supported", e.CIDR)
-	}
 	e.prefix = pfx.Masked()
 	switch e.Proto {
 	case ProtoTCP, ProtoUDP, ProtoAny:
@@ -211,18 +208,20 @@ type Decision struct {
 // Decide evaluates a new guest flow to dst. Gateway services (DNS, DHCP) are
 // served by the broker itself and never reach Decide.
 func Decide(p *Policy, env Env, proto string, dst netip.AddrPort) Decision {
-	a := dst.Addr().Unmap()
+	a := dst.Addr().WithZone("")
 	switch {
 	case p == nil || p.denyAll:
 		return Decision{Reason: "fail-closed"}
-	case !a.Is4():
-		return Decision{Reason: "ipv6"}
+	case !a.IsValid():
+		return Decision{Reason: "invalid-address"}
 	case a == env.Gateway:
 		return Decision{Reason: "gateway"}
 	case env.Subnet.Contains(a):
 		return Decision{Reason: "guest-network"}
 	case env.HostAddrs[a]:
 		return Decision{Reason: "host-address"}
+	case a.Is6():
+		return decideIPv6(p, env, proto, netip.AddrPortFrom(a, dst.Port()))
 	case inAny(a, hardDeniedV4):
 		return Decision{Reason: "hard-deny"}
 	case len(p.blockedZones) > 0 && dst.Port() == 53:

@@ -15,10 +15,12 @@ import (
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/link/ethernet"
 	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
@@ -69,11 +71,13 @@ type Config struct {
 
 // Broker owns the userspace stack for one guest NIC.
 type Broker struct {
-	cfg    Config
-	stack  *stack.Stack
-	link   *channel.Endpoint
-	policy atomic.Pointer[Policy]
-	hosts  addrCache
+	cfg     Config
+	stack   *stack.Stack
+	link    *channel.Endpoint
+	policy  atomic.Pointer[Policy]
+	hosts   addrCache
+	dialTCP func(string, string) (net.Conn, error)
+	dialUDP func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)
 
 	logMu sync.Mutex
 	log   *json.Encoder
@@ -88,7 +92,7 @@ type Broker struct {
 
 // New builds the stack. It does not open any socket.
 func New(cfg Config, p *Policy) (*Broker, error) {
-	if !cfg.Subnet.Contains(cfg.Gateway) || !cfg.Subnet.Contains(cfg.GuestIP) || cfg.Gateway == cfg.GuestIP {
+	if !cfg.Gateway.Is4() || !cfg.GuestIP.Is4() || !cfg.Subnet.Contains(cfg.Gateway) || !cfg.Subnet.Contains(cfg.GuestIP) || cfg.Gateway == cfg.GuestIP {
 		return nil, fmt.Errorf("gateway %s and guest %s must be distinct addresses in %s", cfg.Gateway, cfg.GuestIP, cfg.Subnet)
 	}
 	if cfg.MTU == 0 {
@@ -98,10 +102,12 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 		cfg.Log = io.Discard
 	}
 	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log)}
+	b.dialTCP = (&net.Dialer{Timeout: dialTimeout}).Dial
+	b.dialUDP = net.DialUDP
 	b.policy.Store(p)
 
 	s := stack.New(stack.Options{
-		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol},
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
 	b.link = channel.New(512, cfg.MTU+14, gatewayMAC)
@@ -118,7 +124,18 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 	}, stack.AddressProperties{}); err != nil {
 		return nil, fmt.Errorf("add gateway address: %s", err)
 	}
-	s.SetRouteTable([]tcpip.Route{{Destination: headerIPv4Any(), NIC: nicID}})
+	for _, address := range []netip.Addr{gateway6, linkLocal6} {
+		if err := s.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
+			Protocol:          ipv6.ProtocolNumber,
+			AddressWithPrefix: tcpip.AddressWithPrefix{Address: tcpip.AddrFrom16(address.As16()), PrefixLen: 64},
+		}, stack.AddressProperties{}); err != nil {
+			return nil, fmt.Errorf("add IPv6 gateway address: %s", err)
+		}
+	}
+	s.SetRouteTable([]tcpip.Route{
+		{Destination: headerIPv4Any(), NIC: nicID},
+		{Destination: header.IPv6EmptySubnet, NIC: nicID},
+	})
 	if err := s.SetPromiscuousMode(nicID, true); err != nil {
 		return nil, fmt.Errorf("promiscuous mode: %s", err)
 	}
@@ -283,9 +300,11 @@ func (c *addrCache) get() map[netip.Addr]bool {
 	}
 	set := map[netip.Addr]bool{}
 	if addrs, err := net.InterfaceAddrs(); err == nil {
-		for _, a := range addrs {
-			if p, err := netip.ParsePrefix(a.String()); err == nil {
-				set[p.Addr().WithZone("").Unmap()] = true
+		for _, address := range addrs {
+			if ipnet, ok := address.(*net.IPNet); ok {
+				if ip, ok := netip.AddrFromSlice(ipnet.IP); ok {
+					set[ip.WithZone("").Unmap()] = true
+				}
 			}
 		}
 	}

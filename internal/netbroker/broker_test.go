@@ -18,10 +18,12 @@ import (
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/link/ethernet"
 	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
@@ -49,9 +51,10 @@ func (s *syncBuf) String() string {
 func fakeGuest(t *testing.T, ctx context.Context, sock string) *stack.Stack {
 	t.Helper()
 	s := stack.New(stack.Options{
-		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol},
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
+	t.Cleanup(s.Close)
 	link := channel.New(256, 1514, tcpip.LinkAddress("\x02\x00\x00\x00\x00\x02"))
 	if err := s.CreateNIC(1, ethernet.New(link)); err != nil {
 		t.Fatalf("guest nic: %s", err)
@@ -62,7 +65,16 @@ func fakeGuest(t *testing.T, ctx context.Context, sock string) *stack.Stack {
 	}, stack.AddressProperties{}); err != nil {
 		t.Fatalf("guest addr: %s", err)
 	}
-	s.SetRouteTable([]tcpip.Route{{Destination: headerIPv4Any(), Gateway: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), NIC: 1}})
+	if err := s.AddProtocolAddress(1, tcpip.ProtocolAddress{
+		Protocol:          ipv6.ProtocolNumber,
+		AddressWithPrefix: tcpip.AddressWithPrefix{Address: tcpip.AddrFrom16(netip.MustParseAddr("fd00:127::2").As16()), PrefixLen: 64},
+	}, stack.AddressProperties{}); err != nil {
+		t.Fatalf("guest IPv6 addr: %s", err)
+	}
+	s.SetRouteTable([]tcpip.Route{
+		{Destination: headerIPv4Any(), Gateway: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), NIC: 1},
+		{Destination: header.IPv6EmptySubnet, Gateway: tcpip.AddrFrom16(netip.MustParseAddr("fe80::1").As16()), NIC: 1},
+	})
 	c, err := net.Dial("unix", sock)
 	if err != nil {
 		t.Fatalf("dial broker: %v", err)

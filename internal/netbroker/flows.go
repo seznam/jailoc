@@ -32,8 +32,7 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true)
 		return
 	}
-	d := net.Dialer{Timeout: dialTimeout}
-	out, err := d.Dial("tcp", dst.String())
+	out, err := b.dialTCP("tcp", dst.String())
 	if err != nil {
 		b.record(map[string]any{"event": "dial-error", "proto": ProtoTCP, "dst": dst.String(), "error": err.Error()})
 		r.Complete(true)
@@ -59,7 +58,7 @@ func (b *Broker) handleUDP(r *udp.ForwarderRequest) bool {
 	if !b.decide(ProtoUDP, src, dst).Allow {
 		return false
 	}
-	out, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(dst))
+	out, err := b.dialUDP("udp", nil, net.UDPAddrFromAddrPort(dst))
 	if err != nil {
 		b.record(map[string]any{"event": "dial-error", "proto": ProtoUDP, "dst": dst.String(), "error": err.Error()})
 		return false
