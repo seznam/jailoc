@@ -256,7 +256,7 @@ func mustGuest(ctx context.Context, t *testing.T, command string) string {
 
 func dumpLogs(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"supervisor.log", "microvm/console.log", "broker.jsonl"} {
+	for _, name := range []string{"supervisor.log", "microvm/vm.log", "microvm/console.log", "broker.jsonl"} {
 		data, err := os.ReadFile(filepath.Join(stateDir(), name)) //nolint:gosec // G304: test state file
 		if err != nil {
 			continue
