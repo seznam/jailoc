@@ -28,7 +28,8 @@ const (
 func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
-	if !b.decide(ProtoTCP, src, dst).Allow {
+	conn := b.connSeq.Add(1)
+	if !b.decide(ProtoTCP, src, dst, conn).Allow {
 		r.Complete(true)
 		return
 	}
@@ -46,7 +47,11 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 	r.Complete(false)
-	go splice(gonet.NewTCPConn(&wq, ep), out)
+	guest := &sniffConn{Conn: gonet.NewTCPConn(&wq, ep), report: func(info map[string]any) {
+		info["event"], info["conn"], info["dst"] = "l7", conn, dst.String()
+		b.record(info)
+	}}
+	go splice(guest, out)
 }
 
 // handleUDP runs for every new guest UDP flow. Returning false makes the
@@ -55,7 +60,7 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 func (b *Broker) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
-	if !b.decide(ProtoUDP, src, dst).Allow {
+	if !b.decide(ProtoUDP, src, dst, b.connSeq.Add(1)).Allow {
 		return false
 	}
 	out, err := b.dialUDP("udp", nil, net.UDPAddrFromAddrPort(dst))

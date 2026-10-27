@@ -88,6 +88,9 @@ type Broker struct {
 	statusMu sync.Mutex
 
 	runtime runtimeState
+
+	// connSeq numbers guest flows so l7 events refer to their flow event.
+	connSeq atomic.Uint64
 }
 
 // New builds the stack. It does not open any socket.
@@ -163,9 +166,9 @@ func (b *Broker) env() Env {
 	return Env{Gateway: b.cfg.Gateway, Subnet: b.cfg.Subnet, HostAddrs: b.hosts.get()}
 }
 
-func (b *Broker) decide(proto string, src, dst netip.AddrPort) Decision {
+func (b *Broker) decide(proto string, src, dst netip.AddrPort, conn uint64) Decision {
 	d := Decide(b.policy.Load(), b.env(), proto, dst)
-	b.record(map[string]any{"event": "flow", "proto": proto, "src": src.String(), "dst": dst.String(), "allow": d.Allow, "reason": d.Reason})
+	b.record(map[string]any{"event": "flow", "conn": conn, "proto": proto, "src": src.String(), "dst": dst.String(), "allow": d.Allow, "reason": d.Reason})
 	return d
 }
 
