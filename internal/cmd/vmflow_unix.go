@@ -73,12 +73,16 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err := writeTUIConfig(cacheDir); err != nil {
 		return err
 	}
-	gitConfig := ""
-	if src := resolveGitConfig(ws.GitConfig); src != "" {
-		if err := copyFile(src, filepath.Join(cacheDir, "gitconfig")); err != nil {
-			return err
-		}
-		gitConfig = filepath.Join(guestCacheDir, "gitconfig")
+	shares, err := vmShares(ws, cacheDir)
+	if err != nil {
+		return err
+	}
+	copies, err := vmCopies(ws)
+	if err != nil {
+		return err
+	}
+	if err := checkCopies(ws, copies, shares); err != nil {
+		return err
 	}
 
 	rt, err := vmRuntime(ctx, cfg)
@@ -90,7 +94,14 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		return err
 	}
 
-	spec, err := workspaceSpec(ctx, ws, rt, ref, cacheDir, gitConfig)
+	stagedDir, binds, err := stageCopies(stateDir, copies)
+	if err != nil {
+		return fmt.Errorf("workspace %q: %w", ws.Name, err)
+	}
+	if stagedDir != "" {
+		shares = append(shares, vm.Share{HostPath: stagedDir, GuestPath: guest.CopiesDir, ReadOnly: true})
+	}
+	spec, err := workspaceSpec(ctx, ws, rt, ref, shares, binds)
 	if err != nil {
 		return err
 	}
@@ -185,14 +196,10 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 }
 
 // workspaceSpec describes the workspace VM booting ref.
-func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFiles, ref, cacheDir, gitConfig string) (vm.Spec, error) {
+func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFiles, ref string, shares []vm.Share, copies []guest.Copy) (vm.Spec, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return vm.Spec{}, fmt.Errorf("locate jailoc executable: %w", err)
-	}
-	shares, err := vmShares(ws, cacheDir)
-	if err != nil {
-		return vm.Spec{}, err
 	}
 	memMiB, err := vmMemoryMiB(ws.Memory)
 	if err != nil {
@@ -203,13 +210,13 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		return vm.Spec{}, err
 	}
 	g := &guest.Config{
-		Hostname:  ws.Name,
-		User:      "agent",
-		UID:       agentUID,
-		GID:       agentUID,
-		Home:      "/home/agent",
-		WorkDir:   ws.Paths[0],
-		GitConfig: gitConfig,
+		Hostname: ws.Name,
+		User:     "agent",
+		UID:      agentUID,
+		GID:      agentUID,
+		Home:     "/home/agent",
+		WorkDir:  ws.Paths[0],
+		Copies:   copies,
 		Env: []string{
 			"JAILOC=1",
 			"JAILOC_WORKSPACE=" + ws.Name,
@@ -235,17 +242,6 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		GuestBinary: rt.guest,
 		Guest:       g,
 	}, nil
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src) //nolint:gosec // G304: user-configured host file
-	if err != nil {
-		return fmt.Errorf("read %s: %w", src, err)
-	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil { //nolint:gosec // G306: read by the agent user in the guest
-		return fmt.Errorf("write %s: %w", dst, err)
-	}
-	return nil
 }
 
 // pushSecrets delivers the workspace environment and secrets to the guest

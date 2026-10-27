@@ -26,6 +26,7 @@ type Resolved struct {
 	Backend         string
 	Paths           []string
 	Mounts          []string
+	Copies          []string // read-only snapshots (host:container:ro); backend "vm" only
 	Port            int
 	AllowedHosts    []string
 	AllowedNetworks []string
@@ -167,6 +168,11 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		// over SSH: no published port and no Docker daemon for the agent.
 		r.ExposePort = false
 		r.EnableDocker = false
+		copies, err := config.MergeMounts(cfg.Defaults.Copies, ws.Copies)
+		if err != nil {
+			return nil, fmt.Errorf("merge copies for workspace %s: %w", name, err)
+		}
+		r.Copies = copies
 	}
 
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))

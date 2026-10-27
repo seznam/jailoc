@@ -52,7 +52,25 @@ The VM gets `cpu` rounded up to whole vCPUs and `memory` plus 1 GiB.
 - Workspace `paths` and the directories of `mounts` appear at their configured paths. Files the agent creates in them belong to your host user.
 - `~/.local/share/opencode` and `~/.cache` persist across `jailoc down` and `jailoc up` unless a mount covers them.
 - Secrets are in `/run/secrets/` (mode `0400`), and environment secrets are also set in the session environment.
-- The Git configuration is copied to `~/.gitconfig`; a forwarded CA bundle is added to the system trust store.
+- The Git configuration (`git_config`) is a copy at `~/.gitconfig`; a forwarded CA bundle is added to the system trust store.
+
+## Copy files into the workspace
+
+`mounts` are live, two-way shares and work on directories only. For single files, or whenever the workspace should get a snapshot instead of access to the host original, use `copies`:
+
+```toml
+[workspaces.myproject]
+backend = "vm"
+paths = ["~/src/myproject"]
+copies = [
+  "~/.npmrc:/home/agent/.npmrc",
+  "~/.config/gh:/home/agent/.config/gh",
+]
+```
+
+Each copy is taken when the VM starts and is read-only in the workspace, even for root. Changes on the host appear after `jailoc down` and `jailoc up`; nothing the workspace does reaches the host original.
+
+A copy destination cannot overlap a shared path, so it cannot point into a workspace path or a `mounts` destination.
 
 ## Share a builder or isolate it
 
@@ -88,7 +106,7 @@ Host addresses, the broker gateway and cloud metadata endpoints stay blocked reg
 - Sessions use exec mode only; `jailoc --remote` is rejected and `expose_port = true` is rejected.
 - The agent has no Docker daemon; `enable_docker = true` is rejected.
 - `ssh_auth_sock` and `filtered_dns` are rejected: the SSH agent socket cannot cross into the VM, and DNS goes through the broker.
-- `mounts` must name directories. A file mount is rejected at `jailoc up`; mount its parent directory instead.
+- `mounts` must name directories. A file mount is rejected at `jailoc up`; use `copies` for files.
 - On macOS, reaching hosts on the local network through `allowed_hosts` or `allowed_networks` needs the macOS network permission for the process that runs jailoc.
 
 ## Inspect a running VM

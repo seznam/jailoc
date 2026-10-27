@@ -66,14 +66,17 @@ func Init(logger *slog.Logger) error {
 	if err := netcfg.Configure(logger); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
-	if err := mountShares(logger, cfg.Shares); err != nil {
-		return err
-	}
 	acct, err := ensureAccount(cfg)
 	if err != nil {
 		return err
 	}
-	if err := prepareHome(logger, cfg, acct); err != nil {
+	if err := ownedDir(acct.home, acct, 0o755); err != nil {
+		return err
+	}
+	if err := mountShares(logger, cfg.Shares, acct); err != nil {
+		return err
+	}
+	if err := bindCopies(cfg.Copies, acct); err != nil {
 		return err
 	}
 	env := sessionEnv(cfg)
@@ -135,11 +138,14 @@ func loadConfig() (*Config, error) {
 }
 
 // mountShares mounts the virtio-fs shares, parents before children.
-func mountShares(logger *slog.Logger, shares []Share) error {
+// mountShares mounts the virtio-fs shares at their guest paths. Missing
+// mount points and parents inside the agent's home belong to the agent, so
+// the agent can still create siblings such as ~/.config/<tool>.
+func mountShares(logger *slog.Logger, shares []Share, acct account) error {
 	sorted := slices.Clone(shares)
 	slices.SortStableFunc(sorted, func(a, b Share) int { return len(a.GuestPath) - len(b.GuestPath) })
 	for _, s := range sorted {
-		if err := os.MkdirAll(s.GuestPath, 0o755); err != nil { //nolint:gosec // G301: mount points are traversed by the agent
+		if err := makeParents(s.GuestPath, acct); err != nil {
 			return fmt.Errorf("create mount point %s: %w", s.GuestPath, err)
 		}
 		flags := uintptr(syscall.MS_NOSUID | syscall.MS_NODEV)
@@ -215,24 +221,81 @@ func appendLine(path, line string) error {
 	return nil
 }
 
-// prepareHome creates the home directory and installs the Git config.
-func prepareHome(logger *slog.Logger, cfg *Config, acct account) error {
-	if err := ownedDir(acct.home, acct, 0o755); err != nil {
+// bindCopies binds every staged copy read-only at its destination.
+// Missing parent directories are created; those inside the agent's home
+// belong to the agent.
+func bindCopies(copies []Copy, acct account) error {
+	for _, c := range copies {
+		info, err := os.Stat(c.Source)
+		if err != nil {
+			return fmt.Errorf("copy %s: %w", c.Target, err)
+		}
+		if err := makeParents(filepath.Dir(c.Target), acct); err != nil {
+			return fmt.Errorf("copy %s: %w", c.Target, err)
+		}
+		if err := mountPoint(c.Target, info.IsDir()); err != nil {
+			return fmt.Errorf("copy %s: %w", c.Target, err)
+		}
+		if err := syscall.Mount(c.Source, c.Target, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("copy %s: bind: %w", c.Target, err)
+		}
+		flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
+		if err := syscall.Mount("", c.Target, "", flags, ""); err != nil {
+			return fmt.Errorf("copy %s: remount read-only: %w", c.Target, err)
+		}
+	}
+	return nil
+}
+
+// makeParents creates dir and its missing parents with mode 0755.
+func makeParents(dir string, acct account) error {
+	var missing []string
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		}
+		missing = append(missing, d)
+		if d == filepath.Dir(d) {
+			break
+		}
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		d := missing[i]
+		if err := os.Mkdir(d, 0o755); err != nil && !os.IsExist(err) { //nolint:gosec // G301: destination parents are ordinary directories
+			return fmt.Errorf("create %s: %w", d, err)
+		}
+		if within(d, acct.home) {
+			if err := chown(d, acct); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// mountPoint makes sure path exists as a directory or a regular file.
+func mountPoint(path string, dir bool) error {
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil && info.IsDir() != dir:
+		return fmt.Errorf("destination exists as a different file type")
+	case err == nil:
+		return nil
+	case !os.IsNotExist(err):
 		return err
+	case dir:
+		return os.Mkdir(path, 0o755) //nolint:gosec // G301: mount point, replaced by the bind mount
+	default:
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644) //nolint:gosec // G302,G304: mount point, replaced by the bind mount
+		if err != nil {
+			return err
+		}
+		return f.Close()
 	}
-	if cfg.GitConfig == "" {
-		return nil
-	}
-	b, err := os.ReadFile(cfg.GitConfig)
-	if err != nil {
-		logger.Warn("git config not available", "path", cfg.GitConfig, "error", err)
-		return nil
-	}
-	dst := filepath.Join(acct.home, ".gitconfig")
-	if err := os.WriteFile(dst, b, 0o644); err != nil { //nolint:gosec // G306: Git config is readable by design
-		return fmt.Errorf("write %s: %w", dst, err)
-	}
-	return chown(dst, acct)
+}
+
+func within(path, dir string) bool {
+	return path == dir || strings.HasPrefix(path, dir+"/")
 }
 
 func ownedDir(path string, acct account, mode os.FileMode) error {

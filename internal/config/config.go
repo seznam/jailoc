@@ -235,6 +235,7 @@ type Defaults struct {
 	Env             []string  `toml:"env"`
 	EnvFile         []string  `toml:"env_file"`
 	Mounts          []string  `toml:"mounts"`
+	Copies          []string  `toml:"copies"`
 	AllowedHosts    []string  `toml:"allowed_hosts"`
 	AllowedNetworks []string  `toml:"allowed_networks"`
 	Secrets         Secrets   `toml:"secrets,omitempty"`
@@ -256,6 +257,7 @@ type Workspace struct {
 	Backend         string    `toml:"backend"`
 	Paths           []string  `toml:"paths"`
 	Mounts          []string  `toml:"mounts"`
+	Copies          []string  `toml:"copies"`
 	AllowedHosts    []string  `toml:"allowed_hosts"`
 	AllowedNetworks []string  `toml:"allowed_networks"`
 	Env             []string  `toml:"env"`
@@ -842,6 +844,14 @@ func Validate(cfg *Config) error {
 		cfg.Defaults.Mounts[i] = formatMount(m)
 	}
 
+	for i, spec := range cfg.Defaults.Copies {
+		normalized, err := normalizeCopy(spec, "defaults")
+		if err != nil {
+			return err
+		}
+		cfg.Defaults.Copies[i] = normalized
+	}
+
 	if cfg.Defaults.CPU != nil && (*cfg.Defaults.CPU <= 0 || math.IsNaN(*cfg.Defaults.CPU) || math.IsInf(*cfg.Defaults.CPU, 0)) {
 		return fmt.Errorf("defaults: cpu must be a finite number greater than 0")
 	}
@@ -984,6 +994,16 @@ func Validate(cfg *Config) error {
 		if err := validateBackend(ws.Backend); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
+		for i, spec := range ws.Copies {
+			normalized, err := normalizeCopy(spec, fmt.Sprintf("workspace %q", name))
+			if err != nil {
+				return err
+			}
+			ws.Copies[i] = normalized
+		}
+		if len(ws.Copies) > 0 && EffectiveBackend(cfg.Defaults.Backend, ws.Backend) != BackendVM {
+			return fmt.Errorf("workspace %q: copies is only supported with backend %q; use mounts with the Docker backend", name, BackendVM)
+		}
 		if EffectiveBackend(cfg.Defaults.Backend, ws.Backend) == BackendVM {
 			sshAuthSock := cfg.Defaults.SSHAuthSock
 			if ws.SSHAuthSock != nil {
@@ -1007,6 +1027,37 @@ func Validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// normalizeCopy validates a copies entry "host:container" (":ro" accepted,
+// ":rw" rejected because copies are read-only) or a removal entry
+// ":container", and returns it as "host:container:ro" with expanded paths.
+func normalizeCopy(spec, context string) (string, error) {
+	if strings.HasSuffix(spec, ":rw") {
+		return "", fmt.Errorf("%s: copy %q: copies are read-only snapshots; remove \":rw\" or use mounts", context, spec)
+	}
+	m, err := ParseMount(spec)
+	if err != nil {
+		return "", fmt.Errorf("%s: copy %q: %w", context, spec, err)
+	}
+	if err := validateMountHostPath(m.Host, context); err != nil {
+		return "", err
+	}
+	host, err := ExpandPath(m.Host)
+	if err != nil {
+		return "", fmt.Errorf("%s: expand copy host path %q: %w", context, m.Host, err)
+	}
+	container, err := ExpandPath(m.Container)
+	if err != nil {
+		return "", fmt.Errorf("%s: expand copy destination %q: %w", context, m.Container, err)
+	}
+	container = filepath.Clean(container)
+	for _, prefix := range forbiddenMountContainerPrefixes {
+		if container == prefix || strings.HasPrefix(container, prefix+"/") {
+			return "", fmt.Errorf("%s: copy destination %q is not allowed (conflicts with system directory %q)", context, container, prefix)
+		}
+	}
+	return formatMount(Mount{Host: host, Container: container, Mode: "ro"}), nil
 }
 
 func validateBackend(backend string) error {

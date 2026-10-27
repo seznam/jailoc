@@ -3654,3 +3654,45 @@ func TestLoadBackendTOML(t *testing.T) {
 		t.Fatalf("unexpected config: vm=%+v defaults.backend=%q ws.backend=%q", cfg.VM, cfg.Defaults.Backend, cfg.Workspaces["test"].Backend)
 	}
 }
+
+func TestCopiesValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		defaults  Defaults
+		ws        Workspace
+		want      []string
+		wantError string
+	}{
+		{name: "vm copy normalized read-only", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/npmrc:/home/agent/.npmrc"}}, want: []string{"/data/npmrc:/home/agent/.npmrc:ro"}},
+		{name: "explicit ro accepted", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/gh:/home/agent/.config/gh:ro"}}, want: []string{"/data/gh:/home/agent/.config/gh:ro"}},
+		{name: "removal entry", ws: Workspace{Backend: BackendVM, Copies: []string{":/home/agent/.gitconfig"}}, want: []string{":/home/agent/.gitconfig:ro"}},
+		{name: "rw rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/npmrc:/home/agent/.npmrc:rw"}}, wantError: "copies are read-only snapshots"},
+		{name: "relative destination rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/npmrc:npmrc"}}, wantError: "must be absolute"},
+		{name: "system destination rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/hosts:/etc/hosts"}}, wantError: "is not allowed"},
+		{name: "forbidden source rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/etc/passwd:/home/agent/passwd"}}, wantError: "is forbidden"},
+		{name: "docker workspace rejects copies", ws: Workspace{Copies: []string{"/data/npmrc:/home/agent/.npmrc"}}, wantError: `copies is only supported with backend "vm"`},
+		{name: "defaults copies allowed with docker workspace", defaults: Defaults{Copies: []string{"/data/npmrc:/home/agent/.npmrc"}}, ws: Workspace{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ws := tc.ws
+			ws.Paths = []string{"/data/work"}
+			cfg := &Config{Defaults: tc.defaults, Workspaces: map[string]Workspace{"test": ws}}
+			err := Validate(cfg)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if got := cfg.Workspaces["test"].Copies; tc.want != nil && strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("copies = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -48,9 +48,9 @@ All VM workspaces share one builder by default. It keeps one build cache for all
 
 The root file system is a copy-on-write clone of the unpacked image and is discarded on every start; only `~/.local/share/opencode` and `~/.cache` of the agent persist, in the workspace's VM state directory. `jailoc-guest` prepares the system and then serves SSH:
 
-1. mounts the shared directories,
-2. configures the network address, the broker as gateway and DNS resolver, and the hostname,
-3. creates the `agent` user (UID 1000) when the image has none, copies the Git configuration and adds a forwarded CA bundle to the system trust store,
+1. configures the network address, the broker as gateway and DNS resolver, and the hostname,
+2. creates the `agent` user (UID 1000) when the image has none and its home directory,
+3. mounts the shared directories, binds the copies (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
 4. adds the hostname to `/etc/hosts`; it leaves privileges alone, so the agent can use `sudo` from the image, because root in the VM is still inside the VM boundary,
 5. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
 
@@ -61,6 +61,8 @@ Secrets never touch the root file system or a share: jailoc sends them over SSH 
 ## Filesystem sharing
 
 Workspace `paths`, the host directories of `mounts`, the workspace configuration directory, the workspace cache directory and the persistent home directories are shared into the VM with virtio-fs. Read-only shares are enforced by the VMM: guest root cannot remount them writable. Sharing works on directories only, which is why file mounts and the SSH agent socket are not available.
+
+Files and directories listed in `copies`, and the Git configuration, are not shared: jailoc snapshots them into the VM state directory when the VM starts, shares that directory read-only, and the guest binds each item read-only at its destination. The workspace sees the content from the moment of the start, and its writes never reach the host original.
 
 Shares use simplified ownership semantics: every guest process sees shared files as its own, and files it creates are owned by the host user. Permission bits stay meaningful on the host; ownership changes inside the guest have no effect on host files.
 

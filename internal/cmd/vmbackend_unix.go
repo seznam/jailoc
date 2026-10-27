@@ -301,7 +301,7 @@ func vmShares(ws *workspace.Resolved, cacheDir string) ([]vm.Share, error) {
 		case err != nil:
 			return nil, fmt.Errorf("workspace %q: mount source %q: %w", ws.Name, host, err)
 		case !info.IsDir():
-			return nil, fmt.Errorf("workspace %q: mount %q: backend \"vm\" shares directories only", ws.Name, spec)
+			return nil, fmt.Errorf("workspace %q: mount %q: backend \"vm\" shares directories only; use copies for a read-only snapshot of a file", ws.Name, spec)
 		}
 		add(host, m.Container, m.Mode == "ro")
 	}

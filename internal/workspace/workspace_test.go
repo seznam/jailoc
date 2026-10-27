@@ -1556,3 +1556,37 @@ func TestResolveVMBackendDisablesPortAndDocker(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveCopies(t *testing.T) {
+	t.Parallel()
+	defaults := config.Defaults{Copies: []string{"/data/npmrc:/home/agent/.npmrc:ro", "/data/gh:/home/agent/.config/gh:ro"}}
+	tests := []struct {
+		name    string
+		backend string
+		copies  []string
+		want    []string
+	}{
+		{name: "docker ignores default copies", backend: config.BackendDocker},
+		{name: "vm inherits defaults", backend: config.BackendVM, want: []string{"/data/npmrc:/home/agent/.npmrc:ro", "/data/gh:/home/agent/.config/gh:ro"}},
+		{
+			name: "workspace overrides and removes", backend: config.BackendVM,
+			copies: []string{"/data/other-npmrc:/home/agent/.npmrc:ro", ":/home/agent/.config/gh:ro", "/data/tool:/opt-tool/cfg:ro"},
+			want:   []string{"/data/other-npmrc:/home/agent/.npmrc:ro", "/data/tool:/opt-tool/cfg:ro"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{Defaults: defaults, Workspaces: map[string]config.Workspace{
+				"ws": {Backend: tt.backend, Paths: []string{"/data/work"}, Copies: tt.copies},
+			}}
+			r, err := workspace.Resolve(cfg, "ws")
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if strings.Join(r.Copies, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("Copies = %v, want %v", r.Copies, tt.want)
+			}
+		})
+	}
+}

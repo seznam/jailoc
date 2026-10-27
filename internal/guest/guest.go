@@ -35,6 +35,17 @@ type Share struct {
 	ReadOnly  bool   `json:"read_only,omitempty"`
 }
 
+// CopiesDir is the guest path of the read-only share holding the staged
+// copies.
+const CopiesDir = Dir + "/copies"
+
+// Copy binds Source, a file or directory inside CopiesDir, read-only at
+// Target.
+type Copy struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
 // Config is the guest configuration the host writes to ConfigPath.
 type Config struct {
 	Hostname      string   `json:"hostname"`
@@ -46,8 +57,9 @@ type Config struct {
 	Shares        []Share  `json:"shares"`
 	AuthorizedKey string   `json:"authorized_key"`
 	Env           []string `json:"env,omitempty"`
-	// GitConfig is a guest path copied to the user's ~/.gitconfig.
-	GitConfig string `json:"git_config,omitempty"`
+	// Copies are read-only snapshots bound from the staged copies share
+	// to their destinations.
+	Copies []Copy `json:"copies,omitempty"`
 	// CABundle is a guest path appended to the system CA bundle.
 	CABundle string `json:"ca_bundle,omitempty"`
 }

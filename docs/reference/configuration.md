@@ -79,10 +79,11 @@ Global defaults applied to all workspaces. All fields are optional and default t
 | `env` | string[] | `[]` | Environment variables applied to all workspaces. Each entry must be in `KEY=VALUE` format. Workspace `env` entries take precedence over defaults with the same key. |
 | `env_file` | string[] | `[]` | Paths to `.env` files loaded for all workspaces. Each file must exist at config load time. Paths must be absolute (`/...`) or start with `~`. Parsed before workspace-level `env_file` entries. |
 | `mounts` | string[] | `[]` | Additional bind mounts for all workspaces. Each entry follows `host:container[:mode]` format where mode is `ro` or `rw` (default `rw`). An empty host source removes a default mount matching the container path. Merged with per-workspace `mounts` — see Merge Semantics below. Supports `~` expansion on both host and container sides. |
+| `copies` | string[] | `[]` | Backend `"vm"` only. Read-only snapshots of host files or directories, taken when the workspace VM starts. Format `host:container` (`:ro` is accepted, `:rw` is rejected). An empty host source removes an inherited copy. Applies to VM workspaces only; Docker workspaces ignore it. See [Copies](#copies). |
 | `allowed_hosts` | string[] | `[]` | Hostnames allowed through the firewall for all workspaces. Merged with per-workspace `allowed_hosts`. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges allowed through the firewall for all workspaces. Merged with per-workspace `allowed_networks`. |
 | `ssh_auth_sock` | bool | `false` | Mount the host SSH agent socket into the container. Auto-detects the socket: Docker Desktop/OrbStack magic path first, then `$SSH_AUTH_SOCK`. Also mounts `~/.ssh/known_hosts` read-only when enabled. |
-| `git_config` | bool | `true` | Mount the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only into the container. |
+| `git_config` | bool | `true` | Mount the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only into the container. With backend `"vm"`, delivered as a read-only [copy](#copies) at `/home/agent/.gitconfig`. |
 | `expose_port` | bool | `true` | Expose the opencode container port to the host. When `false`, the `ports:` section is omitted from the generated compose file and the workspace is only accessible via `jailoc --exec`. |
 | `cpu` | float64 | `2.0` | Number of CPU cores allocated to the opencode container. Must be greater than 0. |
 | `memory` | string | `"4g"` | Memory limit for the opencode container. Accepts Docker memory format: a positive integer optionally followed by `k`, `m`, or `g` suffix (e.g. `512m`, `4g`, `1024`). Must be greater than 0. |
@@ -124,6 +125,7 @@ Each workspace is declared as a TOML table under `[workspaces]`, keyed by name.
 | `backend` | string | (inherit; `"docker"`) | Override the backend for this workspace: `"docker"` or `"vm"`. |
 | `isolated_build` | bool | (inherit; `false`) | Override the default `isolated_build` setting for this workspace. |
 | `mounts` | string[] | `[]` | Bind mounts for this workspace. Format: `host:container[:mode]` — mode is `ro` or `rw` (default `rw`). An empty host source (e.g. `":/home/agent/.opencode"`) removes a default mount matching the container path. Container destinations under `/home/agent/...` are allowed (unlike `paths`); see [mounts validation](#mounts) for the full list of forbidden container prefixes. |
+| `copies` | string[] | `[]` | Backend `"vm"` only. Read-only snapshots for this workspace, merged with `[defaults].copies` by destination path. Rejected for Docker workspaces. See [Copies](#copies). |
 | `allowed_hosts` | string[] | `[]` | Hostnames resolved at container start and added as iptables `ACCEPT` rules before the private-range `DROP` rules. |
 | `allowed_networks` | string[] | `[]` | CIDR ranges explicitly allowed through the container firewall. |
 | `image` | string | (none) | Pre-built Docker image to use directly for this workspace, bypassing all build steps. Compose pulls the image natively at startup. Cannot be combined with `dockerfile` or `build_context`. |
@@ -252,9 +254,16 @@ Accepted values: `"docker"`, `"vm"`, or empty (`"docker"`). A workspace value ov
 - `ssh_auth_sock = true` is rejected: Unix sockets cannot cross into the VM.
 - `filtered_dns = true` is rejected.
 - `enable_docker = true` and `expose_port = true`, when set explicitly, are rejected. Both are off for VM workspaces: the agent has no Docker daemon, and sessions run over SSH instead of a published port.
-- Every `mounts` entry with a host source must be a directory; file mounts are rejected at `jailoc up`.
+- Every `mounts` entry with a host source must be a directory; file mounts are rejected at `jailoc up`. Use [`copies`](#copies) for files.
+- `git_config` is delivered as a copy to `/home/agent/.gitconfig`.
 
 `[vm]` `runner` and `lib_dir` must be absolute paths after `~` expansion.
+
+### `copies`
+
+Each entry is `host:container` with an optional `:ro`; `:rw` is rejected because copies are read-only. The host path must be absolute or start with `~`, and the same forbidden host paths as for `mounts` apply. The destination must be absolute and outside system directories (`/usr`, `/etc`, `/var`, `/opt`, `/tmp` and the other prefixes rejected for `mounts`). A workspace `copies` entry with the Docker backend is rejected.
+
+At `jailoc up`, the destination must not equal, contain or lie inside a shared path (workspace `paths`, `mounts` destinations, the persistent home directories); otherwise the start fails. A missing copy source also fails the start.
 
 ### `cpu`
 
@@ -382,6 +391,8 @@ Environment variables from multiple sources are merged in this order (later entr
 4. Workspace `env` — per-workspace inline values (highest priority)
 
 `allowed_hosts` and `allowed_networks` use union deduplication: the global list is merged with the workspace list, with duplicates removed, preserving order.
+
+`copies` merges `[defaults].copies` and workspace `copies` the same way, keyed by destination; with backend `"vm"`, `git_config` adds a lowest-priority copy of the Git configuration to `/home/agent/.gitconfig`, which a `copies` entry for that destination replaces or, with an empty host source, removes.
 
 `mounts` follows a three-layer merge keyed by container path. Default mounts (built into jailoc) are applied first, then `[defaults].mounts`, then per-workspace `mounts`. For each container path, the last layer to set it wins. An entry with an empty host source removes the mount for that container path. The built-in default mounts are:
 
