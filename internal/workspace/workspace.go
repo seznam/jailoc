@@ -168,6 +168,11 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		// over SSH: no published port and no Docker daemon for the agent.
 		r.ExposePort = false
 		r.EnableDocker = false
+		// The broker policy is built from the resolved lists, so they carry
+		// the [defaults] entries too (the Docker backend merges them when
+		// writing the allowed-hosts and allowed-networks files).
+		r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
+		r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
 		copies, err := config.MergeMounts(cfg.Defaults.Copies, ws.Copies)
 		if err != nil {
 			return nil, fmt.Errorf("merge copies for workspace %s: %w", name, err)
@@ -178,6 +183,19 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))
 
 	return r, nil
+}
+
+// mergeUnique returns a followed by the entries of b not already present.
+func mergeUnique(a, b []string) []string {
+	out := make([]string, 0, len(a)+len(b))
+	seen := make(map[string]bool, len(a)+len(b))
+	for _, v := range append(append([]string{}, a...), b...) {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // FlattenSecrets converts a single [<scope>.secrets] block into the ordering

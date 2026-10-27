@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1586,6 +1587,38 @@ func TestResolveCopies(t *testing.T) {
 			}
 			if strings.Join(r.Copies, ",") != strings.Join(tt.want, ",") {
 				t.Fatalf("Copies = %v, want %v", r.Copies, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveVMBackendMergesAllowedDestinations(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		backend      string
+		wantHosts    []string
+		wantNetworks []string
+	}{
+		{name: "docker keeps workspace lists", backend: config.BackendDocker, wantHosts: []string{"ws.example", "both.example"}, wantNetworks: []string{"10.2.0.0/16"}},
+		{name: "vm merges defaults", backend: config.BackendVM, wantHosts: []string{"defaults.example", "both.example", "ws.example"}, wantNetworks: []string{"10.1.0.0/16", "10.2.0.0/16"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{
+				Defaults: config.Defaults{AllowedHosts: []string{"defaults.example", "both.example"}, AllowedNetworks: []string{"10.1.0.0/16"}},
+				Workspaces: map[string]config.Workspace{"ws": {
+					Backend: tt.backend, Paths: []string{"/data/work"},
+					AllowedHosts: []string{"ws.example", "both.example"}, AllowedNetworks: []string{"10.2.0.0/16"},
+				}},
+			}
+			r, err := workspace.Resolve(cfg, "ws")
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if !slices.Equal(r.AllowedHosts, tt.wantHosts) || !slices.Equal(r.AllowedNetworks, tt.wantNetworks) {
+				t.Fatalf("hosts=%v networks=%v, want %v %v", r.AllowedHosts, r.AllowedNetworks, tt.wantHosts, tt.wantNetworks)
 			}
 		})
 	}
