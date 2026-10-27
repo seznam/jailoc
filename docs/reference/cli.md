@@ -29,10 +29,12 @@ jailoc [flags]
 | `--remote` | Force remote connection mode (runs `opencode attach` on the host). |
 | `--exec` | Force exec connection mode (runs `docker exec` into the container). |
 | `--dir` | Directory to open in opencode (forwarded as `--dir` to `opencode attach`). |
+| `--new` | Start a new agent session instead of attaching to the one running in the current directory. Backend `"vm"` only. |
+| `--attach ID` | Attach to the agent session with this ID (see [`jailoc sessions`](#jailoc-sessions)). Backend `"vm"` only; cannot be combined with `--new`, `--session` or `--continue`. |
 
 When run from a subdirectory of a workspace path, jailoc resolves the current working directory and passes it as `--dir` to `opencode attach`, so the agent opens that directory instead of the workspace root.
 
-For workspaces with `backend = "vm"`, runs `opencode` inside the workspace VM over SSH with a terminal of its own; `--remote` is rejected and `mode` is ignored.
+For workspaces with `backend = "vm"`, runs `opencode` inside the workspace VM in a detachable session; `--remote` is rejected and `mode` is ignored. Without flags, jailoc attaches to the session already running in the current directory, or starts one. `--session` and `--continue` always start a new session. Press `Ctrl-\` or close the terminal to detach; the agent keeps running. Attaching from a second terminal takes the session over and detaches the first one.
 
 When neither `--remote` nor `--exec` is specified, the connection mode is determined by the workspace `mode` field in configuration, falling back to auto-detection (checks for `opencode`, then `opencode-cli` on PATH). See the [access modes how-to](../how-to/access-modes.md) for configuration steps, or the [access modes explanation](../explanation/access-modes.md) for the difference between modes.
 
@@ -143,6 +145,21 @@ jailoc add [flags]
 Appends the current directory to `workspaces.<name>.paths` in `~/.config/jailoc/config.toml`. The path must not be under a forbidden system prefix. See the [configuration reference](configuration.md) for path validation rules. Validates secret sources for the target workspace before updating configuration. If the workspace is running, stops and recreates its Compose containers so updated CA trust and mounts take effect; named volumes are preserved.
 
 When `--workspace` is not set, resolves the workspace from the path being added (longest prefix). If `--workspace` is set explicitly and the path is not under any of that workspace's configured paths, `jailoc add` returns an error. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
+
+---
+
+### `jailoc sessions`
+
+List the agent sessions running in a VM workspace, or stop one.
+
+```
+jailoc sessions [flags]
+jailoc sessions stop ID [flags]
+```
+
+Prints each session's ID, state (`attached` or `detached`), start time, directory and command, most recently attached first. `stop` ends the session's agent; an attached terminal is disconnected. Sessions end when the workspace VM stops. Backend `"vm"` only.
+
+When `--workspace` is not set, resolves the workspace from the current working directory (longest prefix). Falls back to `default`.
 
 ---
 

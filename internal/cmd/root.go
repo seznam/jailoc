@@ -32,6 +32,8 @@ var appVersion string
 var remoteFlag, execFlag bool
 var sessionFlag string
 var continueFlag bool
+var newSessionFlag bool
+var attachSessionFlag string
 
 var rootCmd = &cobra.Command{
 	Use:          "jailoc [path]",
@@ -116,7 +118,13 @@ var rootCmd = &cobra.Command{
 			if remoteFlag {
 				return fmt.Errorf(`workspace %q: remote mode is not supported with backend "vm"`, ws.Name)
 			}
-			return runSessionVM(ctx, cfg, ws, targetPath, sessionFlag, continueFlag)
+			return runSessionVM(ctx, cfg, ws, vmSessionOptions{
+				dir: targetPath, session: sessionFlag, cont: continueFlag,
+				newAgent: newSessionFlag, attach: attachSessionFlag,
+			})
+		}
+		if newSessionFlag || attachSessionFlag != "" {
+			return fmt.Errorf(`workspace %q: --new and --attach need backend "vm"`, ws.Name)
 		}
 
 		composePath := filepath.Join(ComposeCacheDir(ws.Name), "docker-compose.yml")
@@ -202,7 +210,12 @@ func init() {
 	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "session ID to continue")
 	rootCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "continue the last session")
 	rootCmd.MarkFlagsMutuallyExclusive("remote", "exec")
+	rootCmd.Flags().BoolVar(&newSessionFlag, "new", false, `start a new agent session instead of attaching to the running one (backend "vm")`)
+	rootCmd.Flags().StringVar(&attachSessionFlag, "attach", "", `attach to the agent session with this ID (backend "vm"; see jailoc sessions)`)
 	rootCmd.MarkFlagsMutuallyExclusive("session", "continue")
+	rootCmd.MarkFlagsMutuallyExclusive("new", "attach")
+	rootCmd.MarkFlagsMutuallyExclusive("attach", "session")
+	rootCmd.MarkFlagsMutuallyExclusive("attach", "continue")
 }
 
 // resolveTargetPath returns the absolute path from a positional argument.

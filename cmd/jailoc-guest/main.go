@@ -3,7 +3,8 @@
 // Command jailoc-guest is the jailoc agent inside a backend "vm" workspace
 // VM. Without arguments it initialises the guest and serves SSH sessions;
 // "secrets" stores secrets read from stdin; "run [-C DIR] [-e KEY=VALUE]...
-// -- CMD..." executes a command with the workspace environment.
+// -- CMD..." executes a command with the workspace environment; "session"
+// manages detachable agent sessions.
 package main
 
 import (
@@ -29,6 +30,8 @@ func run(logger *slog.Logger, args []string) error {
 	switch args[0] {
 	case "secrets":
 		return guest.WriteSecrets(os.Stdin)
+	case "session":
+		return guest.Session(args[1:], os.Stdin, os.Stdout)
 	case "run":
 		var dir string
 		var env []string

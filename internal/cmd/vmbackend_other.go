@@ -15,9 +15,13 @@ var errVMUnsupported = errors.New(`backend "vm" is supported on macOS and Linux 
 
 func runUpVM(context.Context, *config.Config, *workspace.Resolved) error { return errVMUnsupported }
 
-func runSessionVM(context.Context, *config.Config, *workspace.Resolved, string, string, bool) error {
+func runSessionVM(context.Context, *config.Config, *workspace.Resolved, vmSessionOptions) error {
 	return errVMUnsupported
 }
+
+func listSessionsVM(context.Context, *workspace.Resolved) error { return errVMUnsupported }
+
+func stopSessionVM(context.Context, *workspace.Resolved, string) error { return errVMUnsupported }
 
 func downVM(*workspace.Resolved, bool) error { return errVMUnsupported }
 

@@ -5,21 +5,17 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/fatih/color"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/term"
 
 	"github.com/seznam/jailoc/internal/compose"
 	"github.com/seznam/jailoc/internal/config"
@@ -347,92 +343,6 @@ func pushSecrets(ctx context.Context, ws *workspace.Resolved) error {
 	sess.Stderr = &stderr
 	if err := sess.Run(guest.BinaryPath + " secrets"); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
-}
-
-// runSessionVM starts the workspace if needed and runs the OpenCode TUI in
-// it over SSH, attached to this terminal.
-func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, dir, session string, cont bool) error {
-	if st, err := runningVM(vmStateDir(ws.Name)); err != nil {
-		return err
-	} else if st == nil {
-		workspaceExplicit = true
-		if err := runUpVM(ctx, cfg, ws); err != nil {
-			return err
-		}
-	}
-	client, err := vm.DialSSH(ctx, vmStateDir(ws.Name))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = client.Close() }()
-	sess, err := client.NewSession()
-	if err != nil {
-		return fmt.Errorf("open ssh session: %w", err)
-	}
-	defer func() { _ = sess.Close() }()
-
-	cmdline := []string{guest.BinaryPath, "run", "-C", dir}
-	for _, kv := range terminalEnv() {
-		cmdline = append(cmdline, "-e", kv)
-	}
-	cmdline = append(cmdline, "--", "opencode")
-	if session != "" {
-		cmdline = append(cmdline, "--session", session)
-	}
-	if cont {
-		cmdline = append(cmdline, "--continue")
-	}
-
-	fd := int(os.Stdin.Fd()) //nolint:gosec // G115: file descriptors fit in int
-	if term.IsTerminal(fd) {
-		w, h, err := term.GetSize(fd)
-		if err != nil {
-			w, h = 80, 24
-		}
-		termName := os.Getenv("TERM")
-		if termName == "" {
-			termName = "xterm-256color"
-		}
-		if err := sess.RequestPty(termName, h, w, ssh.TerminalModes{ssh.ECHO: 1}); err != nil {
-			return fmt.Errorf("request pty: %w", err)
-		}
-		old, err := term.MakeRaw(fd)
-		if err != nil {
-			return fmt.Errorf("set terminal raw mode: %w", err)
-		}
-		defer func() {
-			// The guest TUI cannot turn its terminal features off when the
-			// VM or connection dies, so reset them after every session.
-			if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
-				resetTerminalModes(os.Stdout)
-			}
-			_ = term.Restore(fd, old)
-		}()
-		winch := make(chan os.Signal, 1)
-		signal.Notify(winch, syscall.SIGWINCH)
-		defer signal.Stop(winch)
-		go func() {
-			for range winch {
-				if w, h, err := term.GetSize(fd); err == nil {
-					_ = sess.WindowChange(h, w)
-				}
-			}
-		}()
-	}
-	sess.Stdin, sess.Stdout, sess.Stderr = os.Stdin, os.Stdout, os.Stderr
-	err = sess.Run(shellJoin(cmdline))
-	var exitErr *ssh.ExitError
-	if errors.As(err, &exitErr) {
-		return fmt.Errorf("opencode exited with status %d", exitErr.ExitStatus())
-	}
-	var missing *ssh.ExitMissingError
-	if errors.As(err, &missing) || errors.Is(err, io.EOF) {
-		return fmt.Errorf("connection to workspace %q lost; the VM stopped or was stopped by `jailoc down`", ws.Name)
-	}
-	if err != nil {
-		return fmt.Errorf("run opencode in workspace %q: %w", ws.Name, err)
 	}
 	return nil
 }

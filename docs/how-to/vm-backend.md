@@ -53,7 +53,17 @@ jailoc
 
 The first `jailoc up` builds the workspace image exactly as the Docker backend would build it (see [Image Resolution](../reference/image-resolution.md)), with the host Docker daemon when one is available and otherwise in a builder VM. It then unpacks the image and boots the workspace VM from it. Later starts reuse the build cache and the unpacked image and take a few seconds.
 
-`jailoc` then opens OpenCode inside the VM over SSH, in the directory you started it from. Closing OpenCode ends the session; the VM keeps running until `jailoc down`.
+`jailoc` then opens OpenCode inside the VM, in the directory you started it from. The VM keeps running until `jailoc down`.
+
+## Detach and re-attach
+
+OpenCode runs in a session that outlives your terminal:
+
+- Press `Ctrl-\` or close the terminal window to detach. The agent keeps working.
+- Run `jailoc` in the same directory to re-attach; the screen is redrawn.
+- Run `jailoc --new` to start a second session next to the running one, and `jailoc sessions` to list them. `jailoc --attach ID` attaches to a specific one.
+- Running `jailoc` from another terminal takes the session over; the first terminal is detached.
+- Quitting OpenCode ends the session. `jailoc sessions stop ID` ends it from outside, and `jailoc down` ends all sessions of the workspace.
 
 The VM gets `cpu` rounded up to whole vCPUs and `memory` plus 1 GiB.
 
