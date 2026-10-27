@@ -1,12 +1,14 @@
 name: VM runtime
 
-# Builds the VM runtime bundle that jailoc downloads for backend = "vm"
-# (internal/vm/runtime.go) and attaches it to a pre-release.
+# Builds the VM runtime bundles that jailoc downloads for workspace VMs
+# (internal/vm/runtime.go) and attaches them to a pre-release.
 #
 # Push a tag named vm-runtime-<go-microvm release>-jailoc.<n>, for example
 # vm-runtime-v0.0.41-jailoc.1. The runner is built from the go-microvm
-# revision that go.mod pins at the tagged commit; libkrun comes from the
-# go-microvm release named in the tag.
+# revision that go.mod pins at the tagged commit. On macOS, libkrun comes
+# from the go-microvm release named in the tag; on Linux, go-microvm's
+# builder image provides libkrun and libkrunfw at the versions that revision
+# pins.
 
 on:
   push:
@@ -23,8 +25,6 @@ jobs:
   darwin-arm64:
     name: Build darwin-arm64 runtime
     runs-on: macos-15
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -61,19 +61,78 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM: ${{ steps.versions.outputs.upstream }}
+        run: scripts/vm-runtime/build-runtime-darwin.sh "$RUNNER_TEMP/go-microvm" "$UPSTREAM" dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-darwin-arm64
+          path: dist/go-microvm-runtime-darwin-arm64.tar.gz
+          if-no-files-found: error
+
+  linux-amd64:
+    name: Build linux-amd64 runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve go-microvm revision
+        id: versions
         run: |
-          scripts/vm-runtime/build-runtime-darwin.sh "$RUNNER_TEMP/go-microvm" "$UPSTREAM" dist
-          (cd dist && shasum -a 256 go-microvm-runtime-darwin-arm64.tar.gz > sha256sums.txt)
+          read -r path version < <(go list -m -f '{{if .Replace}}{{.Replace.Path}} {{.Replace.Version}}{{else}}{{.Path}} {{.Version}}{{end}}' github.com/stacklok/go-microvm)
+          echo "repo=${path}" >> "$GITHUB_OUTPUT"
+          echo "rev=${version##*-}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out go-microvm
+        env:
+          REPO: ${{ steps.versions.outputs.repo }}
+          REV: ${{ steps.versions.outputs.rev }}
+        run: |
+          git clone --quiet "https://${REPO}" "$RUNNER_TEMP/go-microvm"
+          git -C "$RUNNER_TEMP/go-microvm" checkout --quiet "$REV"
+
+      - name: Install Task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.54.0
+
+      - name: Build bundle
+        run: scripts/vm-runtime/build-runtime-linux.sh "$RUNNER_TEMP/go-microvm" dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-linux-amd64
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish pre-release
+    needs: [darwin-arm64, linux-amd64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Publish pre-release
         env:
           GH_TOKEN: ${{ github.token }}
-          UPSTREAM: ${{ steps.versions.outputs.upstream }}
-          REPO: ${{ steps.versions.outputs.repo }}
-          REV: ${{ steps.versions.outputs.rev }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            dist/go-microvm-runtime-darwin-arm64.tar.gz dist/sha256sums.txt \
+          read -r repo version < <(go list -m -f '{{if .Replace}}{{.Replace.Path}} {{.Replace.Version}}{{else}}{{.Path}} {{.Version}}{{end}}' github.com/stacklok/go-microvm)
+          upstream="${GITHUB_REF_NAME#vm-runtime-}"
+          upstream="${upstream%-jailoc.*}"
+          (cd dist && sha256sum -- *.tar.gz > sha256sums.txt && cat sha256sums.txt)
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/sha256sums.txt \
             --prerelease --latest=false \
             --title "VM runtime ${GITHUB_REF_NAME#vm-runtime-}" \
-            --notes "VM runtime for jailoc's experimental \`backend = \"vm\"\`: go-microvm-runner built from ${REPO}@${REV}, with libkrun and its libraries from stacklok/go-microvm ${UPSTREAM}. The firmware (libkrunfw) is downloaded from the stacklok/go-microvm ${UPSTREAM} release."
+            --notes "VM runtime for jailoc workspace VMs. go-microvm-runner is built from ${repo}@${version##*-}. darwin-arm64: libkrun and its libraries come from stacklok/go-microvm ${upstream}; the firmware (libkrunfw) is downloaded from that release. linux-amd64: the runner, libkrun and libkrunfw (firmware tarball, GPL-2.0) are built with go-microvm's builder image at the versions in its versions.env."
