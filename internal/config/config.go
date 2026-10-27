@@ -263,6 +263,7 @@ type Defaults struct {
 	DNSBlockedZones []string  `toml:"dns_blocked_zones,omitempty"`
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
 	IsolatedBuild   *bool     `toml:"isolated_build,omitempty"`
+	ProtectGit      *bool     `toml:"protect_git,omitempty"`
 }
 
 type Workspace struct {
@@ -289,6 +290,7 @@ type Workspace struct {
 	DNSBlockedZones []string  `toml:"dns_blocked_zones,omitempty"`
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
 	IsolatedBuild   *bool     `toml:"isolated_build,omitempty"`
+	ProtectGit      *bool     `toml:"protect_git,omitempty"`
 }
 
 func ConfigDir() string {
@@ -1077,6 +1079,9 @@ func Validate(cfg *Config) error {
 		}
 		if len(ws.Copies) > 0 && EffectiveBackend(cfg.Defaults.Backend, ws.Backend) != BackendVM {
 			return fmt.Errorf("workspace %q: copies is only supported with backend %q; use mounts with the Docker backend", name, BackendVM)
+		}
+		if ws.ProtectGit != nil && *ws.ProtectGit && EffectiveBackend(cfg.Defaults.Backend, ws.Backend) != BackendVM {
+			return fmt.Errorf("workspace %q: protect_git is only supported with backend %q", name, BackendVM)
 		}
 		if EffectiveBackend(cfg.Defaults.Backend, ws.Backend) == BackendVM {
 			sshAuthSock := cfg.Defaults.SSHAuthSock

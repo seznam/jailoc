@@ -62,6 +62,14 @@ type Config struct {
 	Copies []Copy `json:"copies,omitempty"`
 	// CABundle is a guest path appended to the system CA bundle.
 	CABundle string `json:"ca_bundle,omitempty"`
+	// Pins are paths bound onto themselves so that they cannot be renamed
+	// or removed in the guest; they keep their share's writability.
+	Pins []string `json:"pins,omitempty"`
+	// ReadOnly are paths bound read-only onto themselves.
+	ReadOnly []string `json:"read_only,omitempty"`
+	// NoPrivilegeEscalation removes privilege escalation, including sudo,
+	// from sessions, so the agent cannot undo Pins and ReadOnly.
+	NoPrivilegeEscalation bool `json:"no_privilege_escalation,omitempty"`
 }
 
 // Secrets is the payload of "jailoc-guest secrets": environment entries

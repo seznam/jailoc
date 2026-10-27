@@ -69,7 +69,7 @@ The VM gets `cpu` rounded up to whole vCPUs and `memory` plus 1 GiB.
 
 ## What the agent sees
 
-- It runs as `agent` (UID 1000) and can become root with `sudo` when the image allows it (the built-in image does), for example to install packages with `apt`. Root inside the VM cannot reach host files outside the shares, write read-only shares, or bypass the network rules.
+- It runs as `agent` (UID 1000) and, unless `protect_git` is set, can become root with `sudo` when the image allows it (the built-in image does), for example to install packages with `apt`. Root inside the VM cannot reach host files outside the shares, write read-only shares, or bypass the network rules.
 - Workspace `paths` and the directories of `mounts` appear at their configured paths. Files the agent creates in them belong to your host user.
 - OpenCode sessions and logins (`~/.local/share/opencode`), its prompt history and model choice (`~/.local/state/opencode`), and `~/.cache` persist across `jailoc down` and `jailoc up` unless a mount covers them. `jailoc down --purge` deletes them. Each workspace has its own OpenCode login.
 - Everything else outside the shares, including packages installed with `sudo apt`, is reset on every start; install lasting tools through the workspace Dockerfile.
@@ -122,6 +122,24 @@ isolated_build = true
 ```
 
 Set `isolated_build = true` in `[defaults]` to isolate every workspace. `isolated_build` always uses a builder VM, whatever `[vm] builder` says. Each builder VM runs only while an image is built.
+
+## Protect Git hooks and configuration
+
+Workspace `paths` are shared read-write, including the `.git` directories of the repositories in them. Git on the host runs hooks from `.git/hooks` and commands named in `.git/config` (for example `core.fsmonitor`), so an agent that writes there can run code on the host the next time you use Git in that repository. To prevent it, set:
+
+```toml
+[workspaces.myproject]
+protect_git = true
+```
+
+At every `jailoc up`, jailoc finds the Git repositories under the workspace `paths` and makes inside the VM:
+
+- `.git/hooks`, `.git/config`, the same files of submodules, and `.git` files of worktrees and submodule checkouts read-only (a missing `hooks` directory is created first);
+- the `.git` directories, the repositories and the directories between a workspace path and a repository impossible to rename or remove, so the agent cannot swap a protected `.git` for its own.
+
+`sudo` is disabled in the workspace, because root inside the VM could lift these protections. The agent can still commit, branch, fetch and push; Git commands that change `.git/config`, such as `git remote add` or `git config`, fail.
+
+The protection covers repositories that exist at `jailoc up`. Repositories created later, including those the agent clones, are not protected; restart the workspace to include them. Files in the working tree that tools run, such as `Makefile` or `package.json` scripts, are not covered either.
 
 ## Stop and remove the VM
 

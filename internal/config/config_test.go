@@ -3676,6 +3676,9 @@ func TestCopiesValidation(t *testing.T) {
 		{name: "system destination rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/data/hosts:/etc/hosts"}}, wantError: "is not allowed"},
 		{name: "forbidden source rejected", ws: Workspace{Backend: BackendVM, Copies: []string{"/etc/passwd:/home/agent/passwd"}}, wantError: "is forbidden"},
 		{name: "docker workspace rejects copies", ws: Workspace{Copies: []string{"/data/npmrc:/home/agent/.npmrc"}}, wantError: `copies is only supported with backend "vm"`},
+		{name: "docker workspace rejects protect_git", ws: Workspace{ProtectGit: new(true)}, wantError: `protect_git is only supported with backend "vm"`},
+		{name: "vm workspace accepts protect_git", ws: Workspace{Backend: BackendVM, ProtectGit: new(true)}},
+		{name: "docker defaults ignore protect_git", defaults: Defaults{ProtectGit: new(true)}},
 		{name: "defaults copies allowed with docker workspace", defaults: Defaults{Copies: []string{"/data/npmrc:/home/agent/.npmrc"}}, ws: Workspace{}},
 	}
 	for _, tc := range tests {

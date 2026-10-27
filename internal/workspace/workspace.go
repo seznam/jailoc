@@ -43,7 +43,10 @@ type Resolved struct {
 	EnableDocker    bool
 	// IsolatedBuild builds the image of a backend "vm" workspace in its own
 	// builder VM instead of the builder shared by all workspaces.
-	IsolatedBuild   bool
+	IsolatedBuild bool
+	// ProtectGit makes .git/hooks and .git/config of the repositories in
+	// a backend "vm" workspace read-only in the VM and disables sudo there.
+	ProtectGit      bool
 	FilteredDNS     bool
 	DNSUpstream     string
 	DNSBlockedZones []string
@@ -152,6 +155,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		ExposePort:      boolPtrWithDefault(cfg.Defaults.ExposePort, ws.ExposePort, true),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
 		IsolatedBuild:   boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
+		ProtectGit:      boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),
 		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.FilteredDNS, ws.FilteredDNS, false),
 		DNSUpstream:     ws.DNSUpstream,
 		DNSBlockedZones: ws.DNSBlockedZones,

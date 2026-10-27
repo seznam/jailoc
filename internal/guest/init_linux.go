@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
 
 	"github.com/stacklok/go-microvm/guest/harden"
 	"github.com/stacklok/go-microvm/guest/mount"
@@ -79,6 +80,9 @@ func Init(logger *slog.Logger) error {
 	if err := bindCopies(cfg.Copies, acct); err != nil {
 		return err
 	}
+	if err := protectPaths(cfg.Pins, cfg.ReadOnly); err != nil {
+		return err
+	}
 	env := sessionEnv(cfg)
 	if cfg.CABundle != "" {
 		if err := installCABundle(cfg.CABundle); err != nil {
@@ -92,10 +96,16 @@ func Init(logger *slog.Logger) error {
 		}
 	}
 
-	// The agent may become root through sudo: the VM is the isolation
-	// boundary, and network policy and share permissions are enforced on
-	// the host. Only kernel information leaks are hardened here.
+	// By default the agent may become root through sudo: the VM is the
+	// isolation boundary, and network policy and share permissions are
+	// enforced on the host. Guest-side protections (Pins, ReadOnly) only
+	// hold while sessions cannot gain privileges.
 	harden.KernelDefaults(logger)
+	if cfg.NoPrivilegeEscalation {
+		if err := disablePrivilegeEscalation(); err != nil {
+			return err
+		}
+	}
 
 	srv, err := newSSHServer(logger, cfg, acct, env)
 	if err != nil {
@@ -242,6 +252,57 @@ func bindCopies(copies []Copy, acct account) error {
 		flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
 		if err := syscall.Mount("", c.Target, "", flags, ""); err != nil {
 			return fmt.Errorf("copy %s: remount read-only: %w", c.Target, err)
+		}
+	}
+	return nil
+}
+
+// disablePrivilegeEscalation sets no_new_privs and drops every capability
+// the SSH server does not need from the bounding set, on all threads of the
+// process: prctl is per thread, and the Go runtime starts sessions from
+// arbitrary threads. With no_new_privs, sudo and other setuid programs no
+// longer grant root to sessions.
+func disablePrivilegeEscalation() error {
+	keep := map[uintptr]bool{unix.CAP_SETUID: true, unix.CAP_SETGID: true, unix.CAP_NET_BIND_SERVICE: true}
+	last := uintptr(unix.CAP_LAST_CAP)
+	if data, err := os.ReadFile("/proc/sys/kernel/cap_last_cap"); err == nil {
+		if n, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 8); err == nil {
+			last = uintptr(n)
+		}
+	}
+	for c := uintptr(0); c <= last; c++ {
+		if keep[c] {
+			continue
+		}
+		if _, _, errno := syscall.AllThreadsSyscall(syscall.SYS_PRCTL, unix.PR_CAPBSET_DROP, c, 0); errno != 0 {
+			return fmt.Errorf("drop capability %d from the bounding set: %w", c, errno)
+		}
+	}
+	if _, _, errno := syscall.AllThreadsSyscall(syscall.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); errno != 0 {
+		return fmt.Errorf("set no_new_privs: %w", errno)
+	}
+	return nil
+}
+
+// protectPaths binds every pin onto itself, which makes it a mount point
+// that cannot be renamed or removed, then binds every read-only path onto
+// itself read-only. Pins are bound parents first so that later binds land
+// inside them.
+func protectPaths(pins, readOnly []string) error {
+	pins = slices.Clone(pins)
+	slices.SortFunc(pins, func(a, b string) int { return len(a) - len(b) })
+	for _, p := range pins {
+		if err := syscall.Mount(p, p, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("pin %s: %w", p, err)
+		}
+	}
+	for _, p := range readOnly {
+		if err := syscall.Mount(p, p, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("protect %s: bind: %w", p, err)
+		}
+		flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
+		if err := syscall.Mount("", p, "", flags, ""); err != nil {
+			return fmt.Errorf("protect %s: remount read-only: %w", p, err)
 		}
 	}
 	return nil

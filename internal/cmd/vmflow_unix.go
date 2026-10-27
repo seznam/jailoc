@@ -102,6 +102,22 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
+	if ws.ProtectGit {
+		pins, readOnly, err := gitProtection(ws.Paths)
+		if err != nil {
+			return fmt.Errorf("workspace %q: %w", ws.Name, err)
+		}
+		spec.Guest.Pins = pins
+		spec.Guest.ReadOnly = readOnly
+		spec.Guest.NoPrivilegeEscalation = true
+		repos := 0
+		for _, p := range readOnly {
+			if filepath.Base(p) == "hooks" {
+				repos++
+			}
+		}
+		_, _ = color.New(color.FgCyan).Printf("Protecting Git hooks and config of %d repositories; sudo is disabled\n", repos)
+	}
 	if _, err := startSupervisor(ctx, spec, "VM for workspace "+ws.Name); err != nil {
 		return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
 	}
