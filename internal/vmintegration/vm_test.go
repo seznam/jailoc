@@ -1,0 +1,370 @@
+//go:build vmintegration
+
+// Package vmintegration boots real workspace VMs with jailoc and checks them
+// from the host and from inside the guest. It needs /dev/kvm (Linux) or the
+// Hypervisor framework (macOS), a go-microvm runner built from the revision
+// pinned in go.mod, and a host Docker daemon for image builds:
+//
+//	JAILOC_VM_RUNNER=/path/to/go-microvm-runner JAILOC_VM_LIBDIR=/path/to/libs \
+//	  go test -tags vmintegration -v -timeout 45m ./internal/vmintegration/
+package vmintegration
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/ssh/agent"
+
+	"github.com/seznam/jailoc/internal/vm"
+)
+
+const (
+	workspaceName = "vmtest"
+	hostPort      = "18080"
+	agentComment  = "jailoc-vmintegration"
+)
+
+var (
+	binaryPath string
+	home       string
+	project    string
+)
+
+func TestMain(m *testing.M) {
+	os.Exit(run(m))
+}
+
+func run(m *testing.M) int {
+	if os.Getenv("JAILOC_VM_RUNNER") == "" {
+		fmt.Fprintln(os.Stderr, "JAILOC_VM_RUNNER is not set; skipping VM integration tests")
+		return 0
+	}
+	root, err := projectRoot()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	tmp, err := os.MkdirTemp("", "jailoc-vmintegration-bin-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	binaryPath = filepath.Join(tmp, "jailoc")
+	for _, args := range [][]string{
+		{"generate", "./internal/guestbin"},
+		{"build", "-o", binaryPath, "./cmd/jailoc"},
+	} {
+		cmd := exec.Command("go", args...) //nolint:gosec // G204: fixed go subcommands
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "go %s: %v\n%s", strings.Join(args, " "), err, out)
+			return 1
+		}
+	}
+	// Workspace paths may not live under /tmp, so the test home is created
+	// in the real home directory.
+	realHome, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	home, err = os.MkdirTemp(realHome, "jailoc-vm-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(home) }()
+	project = filepath.Join(home, "project")
+	return m.Run()
+}
+
+func projectRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", errors.New("go.mod not found")
+		}
+		dir = parent
+	}
+}
+
+func writeConfig(t *testing.T) {
+	t.Helper()
+	cfg := fmt.Sprintf(`[vm]
+runner = %q
+lib_dir = %q
+
+[workspaces.%s]
+backend = "vm"
+paths = [%q]
+cpu = 2.0
+memory = "3g"
+ports = ["%s:8080"]
+ssh_auth_sock = true
+filtered_dns = true
+dns_upstream = "1.1.1.1"
+dns_blocked_zones = ["example.org"]
+
+[workspaces.%s.secrets.env.VMTEST_TOKEN]
+from_env = "VMTEST_HOST_TOKEN"
+`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), workspaceName, project, hostPort, workspaceName)
+	dir := filepath.Join(home, ".config", "jailoc")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil { //nolint:gosec // G703: test directory
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(project, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "README.txt"), []byte("hello from host\n"), 0o600); err != nil { //nolint:gosec // G703: test directory
+		t.Fatal(err)
+	}
+}
+
+// startAgent serves an in-memory SSH agent with one generated key.
+func startAgent(t *testing.T) string {
+	t.Helper()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := agent.NewKeyring()
+	if err := keyring.Add(agent.AddedKey{PrivateKey: key, Comment: agentComment}); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(home, "agent.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				_ = agent.ServeAgent(keyring, c)
+			}()
+		}
+	}()
+	return sock
+}
+
+func jailoc(ctx context.Context, t *testing.T, agentSock string, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, binaryPath, args...) //nolint:gosec // G204: the jailoc binary under test
+	cmd.Dir = project
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"SSH_AUTH_SOCK="+agentSock,
+		"VMTEST_HOST_TOKEN=token-from-host",
+		"OPENCODE_SERVER_PASSWORD=vmintegration",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("jailoc %s: %v\n%s", strings.Join(args, " "), err, tail(out, 6000))
+	}
+	return string(out)
+}
+
+func tail(b []byte, n int) []byte {
+	if len(b) > n {
+		return b[len(b)-n:]
+	}
+	return b
+}
+
+func stateDir() string {
+	return filepath.Join(home, ".cache", "jailoc-vm", "workspaces", workspaceName)
+}
+
+// guest runs a shell command in the workspace VM as the agent user.
+func guest(ctx context.Context, t *testing.T, command string) (string, error) {
+	t.Helper()
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	client, err := vm.DialSSH(cctx, stateDir())
+	if err != nil {
+		t.Fatalf("dial workspace VM: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("ssh session: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+	type result struct {
+		out []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := sess.CombinedOutput(command)
+		done <- result{out, err}
+	}()
+	select {
+	case r := <-done:
+		return string(r.out), r.err
+	case <-cctx.Done():
+		return "", fmt.Errorf("command %q timed out", command)
+	}
+}
+
+func mustGuest(ctx context.Context, t *testing.T, command string) string {
+	t.Helper()
+	out, err := guest(ctx, t, command)
+	if err != nil {
+		t.Fatalf("guest %q: %v\n%s", command, err, out)
+	}
+	return strings.TrimSpace(out)
+}
+
+func dumpLogs(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"supervisor.log", "microvm/console.log", "broker.jsonl"} {
+		data, err := os.ReadFile(filepath.Join(stateDir(), name)) //nolint:gosec // G304: test state file
+		if err != nil {
+			continue
+		}
+		t.Logf("==== %s ====\n%s", name, tail(data, 8000))
+	}
+}
+
+func TestWorkspaceVM(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	defer cancel()
+	writeConfig(t)
+	agentSock := startAgent(t)
+	t.Cleanup(func() {
+		if t.Failed() {
+			dumpLogs(t)
+		}
+		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer ccancel()
+		cmd := exec.CommandContext(cctx, binaryPath, "down", "--purge", workspaceName)
+		cmd.Env = append(os.Environ(), "HOME="+home)
+		_ = cmd.Run()
+	})
+
+	start := time.Now()
+	jailoc(ctx, t, agentSock, "up", workspaceName)
+	t.Logf("first up: %s", time.Since(start).Round(time.Second))
+
+	t.Run("agent user and sudo", func(t *testing.T) {
+		if got := mustGuest(ctx, t, "id -u"); got != "1000" {
+			t.Fatalf("id -u = %q", got)
+		}
+		if got := mustGuest(ctx, t, "sudo -n id -u"); got != "0" {
+			t.Fatalf("sudo id -u = %q", got)
+		}
+	})
+
+	t.Run("project share", func(t *testing.T) {
+		if got := mustGuest(ctx, t, "cat "+filepath.Join(project, "README.txt")); got != "hello from host" {
+			t.Fatalf("README = %q", got)
+		}
+		mustGuest(ctx, t, "echo from-guest > "+filepath.Join(project, "guest.txt"))
+		data, err := os.ReadFile(filepath.Join(project, "guest.txt")) //nolint:gosec // G304: test file
+		if err != nil || strings.TrimSpace(string(data)) != "from-guest" {
+			t.Fatalf("guest file on host = %q, %v", data, err)
+		}
+	})
+
+	t.Run("secrets", func(t *testing.T) {
+		got := mustGuest(ctx, t, `/.jailoc/jailoc-guest run -- sh -c 'echo "$VMTEST_TOKEN"; cat /run/secrets/VMTEST_TOKEN'`)
+		if got != "token-from-host\ntoken-from-host" {
+			t.Fatalf("secrets = %q", got)
+		}
+	})
+
+	t.Run("network policy", func(t *testing.T) {
+		if got := mustGuest(ctx, t, "curl -sS -m 20 -o /dev/null -w '%{http_code}' https://example.com"); got != "200" {
+			t.Fatalf("public https = %q", got)
+		}
+		for _, target := range []string{"http://10.0.0.1/", "http://192.168.127.1:22/", "http://169.254.169.254/"} {
+			if out, err := guest(ctx, t, "curl -sS -m 5 -o /dev/null "+target); err == nil {
+				t.Fatalf("%s reachable from the guest: %s", target, out)
+			}
+		}
+	})
+
+	t.Run("filtered DNS", func(t *testing.T) {
+		if out, err := guest(ctx, t, "getent hosts example.org"); err == nil {
+			t.Fatalf("blocked zone resolved: %s", out)
+		}
+		mustGuest(ctx, t, "getent hosts example.com")
+	})
+
+	t.Run("SSH agent", func(t *testing.T) {
+		if got := mustGuest(ctx, t, "ssh-add -l"); !strings.Contains(got, agentComment) {
+			t.Fatalf("ssh-add -l = %q", got)
+		}
+	})
+
+	t.Run("Docker", func(t *testing.T) {
+		if got := mustGuest(ctx, t, "docker run --rm alpine:3.20 echo docker-ok"); !strings.HasSuffix(got, "docker-ok") {
+			t.Fatalf("docker run = %q", got)
+		}
+	})
+
+	t.Run("published port", func(t *testing.T) {
+		mustGuest(ctx, t, "cd /tmp && echo port-ok > index.html && setsid -f python3 -m http.server 8080 --bind 0.0.0.0 >/dev/null 2>&1")
+		var body string
+		for range 30 {
+			resp, err := http.Get("http://127.0.0.1:" + hostPort + "/index.html") //nolint:gosec,noctx // G107: fixed test URL
+			if err == nil {
+				b, _ := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				body = strings.TrimSpace(string(b))
+				if body == "port-ok" {
+					return
+				}
+			}
+			time.Sleep(time.Second)
+		}
+		t.Fatalf("published port answered %q", body)
+	})
+
+	t.Run("restart keeps home and Docker data", func(t *testing.T) {
+		mustGuest(ctx, t, "echo persisted > ~/.cache/marker")
+		jailoc(ctx, t, agentSock, "down", workspaceName)
+		if out := jailoc(ctx, t, agentSock, "status", workspaceName); !strings.Contains(out, "stopped") {
+			t.Fatalf("status after down:\n%s", out)
+		}
+		start := time.Now()
+		jailoc(ctx, t, agentSock, "up", workspaceName)
+		t.Logf("cached up: %s", time.Since(start).Round(time.Second))
+		if got := mustGuest(ctx, t, "cat ~/.cache/marker"); got != "persisted" {
+			t.Fatalf("home marker = %q", got)
+		}
+		if got := mustGuest(ctx, t, "docker image ls --format '{{.Repository}}:{{.Tag}}'"); !strings.Contains(got, "alpine:3.20") {
+			t.Fatalf("docker images after restart = %q", got)
+		}
+	})
+}

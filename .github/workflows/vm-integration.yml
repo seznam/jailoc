@@ -1,0 +1,108 @@
+name: VM Integration
+
+# Boots real workspace VMs on a GitHub-hosted Linux runner. Standard x64
+# ubuntu runners expose /dev/kvm (nested virtualization, not documented by
+# GitHub); arm64 Linux and macOS runners do not, so this is the only hosted
+# platform that can run the VM backend.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/vm-integration.yml
+      - cmd/jailoc/**
+      - cmd/jailoc-guest/**
+      - internal/cmd/**
+      - internal/config/**
+      - internal/docker/**
+      - internal/embed/**
+      - internal/guest/**
+      - internal/guestbin/**
+      - internal/netbroker/**
+      - internal/brokerproc/**
+      - internal/vm/**
+      - internal/vmintegration/**
+      - internal/workspace/**
+      - go.mod
+      - go.sum
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/vm-integration.yml
+      - cmd/jailoc/**
+      - cmd/jailoc-guest/**
+      - internal/cmd/**
+      - internal/config/**
+      - internal/docker/**
+      - internal/embed/**
+      - internal/guest/**
+      - internal/guestbin/**
+      - internal/netbroker/**
+      - internal/brokerproc/**
+      - internal/vm/**
+      - internal/vmintegration/**
+      - internal/workspace/**
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  vm-integration:
+    name: VM Integration Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -w /dev/kvm || { echo "/dev/kvm is not available on this runner" >&2; exit 1; }
+
+      - name: Resolve go-microvm revision
+        id: microvm
+        run: |
+          read -r path version < <(go list -m -f '{{if .Replace}}{{.Replace.Path}} {{.Replace.Version}}{{else}}{{.Path}} {{.Version}}{{end}}' github.com/stacklok/go-microvm)
+          echo "repo=${path}" >> "$GITHUB_OUTPUT"
+          echo "rev=${version##*-}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out go-microvm
+        env:
+          REPO: ${{ steps.microvm.outputs.repo }}
+          REV: ${{ steps.microvm.outputs.rev }}
+        run: |
+          git clone --quiet "https://${REPO}" "$RUNNER_TEMP/go-microvm"
+          git -C "$RUNNER_TEMP/go-microvm" checkout --quiet "$REV"
+
+      - name: Build go-microvm runner and libkrun
+        working-directory: ${{ runner.temp }}/go-microvm
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          task build-runner
+          ls -l bin
+
+      - name: Run VM integration tests
+        env:
+          JAILOC_VM_RUNNER: ${{ runner.temp }}/go-microvm/bin/go-microvm-runner
+          JAILOC_VM_LIBDIR: ${{ runner.temp }}/go-microvm/bin
+        run: go test -tags vmintegration -v -count=1 -timeout 50m ./internal/vmintegration/

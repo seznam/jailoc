@@ -26,6 +26,10 @@ go test ./...
 # Run integration tests (requires a running Docker daemon)
 go test -tags=integration ./internal/...
 
+# Run the VM integration tests (needs KVM or macOS, a go-microvm runner and host Docker)
+JAILOC_VM_RUNNER=/path/to/go-microvm-runner JAILOC_VM_LIBDIR=/path/to/libs \
+  go test -tags vmintegration -v -timeout 45m ./internal/vmintegration/
+
 # Lint
 go vet ./...
 golangci-lint run
@@ -41,6 +45,7 @@ The pipeline runs on GitHub Actions. Most workflows trigger on every branch and 
 | Release | Tags matching `v*` — runs on `push` with `v*` ref | GoReleaser publishes static binaries and generates a GitHub Release with changelog |
 | Docs | Tags matching `v*` — runs on `push` with `v*` ref | Builds documentation with MkDocs and deploys to GitHub Pages |
 | Pre-release | Manual (`workflow_dispatch`) with a ref and a version such as `1.20.0-rc.1` | Tags the ref and publishes GoReleaser binaries as a GitHub pre-release; no docs deploy, no release-please involvement |
+| VM Integration | PRs and pushes to `main` touching VM code, manual | Builds the go-microvm runner and libkrun from the pinned revision and boots real workspace VMs on a GitHub-hosted x64 Linux runner with KVM (`go test -tags vmintegration ./internal/vmintegration/`) |
 | VM runtime | Tags matching `vm-runtime-*` | Builds the macOS VM runtime bundle (go-microvm runner and libkrun) and publishes it as a pre-release |
 
 Integration tests run as part of the CI workflow on `v*` tags with `go test -tags=integration`. GoReleaser builds static binaries (`CGO_ENABLED=0`) for `linux/darwin` x `amd64/arm64`. Configs live in `.goreleaser.yml` and `.github/workflows/`.
