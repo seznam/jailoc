@@ -198,7 +198,7 @@ func (b *Broker) Run(ctx context.Context, l net.Listener) error {
 		return err
 	}
 	for _, f := range b.cfg.Forwards {
-		if err := b.startForward(ctx, f); err != nil {
+		if _, err := b.startForward(ctx, f); err != nil {
 			return err
 		}
 	}

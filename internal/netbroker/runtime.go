@@ -65,12 +65,12 @@ func ParseRuntime(data []byte, source string) (*Runtime, error) {
 }
 
 type runtimeForward struct {
-	cancel context.CancelFunc
+	stop func()
 }
 
 type runtimeService struct {
-	cancel context.CancelFunc
-	path   atomic.Pointer[string]
+	stop func()
+	path atomic.Pointer[string]
 }
 
 // runtimeState tracks the listeners started from a Runtime.
@@ -102,13 +102,13 @@ func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 	// Stop removed entries first so a host port can move between guest ports.
 	for f, r := range s.forwards {
 		if !wantF[f] {
-			r.cancel()
+			r.stop()
 			delete(s.forwards, f)
 		}
 	}
 	for port, r := range s.services {
 		if _, ok := wantS[port]; !ok {
-			r.cancel()
+			r.stop()
 			delete(s.services, port)
 		}
 	}
@@ -119,12 +119,13 @@ func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 		}
 		fctx, cancel := context.WithCancel(ctx)
 		hp := netip.MustParseAddrPort(f.Host)
-		if err := b.startForward(fctx, Forward{Host: hp, GuestPort: f.GuestPort}); err != nil {
+		closeL, err := b.startForward(fctx, Forward{Host: hp, GuestPort: f.GuestPort})
+		if err != nil {
 			cancel()
 			errs = append(errs, fmt.Errorf("forward %s -> %d: %w", f.Host, f.GuestPort, err))
 			continue
 		}
-		s.forwards[f] = &runtimeForward{cancel: cancel}
+		s.forwards[f] = &runtimeForward{stop: func() { closeL(); cancel() }}
 	}
 	for port, path := range wantS {
 		if r, ok := s.services[port]; ok {
@@ -134,12 +135,13 @@ func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 		r := &runtimeService{}
 		r.path.Store(&path)
 		sctx, cancel := context.WithCancel(ctx)
-		if err := b.startServicePath(sctx, port, func() string { return *r.path.Load() }); err != nil {
+		closeL, err := b.startServicePath(sctx, port, func() string { return *r.path.Load() })
+		if err != nil {
 			cancel()
 			errs = append(errs, fmt.Errorf("service %d: %w", port, err))
 			continue
 		}
-		r.cancel = cancel
+		r.stop = func() { closeL(); cancel() }
 		s.services[port] = r
 	}
 	return errs

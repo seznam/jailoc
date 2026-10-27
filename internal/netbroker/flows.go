@@ -106,23 +106,23 @@ func relayUDP(in *gonet.UDPConn, out *net.UDPConn) {
 
 // startForward publishes guest port f.GuestPort on the host loopback address,
 // or on a host unix socket when f.UnixPath is set.
-func (b *Broker) startForward(ctx context.Context, f Forward) error {
+func (b *Broker) startForward(ctx context.Context, f Forward) (func(), error) {
 	var lc net.ListenConfig
 	network, addr := "tcp", f.Host.String()
 	if f.UnixPath != "" {
 		network, addr = "unix", f.UnixPath
 		if err := os.Remove(addr); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale forward socket: %w", err)
+			return nil, fmt.Errorf("remove stale forward socket: %w", err)
 		}
 	}
 	l, err := lc.Listen(ctx, network, addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if f.UnixPath != "" {
 		if err := os.Chmod(addr, 0o600); err != nil {
 			_ = l.Close()
-			return fmt.Errorf("chmod forward socket: %w", err)
+			return nil, fmt.Errorf("chmod forward socket: %w", err)
 		}
 	}
 	go func() {
@@ -149,22 +149,23 @@ func (b *Broker) startForward(ctx context.Context, f Forward) error {
 			}()
 		}
 	}()
-	return nil
+	return func() { _ = l.Close() }, nil
 }
 
 // startService accepts guest connections to the gateway's s.GuestPort and
 // relays each to the host unix socket s.UnixPath.
 func (b *Broker) startService(ctx context.Context, s Service) error {
-	return b.startServicePath(ctx, s.GuestPort, func() string { return s.UnixPath })
+	_, err := b.startServicePath(ctx, s.GuestPort, func() string { return s.UnixPath })
+	return err
 }
 
 // startServicePath is startService with the socket path looked up for every
 // connection, so a runtime reload can change it without a restart.
-func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() string) error {
+func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() string) (func(), error) {
 	s := Service{GuestPort: port}
 	l, err := gonet.ListenTCP(b.stack, *guestAddr(b.cfg.Gateway, s.GuestPort), ipv4.ProtocolNumber)
 	if err != nil {
-		return fmt.Errorf("service listener on port %d: %w", s.GuestPort, err)
+		return nil, fmt.Errorf("service listener on port %d: %w", s.GuestPort, err)
 	}
 	go func() {
 		<-ctx.Done()
@@ -191,7 +192,7 @@ func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() 
 			}()
 		}
 	}()
-	return nil
+	return func() { _ = l.Close() }, nil
 }
 
 func guestAddr(a netip.Addr, port uint16) *tcpip.FullAddress {
