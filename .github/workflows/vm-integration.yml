@@ -77,6 +77,9 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle
+          ls -l /dev/kvm || true
+          grep -cE 'vmx|svm' /proc/cpuinfo || true
           test -w /dev/kvm || { echo "/dev/kvm is not available on this runner" >&2; exit 1; }
 
       - name: Resolve go-microvm revision
