@@ -132,10 +132,13 @@ Host addresses, the broker gateway and cloud metadata endpoints stay blocked reg
 ## Restrictions
 
 - Sessions use exec mode only; `jailoc --remote` is rejected and `expose_port = true` is rejected.
-- The agent has no Docker daemon; `enable_docker = true` is rejected.
-- `ssh_auth_sock` and `filtered_dns` are rejected: the SSH agent socket cannot cross into the VM, and DNS goes through the broker.
+- The agent has no Docker daemon; `enable_docker = true` is rejected. Testcontainers and `docker build` inside the workspace do not work.
+- `ssh_auth_sock` is rejected: the host SSH agent socket cannot cross into the VM. Git over SSH (`git@host:repo` remotes) fails; use HTTPS remotes with a token, for example a `~/.netrc` added through `copies`.
+- `filtered_dns` is rejected: DNS goes through the broker.
 - `mounts` must name directories. A file mount is rejected at `jailoc up`; use `copies` for files.
-- On macOS, reaching hosts on the local network through `allowed_hosts` or `allowed_networks` needs the macOS network permission for the process that runs jailoc.
+- The shared builder VM reaches public addresses only. Images that pull from private registries or hosts need `isolated_build = true` with the hosts in `allowed_hosts`, or `[vm] builder = "docker"`.
+- On macOS, reaching hosts on the local network through `allowed_hosts` or `allowed_networks` needs the macOS Local Network permission for the process that runs jailoc. Without it, connections to local-network addresses fail with `no route to host`.
+- IPv6 is not available inside the VM.
 
 ## Inspect a running VM
 
@@ -150,3 +153,5 @@ Workspace VM state lives in `~/.cache/jailoc-vm/workspaces/<workspace>/`. `jailo
 | `home/` | Persistent home directories of the agent |
 
 The shared builder lives in `~/.cache/jailoc-vm/builder/`, an isolated one in `~/.cache/jailoc-vm/workspaces/<workspace>/builder/`.
+
+Unpacked workspace images live in `~/.cache/jailoc-vm/images/`. Each `jailoc up` removes images that no workspace uses any more and extracted layers unused for two weeks; entries changed within the last hour are kept, because another `jailoc up` may still need them.
