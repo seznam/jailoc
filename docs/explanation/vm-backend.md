@@ -86,7 +86,7 @@ With `filtered_dns`, the broker's resolver answers NXDOMAIN for the blocked zone
 
 The broker also serves one service on the gateway when `ssh_auth_sock` is on: connections to its SSH agent port are relayed to the host agent socket, and `jailoc-guest` exposes them as `/run/ssh-agent.sock`. Keys never enter the VM.
 
-Denied TCP connections are reset; denied UDP is dropped. DNS answers never change a decision: a public name that resolves to a private address is still blocked. Each decision is written to `broker.jsonl`.
+Denied TCP connections are reset; denied UDP gets ICMP port unreachable. DNS answers never change a decision: a public name that resolves to a private address is still blocked. Each decision is written to `broker.jsonl`.
 
 No port is published on the host. An invalid policy file at start prevents the VM from starting. If the broker exits, the supervisor stops the VM, so the workspace never runs without its broker.
 
