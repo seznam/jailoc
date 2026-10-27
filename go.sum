@@ -563,8 +563,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tchap/go-patricia/v2 v2.3.3 h1:xfNEsODumaEcCcY3gI0hYPZ/PcpVv5ju6RMAhgwZDDc=
 github.com/tchap/go-patricia/v2 v2.3.3/go.mod h1:VZRHKAb53DLaG+nA9EaYYiaEx6YztwDlLElMsnSHD4k=
-github.com/thejoeejoee/go-microvm v0.0.42-0.20261027082724-5b8d02a5bd12 h1:zNrKZnnFjiOwC00WJoY8gklJOO3vJOThXBBQYBl9ayc=
-github.com/thejoeejoee/go-microvm v0.0.42-0.20261027082724-5b8d02a5bd12/go.mod h1:MSeQCQZE65BY0LzaxQszGPqz9TIy8EyV8fnzZm+C+Vk=
+github.com/thejoeejoee/go-microvm v0.0.42-0.20261027120306-1e9c43aebd05 h1:yWG6wFK4HeiJQH3nx88QXzcbd+dgiDfkGBMkm/2VGYg=
+github.com/thejoeejoee/go-microvm v0.0.42-0.20261027120306-1e9c43aebd05/go.mod h1:MSeQCQZE65BY0LzaxQszGPqz9TIy8EyV8fnzZm+C+Vk=
 github.com/theupdateframework/go-tuf v0.7.0 h1:CqbQFrWo1ae3/I0UCblSbczevCCbS31Qvs5LdxRWqRI=
 github.com/theupdateframework/go-tuf v0.7.0/go.mod h1:uEB7WSY+7ZIugK6R1hiBMBjQftaFzn7ZCDJcp1tCUug=
 github.com/theupdateframework/go-tuf/v2 v2.4.2 h1:w7976/W8uTwlsegP5nRymlpjPgrwSh+AXUf85is6nJk=

@@ -223,7 +223,7 @@ require (
 	tags.cncf.io/container-device-interface v1.1.0 // indirect
 )
 
-// go-microvm fork: WithDisks (stacklok/go-microvm#128), simplified virtio-fs
-// ownership, the fresh-cache clone fix, read-only file ownership and image
-// PATH handling, until they are merged upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261027082724-5b8d02a5bd12
+// go-microvm fork: simplified virtio-fs ownership (stacklok/go-microvm#135),
+// image PATH handling (#139) and exec-session exit status (#143), until they
+// are merged upstream.
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261027120306-1e9c43aebd05
