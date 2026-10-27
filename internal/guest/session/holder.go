@@ -168,6 +168,16 @@ func Serve(stateDir, id string) error {
 		for range hup {
 		}
 	}()
+	// Record the holder PID and catch stop signals before the socket
+	// accepts clients: Create returns as soon as it does, and Stop needs
+	// the PID. A stop that arrives before the program starts is handled
+	// once it runs.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+	info.PID = os.Getpid()
+	if err := writeInfo(stateDir, info); err != nil {
+		return err
+	}
 	_ = os.Remove(socketPath(stateDir, id))
 	ln, err := net.Listen("unix", socketPath(stateDir, id))
 	if err != nil {
@@ -194,14 +204,7 @@ func Serve(stateDir, id string) error {
 		return fmt.Errorf("start %s: %w", info.Argv[0], err)
 	}
 	h := &holder{stateDir: stateDir, info: info, ptmx: ptmx, modes: NewModeTracker(), rows: rows, cols: cols}
-	info.PID = os.Getpid()
-	if err := writeInfo(stateDir, info); err != nil {
-		_ = cmd.Process.Kill()
-		return err
-	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-stop
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGHUP)

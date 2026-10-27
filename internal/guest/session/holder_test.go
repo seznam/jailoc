@@ -24,9 +24,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// script ignores read failures: dash aborts a read interrupted by the
+// trapped SIGWINCH.
 const script = `printf '\033[?1049h\033[?1000h'
 trap 'echo winch' WINCH
-while read -r l; do
+while :; do
+  read -r l || continue
   [ "$l" = quit ] && exit 7
   echo "got:$l"
 done`
