@@ -378,7 +378,14 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 		if err != nil {
 			return fmt.Errorf("set terminal raw mode: %w", err)
 		}
-		defer func() { _ = term.Restore(fd, old) }()
+		defer func() {
+			// The guest TUI cannot turn its terminal features off when the
+			// VM or connection dies, so reset them after every session.
+			if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
+				resetTerminalModes(os.Stdout)
+			}
+			_ = term.Restore(fd, old)
+		}()
 		winch := make(chan os.Signal, 1)
 		signal.Notify(winch, syscall.SIGWINCH)
 		defer signal.Stop(winch)
@@ -395,6 +402,10 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	var exitErr *ssh.ExitError
 	if errors.As(err, &exitErr) {
 		return fmt.Errorf("opencode exited with status %d", exitErr.ExitStatus())
+	}
+	var missing *ssh.ExitMissingError
+	if errors.As(err, &missing) || errors.Is(err, io.EOF) {
+		return fmt.Errorf("connection to workspace %q lost; the VM stopped or was stopped by `jailoc down`", ws.Name)
 	}
 	if err != nil {
 		return fmt.Errorf("run opencode in workspace %q: %w", ws.Name, err)
