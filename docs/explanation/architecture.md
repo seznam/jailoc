@@ -70,7 +70,7 @@ With `protect_git`, `jailoc-guest` bind-mounts `.git/hooks` and `.git/config` of
 
 Workspace `paths`, the directories in `mounts`, the workspace configuration directory, the workspace cache directory and the persistent home directories reach the VM through virtio-fs. Read-only shares are enforced by the VMM: guest root can't remount them writable. virtio-fs shares directories only, so a `mounts` entry that points at a single file isn't supported; use `snapshots` for files.
 
-Shares use simplified ownership: every guest process sees shared files as its own, and files it creates are owned by the host user. Permission bits stay meaningful on the host, and ownership changes inside the guest have no effect on host files.
+On macOS, shares use simplified ownership: every guest process sees shared files as its own, and files it creates are owned by the host user. Permission bits stay meaningful on the host, and ownership changes inside the guest have no effect on host files. On Linux, the guest sees the host owner and group of shared files. libkrun creates files as the host user that runs jailoc and allows it only for guest `root` or for a guest user whose uid and gid match that host user, so the `agent` user (uid and gid 1000) can create files in shares only when jailoc runs as uid and gid 1000.
 
 ### Snapshots
 

@@ -388,9 +388,7 @@ func builderOptions(spec Spec) []microvm.Option {
 	var table strings.Builder
 	for i, s := range spec.Shares {
 		tag := fmt.Sprintf("jailoc%d", i)
-		// Simplified ownership: the container agent (uid 1000) and root both see
-		// shared files as their own, whatever the host owner is.
-		mounts = append(mounts, microvm.VirtioFSMount{Tag: tag, HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: true})
+		mounts = append(mounts, microvm.VirtioFSMount{Tag: tag, HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: simplifiedOwnership})
 		mode := "rw"
 		if s.ReadOnly {
 			mode = "ro"
@@ -399,7 +397,7 @@ func builderOptions(spec Spec) []microvm.Option {
 	}
 	// The control share carries the shutdown request from the supervisor to
 	// the guest init; it is the only state-dir content the guest sees.
-	mounts = append(mounts, microvm.VirtioFSMount{Tag: "jailocctl", HostPath: controlDir(spec.StateDir), SimplifiedOwnership: true})
+	mounts = append(mounts, microvm.VirtioFSMount{Tag: "jailocctl", HostPath: controlDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership})
 	fmt.Fprintf(&table, "%s\t%s\t%s\n", "jailocctl", "rw", controlDir(spec.StateDir))
 	return append(commonOptions(spec),
 		microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}),

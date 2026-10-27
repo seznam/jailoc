@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -116,14 +117,18 @@ func prepareGuest(spec Spec) (map[string]fileContent, error) {
 
 func shareTag(i int) string { return fmt.Sprintf("jailoc%d", i) }
 
+// simplifiedOwnership makes the agent (uid 1000) and root both see shared
+// files as their own, whatever the host owner is. libkrun implements it only
+// on macOS (its Linux passthrough backend ignores the semantics), and
+// go-microvm rejects it on other hosts, where guests see host ownership.
+const simplifiedOwnership = runtime.GOOS == "darwin"
+
 func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option {
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares)+1)
 	for i, s := range spec.Shares {
-		// Simplified ownership: the agent (uid 1000) and root both see
-		// shared files as their own, whatever the host owner is.
-		mounts = append(mounts, microvm.VirtioFSMount{Tag: shareTag(i), HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: true})
+		mounts = append(mounts, microvm.VirtioFSMount{Tag: shareTag(i), HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: simplifiedOwnership})
 	}
-	mounts = append(mounts, microvm.VirtioFSMount{Tag: controlTag, HostPath: controlDir(spec.StateDir), SimplifiedOwnership: true})
+	mounts = append(mounts, microvm.VirtioFSMount{Tag: controlTag, HostPath: controlDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership})
 	opts := commonOptions(spec)
 	if spec.Docker {
 		// The only disk, so the guest sees it as /dev/vda (guest.DockerDisk).
