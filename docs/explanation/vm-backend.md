@@ -48,7 +48,7 @@ All VM workspaces share one builder VM. It keeps one build cache for all of them
 
 ## Workspace VM
 
-The root file system is a copy-on-write clone of the unpacked image and is discarded on every start; only `~/.local/share/opencode` and `~/.cache` of the agent persist, in the workspace's VM state directory. `jailoc-guest` prepares the system and then serves SSH:
+The root file system is a copy-on-write clone of the unpacked image and is discarded on every start; only `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` of the agent persist, in the workspace's VM state directory. `jailoc-guest` prepares the system and then serves SSH:
 
 1. configures the network address, the broker as gateway and DNS resolver, and the hostname,
 2. creates the `agent` user (UID 1000) when the image has none and its home directory,

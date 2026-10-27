@@ -64,7 +64,7 @@ jailoc down [flags]
 
 Equivalent to `docker compose down` on the generated compose file. Does not remove named volumes or the image.
 
-For workspaces with `backend = "vm"`, shuts down the workspace VM and its network broker instead. The persistent home directories (`~/.local/share/opencode` and `~/.cache` of the agent) are kept.
+For workspaces with `backend = "vm"`, shuts down the workspace VM and its network broker instead. The persistent home directories (`~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` of the agent) are kept.
 
 | Flag | Description |
 |------|-------------|

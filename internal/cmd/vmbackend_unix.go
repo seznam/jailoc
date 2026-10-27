@@ -257,10 +257,11 @@ func vmLibDir(configured string) string {
 
 // Guest paths of the jailoc directories shared with a workspace VM.
 const (
-	guestConfigDir   = "/etc/jailoc"
-	guestCacheDir    = "/etc/jailoc-cache"
-	guestOpenCodeDir = "/home/agent/.local/share/opencode"
-	guestUserCache   = "/home/agent/.cache"
+	guestConfigDir     = "/etc/jailoc"
+	guestCacheDir      = "/etc/jailoc-cache"
+	guestOpenCodeDir   = "/home/agent/.local/share/opencode"
+	guestOpenCodeState = "/home/agent/.local/state/opencode"
+	guestUserCache     = "/home/agent/.cache"
 )
 
 // vmShares lists the host directories the workspace VM mounts: workspace
@@ -308,7 +309,14 @@ func vmShares(ws *workspace.Resolved, cacheDir string) ([]vm.Share, error) {
 	add(filepath.Join(config.ConfigDir(), "workspaces", ws.Name), guestConfigDir, true)
 	add(cacheDir, guestCacheDir, true)
 	add(filepath.Join(cacheDir, "tui-plugin"), tuiPluginContainerDir, true)
-	for _, dir := range []struct{ name, guestPath string }{{"opencode-data", guestOpenCodeDir}, {"cache", guestUserCache}} {
+	// OpenCode sessions and logins (data), prompt history and model choice
+	// (state) and caches survive restarts in the VM state directory.
+	persistent := []struct{ name, guestPath string }{
+		{"opencode-data", guestOpenCodeDir},
+		{"opencode-state", guestOpenCodeState},
+		{"cache", guestUserCache},
+	}
+	for _, dir := range persistent {
 		if _, covered := byGuest[dir.guestPath]; covered {
 			continue
 		}

@@ -109,6 +109,7 @@ func TestVMShares(t *testing.T) {
 		{HostPath: cacheDir, GuestPath: guestCacheDir, ReadOnly: true},
 		{HostPath: filepath.Join(cacheDir, "tui-plugin"), GuestPath: tuiPluginContainerDir, ReadOnly: true},
 		{HostPath: filepath.Join(vmStateDir("w"), "home", "cache"), GuestPath: guestUserCache},
+		{HostPath: filepath.Join(vmStateDir("w"), "home", "opencode-state"), GuestPath: guestOpenCodeState},
 		{HostPath: filepath.Join(home, "data"), GuestPath: guestOpenCodeDir},
 		{HostPath: filepath.Join(home, "created"), GuestPath: "/opt/created"},
 		{HostPath: tools, GuestPath: "/opt/tools", ReadOnly: true},
@@ -118,7 +119,7 @@ func TestVMShares(t *testing.T) {
 	if !slices.Equal(shares, want) {
 		t.Fatalf("shares =\n%+v\nwant\n%+v", shares, want)
 	}
-	for _, dir := range []string{filepath.Join(home, "created"), filepath.Join(vmStateDir("w"), "home", "cache")} {
+	for _, dir := range []string{filepath.Join(home, "created"), filepath.Join(vmStateDir("w"), "home", "cache"), filepath.Join(vmStateDir("w"), "home", "opencode-state")} {
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			t.Fatalf("directory %s not created: %v", dir, err)
 		}
