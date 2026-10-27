@@ -49,20 +49,33 @@ type Release struct {
 // local server. The checksums still apply.
 var runtimeMirror string
 
-// releases pins the runtime per GOOS/GOARCH. The runtime tarball is built by
-// .github/workflows/vm-runtime.yml from the go-microvm revision in go.mod
-// (block disks and simplified virtio-fs ownership) with libkrun from the
-// go-microvm v0.0.41 release; the firmware is that release's artifact.
+// releases pins the runtime per GOOS/GOARCH; other platforms are unsupported.
+// .github/workflows/vm-runtime.yml builds the runner from the go-microvm
+// revision in go.mod (block disks and simplified virtio-fs ownership). On
+// darwin/arm64 libkrun comes from the go-microvm v0.0.41 release and the
+// firmware is that release's artifact. On linux/amd64 the runner, libkrun and
+// the firmware (libkrunfw) are built with go-microvm's builder image.
 var releases = map[string]Release{
 	"darwin/arm64": {
-		Version: "v0.0.41-jailoc.2",
+		Version: "v0.0.41-jailoc.4",
 		Runtime: Artifact{
-			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.2/go-microvm-runtime-darwin-arm64.tar.gz",
-			SHA256: "1f6524076489cfe6ab2eb03daa3e8d584e252e24957d11295eef59d1a9df7204",
+			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.4/go-microvm-runtime-darwin-arm64.tar.gz",
+			SHA256: "d7b6f54e80d499691423012d67045a3867d87469857315529f6783a5e11de58b",
 		},
 		Firmware: Artifact{
 			URL:    "https://github.com/stacklok/go-microvm/releases/download/v0.0.41/go-microvm-firmware-darwin-arm64.tar.gz",
 			SHA256: "02ff1ca992c3b104cf6c4d0c2995fac5aa8646e7f7cafa0ee72b734b69fc5216",
+		},
+	},
+	"linux/amd64": {
+		Version: "v0.0.41-jailoc.4",
+		Runtime: Artifact{
+			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.4/go-microvm-runtime-linux-amd64.tar.gz",
+			SHA256: "7bf064cbb1535f2edcaff369c24a6241c9ed4a3cddf5902866615b414d5de899",
+		},
+		Firmware: Artifact{
+			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.4/go-microvm-firmware-linux-amd64.tar.gz",
+			SHA256: "8a022dbd2c42c291a0ea7e698192d353e5465d42e8a7d7c4710347331de387d4",
 		},
 	},
 }
@@ -74,7 +87,7 @@ func EnsureRuntime(ctx context.Context, cacheDir string, progress io.Writer) (ru
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	rel, ok := releases[platform]
 	if !ok {
-		return "", "", fmt.Errorf("no VM runtime available for %s; set runner and lib_dir in the [vm] section of the config", platform)
+		return "", "", fmt.Errorf("VM runtime is not supported on %s (supported: darwin/arm64, linux/amd64); set runner and lib_dir in the [vm] section of the config to use a self-built runtime", platform)
 	}
 	return ensureRelease(ctx, http.DefaultClient, cacheDir, rel, progress)
 }
