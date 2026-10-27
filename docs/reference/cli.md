@@ -146,6 +146,31 @@ When `--workspace` is not set, resolves the workspace from the path being added 
 
 ---
 
+### `jailoc migrate`
+
+Move every workspace to the VM backend.
+
+```
+jailoc migrate [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Print the planned changes and the resulting `config.toml` without changing anything. |
+| `-y`, `--yes` | Accept the default answer to every question. Required when standard input is not a terminal. |
+
+Rewrites `~/.config/jailoc/config.toml`:
+
+- Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
+- Lists settings the VM backend rejects or ignores (`mode = "remote"`, `ssh_auth_sock`, `filtered_dns`, `enable_docker = true`, `expose_port = true`) per scope and removes them after confirmation. Declining stops the migration.
+- Asks for every `mounts` entry of `[defaults]` and of each Docker workspace whether it stays a mount (default for directories), becomes a read-only [copy](configuration.md#copies) (default for files), or is dropped. Files cannot stay mounts.
+
+For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories, unless a mount covers those paths or VM data already exists there. The volumes are left in place. Without a reachable Docker daemon, these steps are skipped after confirmation.
+
+The previous configuration is saved as `config.toml.pre-vm-migration` next to it. Comments are not carried over to the rewritten file.
+
+---
+
 ## Update Checks
 
 jailoc checks GitHub Releases for newer versions on every command run. The check runs asynchronously in the background and does not block command execution.

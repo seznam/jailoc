@@ -21,6 +21,17 @@ On Linux, the user running jailoc also needs read and write access to `/dev/kvm`
 
 jailoc ships `jailoc-guest`, the init process and SSH server of workspace VMs, inside its own binary. A jailoc built from source without `go generate ./internal/guestbin` (see [Development](../development.md)) has none and looks for `jailoc-guest` next to the runner instead.
 
+## Migrate all workspaces
+
+To move every existing workspace to the VM backend in one step, run:
+
+```bash
+jailoc migrate --dry-run   # preview
+jailoc migrate
+```
+
+It asks how to carry over each mount (mount, copy or drop), removes settings the VM backend does not support after confirmation, stops running Docker workspaces, copies their OpenCode data into the VM, and keeps the previous configuration as `config.toml.pre-vm-migration`. See [`jailoc migrate`](../reference/cli.md#jailoc-migrate).
+
 ## Switch a workspace to the VM backend
 
 Set `backend` on the workspace, or in `[defaults]` for all workspaces:

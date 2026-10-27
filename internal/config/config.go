@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -211,72 +212,72 @@ type Secrets struct {
 }
 
 type Config struct {
-	Mode         string               `toml:"mode"`
-	PasswordMode string               `toml:"password_mode"`
-	Base         BaseConfig           `toml:"base"`
-	VM           VMConfig             `toml:"vm"`
-	Defaults     Defaults             `toml:"defaults"`
+	Mode         string               `toml:"mode,omitempty"`
+	PasswordMode string               `toml:"password_mode,omitempty"`
+	Base         BaseConfig           `toml:"base,omitempty"`
+	VM           VMConfig             `toml:"vm,omitempty"`
+	Defaults     Defaults             `toml:"defaults,omitempty"`
 	Workspaces   map[string]Workspace `toml:"workspaces"`
 }
 
 // VMConfig locates the host runtime of the vm backend. Empty fields use
 // platform defaults.
 type VMConfig struct {
-	Runner string `toml:"runner"`
-	LibDir string `toml:"lib_dir"`
+	Runner string `toml:"runner,omitempty"`
+	LibDir string `toml:"lib_dir,omitempty"`
 }
 
 type BaseConfig struct {
-	Dockerfile string `toml:"dockerfile"`
+	Dockerfile string `toml:"dockerfile,omitempty"`
 }
 
 type Defaults struct {
-	Backend         string    `toml:"backend"`
-	Env             []string  `toml:"env"`
-	EnvFile         []string  `toml:"env_file"`
-	Mounts          []string  `toml:"mounts"`
-	Copies          []string  `toml:"copies"`
-	AllowedHosts    []string  `toml:"allowed_hosts"`
-	AllowedNetworks []string  `toml:"allowed_networks"`
+	Backend         string    `toml:"backend,omitempty"`
+	Env             []string  `toml:"env,omitempty"`
+	EnvFile         []string  `toml:"env_file,omitempty"`
+	Mounts          []string  `toml:"mounts,omitempty"`
+	Copies          []string  `toml:"copies,omitempty"`
+	AllowedHosts    []string  `toml:"allowed_hosts,omitempty"`
+	AllowedNetworks []string  `toml:"allowed_networks,omitempty"`
 	Secrets         Secrets   `toml:"secrets,omitempty"`
-	Image           string    `toml:"image"`
-	SSHAuthSock     bool      `toml:"ssh_auth_sock"`
-	GitConfig       *bool     `toml:"git_config"`
-	CPU             *float64  `toml:"cpu"`
-	Memory          *string   `toml:"memory"`
-	ExposePort      *bool     `toml:"expose_port"`
-	EnableDocker    *bool     `toml:"enable_docker"`
-	FilteredDNS     *bool     `toml:"filtered_dns"`
-	DNSUpstream     string    `toml:"dns_upstream"`
-	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
+	Image           string    `toml:"image,omitempty"`
+	SSHAuthSock     bool      `toml:"ssh_auth_sock,omitempty"`
+	GitConfig       *bool     `toml:"git_config,omitempty"`
+	CPU             *float64  `toml:"cpu,omitempty"`
+	Memory          *string   `toml:"memory,omitempty"`
+	ExposePort      *bool     `toml:"expose_port,omitempty"`
+	EnableDocker    *bool     `toml:"enable_docker,omitempty"`
+	FilteredDNS     *bool     `toml:"filtered_dns,omitempty"`
+	DNSUpstream     string    `toml:"dns_upstream,omitempty"`
+	DNSBlockedZones []string  `toml:"dns_blocked_zones,omitempty"`
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
-	IsolatedBuild   *bool     `toml:"isolated_build"`
+	IsolatedBuild   *bool     `toml:"isolated_build,omitempty"`
 }
 
 type Workspace struct {
-	Backend         string    `toml:"backend"`
-	Paths           []string  `toml:"paths"`
-	Mounts          []string  `toml:"mounts"`
-	Copies          []string  `toml:"copies"`
-	AllowedHosts    []string  `toml:"allowed_hosts"`
-	AllowedNetworks []string  `toml:"allowed_networks"`
-	Env             []string  `toml:"env"`
-	EnvFile         []string  `toml:"env_file"`
+	Backend         string    `toml:"backend,omitempty"`
+	Paths           []string  `toml:"paths,omitempty"`
+	Mounts          []string  `toml:"mounts,omitempty"`
+	Copies          []string  `toml:"copies,omitempty"`
+	AllowedHosts    []string  `toml:"allowed_hosts,omitempty"`
+	AllowedNetworks []string  `toml:"allowed_networks,omitempty"`
+	Env             []string  `toml:"env,omitempty"`
+	EnvFile         []string  `toml:"env_file,omitempty"`
 	Secrets         Secrets   `toml:"secrets,omitempty"`
-	BuildContext    string    `toml:"build_context"`
-	Dockerfile      string    `toml:"dockerfile"`
-	Image           string    `toml:"image"`
-	SSHAuthSock     *bool     `toml:"ssh_auth_sock"`
-	GitConfig       *bool     `toml:"git_config"`
-	CPU             *float64  `toml:"cpu"`
-	Memory          *string   `toml:"memory"`
-	ExposePort      *bool     `toml:"expose_port"`
-	EnableDocker    *bool     `toml:"enable_docker"`
-	FilteredDNS     *bool     `toml:"filtered_dns"`
-	DNSUpstream     string    `toml:"dns_upstream"`
-	DNSBlockedZones []string  `toml:"dns_blocked_zones"`
+	BuildContext    string    `toml:"build_context,omitempty"`
+	Dockerfile      string    `toml:"dockerfile,omitempty"`
+	Image           string    `toml:"image,omitempty"`
+	SSHAuthSock     *bool     `toml:"ssh_auth_sock,omitempty"`
+	GitConfig       *bool     `toml:"git_config,omitempty"`
+	CPU             *float64  `toml:"cpu,omitempty"`
+	Memory          *string   `toml:"memory,omitempty"`
+	ExposePort      *bool     `toml:"expose_port,omitempty"`
+	EnableDocker    *bool     `toml:"enable_docker,omitempty"`
+	FilteredDNS     *bool     `toml:"filtered_dns,omitempty"`
+	DNSUpstream     string    `toml:"dns_upstream,omitempty"`
+	DNSBlockedZones []string  `toml:"dns_blocked_zones,omitempty"`
 	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
-	IsolatedBuild   *bool     `toml:"isolated_build"`
+	IsolatedBuild   *bool     `toml:"isolated_build,omitempty"`
 }
 
 func ConfigDir() string {
@@ -357,6 +358,63 @@ func decode(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// ReadRaw decodes path without validation or path expansion, for tools
+// that rewrite the configuration.
+func ReadRaw(path string) (*Config, error) {
+	return decode(path)
+}
+
+// Encode returns cfg as TOML.
+func Encode(cfg *Config) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+		return nil, fmt.Errorf("encode config: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// WriteRaw encodes cfg to path atomically. Comments in the previous file are
+// not preserved.
+func WriteRaw(path string, cfg *Config) error {
+	data, err := Encode(cfg)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.toml")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
+	}
+	return nil
+}
+
+// ValidateCopy checks that cfg survives an encode/decode round trip and
+// passes validation, without modifying cfg.
+func ValidateCopy(cfg *Config) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	var copied Config
+	if _, err := toml.Decode(buf.String(), &copied); err != nil {
+		return fmt.Errorf("decode config: %w", err)
+	}
+	if copied.Workspaces == nil {
+		copied.Workspaces = map[string]Workspace{}
+	}
+	return Validate(&copied)
 }
 
 func CreateDefault() error {
