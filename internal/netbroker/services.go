@@ -99,6 +99,10 @@ func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
 // resolve forwards one query to the upstreams in order and returns the first
 // answer, or SERVFAIL when none answers.
 func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
+	if name := questionName(q); name != "" && b.policy.Load().blocked(name) {
+		b.record(map[string]any{"event": "dns", "network": network, "name": name, "blocked": true})
+		return nxdomain(q)
+	}
 	var resp []byte
 	lastErr := errNoUpstream
 	for _, up := range b.upstreams() {
@@ -148,6 +152,30 @@ func exchange(ctx context.Context, network string, up netip.AddrPort, q []byte) 
 		return nil, err
 	}
 	return resp, nil
+}
+
+// questionName returns the name of the first question, or "".
+func questionName(q []byte) string {
+	var p dnsmessage.Parser
+	if _, err := p.Start(q); err != nil {
+		return ""
+	}
+	qs, err := p.Question()
+	if err != nil {
+		return ""
+	}
+	return qs.Name.String()
+}
+
+// nxdomain answers q with NXDOMAIN and no records.
+func nxdomain(q []byte) []byte {
+	if len(q) < 12 {
+		return nil
+	}
+	r := append([]byte(nil), q...)
+	r[2] |= 0x80                // QR
+	r[3] = (r[3] & 0xf0) | 0x03 // RCODE NXDOMAIN
+	return r
 }
 
 func servfail(q []byte) []byte {

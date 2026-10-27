@@ -82,6 +82,10 @@ Each VM has exactly one network interface, and its only peer is its jailoc netwo
 | Private ranges (RFC 1918, CGNAT and other special-purpose ranges) | blocked unless covered by `allowed_networks` or a resolved `allowed_hosts` address |
 | IPv6 | blocked |
 
+With `filtered_dns`, the broker's resolver answers NXDOMAIN for the blocked zones and DNS to any other resolver is blocked.
+
+The broker also serves one service on the gateway when `ssh_auth_sock` is on: connections to its SSH agent port are relayed to the host agent socket, and `jailoc-guest` exposes them as `/run/ssh-agent.sock`. Keys never enter the VM.
+
 Denied TCP connections are reset; denied UDP is dropped. DNS answers never change a decision: a public name that resolves to a private address is still blocked. Each decision is written to `broker.jsonl`.
 
 No port is published on the host. An invalid policy file at start prevents the VM from starting. If the broker exits, the supervisor stops the VM, so the workspace never runs without its broker.
@@ -89,7 +93,7 @@ No port is published on the host. An invalid policy file at start prevents the V
 ## Trade-offs
 
 - **Start time:** a cached start takes about 7 seconds on Apple Silicon with the host Docker daemon and about 15 seconds with the builder VM, which has to boot first; the first start builds the image.
-- **Resources:** each workspace reserves its own VM memory (`memory` + 1 GiB) and vCPUs (`cpu` rounded up); a build in the builder VM adds the builder (4 vCPUs, 4 GiB).
+- **Resources:** `cpu` (rounded up) and `memory` size the whole VM, including its Docker daemon; nothing limits processes inside it. A build in the builder VM adds the builder (4 vCPUs, 4 GiB).
 - **Docker inside the VM:** with `enable_docker`, the workspace VM runs its own Docker daemon on a persistent data disk; containers share the VM's CPU and memory and its network rules. `protect_git` turns it off, because Docker access is root access in the VM.
 - **No remote mode:** sessions run OpenCode inside the VM; there is no OpenCode server port on the host.
 - **Platform:** tested on macOS with libkrun. The broker is IPv4 only.

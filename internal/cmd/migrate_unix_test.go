@@ -57,7 +57,7 @@ func TestPlanMigration(t *testing.T) {
 	if !slices.Equal(m.workspaces, []string{"api"}) {
 		t.Fatalf("workspaces = %v", m.workspaces)
 	}
-	if cfg.Defaults.Backend != config.BackendVM || cfg.Mode != "" || cfg.Defaults.SSHAuthSock {
+	if cfg.Defaults.Backend != config.BackendVM || cfg.Mode != "" || !cfg.Defaults.SSHAuthSock {
 		t.Fatalf("defaults not migrated: backend=%q mode=%q ssh=%v", cfg.Defaults.Backend, cfg.Mode, cfg.Defaults.SSHAuthSock)
 	}
 	api := cfg.Workspaces["api"]

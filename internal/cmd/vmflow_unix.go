@@ -189,6 +189,9 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		LibDir:     rt.libDir,
 		ImageCache: filepath.Join(vmRootDir(), "images"),
 		Broker:     []string{exe, "netbroker"},
+		// The builder restarts with each workspace's bundle, so pulls behind
+		// a TLS-intercepting proxy work in the shared builder too.
+		CABundle: workspaceCABundle(ws),
 	}
 	if ws.IsolatedBuild {
 		spec.Workspace = ws.Name + "-builder"
@@ -305,6 +308,8 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if _, err := os.Stat(filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)); err == nil {
 		g.CABundle = filepath.Join(guestConfigDir, caBundleFilename)
 	}
+	agent := vmSSHAgent(ws)
+	g.SSHAgent = agent != ""
 	return vm.Spec{
 		Kind:        vm.KindWorkspace,
 		Workspace:   ws.Name,
@@ -321,7 +326,31 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		GuestBinary: rt.guest,
 		Guest:       g,
 		Forwards:    vmForwards(ws.Ports),
+		SSHAgent:    agent,
 	}, nil
+}
+
+// vmSSHAgent returns the host SSH agent socket to relay into the workspace
+// VM, or "" when ssh_auth_sock is off or no agent is running.
+func vmSSHAgent(ws *workspace.Resolved) string {
+	if !ws.SSHAuthSock {
+		return ""
+	}
+	sock := os.Getenv("SSH_AUTH_SOCK")
+	if info, err := os.Stat(sock); sock == "" || err != nil || info.Mode()&os.ModeSocket == 0 { //nolint:gosec // G703: the user's own SSH_AUTH_SOCK
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: ssh_auth_sock is enabled but SSH_AUTH_SOCK does not name a running agent; the workspace starts without one\n")
+		return ""
+	}
+	return sock
+}
+
+// workspaceCABundle is the materialized CA bundle of the workspace, or "".
+func workspaceCABundle(ws *workspace.Resolved) string {
+	path := filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 // pushSecrets delivers the workspace environment and secrets to the guest

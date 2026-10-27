@@ -146,6 +146,41 @@ func (b *Broker) startForward(ctx context.Context, f Forward) error {
 	return nil
 }
 
+// startService accepts guest connections to the gateway's s.GuestPort and
+// relays each to the host unix socket s.UnixPath.
+func (b *Broker) startService(ctx context.Context, s Service) error {
+	l, err := gonet.ListenTCP(b.stack, *guestAddr(b.cfg.Gateway, s.GuestPort), ipv4.ProtocolNumber)
+	if err != nil {
+		return fmt.Errorf("service listener on port %d: %w", s.GuestPort, err)
+	}
+	go func() {
+		<-ctx.Done()
+		_ = l.Close()
+	}()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				var d net.Dialer
+				dctx, cancel := context.WithTimeout(ctx, dialTimeout)
+				h, err := d.DialContext(dctx, "unix", s.UnixPath)
+				cancel()
+				if err != nil {
+					b.record(map[string]any{"event": "service-error", "guest_port": s.GuestPort, "error": err.Error()})
+					_ = c.Close()
+					return
+				}
+				b.record(map[string]any{"event": "service", "guest_port": s.GuestPort})
+				splice(c, h)
+			}()
+		}
+	}()
+	return nil
+}
+
 func guestAddr(a netip.Addr, port uint16) *tcpip.FullAddress {
 	return &tcpip.FullAddress{NIC: nicID, Addr: tcpip.AddrFrom4(a.As4()), Port: port}
 }

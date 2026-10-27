@@ -110,6 +110,7 @@ func (e *Exception) matches(proto string, dst netip.AddrPort) bool {
 type Policy struct {
 	exceptions   []Exception
 	dnsUpstreams []netip.AddrPort
+	blockedZones []string
 	denyAll      bool
 	source       string
 }
@@ -117,6 +118,10 @@ type Policy struct {
 type policyFile struct {
 	Exceptions   []Exception `json:"exceptions"`
 	DNSUpstreams []string    `json:"dns_upstreams"`
+	// DNSBlockedZones makes the gateway resolver answer NXDOMAIN for these
+	// zones and their subdomains, and denies guest DNS (port 53) to any
+	// other resolver so the filter cannot be bypassed.
+	DNSBlockedZones []string `json:"dns_blocked_zones"`
 }
 
 // ParsePolicy validates a JSON policy. Unknown fields are rejected so a typo
@@ -142,7 +147,36 @@ func ParsePolicy(data []byte, source string) (*Policy, error) {
 		}
 		p.dnsUpstreams = append(p.dnsUpstreams, ap)
 	}
+	for _, z := range f.DNSBlockedZones {
+		z = normalizeName(z)
+		if z == "" {
+			return nil, fmt.Errorf("policy %s: empty blocked DNS zone", source)
+		}
+		p.blockedZones = append(p.blockedZones, z)
+	}
+	if len(p.blockedZones) > 0 && len(p.dnsUpstreams) == 0 {
+		return nil, fmt.Errorf("policy %s: dns_blocked_zones requires dns_upstreams", source)
+	}
 	return p, nil
+}
+
+// normalizeName lowercases a DNS name and drops its trailing dot.
+func normalizeName(name string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+}
+
+// blocked reports whether name is one of the blocked zones or below one.
+func (p *Policy) blocked(name string) bool {
+	if p == nil {
+		return false
+	}
+	name = normalizeName(name)
+	for _, z := range p.blockedZones {
+		if name == z || strings.HasSuffix(name, "."+z) {
+			return true
+		}
+	}
+	return false
 }
 
 // DenyAll is the fail-closed policy installed when a reload fails.
@@ -191,6 +225,8 @@ func Decide(p *Policy, env Env, proto string, dst netip.AddrPort) Decision {
 		return Decision{Reason: "host-address"}
 	case inAny(a, hardDeniedV4):
 		return Decision{Reason: "hard-deny"}
+	case len(p.blockedZones) > 0 && dst.Port() == 53:
+		return Decision{Reason: "dns-filtered"}
 	}
 	if !inAny(a, deniedV4) {
 		return Decision{Allow: true, Reason: "public"}

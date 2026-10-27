@@ -39,13 +39,23 @@ type Forward struct {
 	GuestPort uint16
 }
 
+// Service relays guest TCP connections to the gateway's GuestPort to the
+// host unix socket UnixPath.
+type Service struct {
+	GuestPort uint16
+	UnixPath  string
+}
+
 // Config describes the virtual network served to one guest.
 type Config struct {
-	Subnet      netip.Prefix
-	Gateway     netip.Addr
-	GuestIP     netip.Addr
-	MTU         uint32
-	Forwards    []Forward
+	Subnet   netip.Prefix
+	Gateway  netip.Addr
+	GuestIP  netip.Addr
+	MTU      uint32
+	Forwards []Forward
+	// Services are gateway TCP ports relayed to host unix sockets, such as
+	// the SSH agent. They are the only gateway ports besides DNS.
+	Services    []Service
 	DNSFallback []netip.AddrPort // used when the policy names no upstream
 	// HostDNS, when set, supplies the upstreams at query time if neither the
 	// policy nor DNSFallback names any, so host network changes apply.
@@ -167,6 +177,11 @@ func (b *Broker) Run(ctx context.Context, l net.Listener) error {
 	}
 	for _, f := range b.cfg.Forwards {
 		if err := b.startForward(ctx, f); err != nil {
+			return err
+		}
+	}
+	for _, s := range b.cfg.Services {
+		if err := b.startService(ctx, s); err != nil {
 			return err
 		}
 	}

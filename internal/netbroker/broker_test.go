@@ -142,6 +142,22 @@ func TestBrokerEndToEnd(t *testing.T) {
 	log := &syncBuf{}
 	status := &syncBuf{}
 	fwdSock := filepath.Join(t.TempDir(), "fwd.sock")
+	svcSock := filepath.Join(t.TempDir(), "svc.sock")
+	svc, err := net.Listen("unix", svcSock)
+	if err != nil {
+		t.Fatalf("service socket: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	go func() {
+		for {
+			c, err := svc.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = c.Write([]byte("hello from host"))
+			_ = c.Close()
+		}
+	}()
 	b, err := New(Config{
 		Subnet:  netip.MustParsePrefix("192.168.127.0/24"),
 		Gateway: netip.MustParseAddr("192.168.127.1"),
@@ -150,8 +166,9 @@ func TestBrokerEndToEnd(t *testing.T) {
 			{Host: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), ingress), GuestPort: 4096},
 			{UnixPath: fwdSock, GuestPort: 4096},
 		},
-		Log:    log,
-		Status: status,
+		Services: []Service{{GuestPort: 7022, UnixPath: svcSock}},
+		Log:      log,
+		Status:   status,
 	}, pol)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -235,6 +252,46 @@ func TestBrokerEndToEnd(t *testing.T) {
 			if string(got) != "hello from guest" {
 				t.Fatalf("ingress %s got %q", target[0], got)
 			}
+		}
+	})
+	t.Run("gateway service reaches the host unix socket", func(t *testing.T) {
+		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+		defer dcancel()
+		c, err := gonet.DialContextTCP(dctx, g, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), Port: 7022}, ipv4.ProtocolNumber)
+		if err != nil {
+			t.Fatalf("dial service: %v", err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got, _ := io.ReadAll(c)
+		_ = c.Close()
+		if string(got) != "hello from host" {
+			t.Fatalf("service got %q", got)
+		}
+	})
+	t.Run("blocked DNS zone gets NXDOMAIN", func(t *testing.T) {
+		filtered, err := ParsePolicy([]byte(`{"dns_upstreams":["`+up.LocalAddr().String()+`"],"dns_blocked_zones":["Example.COM."]}`), "filtered")
+		if err != nil {
+			t.Fatalf("policy: %v", err)
+		}
+		b.SetPolicy(filtered)
+		defer b.SetPolicy(pol)
+		c, err := gonet.DialUDP(g, nil, &tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), Port: 53}, ipv4.ProtocolNumber)
+		if err != nil {
+			t.Fatalf("dial dns: %v", err)
+		}
+		defer func() { _ = c.Close() }()
+		q := []byte{0xca, 0xfe, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 3, 'w', 'w', 'w', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
+		if _, err := c.Write(q); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		buf := make([]byte, 512)
+		n, err := c.Read(buf)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if n < 12 || buf[0] != 0xca || buf[2]&0x80 == 0 || buf[3]&0x0f != 3 {
+			t.Fatalf("want NXDOMAIN, got % x", buf[:n])
 		}
 	})
 	t.Run("fail-closed policy denies public destinations", func(t *testing.T) {

@@ -100,6 +100,12 @@ func Init(logger *slog.Logger) error {
 			return err
 		}
 	}
+	if cfg.SSHAgent {
+		if err := startAgentRelay(logger, acct); err != nil {
+			return err
+		}
+		env = append(env, "SSH_AUTH_SOCK="+SSHAgentSocket)
+	}
 
 	// By default the agent may become root through sudo: the VM is the
 	// isolation boundary, and network policy and share permissions are

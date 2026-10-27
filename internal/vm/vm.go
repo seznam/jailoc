@@ -108,6 +108,11 @@ type Spec struct {
 	// Docker attaches a persistent data disk for the Docker daemon of a
 	// workspace VM (the builder always has one).
 	Docker bool `json:"docker,omitempty"`
+	// SSHAgent is the host SSH agent socket relayed into a workspace VM.
+	SSHAgent string `json:"ssh_agent,omitempty"`
+	// CABundle is a host PEM file the builder's Docker daemon trusts in
+	// addition to the image's CA certificates.
+	CABundle string `json:"ca_bundle,omitempty"`
 	// Log receives lifecycle messages and the broker's output.
 	Log io.Writer `json:"-"`
 }
@@ -327,6 +332,9 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 	)
 	if spec.Kind == KindWorkspace {
 		args = append(args, "-forward-unix", SSHSocket(spec.StateDir)+"="+strconv.Itoa(guest.SSHPort))
+		if spec.SSHAgent != "" {
+			args = append(args, "-service", strconv.Itoa(guest.SSHAgentPort)+"="+spec.SSHAgent)
+		}
 	} else {
 		args = append(args, "-forward-unix", DockerSocket(spec.StateDir)+"="+strconv.Itoa(DockerPort))
 	}
@@ -400,6 +408,15 @@ func builderOptions(spec Spec) []microvm.Option {
 			}
 			if err := os.WriteFile(filepath.Join(rootfs, "jailoc-init.sh"), []byte(script), 0o755); err != nil { //nolint:gosec // G306: guest init must be executable
 				return fmt.Errorf("write guest init: %w", err)
+			}
+			if spec.CABundle != "" {
+				pem, err := os.ReadFile(spec.CABundle)
+				if err != nil {
+					return fmt.Errorf("read CA bundle: %w", err)
+				}
+				if err := os.WriteFile(filepath.Join(rootfs, "jailoc-ca.pem"), pem, 0o644); err != nil { //nolint:gosec // G306: public certificates
+					return fmt.Errorf("write CA bundle: %w", err)
+				}
 			}
 			return nil
 		}),

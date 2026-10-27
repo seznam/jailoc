@@ -33,9 +33,10 @@ func Main(args []string) error {
 	guest := fs.String("guest", "192.168.127.2", "address leased to the guest")
 	logPath := fs.String("log", "-", "JSONL decision log, - for stderr")
 	statusFD := fs.Int("status-fd", 0, "inherited file descriptor that receives lifecycle lines (ready, nic connected, nic disconnected) for a supervisor; 0 disables")
-	var forwards, unixForwards, dnsFallback multi
+	var forwards, unixForwards, services, dnsFallback multi
 	fs.Var(&forwards, "forward", "publish a guest TCP port: 127.0.0.1:HOSTPORT=GUESTPORT (repeatable, loopback only)")
 	fs.Var(&unixForwards, "forward-unix", "publish a guest TCP port on a host unix socket: PATH=GUESTPORT (repeatable, mode 0600)")
+	fs.Var(&services, "service", "relay guest TCP connections to the gateway port to a host unix socket: GUESTPORT=PATH (repeatable)")
 	fs.Var(&dnsFallback, "dns-upstream", "DNS upstream when the policy names none (repeatable, default: host /etc/resolv.conf)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -71,6 +72,13 @@ func Main(args []string) error {
 			return err
 		}
 		cfg.Forwards = append(cfg.Forwards, fw)
+	}
+	for _, s := range services {
+		svc, err := parseService(s)
+		if err != nil {
+			return err
+		}
+		cfg.Services = append(cfg.Services, svc)
 	}
 	for _, s := range dnsFallback {
 		ap, err := parseUpstream(s)
@@ -175,6 +183,15 @@ func parseUnixForward(s string) (Forward, error) {
 		return Forward{}, fmt.Errorf("forward-unix %q: invalid guest port", s)
 	}
 	return Forward{UnixPath: path, GuestPort: uint16(gp)}, nil
+}
+
+func parseService(s string) (Service, error) {
+	port, path, ok := strings.Cut(s, "=")
+	n, err := strconv.ParseUint(port, 10, 16)
+	if !ok || err != nil || n == 0 || path == "" || port == "53" {
+		return Service{}, fmt.Errorf("service %q: want GUESTPORT=PATH with a port other than 53", s)
+	}
+	return Service{GuestPort: uint16(n), UnixPath: path}, nil
 }
 
 func parseUpstream(s string) (netip.AddrPort, error) {

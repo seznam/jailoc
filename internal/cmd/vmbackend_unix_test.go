@@ -23,11 +23,12 @@ func TestVMMemoryMiB(t *testing.T) {
 		want    uint32
 		wantErr bool
 	}{
-		{limit: "4g", want: 4096 + vmMemoryOverhead},
-		{limit: "512m", want: 512 + vmMemoryOverhead},
-		{limit: "1536M", want: 1536 + vmMemoryOverhead},
-		{limit: "1k", want: 1 + vmMemoryOverhead},
-		{limit: "1073741824", want: 1024 + vmMemoryOverhead},
+		{limit: "4g", want: 4096},
+		{limit: "512m", want: 512},
+		{limit: "1536M", want: 1536},
+		{limit: "1k", wantErr: true},
+		{limit: "511m", wantErr: true},
+		{limit: "1073741824", want: 1024},
 		{limit: "", wantErr: true},
 		{limit: "0g", wantErr: true},
 		{limit: "g", wantErr: true},
@@ -71,6 +72,30 @@ func TestVMPolicy(t *testing.T) {
 	}
 	if !slices.Equal(got.Exceptions, want) {
 		t.Fatalf("exceptions = %v, want %v", got.Exceptions, want)
+	}
+}
+
+func TestVMPolicyFilteredDNS(t *testing.T) {
+	t.Parallel()
+	for _, filtered := range []bool{false, true} {
+		ws := &workspace.Resolved{Name: "w", FilteredDNS: filtered, DNSUpstream: "10.0.0.53", DNSBlockedZones: []string{"corp.example"}}
+		data, err := vmPolicy(context.Background(), ws)
+		if err != nil {
+			t.Fatalf("vmPolicy: %v", err)
+		}
+		var got struct {
+			DNSUpstreams    []string `json:"dns_upstreams"`
+			DNSBlockedZones []string `json:"dns_blocked_zones"`
+		}
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("unmarshal %s: %v", data, err)
+		}
+		if filtered && (!slices.Equal(got.DNSUpstreams, []string{"10.0.0.53"}) || !slices.Equal(got.DNSBlockedZones, []string{"corp.example"})) {
+			t.Fatalf("filtered policy = %s", data)
+		}
+		if !filtered && (got.DNSUpstreams != nil || got.DNSBlockedZones != nil) {
+			t.Fatalf("unfiltered policy names DNS settings: %s", data)
+		}
 	}
 }
 

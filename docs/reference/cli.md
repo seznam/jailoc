@@ -179,7 +179,7 @@ jailoc migrate [flags]
 Rewrites `~/.config/jailoc/config.toml`:
 
 - Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
-- Lists settings the VM backend rejects or ignores (`mode = "remote"`, `ssh_auth_sock`, `filtered_dns`, `expose_port = true`) per scope and removes them after confirmation. Declining stops the migration.
+- Lists settings the VM backend rejects or ignores (`mode = "remote"`, `expose_port = true`) per scope and removes them after confirmation. Declining stops the migration.
 - Asks for every `mounts` entry of `[defaults]` and of each Docker workspace whether it stays a mount (default for directories), becomes a read-only [copy](configuration.md#copies) (default for files), or is dropped. Files cannot stay mounts.
 
 For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories, unless a mount covers those paths or VM data already exists there. The volumes are left in place. Without a reachable Docker daemon, these steps are skipped after confirmation.

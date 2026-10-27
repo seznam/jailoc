@@ -31,7 +31,6 @@ import (
 const (
 	vmStartTimeout   = 5 * time.Minute
 	vmStopTimeout    = 45 * time.Second
-	vmMemoryOverhead = 1024 // MiB added to the workspace memory limit
 )
 
 // vmSuperviseCmd is the detached process that owns a workspace VM and its
@@ -339,8 +338,11 @@ func vmShares(ws *workspace.Resolved, cacheDir string) ([]vm.Share, error) {
 	return shares, nil
 }
 
-// vmMemoryMiB sizes the workspace VM: the workspace memory limit plus room
-// for the guest kernel.
+// vmMinMemoryMiB is the smallest workspace VM that boots reliably.
+const vmMinMemoryMiB = 512
+
+// vmMemoryMiB sizes the workspace VM: the whole VM, including the guest
+// kernel and its Docker daemon, gets the workspace memory limit.
 func vmMemoryMiB(limit string) (uint32, error) {
 	if limit == "" {
 		return 0, errors.New("empty memory limit")
@@ -363,11 +365,10 @@ func vmMemoryMiB(limit string) (uint32, error) {
 		return 0, fmt.Errorf("memory limit %q is too large", limit)
 	}
 	mib := (n*mult + (1<<20 - 1)) >> 20
-	total := mib + vmMemoryOverhead
-	if total > math.MaxUint32 {
-		return 0, fmt.Errorf("memory limit %q is too large", limit)
+	if mib < vmMinMemoryMiB {
+		return 0, fmt.Errorf("memory limit %q is below the %d MiB a workspace VM needs", limit, vmMinMemoryMiB)
 	}
-	return uint32(total), nil //nolint:gosec // G115: bounded by the check above
+	return uint32(mib), nil //nolint:gosec // G115: bounded by the check above
 }
 
 type vmException struct {
@@ -405,9 +406,16 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 			add(ip.String() + "/32")
 		}
 	}
-	data, err := json.Marshal(struct {
-		Exceptions []vmException `json:"exceptions"`
-	}{exceptions})
+	policy := struct {
+		Exceptions      []vmException `json:"exceptions"`
+		DNSUpstreams    []string      `json:"dns_upstreams,omitempty"`
+		DNSBlockedZones []string      `json:"dns_blocked_zones,omitempty"`
+	}{Exceptions: exceptions}
+	if ws.FilteredDNS {
+		policy.DNSUpstreams = []string{ws.DNSUpstream}
+		policy.DNSBlockedZones = ws.DNSBlockedZones
+	}
+	data, err := json.Marshal(policy)
 	if err != nil {
 		return nil, fmt.Errorf("encode broker policy: %w", err)
 	}

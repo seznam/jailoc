@@ -22,12 +22,23 @@ import (
 // guestGitConfig is the destination of the git_config default copy.
 const guestGitConfig = "/home/agent/.gitconfig"
 
+// guestKnownHosts is the destination of the known_hosts default copy that
+// accompanies the SSH agent.
+const guestKnownHosts = "/home/agent/.ssh/known_hosts"
+
 // vmCopies returns the workspace copies: git_config as a default copy of
 // ~/.gitconfig (or ~/.config/git/config), overridden by configured copies.
 func vmCopies(ws *workspace.Resolved) ([]config.Mount, error) {
 	var defaults []string
 	if src := resolveGitConfig(ws.GitConfig); src != "" {
 		defaults = append(defaults, src+":"+guestGitConfig+":ro")
+	}
+	if ws.SSHAuthSock {
+		if home, err := os.UserHomeDir(); err == nil {
+			if src := filepath.Join(home, ".ssh", "known_hosts"); isRegularFile(src) {
+				defaults = append(defaults, src+":"+guestKnownHosts+":ro")
+			}
+		}
 	}
 	merged, err := config.MergeMounts(defaults, ws.Copies)
 	if err != nil {
@@ -151,4 +162,9 @@ func copyRegular(src, dst string, perm fs.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+func isRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }

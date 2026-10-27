@@ -129,12 +129,6 @@ func defaultsIncompatibilities(cfg *config.Config) []incompatibility {
 	if cfg.Mode == config.ModeRemote {
 		out = append(out, incompatibility{`mode = "remote"`, "sessions run inside the VM (exec mode)", func() { cfg.Mode = "" }})
 	}
-	if d.SSHAuthSock {
-		out = append(out, incompatibility{"ssh_auth_sock = true", "the SSH agent socket cannot cross into the VM; Git over SSH stops working", func() { d.SSHAuthSock = false }})
-	}
-	if d.FilteredDNS != nil && *d.FilteredDNS {
-		out = append(out, incompatibility{"filtered_dns = true", "DNS goes through the VM network broker", func() { d.FilteredDNS = nil }})
-	}
 	if d.ExposePort != nil && *d.ExposePort {
 		out = append(out, incompatibility{"expose_port = true", "sessions run over SSH; there is no published port", func() { d.ExposePort = nil }})
 	}
@@ -143,12 +137,6 @@ func defaultsIncompatibilities(cfg *config.Config) []incompatibility {
 
 func workspaceIncompatibilities(ws *config.Workspace) []incompatibility {
 	var out []incompatibility
-	if ws.SSHAuthSock != nil && *ws.SSHAuthSock {
-		out = append(out, incompatibility{"ssh_auth_sock = true", "the SSH agent socket cannot cross into the VM; Git over SSH stops working", func() { ws.SSHAuthSock = nil }})
-	}
-	if ws.FilteredDNS != nil && *ws.FilteredDNS {
-		out = append(out, incompatibility{"filtered_dns = true", "DNS goes through the VM network broker", func() { ws.FilteredDNS = nil }})
-	}
 	if ws.ExposePort != nil && *ws.ExposePort {
 		out = append(out, incompatibility{"expose_port = true", "sessions run over SSH; there is no published port", func() { ws.ExposePort = nil }})
 	}

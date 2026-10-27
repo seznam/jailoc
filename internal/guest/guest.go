@@ -26,6 +26,11 @@ const (
 	EnvFile = "/run/jailoc/env"
 	// SSHPort is the guest port of the SSH server.
 	SSHPort = 22
+	// SSHAgentPort is the gateway port the broker relays to the host SSH
+	// agent when the workspace forwards it.
+	SSHAgentPort = 7022
+	// SSHAgentSocket is the agent socket sessions see as SSH_AUTH_SOCK.
+	SSHAgentSocket = "/run/ssh-agent.sock"
 )
 
 // Share is a virtio-fs share mounted at GuestPath.
@@ -62,6 +67,9 @@ type Config struct {
 	Copies []Copy `json:"copies,omitempty"`
 	// CABundle is a guest path appended to the system CA bundle.
 	CABundle string `json:"ca_bundle,omitempty"`
+	// SSHAgent exposes the host SSH agent at SSHAgentSocket, relayed
+	// through the broker gateway.
+	SSHAgent bool `json:"ssh_agent,omitempty"`
 	// Pins are paths bound onto themselves so that they cannot be renamed
 	// or removed in the guest; they keep their share's writability.
 	Pins []string `json:"pins,omitempty"`

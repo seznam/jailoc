@@ -15,6 +15,10 @@ func TestDecide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePolicy: %v", err)
 	}
+	filtered, err := ParsePolicy([]byte(`{"dns_upstreams":["10.99.1.53"],"dns_blocked_zones":["internal"]}`), "filtered")
+	if err != nil {
+		t.Fatalf("ParsePolicy filtered: %v", err)
+	}
 	env := Env{
 		Gateway:   netip.MustParseAddr("192.168.127.1"),
 		Subnet:    netip.MustParsePrefix("192.168.127.0/24"),
@@ -45,6 +49,10 @@ func TestDecide(t *testing.T) {
 		{"cgnat", p, ProtoTCP, "100.100.1.1:80", false, "denied-range"},
 		{"broadcast", p, ProtoUDP, "255.255.255.255:67", false, "hard-deny"},
 		{"fail closed", DenyAll("bad reload"), ProtoTCP, "1.1.1.1:443", false, "fail-closed"},
+		{"public DNS without filter", p, ProtoUDP, "1.1.1.1:53", true, "public"},
+		{"public DNS with filter", filtered, ProtoUDP, "1.1.1.1:53", false, "dns-filtered"},
+		{"public DNS over TCP with filter", filtered, ProtoTCP, "8.8.8.8:53", false, "dns-filtered"},
+		{"other public port with filter", filtered, ProtoTCP, "1.1.1.1:443", true, "public"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -60,14 +68,16 @@ func TestDecide(t *testing.T) {
 func TestParsePolicyRejects(t *testing.T) {
 	t.Parallel()
 	for name, in := range map[string]string{
-		"unknown field": `{"exceptoins":[]}`,
-		"bad cidr":      `{"exceptions":[{"cidr":"10.0.0.0/33","proto":"tcp"}]}`,
-		"ipv6 cidr":     `{"exceptions":[{"cidr":"fd00::/8","proto":"tcp"}]}`,
-		"bad proto":     `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"icmp"}]}`,
-		"bad port":      `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"tcp","ports":["0"]}]}`,
-		"reversed":      `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"tcp","ports":["90-80"]}]}`,
-		"bad upstream":  `{"dns_upstreams":["resolver.example"]}`,
-		"not json":      `exceptions: []`,
+		"unknown field":          `{"exceptoins":[]}`,
+		"bad cidr":               `{"exceptions":[{"cidr":"10.0.0.0/33","proto":"tcp"}]}`,
+		"ipv6 cidr":              `{"exceptions":[{"cidr":"fd00::/8","proto":"tcp"}]}`,
+		"bad proto":              `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"icmp"}]}`,
+		"bad port":               `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"tcp","ports":["0"]}]}`,
+		"reversed":               `{"exceptions":[{"cidr":"10.0.0.0/8","proto":"tcp","ports":["90-80"]}]}`,
+		"bad upstream":           `{"dns_upstreams":["resolver.example"]}`,
+		"not json":               `exceptions: []`,
+		"zones without upstream": `{"dns_blocked_zones":["internal"]}`,
+		"empty zone":             `{"dns_upstreams":["10.0.0.53"],"dns_blocked_zones":["."]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

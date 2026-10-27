@@ -65,7 +65,7 @@ OpenCode runs in a session that outlives your terminal:
 - Running `jailoc` from another terminal takes the session over; the first terminal is detached.
 - Quitting OpenCode ends the session. `jailoc sessions stop ID` ends it from outside, and `jailoc down` ends all sessions of the workspace.
 
-The VM gets `cpu` rounded up to whole vCPUs and `memory` plus 1 GiB.
+The whole VM, including its Docker daemon, gets `cpu` rounded up to whole vCPUs and `memory` as its memory; `memory` must be at least `512m`. Inside the VM there are no further limits.
 
 ## What the agent sees
 
@@ -168,6 +168,16 @@ The VM has no init system: nothing restarts a process that exits, and every proc
 - or start it detached from a shell, for example `setsid npm run dev > /tmp/dev.log 2>&1 &`;
 - or run it as a Docker container with `docker run -d --restart unless-stopped`, which Docker restarts when it exits.
 
+## Use your SSH agent
+
+With `ssh_auth_sock = true`, jailoc relays the host SSH agent named by `SSH_AUTH_SOCK` into the VM: sessions see it at `/run/ssh-agent.sock`, so `git@host:repo` remotes and `ssh` work with your keys. The private keys stay on the host. `~/.ssh/known_hosts` is copied to the agent's home at `jailoc up`.
+
+The agent is available as long as the VM runs, also to detached sessions and to containers that mount `/run/ssh-agent.sock`. jailoc reads `SSH_AUTH_SOCK` when it starts the VM; after the host agent moves (for example a new login session), run `jailoc restart`.
+
+## Filter DNS
+
+`filtered_dns`, `dns_upstream` and `dns_blocked_zones` work as with the Docker backend, enforced by the network broker: names in the blocked zones get NXDOMAIN, other names are resolved through `dns_upstream`, and DNS (port 53) to any other resolver is blocked. The shared builder VM does not filter DNS; use `isolated_build = true` to apply the filter to builds.
+
 ## Stop and remove the VM
 
 ```bash
@@ -189,8 +199,6 @@ Host addresses, the broker gateway and cloud metadata endpoints stay blocked reg
 - Sessions use exec mode only; `jailoc --remote` is rejected and `expose_port = true` is rejected.
 - The VM kernel is the libkrun kernel: no `systemd` or other init system, no loadable kernel modules, no swap, no nested virtualization (`/dev/kvm`), and `dmesg` is not readable.
 - The built-in image has no compilers or extra debugging tools such as `gcc`, `pip` or `strace`. Install them with `sudo apt-get install` for the current run, or add them to the workspace Dockerfile to keep them.
-- `ssh_auth_sock` is rejected: the host SSH agent socket cannot cross into the VM. Git over SSH (`git@host:repo` remotes) fails; use HTTPS remotes with a token, for example a `~/.netrc` added through `copies`.
-- `filtered_dns` is rejected: DNS goes through the broker.
 - `mounts` must name directories. A file mount is rejected at `jailoc up`; use `copies` for files.
 - The shared builder VM reaches public addresses only. Images that pull from private registries or hosts need `isolated_build = true` with the hosts in `allowed_hosts`, or `[vm] builder = "docker"`.
 - On macOS, reaching hosts on the local network through `allowed_hosts` or `allowed_networks` needs the macOS Local Network permission for the process that runs jailoc. Without it, connections to local-network addresses fail with `no route to host`.

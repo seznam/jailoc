@@ -52,6 +52,11 @@ nft add rule inet jailoc input tcp dport "$DOCKER_PORT" ip saddr != "$GATEWAY" d
 # Pid files and sockets in the root filesystem are never live at boot.
 rm -f /var/run/docker.pid /var/run/docker.sock /var/run/docker/containerd/containerd.pid
 
+# Trust the workspace's forwarded CA bundle for image pulls during builds.
+if [ -s /jailoc-ca.pem ]; then
+  cat /jailoc-ca.pem >> /etc/ssl/certs/ca-certificates.crt
+  log "CA bundle installed"
+fi
 dockerd --data-root /var/lib/docker --firewall-backend=nftables \
 	-H unix:///var/run/docker.sock -G "$AGENT_GID" \
 	-H "tcp://$GUEST:$DOCKER_PORT" --tls=false &

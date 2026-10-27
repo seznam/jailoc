@@ -1095,16 +1095,6 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("workspace %q: ports is only supported with backend %q", name, BackendVM)
 		}
 		if EffectiveBackend(cfg.Defaults.Backend, ws.Backend) == BackendVM {
-			sshAuthSock := cfg.Defaults.SSHAuthSock
-			if ws.SSHAuthSock != nil {
-				sshAuthSock = *ws.SSHAuthSock
-			}
-			if sshAuthSock {
-				return fmt.Errorf("workspace %q: ssh_auth_sock is not supported with backend %q", name, BackendVM)
-			}
-			if enabled {
-				return fmt.Errorf("workspace %q: filtered_dns is not supported with backend %q", name, BackendVM)
-			}
 			if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) && explicitTrue(cfg.Defaults.ProtectGit, ws.ProtectGit) {
 				return fmt.Errorf("workspace %q: enable_docker cannot be combined with protect_git: Docker access is root access in the VM", name)
 			}
