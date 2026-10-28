@@ -1,0 +1,48 @@
+From 7d32d6dc980c248969278011d4556f9e8c9696a4 Mon Sep 17 00:00:00 2001
+From: jailoc <noreply@github.com>
+Date: Wed, 28 Oct 2026 09:37:52 +0100
+Subject: [PATCH] arch/x86_64: route all IOAPIC pins in the MP table
+
+IRQ_MAX was raised to 23, but the MP table only described IRQs 0-15, so a guest without ACPI could not route virtio-mmio devices on IRQs 16-23 (virtio_net probe failed with -EINVAL). Describe every pin up to IRQ_MAX, as Firecracker does.
+---
+ src/arch/src/x86_64/mptable.rs | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/src/arch/src/x86_64/mptable.rs b/src/arch/src/x86_64/mptable.rs
+index 1b45114..2132775 100644
+--- a/src/arch/src/x86_64/mptable.rs
++++ b/src/arch/src/x86_64/mptable.rs
+@@ -12,6 +12,8 @@ use std::slice;
+ use libc::c_char;
+ 
+ use arch_gen::x86::mpspec;
++
++use super::layout::IRQ_MAX;
+ use vm_memory::{Address, ByteValued, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap};
+ 
+ // This is a workaround to the Rust enforcement specifying that any implementation of a foreign
+@@ -119,7 +121,7 @@ fn compute_mp_size(num_cpus: u8) -> usize {
+         + mem::size_of::<MpcCpuWrapper>() * (num_cpus as usize)
+         + mem::size_of::<MpcIoapicWrapper>()
+         + mem::size_of::<MpcBusWrapper>()
+-        + mem::size_of::<MpcIntsrcWrapper>() * 16
++        + mem::size_of::<MpcIntsrcWrapper>() * (IRQ_MAX as usize + 1)
+         + mem::size_of::<MpcLintsrcWrapper>() * 2
+ }
+ 
+@@ -214,8 +216,10 @@ pub fn setup_mptable(mem: &GuestMemoryMmap, num_cpus: u8) -> Result<()> {
+         base_mp = base_mp.unchecked_add(size);
+         checksum = checksum.wrapping_add(compute_checksum(&mpc_ioapic.0));
+     }
+-    // Per kvm_setup_default_irq_routing() in kernel
+-    for i in 0..16 {
++    // Per kvm_setup_default_irq_routing() in kernel. Every IOAPIC pin up to
++    // IRQ_MAX gets an entry: without one the guest cannot route the
++    // virtio-mmio devices placed above IRQ 15.
++    for i in 0..=(IRQ_MAX as u8) {
+         let size = mem::size_of::<MpcIntsrcWrapper>() as u64;
+         let mut mpc_intsrc = MpcIntsrcWrapper(mpspec::mpc_intsrc::default());
+         mpc_intsrc.0.type_ = mpspec::MP_INTSRC as u8;
+-- 
+2.56.0
+
