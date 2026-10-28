@@ -56,6 +56,19 @@ func Init(logger *slog.Logger) error {
 	if err := mount.Essential(logger, tmpSizeMiB); err != nil {
 		return fmt.Errorf("essential mounts: %w", err)
 	}
+	var mapper *idmapper
+	if cfg.IDMap != nil {
+		if mapper, err = idmapRoot(logger, *cfg.IDMap, cfg.Home, cfg.UID, cfg.GID); err != nil {
+			// Without idmapped mounts the agent runs with the host user's IDs,
+			// so its files on virtio-fs keep their owner.
+			logger.Warn("idmapped mounts unavailable; running the agent with the host user's IDs", "error", err)
+			cfg.UID, cfg.GID = cfg.IDMap.UID, cfg.IDMap.GID
+			cfg.IDMap = nil
+		} else if err := remountAfterPivot(logger); err != nil {
+			return err
+		}
+	}
+	defer mapper.close()
 	if cfg.Hostname != "" {
 		if err := syscall.Sethostname([]byte(cfg.Hostname)); err != nil {
 			logger.Warn("set hostname", "error", err)
@@ -88,7 +101,7 @@ func Init(logger *slog.Logger) error {
 	if err := mountPrivate(); err != nil {
 		return err
 	}
-	if err := mountShares(logger, cfg.Shares, acct); err != nil {
+	if err := mountShares(logger, cfg.Shares, acct, mapper); err != nil {
 		return err
 	}
 	if err := bindInternal(cfg.Binds, acct); err != nil {
@@ -183,20 +196,16 @@ func loadConfig() (*Config, error) {
 // mountShares mounts the virtio-fs shares at their guest paths. Missing
 // mount points and parents inside the agent's home belong to the agent, so
 // the agent can still create siblings such as ~/.config/<tool>.
-func mountShares(logger *slog.Logger, shares []Share, acct account) error {
+func mountShares(logger *slog.Logger, shares []Share, acct account, mapper *idmapper) error {
 	sorted := slices.Clone(shares)
 	slices.SortStableFunc(sorted, func(a, b Share) int { return len(a.GuestPath) - len(b.GuestPath) })
 	for _, s := range sorted {
 		if err := makeParents(s.GuestPath, acct); err != nil {
 			return fmt.Errorf("create mount point %s: %w", s.GuestPath, err)
 		}
-		flags := uintptr(syscall.MS_NOSUID | syscall.MS_NODEV)
-		if s.ReadOnly {
-			flags |= syscall.MS_RDONLY
-		}
 		var err error
 		for range mountRetries {
-			if err = syscall.Mount(s.Tag, s.GuestPath, "virtiofs", flags, ""); err == nil {
+			if err = mapper.mountShare(s.Tag, s.GuestPath, s.ReadOnly); err == nil {
 				break
 			}
 			time.Sleep(250 * time.Millisecond)

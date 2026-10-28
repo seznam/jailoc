@@ -21,9 +21,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -292,21 +291,14 @@ func TestWorkspaceVM(t *testing.T) {
 	t.Logf("first up: %s", time.Since(start).Round(time.Second))
 
 	t.Run("agent user and sudo", func(t *testing.T) {
-		// On Linux the agent takes the host user's IDs, because virtio-fs
-		// shows real host ownership.
-		wantUID := "1000"
-		if runtime.GOOS == "linux" && os.Getuid() != 0 {
-			wantUID = strconv.Itoa(os.Getuid())
-		}
-		if got := mustGuest(ctx, t, "id -u"); got != wantUID {
-			t.Fatalf("id -u = %q, want %s", got, wantUID)
-		}
-		if runtime.GOOS == "linux" {
-			t.Log("sudo is not available on Linux hosts: setuid binaries in the virtio-fs root filesystem are owned by the host user")
-			return
+		if got := mustGuest(ctx, t, "id -u"); got != "1000" {
+			t.Fatalf("id -u = %q, want 1000", got)
 		}
 		if got := mustGuest(ctx, t, "sudo -n id -u"); got != "0" {
 			t.Fatalf("sudo id -u = %q", got)
+		}
+		if got := mustGuest(ctx, t, "stat -c %u:%g /etc/passwd ~ "+project); got != "0:0\n1000:1000\n1000:1000" {
+			t.Fatalf("guest ownership = %q, want root files, agent home and project", got)
 		}
 	})
 
@@ -318,6 +310,12 @@ func TestWorkspaceVM(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(project, "guest.txt")) //nolint:gosec // G304: test file
 		if err != nil || strings.TrimSpace(string(data)) != "from-guest" {
 			t.Fatalf("guest file on host = %q, %v", data, err)
+		}
+		// Files the agent creates belong to the host user.
+		if info, err := os.Stat(filepath.Join(project, "guest.txt")); err != nil {
+			t.Fatal(err)
+		} else if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+			t.Fatalf("guest file owner on host = %d, want %d", st.Uid, os.Getuid())
 		}
 	})
 

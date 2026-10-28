@@ -46,11 +46,12 @@ Building on the host daemon is fastest, but Dockerfile `RUN` steps then run with
 The root file system is a copy-on-write clone of the unpacked image and is discarded on every start. `jailoc-guest` prepares the system and then serves SSH:
 
 1. configures the network addresses, the broker as gateway and DNS resolver, and the hostname,
-2. creates the `agent` user (UID 1000, or the host user's UID on Linux) when the image has none, and its home directory,
-3. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
-4. adds the hostname to `/etc/hosts`,
-5. with `enable_docker`, formats the Docker data disk (20 GiB) on first use, mounts it at `/var/lib/docker` and starts `dockerd` with the socket owned by the `agent` group,
-6. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
+2. on Linux hosts, switches to idmapped mounts of the root filesystem and the shares, because libkrun's virtio-fs shows the real host owner of every file there: your user's files appear as root's in the root filesystem and as the agent's in the home and shared directories, and files the agent creates belong to your user on the host,
+3. creates the `agent` user (UID 1000) when the image has none, and its home directory,
+4. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
+5. adds the hostname to `/etc/hosts`,
+6. with `enable_docker`, formats the Docker data disk (20 GiB) on first use, mounts it at `/var/lib/docker` and starts `dockerd` with the socket owned by the `agent` group,
+7. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
 
 `jailoc-guest` leaves privileges alone by default, so the agent can use `sudo` from the image. Root in the VM is still inside the VM boundary.
 

@@ -44,7 +44,7 @@ jailoc puts each workspace in its own micro-VM and targets two legs of the trife
 
 ### The boundary is the VM
 
-The agent runs as `agent` (UID 1000; the host user's UID on Linux), but on macOS it can use `sudo` from the image and become root inside the guest. That is by design: root in the guest controls the guest kernel and nothing more. Everything the guest can reach on the host passes through a narrow interface that the host enforces: virtio-fs shares, one network interface whose only peer is the broker, and Unix sockets the broker forwards. Read-only shares stay read-only even for guest root, because the VMM enforces them. With `protect_git`, `jailoc-guest` removes privilege escalation so that Git hooks and config in the shares stay read-only too. See [Architecture](architecture.md).
+The agent runs as `agent` (UID 1000), but it can use `sudo` from the image and become root inside the guest. That is by design: root in the guest controls the guest kernel and nothing more. Everything the guest can reach on the host passes through a narrow interface that the host enforces: virtio-fs shares, one network interface whose only peer is the broker, and Unix sockets the broker forwards. Read-only shares stay read-only even for guest root, because the VMM enforces them. With `protect_git`, `jailoc-guest` removes privilege escalation so that Git hooks and config in the shares stay read-only too. See [Architecture](architecture.md).
 
 What the boundary does not cover is a bug in the hypervisor, libkrun or the broker itself. Those run on the host as the user who started jailoc.
 

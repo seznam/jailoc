@@ -30,6 +30,8 @@ func run(logger *slog.Logger, args []string) error {
 	switch args[0] {
 	case "secrets":
 		return guest.WriteSecrets(os.Stdin)
+	case guest.UsernsHoldCommand:
+		return guest.HoldUserNamespace(os.Stdin)
 	case "session":
 		return guest.Session(args[1:], os.Stdin, os.Stdout)
 	case "run":

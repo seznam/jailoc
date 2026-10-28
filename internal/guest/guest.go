@@ -44,6 +44,12 @@ const (
 	SSHAgentSocket = "/run/ssh-agent.sock"
 )
 
+// IDMap holds the host user's IDs as virtio-fs reports them in the guest.
+type IDMap struct {
+	UID uint32 `json:"uid"`
+	GID uint32 `json:"gid"`
+}
+
 // Share is a virtio-fs share mounted at GuestPath.
 type Share struct {
 	Tag       string `json:"tag"`
@@ -87,6 +93,12 @@ type Config struct {
 	Snapshots []Snapshot `json:"snapshots,omitempty"`
 	// CABundle is a guest path appended to the system CA bundle.
 	CABundle string `json:"ca_bundle,omitempty"`
+	// IDMap is set when virtio-fs shows the real host owner of shared files
+	// and of the root filesystem (Linux hosts). The guest then mounts them
+	// idmapped so the host user appears as root in the root filesystem and
+	// as the agent in its home and the shares. Without it, or when the guest
+	// kernel cannot idmap, the agent takes the host user's IDs.
+	IDMap *IDMap `json:"idmap,omitempty"`
 	// SSHAgent exposes the host SSH agent at SSHAgentSocket, relayed
 	// through the broker gateway.
 	SSHAgent bool `json:"ssh_agent,omitempty"`

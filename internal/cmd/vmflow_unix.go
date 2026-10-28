@@ -300,12 +300,12 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if err != nil {
 		return vm.Spec{}, err
 	}
-	uid, gid := agentIDs()
 	g := &guest.Config{
 		Hostname:  ws.Name,
 		User:      "agent",
-		UID:       uid,
-		GID:       gid,
+		UID:       defaultAgentID,
+		GID:       defaultAgentID,
+		IDMap:     hostIDMap(),
 		Home:      "/home/agent",
 		WorkDir:   ws.Paths[0],
 		Snapshots: snapshots,
@@ -590,17 +590,18 @@ func vmForwards(ports []config.PortForward) []vm.Forward {
 	return out
 }
 
-// defaultAgentID is the agent's UID and GID inside workspace VMs on macOS,
-// where virtio-fs presents shared files as owned by whoever accesses them.
+// defaultAgentID is the agent's UID and GID inside workspace VMs.
 const defaultAgentID = 1000
 
-// agentIDs returns the agent's UID and GID inside the workspace VM. On
-// Linux, libkrun's virtio-fs shows the real host owner of every shared file
-// and of the VM root filesystem, so the agent takes the host user's IDs to
-// own its project and home.
-func agentIDs() (uint32, uint32) {
-	if runtime.GOOS != "linux" || os.Getuid() == 0 {
-		return defaultAgentID, defaultAgentID
+// hostIDMap returns the host user to map inside the workspace VM. On Linux,
+// libkrun's virtio-fs shows the real host owner of every shared file and of
+// the VM root filesystem, so the guest mounts them idmapped: the host user
+// appears as root in the root filesystem and as the agent in shared
+// directories. macOS presents files as owned by whoever accesses them and
+// needs no mapping; a root host needs none either.
+func hostIDMap() *guest.IDMap {
+	if runtime.GOOS != "linux" || os.Getuid() == 0 || os.Getgid() == 0 {
+		return nil
 	}
-	return uint32(os.Getuid()), uint32(os.Getgid()) //nolint:gosec // G115: Unix IDs are non-negative and fit in uint32
+	return &guest.IDMap{UID: uint32(os.Getuid()), GID: uint32(os.Getgid())} //nolint:gosec // G115: Unix IDs are non-negative and fit in uint32
 }
