@@ -46,7 +46,7 @@ Building on the host daemon is fastest, but Dockerfile `RUN` steps then run with
 The root file system is a copy-on-write clone of the unpacked image and is discarded on every start. `jailoc-guest` prepares the system and then serves SSH:
 
 1. configures the network addresses, the broker as gateway and DNS resolver, and the hostname,
-2. creates the `agent` user (UID 1000) when the image has none, and its home directory,
+2. creates the `agent` user (UID 1000, or the host user's UID on Linux) when the image has none, and its home directory,
 3. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
 4. adds the hostname to `/etc/hosts`,
 5. with `enable_docker`, formats the Docker data disk (20 GiB) on first use, mounts it at `/var/lib/docker` and starts `dockerd` with the socket owned by the `agent` group,

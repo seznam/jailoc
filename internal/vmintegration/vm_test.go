@@ -21,6 +21,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -290,8 +292,18 @@ func TestWorkspaceVM(t *testing.T) {
 	t.Logf("first up: %s", time.Since(start).Round(time.Second))
 
 	t.Run("agent user and sudo", func(t *testing.T) {
-		if got := mustGuest(ctx, t, "id -u"); got != "1000" {
-			t.Fatalf("id -u = %q", got)
+		// On Linux the agent takes the host user's IDs, because virtio-fs
+		// shows real host ownership.
+		wantUID := "1000"
+		if runtime.GOOS == "linux" && os.Getuid() != 0 {
+			wantUID = strconv.Itoa(os.Getuid())
+		}
+		if got := mustGuest(ctx, t, "id -u"); got != wantUID {
+			t.Fatalf("id -u = %q, want %s", got, wantUID)
+		}
+		if runtime.GOOS == "linux" {
+			t.Log("sudo is not available on Linux hosts: setuid binaries in the virtio-fs root filesystem are owned by the host user")
+			return
 		}
 		if got := mustGuest(ctx, t, "sudo -n id -u"); got != "0" {
 			t.Fatalf("sudo id -u = %q", got)

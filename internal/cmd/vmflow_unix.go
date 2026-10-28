@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -28,7 +29,6 @@ import (
 const (
 	builderCPUs      = 4
 	builderMemoryMiB = 4096
-	agentUID         = 1000
 )
 
 // builderStateDir is the builder of a workspace: shared by all workspaces,
@@ -300,11 +300,12 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if err != nil {
 		return vm.Spec{}, err
 	}
+	uid, gid := agentIDs()
 	g := &guest.Config{
 		Hostname:  ws.Name,
 		User:      "agent",
-		UID:       agentUID,
-		GID:       agentUID,
+		UID:       uid,
+		GID:       gid,
 		Home:      "/home/agent",
 		WorkDir:   ws.Paths[0],
 		Snapshots: snapshots,
@@ -587,4 +588,19 @@ func vmForwards(ports []config.PortForward) []vm.Forward {
 		out = append(out, vm.Forward{HostPort: p.Host, GuestPort: p.Guest})
 	}
 	return out
+}
+
+// defaultAgentID is the agent's UID and GID inside workspace VMs on macOS,
+// where virtio-fs presents shared files as owned by whoever accesses them.
+const defaultAgentID = 1000
+
+// agentIDs returns the agent's UID and GID inside the workspace VM. On
+// Linux, libkrun's virtio-fs shows the real host owner of every shared file
+// and of the VM root filesystem, so the agent takes the host user's IDs to
+// own its project and home.
+func agentIDs() (uint32, uint32) {
+	if runtime.GOOS != "linux" || os.Getuid() == 0 {
+		return defaultAgentID, defaultAgentID
+	}
+	return uint32(os.Getuid()), uint32(os.Getgid()) //nolint:gosec // G115: Unix IDs are non-negative and fit in uint32
 }

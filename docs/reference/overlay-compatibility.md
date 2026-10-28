@@ -20,6 +20,8 @@ jailoc builds the workspace image with Docker and unpacks its file system into t
 
 jailoc-guest looks for the user with UID 1000 in the image's `/etc/passwd` and uses its name, group, home directory and shell. When the image has no such user, jailoc-guest adds `agent` (UID and GID 1000, home `/home/agent`, shell `/bin/bash` if present, otherwise `/bin/sh`).
 
+On Linux hosts the agent takes the host user's UID and GID instead of 1000, because libkrun's virtio-fs shows the real host owner of shared files there. An image user named `agent` is renumbered to those IDs.
+
 ## Incompatible changes
 
 | Action | Severity | Effect |

@@ -239,6 +239,14 @@ func ensureAccount(cfg *Config) (account, error) {
 	if _, err := os.Stat("/bin/bash"); err == nil {
 		acct.shell = "/bin/bash"
 	}
+	// An image user with the configured name but another UID (the built-in
+	// image's agent is 1000; Linux hosts use the host user's IDs) is
+	// renumbered rather than duplicated, so names resolve to one account.
+	if renumbered, err := renumberAccount(cfg); err != nil {
+		return account{}, err
+	} else if renumbered != nil {
+		return *renumbered, nil
+	}
 	if err := appendLine("/etc/passwd", fmt.Sprintf("%s:x:%d:%d:jailoc agent:%s:%s", acct.name, acct.uid, acct.gid, acct.home, acct.shell)); err != nil {
 		return account{}, err
 	}
@@ -246,6 +254,66 @@ func ensureAccount(cfg *Config) (account, error) {
 		return account{}, err
 	}
 	return acct, nil
+}
+
+// renumberAccount gives the /etc/passwd entry named cfg.User the configured
+// UID and GID, and the /etc/group entry of the same name the GID. It returns
+// nil when no entry has that name.
+func renumberAccount(cfg *Config) (*account, error) {
+	var acct *account
+	err := rewriteEntries("/etc/passwd", func(fields []string) bool {
+		if len(fields) < 7 || fields[0] != cfg.User {
+			return false
+		}
+		fields[2] = strconv.FormatUint(uint64(cfg.UID), 10)
+		fields[3] = strconv.FormatUint(uint64(cfg.GID), 10)
+		acct = &account{name: fields[0], uid: cfg.UID, gid: cfg.GID, home: fields[5], shell: fields[6]}
+		if acct.shell == "" {
+			acct.shell = fallbackShell
+		}
+		return true
+	})
+	if err != nil || acct == nil {
+		return nil, err
+	}
+	if err := rewriteEntries("/etc/group", func(fields []string) bool {
+		if len(fields) < 3 || fields[0] != cfg.User {
+			return false
+		}
+		fields[2] = strconv.FormatUint(uint64(cfg.GID), 10)
+		return true
+	}); err != nil {
+		return nil, err
+	}
+	return acct, nil
+}
+
+// rewriteEntries rewrites the colon-separated lines of path for which edit
+// returns true. A missing file is left alone.
+func rewriteEntries(path string, edit func(fields []string) bool) error {
+	data, err := os.ReadFile(path) //nolint:gosec // G304: fixed system paths
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	lines := strings.Split(string(data), "\n")
+	changed := false
+	for i, line := range lines {
+		fields := strings.Split(line, ":")
+		if edit(fields) {
+			lines[i] = strings.Join(fields, ":")
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil { //nolint:gosec // G306: /etc/passwd and /etc/group are world-readable
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
 }
 
 func appendLine(path, line string) error {

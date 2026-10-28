@@ -23,6 +23,9 @@ If the device belongs to the `kvm` group, add yourself to it and log in again:
 sudo usermod -aG kvm "$USER"
 ```
 
+!!! warning "Linux limitations"
+    On Linux, libkrun's virtio-fs shows the real host owner of every file in the VM's root filesystem and shares. The agent therefore runs with your user's UID and GID, `sudo` and other setuid programs in the image do not grant root, and root inside the VM cannot change file ownership. macOS has none of these limits.
+
 Other platforms are unsupported. If you build the [go-microvm](https://github.com/stacklok/go-microvm) runner and libkrun yourself, point jailoc at them in the [`[vm]` section](../reference/configuration.md):
 
 ```toml
