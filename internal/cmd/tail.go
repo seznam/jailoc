@@ -69,14 +69,17 @@ func tailLog(ctx context.Context, w io.Writer, files []logFile, v logView, rende
 			shown = shown[1:]
 		}
 	}
-	var offset int64
+	var (
+		offset int64
+		cur    os.FileInfo // the followed file as last read
+	)
 	for i, path := range files {
-		n, err := readLines(path, 0, keep)
+		n, info, err := readLines(path, 0, nil, keep)
 		if err != nil {
 			return err
 		}
 		if i == len(files)-1 {
-			offset = n
+			offset, cur = n, info
 		}
 	}
 	for _, l := range shown {
@@ -107,33 +110,36 @@ func tailLog(ctx context.Context, w io.Writer, files []logFile, v logView, rende
 			return nil
 		case <-t.C:
 		}
-		if f, err := path.open(); err == nil {
-			if info, err := f.Stat(); err == nil && info.Size() < offset {
-				offset = 0 // rotated or recreated
-			}
-			_ = f.Close()
-		}
-		n, err := readLines(path, offset, emit)
+		n, info, err := readLines(path, offset, cur, emit)
 		if err != nil {
 			return err
 		}
-		offset = n
+		offset, cur = n, info
 	}
 }
 
 // readLines calls fn for every complete line of path after offset and
-// returns the offset after the last complete line.
-func readLines(path logFile, offset int64, fn func([]byte)) (int64, error) {
+// returns the offset after the last complete line and the file it read.
+// It reads from the start when the file is not prev or is shorter than
+// offset, because the log was replaced or truncated.
+func readLines(path logFile, offset int64, prev os.FileInfo, fn func([]byte)) (int64, os.FileInfo, error) {
 	f, err := path.open()
 	if errors.Is(err, fs.ErrNotExist) {
-		return offset, nil
+		return offset, prev, nil
 	}
 	if err != nil {
-		return offset, fmt.Errorf("open %s: %w", path, err)
+		return offset, prev, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return offset, prev, fmt.Errorf("stat %s: %w", path, err)
+	}
+	if info.Size() < offset || (prev != nil && !os.SameFile(prev, info)) {
+		offset = 0
+	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return offset, fmt.Errorf("seek %s: %w", path, err)
+		return offset, info, fmt.Errorf("seek %s: %w", path, err)
 	}
 	r := bufio.NewReaderSize(f, 64<<10)
 	for {
@@ -146,9 +152,9 @@ func readLines(path logFile, offset int64, fn func([]byte)) (int64, error) {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return offset, nil
+				return offset, info, nil
 			}
-			return offset, fmt.Errorf("read %s: %w", path, err)
+			return offset, info, fmt.Errorf("read %s: %w", path, err)
 		}
 	}
 }

@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -105,5 +107,63 @@ func TestTailLog(t *testing.T) {
 				t.Fatalf("out = %q, want %q", out.String(), tt.want)
 			}
 		})
+	}
+}
+
+// lockedBuffer is a bytes.Buffer safe for one writer and one reader.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestTailLogFollowsReplacedFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log")
+	if err := os.WriteFile(path, []byte("a\nb\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &lockedBuffer{}
+	done := make(chan error, 1)
+	go func() {
+		done <- tailLog(ctx, out, []logFile{{path: path}}, logView{lines: -1, follow: true}, func(raw []byte) string { return string(raw) })
+	}()
+	waitFor := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for out.String() != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("out = %q, want %q", out.String(), want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitFor("a\nb\n")
+	// Replace the log with a new file of the same size, as rotation does.
+	next := filepath.Join(dir, "log.new")
+	if err := os.WriteFile(next, []byte("c\nd\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("a\nb\nc\nd\n")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("tailLog: %v", err)
 	}
 }
