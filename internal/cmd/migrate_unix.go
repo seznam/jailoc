@@ -22,6 +22,7 @@ import (
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
+	"github.com/seznam/jailoc/internal/vm"
 )
 
 var (
@@ -299,7 +300,7 @@ func migrationVolumes(cfg *config.Config, names []string) ([]volumeTarget, error
 			out = append(out, volumeTarget{
 				workspace: name,
 				volume:    docker.VolumeName(name, v.key),
-				dst:       filepath.Join(vmStateDir(name), "home", v.home),
+				dst:       filepath.Join(vm.GuestDataDir(vmStateDir(name)), guestDataHome, v.home),
 				guestPath: v.guestPath,
 			})
 		}

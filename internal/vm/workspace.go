@@ -25,7 +25,7 @@ import (
 const (
 	clientKeyFile  = "id_ed25519"
 	hostPubKeyFile = "ssh_host_key.pub"
-	controlTag     = "jailocctl"
+	internalTag    = "jailocint"
 )
 
 type fileContent struct {
@@ -103,7 +103,7 @@ func prepareGuest(spec Spec) (map[string]fileContent, error) {
 	for i, s := range spec.Shares {
 		cfg.Shares = append(cfg.Shares, guest.Share{Tag: shareTag(i), GuestPath: s.guestPath(), ReadOnly: s.ReadOnly})
 	}
-	cfg.Shares = append(cfg.Shares, guest.Share{Tag: controlTag, GuestPath: guest.ControlDir})
+	cfg.Shares = append(cfg.Shares, guest.Share{Tag: internalTag, GuestPath: guest.HostDir})
 	cfgJSON, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode guest config: %w", err)
@@ -128,7 +128,7 @@ func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option 
 	for i, s := range spec.Shares {
 		mounts = append(mounts, microvm.VirtioFSMount{Tag: shareTag(i), HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: simplifiedOwnership})
 	}
-	mounts = append(mounts, microvm.VirtioFSMount{Tag: controlTag, HostPath: controlDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership})
+	mounts = append(mounts, microvm.VirtioFSMount{Tag: internalTag, HostPath: GuestDataDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership})
 	opts := commonOptions(spec)
 	if spec.Docker {
 		// The only disk, so the guest sees it as /dev/vda (guest.DockerDisk).

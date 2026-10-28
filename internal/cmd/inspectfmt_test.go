@@ -98,7 +98,7 @@ func TestTailLog(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var out bytes.Buffer
-			if err := tailLog(context.Background(), &out, []string{old, cur, filepath.Join(dir, "missing")}, tt.view, render); err != nil {
+			if err := tailLog(context.Background(), &out, []logFile{{path: old}, {path: cur}, {root: dir, path: "missing"}}, tt.view, render); err != nil {
 				t.Fatalf("tailLog: %v", err)
 			}
 			if out.String() != tt.want {

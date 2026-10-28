@@ -176,6 +176,9 @@ func vmFailure(stateDir, logPath string) string {
 	if err != nil || len(data) == 0 {
 		return "see " + logPath
 	}
+	if strings.Contains(string(data), "IrqsExhausted") {
+		return "the VM has more shared directories than libkrun can attach on this host (x86_64 allows about 6 besides the internal one); remove some paths or mounts"
+	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) > 5 {
 		lines = lines[len(lines)-5:]
@@ -264,11 +267,10 @@ const (
 )
 
 // vmShares lists the host directories the workspace VM mounts: workspace
-// paths read-write at their host paths, mount sources at their container
-// paths, the workspace's jailoc config and cache directories read-only,
-// and persistent OpenCode data and cache directories unless a mount covers
-// them.
-func vmShares(ws *workspace.Resolved, cacheDir string) ([]vm.Share, error) {
+// paths read-write at their host paths and mount sources at their container
+// paths. jailoc's own directories reach the guest through the internal
+// share (see vmGuestData).
+func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 	byGuest := map[string]vm.Share{}
 	add := func(host, guestPath string, ro bool) {
 		guestPath = filepath.Clean(guestPath)
@@ -304,26 +306,6 @@ func vmShares(ws *workspace.Resolved, cacheDir string) ([]vm.Share, error) {
 			return nil, fmt.Errorf("workspace %q: mount %q: backend \"vm\" shares directories only; use snapshots for a read-only copy of a file", ws.Name, spec)
 		}
 		add(host, m.Container, m.Mode == "ro")
-	}
-	add(filepath.Join(config.ConfigDir(), "workspaces", ws.Name), guestConfigDir, true)
-	add(cacheDir, guestCacheDir, true)
-	add(filepath.Join(cacheDir, "tui-plugin"), tuiPluginContainerDir, true)
-	// OpenCode sessions and logins (data), prompt history and model choice
-	// (state) and caches survive restarts in the VM state directory.
-	persistent := []struct{ name, guestPath string }{
-		{"opencode-data", guestOpenCodeDir},
-		{"opencode-state", guestOpenCodeState},
-		{"cache", guestUserCache},
-	}
-	for _, dir := range persistent {
-		if _, covered := byGuest[dir.guestPath]; covered {
-			continue
-		}
-		host := filepath.Join(vmStateDir(ws.Name), "home", dir.name)
-		if err := os.MkdirAll(host, 0o700); err != nil {
-			return nil, fmt.Errorf("create %s: %w", host, err)
-		}
-		add(host, dir.guestPath, false)
 	}
 
 	guestPaths := make([]string, 0, len(byGuest))

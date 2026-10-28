@@ -17,9 +17,17 @@ const (
 	// HostKeyPath is the SSH host key written by the host; the guest
 	// deletes it after loading.
 	HostKeyPath = Dir + "/ssh_host_key"
-	// ControlDir is shared read-write with the host; a file named
+	// PrivateDir is a root-only tmpfs holding HostDir, so the agent user
+	// cannot reach jailoc's internal share.
+	PrivateDir = Dir + "/private"
+	// HostDir is the mount point of the VM's single internal share: the
+	// host's per-VM guest data directory with the control files, staged
+	// snapshots, jailoc configuration copies and persistent home
+	// directories. The guest binds parts of it into place.
+	HostDir = PrivateDir + "/host"
+	// ControlDir is the control directory inside HostDir; a file named
 	// "shutdown" in it powers the VM off.
-	ControlDir = Dir + "/control"
+	ControlDir = HostDir + "/control"
 	// SecretsDir holds file secrets on a tmpfs owned by the agent user.
 	SecretsDir = "/run/secrets"
 	// EnvFile holds KEY=VALUE lines added to every agent session.
@@ -43,9 +51,15 @@ type Share struct {
 	ReadOnly  bool   `json:"read_only,omitempty"`
 }
 
-// SnapshotsDir is the guest path of the read-only share holding the staged
-// snapshots.
-const SnapshotsDir = Dir + "/snapshots"
+// SnapshotsDir is the guest path of the staged snapshots inside HostDir.
+const SnapshotsDir = HostDir + "/snapshots"
+
+// Bind binds Source, a directory inside HostDir, at Target.
+type Bind struct {
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+}
 
 // Snapshot binds Source, a file or directory inside SnapshotsDir, read-only at
 // Target.
@@ -65,8 +79,11 @@ type Config struct {
 	Shares        []Share  `json:"shares"`
 	AuthorizedKey string   `json:"authorized_key"`
 	Env           []string `json:"env,omitempty"`
+	// Binds place directories of the internal share (HostDir): jailoc
+	// configuration read-only, persistent home directories read-write.
+	Binds []Bind `json:"binds,omitempty"`
 	// Snapshots are read-only host files and directories bound from the
-	// staged snapshots share to their destinations.
+	// staged snapshots to their destinations.
 	Snapshots []Snapshot `json:"snapshots,omitempty"`
 	// CABundle is a guest path appended to the system CA bundle.
 	CABundle string `json:"ca_bundle,omitempty"`

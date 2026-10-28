@@ -461,7 +461,8 @@ env = ["VMTEST_RELOADED=yes"]`, snapshot, extra))
 		if got := mustGuest(ctx, t, "cat ~/.cache/marker"); got != "persisted" {
 			t.Fatalf("home marker = %q", got)
 		}
-		if got := mustGuest(ctx, t, "docker image ls --format '{{.Repository}}:{{.Tag}}'"); !strings.Contains(got, "alpine:3.20") {
+		// dockerd starts in the background after the VM is up.
+		if got := mustGuest(ctx, t, "for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 0.5; done; docker image ls --format '{{.Repository}}:{{.Tag}}'"); !strings.Contains(got, "alpine:3.20") {
 			t.Fatalf("docker images after restart = %q", got)
 		}
 	})

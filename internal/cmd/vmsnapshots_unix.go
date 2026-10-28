@@ -84,28 +84,32 @@ func overlaps(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
-// snapshotsShare is the read-only share of the staged snapshots. Every
-// workspace VM has it, so a reload can add snapshots.
-func snapshotsShare(stateDir string) vm.Share {
-	return vm.Share{HostPath: filepath.Join(stateDir, "snapshots"), GuestPath: guest.SnapshotsDir, ReadOnly: true}
-}
+// snapshotsDir is the directory of the staged snapshots inside the guest
+// data directory.
+const snapshotsDir = "snapshots"
 
 // stageSnapshots copies every snapshot source into a new generation directory
-// under stateDir/snapshots and returns the guest bind list. Generations other
+// of the staged snapshots and returns the guest bind list. Generations other
 // than keep, the one the running guest binds, are removed. A new directory
-// per generation keeps the guest from reading stale virtio-fs entries.
+// per generation keeps the guest from reading stale virtio-fs entries. The
+// guest can write the guest data directory, so every write goes through an
+// os.Root that does not follow links out of it.
 func stageSnapshots(stateDir string, snapshots []config.Mount, keep string) ([]guest.Snapshot, error) {
-	dir := snapshotsShare(stateDir).HostPath
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	root, err := vm.OpenGuestData(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.MkdirAll(snapshotsDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create staged snapshots: %w", err)
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := fs.ReadDir(root.FS(), snapshotsDir)
 	if err != nil {
 		return nil, fmt.Errorf("read staged snapshots: %w", err)
 	}
 	for _, e := range entries {
 		if e.Name() != keep {
-			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			if err := root.RemoveAll(path.Join(snapshotsDir, e.Name())); err != nil {
 				return nil, fmt.Errorf("clear staged snapshots: %w", err)
 			}
 		}
@@ -114,14 +118,15 @@ func stageSnapshots(stateDir string, snapshots []config.Mount, keep string) ([]g
 		return nil, nil
 	}
 	gen := strconv.FormatInt(time.Now().UnixNano(), 10)
-	if err := os.Mkdir(filepath.Join(dir, gen), 0o700); err != nil {
+	genDir := path.Join(snapshotsDir, gen)
+	if err := root.Mkdir(genDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create staged snapshots: %w", err)
 	}
 	binds := make([]guest.Snapshot, 0, len(snapshots))
 	for i, c := range snapshots {
 		name := strconv.Itoa(i)
-		if err := copyTree(c.Host, filepath.Join(dir, gen, name)); err != nil {
-			_ = os.RemoveAll(filepath.Join(dir, gen))
+		if err := copyTree(root, c.Host, path.Join(genDir, name)); err != nil {
+			_ = root.RemoveAll(genDir)
 			return nil, fmt.Errorf("snapshot %q: %w", c.Host, err)
 		}
 		binds = append(binds, guest.Snapshot{Source: path.Join(guest.SnapshotsDir, gen, name), Target: c.Container})
@@ -139,54 +144,55 @@ func snapshotGeneration(binds []guest.Snapshot) string {
 	return gen
 }
 
-// copyTree copies a file or directory. Symbolic links inside a directory
-// are copied as links; sockets, devices and pipes are skipped.
-func copyTree(src, dst string) error {
+// copyTree copies a host file or directory to dst inside root. Symbolic
+// links inside a directory are copied as links; sockets, devices and pipes
+// are skipped.
+func copyTree(root *os.Root, src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
 		return err
 	}
 	if !info.IsDir() {
-		return copyRegular(src, dst, info.Mode().Perm())
+		return copyRegular(root, src, dst, info.Mode().Perm())
 	}
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, path)
+		rel, err := filepath.Rel(src, p)
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
+		target := path.Join(dst, filepath.ToSlash(rel))
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
 		switch {
 		case d.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm()|0o700)
+			return root.MkdirAll(target, info.Mode().Perm()|0o700)
 		case d.Type()&fs.ModeSymlink != 0:
-			link, err := os.Readlink(path)
+			link, err := os.Readlink(p)
 			if err != nil {
 				return err
 			}
-			return os.Symlink(link, target) //nolint:gosec // G122: link is copied verbatim into the staging directory and resolved only inside the guest
+			return root.Symlink(link, target)
 		case d.Type().IsRegular():
-			return copyRegular(path, target, info.Mode().Perm())
+			return copyRegular(root, p, target, info.Mode().Perm())
 		default:
-			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "warning: snapshot skips %s (not a regular file, directory or symlink)\n", path)
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "warning: snapshot skips %s (not a regular file, directory or symlink)\n", p)
 			return nil
 		}
 	})
 }
 
-func copyRegular(src, dst string, perm fs.FileMode) error {
+func copyRegular(root *os.Root, src, dst string, perm fs.FileMode) error {
 	in, err := os.Open(src) //nolint:gosec // G304: user-configured copy source
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm|0o400) //nolint:gosec // G304: inside jailoc's staging directory
+	out, err := root.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm|0o400)
 	if err != nil {
 		return err
 	}

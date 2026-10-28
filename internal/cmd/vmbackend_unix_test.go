@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -127,16 +128,11 @@ func TestVMShares(t *testing.T) {
 			"~/data:" + guestOpenCodeDir,
 		},
 	}
-	shares, err := vmShares(ws, cacheDir)
+	shares, err := vmShares(ws)
 	if err != nil {
 		t.Fatalf("vmShares: %v", err)
 	}
 	want := []vm.Share{
-		{HostPath: filepath.Join(home, ".config", "jailoc", "workspaces", "w"), GuestPath: guestConfigDir, ReadOnly: true},
-		{HostPath: cacheDir, GuestPath: guestCacheDir, ReadOnly: true},
-		{HostPath: filepath.Join(cacheDir, "tui-plugin"), GuestPath: tuiPluginContainerDir, ReadOnly: true},
-		{HostPath: filepath.Join(vmStateDir("w"), "home", "cache"), GuestPath: guestUserCache},
-		{HostPath: filepath.Join(vmStateDir("w"), "home", "opencode-state"), GuestPath: guestOpenCodeState},
 		{HostPath: filepath.Join(home, "data"), GuestPath: guestOpenCodeDir},
 		{HostPath: filepath.Join(home, "created"), GuestPath: "/opt/created"},
 		{HostPath: tools, GuestPath: "/opt/tools", ReadOnly: true},
@@ -146,17 +142,40 @@ func TestVMShares(t *testing.T) {
 	if !slices.Equal(shares, want) {
 		t.Fatalf("shares =\n%+v\nwant\n%+v", shares, want)
 	}
-	for _, dir := range []string{filepath.Join(home, "created"), filepath.Join(vmStateDir("w"), "home", "cache"), filepath.Join(vmStateDir("w"), "home", "opencode-state")} {
-		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-			t.Fatalf("directory %s not created: %v", dir, err)
-		}
+	if info, err := os.Stat(filepath.Join(home, "created")); err != nil || !info.IsDir() {
+		t.Fatalf("mount source not created: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(vmStateDir("w"), "home", "opencode-data")); !errors.Is(err, os.ErrNotExist) {
+
+	if err := os.MkdirAll(filepath.Join(cacheDir, "tui-plugin"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "tui-container.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binds, err := vmGuestData(ws, cacheDir, shares)
+	if err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	wantBinds := []guest.Bind{
+		{Source: guest.HostDir + "/config", Target: guestConfigDir, ReadOnly: true},
+		{Source: guest.HostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
+		{Source: guest.HostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
+		{Source: guest.HostDir + "/home/opencode-state", Target: guestOpenCodeState},
+		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
+	}
+	if !slices.Equal(binds, wantBinds) {
+		t.Fatalf("binds =\n%+v\nwant\n%+v", binds, wantBinds)
+	}
+	data := vm.GuestDataDir(vmStateDir("w"))
+	if b, err := os.ReadFile(filepath.Join(data, "cache", "tui-container.json")); err != nil || string(b) != "{}" { //nolint:gosec // G304: test file
+		t.Fatalf("cache not copied: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "home", "opencode-data")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("opencode-data created although a mount covers it: %v", err)
 	}
 
 	ws.Mounts = []string{file + ":/opt/file.txt:ro"}
-	if _, err := vmShares(ws, cacheDir); err == nil {
+	if _, err := vmShares(ws); err == nil {
 		t.Fatal("vmShares accepted a file mount")
 	}
 }

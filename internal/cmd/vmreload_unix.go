@@ -105,7 +105,12 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err := writeTUIConfig(cacheDir); err != nil {
 		return vm.Spec{}, nil, err
 	}
-	shares, err := vmShares(ws, cacheDir)
+	shares, err := vmShares(ws)
+	if err != nil {
+		return vm.Spec{}, nil, err
+	}
+	// Refreshes the configuration and cache copies the guest reads.
+	internal, err := vmGuestData(ws, cacheDir, shares)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
@@ -116,12 +121,12 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err := checkSnapshots(ws, snapshots, shares); err != nil {
 		return vm.Spec{}, nil, err
 	}
-	shares = append(shares, snapshotsShare(vmStateDir(ws.Name)))
 	rt := vmRuntimeFiles{runner: running.RunnerPath, libDir: running.LibDir, guest: running.GuestBinary}
 	spec, err := workspaceSpec(ctx, ws, rt, running.Image, shares, nil)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
+	spec.Guest.Binds = internal
 	spec.Docker = ws.EnableDocker
 	if spec.Docker {
 		spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
@@ -131,12 +136,9 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 }
 
 // snapshotsReloadable reports whether the running VM can rebind snapshots:
-// it has the snapshots share and runs the current jailoc guest. Otherwise
-// restartOnlyChanges reports the share or guest difference.
+// it runs the current jailoc guest, which has the snapshots in its internal
+// share. Otherwise restartOnlyChanges reports the guest difference.
 func snapshotsReloadable(running vm.Spec) bool {
-	if !slices.Contains(running.Shares, snapshotsShare(running.StateDir)) {
-		return false
-	}
 	current, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
 	return err == nil && filepath.Clean(current) == filepath.Clean(running.GuestBinary)
 }
@@ -145,7 +147,7 @@ func snapshotsReloadable(running vm.Spec) bool {
 // and the configuration but cannot change while the VM runs.
 func restartOnlyChanges(running, want vm.Spec) []string {
 	var out []string
-	if !slices.Equal(sortedShares(running.Shares), sortedShares(want.Shares)) {
+	if !slices.Equal(sortedShares(running.Shares), sortedShares(want.Shares)) || !slices.Equal(running.Guest.Binds, want.Guest.Binds) {
 		out = append(out, "paths and mounts")
 	}
 	if running.CPUs != want.CPUs {
@@ -270,23 +272,18 @@ func brokerReloadEvent(path string, offset int64) (brokerReload, bool) {
 // reloadGuest asks the guest init to apply the CA bundle, SSH agent and snapshots of g
 // and waits for its answer.
 func reloadGuest(stateDir string, g guest.Config) error {
-	dir := vm.ControlDir(stateDir)
 	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, Snapshots: g.Snapshots}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode reload request: %w", err)
 	}
-	tmp := filepath.Join(dir, guest.ReloadFile+".tmp")
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write reload request: %w", err)
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, guest.ReloadFile)); err != nil {
+	if err := vm.WriteControl(stateDir, guest.ReloadFile, data); err != nil {
 		return fmt.Errorf("write reload request: %w", err)
 	}
 	deadline := time.Now().Add(reloadTimeout)
 	for time.Now().Before(deadline) {
 		var done guest.ReloadDone
-		if b, err := os.ReadFile(filepath.Join(dir, guest.ReloadDoneFile)); err == nil && json.Unmarshal(b, &done) == nil && done.Seq == req.Seq { //nolint:gosec // G304: jailoc-owned state path
+		if b, err := vm.ReadControl(stateDir, guest.ReloadDoneFile); err == nil && json.Unmarshal(b, &done) == nil && done.Seq == req.Seq {
 			if done.Error != "" {
 				return fmt.Errorf("guest: %s", done.Error)
 			}

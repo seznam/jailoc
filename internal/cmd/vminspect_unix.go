@@ -23,13 +23,13 @@ import (
 
 func trafficVM(ctx context.Context, ws *workspace.Resolved, v logView, all bool, w io.Writer) error {
 	f := newTrafficFormatter(all)
-	return tailLog(ctx, w, []string{vm.TrafficLog(vmStateDir(ws.Name))}, v, f.line)
+	return tailLog(ctx, w, []logFile{{path: vm.TrafficLog(vmStateDir(ws.Name))}}, v, f.line)
 }
 
 func execLogVM(ctx context.Context, ws *workspace.Resolved, v logView, all bool, w io.Writer) error {
-	log := vm.ExecLog(vmStateDir(ws.Name))
+	root := vm.GuestDataDir(vmStateDir(ws.Name))
 	f := execFormatter{all: all}
-	return tailLog(ctx, w, []string{log + ".1", log}, v, f.line)
+	return tailLog(ctx, w, []logFile{{root: root, path: vm.ExecLogName + ".1"}, {root: root, path: vm.ExecLogName}}, v, f.line)
 }
 
 // execVM runs args (a login shell when empty) as the agent user in the

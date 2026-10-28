@@ -258,7 +258,7 @@ Scalar settings (`ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`
 
 ## Persistent state
 
-`~/.cache/jailoc-vm/workspaces/<workspace>/home` keeps the agent's `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` across restarts. `jailoc down --purge` deletes it.
+`~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` keeps the agent's `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` across restarts. `jailoc down --purge` deletes it.
 
 ---
 

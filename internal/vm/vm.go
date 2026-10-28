@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -250,16 +251,8 @@ func Run(ctx context.Context, spec Spec) (err error) {
 			return err
 		}
 	}
-	ctl := controlDir(spec.StateDir)
-	// Keep the process log of the previous boot next to the new one.
-	if err := os.Rename(filepath.Join(ctl, guest.ExecLogFile), PrevExecLog(spec.StateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("keep previous exec log: %w", err)
-	}
-	if err := os.RemoveAll(ctl); err != nil {
-		return fmt.Errorf("reset vm control dir: %w", err)
-	}
-	if err := os.MkdirAll(ctl, 0o700); err != nil {
-		return fmt.Errorf("create vm control dir: %w", err)
+	if err := resetControl(spec.StateDir); err != nil {
+		return err
 	}
 	policyPath := PolicyFile(spec.StateDir)
 	if err := WritePolicy(spec); err != nil {
@@ -312,7 +305,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	}
 	logf("%s ready", spec.Kind)
 
-	out := brokerproc.Supervise(ctx, bp, vmHandle{vm: vm, control: ctl}, 500*time.Millisecond, stopGrace)
+	out := brokerproc.Supervise(ctx, bp, vmHandle{vm: vm, stateDir: spec.StateDir}, 500*time.Millisecond, stopGrace)
 	logf("supervise %s", out.Reason)
 	if out.Reason == "shutdown" {
 		return nil
@@ -511,20 +504,89 @@ const stopGrace = 30 * time.Second
 // dockerd, sync and unmount the data disk before the VM is stopped hard.
 const guestShutdownWait = 20 * time.Second
 
-func controlDir(stateDir string) string { return filepath.Join(stateDir, "control") }
+// GuestDataDir is the per-VM directory shared read-write with the guest
+// (the workspace VM mounts all of it, the builder only its control
+// directory). The guest can change anything inside it, so the host only
+// accesses it through OpenGuestData, which never follows a link out of it,
+// and never stores host-only state such as keys or the spec in it.
+func GuestDataDir(stateDir string) string { return filepath.Join(stateDir, "guest") }
 
-// ExecLog is the guest's process log of the running boot.
-func ExecLog(stateDir string) string { return filepath.Join(controlDir(stateDir), guest.ExecLogFile) }
+// OpenGuestData creates the guest data directory if needed and opens it as
+// an os.Root.
+func OpenGuestData(stateDir string) (*os.Root, error) {
+	dir := GuestDataDir(stateDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create guest data dir: %w", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open guest data dir: %w", err)
+	}
+	return root, nil
+}
 
-// PrevExecLog is the process log of the previous boot.
-func PrevExecLog(stateDir string) string { return filepath.Join(stateDir, "exec.prev.jsonl") }
+// Paths inside the guest data directory.
+const (
+	// ControlName is the control directory: shutdown and reload requests
+	// and the guest's exec log.
+	ControlName = "control"
+	// ExecLogName is the guest's process log of the running boot.
+	ExecLogName = ControlName + "/" + guest.ExecLogFile
+	// PrevExecLogName is the process log of the previous boot.
+	PrevExecLogName = "exec.prev.jsonl"
+)
+
+func controlDir(stateDir string) string { return filepath.Join(GuestDataDir(stateDir), ControlName) }
+
+// WriteControl writes name into the control directory atomically.
+func WriteControl(stateDir, name string, data []byte) error {
+	root, err := OpenGuestData(stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	tmp := path.Join(ControlName, name+".tmp")
+	if err := root.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	if err := root.Rename(tmp, path.Join(ControlName, name)); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	return nil
+}
+
+// ReadControl reads name from the control directory.
+func ReadControl(stateDir, name string) ([]byte, error) {
+	root, err := OpenGuestData(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return root.ReadFile(path.Join(ControlName, name))
+}
+
+// resetControl starts a boot with an empty control directory and keeps the
+// exec log of the previous boot.
+func resetControl(stateDir string) error {
+	root, err := OpenGuestData(stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Rename(ExecLogName, PrevExecLogName); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("keep previous exec log: %w", err)
+	}
+	if err := root.RemoveAll(ControlName); err != nil {
+		return fmt.Errorf("reset vm control dir: %w", err)
+	}
+	if err := root.Mkdir(ControlName, 0o700); err != nil {
+		return fmt.Errorf("create vm control dir: %w", err)
+	}
+	return nil
+}
 
 // TrafficLog is the network broker's event log.
 func TrafficLog(stateDir string) string { return filepath.Join(stateDir, "broker.jsonl") }
-
-// ControlDir is the directory shared read-write with the workspace guest
-// for shutdown and reload requests.
-func ControlDir(stateDir string) string { return controlDir(stateDir) }
 
 // PolicyFile is the network policy the broker reloads on SIGHUP.
 func PolicyFile(stateDir string) string { return filepath.Join(stateDir, "policy.json") }
@@ -577,8 +639,8 @@ func writeFileAtomic(path string, data []byte) error {
 }
 
 type vmHandle struct {
-	vm      *microvm.VM
-	control string
+	vm       *microvm.VM
+	stateDir string
 }
 
 func (h vmHandle) Alive() bool {
@@ -591,7 +653,7 @@ func (h vmHandle) Alive() bool {
 // guest ends its sessions and syncs), then stops the VM.
 func (h vmHandle) Stop(ctx context.Context) error {
 	if h.Alive() {
-		if err := os.WriteFile(filepath.Join(h.control, "shutdown"), nil, 0o600); err == nil {
+		if err := WriteControl(h.stateDir, "shutdown", nil); err == nil {
 			wait, cancel := context.WithTimeout(ctx, guestShutdownWait)
 			for h.Alive() && wait.Err() == nil {
 				select {

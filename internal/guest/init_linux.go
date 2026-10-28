@@ -85,7 +85,13 @@ func Init(logger *slog.Logger) error {
 	if err := ownedDir(acct.home, acct, 0o755); err != nil {
 		return err
 	}
+	if err := mountPrivate(); err != nil {
+		return err
+	}
 	if err := mountShares(logger, cfg.Shares, acct); err != nil {
+		return err
+	}
+	if err := bindInternal(cfg.Binds, acct); err != nil {
 		return err
 	}
 	live := &liveState{logger: logger, acct: acct, created: map[string]bool{}}
@@ -253,6 +259,44 @@ func appendLine(path, line string) error {
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)
+	}
+	return nil
+}
+
+// mountPrivate mounts the root-only tmpfs that holds the internal share.
+func mountPrivate() error {
+	if err := os.MkdirAll(PrivateDir, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", PrivateDir, err)
+	}
+	if err := syscall.Mount("tmpfs", PrivateDir, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "mode=0700,size=1m"); err != nil {
+		return fmt.Errorf("mount %s: %w", PrivateDir, err)
+	}
+	return nil
+}
+
+// bindInternal binds directories of the internal share into place,
+// shorter targets first. Missing parents inside the agent's home belong
+// to the agent.
+func bindInternal(binds []Bind, acct account) error {
+	sorted := slices.Clone(binds)
+	slices.SortStableFunc(sorted, func(a, b Bind) int { return len(a.Target) - len(b.Target) })
+	for _, b := range sorted {
+		if !within(b.Source, HostDir) || within(b.Source, ControlDir) {
+			return fmt.Errorf("bind %s: source %s is outside the internal share", b.Target, b.Source)
+		}
+		if err := makeParents(b.Target, acct); err != nil {
+			return fmt.Errorf("bind %s: %w", b.Target, err)
+		}
+		if err := syscall.Mount(b.Source, b.Target, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("bind %s: %w", b.Target, err)
+		}
+		flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_NOSUID | syscall.MS_NODEV)
+		if b.ReadOnly {
+			flags |= syscall.MS_RDONLY
+		}
+		if err := syscall.Mount("", b.Target, "", flags, ""); err != nil {
+			return fmt.Errorf("bind %s: remount: %w", b.Target, err)
+		}
 	}
 	return nil
 }

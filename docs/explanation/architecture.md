@@ -68,17 +68,17 @@ With `protect_git`, `jailoc-guest` bind-mounts `.git/hooks` and `.git/config` of
 
 ### Shares
 
-Workspace `paths`, the directories in `mounts`, the workspace configuration directory, the workspace cache directory and the persistent home directories reach the VM through virtio-fs. Read-only shares are enforced by the VMM: guest root can't remount them writable. virtio-fs shares directories only, so a `mounts` entry that points at a single file isn't supported; use `snapshots` for files.
+Workspace `paths` and the directories in `mounts` reach the VM through virtio-fs, one share each. jailoc's own data uses a single internal share, the VM's `guest` directory on the host: copies of the workspace configuration and cache directories, the staged snapshots, the persistent home directories and the control files the host and guest exchange. The guest mounts it under a root-only directory and binds its parts into place (configuration copies read-only). Because the guest can write the whole internal share, the host keeps nothing in it that it trusts, such as keys or the VM spec, and accesses it only in ways that cannot follow a link out of it. One share keeps the number of virtio devices low; libkrun on x86_64 hosts can attach only about six shares besides it. Read-only shares are enforced by the VMM: guest root can't remount them writable. virtio-fs shares directories only, so a `mounts` entry that points at a single file isn't supported; use `snapshots` for files.
 
 On macOS, shares use simplified ownership: every guest process sees shared files as its own, and files it creates are owned by the host user. Permission bits stay meaningful on the host, and ownership changes inside the guest have no effect on host files. On Linux, the guest sees the host owner and group of shared files. libkrun creates files as the host user that runs jailoc and allows it only for guest `root` or for a guest user whose uid and gid match that host user, so the `agent` user (uid and gid 1000) can create files in shares only when jailoc runs as uid and gid 1000.
 
 ### Snapshots
 
-Files and directories in `snapshots`, and the Git configuration, aren't shared. jailoc copies them into the VM state directory when the VM starts and on every `jailoc reload`, shares that directory read-only, and the guest binds each item read-only at its destination. Each reload copies into a new directory and the guest replaces its binds; processes that opened a file earlier keep reading the old copy. Nothing the workspace does reaches the host original.
+Files and directories in `snapshots`, and the Git configuration, aren't shared. jailoc copies them into the internal share when the VM starts and on every `jailoc reload`, and the guest binds each item read-only at its destination. Each reload copies into a new directory and the guest replaces its binds; processes that opened a file earlier keep reading the old copy. Nothing the workspace does reaches the host original.
 
 ### Persistent home
 
-Only `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` of the agent survive a restart. They live in `~/.cache/jailoc-vm/workspaces/<workspace>/home` on the host, next to the Docker data disk of `enable_docker`. `jailoc down --purge` deletes them.
+Only `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` of the agent survive a restart. They live in `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` on the host, next to the Docker data disk of `enable_docker`. `jailoc down --purge` deletes them.
 
 ### Secrets
 

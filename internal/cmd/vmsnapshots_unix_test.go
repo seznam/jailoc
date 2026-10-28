@@ -100,7 +100,7 @@ func TestStageSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := t.TempDir()
-	staged := filepath.Join(state, "snapshots")
+	staged := filepath.Join(vm.GuestDataDir(state), snapshotsDir)
 	stale := filepath.Join(staged, "stale")
 	if err := os.MkdirAll(stale, 0o750); err != nil {
 		t.Fatal(err)

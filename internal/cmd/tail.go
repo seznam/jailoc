@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -21,11 +22,38 @@ type logView struct {
 	json   bool // print shown events as their raw JSON lines
 }
 
+// logFile is a log to tail: path, or name inside the directory root when root
+// is set. Logs the guest can write are read through root, so a link the
+// guest plants cannot make jailoc print another host file.
+type logFile struct {
+	root string
+	path string
+}
+
+func (l logFile) open() (*os.File, error) {
+	if l.root == "" {
+		return os.Open(l.path) //nolint:gosec // G304: jailoc state file
+	}
+	r, err := os.OpenRoot(l.root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = r.Close() }()
+	return r.Open(l.path)
+}
+
+func (l logFile) String() string {
+	if l.root == "" {
+		return l.path
+	}
+	return filepath.Join(l.root, l.path)
+}
+
 // tailLog prints the last v.lines events from files (oldest first) that
 // render to a non-empty line, then follows the last file when v.follow is
 // set. render sees every event in order, so it can keep state such as DNS
 // names. Missing files count as empty.
-func tailLog(ctx context.Context, w io.Writer, files []string, v logView, render func([]byte) string) error {
+func tailLog(ctx context.Context, w io.Writer, files []logFile, v logView, render func([]byte) string) error {
 	var shown [][]byte
 	keep := func(raw []byte) {
 		text := render(raw)
@@ -79,8 +107,11 @@ func tailLog(ctx context.Context, w io.Writer, files []string, v logView, render
 			return nil
 		case <-t.C:
 		}
-		if info, err := os.Stat(path); err == nil && info.Size() < offset {
-			offset = 0 // rotated or recreated
+		if f, err := path.open(); err == nil {
+			if info, err := f.Stat(); err == nil && info.Size() < offset {
+				offset = 0 // rotated or recreated
+			}
+			_ = f.Close()
 		}
 		n, err := readLines(path, offset, emit)
 		if err != nil {
@@ -92,8 +123,8 @@ func tailLog(ctx context.Context, w io.Writer, files []string, v logView, render
 
 // readLines calls fn for every complete line of path after offset and
 // returns the offset after the last complete line.
-func readLines(path string, offset int64, fn func([]byte)) (int64, error) {
-	f, err := os.Open(path) //nolint:gosec // G304: jailoc state file
+func readLines(path logFile, offset int64, fn func([]byte)) (int64, error) {
+	f, err := path.open()
 	if errors.Is(err, fs.ErrNotExist) {
 		return offset, nil
 	}

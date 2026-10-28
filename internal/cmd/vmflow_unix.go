@@ -69,7 +69,11 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err := writeTUIConfig(cacheDir); err != nil {
 		return err
 	}
-	shares, err := vmShares(ws, cacheDir)
+	shares, err := vmShares(ws)
+	if err != nil {
+		return err
+	}
+	internal, err := vmGuestData(ws, cacheDir, shares)
 	if err != nil {
 		return err
 	}
@@ -94,11 +98,11 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return fmt.Errorf("workspace %q: %w", ws.Name, err)
 	}
-	shares = append(shares, snapshotsShare(stateDir))
 	spec, err := workspaceSpec(ctx, ws, rt, ref, shares, binds)
 	if err != nil {
 		return err
 	}
+	spec.Guest.Binds = internal
 	if err := configureVMDocker(cfg, ws, &spec); err != nil {
 		return err
 	}
