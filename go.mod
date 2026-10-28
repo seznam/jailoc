@@ -89,6 +89,8 @@ require (
 )
 
 // go-microvm fork: simplified virtio-fs ownership (stacklok/go-microvm#135),
-// exec-session exit status (#143) and setuid bits on Linux hosts (#149) on
-// top of upstream main, until they are merged upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261028103459-bd0f3b8e9bed
+// exec-session exit status (#143), setuid bits on Linux hosts (#149) and
+// exec-session exit status under the PID 1 reaper (branch
+// fix/sshd-exec-exit-status) on top of upstream main, until they are merged
+// upstream.
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261028105024-29878965fd95
