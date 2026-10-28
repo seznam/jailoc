@@ -29,12 +29,15 @@ ip link set eth0 up
 ip link set eth0 mtu @MTU@
 until udhcpc -i eth0 -n -q -t 10; do log "dhcp failed, retrying"; sleep 1; done
 
+# Docker state must persist on the data disk; never fall back to the
+# disposable root filesystem.
+fail() { log "$*"; poweroff -f; exit 1; }
 mkdir -p /var/lib/docker
 if [ -z "$(blkid /dev/vda)" ]; then
-	apk add -q --no-cache e2fsprogs || log "apk add e2fsprogs failed"
-	mkfs.ext4 -q -F /dev/vda || log "mkfs failed"
+	apk add -q --no-cache e2fsprogs || fail "apk add e2fsprogs failed"
+	mkfs.ext4 -q -F /dev/vda || fail "mkfs failed"
 fi
-mount -t ext4 /dev/vda /var/lib/docker || log "mount data disk failed"
+mount -t ext4 /dev/vda /var/lib/docker || fail "mount data disk failed"
 
 # dockerd's nftables backend needs the nft binary; keep the package cache on
 # the data disk so later boots do not need the network for it.
