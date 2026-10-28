@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"os/signal"
 	"sync"
 	"sync/atomic"
@@ -79,6 +80,31 @@ func Create(stateDir string, opts Options, holder []string) (string, error) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+}
+
+// Open returns the most recently attached running session started in
+// opts.Dir, creating one as [Create] does when none runs. Concurrent calls,
+// also from other processes, are serialized so they share one session.
+func Open(stateDir string, opts Options, holder []string) (string, error) {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return "", fmt.Errorf("create session directory: %w", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(stateDir, "open.lock"), os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // G304: fixed name inside the session directory
+	if err != nil {
+		return "", fmt.Errorf("open session lock: %w", err)
+	}
+	defer func() { _ = lock.Close() }()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // G115: file descriptors fit in int
+		return "", fmt.Errorf("lock sessions: %w", err)
+	}
+	found, err := Find(stateDir, opts.Dir)
+	if err != nil {
+		return "", err
+	}
+	if found != nil {
+		return found.ID, nil
+	}
+	return Create(stateDir, opts, holder)
 }
 
 // Attach relays a client's framed stream between in/out and the session's

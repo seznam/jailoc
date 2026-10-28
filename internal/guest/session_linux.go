@@ -77,32 +77,29 @@ func openSession(self string, args []string, stdin io.Reader, stdout io.Writer) 
 		return err
 	}
 	cmd := fs.Args()
-	if *id == "" && !*newSession {
-		found, err := session.Find(SessionsDir, *dir)
-		if err != nil {
-			return err
-		}
-		if found != nil {
-			*id = found.ID
-		}
-	}
 	if *id == "" {
-		if len(cmd) == 0 {
-			return errors.New("session open: no command")
+		var argv []string
+		if len(cmd) > 0 {
+			argv = []string{self, "run", "-C", *dir}
+			for _, kv := range env {
+				argv = append(argv, "-e", kv)
+			}
+			argv = append(append(argv, "--"), cmd...)
 		}
-		argv := []string{self, "run", "-C", *dir}
-		for _, kv := range env {
-			argv = append(argv, "-e", kv)
-		}
-		argv = append(append(argv, "--"), cmd...)
-		created, err := session.Create(SessionsDir, session.Options{
+		opts := session.Options{
 			Name: strings.Join(cmd, " "), Dir: *dir, Argv: argv, Env: os.Environ(),
 			Rows: uint16(min(*rows, 0xffff)), Cols: uint16(min(*cols, 0xffff)), //nolint:gosec // G115: clamped
-		}, []string{self, "session", "serve"})
+		}
+		holder := []string{self, "session", "serve"}
+		var err error
+		if *newSession {
+			*id, err = session.Create(SessionsDir, opts, holder)
+		} else {
+			*id, err = session.Open(SessionsDir, opts, holder)
+		}
 		if err != nil {
 			return err
 		}
-		*id = created
 	}
 	if err := session.WriteFrame(stdout, session.Frame{Type: session.FrameInfo, Payload: []byte(*id)}); err != nil {
 		return err

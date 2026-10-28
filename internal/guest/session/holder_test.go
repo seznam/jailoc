@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -175,5 +176,40 @@ func TestStopSession(t *testing.T) {
 	}
 	if err := Stop(dir, id); err == nil {
 		t.Fatal("stopping an ended session succeeded")
+	}
+}
+
+func TestOpenSharesOneSession(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "jls-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv(holderEnv, dir)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Name: "sleep", Dir: "/", Argv: []string{"/bin/sleep", "60"}, Env: []string{"PATH=/bin"}, Rows: 24, Cols: 80}
+	ids := make([]string, 8)
+	errs := make([]error, len(ids))
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Go(func() { ids[i], errs[i] = Open(dir, opts, []string{exe}) })
+	}
+	wg.Wait()
+	t.Cleanup(func() {
+		infos, _ := List(dir)
+		for _, info := range infos {
+			_ = Stop(dir, info.ID)
+		}
+	})
+	for i := range ids {
+		if errs[i] != nil {
+			t.Fatalf("Open: %v", errs[i])
+		}
+		if ids[i] != ids[0] {
+			t.Fatalf("concurrent Open started sessions %v", ids)
+		}
 	}
 }
