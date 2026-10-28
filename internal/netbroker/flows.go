@@ -161,6 +161,8 @@ func (b *Broker) startService(ctx context.Context, s Service) error {
 
 // startServicePath is startService with the socket path looked up for every
 // connection, so a runtime reload can change it without a restart.
+// Cancelling ctx closes the listener and every open connection, so that a
+// removed service, such as SSH agent forwarding, is revoked at once.
 func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() string) (func(), error) {
 	s := Service{GuestPort: port}
 	l, err := gonet.ListenTCP(b.stack, *guestAddr(b.cfg.Gateway, s.GuestPort), ipv4.ProtocolNumber)
@@ -188,6 +190,11 @@ func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() 
 					return
 				}
 				b.record(map[string]any{"event": "service", "guest_port": s.GuestPort})
+				stop := context.AfterFunc(ctx, func() {
+					_ = c.Close()
+					_ = h.Close()
+				})
+				defer stop()
 				splice(c, h)
 			}()
 		}

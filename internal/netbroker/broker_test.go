@@ -381,6 +381,56 @@ func TestBrokerEndToEnd(t *testing.T) {
 			t.Fatalf("removed service got %q, want refused", got)
 		}
 	})
+	t.Run("removing a runtime service closes its open connections", func(t *testing.T) {
+		sockDir, err := os.MkdirTemp("", "nb")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+		path := filepath.Join(sockDir, "agent.sock")
+		hl, err := net.Listen("unix", path)
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		t.Cleanup(func() { _ = hl.Close() })
+		accepted := make(chan net.Conn, 1)
+		go func() {
+			c, err := hl.Accept()
+			if err == nil {
+				accepted <- c
+			}
+		}()
+		if errs := b.ApplyRuntime(ctx, &Runtime{Services: []RuntimeService{{GuestPort: 7024, Path: path}}}); len(errs) > 0 {
+			t.Fatalf("apply: %v", errs)
+		}
+		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+		defer dcancel()
+		c, err := gonet.DialContextTCP(dctx, g, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), Port: 7024}, ipv4.ProtocolNumber)
+		if err != nil {
+			t.Fatalf("dial service: %v", err)
+		}
+		defer func() { _ = c.Close() }()
+		var h net.Conn
+		select {
+		case h = <-accepted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("host socket did not get the connection")
+		}
+		defer func() { _ = h.Close() }()
+
+		if errs := b.ApplyRuntime(ctx, &Runtime{}); len(errs) > 0 {
+			t.Fatalf("apply empty: %v", errs)
+		}
+		_ = h.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := h.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatalf("host side read = %v, want EOF after the service was removed", err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var ne net.Error
+		if _, err := c.Read(make([]byte, 1)); err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+			t.Fatalf("guest side read = %v, want the connection closed", err)
+		}
+	})
 	t.Run("blocked DNS zone gets NXDOMAIN", func(t *testing.T) {
 		filtered, err := ParsePolicy([]byte(`{"dns_upstreams":["`+up.LocalAddr().String()+`"],"dns_blocked_zones":["Example.COM."]}`), "filtered")
 		if err != nil {

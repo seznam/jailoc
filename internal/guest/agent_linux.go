@@ -1,6 +1,7 @@
 package guest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +16,8 @@ import (
 
 // startAgentRelay serves SSHAgentSocket for the agent user and relays every
 // connection to the broker gateway, which forwards it to the host SSH agent.
-// The returned function stops serving and removes the socket.
+// The returned function stops serving, closes open connections and removes
+// the socket.
 func startAgentRelay(logger *slog.Logger, acct account) (func(), error) {
 	if err := os.Remove(SSHAgentSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("ssh agent: remove stale socket: %w", err)
@@ -33,6 +35,7 @@ func startAgentRelay(logger *slog.Logger, acct account) (func(), error) {
 		return nil, fmt.Errorf("ssh agent: chmod socket: %w", err)
 	}
 	upstream := net.JoinHostPort(topology.GatewayIP, strconv.Itoa(SSHAgentPort))
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -41,12 +44,22 @@ func startAgentRelay(logger *slog.Logger, acct account) (func(), error) {
 			}
 			go func() {
 				defer func() { _ = c.Close() }()
-				u, err := net.DialTimeout("tcp", upstream, 10*time.Second)
+				var d net.Dialer
+				dctx, dcancel := context.WithTimeout(ctx, 10*time.Second)
+				u, err := d.DialContext(dctx, "tcp", upstream)
+				dcancel()
 				if err != nil {
 					logger.Warn("ssh agent: connect to host", "error", err)
 					return
 				}
 				defer func() { _ = u.Close() }()
+				// Stopping the relay closes open connections too, so that
+				// disabling forwarding ends signing at once.
+				stop := context.AfterFunc(ctx, func() {
+					_ = c.Close()
+					_ = u.Close()
+				})
+				defer stop()
 				done := make(chan struct{}, 2)
 				go func() { _, _ = io.Copy(u, c); done <- struct{}{} }()
 				go func() { _, _ = io.Copy(c, u); done <- struct{}{} }()
@@ -55,6 +68,7 @@ func startAgentRelay(logger *slog.Logger, acct account) (func(), error) {
 		}
 	}()
 	return func() {
+		cancel()
 		_ = l.Close()
 		_ = os.Remove(SSHAgentSocket)
 	}, nil
