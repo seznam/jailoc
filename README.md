@@ -17,7 +17,7 @@ Run coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO) in sandboxed 
 
 - 📁 **File isolation**: each workspace is a separate VM with its own kernel. The agent only sees directories you explicitly share and files you copy in. SSH keys, browser profiles, and other projects are invisible.
 - 🌐 **Network isolation**: all VM traffic goes through a host-side network broker that blocks private and reserved IPv4 and IPv6 ranges by default. You allowlist only what the agent needs. No pivoting to internal infrastructure.
-- 🐳 **Sandboxed Docker**: with `enable_docker`, the Docker daemon runs inside the workspace VM. No host socket mounting.
+- 🐳 **Sandboxed Docker**: opt in with `enable_docker = true` and the Docker daemon runs inside the workspace VM. No host socket mounting.
 - ⚡ **Zero config to start**: `jailoc` downloads the VM runtime, builds the image, boots the VM and attaches you to the agent.
 
 ## Installation
