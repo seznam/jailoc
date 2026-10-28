@@ -36,7 +36,7 @@ Running `jailoc up` from `/home/you/projects/api/src` selects `specific`. Runnin
 
 ## Define a workspace
 
-Each workspace is a `[workspaces.<name>]` section. The only required field is `paths`:
+Each workspace is a `[workspaces.<name>]` section. Most workspaces set `paths`; the first path is the working directory. A workspace without `paths` starts in `/home/agent`:
 
 ```toml
 [workspaces.default]
@@ -153,7 +153,7 @@ snapshots = [
 ]
 ```
 
-Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original. A snapshot destination can't overlap a shared path, so it can't point into a workspace path or a `mounts` destination. To pick up host edits, or added and removed entries, run `jailoc reload`.
+Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original. A symlink given as the snapshot source is resolved; symlinks inside a snapshotted directory are copied as symlinks. A snapshot destination can't overlap a shared path, so it can't point into a workspace path or a `mounts` destination. To pick up host edits, or added and removed entries, run `jailoc reload`.
 
 ## Publish ports
 
@@ -175,7 +175,7 @@ Workspace paths are shared read-write, including `.git`. Git on the host runs ho
 protect_git = true
 ```
 
-At every `jailoc up`, jailoc finds the repositories under the workspace paths and, inside the VM, makes `.git/hooks`, `.git/config` (and the same files of submodules, worktrees and separate git directories that `.git` files point at under the workspace paths) read-only, and makes these git directories and their parents impossible to rename or remove. `sudo` and Docker are disabled in that workspace, and `enable_docker = true` together with `protect_git = true` is rejected.
+At every `jailoc up`, jailoc finds the repositories under the workspace paths, including symlinked workspace roots. Inside the VM, it makes `.git/hooks`, `.git/config` and linked worktree `commondir` pointers read-only, including metadata of submodules, worktrees and separate git directories reached through `.git` files under the workspace paths. These git directories and their parents cannot be renamed or removed. `sudo` and Docker are disabled in that workspace, and `enable_docker = true` together with `protect_git = true` is rejected.
 
 !!! warning
     Only repositories that exist at `jailoc up` are covered. Repositories the agent creates or clones later aren't protected until the next restart. Files that tools run from the working tree, such as `Makefile` or `package.json` scripts, aren't covered either.

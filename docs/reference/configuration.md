@@ -71,7 +71,7 @@ Defaults applied to all workspaces.
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `enable_docker` | bool | `true` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
-| `protect_git` | bool | `false` | Make `.git/hooks` and `.git/config` of every Git repository under the workspace `paths` read-only inside the VM, and disable `sudo` and Docker there. |
+| `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config` and linked worktree `commondir` pointers read-only inside the VM for repositories under workspace `paths`, including symlinked workspace roots. Disable `sudo` and Docker there. |
 | `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. |
 | `filtered_dns` | bool | `false` | Filter DNS answers in the network broker. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
 | `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. |
@@ -101,7 +101,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `paths` | string[] | (required) | Host directories shared into the VM over virtio-fs at their original absolute paths. The first path is the working directory. |
+| `paths` | string[] | `[]` | Host directories shared into the VM over virtio-fs at their original absolute paths. The first path is the working directory; with no paths, the working directory is `/home/agent`. |
 | `backend` | string | (inherit) | `"vm"` or empty. `"docker"` is rejected as a jailoc v1 setting. |
 | `image` | string | (none) | Pre-built image used directly, bypassing all build steps. Cannot be combined with `dockerfile` or `build_context`. |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to an overlay Dockerfile built on top of the base image. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. |
@@ -143,7 +143,7 @@ Any `backend` value other than `"vm"` and empty is rejected. See [Migrate from j
 
 ### `paths`
 
-`~` is expanded. Empty entries are rejected. Paths equal to or under these prefixes are rejected: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. A path configured in more than one workspace prints a warning.
+`~` is expanded. An empty list is allowed; empty entries are rejected. Paths equal to or under these prefixes are rejected: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. A path configured in more than one workspace prints a warning.
 
 ### `mounts`
 
@@ -158,7 +158,7 @@ Host paths equal to or under these entries are rejected: `/`, `/boot`, `/dev`, `
 
 Format: `host:container`, optionally `:ro`; `:rw` is rejected because snapshots are read-only. Host and destination rules are the same as for `mounts`, except that the host may be a file or a directory. An empty host removes an inherited snapshot.
 
-jailoc copies the sources when the VM starts and again on every `jailoc reload`, which also applies added and removed entries. At `jailoc up` and `jailoc reload`, the destination must not equal, contain or lie inside a shared path (workspace `paths`, `mounts` destinations, the persistent home directories), and the source must exist.
+jailoc copies the sources when the VM starts and again on every `jailoc reload`, which also applies added and removed entries. At `jailoc up` and `jailoc reload`, the destination must not equal, contain or lie inside a shared path (workspace `paths`, `mounts` destinations, the persistent home directories), and the source must exist. A symlink given as the source root is resolved; symlinks inside a copied directory are copied unchanged.
 
 ### `ports`
 

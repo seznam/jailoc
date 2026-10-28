@@ -119,7 +119,7 @@ Changes to the following need a new VM. `jailoc reload` lists them, and [`jailoc
 - `paths` and `mounts`
 - `cpu`, `memory`
 - `enable_docker`, `protect_git`
-- the working directory (first entry of `paths`)
+- the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest binary, after a jailoc upgrade
 
 Fails when the workspace is not running.
@@ -162,10 +162,10 @@ jailoc traffic [workspace] [flags]
 |------|-------|-------------|
 | `--follow` | `-f` | Keep printing new events until interrupted. |
 | `--lines N` | `-n` | Number of past events to print. Default `100`; `0` prints none, `-1` all. |
-| `--json` | | Print the shown events as their JSON log lines. |
+| `--json` | | Print the shown events as their JSON log lines, unchanged. |
 | `--all` | | Also show DHCP, NIC, gateway service and jailoc's own SSH connections. |
 
-TLS connections are identified from the unencrypted ClientHello only; their content is not decrypted.
+Without `--json`, control characters in logged values are escaped. TLS connections are identified from the unencrypted ClientHello only; their content is not decrypted.
 
 ---
 
@@ -181,10 +181,10 @@ jailoc strace [workspace] [flags]
 |------|-------|-------------|
 | `--follow` | `-f` | Keep printing new processes until interrupted. |
 | `--lines N` | `-n` | Number of past processes to print. Default `100`; `0` prints none, `-1` all. |
-| `--json` | | Print the shown records as JSON lines. |
+| `--json` | | Print the shown records as JSON lines, unchanged. |
 | `--all` | | Also show jailoc's own guest processes. |
 
-The record is written inside the VM: root in the VM (`sudo`) can stop or alter it. Processes that exit before the guest reads their details show only their name.
+Without `--json`, control characters in logged values are escaped. The record is written inside the VM: root in the VM (`sudo`) can stop or alter it. Processes that exit before the guest reads their details show only their name.
 
 ---
 
