@@ -175,7 +175,7 @@ Workspace paths are shared read-write, including `.git`. Git on the host runs ho
 protect_git = true
 ```
 
-At every `jailoc up`, jailoc finds the repositories under the workspace paths and, inside the VM, makes `.git/hooks`, `.git/config` (and the same files of submodules and worktrees) read-only, and makes the `.git` directories and their parents impossible to rename or remove. `sudo` and Docker are disabled in that workspace, and `enable_docker = true` together with `protect_git = true` is rejected.
+At every `jailoc up`, jailoc finds the repositories under the workspace paths and, inside the VM, makes `.git/hooks`, `.git/config` (and the same files of submodules, worktrees and separate git directories that `.git` files point at under the workspace paths) read-only, and makes these git directories and their parents impossible to rename or remove. `sudo` and Docker are disabled in that workspace, and `enable_docker = true` together with `protect_git = true` is rejected.
 
 !!! warning
     Only repositories that exist at `jailoc up` are covered. Repositories the agent creates or clones later aren't protected until the next restart. Files that tools run from the working tree, such as `Makefile` or `package.json` scripts, aren't covered either.

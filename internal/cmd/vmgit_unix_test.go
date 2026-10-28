@@ -37,18 +37,41 @@ func TestGitProtection(t *testing.T) {
 	write("a/b/repo/.git/config", "[core]\n")
 	// Repositories inside skipped directories are ignored.
 	mk("node_modules/pkg/.git/hooks")
+	// Checkout of a separate git directory (git init --separate-git-dir)
+	// that has no hooks directory yet.
+	mk("meta.git")
+	write("meta.git/HEAD", "ref: refs/heads/main\n")
+	write("meta.git/config", "[core]\n")
+	mk("sep")
+	write("sep/.git", "gitdir: ../meta.git\n")
+	// Linked worktree of the workspace repository, with an absolute gitdir.
+	mk(".git/worktrees/wt")
+	write(".git/worktrees/wt/commondir", "../..\n")
+	write(".git/worktrees/wt/config.worktree", "[core]\n")
+	mk("wt")
+	write("wt/.git", "gitdir: "+filepath.Join(root, ".git/worktrees/wt")+"\n")
+	// Git directories outside the workspace paths are not shared.
+	mk("out")
+	write("out/.git", "gitdir: /nonexistent/jailoc/outside.git\n")
 
 	pins, ro, err := gitProtection([]string{root})
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
 	p := func(rel string) string { return filepath.Join(root, rel) }
-	wantPins := []string{p(".git"), p("a"), p("a/b"), p("a/b/repo"), p("a/b/repo/.git"), p("sub")}
+	wantPins := []string{
+		p(".git"), p(".git/modules"), p(".git/modules/sub"),
+		p(".git/worktrees"), p(".git/worktrees/wt"),
+		p("a"), p("a/b"), p("a/b/repo"), p("a/b/repo/.git"),
+		p("meta.git"), p("out"), p("sep"), p("sub"), p("wt"),
+	}
 	wantRO := []string{
 		p(".git/config"), p(".git/hooks"),
 		p(".git/modules/sub/config"), p(".git/modules/sub/hooks"),
+		p(".git/worktrees/wt/config.worktree"),
 		p("a/b/repo/.git/config"), p("a/b/repo/.git/hooks"),
-		p("sub/.git"),
+		p("meta.git/config"), p("meta.git/hooks"),
+		p("out/.git"), p("sep/.git"), p("sub/.git"), p("wt/.git"),
 	}
 	slices.Sort(wantPins)
 	slices.Sort(wantRO)
