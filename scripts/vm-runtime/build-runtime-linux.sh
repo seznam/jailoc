@@ -6,6 +6,7 @@
 # jailoc pins in go.mod and provides libkrun and libkrunfw at the versions
 # that revision names in versions.env, so the runner and the libraries come
 # from the same glibc and match the combination the VM integration test uses.
+# libkrun is then rebuilt with jailoc's patches (build-libkrun-linux.sh).
 # The firmware tarball carries libkrunfw (GPL-2.0) separately.
 #
 # Usage: build-runtime-linux.sh GO_MICROVM_CHECKOUT OUT_DIR
@@ -29,6 +30,7 @@ work=$(mktemp -d)
 trap 'rm -r "$work"' EXIT
 
 (cd "$src" && task build-runner)
+"$(dirname "$0")/build-libkrun-linux.sh" "$src" "$src/bin"
 libkrun=$(grep '^LIBKRUN_VERSION=' "$src/versions.env" | cut -d= -f2)
 libkrunfw=$(grep '^LIBKRUNFW_VERSION=' "$src/versions.env" | cut -d= -f2)
 rev=$(git -C "$src" rev-parse --short HEAD)
@@ -36,7 +38,8 @@ rev=$(git -C "$src" rev-parse --short HEAD)
 mkdir -p "$work/$runtime_name" "$work/$firmware_name"
 install -m 0755 "$src/bin/go-microvm-runner" "$work/$runtime_name/go-microvm-runner"
 install -m 0444 "$src/bin/libkrun.so.1" "$work/$runtime_name/libkrun.so.1"
-echo "$rev libkrun-$libkrun" > "$work/$runtime_name/VERSION"
+patches=$(cd "$(dirname "$0")/libkrun-patches" && ls -- *.patch | cut -c1-4 | paste -sd, -)
+echo "$rev libkrun-$libkrun+jailoc-patches-$patches" > "$work/$runtime_name/VERSION"
 install -m 0444 "$src/bin/libkrunfw.so.5" "$work/$firmware_name/libkrunfw.so.5"
 echo "$libkrunfw" > "$work/$firmware_name/VERSION"
 cat > "$work/$firmware_name/LICENSE-GPL" <<'EOF'

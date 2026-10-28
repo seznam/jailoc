@@ -177,7 +177,7 @@ func vmFailure(stateDir, logPath string) string {
 		return "see " + logPath
 	}
 	if strings.Contains(string(data), "IrqsExhausted") {
-		return "the VM has more shared directories than libkrun can attach on this host (x86_64 allows about 6 besides the internal one); remove some paths or mounts"
+		return "the VM has more devices than libkrun can attach on this host (on x86_64 about 12 shared directories besides jailoc's own); remove some paths or mounts"
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) > 5 {

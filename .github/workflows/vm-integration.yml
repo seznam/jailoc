@@ -10,6 +10,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/vm-integration.yml
+      - scripts/vm-runtime/**
       - cmd/jailoc/**
       - cmd/jailoc-guest/**
       - internal/cmd/**
@@ -29,6 +30,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/vm-integration.yml
+      - scripts/vm-runtime/**
       - cmd/jailoc/**
       - cmd/jailoc-guest/**
       - internal/cmd/**
@@ -109,6 +111,7 @@ jobs:
         run: |
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           task build-runner
+          "$GITHUB_WORKSPACE/scripts/vm-runtime/build-libkrun-linux.sh" "$PWD" bin
           ls -l bin
 
       - name: Run VM integration tests
