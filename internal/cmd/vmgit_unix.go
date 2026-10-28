@@ -47,16 +47,20 @@ func gitProtection(paths []string) (pins, readOnly []string, err error) {
 	}
 	scanned := 0
 	for _, r := range p.roots {
-		root := r.path
-		walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		walkErr := filepath.WalkDir(r.real, func(hostPath string, d fs.DirEntry, err error) error {
 			if err != nil {
-				if path == root {
+				if hostPath == r.real {
 					return err
 				}
 				return nil // unreadable subtree: nothing to protect there
 			}
-			if d.Name() == ".git" && path != root {
-				if err := p.repo(root, path, d); err != nil {
+			rel, err := filepath.Rel(r.real, hostPath)
+			if err != nil {
+				return err
+			}
+			guestPath := filepath.Join(r.path, rel)
+			if d.Name() == ".git" && hostPath != r.real {
+				if err := p.repo(r.path, guestPath, d); err != nil {
 					return err
 				}
 				if d.IsDir() {
@@ -67,7 +71,7 @@ func gitProtection(paths []string) (pins, readOnly []string, err error) {
 			if !d.IsDir() {
 				return nil
 			}
-			if path != root && gitScanSkip[d.Name()] {
+			if hostPath != r.real && gitScanSkip[d.Name()] {
 				return fs.SkipDir
 			}
 			scanned++
@@ -77,7 +81,7 @@ func gitProtection(paths []string) (pins, readOnly []string, err error) {
 			return nil
 		})
 		if walkErr != nil {
-			return nil, nil, fmt.Errorf("scan %s for git repositories: %w", root, walkErr)
+			return nil, nil, fmt.Errorf("scan %s for git repositories: %w", r.path, walkErr)
 		}
 	}
 	return sortedKeys(p.pins), sortedKeys(p.ro), nil
@@ -148,6 +152,7 @@ func (p *gitProtector) gitDir(root, dir string) error {
 	p.done[dir] = true
 	p.pinUpTo(dir, root)
 	if common, ok := readPointer(filepath.Join(dir, "commondir")); ok {
+		p.ro[filepath.Join(dir, "commondir")] = true
 		p.readOnlyFile(filepath.Join(dir, "config.worktree"))
 		return p.linked(resolvePointer(dir, common))
 	}
