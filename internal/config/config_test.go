@@ -480,6 +480,151 @@ func TestAddPathPersists(t *testing.T) {
 	}
 }
 
+func TestAddPathPreservesComments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	input := `# Top-level file comment
+# Additional explanation
+
+[defaults]
+# Default image comment
+image = "ubuntu:24.04" # inline image comment
+
+[workspaces.default]
+# Workspace documentation comment
+paths = [] # inline paths comment
+# Comment below paths
+image = "custom:latest"
+
+[workspaces.other]
+# Other workspace comment
+paths = ["/other/work"]
+`
+
+	writeFile(t, ConfigPath(), input)
+
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	content := string(data)
+
+	expectedComments := []string{
+		"# Top-level file comment",
+		"# Additional explanation",
+		"# Default image comment",
+		"# inline image comment",
+		"# Workspace documentation comment",
+		"# inline paths comment",
+		"# Comment below paths",
+		"# Other workspace comment",
+	}
+	for _, comment := range expectedComments {
+		if !strings.Contains(content, comment) {
+			t.Errorf("expected comment %q to be preserved in:\n%s", comment, content)
+		}
+	}
+
+	if !strings.Contains(content, `paths = ["/data/mywork"] # inline paths comment`) {
+		t.Errorf("expected updated paths line with preserved inline comment, got:\n%s", content)
+	}
+
+	// Add a second path and verify comments still survive
+	if err := AddPath("default", "/data/second"); err != nil {
+		t.Fatalf("second AddPath failed: %v", err)
+	}
+	data2, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config after second AddPath: %v", err)
+	}
+	content2 := string(data2)
+	for _, comment := range expectedComments {
+		if !strings.Contains(content2, comment) {
+			t.Errorf("expected comment %q to be preserved after second AddPath in:\n%s", comment, content2)
+		}
+	}
+	if !strings.Contains(content2, `paths = ["/data/mywork", "/data/second"] # inline paths comment`) {
+		t.Errorf("expected second path appended with preserved inline comment, got:\n%s", content2)
+	}
+}
+
+func TestAddPathMultilineArray(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	input := `[workspaces.default]
+# Paths list
+paths = [
+    # First directory
+    "/data/first",
+]
+`
+
+	writeFile(t, ConfigPath(), input)
+
+	if err := AddPath("default", "/data/second"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "# First directory") {
+		t.Errorf("expected comment to be preserved, got:\n%s", content)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 2 || ws.Paths[0] != "/data/first" || ws.Paths[1] != "/data/second" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
+func TestAddPathMissingPathsKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	input := `# Header comment
+[workspaces.default]
+# Workspace comment
+image = "ubuntu:24.04"
+`
+	writeFile(t, ConfigPath(), input)
+
+	if err := AddPath("default", "/data/mywork"); err != nil {
+		t.Fatalf("AddPath failed: %v", err)
+	}
+
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "# Header comment") || !strings.Contains(content, "# Workspace comment") {
+		t.Errorf("expected comments preserved, got:\n%s", content)
+	}
+
+	cfg, err := LoadFrom(ConfigPath())
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+	ws := cfg.Workspaces["default"]
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/mywork" {
+		t.Fatalf("unexpected paths: %#v", ws.Paths)
+	}
+}
+
 func TestTildeExpansion(t *testing.T) {
 	// Use a safe temp directory outside of /var (macOS puts tmp in /var/folders)
 	home := "/data/home_test_" + strings.ReplaceAll(t.Name(), "/", "_")
@@ -538,8 +683,10 @@ func TestAddPathDoesNotEmitEmptySecretsHeaderAfterCreateDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read persisted config: %v", err)
 	}
-	if bytes.Contains(data, []byte("[defaults.secrets")) {
-		t.Fatalf("expected no secrets table header in persisted config, got:\n%s", string(data))
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "[defaults.secrets") {
+			t.Fatalf("expected no secrets table header in persisted config, got:\n%s", string(data))
+		}
 	}
 }
 

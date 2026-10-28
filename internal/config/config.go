@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -1170,25 +1171,391 @@ func AddPath(workspace, path string) error {
 		cfg.Workspaces = map[string]Workspace{}
 	}
 
-	ws, ok := cfg.Workspaces[workspace]
-	if !ok {
+	if _, ok := cfg.Workspaces[workspace]; !ok {
 		return fmt.Errorf("workspace %q does not exist", workspace)
 	}
 
-	ws.Paths = append(ws.Paths, path)
-	cfg.Workspaces[workspace] = ws
-
-	f, err := os.Create(configPath) //nolint:gosec // configPath is derived from ConfigPath(), not user input
+	raw, err := os.ReadFile(configPath) //nolint:gosec // configPath is derived from ConfigPath(), not user input
 	if err != nil {
-		return fmt.Errorf("open config for write: %w", err)
+		return fmt.Errorf("read config for AddPath: %w", err)
 	}
-	defer func() { _ = f.Close() }()
 
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		return fmt.Errorf("encode updated config: %w", err)
+	patched, err := patchAddPath(raw, workspace, path)
+	if err != nil {
+		return fmt.Errorf("patch config for AddPath: %w", err)
+	}
+
+	var check Config
+	if _, err := toml.Decode(string(patched), &check); err != nil {
+		return fmt.Errorf("patched config is invalid TOML: %w", err)
+	}
+	wsCheck, ok := check.Workspaces[workspace]
+	if !ok || !slices.Contains(wsCheck.Paths, path) {
+		return fmt.Errorf("patched config missing added path %q", path)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(configPath), ".config-*.toml")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+
+	if _, err := tmp.Write(patched); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary config: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), configPath); err != nil {
+		return fmt.Errorf("replace config: %w", err)
 	}
 
 	return nil
+}
+
+func patchAddPath(data []byte, workspace, newPath string) ([]byte, error) {
+	crlf := bytes.Contains(data, []byte("\r\n"))
+	newline := "\n"
+	if crlf {
+		newline = "\r\n"
+	}
+	hasTrailingNewline := len(data) > 0 && data[len(data)-1] == '\n'
+
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	if hasTrailingNewline && len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	headerIdx := -1
+	for i, line := range lines {
+		if name, isTable := parseTableHeader(line); isTable {
+			if matchesWorkspace(name, workspace) {
+				headerIdx = i
+				break
+			}
+		}
+	}
+
+	quoted := strconv.Quote(newPath)
+
+	if headerIdx == -1 {
+		newBlock := []string{
+			fmt.Sprintf("[workspaces.%s]", workspace),
+			fmt.Sprintf("paths = [%s]", quoted),
+		}
+		if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, newBlock...)
+	} else {
+		startIdx := headerIdx + 1
+		endIdx := len(lines)
+		for i := startIdx; i < len(lines); i++ {
+			if _, isTable := parseTableHeader(lines[i]); isTable {
+				endIdx = i
+				break
+			}
+		}
+
+		pathsIdx := -1
+		for i := startIdx; i < endIdx; i++ {
+			if isPathsAssignment(lines[i]) {
+				pathsIdx = i
+				break
+			}
+		}
+
+		if pathsIdx == -1 {
+			newLine := fmt.Sprintf("paths = [%s]", quoted)
+			lines = slices.Insert(lines, startIdx, newLine)
+		} else {
+			openLineIdx := -1
+			openColIdx := -1
+			for i := pathsIdx; i < endIdx; i++ {
+				col := findUnquotedChar(lines[i], '[')
+				if col != -1 {
+					openLineIdx = i
+					openColIdx = col
+					break
+				}
+			}
+			if openLineIdx == -1 {
+				return nil, fmt.Errorf("paths assignment missing '['")
+			}
+
+			closeLineIdx := -1
+			closeColIdx := -1
+			for i := openLineIdx; i < endIdx; i++ {
+				startCol := 0
+				if i == openLineIdx {
+					startCol = openColIdx + 1
+				}
+				col := findUnquotedCharFrom(lines[i], startCol, ']')
+				if col != -1 {
+					closeLineIdx = i
+					closeColIdx = col
+					break
+				}
+			}
+			if closeLineIdx == -1 {
+				return nil, fmt.Errorf("paths array missing ']'")
+			}
+
+			if openLineIdx == closeLineIdx {
+				line := lines[openLineIdx]
+				beforeOpen := line[:openColIdx+1]
+				inner := line[openColIdx+1 : closeColIdx]
+				afterClose := line[closeColIdx:]
+
+				trimmedInner := strings.TrimSpace(inner)
+				if trimmedInner == "" {
+					lines[openLineIdx] = beforeOpen + quoted + afterClose
+				} else {
+					lastNonSpace := -1
+					for k := len(inner) - 1; k >= 0; k-- {
+						if inner[k] != ' ' && inner[k] != '\t' {
+							lastNonSpace = k
+							break
+						}
+					}
+					switch {
+					case lastNonSpace != -1 && inner[lastNonSpace] == ',':
+						insertPos := openColIdx + 1 + lastNonSpace + 1
+						lines[openLineIdx] = line[:insertPos] + " " + quoted + line[insertPos:]
+					case lastNonSpace != -1:
+						insertPos := openColIdx + 1 + lastNonSpace + 1
+						lines[openLineIdx] = line[:insertPos] + ", " + quoted + line[insertPos:]
+					default:
+						lines[openLineIdx] = beforeOpen + quoted + afterClose
+					}
+				}
+			} else {
+				closeLine := lines[closeLineIdx]
+				prefixBeforeClose := closeLine[:closeColIdx]
+				if strings.TrimSpace(prefixBeforeClose) == "" {
+					lastItemLineIdx := -1
+					for k := closeLineIdx - 1; k > openLineIdx; k-- {
+						if strings.TrimSpace(stripComment(lines[k])) != "" {
+							lastItemLineIdx = k
+							break
+						}
+					}
+
+					indent := ""
+					if lastItemLineIdx != -1 {
+						for _, r := range lines[lastItemLineIdx] {
+							if r == ' ' || r == '\t' {
+								indent += string(r)
+							} else {
+								break
+							}
+						}
+						code := stripComment(lines[lastItemLineIdx])
+						trimmedCode := strings.TrimRight(code, " \t")
+						if !strings.HasSuffix(trimmedCode, ",") {
+							commentIdx := strings.Index(lines[lastItemLineIdx], "#")
+							if commentIdx != -1 {
+								codePart := lines[lastItemLineIdx][:commentIdx]
+								commentPart := lines[lastItemLineIdx][commentIdx:]
+								trimmedCodePart := strings.TrimRight(codePart, " \t")
+								spaces := codePart[len(trimmedCodePart):]
+								lines[lastItemLineIdx] = trimmedCodePart + "," + spaces + commentPart
+							} else {
+								lines[lastItemLineIdx] = strings.TrimRight(lines[lastItemLineIdx], " \t") + ","
+							}
+						}
+					} else {
+						indent = prefixBeforeClose + "    "
+						if indent == "" {
+							indent = "    "
+						}
+					}
+
+					newLine := indent + quoted + ","
+					lines = slices.Insert(lines, closeLineIdx, newLine)
+				} else {
+					lastNonSpace := -1
+					for k := len(prefixBeforeClose) - 1; k >= 0; k-- {
+						if prefixBeforeClose[k] != ' ' && prefixBeforeClose[k] != '\t' {
+							lastNonSpace = k
+							break
+						}
+					}
+					switch {
+					case lastNonSpace != -1 && prefixBeforeClose[lastNonSpace] == ',':
+						insertPos := lastNonSpace + 1
+						lines[closeLineIdx] = closeLine[:insertPos] + " " + quoted + closeLine[insertPos:]
+					case lastNonSpace != -1:
+						insertPos := lastNonSpace + 1
+						lines[closeLineIdx] = closeLine[:insertPos] + ", " + quoted + closeLine[insertPos:]
+					}
+				}
+			}
+		}
+	}
+
+	result := strings.Join(lines, newline)
+	if hasTrailingNewline {
+		result += newline
+	}
+	return []byte(result), nil
+}
+
+func stripComment(line string) string {
+	inQuote := rune(0)
+	escaped := false
+	for i, r := range line {
+		if inQuote != 0 {
+			if inQuote == '"' && escaped {
+				escaped = false
+				continue
+			}
+			if inQuote == '"' && r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		if r == '"' || r == '\'' {
+			inQuote = r
+			continue
+		}
+		if r == '#' {
+			return line[:i]
+		}
+	}
+	return line
+}
+
+func parseTableHeader(line string) (name string, isTable bool) {
+	trimmed := strings.TrimSpace(stripComment(line))
+	if strings.HasPrefix(trimmed, "[[") {
+		if strings.HasSuffix(trimmed, "]]") {
+			return strings.TrimSpace(trimmed[2 : len(trimmed)-2]), true
+		}
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		return strings.TrimSpace(trimmed[1 : len(trimmed)-1]), true
+	}
+	return "", false
+}
+
+func splitDottedKeys(s string) []string {
+	var parts []string
+	var current strings.Builder
+	inQuote := rune(0)
+	escaped := false
+
+	for _, r := range s {
+		if inQuote != 0 {
+			if inQuote == '"' && escaped {
+				escaped = false
+				current.WriteRune(r)
+				continue
+			}
+			if inQuote == '"' && r == '\\' {
+				escaped = true
+				current.WriteRune(r)
+				continue
+			}
+			if r == inQuote {
+				inQuote = 0
+			}
+			current.WriteRune(r)
+			continue
+		}
+		if r == '"' || r == '\'' {
+			inQuote = r
+			current.WriteRune(r)
+			continue
+		}
+		if r == '.' {
+			parts = append(parts, current.String())
+			current.Reset()
+			continue
+		}
+		current.WriteRune(r)
+	}
+	if current.Len() > 0 || len(parts) > 0 {
+		parts = append(parts, current.String())
+	}
+
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if (strings.HasPrefix(trimmed, `"`) && strings.HasSuffix(trimmed, `"`)) ||
+			(strings.HasPrefix(trimmed, `'`) && strings.HasSuffix(trimmed, `'`)) {
+			if len(trimmed) >= 2 {
+				trimmed = trimmed[1 : len(trimmed)-1]
+			}
+		}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func matchesWorkspace(headerName, targetWorkspace string) bool {
+	keys := splitDottedKeys(headerName)
+	return len(keys) == 2 && keys[0] == "workspaces" && keys[1] == targetWorkspace
+}
+
+func isPathsAssignment(line string) bool {
+	stripped := strings.TrimSpace(stripComment(line))
+	if stripped == "" {
+		return false
+	}
+	parts := strings.SplitN(stripped, "=", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	key := strings.TrimSpace(parts[0])
+	return key == "paths" || key == `"paths"` || key == `'paths'`
+}
+
+func findUnquotedChar(line string, target rune) int {
+	return findUnquotedCharFrom(line, 0, target)
+}
+
+func findUnquotedCharFrom(line string, start int, target rune) int {
+	if start >= len(line) {
+		return -1
+	}
+	inQuote := rune(0)
+	escaped := false
+	for i, r := range line[start:] {
+		pos := start + i
+		if inQuote != 0 {
+			if inQuote == '"' && escaped {
+				escaped = false
+				continue
+			}
+			if inQuote == '"' && r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		if r == '"' || r == '\'' {
+			inQuote = r
+			continue
+		}
+		if r == '#' {
+			return -1
+		}
+		if r == target {
+			return pos
+		}
+	}
+	return -1
 }
 
 // mergeDedup combines two string slices into one, removing duplicates.
