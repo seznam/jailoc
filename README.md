@@ -5,13 +5,13 @@
 [![CI](https://github.com/seznam/jailoc/actions/workflows/ci.yml/badge.svg)](https://github.com/seznam/jailoc/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/seznam/jailoc)](https://github.com/seznam/jailoc/releases/latest)
 
-Run headless OpenCode coding agents in sandboxed micro-VMs.
+Run coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO) in sandboxed micro-VMs.
 
 📖 **[Full documentation](https://seznam.github.io/jailoc/)**
 
 ## What is this?
 
-`jailoc` runs OpenCode agents in isolated libkrun micro-VMs so they can work autonomously, isolated from your host system except for the directories you share. Each workspace boots its own VM with a network policy that blocks private networks by default, letting you control exactly which internal services the agent can reach. You configure which directories to share, which hosts to allowlist, and the agent runs inside the VM in detachable sessions you attach to over SSH.
+`jailoc` runs coding agents such as OpenCode, Claude Code, GitHub Copilot CLI and OmO in isolated libkrun micro-VMs so they can work autonomously, isolated from your host system except for the directories you share. Each workspace boots its own VM with a network policy that blocks private networks by default, letting you control exactly which internal services the agent can reach. You configure which directories to share, which hosts to allowlist, and the agent runs inside the VM in detachable sessions you attach to over SSH.
 
 ## Why jailoc
 
@@ -86,6 +86,5 @@ The default base image (Ubuntu 24.04) ships with:
 | Package managers | npm |
 | Language servers | typescript-language-server, pyright, yaml-language-server, bash-language-server |
 | CLI tools | rg (ripgrep), fdfind, jq, git, openssh-client, curl, sudo |
-| Agent stack | OpenCode |
 
-Exact versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile). See the [default image reference](https://seznam.github.io/jailoc/reference/default-image/) for the full list of installed tools.
+jailoc installs the workspace's coding agent on top of it. Exact versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile). See the [default image reference](https://seznam.github.io/jailoc/reference/default-image/) for the full list of installed tools.

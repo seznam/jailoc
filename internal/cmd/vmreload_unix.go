@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/guestbin"
@@ -98,11 +100,8 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err := materializeCABundle(ws); err != nil {
 		return vm.Spec{}, nil, fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}
-	if hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
-		_ = ensureOCConfigGitignore(hostPath)
-	}
 	cacheDir := workspaceCacheDir(ws.Name)
-	if err := writeTUIConfig(cacheDir); err != nil {
+	if err := writeAgentFiles(ws, cacheDir); err != nil {
 		return vm.Spec{}, nil, err
 	}
 	shares, err := vmShares(ws)
@@ -162,7 +161,12 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if running.Guest.NoPrivilegeEscalation != want.Guest.NoPrivilegeEscalation {
 		out = append(out, "protect_git")
 	}
-	if !slices.Equal(running.Guest.Env, want.Guest.Env) || running.Guest.WorkDir != want.Guest.WorkDir {
+	// Specs written before jailoc ran other agents than OpenCode name none.
+	agentChanged := cmp.Or(running.Agent, agent.Default) != want.Agent
+	if agentChanged {
+		out = append(out, "agent")
+	}
+	if !agentChanged && (!slices.Equal(running.Guest.Env, want.Guest.Env) || running.Guest.WorkDir != want.Guest.WorkDir) {
 		out = append(out, "the working directory")
 	}
 	if current, err := guestbin.Path(filepath.Join(vmRootDir(), "guest")); err == nil && filepath.Clean(current) != filepath.Clean(running.GuestBinary) {

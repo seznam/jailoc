@@ -2,7 +2,7 @@
 
 The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below. This image is used when no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile). jailoc unpacks it into the VM image cache and boots it as the root file system of the workspace VM.
 
-Core tool versions (Node.js, the npm language servers, OpenCode, Docker, Buildx, Compose) are pinned as `ARG` declarations at the top of the Dockerfile.
+Core tool versions (Node.js, the npm language servers, Docker, Buildx, Compose) are pinned as `ARG` declarations at the top of the Dockerfile.
 
 The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of the VM and starts sessions over SSH.
 
@@ -48,11 +48,9 @@ Docker CE static binaries, checksum-verified. With `enable_docker = true`, jailo
 | Docker Buildx | `docker/buildx` GitHub release | `docker buildx` (CLI plugin) |
 | Docker Compose | `docker/compose` GitHub release | `docker compose` (CLI plugin) |
 
-## Agent stack
+## Coding agent
 
-| Tool | Source | Binary |
-|------|--------|--------|
-| OpenCode | npm package `opencode-ai` | `opencode` |
+The base image contains no coding agent. jailoc installs the workspace's agent (OpenCode by default) in a separate layer on top of it; see [Coding agents](configuration.md#coding-agents) and [Image Resolution](image-resolution.md#agent-layer-steps-2-4-and-5).
 
 ## User and environment
 

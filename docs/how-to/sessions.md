@@ -1,6 +1,6 @@
 # How to work with agent sessions
 
-OpenCode runs in a session inside the workspace VM, reached over SSH. Sessions outlive your terminal: you can detach, re-attach, run several at once and stop them from outside.
+The workspace's coding agent (OpenCode unless `agent` selects another, see [Choose a coding agent](coding-agents.md)) runs in a session inside the workspace VM, reached over SSH. Sessions outlive your terminal: you can detach, re-attach, run several at once and stop them from outside.
 
 ## Start or attach to a session
 
@@ -10,7 +10,7 @@ From a directory inside a workspace path, run:
 jailoc
 ```
 
-jailoc picks the workspace that contains the current directory, starts the VM if needed and opens OpenCode in that directory. If a session is already running, `jailoc` attaches to it and redraws the screen.
+jailoc picks the workspace that contains the current directory, starts the VM if needed and opens the agent in that directory. If a session is already running, `jailoc` attaches to it and redraws the screen. If the directory belongs to several workspaces equally, jailoc asks you to pick one with `-w`.
 
 To name the workspace or directory explicitly:
 
@@ -33,14 +33,14 @@ jailoc --new
 
 This opens a second session next to the running one, for example to run a dev server while the agent works.
 
-## Continue an earlier OpenCode conversation
+## Continue an earlier agent conversation
 
 ```bash
 jailoc -c              # continue the last conversation
 jailoc -s <session-id> # continue a specific conversation
 ```
 
-These flags are passed to OpenCode and refer to OpenCode conversations, not to running jailoc sessions.
+These flags are passed to the agent (for example `--continue` and `--resume <id>` for Claude Code) and refer to its conversations, not to running jailoc sessions.
 
 ## List and attach to running sessions
 
@@ -56,7 +56,7 @@ jailoc --attach <ID> -w my-project
 
 ## Stop a session
 
-Quitting OpenCode ends the session. To end it from outside:
+Quitting the agent ends the session. To end it from outside:
 
 ```bash
 jailoc sessions stop <ID> -w my-project

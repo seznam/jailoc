@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 )
 
@@ -17,13 +19,19 @@ import (
 // this from real configuration/resolution failures.
 var ErrNoMatch = errors.New("no matching workspace")
 
-// BasePort is the internal port that opencode serve binds to inside the container.
-// Host-side ports are assigned as BasePort + alphabetical workspace index.
+// BasePort numbers the workspaces: PortForWorkspace returns BasePort plus the
+// workspace's alphabetical index.
 const BasePort = 4096
 
 type Resolved struct {
-	Name            string
-	Paths           []string
+	Name  string
+	Paths []string
+	// Agent is the harness the workspace runs.
+	Agent agent.Harness
+	// AgentInstall adds the built-in image layer that installs Agent.
+	AgentInstall bool
+	// AgentArgs are appended to every start of Agent.
+	AgentArgs       []string
 	Mounts          []string
 	Snapshots       []string // read-only snapshots (host:container:ro)
 	Port            int
@@ -130,7 +138,11 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	mergedEnv = append(mergedEnv, ws.Env...)
 	mergedEnv = dedupEnvByKeyLastWins(mergedEnv)
 
-	mergedMounts, err := config.MergeMounts(config.DefaultMounts, cfg.Defaults.Mounts, ws.Mounts)
+	h, err := resolveAgent(cfg, ws)
+	if err != nil {
+		return nil, fmt.Errorf("workspace %s: %w", name, err)
+	}
+	mergedMounts, err := config.MergeMounts(h.DefaultMounts(), cfg.Defaults.Mounts, ws.Mounts)
 	if err != nil {
 		return nil, fmt.Errorf("merge mounts for workspace %s: %w", name, err)
 	}
@@ -140,6 +152,9 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	r := &Resolved{
 		Name:            name,
 		Paths:           paths,
+		Agent:           h,
+		AgentInstall:    boolPtrWithDefault(cfg.Defaults.Agents[h.Name].Install, ws.Agents[h.Name].Install, true),
+		AgentArgs:       ws.Agents[h.Name].Args,
 		Mounts:          mergedMounts,
 		Port:            PortForWorkspace(cfg, name),
 		AllowedHosts:    ws.AllowedHosts,
@@ -160,6 +175,9 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		DNSUpstream:     ws.DNSUpstream,
 		DNSBlockedZones: ws.DNSBlockedZones,
 		CABundle:        caBundleWithDefault(cfg.Defaults.CABundle, ws.CABundle),
+	}
+	if r.AgentArgs == nil {
+		r.AgentArgs = cfg.Defaults.Agents[h.Name].Args
 	}
 	if r.DNSUpstream == "" {
 		r.DNSUpstream = cfg.Defaults.DNSUpstream
@@ -182,6 +200,23 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))
 
 	return r, nil
+}
+
+// resolveAgent returns the harness of ws: its own agent, the default one or
+// agent.Default.
+func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, error) {
+	name := ws.Agent
+	if name == "" {
+		name = cfg.Defaults.Agent
+	}
+	if name == "" {
+		name = agent.Default
+	}
+	h, ok := agent.Lookup(name)
+	if !ok {
+		return agent.Harness{}, fmt.Errorf("unknown agent %q: must be one of %s", name, strings.Join(agent.Names(), ", "))
+	}
+	return h, nil
 }
 
 // mergeUnique returns a followed by the entries of b not already present.
@@ -278,7 +313,8 @@ func dedupEnvByKeyLastWins(entries []string) []string {
 }
 
 func ResolveFromCWD(cfg *config.Config, cwd string) (*Resolved, string, error) {
-	var bestName string
+	// best are the workspaces whose matching path is the deepest.
+	var best []string
 	var bestMatchedPath string
 	var bestSegments int
 
@@ -290,24 +326,28 @@ func ResolveFromCWD(cfg *config.Config, cwd string) (*Resolved, string, error) {
 				continue
 			}
 			p, err := filepath.Abs(expanded)
-			if err != nil {
+			if err != nil || !pathMatchesCWD(p, cwd) {
 				continue
 			}
-			if pathMatchesCWD(p, cwd) && pathSegments(p) > bestSegments {
-				bestName = name
-				bestMatchedPath = p
-				bestSegments = pathSegments(p)
+			switch segments := pathSegments(p); {
+			case len(best) == 0 || segments > bestSegments:
+				best, bestMatchedPath, bestSegments = []string{name}, p, segments
+			case segments == bestSegments && !slices.Contains(best, name):
+				best = append(best, name)
 			}
 		}
 	}
 
-	if bestName == "" {
+	switch {
+	case len(best) == 0:
 		return nil, "", fmt.Errorf("%w: directory %q", ErrNoMatch, cwd)
+	case len(best) > 1:
+		return nil, "", fmt.Errorf("directory %s matches workspaces %s; choose one with -w", cwd, strings.Join(best, ", "))
 	}
 
-	resolved, err := Resolve(cfg, bestName)
+	resolved, err := Resolve(cfg, best[0])
 	if err != nil {
-		return nil, "", fmt.Errorf("resolve workspace %q: %w", bestName, err)
+		return nil, "", fmt.Errorf("resolve workspace %q: %w", best[0], err)
 	}
 
 	return resolved, bestMatchedPath, nil

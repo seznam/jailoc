@@ -9,8 +9,8 @@ The image is a root file system, not a container. jailoc ignores its `ENTRYPOINT
 An image used directly (`image`) or built from a custom base Dockerfile (`[base] dockerfile`) needs:
 
 - a user `agent` with UID 1000 and home directory `/home/agent`;
-- `opencode` on `PATH`;
-- `PATH` including `/home/agent/.local/bin` and `/home/agent/.opencode/bin`;
+- `npm` on `PATH` when jailoc installs the [coding agent](coding-agents.md) on top of a `[base] dockerfile`, or the agent binary (for example `opencode` or `claude`) on `PATH` in an image used directly;
+- `PATH` including `/home/agent/.local/bin`, and for OpenCode `/home/agent/.opencode/bin`;
 - `dockerd` if you want Docker inside the VM (see [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm)).
 
 !!! warning
@@ -37,7 +37,7 @@ Set `image` in `[defaults]` to start every workspace from a pre-built image. Wor
 
 ```toml
 [defaults]
-image = "myregistry.example.com/myteam/opencode-base:v1.2.3"
+image = "myregistry.example.com/myteam/agent-base:v1.2.3"
 ```
 
 ## Build the base from your own Dockerfile
@@ -182,7 +182,7 @@ jailoc forwards the host's `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`,
 
 !!! danger "Fatal"
     - **Deleting `/home/agent` or the UID 1000 `agent` user**: sessions run as this user and fail to start without it.
-    - **Removing `opencode`**: sessions have nothing to run.
+    - **Removing the agent binary (for example `opencode`)**: sessions have nothing to run.
 
 !!! warning "Breaking"
     - **Overriding `ENV PATH` without `/home/agent/.local/bin` and `/home/agent/.opencode/bin`**: OpenCode and its plugins aren't found.

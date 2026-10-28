@@ -2,9 +2,11 @@
 # jailoc base image
 #
 # Core sandbox image for jailoc workspaces. Provides the runtime environment
-# for headless OpenCode coding agents: Node.js, language servers, CLI tools,
-# a non-root "agent" user (UID 1000). The VM guest manages the agent process
-# and the network broker enforces isolation outside the image.
+# for headless coding agents: Node.js, language servers, CLI tools, a
+# non-root "agent" user (UID 1000). jailoc installs the workspace's agent
+# (OpenCode, Claude Code, ...) in a separate layer on top of this image. The
+# VM guest manages the agent process and the network broker enforces
+# isolation outside the image.
 #
 # Preset/overlay images (e.g. jailoc-szn-preset) extend this with additional
 # language runtimes and tooling via `FROM <this-image>`.
@@ -19,7 +21,6 @@ ARG TS_LS_VERSION=5.3.0
 ARG TS_VERSION=6.0.3
 ARG PYRIGHT_VERSION=1.1.411
 ARG BASH_LS_VERSION=5.6.0
-ARG OPENCODE_VERSION=v1.18.4
 ARG DOCKER_VERSION=29.9.2
 ARG BUILDX_VERSION=0.38.1
 ARG COMPOSE_VERSION=5.6.1
@@ -45,7 +46,7 @@ RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
     && curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz \
     | tar -xJC /usr/local --strip-components=1
 
-# Language servers (npm) — OpenCode uses these for code intelligence
+# Language servers (npm) — coding agents use these for code intelligence
 # (go-to-definition, diagnostics, completions) across languages.
 ARG YAML_LS_VERSION
 ARG TS_LS_VERSION
@@ -104,7 +105,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   git, openssh-client    — repo operations (clone, push over SSH)
 #   sudo                   — agent user has passwordless sudo for apt installs
 #   python3                — Python runtime for pyright and user scripts
-#   ripgrep (rg), fd-find, jq — fast search/filter tools used by OpenCode
+#   ripgrep (rg), fd-find, jq — fast search/filter tools used by coding agents
 #   unzip, xz-utils        — archive extraction for runtime downloads
 #   libatomic1             — required by Node.js 26+ runtime
 #   nftables               — firewall backend of dockerd in VM workspaces
@@ -150,11 +151,6 @@ RUN (userdel -r ubuntu || true) \
     && chmod 755 /home/agent \
     && mkdir -p /home/agent/.local/state /home/agent/.local/share \
     && chown -R agent:agent /home/agent/.local
-
-# OpenCode — the AI coding agent. Installed via npm for supply-chain safety
-# (avoids curl|bash). The npm package is "opencode-ai".
-ARG OPENCODE_VERSION
-RUN npm install -g "opencode-ai@${OPENCODE_VERSION#v}"
 
 # PATH includes agent's local bin dirs for tools installed as the agent user
 # (e.g. uv from preset overlays goes to ~/.local/bin).

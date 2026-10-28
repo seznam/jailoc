@@ -105,7 +105,7 @@ Common causes:
 
 - the hypervisor isn't available (see [/dev/kvm](#vm-cant-open-devkvm) on Linux);
 - too little memory for the requested `memory`;
-- a custom image without the UID 1000 `agent` user or `opencode` (see [How to use a custom image](custom-images.md#know-what-the-image-must-provide));
+- a custom image without the UID 1000 `agent` user or the agent binary (see [How to use a custom image](custom-images.md#know-what-the-image-must-provide));
 - a stale VM left over from a crash.
 
 Clear a stale VM with `jailoc down <workspace>` and start again.

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -74,5 +75,30 @@ func TestProxyBuildArgs(t *testing.T) {
 	}
 	if _, exists := proxyBuildArgs()["HTTP_PROXY"]; exists {
 		t.Fatal("unset HTTP_PROXY was forwarded")
+	}
+}
+
+func TestAgentDockerfile(t *testing.T) {
+	t.Parallel()
+
+	claude, _ := agent.Lookup("claude")
+	install := "RUN npm install -g --allow-scripts='@anthropic-ai/claude-code' '@anthropic-ai/claude-code@" + claude.Version + "' && npm cache clean --force\n"
+	tests := []struct {
+		user string
+		want string
+	}{
+		{"", "ARG BASE\nFROM ${BASE}\n" + install},
+		{"root", "ARG BASE\nFROM ${BASE}\n" + install},
+		{"0:0", "ARG BASE\nFROM ${BASE}\n" + install},
+		{"agent", "ARG BASE\nFROM ${BASE}\nUSER root\n" + install + "USER agent\n"},
+		{"1000:1000", "ARG BASE\nFROM ${BASE}\nUSER root\n" + install + "USER 1000:1000\n"},
+	}
+	for _, tt := range tests {
+		t.Run("user="+tt.user, func(t *testing.T) {
+			t.Parallel()
+			if got := string(agentDockerfile(claude, tt.user)); got != tt.want {
+				t.Fatalf("agentDockerfile() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
 	}
 }

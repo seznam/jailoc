@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/guest/session"
@@ -43,7 +45,7 @@ const (
 )
 
 // runSessionVM starts the workspace if needed and attaches the terminal to
-// a detachable OpenCode session in the VM: the one started in the same
+// a detachable agent session in the VM: the one started in the same
 // directory, or a new one. Closing the terminal or pressing Ctrl-\ detaches
 // and leaves the agent running.
 func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, opts vmSessionOptions) error {
@@ -56,6 +58,8 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 		}
 	} else if err := checkGuestCurrent(ws.Name); err != nil {
 		return err
+	} else if err := checkAgentCurrent(ws); err != nil {
+		return err
 	} else if err := ensureSecrets(ctx, ws); err != nil {
 		return err
 	}
@@ -64,6 +68,11 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 		return err
 	}
 	defer func() { _ = client.Close() }()
+	if opts.attach == "" {
+		if err := checkAgentBinary(client, ws); err != nil {
+			return err
+		}
+	}
 	sess, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("open ssh session: %w", err)
@@ -92,13 +101,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	for _, kv := range env {
 		cmdline = append(cmdline, "-e", kv)
 	}
-	cmdline = append(cmdline, "--", "opencode")
-	if opts.session != "" {
-		cmdline = append(cmdline, "--session", opts.session)
-	}
-	if opts.cont {
-		cmdline = append(cmdline, "--continue")
-	}
+	cmdline = append(append(cmdline, "--"), ws.Agent.Command(ws.AgentArgs, opts.session, opts.cont)...)
 
 	stdin, err := sess.StdinPipe()
 	if err != nil {
@@ -122,7 +125,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	switch outcome {
 	case outcomeExited:
 		if code != 0 {
-			return fmt.Errorf("opencode exited with status %d", code)
+			return fmt.Errorf("%s exited with status %d", ws.Agent.Binary, code)
 		}
 		return nil
 	case outcomeDetached:
@@ -320,4 +323,37 @@ func checkGuestCurrent(name string) error {
 		return nil
 	}
 	return fmt.Errorf("workspace %q runs a jailoc-guest from another jailoc version; run `jailoc restart %s` to update it (this ends its running sessions)", name, name)
+}
+
+// checkAgentCurrent reports a running workspace VM that was started for
+// another agent than the configured one: its image may lack the agent.
+func checkAgentCurrent(ws *workspace.Resolved) error {
+	spec, err := vm.ReadSpec(vmStateDir(ws.Name))
+	if err != nil {
+		return nil //nolint:nilerr // a missing spec is reported by the session itself
+	}
+	// Specs written before jailoc ran other agents than OpenCode name none.
+	if running := cmp.Or(spec.Agent, agent.Default); running != ws.Agent.Name {
+		return fmt.Errorf("workspace %q runs %s, but its configuration selects %s; run `jailoc restart %s` to switch (this ends its running sessions)", ws.Name, running, ws.Agent.Name, ws.Name)
+	}
+	return nil
+}
+
+// checkAgentBinary reports a workspace VM whose image lacks the agent, for
+// example an image used as is or one built with install = false.
+func checkAgentBinary(client *ssh.Client, ws *workspace.Resolved) error {
+	sess, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("open ssh session: %w", err)
+	}
+	defer func() { _ = sess.Close() }()
+	err = sess.Run(shellJoin([]string{guest.BinaryPath, "run", "--", "/bin/sh", "-c", `command -v "$0" >/dev/null`, ws.Agent.Binary}))
+	var exitErr *ssh.ExitError
+	switch {
+	case errors.As(err, &exitErr):
+		return fmt.Errorf("workspace %q: %s is not installed in the VM (no %s on PATH); install it in the workspace image, or let jailoc install it: it does so in the images it builds unless agents.%s install = false", ws.Name, ws.Agent.Title, ws.Agent.Binary, ws.Agent.Name)
+	case err != nil:
+		return fmt.Errorf("check agent in workspace %q: %w", ws.Name, err)
+	}
+	return nil
 }

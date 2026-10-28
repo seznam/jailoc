@@ -24,7 +24,7 @@ Commands that accept an optional `[workspace]` argument use it first. Without th
 
 ### `jailoc`
 
-Open an OpenCode session in the workspace VM.
+Open a session of the workspace's coding agent in the workspace VM.
 
 ```
 jailoc [path] [flags]
@@ -34,15 +34,15 @@ jailoc [path] [flags]
 |------|-------|-------------|
 | `--new` | | Start a new agent session instead of attaching to the one running in the target directory. |
 | `--attach ID` | | Attach to the agent session with this ID (see [`jailoc sessions`](#jailoc-sessions)). |
-| `--continue` | `-c` | Start a session that continues the last OpenCode session. |
-| `--session ID` | `-s` | Start a session that continues the OpenCode session with this ID. |
+| `--continue` | `-c` | Start a session that continues the agent's last conversation. |
+| `--session ID` | `-s` | Start a session that continues the agent conversation with this ID. |
 | `--version` | `-v` | Print the jailoc version. |
 
 Mutually exclusive: `--session` with `--continue`, `--new` with `--attach`, `--attach` with `--session` or `--continue`.
 
-The target directory is `path` (`~` is expanded) or the current working directory, and must be a directory. Without `--workspace`, the workspace is resolved from the target directory. When the directory is not under any path of the workspace, jailoc asks whether to add it.
+The target directory is `path` (`~` is expanded) or the current working directory, and must be a directory. Without `--workspace`, the workspace is resolved from the target directory. When the directory is not under any path of the workspace, jailoc asks whether to add it. When several workspaces match the directory at the same depth, jailoc fails and asks for `--workspace`.
 
-If the workspace VM is not running, jailoc starts it as [`jailoc up`](#jailoc-up) does. It then runs `opencode` inside the VM over SSH, in a detachable session whose working directory is the target directory:
+If the workspace VM is not running, jailoc starts it as [`jailoc up`](#jailoc-up) does. It checks that the agent binary is on `PATH` in the VM and runs the agent (see [Coding agents](configuration.md#coding-agents)) over SSH, in a detachable session whose working directory is the target directory:
 
 - Without flags, attaches to the session already running in the target directory, or starts one.
 - `--session` and `--continue` always start a new session.
@@ -75,7 +75,7 @@ Stop a workspace VM.
 jailoc down [workspace] [flags]
 ```
 
-Shuts down the workspace VM and its network broker. All agent sessions end. The persistent home directories (`~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` of the agent) are kept.
+Shuts down the workspace VM and its network broker. All agent sessions end. The persistent home directories (the [agent's state directories](configuration.md#coding-agents) and `~/.cache`) are kept.
 
 | Flag | Description |
 |------|-------------|

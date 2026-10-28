@@ -9,7 +9,7 @@ jailoc builds the workspace image with Docker and unpacks its file system into t
 | `ENV` | Yes | Passed to jailoc-guest and inherited by every session; config `env` and secrets are added on top |
 | `RUN`, `COPY`, `ADD` | Yes | The resulting file system is the VM's root file system |
 | `LABEL` | No | Metadata only |
-| `ENTRYPOINT`, `CMD` | No | jailoc-guest is the VM's init; sessions run `opencode` over SSH |
+| `ENTRYPOINT`, `CMD` | No | jailoc-guest is the VM's init; sessions run the coding agent over SSH |
 | `USER` | No | Sessions run as UID 1000 |
 | `WORKDIR` | No | The working directory is the first workspace path, or the target directory of a session |
 | `EXPOSE` | No | Publish guest ports with `ports` in the configuration |
@@ -26,7 +26,7 @@ On Linux hosts the image's root filesystem is mounted idmapped, so files owned b
 
 | Action | Severity | Effect |
 |--------|----------|--------|
-| Remove `opencode` from `PATH` | Fatal | Sessions fail to start |
+| Remove the agent binary (for example `opencode`) from `PATH` | Fatal | Sessions fail to start with an error naming the binary |
 | Override `ENV PATH` without `/home/agent/.local/bin` | Breaking | Tools installed by the agent under `~/.local/bin` are not found |
 | Remove `dockerd` with `enable_docker = true` set explicitly | Fatal | `jailoc up` fails; with the default value only a warning is printed |
 | Remove `nftables` while `enable_docker` is on | Breaking | `dockerd` cannot set up container networking |

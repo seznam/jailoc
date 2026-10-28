@@ -1,6 +1,6 @@
 # Getting Started
 
-This tutorial walks you through installing jailoc and running your first sandboxed workspace. By the end, you'll have an OpenCode agent running in an isolated micro-VM, working on your project directory.
+This tutorial walks you through installing jailoc and running your first sandboxed workspace. By the end, you'll have a coding agent (OpenCode) running in an isolated micro-VM, working on your project directory.
 
 ## Prerequisites
 
@@ -75,7 +75,7 @@ jailoc logs     # show workspace logs
 jailoc down     # stop the workspace VM
 ```
 
-`jailoc down` keeps the VM's home state, such as OpenCode sessions and caches, for the next start. `jailoc down --purge` deletes it.
+`jailoc down` keeps the VM's home state, such as agent conversations, logins and caches, for the next start. `jailoc down --purge` deletes it.
 
 ## What's running
 

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`jailoc` — CLI tool that runs headless OpenCode coding agents in sandboxed libkrun micro-VMs. Each workspace gets its own VM with virtio-fs directory shares, a host-side userspace network broker that denies private networks, and SSH-based agent sessions.
+`jailoc` — CLI tool that runs coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO; one per workspace) in sandboxed libkrun micro-VMs. Each workspace gets its own VM with virtio-fs directory shares, a host-side userspace network broker that denies private networks, and SSH-based agent sessions.
 
 **Module**: `github.com/seznam/jailoc`
 **Language**: Go 1.26+
@@ -18,6 +18,7 @@ cmd/jailoc-guest/           VM init + SSH server inside the guest (embedded via 
 cmd/jailoc-netbroker/       Host-side network broker process, one per workspace VM
 internal/
   cmd/                       Cobra CLI: root (attach/new/continue sessions) + add, config, down, logs, migrate, reload, restart, sessions, status, up
+  agent/                     Built-in coding agent harnesses (opencode, claude, copilot, omo): npm package, session flags, env, persisted dirs, default mounts
   config/                    TOML config parsing, validation (rejects v1 settings), mutation (~/.config/jailoc/config.toml), default config content
   workspace/                 Workspace name → resolved paths, allowed hosts/networks, CWD matching
   docker/                    Docker Engine SDK — image resolution/build on the host, v1 volume export for migrate
@@ -42,7 +43,7 @@ docs/                        MkDocs documentation (Diátaxis framework, see docs
 6. `startSupervisor` → boot the workspace VM (jailoc-guest as init) with its netbroker; persistent home under `~/.cache/jailoc-vm/workspaces/<ws>/home`
 7. `secretsPayload` (read on the host before boot, incl. `from_command`) → `deliverSecrets` over SSH; the guest writes file secrets to `/run/secrets` (tmpfs) and env secrets to the session environment
 
-If the VM is already running, `up` reloads it instead (`internal/cmd/vmreload_unix.go`). Sessions attach over SSH; there is no published OpenCode port or server password.
+If the VM is already running, `up` reloads it instead (`internal/cmd/vmreload_unix.go`). Sessions attach over SSH; there is no published agent port or server password.
 
 ### Network
 

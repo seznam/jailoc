@@ -113,7 +113,7 @@ env = ["LOG_LEVEL=debug"]
 `env` entries override `env_file` entries with the same key.
 
 !!! note
-    Keys jailoc sets itself are rejected: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `OPENCODE_TUI_CONFIG`, `SSH_AUTH_SOCK`.
+    Keys jailoc sets itself are rejected: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK` and the agent variables listed in [Coding agents](../reference/configuration.md#coding-agents).
 
 For tokens and passwords, use [secrets](secrets.md) instead of `env`.
 

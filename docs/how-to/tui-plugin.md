@@ -1,6 +1,6 @@
 # How to use the TUI sidebar plugin
 
-The TUI sidebar plugin shows the workspace name in the OpenCode sidebar of a jailoc session.
+The TUI sidebar plugin shows the workspace name in the OpenCode sidebar of a jailoc session. It applies to workspaces with `agent = "opencode"`, the default.
 
 ## Setup
 

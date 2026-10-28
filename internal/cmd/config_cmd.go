@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
@@ -50,6 +51,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		defaultsImage = "(not set)"
 	}
 	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Image: %s\n", defaultsImage)
+
+	defaultsAgent := cfg.Defaults.Agent
+	if defaultsAgent == "" {
+		defaultsAgent = "(not set, default: " + agent.Default + ")"
+	}
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Agent: %s\n", defaultsAgent)
 
 	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Allowed Hosts:\n")
 	if len(cfg.Defaults.AllowedHosts) == 0 {
@@ -109,6 +116,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		ws := cfg.Workspaces[name]
 
 		_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Workspace: %s\n", name)
+
+		wsAgent := ws.Agent
+		if wsAgent == "" {
+			wsAgent = "(not set)"
+		}
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Agent: %s\n", wsAgent)
 
 		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Paths:\n")
 		if len(ws.Paths) == 0 {

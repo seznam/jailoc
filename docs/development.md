@@ -69,7 +69,6 @@ The embedded Dockerfile defines an Ubuntu 24.04 base image. Exact versions are p
 | Package managers | npm |
 | Language servers | typescript-language-server, pyright, yaml-language-server, bash-language-server |
 | CLI tools | ripgrep, fd, jq, git, openssh-client, curl |
-| Agent stack | OpenCode |
 
 Source: [`internal/embed/assets/Dockerfile`](https://github.com/seznam/jailoc/blob/master/internal/embed/assets/Dockerfile)
 

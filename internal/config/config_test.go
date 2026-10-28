@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -2122,6 +2123,11 @@ func TestParseMountWindowsPaths(t *testing.T) {
 func TestMergeMounts(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	defaultMounts := []string{
+		"~/.config/opencode:/home/agent/.config/opencode:rw",
+		"~/.opencode:/home/agent/.opencode:rw",
+		"~/.agents:/home/agent/.agents:ro",
+	}
 
 	tests := []struct {
 		name     string
@@ -2131,50 +2137,46 @@ func TestMergeMounts(t *testing.T) {
 		{
 			name: "default mounts only",
 			layers: [][]string{
-				DefaultMounts,
+				defaultMounts,
 			},
 			expected: []string{
 				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
 				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
-				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 			},
 		},
 		{
 			name: "override default mount mode",
 			layers: [][]string{
-				DefaultMounts,
+				defaultMounts,
 				{"~/cfg:/home/agent/.config/opencode:rw"},
 			},
 			expected: []string{
 				filepath.Join(home, "cfg") + ":/home/agent/.config/opencode:rw",
 				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
-				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 			},
 		},
 		{
 			name: "remove default mount",
 			layers: [][]string{
-				DefaultMounts,
+				defaultMounts,
 				{":/home/agent/.opencode"},
 			},
 			expected: []string{
 				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
-				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 			},
 		},
 		{
 			name: "add new mount",
 			layers: [][]string{
-				DefaultMounts,
+				defaultMounts,
 				{"~/my-data:/workspace/data:rw"},
 			},
 			expected: []string{
 				filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
 				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
-				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 				filepath.Join(home, "my-data") + ":/workspace/data:rw",
 			},
@@ -2182,14 +2184,13 @@ func TestMergeMounts(t *testing.T) {
 		{
 			name: "multiple layers overrides and removals",
 			layers: [][]string{
-				DefaultMounts,
+				defaultMounts,
 				{"~/cfg:/home/agent/.config/opencode:rw", "~/x:/x:rw"},
 				{":/home/agent/.agents", "~/y:/x:ro"},
 			},
 			expected: []string{
 				filepath.Join(home, "cfg") + ":/home/agent/.config/opencode:rw",
 				filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
-				filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 				filepath.Join(home, "y") + ":/x:ro",
 			},
 		},
@@ -3219,5 +3220,73 @@ func TestCopiesValidation(t *testing.T) {
 				t.Fatalf("snapshots = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAgentValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		defaults  Defaults
+		ws        Workspace
+		wantError string
+	}{
+		{name: "unset agent", ws: Workspace{}},
+		{name: "workspace agent", ws: Workspace{Agent: "claude"}},
+		{name: "defaults agent", defaults: Defaults{Agent: "omo"}},
+		{name: "unknown workspace agent", ws: Workspace{Agent: "vim"}, wantError: `workspace "test": invalid agent "vim": must be one of opencode, claude, copilot, omo`},
+		{name: "unknown defaults agent", defaults: Defaults{Agent: "vim"}, wantError: `defaults: invalid agent "vim"`},
+		{name: "settings of another agent", ws: Workspace{Agent: "claude", Agents: map[string]AgentSettings{"copilot": {Args: []string{"--banner"}}}}},
+		{name: "settings of unknown agent", ws: Workspace{Agents: map[string]AgentSettings{"vim": {}}}, wantError: `workspace "test": agents: unknown agent "vim"`},
+		{name: "defaults settings of unknown agent", defaults: Defaults{Agents: map[string]AgentSettings{"vim": {}}}, wantError: `defaults: agents: unknown agent "vim"`},
+		{name: "agent env reserved", ws: Workspace{Env: []string{"CLAUDE_CONFIG_DIR=/tmp"}}, wantError: `env key "CLAUDE_CONFIG_DIR" is reserved`},
+		{name: "TUI config env reserved", defaults: Defaults{Env: []string{"OPENCODE_TUI_CONFIG=/tmp/x.json"}}, wantError: `env key "OPENCODE_TUI_CONFIG" is reserved`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ws := tc.ws
+			ws.Paths = []string{"/data/work"}
+			cfg := &Config{Defaults: tc.defaults, Workspaces: map[string]Workspace{"test": ws}}
+			err := Validate(cfg)
+			if tc.wantError == "" && err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestLoadAgentTOML(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `[defaults]
+agent = "claude"
+
+[defaults.agents.claude]
+args = ["--model", "opus"]
+
+[workspaces.test]
+paths = ["/data/work"]
+agent = "omo"
+
+[workspaces.test.agents.omo]
+install = false
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.Defaults.Agent != "claude" || !slices.Equal(cfg.Defaults.Agents["claude"].Args, []string{"--model", "opus"}) {
+		t.Fatalf("unexpected defaults: %+v", cfg.Defaults)
+	}
+	ws := cfg.Workspaces["test"]
+	if ws.Agent != "omo" || ws.Agents["omo"].Install == nil || *ws.Agents["omo"].Install {
+		t.Fatalf("unexpected workspace: %+v", ws)
 	}
 }
