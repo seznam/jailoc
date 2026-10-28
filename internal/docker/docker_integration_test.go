@@ -6,10 +6,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 
@@ -172,5 +174,39 @@ func TestBuildOverlayImageExplicitBuildContext(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "write temporary workspace Dockerfile") {
 		t.Fatalf("unexpected Dockerfile temp write error: %v", err)
+	}
+}
+
+func TestEnsureImageReplacesForeignPlatform(t *testing.T) {
+	skipWithoutDocker(t)
+	ctx := context.Background()
+	const ref = "busybox:1.36.1"
+	foreign := "linux/amd64"
+	if runtime.GOARCH == "amd64" {
+		foreign = "linux/arm64"
+	}
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cli.Close() }()
+	if _, err := cli.ImageRemove(ctx, ref, image.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+		t.Fatalf("remove %s: %v", ref, err)
+	}
+	if err := pullImage(ctx, cli, ref, foreign); err != nil {
+		t.Fatalf("pull %s for %s: %v", ref, foreign, err)
+	}
+	if info, err := cli.ImageInspect(ctx, ref); err != nil || imagePlatform(info) == "linux/"+runtime.GOARCH {
+		t.Fatalf("precondition: %s is cached for the host platform: %v", ref, err)
+	}
+	if err := EnsureImage(ctx, ref); err != nil {
+		t.Fatalf("EnsureImage: %v", err)
+	}
+	info, err := cli.ImageInspect(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := imagePlatform(info), "linux/"+runtime.GOARCH; got != want {
+		t.Fatalf("image platform = %s, want %s", got, want)
 	}
 }

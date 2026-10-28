@@ -84,20 +84,43 @@ func linuxArch(goarch string) string {
 	}
 }
 
-// EnsureImage pulls ref for linux/<host architecture> unless the daemon
-// already has it.
+// EnsureImage makes sure the daemon has ref for linux/<host architecture>,
+// the platform of the VMs. It pulls ref when the daemon lacks it or has it
+// only for another platform, and rejects an image it cannot get for the
+// host platform.
 func EnsureImage(ctx context.Context, ref string) error {
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		return fmt.Errorf("create Docker Engine client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
-	if _, err := cli.ImageInspect(ctx, ref); err == nil {
-		return nil
+	want := "linux/" + runtime.GOARCH
+	cached := ""
+	if info, err := cli.ImageInspect(ctx, ref); err == nil {
+		if cached = imagePlatform(info); cached == want {
+			return nil
+		}
 	} else if !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("inspect image %s: %w", ref, err)
 	}
-	rc, err := cli.ImagePull(ctx, ref, image.PullOptions{Platform: "linux/" + runtime.GOARCH})
+	if err := pullImage(ctx, cli, ref, want); err != nil {
+		if cached != "" {
+			return fmt.Errorf("image %s is for %s, VMs need %s, and pulling it for %s failed (build or pull it for %s): %w", ref, cached, want, want, want, err)
+		}
+		return err
+	}
+	info, err := cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("inspect image %s: %w", ref, err)
+	}
+	if got := imagePlatform(info); got != want {
+		return fmt.Errorf("image %s is for %s, VMs need %s; use an image published for %s", ref, got, want, want)
+	}
+	return nil
+}
+
+func pullImage(ctx context.Context, cli *dockerclient.Client, ref, platform string) error {
+	rc, err := cli.ImagePull(ctx, ref, image.PullOptions{Platform: platform})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
@@ -106,4 +129,9 @@ func EnsureImage(ctx context.Context, ref string) error {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	return nil
+}
+
+// imagePlatform returns the os/architecture of an inspected image.
+func imagePlatform(info image.InspectResponse) string {
+	return info.Os + "/" + info.Architecture
 }
