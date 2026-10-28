@@ -154,8 +154,21 @@ func (m *idmapper) mountShare(tag, target string, readOnly bool) error {
 		return fmt.Errorf("create mount: %w", err)
 	}
 	defer func() { _ = unix.Close(mnt) }()
-	if err := unix.MountSetattr(mnt, "", unix.AT_EMPTY_PATH, &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_IDMAP, Userns_fd: uint64(m.shares.Fd())}); err != nil {
-		return fmt.Errorf("set idmapping: %w", err)
+	// FUSE allows idmapped mounts only after the server's INIT reply, which
+	// arrives asynchronously after the mount is created. A request on the
+	// mount waits for INIT; retry briefly in case it is still in flight.
+	var st unix.Stat_t
+	_ = unix.Fstatat(mnt, "", &st, unix.AT_EMPTY_PATH)
+	var err2 error
+	for range 40 {
+		err2 = unix.MountSetattr(mnt, "", unix.AT_EMPTY_PATH, &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_IDMAP, Userns_fd: uint64(m.shares.Fd())})
+		if !errors.Is(err2, unix.EINVAL) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err2 != nil {
+		return fmt.Errorf("set idmapping: %w", err2)
 	}
 	if err := unix.MoveMount(mnt, "", unix.AT_FDCWD, target, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
 		return fmt.Errorf("attach: %w", err)
