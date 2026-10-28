@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -67,6 +68,88 @@ func TestExecFormatter(t *testing.T) {
 	}
 	if out := plain(f.line([]byte(`{"time":"2026-10-27T10:00:00Z","pid":44,"uid":0,"comm":"true"}`))); !strings.HasSuffix(out, "root [true, exited]") {
 		t.Fatalf("exited process line = %q", out)
+	}
+}
+
+func TestTrafficFormatterEscapesGuestFields(t *testing.T) {
+	t.Parallel()
+	attack := "\x1b]52;c;payload\a\r\n\u009b\u202e"
+	want := `\x1b]52;c;payload\a\r\n\u009b\u202e`
+	f := newTrafficFormatter(true)
+	cases := []struct {
+		name  string
+		event trafficEvent
+	}{
+		{"flow", trafficEvent{Event: "flow", Proto: attack, Dst: attack, Reason: attack}},
+		{"tls", trafficEvent{Event: "l7", Proto: "tls", SNI: attack, ALPN: []string{attack}}},
+		{"http", trafficEvent{Event: "l7", Proto: "http", Method: attack, Host: attack, Path: attack}},
+		{"dns answer", trafficEvent{Event: "dns", Name: attack, Type: attack, Answers: []string{attack}}},
+		{"dns error", trafficEvent{Event: "dns", Name: attack, Type: attack, Error: attack}},
+		{"dns blocked", trafficEvent{Event: "dns", Name: attack, Blocked: true}},
+		{"dial error", trafficEvent{Event: "dial-error", Proto: attack, Dst: attack, Error: attack}},
+		{"ingress", trafficEvent{Event: "ingress", Host: attack, GuestPort: 8080}},
+		{"service error", trafficEvent{Event: "service-error", Error: attack}},
+		{"reload", trafficEvent{Event: "reload", PolicyError: attack, RuntimeErrors: []string{attack}}},
+		{"unknown event", trafficEvent{Event: attack}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := newTrafficFormatter(true).render(tc.event)
+			if !strings.Contains(out, want) || strings.Contains(out, attack) {
+				t.Fatalf("render = %q, want visible controls only", out)
+			}
+		})
+	}
+	dns, _ := json.Marshal(trafficEvent{Event: "dns", Name: attack + ".", Type: "A", Answers: []string{"1.2.3.4"}})
+	f.line(dns)
+	flow, _ := json.Marshal(trafficEvent{Event: "flow", Proto: "tcp", Dst: "1.2.3.4:443", Allow: true, Reason: "public"})
+	if out := f.line(flow); !strings.Contains(out, want+":443") || strings.Contains(out, attack) {
+		t.Fatalf("cached DNS name = %q", out)
+	}
+}
+
+func TestExecFormatterEscapesGuestFields(t *testing.T) {
+	t.Parallel()
+	attack := "\x1b]52;c;payload\a\r\n\u009b\u202e"
+	want := `\x1b]52;c;payload\a\r\n\u009b\u202e`
+	f := execFormatter{}
+	for _, record := range []struct {
+		name string
+		argv []string
+		comm string
+	}{
+		{name: "argv", argv: []string{"run", attack}},
+		{name: "comm", comm: attack},
+	} {
+		t.Run(record.name, func(t *testing.T) {
+			t.Parallel()
+			raw, _ := json.Marshal(map[string]any{"pid": 42, "uid": 1000, "cwd": "/home/agent/" + attack, "argv": record.argv, "comm": record.comm})
+			out := f.line(raw)
+			if !strings.Contains(out, want) || strings.Contains(out, attack) {
+				t.Fatalf("exec line = %q, want visible controls only", out)
+			}
+		})
+	}
+}
+
+func TestTrafficFormatterEscapesNonprintingUnicode(t *testing.T) {
+	t.Parallel()
+	input := "café 日本語 👋 \x1b]52;c;data\a\r\n\t\x00\u009b\u202e" + string([]byte{0xff})
+	want := `café 日本語 👋 \x1b]52;c;data\a\r\n\t\x00\u009b\u202e\xff`
+	if got := newTrafficFormatter(false).render(trafficEvent{Event: "ingress", Host: input, GuestPort: 8080}); !strings.Contains(got, want) {
+		t.Fatalf("render = %q, want visible field %q", got, want)
+	}
+}
+
+func TestTrafficFormatterKeepsApplicationColor(t *testing.T) {
+	t.Parallel()
+	f := newTrafficFormatter(false)
+	e := trafficEvent{Event: "l7", Proto: "http", Method: "GET", Host: "café.example", Path: "/\x1b]52;c;x\a"}
+	out := f.render(e)
+	want := colInfo.Sprint(`GET café.example/\x1b]52;c;x\a`)
+	if !strings.Contains(out, want) {
+		t.Fatalf("render = %q, want colored field %q", out, want)
 	}
 }
 
