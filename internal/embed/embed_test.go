@@ -14,6 +14,13 @@ func TestDockerfileEmbedded(t *testing.T) {
 	}
 }
 
+func TestDockerLayerEmbedded(t *testing.T) {
+	t.Parallel()
+	if !strings.Contains(string(jailocembed.DockerLayer()), "AS docker") {
+		t.Fatal("DockerLayer() does not contain the docker stage")
+	}
+}
+
 func TestTUIPluginEmbedded(t *testing.T) {
 	t.Parallel()
 	if len(jailocembed.TUIPluginJS()) == 0 || len(jailocembed.TUIPluginJSON()) == 0 {

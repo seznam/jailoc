@@ -72,6 +72,7 @@ Guest IPv4 192.168.127.2/24 (gateway .1), IPv6 fd00:127::2/64. All traffic goes 
 
 ### Embedded assets (`internal/embed/assets/`)
 - `Dockerfile` — embedded fallback base image for the VM rootfs (no entrypoint/CMD; jailoc-guest is the init)
+- `docker.Dockerfile` — Docker layer stages (pinned, checksum-verified Docker CE, buildx, compose); jailoc appends the final stage and builds it on top of the base only for `enable_docker` workspaces
 - `tui.js` — built TUI plugin JS (from `plugin/index.jsx` via the Babel-based Solid transform in `plugin/build.mjs`)
 - `tui-plugin.json` — minimal package.json for the embedded TUI plugin
 

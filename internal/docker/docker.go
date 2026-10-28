@@ -260,12 +260,30 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 // BuildAgentImage installs the pinned npm package of harness h on top of base
 // and returns the tag of the result.
 func BuildAgentImage(ctx context.Context, base string, h agent.Harness) (string, error) {
+	label := fmt.Sprintf("%s %s", h.Title, h.Version)
+	return buildLayerImage(ctx, base, "jailoc-agent-"+h.Name, label, func(user string) []byte {
+		return agentDockerfile(h, user)
+	})
+}
+
+// BuildDockerImage adds the embedded Docker layer (Docker CE, buildx,
+// compose, nftables) on top of base and returns the tag of the result.
+func BuildDockerImage(ctx context.Context, base string) (string, error) {
+	return buildLayerImage(ctx, base, "jailoc-docker", "Docker", func(user string) []byte {
+		return dockerLayerDockerfile(embed.DockerLayer(), user)
+	})
+}
+
+// buildLayerImage builds the Dockerfile that dockerfile returns for the user
+// of base, with base as the BASE build argument, and tags the result repo
+// with a hash of the base image ID and the Dockerfile.
+func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile func(user string) []byte) (string, error) {
 	if err := EnsureImage(ctx, base); err != nil {
 		return "", err
 	}
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
-		return "", fmt.Errorf("create Docker Engine client for the %s image layer: %w", h.Title, err)
+		return "", fmt.Errorf("create Docker Engine client for the %s image layer: %w", label, err)
 	}
 	defer func() { _ = cli.Close() }()
 	inspect, err := cli.ImageInspect(ctx, base)
@@ -276,15 +294,15 @@ func BuildAgentImage(ctx context.Context, base string, h agent.Harness) (string,
 	if inspect.Config != nil {
 		user = inspect.Config.User
 	}
-	dockerfile := agentDockerfile(h, user)
+	content := dockerfile(user)
 
-	tmpDir, err := os.MkdirTemp("", "jailoc-agent-dockerfile-")
+	tmpDir, err := os.MkdirTemp("", "jailoc-layer-dockerfile-")
 	if err != nil {
-		return "", fmt.Errorf("create temp directory for the %s image layer: %w", h.Title, err)
+		return "", fmt.Errorf("create temp directory for the %s image layer: %w", label, err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
-	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), dockerfile, 0o600); err != nil {
-		return "", fmt.Errorf("write the %s image layer Dockerfile: %w", h.Title, err)
+	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), content, 0o600); err != nil {
+		return "", fmt.Errorf("write the %s image layer Dockerfile: %w", label, err)
 	}
 	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
 	if err != nil {
@@ -292,31 +310,60 @@ func BuildAgentImage(ctx context.Context, base string, h agent.Harness) (string,
 	}
 	defer func() { _ = buildCtx.Close() }()
 
-	hash := sha256.Sum256(append([]byte(inspect.ID+"\n"), dockerfile...))
-	tag := fmt.Sprintf("jailoc-agent-%s:%x", h.Name, hash[:8])
+	hash := sha256.Sum256(append([]byte(inspect.ID+"\n"), content...))
+	tag := fmt.Sprintf("%s:%x", repo, hash[:8])
 	buildArgs := proxyBuildArgs()
 	buildArgs["BASE"] = &base
-	_, _ = color.New(color.FgCyan).Printf("Installing %s %s into the image...\n", h.Title, h.Version)
+	_, _ = color.New(color.FgCyan).Printf("Installing %s into the image...\n", label)
 	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:      []string{tag},
 		BuildArgs: buildArgs,
 		Remove:    true,
 	})
 	if err != nil {
-		return "", fmt.Errorf("build the %s image layer: %w", h.Title, err)
+		return "", fmt.Errorf("build the %s image layer: %w", label, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := displayStream(resp.Body); err != nil {
-		return "", fmt.Errorf("read the %s image layer build output: %w", h.Title, err)
+		return "", fmt.Errorf("read the %s image layer build output: %w", label, err)
 	}
 	return tag, nil
+}
+
+// asRoot reports whether a layer on an image with this user must switch to
+// root for its installation and back afterwards.
+func asRoot(user string) bool {
+	return user != "" && user != "root" && user != "0" && !strings.HasPrefix(user, "0:") && !strings.HasPrefix(user, "root:")
+}
+
+// dockerLayerDockerfile appends to stages, which leave the Docker files in
+// /out of the docker stage, a final stage that copies them onto BASE and
+// installs nftables unless nft is present, as root, restoring the user.
+func dockerLayerDockerfile(stages []byte, user string) []byte {
+	var b strings.Builder
+	b.WriteString("ARG BASE\n")
+	b.Write(stages)
+	b.WriteString("\nFROM ${BASE}\n")
+	switchUser := asRoot(user)
+	if switchUser {
+		b.WriteString("USER root\n")
+	}
+	b.WriteString("RUN command -v nft >/dev/null || (apt-get update \\\n" +
+		"    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables \\\n" +
+		"    && rm -rf /var/lib/apt/lists/*)\n")
+	b.WriteString("COPY --from=docker /out/bin/ /usr/local/bin/\n")
+	b.WriteString("COPY --from=docker /out/cli-plugins/ /usr/local/lib/docker/cli-plugins/\n")
+	if switchUser {
+		fmt.Fprintf(&b, "USER %s\n", user)
+	}
+	return []byte(b.String())
 }
 
 // agentDockerfile installs h as root and restores the base image's user.
 func agentDockerfile(h agent.Harness, user string) []byte {
 	var b strings.Builder
 	b.WriteString("ARG BASE\nFROM ${BASE}\n")
-	switchUser := user != "" && user != "root" && user != "0" && !strings.HasPrefix(user, "0:") && !strings.HasPrefix(user, "root:")
+	switchUser := asRoot(user)
 	if switchUser {
 		b.WriteString("USER root\n")
 	}
