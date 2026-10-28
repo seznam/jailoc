@@ -88,7 +88,7 @@ require (
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 )
 
-// go-microvm fork: simplified virtio-fs ownership (stacklok/go-microvm#135)
-// and exec-session exit status (#143) on top of upstream main, until they
-// are merged upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261027220309-9d3cca171297
+// go-microvm fork: simplified virtio-fs ownership (stacklok/go-microvm#135),
+// exec-session exit status (#143) and setuid bits on Linux hosts (#149) on
+// top of upstream main, until they are merged upstream.
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261028100516-4850e109798c
