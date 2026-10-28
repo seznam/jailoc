@@ -113,7 +113,7 @@ Run `go build`, `go test ./...`, and `golangci-lint run` inside as usual.
 ## CI/CD
 
 GitHub Actions workflows:
-- **CI** (`.github/workflows/ci.yml`): runs on push/PR to main — `go test`, golangci-lint v2.12.2, and a TUI plugin sync check (`dist/tui.js` vs embedded copy)
+- **CI** (`.github/workflows/ci.yml`): runs on push/PR to main — `go test`, golangci-lint v2.15.0, and a TUI plugin sync check (`dist/tui.js` vs embedded copy)
 - **VM Integration** (`.github/workflows/vm-integration.yml`): PRs/pushes to main touching VM code — boots real workspace VMs on an x64 Linux runner with KVM
 - **VM runtime** (`.github/workflows/vm-runtime.yml`): `vm-runtime-*` tags — builds and publishes the VM runtime bundle
 - **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, then GoReleaser runs `go generate ./internal/guestbin` and publishes binaries (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`)

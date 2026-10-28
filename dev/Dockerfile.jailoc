@@ -1,5 +1,7 @@
-# Workspace overlay image for developing jailoc inside a jailoc container.
-# Extends the jailoc base image with the Go toolchain, gopls, and golangci-lint.
+# Workspace overlay image for developing jailoc inside a jailoc workspace VM.
+# Extends the jailoc base image with the toolchain CI uses: Go, gopls and
+# golangci-lint. Node.js and npm for the TUI plugin come from the base image;
+# Docker for the integration tests runs in the VM with enable_docker.
 #
 # Usage — add to ~/.config/jailoc/config.toml:
 #
@@ -10,24 +12,34 @@
 # jailoc injects the resolved base image via the BASE build arg.
 
 ARG BASE
+ARG GO_VERSION=1.27.3
+
+FROM golang:${GO_VERSION} AS go
+
 FROM ${BASE}
 
-# Go toolchain — required by golangci-lint and gopls at runtime.
-ARG GO_VERSION=1.26.4
-RUN set -eux; \
-    ARCH=$(dpkg --print-architecture); \
-    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" \
-    | tar -xzC /usr/local
-ENV PATH="/usr/local/go/bin:${PATH}"
+# Go toolchain matching CI (go-version 1.27.x), from the official multi-arch
+# image so the architecture always matches the host.
+COPY --from=go /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:/home/agent/go/bin:${PATH}"
 
-# gopls — Go language server for OpenCode code intelligence (go-to-definition, completions, diagnostics).
-ARG GOPLS_VERSION=v0.22.0
-RUN GOBIN=/usr/local/bin go install golang.org/x/tools/gopls@${GOPLS_VERSION}
+# gopls — Go language server for the agent's code intelligence.
+ARG GOPLS_VERSION=v0.24.0
+RUN GOBIN=/usr/local/bin GOCACHE=/tmp/gocache GOPATH=/tmp/gopath \
+      go install golang.org/x/tools/gopls@${GOPLS_VERSION} \
+    && rm -rf /tmp/gocache /tmp/gopath
 
-# golangci-lint — static analysis matching CI (gosec, staticcheck, gocritic).
-ARG GOLANGCI_LINT_VERSION=v2.12.2
-RUN set -eux; \
-    ARCH=$(dpkg --print-architecture); \
-    curl -fsSL "https://github.com/golangci/golangci-lint/releases/download/${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION#v}-linux-${ARCH}.tar.gz" \
-    | tar -xzC /usr/local/bin --strip-components=1 \
-      "golangci-lint-${GOLANGCI_LINT_VERSION#v}-linux-${ARCH}/golangci-lint"
+# golangci-lint — same version as the CI lint job, checksum-verified.
+ARG GOLANGCI_LINT_VERSION=v2.15.0
+RUN set -eu; arch=$(dpkg --print-architecture); \
+    case "$arch" in \
+      arm64) sha=b4d8f17068b35ee6060cc2f69a16fb48740d706fbba81661c318649c114a6998 ;; \
+      amd64) sha=9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea ;; \
+      *) echo "unsupported architecture $arch" >&2; exit 1 ;; \
+    esac; \
+    v=${GOLANGCI_LINT_VERSION#v}; tmp=$(mktemp -d); \
+    curl -fsSLo "$tmp/lint.tar.gz" \
+      "https://github.com/golangci/golangci-lint/releases/download/${GOLANGCI_LINT_VERSION}/golangci-lint-${v}-linux-${arch}.tar.gz"; \
+    echo "${sha}  $tmp/lint.tar.gz" | sha256sum -c -; \
+    tar -xzf "$tmp/lint.tar.gz" -C /usr/local/bin --strip-components=1 "golangci-lint-${v}-linux-${arch}/golangci-lint"; \
+    rm -r "$tmp"
