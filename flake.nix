@@ -48,6 +48,14 @@
 
         env.CGO_ENABLED = 0;
 
+        # Embed jailoc-guest for linux/arm64 and linux/amd64, as the
+        # GoReleaser before hook does; without it jailoc cannot boot a VM.
+        preBuild = ''
+          go generate ./internal/guestbin
+        '';
+        # The vendored-modules derivation runs preBuild too, before vendor/ exists.
+        overrideModAttrs = _: {preBuild = "";};
+
         ldflags = [
           "-s"
           "-w"
