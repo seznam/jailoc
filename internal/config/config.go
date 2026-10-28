@@ -37,7 +37,7 @@ const (
 # allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
 # git_config = true
-# enable_docker = true
+# enable_docker = false
 # filtered_dns = false
 # dns_upstream = "10.20.30.53"
 # dns_blocked_zones = ["corp.example.com"]
@@ -66,7 +66,7 @@ paths = []
 # dockerfile = ""
 # ssh_auth_sock = false
 # git_config = true
-# enable_docker = true
+# enable_docker = false
 # filtered_dns = false
 # dns_upstream = "10.20.30.53"
 # dns_blocked_zones = ["corp.example.com"]

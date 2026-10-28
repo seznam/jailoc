@@ -182,9 +182,16 @@ At every `jailoc up`, jailoc finds the repositories under the workspace paths, i
 
 ## Use Docker inside the VM
 
-With `enable_docker = true` (the default), the guest runs its own Docker daemon when the image contains `dockerd`. In the images it builds, jailoc adds Docker CE with the `buildx` and `compose` plugins only for workspaces with Docker on; changing `enable_docker` takes effect after `jailoc restart`, which rebuilds the image. Images, containers and volumes live on a 20 GiB data disk that survives `jailoc down`; `jailoc down --purge` deletes it.
+Docker is off by default. Turn it on for a workspace, or for all of them in `[defaults]`:
 
-A custom image without `dockerd` starts without Docker and prints a warning. Set `enable_docker = false` to silence it. With an explicit `enable_docker = true`, such an image fails `jailoc up`.
+```toml
+[workspaces.my-project]
+enable_docker = true
+```
+
+The guest then runs its own Docker daemon. In the images it builds, jailoc adds Docker CE with the `buildx` and `compose` plugins; changing `enable_docker` takes effect after `jailoc restart`, which rebuilds the image. Images, containers and volumes live on a 20 GiB data disk that survives `jailoc down`; `jailoc down --purge` deletes it.
+
+An image used directly (`image`) must contain `dockerd`; otherwise `enable_docker = true` fails `jailoc up`.
 
 ## Forward the SSH agent
 

@@ -1453,18 +1453,20 @@ func TestResolveVMBackendPortAndDocker(t *testing.T) {
 		name         string
 		isolated     *bool
 		protectGit   *bool
+		docker       *bool
 		wantDocker   bool
 		wantIsolated bool
 	}{
-		{name: "default keeps docker", wantDocker: true},
-		{name: "protect_git disables docker", protectGit: new(true)},
-		{name: "isolated build", isolated: new(true), wantDocker: true, wantIsolated: true},
+		{name: "docker is off by default"},
+		{name: "enable_docker turns docker on", docker: new(true), wantDocker: true},
+		{name: "protect_git disables docker", docker: new(true), protectGit: new(true)},
+		{name: "isolated build", isolated: new(true), wantIsolated: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &config.Config{Workspaces: map[string]config.Workspace{
-				"ws": {Paths: []string{"/data/work"}, IsolatedBuild: tt.isolated, ProtectGit: tt.protectGit},
+				"ws": {Paths: []string{"/data/work"}, IsolatedBuild: tt.isolated, ProtectGit: tt.protectGit, EnableDocker: tt.docker},
 			}}
 			r, err := workspace.Resolve(cfg, "ws")
 			if err != nil {

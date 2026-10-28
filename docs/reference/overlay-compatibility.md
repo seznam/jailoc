@@ -28,7 +28,7 @@ On Linux hosts the image's root filesystem is mounted idmapped, so files owned b
 |--------|----------|--------|
 | Remove the agent binary (for example `opencode`) from `PATH` | Fatal | Sessions fail to start with an error naming the binary |
 | Override `ENV PATH` without `/home/agent/.local/bin` | Breaking | Tools installed by the agent under `~/.local/bin` are not found |
-| Remove `dockerd` with `enable_docker = true` set explicitly | Fatal | `jailoc up` fails; with the default value only a warning is printed |
+| Remove `dockerd` from an image used directly with `enable_docker = true` | Fatal | `jailoc up` fails |
 | Remove `nftables` while `enable_docker` is on | Breaking | `dockerd` cannot set up container networking |
 | Use the `docker` CLI in a `RUN` step with `enable_docker = false` | Fatal | The build fails: Docker is installed only for workspaces with `enable_docker` on |
 | Remove `ca-certificates` | Breaking | TLS fails, and a forwarded `ca_bundle` has no trust store to join |

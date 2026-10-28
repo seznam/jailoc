@@ -168,7 +168,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
-		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, true),
+		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, false),
 		IsolatedBuild:   boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
 		ProtectGit:      boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),
 		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.FilteredDNS, ws.FilteredDNS, false),
