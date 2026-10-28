@@ -300,6 +300,10 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if err != nil {
 		return vm.Spec{}, err
 	}
+	workDir := "/home/agent"
+	if len(ws.Paths) > 0 {
+		workDir = ws.Paths[0]
+	}
 	g := &guest.Config{
 		Hostname:  ws.Name,
 		User:      "agent",
@@ -307,7 +311,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		GID:       defaultAgentID,
 		IDMap:     hostIDMap(),
 		Home:      "/home/agent",
-		WorkDir:   ws.Paths[0],
+		WorkDir:   workDir,
 		Snapshots: snapshots,
 		Env: []string{
 			"JAILOC=1",

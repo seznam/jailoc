@@ -44,6 +44,31 @@ func TestUseHostDocker(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSpecWorkDir(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{name: "no paths uses guest home", want: "/home/agent"},
+		{name: "paths use first", paths: []string{"/work/first", "/work/second"}, want: "/work/first"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ws := &workspace.Resolved{Name: "test", Paths: tt.paths, CPU: 2, Memory: "2G"}
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
+			if err != nil {
+				t.Fatalf("workspaceSpec: %v", err)
+			}
+			if spec.Guest.WorkDir != tt.want {
+				t.Errorf("WorkDir = %q, want %q", spec.Guest.WorkDir, tt.want)
+			}
+		})
+	}
+}
+
 func TestSecretsPayload(t *testing.T) {
 	t.Parallel()
 	ws := &workspace.Resolved{
