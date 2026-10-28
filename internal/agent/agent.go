@@ -120,8 +120,8 @@ var harnesses = []Harness{
 		Resume:     "--session",
 		Unattended: []string{"--permission-preset", "full-access"},
 		// The image runs Node.js; OMO_RUNTIME=node silences the Bun notice.
-		Env:        []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
-		State:      []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
+		Env:   []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
+		State: []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
 	},
 }
 
