@@ -29,6 +29,13 @@ ip link set eth0 up
 ip link set eth0 mtu @MTU@
 until udhcpc -i eth0 -n -q -t 10; do log "dhcp failed, retrying"; sleep 1; done
 
+# Trust the workspace's forwarded CA bundle before any download (apk, image
+# pulls during builds).
+if [ -s /jailoc-ca.pem ]; then
+	cat /jailoc-ca.pem >> /etc/ssl/certs/ca-certificates.crt
+	log "CA bundle installed"
+fi
+
 # Docker state must persist on the data disk; never fall back to the
 # disposable root filesystem.
 fail() { log "$*"; poweroff -f; exit 1; }
@@ -57,11 +64,6 @@ nft add rule inet jailoc input tcp dport "$DOCKER_PORT" ip saddr != "$GATEWAY" d
 # Pid files and sockets in the root filesystem are never live at boot.
 rm -f /var/run/docker.pid /var/run/docker.sock /var/run/docker/containerd/containerd.pid
 
-# Trust the workspace's forwarded CA bundle for image pulls during builds.
-if [ -s /jailoc-ca.pem ]; then
-  cat /jailoc-ca.pem >> /etc/ssl/certs/ca-certificates.crt
-  log "CA bundle installed"
-fi
 dockerd --data-root /var/lib/docker --firewall-backend=nftables \
 	-H unix:///var/run/docker.sock -G "$AGENT_GID" \
 	-H "tcp://$GUEST:$DOCKER_PORT" --tls=false &
