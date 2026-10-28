@@ -170,3 +170,54 @@ func TestStageSnapshots(t *testing.T) {
 		t.Fatalf("failed staging left %v", entries)
 	}
 }
+
+func TestStageSnapshotsDirectorySymlinkRoot(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name   string
+		target func(string) string
+	}{
+		{name: "absolute", target: func(dir string) string { return dir }},
+		{name: "relative", target: func(string) string { return "actual" }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			src := t.TempDir()
+			actual := filepath.Join(src, "actual")
+			if err := os.Mkdir(actual, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(actual, "data"), []byte("copied"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("data", filepath.Join(actual, "nested-link")); err != nil {
+				t.Fatal(err)
+			}
+			linked := filepath.Join(src, "linked")
+			if err := os.Symlink(tt.target(actual), linked); err != nil {
+				t.Fatal(err)
+			}
+			state := t.TempDir()
+			binds, err := stageSnapshots(state, []config.Mount{{Host: linked, Container: "/home/agent/data", Mode: "ro"}}, "")
+			if err != nil {
+				t.Fatalf("stageSnapshots: %v", err)
+			}
+			staged := filepath.Join(vm.GuestDataDir(state), snapshotsDir, snapshotGeneration(binds), "0")
+			info, err := os.Lstat(staged)
+			if err != nil {
+				t.Fatalf("lstat staged root: %v", err)
+			}
+			if !info.IsDir() {
+				t.Fatalf("staged root mode = %v, want directory", info.Mode())
+			}
+			content, err := os.ReadFile(filepath.Join(staged, "data")) //nolint:gosec // G304: staged snapshot inside t.TempDir
+			if err != nil || string(content) != "copied" {
+				t.Fatalf("staged content = %q, %v", content, err)
+			}
+			target, err := os.Readlink(filepath.Join(staged, "nested-link"))
+			if err != nil || target != "data" {
+				t.Fatalf("nested link = %q, %v", target, err)
+			}
+		})
+	}
+}

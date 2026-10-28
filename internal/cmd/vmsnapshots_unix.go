@@ -155,6 +155,10 @@ func copyTree(root *os.Root, src, dst string) error {
 	if !info.IsDir() {
 		return copyRegular(root, src, dst, info.Mode().Perm())
 	}
+	src, err = filepath.EvalSymlinks(src)
+	if err != nil {
+		return fmt.Errorf("resolve snapshot directory %q: %w", src, err)
+	}
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
