@@ -17,6 +17,7 @@ require (
 	github.com/moby/moby/client v0.6.2
 	github.com/moby/term v0.5.2
 	github.com/opencontainers/image-spec v1.1.1
+	github.com/pelletier/go-toml/v2 v2.4.4-0.20260711173024-cbe6f88bcc08
 	github.com/spf13/cobra v1.10.2
 	github.com/stacklok/go-microvm v0.0.44
 	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
