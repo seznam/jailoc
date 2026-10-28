@@ -2,7 +2,7 @@
 
 # jailoc
 
-`jailoc` runs OpenCode agents in sandboxed micro-VMs so they can work autonomously without touching your host system. Each workspace boots its own lightweight VM with network restrictions, letting you control exactly which directories and internal services the agent can reach.
+`jailoc` runs coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO) in sandboxed micro-VMs so they can work autonomously without touching your host system. Each workspace boots its own lightweight VM with network restrictions, letting you control exactly which directories and internal services the agent can reach.
 
 ## Why jailoc
 
@@ -41,6 +41,7 @@ Step-by-step guides for specific tasks once you're up and running.
 - [Secrets](how-to/secrets.md)
 - [SSH & Git Passthrough](how-to/ssh-git-passthrough.md)
 - [Sessions](how-to/sessions.md)
+- [Coding Agents](how-to/coding-agents.md)
 - [TUI Plugin](how-to/tui-plugin.md)
 - [Migrate from jailoc v1](how-to/migrate-from-v1.md)
 - [Troubleshooting](how-to/troubleshooting.md)

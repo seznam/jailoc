@@ -1,6 +1,6 @@
 # jailoc
 
-> jailoc is a Go CLI tool that runs headless OpenCode coding agents in sandboxed micro-VMs. Each workspace boots its own libkrun VM with directory shares for project paths, a userspace network broker that blocks private networks, and SSH-based agent sessions.
+> jailoc is a Go CLI tool that runs coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO) in sandboxed micro-VMs. Each workspace boots its own libkrun VM with directory shares for project paths, a userspace network broker that blocks private networks, and SSH-based agent sessions.
 
 Key facts:
 
@@ -14,7 +14,7 @@ Key facts:
 ## Reference
 
 - [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): Root command (`--new`, `--attach`, `-c`, `-s`, `-w`) and all subcommands (`up`, `down --purge`, `restart`, `reload`, `sessions`, `logs`, `traffic`, `strace`, `exec`, `shell`, `status`, `add`, `config`, `migrate`) with flags
-- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field in `[base]`, `[vm]`, `[defaults]` and `[workspaces.<name>]`, with types, defaults, validation rules and merge semantics
+- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field in `[base]`, `[vm]`, `[defaults]` and `[workspaces.<name>]`, with types, defaults, validation rules and merge semantics; built-in coding agents with their session flags, persistent directories and environment
 - [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): How the workspace image is chosen, built and exported into the VM
 - [Default Image Contents](https://seznam.github.io/jailoc/reference/default-image/): Tools and runtimes shipped in the embedded base image
 - [Overlay Compatibility](https://seznam.github.io/jailoc/reference/overlay-compatibility/): Rules for workspace Dockerfile overlays
@@ -28,6 +28,7 @@ Key facts:
 - [Secrets](https://seznam.github.io/jailoc/how-to/secrets/): Pass secrets from host environment variables (from_env), files (from_file) or commands such as password managers (from_command) into the VM as session environment variables or /run/secrets files; rotate with reload
 - [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward the SSH agent and known_hosts, copy Git config into the VM
 - [Sessions](https://seznam.github.io/jailoc/how-to/sessions/): Attach to, start, continue and list agent sessions; read logs
+- [Coding Agents](https://seznam.github.io/jailoc/how-to/coding-agents/): Choose OpenCode, Claude Code, GitHub Copilot CLI or OmO per workspace, run several agents on one project, log in, pass arguments, install the agent yourself
 - [TUI Plugin](https://seznam.github.io/jailoc/how-to/tui-plugin/): Enable the TUI sidebar plugin to show workspace context in the OpenCode sidebar
 - [Migrate from jailoc v1](https://seznam.github.io/jailoc/how-to/migrate-from-v1/): Convert a Docker-based configuration with `jailoc migrate`
 - [Troubleshooting](https://seznam.github.io/jailoc/how-to/troubleshooting/): Find logs, debug common errors, clean up stale state

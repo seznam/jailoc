@@ -259,11 +259,9 @@ func vmLibDir(configured string) string {
 
 // Guest paths of the jailoc directories shared with a workspace VM.
 const (
-	guestConfigDir     = "/etc/jailoc"
-	guestCacheDir      = "/etc/jailoc-cache"
-	guestOpenCodeDir   = "/home/agent/.local/share/opencode"
-	guestOpenCodeState = "/home/agent/.local/state/opencode"
-	guestUserCache     = "/home/agent/.cache"
+	guestConfigDir = "/etc/jailoc"
+	guestCacheDir  = "/etc/jailoc-cache"
+	guestUserCache = "/home/agent/.cache"
 )
 
 // vmShares lists the host directories the workspace VM mounts: workspace

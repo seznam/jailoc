@@ -26,12 +26,12 @@ flowchart TD
   start(["jailoc up"]) --> s1{"[1] workspace.image set?"}
   s1 -- yes --> r1["Use image directly"]
   s1 -- no --> s2{"[2] defaults.image set<br>AND workspace.dockerfile set?"}
-  s2 -- yes --> r2["Build workspace overlay<br>on defaults.image"]
+  s2 -- yes --> r2["Build agent layer and workspace overlay<br>on defaults.image"]
   s2 -- no --> s3{"[3] defaults.image set?"}
   s3 -- yes --> r3["Use defaults.image directly"]
   s3 -- no --> s4{"[4] base.dockerfile set?"}
-  s4 -- yes --> r4["Build jailoc-base:preset-hash"]
-  s4 -- no --> r5["Build jailoc-base:embedded"]
+  s4 -- yes --> r4["Build jailoc-base:preset-hash<br>and agent layer"]
+  s4 -- no --> r5["Build jailoc-base:embedded<br>and agent layer"]
   r1 & r2 & r3 & r4 & r5 --> unpack["Pull if missing, docker save,<br>unpack into VM image cache"]
 ```
 
@@ -45,7 +45,7 @@ No build runs; `dockerfile` and `build_context` are not consulted (combining the
 
 **Trigger:** `[defaults] image` and workspace `dockerfile` are both set.
 
-The workspace Dockerfile is built on top of `defaults.image`, passed as the `BASE` build argument. The Dockerfile must start with:
+The [agent layer](#agent-layer) is built on top of `defaults.image`, then the workspace Dockerfile on top of that, passed as the `BASE` build argument. The Dockerfile must start with:
 
 ```dockerfile
 ARG BASE
@@ -72,15 +72,19 @@ The Dockerfile is loaded from a local path or HTTP(S) URL (maximum 1 MiB) and bu
 
 The Dockerfile embedded in the jailoc binary is built as `jailoc-base:embedded`. See [Default Image](default-image.md).
 
+### Agent layer (steps 2, 4 and 5)
+
+The workspace's [coding agent](configuration.md#coding-agents) is installed with `npm install -g` of its pinned package in a layer on top of the base image, tagged `jailoc-agent-<agent>:<content-hash>`. The base image needs `npm` on `PATH`. The layer is skipped with `agents.<agent>.install = false`. Images used directly (steps 1 and 3) get no agent layer and must contain the agent binary.
+
 ### Workspace overlay (steps 4 and 5)
 
-After step 4 or 5, a workspace `dockerfile` is built on top of the base image with `BASE` set to it, and tagged `jailoc-<workspace>:<content-hash>`.
+After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (or the base image when it is skipped) with `BASE` set to it, and tagged `jailoc-<workspace>:<content-hash>`.
 
 ---
 
 ## Build details
 
-- `<content-hash>` is derived from the SHA-256 of the Dockerfile content: 8 hex characters for workspace overlays, 16 for `[base] dockerfile` presets.
+- `<content-hash>` is derived from the SHA-256 of the Dockerfile content: 8 hex characters for workspace overlays, 16 for `[base] dockerfile` presets. The agent layer hash also covers the base image ID.
 - Host proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY` and lowercase variants) are passed as build arguments to every build.
 - Overlay build context: `build_context` when set; otherwise the Dockerfile's parent directory for a local path, or an empty temporary directory for a URL.
 - Images from steps 1 and 3 are pulled for `linux/<host architecture>` when the daemon does not have them.
@@ -102,6 +106,7 @@ The image's `ENTRYPOINT`, `CMD`, `USER`, `WORKDIR` and `EXPOSE` are not used; se
 | `defaults.image` | unchanged |
 | `[base] dockerfile` | `jailoc-base:preset-<content-hash>` |
 | Embedded Dockerfile | `jailoc-base:embedded` |
+| Agent layer on step 2, 4 or 5 | `jailoc-agent-<agent>:<content-hash>` |
 | Workspace overlay on step 4 or 5 | `jailoc-<workspace>:<content-hash>` |
 
 ---

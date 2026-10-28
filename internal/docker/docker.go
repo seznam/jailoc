@@ -17,6 +17,7 @@ import (
 	archive "github.com/moby/go-archive"
 	"github.com/moby/term"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/embed"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -254,6 +255,79 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	}
 
 	return overlayTag, nil
+}
+
+// BuildAgentImage installs the pinned npm package of harness h on top of base
+// and returns the tag of the result.
+func BuildAgentImage(ctx context.Context, base string, h agent.Harness) (string, error) {
+	if err := EnsureImage(ctx, base); err != nil {
+		return "", err
+	}
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return "", fmt.Errorf("create Docker Engine client for the %s image layer: %w", h.Title, err)
+	}
+	defer func() { _ = cli.Close() }()
+	inspect, err := cli.ImageInspect(ctx, base)
+	if err != nil {
+		return "", fmt.Errorf("inspect image %s: %w", base, err)
+	}
+	user := ""
+	if inspect.Config != nil {
+		user = inspect.Config.User
+	}
+	dockerfile := agentDockerfile(h, user)
+
+	tmpDir, err := os.MkdirTemp("", "jailoc-agent-dockerfile-")
+	if err != nil {
+		return "", fmt.Errorf("create temp directory for the %s image layer: %w", h.Title, err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), dockerfile, 0o600); err != nil {
+		return "", fmt.Errorf("write the %s image layer Dockerfile: %w", h.Title, err)
+	}
+	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
+	if err != nil {
+		return "", fmt.Errorf("create build context tar for %q: %w", tmpDir, err)
+	}
+	defer func() { _ = buildCtx.Close() }()
+
+	hash := sha256.Sum256(append([]byte(inspect.ID+"\n"), dockerfile...))
+	tag := fmt.Sprintf("jailoc-agent-%s:%x", h.Name, hash[:8])
+	buildArgs := proxyBuildArgs()
+	buildArgs["BASE"] = &base
+	_, _ = color.New(color.FgCyan).Printf("Installing %s %s into the image...\n", h.Title, h.Version)
+	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
+		Tags:      []string{tag},
+		BuildArgs: buildArgs,
+		Remove:    true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("build the %s image layer: %w", h.Title, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := displayStream(resp.Body); err != nil {
+		return "", fmt.Errorf("read the %s image layer build output: %w", h.Title, err)
+	}
+	return tag, nil
+}
+
+// agentDockerfile installs h as root and restores the base image's user.
+func agentDockerfile(h agent.Harness, user string) []byte {
+	var b strings.Builder
+	b.WriteString("ARG BASE\nFROM ${BASE}\n")
+	switchUser := user != "" && user != "root" && user != "0" && !strings.HasPrefix(user, "0:") && !strings.HasPrefix(user, "root:")
+	if switchUser {
+		b.WriteString("USER root\n")
+	}
+	// npm installs the pinned version without running curl | bash. npm 11
+	// runs install scripts of global packages only when allowed; harnesses
+	// use them to set up their native binaries.
+	fmt.Fprintf(&b, "RUN npm install -g --allow-scripts='%s' '%s@%s' && npm cache clean --force\n", h.Package, h.Package, h.Version)
+	if switchUser {
+		fmt.Fprintf(&b, "USER %s\n", user)
+	}
+	return []byte(b.String())
 }
 
 // injectBaseArg inserts "ARG BASE\n" after any leading parser directives (# syntax=...,

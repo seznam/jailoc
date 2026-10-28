@@ -17,8 +17,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const ocConfigContainerPath = "/home/agent/.config/opencode"
-
 var upCmd = &cobra.Command{
 	Use:   "up [workspace]",
 	Short: "Start a workspace environment",
@@ -115,7 +113,11 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 		return strategyImage, nil
 	case strategyDefaultsOverlay:
 		_, _ = color.New(color.FgCyan).Printf("Building overlay on default image %s...\n", strategyImage)
-		final, err := docker.BuildOverlayImage(ctx, strategyImage, *ws)
+		base, err := agentLayer(ctx, ws, strategyImage)
+		if err != nil {
+			return "", err
+		}
+		final, err := docker.BuildOverlayImage(ctx, base, *ws)
 		if err != nil {
 			return "", fmt.Errorf("build workspace overlay image: %w", err)
 		}
@@ -125,6 +127,9 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 		base, err := docker.ResolveBaseImage(ctx, cfg, version)
 		if err != nil {
 			return "", fmt.Errorf("resolve base image: %w", err)
+		}
+		if base, err = agentLayer(ctx, ws, base); err != nil {
+			return "", err
 		}
 
 		slog.Debug("building workspace layer", "base", base, "dockerfile", ws.Dockerfile)
@@ -136,7 +141,34 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 	}
 }
 
+// agentLayer installs the agent of ws on base unless install = false.
+func agentLayer(ctx context.Context, ws *workspace.Resolved, base string) (string, error) {
+	if !ws.AgentInstall {
+		return base, nil
+	}
+	image, err := docker.BuildAgentImage(ctx, base, ws.Agent)
+	if err != nil {
+		return "", fmt.Errorf("install %s into the workspace image: %w", ws.Agent.Title, err)
+	}
+	return image, nil
+}
+
 const tuiPluginContainerDir = "/etc/jailoc-tui-plugin"
+
+// writeAgentFiles prepares the host files the agent of ws reads: the
+// .gitignore of a read-only config directory mount and the TUI plugin.
+func writeAgentFiles(ws *workspace.Resolved, cacheDir string) error {
+	h := ws.Agent
+	if hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, h.ConfigDir); ok && h.ConfigDir != "" {
+		if err := ensureConfigGitignore(hostPath, h.ConfigGitignore); err != nil {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not pre-create .gitignore in %s: %v\n", hostPath, err)
+		}
+	}
+	if h.TUIConfigEnv == "" {
+		return nil
+	}
+	return writeTUIConfig(cacheDir)
+}
 
 func writeTUIConfig(baseDir string) error {
 	if err := writeTUIPlugin(baseDir); err != nil {
@@ -203,18 +235,10 @@ func writeTUIPlugin(baseDir string) error {
 	return nil
 }
 
-// ocConfigGitignore is the .gitignore content that OpenCode (v1.14.22+, shipped
-// since jailoc 1.13) expects in its config directory. Without it, OpenCode
-// crashes with EROFS on read-only filesystems.
-// See: https://github.com/anomalyco/opencode/issues/23040
-const ocConfigGitignore = `node_modules
-package.json
-package-lock.json
-bun.lock
-.gitignore
-`
-
-func ensureOCConfigGitignore(hostDir string) error {
+// ensureConfigGitignore creates hostDir/.gitignore with content unless it
+// exists: some agents write it into their config directory on startup and
+// fail when the directory is mounted read-only.
+func ensureConfigGitignore(hostDir, content string) error {
 	gitignorePath := filepath.Join(hostDir, ".gitignore")
 	_, err := os.Stat(gitignorePath)
 	if err == nil {
@@ -226,7 +250,7 @@ func ensureOCConfigGitignore(hostDir string) error {
 	if err := os.MkdirAll(hostDir, 0o755); err != nil { //nolint:gosec // 0o755: directory must be readable when bind-mounted
 		return fmt.Errorf("create directory %q: %w", hostDir, err)
 	}
-	if err := os.WriteFile(gitignorePath, []byte(ocConfigGitignore), 0o644); err != nil { //nolint:gosec // 0o644: standard file perms
+	if err := os.WriteFile(gitignorePath, []byte(content), 0o644); err != nil { //nolint:gosec // 0o644: standard file perms
 		return fmt.Errorf("write %q: %w", gitignorePath, err)
 	}
 	return nil

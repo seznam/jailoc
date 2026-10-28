@@ -172,7 +172,7 @@ func TestResolveFromCWD(t *testing.T) {
 			wantMatchedPath: "/a/b/c/d",
 		},
 		{
-			name: "equal length tiebreaker uses alphabetical workspace name",
+			name: "equal depth match is ambiguous",
 			cfg: &config.Config{
 				Workspaces: map[string]config.Workspace{
 					"beta": {
@@ -184,8 +184,20 @@ func TestResolveFromCWD(t *testing.T) {
 				},
 			},
 			cwd:             "/a/b/c",
-			wantWorkspace:   "alpha",
-			wantMatchedPath: "/a/b",
+			wantErrContains: "directory /a/b/c matches workspaces alpha, beta; choose one with -w",
+		},
+		{
+			name: "deeper match wins over an ambiguous shallower one",
+			cfg: &config.Config{
+				Workspaces: map[string]config.Workspace{
+					"x-claude":   {Paths: []string{"/a/b"}},
+					"x-opencode": {Paths: []string{"/a/b"}},
+					"inner":      {Paths: []string{"/a/b/c"}},
+				},
+			},
+			cwd:             "/a/b/c/d",
+			wantWorkspace:   "inner",
+			wantMatchedPath: "/a/b/c",
 		},
 		{
 			name: "segment count wins over string length",
@@ -1168,7 +1180,6 @@ func TestResolveMountsDefault(t *testing.T) {
 	want := []string{
 		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
 		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
-		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
 
@@ -1198,7 +1209,6 @@ func TestResolveMountsOverride(t *testing.T) {
 	want := []string{
 		filepath.Join(home, "custom-opencode") + ":/home/agent/.config/opencode:rw",
 		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
-		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
 
@@ -1227,7 +1237,6 @@ func TestResolveMountsRemoval(t *testing.T) {
 
 	want := []string{
 		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
-		filepath.Join(home, ".claude", "transcripts") + ":/home/agent/.claude/transcripts:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
 
@@ -1554,5 +1563,59 @@ func TestResolveVMPorts(t *testing.T) {
 	}
 	if !slices.Equal(d.Ports, []config.PortForward{{Host: 3000, Guest: 3000}, {Host: 8080, Guest: 80}}) {
 		t.Fatalf("inherited Ports = %v", d.Ports)
+	}
+}
+
+func TestResolveAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Agent: "claude",
+			Agents: map[string]config.AgentSettings{
+				"claude":  {Args: []string{"--model", "opus"}},
+				"copilot": {Install: new(false), Args: []string{"--banner"}},
+			},
+		},
+		Workspaces: map[string]config.Workspace{
+			"inherit":  {Paths: []string{"/tmp/a"}},
+			"override": {Paths: []string{"/tmp/b"}, Agent: "copilot", Agents: map[string]config.AgentSettings{"copilot": {Args: []string{}}}},
+			"opencode": {Paths: []string{"/tmp/c"}, Agent: "opencode"},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		wantAgent   string
+		wantInstall bool
+		wantArgs    []string
+		wantMounts  []string
+	}{
+		{"inherit", "claude", true, []string{"--model", "opus"}, []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
+		{"override", "copilot", false, []string{}, []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
+		{"opencode", "opencode", true, nil, []string{
+			filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
+			filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
+			filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved, err := workspace.Resolve(cfg, tt.name)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if resolved.Agent.Name != tt.wantAgent || resolved.AgentInstall != tt.wantInstall || !reflect.DeepEqual(resolved.AgentArgs, tt.wantArgs) {
+				t.Fatalf("agent = %q install=%v args=%#v, want %q install=%v args=%#v", resolved.Agent.Name, resolved.AgentInstall, resolved.AgentArgs, tt.wantAgent, tt.wantInstall, tt.wantArgs)
+			}
+			if !reflect.DeepEqual(resolved.Mounts, tt.wantMounts) {
+				t.Fatalf("mounts = %#v, want %#v", resolved.Mounts, tt.wantMounts)
+			}
+		})
+	}
+
+	if _, err := workspace.Resolve(&config.Config{Workspaces: map[string]config.Workspace{"x": {Agent: "vim"}}}, "x"); err == nil || !strings.Contains(err.Error(), `unknown agent "vim"`) {
+		t.Fatalf("Resolve unknown agent error = %v", err)
 	}
 }

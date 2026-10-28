@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/vm"
@@ -279,19 +280,25 @@ func carryMounts(p *prompter, label string, mounts, snapshots *[]string, stat fu
 
 // volumeTarget is a Docker volume of a workspace and the persistent VM home
 // directory it is copied to.
+// v1OpenCodeData is the guest path of the OpenCode data that jailoc v1 kept in
+// the opencode-data-<workspace> volume.
+const v1OpenCodeData = "/home/agent/.local/share/opencode"
+
 type volumeTarget struct {
 	workspace, volume, dst, guestPath string
 }
 
 func migrationVolumes(cfg *config.Config, names []string) ([]volumeTarget, error) {
+	// jailoc v1 ran OpenCode only.
+	v1Agent, _ := agent.Lookup("opencode")
 	var out []volumeTarget
 	for _, name := range names {
-		mounts, err := config.MergeMounts(config.DefaultMounts, cfg.Defaults.Mounts, cfg.Workspaces[name].Mounts)
+		mounts, err := config.MergeMounts(v1Agent.DefaultMounts(), cfg.Defaults.Mounts, cfg.Workspaces[name].Mounts)
 		if err != nil {
 			return nil, fmt.Errorf("workspace %q: %w", name, err)
 		}
 		for _, v := range []struct{ key, home, guestPath string }{
-			{"opencode-data-" + name, "opencode-data", guestOpenCodeDir},
+			{"opencode-data-" + name, "opencode-data", v1OpenCodeData},
 			{"opencode-cache-" + name, "cache", guestUserCache},
 		} {
 			if config.MountsContainTarget(mounts, v.guestPath) {

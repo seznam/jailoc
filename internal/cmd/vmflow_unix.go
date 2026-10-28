@@ -57,16 +57,11 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err := materializeCABundle(ws); err != nil {
 		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}
-	if hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, ocConfigContainerPath); ok {
-		if err := ensureOCConfigGitignore(hostPath); err != nil {
-			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not pre-create .gitignore in %s: %v\n", hostPath, err)
-		}
-	}
 	cacheDir := workspaceCacheDir(ws.Name)
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		return fmt.Errorf("create cache directory %q: %w", cacheDir, err)
 	}
-	if err := writeTUIConfig(cacheDir); err != nil {
+	if err := writeAgentFiles(ws, cacheDir); err != nil {
 		return err
 	}
 	shares, err := vmShares(ws)
@@ -313,11 +308,10 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Home:      "/home/agent",
 		WorkDir:   workDir,
 		Snapshots: snapshots,
-		Env: []string{
-			"JAILOC=1",
-			"JAILOC_WORKSPACE=" + ws.Name,
-			"OPENCODE_TUI_CONFIG=" + filepath.Join(guestCacheDir, "tui-container.json"),
-		},
+		Env:       append([]string{"JAILOC=1", "JAILOC_WORKSPACE=" + ws.Name}, ws.Agent.Env...),
+	}
+	if ws.Agent.TUIConfigEnv != "" {
+		g.Env = append(g.Env, ws.Agent.TUIConfigEnv+"="+filepath.Join(guestCacheDir, "tui-container.json"))
 	}
 	if _, err := os.Stat(filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)); err == nil {
 		g.CABundle = filepath.Join(guestConfigDir, caBundleFilename)
@@ -338,6 +332,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		ImageCache:  filepath.Join(vmRootDir(), "images"),
 		Broker:      []string{exe, "netbroker"},
 		GuestBinary: rt.guest,
+		Agent:       ws.Agent.Name,
 		Guest:       g,
 		Forwards:    vmForwards(ws.Ports),
 		SSHAgent:    agent,

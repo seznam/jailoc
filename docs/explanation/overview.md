@@ -1,6 +1,6 @@
 # How jailoc Works
 
-jailoc is a CLI tool that runs [OpenCode](https://opencode.ai) coding agents inside per-workspace micro-VMs. Each workspace boots its own libkrun virtual machine with its own kernel, sees only the host directories shared with it, and reaches the network only through a host-side broker that blocks private infrastructure while leaving the public internet open.
+jailoc is a CLI tool that runs coding agents ([OpenCode](https://opencode.ai), Claude Code, GitHub Copilot CLI or OmO, one per workspace) inside per-workspace micro-VMs. Each workspace boots its own libkrun virtual machine with its own kernel, sees only the host directories shared with it, and reaches the network only through a host-side broker that blocks private infrastructure while leaving the public internet open.
 
 The problem it solves is simple to state. An autonomous coding agent running directly on a machine can read any file the user can read, call any network endpoint, and change anything the user can touch. jailoc draws a hardware-virtualization boundary around it. Inside the VM the agent can do what it likes, including becoming root. Outside it, the agent has only what the workspace configuration grants.
 
@@ -18,7 +18,7 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 **5. VM start.** A detached supervisor starts the network broker and boots the VM from a copy-on-write clone of the unpacked image. `jailoc-guest`, the VM's init process, mounts the shares, prepares the `agent` user and starts an SSH server. jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
 
-Sessions run over SSH: `jailoc` attaches to a running OpenCode session or starts a new one. No OpenCode server port is published on the host and no server password exists. See [Manage sessions](../how-to/sessions.md).
+Sessions run over SSH: `jailoc` attaches to a running agent session or starts a new one. No agent server port is published on the host and no server password exists. See [Manage sessions](../how-to/sessions.md).
 
 `jailoc reload` applies network policy, published ports, the SSH agent, the CA bundle, snapshots, environment and secrets to a running VM. Changes to shares, CPU, memory, `enable_docker` or `protect_git` take effect after `jailoc restart`.
 

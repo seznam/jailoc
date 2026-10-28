@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
@@ -25,12 +26,10 @@ const (
 	guestDataHome   = "home"   // persistent home directories
 )
 
-// persistentHomeDirs survive restarts: OpenCode sessions and logins (data),
-// prompt history and model choice (state) and caches.
-var persistentHomeDirs = []struct{ name, guestPath string }{
-	{"opencode-data", guestOpenCodeDir},
-	{"opencode-state", guestOpenCodeState},
-	{"cache", guestUserCache},
+// persistentHomeDirs survive restarts: the state of the workspace's agent
+// (sessions, logins, history) and caches.
+func persistentHomeDirs(h agent.Harness) []agent.StateDir {
+	return append(slices.Clone(h.State), agent.StateDir{Name: "cache", Path: guestUserCache})
 }
 
 // vmGuestData prepares the guest data directory of the workspace VM, its
@@ -58,20 +57,22 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share) ([]
 	binds := []guest.Bind{
 		{Source: src(guestDataConfig), Target: guestConfigDir, ReadOnly: true},
 		{Source: src(guestDataCache), Target: guestCacheDir, ReadOnly: true},
-		{Source: src(guestDataCache + "/tui-plugin"), Target: tuiPluginContainerDir, ReadOnly: true},
 	}
-	if err := root.MkdirAll(guestDataCache+"/tui-plugin", 0o700); err != nil {
-		return nil, fmt.Errorf("create tui plugin dir: %w", err)
+	if ws.Agent.TUIConfigEnv != "" {
+		if err := root.MkdirAll(guestDataCache+"/tui-plugin", 0o700); err != nil {
+			return nil, fmt.Errorf("create tui plugin dir: %w", err)
+		}
+		binds = append(binds, guest.Bind{Source: src(guestDataCache + "/tui-plugin"), Target: tuiPluginContainerDir, ReadOnly: true})
 	}
-	for _, d := range persistentHomeDirs {
-		if slices.ContainsFunc(shares, func(s vm.Share) bool { return s.GuestPath == d.guestPath }) {
+	for _, d := range persistentHomeDirs(ws.Agent) {
+		if slices.ContainsFunc(shares, func(s vm.Share) bool { return s.GuestPath == d.Path }) {
 			continue
 		}
-		rel := guestDataHome + "/" + d.name
+		rel := guestDataHome + "/" + d.Name
 		if err := root.MkdirAll(rel, 0o700); err != nil {
 			return nil, fmt.Errorf("create %s: %w", rel, err)
 		}
-		binds = append(binds, guest.Bind{Source: src(rel), Target: d.guestPath})
+		binds = append(binds, guest.Bind{Source: src(rel), Target: d.Path})
 	}
 	return binds, nil
 }

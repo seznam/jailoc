@@ -17,7 +17,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/compose-spec/compose-go/v2/format"
-	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/agent"
 )
 
 const (
@@ -28,6 +28,7 @@ const (
 # dockerfile = ""
 
 [defaults]
+# agent = "opencode"  # opencode, claude, copilot or omo
 # image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
@@ -48,9 +49,13 @@ const (
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
 # [defaults.secrets.file.MY_FILE]
 #   from_file = "/path/to/secret"  # written to /run/secrets/MY_FILE
+# [defaults.agents.claude]
+#   install = true  # false: the image provides the agent binary
+#   args = []       # appended to every agent start
 
 [workspaces.default]
 paths = []
+# agent = "opencode"
 # image = ""
 # allowed_hosts = []
 # allowed_networks = []
@@ -101,13 +106,31 @@ var secretNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // secret names are exported verbatim into the session environment in the VM.
 var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// reservedEnvKeys are the session variables jailoc sets itself.
+// reservedEnvKeys are the session variables jailoc sets itself. The
+// variables of the agent harnesses are reserved too, see reservedEnvKey.
 var reservedEnvKeys = map[string]bool{
-	"NODE_USE_SYSTEM_CA":  true,
-	"OPENCODE_TUI_CONFIG": true,
-	"SSH_AUTH_SOCK":       true,
-	"JAILOC":              true,
-	"JAILOC_WORKSPACE":    true,
+	"NODE_USE_SYSTEM_CA": true,
+	"SSH_AUTH_SOCK":      true,
+	"JAILOC":             true,
+	"JAILOC_WORKSPACE":   true,
+}
+
+// reservedEnvKey reports whether jailoc or an agent harness sets key.
+func reservedEnvKey(key string) bool {
+	if reservedEnvKeys[key] {
+		return true
+	}
+	for _, h := range agent.All() {
+		if key == h.TUIConfigEnv {
+			return true
+		}
+		for _, kv := range h.Env {
+			if k, _, _ := strings.Cut(kv, "="); k == key {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var forbiddenMountPrefixes = []string{
@@ -166,11 +189,14 @@ var forbiddenMountHostPaths = []string{
 	"~/.aws",
 }
 
-var DefaultMounts = []string{
-	"~/.config/opencode:/home/agent/.config/opencode:rw",
-	"~/.opencode:/home/agent/.opencode:rw",
-	"~/.claude/transcripts:/home/agent/.claude/transcripts:rw",
-	"~/.agents:/home/agent/.agents:ro",
+// AgentSettings is an [<scope>.agents.<name>] table: settings of the agent
+// harness name, used when the workspace runs it.
+type AgentSettings struct {
+	// Install adds the built-in image layer that installs the harness;
+	// false leaves it to the workspace image. Unset means true.
+	Install *bool `toml:"install,omitempty"`
+	// Args are appended to every start of the agent.
+	Args []string `toml:"args,omitempty"`
 }
 
 type Mount struct {
@@ -231,56 +257,60 @@ type BaseConfig struct {
 }
 
 type Defaults struct {
-	Backend         string    `toml:"backend,omitempty"`
-	Env             []string  `toml:"env,omitempty"`
-	EnvFile         []string  `toml:"env_file,omitempty"`
-	Mounts          []string  `toml:"mounts,omitempty"`
-	Snapshots       []string  `toml:"snapshots,omitempty"`
-	AllowedHosts    []string  `toml:"allowed_hosts,omitempty"`
-	AllowedNetworks []string  `toml:"allowed_networks,omitempty"`
-	Secrets         Secrets   `toml:"secrets,omitempty"`
-	Image           string    `toml:"image,omitempty"`
-	SSHAuthSock     bool      `toml:"ssh_auth_sock,omitempty"`
-	GitConfig       *bool     `toml:"git_config,omitempty"`
-	CPU             *float64  `toml:"cpu,omitempty"`
-	Memory          *string   `toml:"memory,omitempty"`
-	ExposePort      *bool     `toml:"expose_port,omitempty"`
-	EnableDocker    *bool     `toml:"enable_docker,omitempty"`
-	FilteredDNS     *bool     `toml:"filtered_dns,omitempty"`
-	DNSUpstream     string    `toml:"dns_upstream,omitempty"`
-	DNSBlockedZones []string  `toml:"dns_blocked_zones,omitempty"`
-	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
-	IsolatedBuild   *bool     `toml:"isolated_build,omitempty"`
-	ProtectGit      *bool     `toml:"protect_git,omitempty"`
-	Ports           []Port    `toml:"ports,omitempty"`
+	Backend         string                   `toml:"backend,omitempty"`
+	Agent           string                   `toml:"agent,omitempty"`
+	Agents          map[string]AgentSettings `toml:"agents,omitempty"`
+	Env             []string                 `toml:"env,omitempty"`
+	EnvFile         []string                 `toml:"env_file,omitempty"`
+	Mounts          []string                 `toml:"mounts,omitempty"`
+	Snapshots       []string                 `toml:"snapshots,omitempty"`
+	AllowedHosts    []string                 `toml:"allowed_hosts,omitempty"`
+	AllowedNetworks []string                 `toml:"allowed_networks,omitempty"`
+	Secrets         Secrets                  `toml:"secrets,omitempty"`
+	Image           string                   `toml:"image,omitempty"`
+	SSHAuthSock     bool                     `toml:"ssh_auth_sock,omitempty"`
+	GitConfig       *bool                    `toml:"git_config,omitempty"`
+	CPU             *float64                 `toml:"cpu,omitempty"`
+	Memory          *string                  `toml:"memory,omitempty"`
+	ExposePort      *bool                    `toml:"expose_port,omitempty"`
+	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
+	FilteredDNS     *bool                    `toml:"filtered_dns,omitempty"`
+	DNSUpstream     string                   `toml:"dns_upstream,omitempty"`
+	DNSBlockedZones []string                 `toml:"dns_blocked_zones,omitempty"`
+	CABundle        *CABundle                `toml:"ca_bundle,omitempty"`
+	IsolatedBuild   *bool                    `toml:"isolated_build,omitempty"`
+	ProtectGit      *bool                    `toml:"protect_git,omitempty"`
+	Ports           []Port                   `toml:"ports,omitempty"`
 }
 
 type Workspace struct {
-	Backend         string    `toml:"backend,omitempty"`
-	Paths           []string  `toml:"paths,omitempty"`
-	Mounts          []string  `toml:"mounts,omitempty"`
-	Snapshots       []string  `toml:"snapshots,omitempty"`
-	AllowedHosts    []string  `toml:"allowed_hosts,omitempty"`
-	AllowedNetworks []string  `toml:"allowed_networks,omitempty"`
-	Env             []string  `toml:"env,omitempty"`
-	EnvFile         []string  `toml:"env_file,omitempty"`
-	Secrets         Secrets   `toml:"secrets,omitempty"`
-	BuildContext    string    `toml:"build_context,omitempty"`
-	Dockerfile      string    `toml:"dockerfile,omitempty"`
-	Image           string    `toml:"image,omitempty"`
-	SSHAuthSock     *bool     `toml:"ssh_auth_sock,omitempty"`
-	GitConfig       *bool     `toml:"git_config,omitempty"`
-	CPU             *float64  `toml:"cpu,omitempty"`
-	Memory          *string   `toml:"memory,omitempty"`
-	ExposePort      *bool     `toml:"expose_port,omitempty"`
-	EnableDocker    *bool     `toml:"enable_docker,omitempty"`
-	FilteredDNS     *bool     `toml:"filtered_dns,omitempty"`
-	DNSUpstream     string    `toml:"dns_upstream,omitempty"`
-	DNSBlockedZones []string  `toml:"dns_blocked_zones,omitempty"`
-	CABundle        *CABundle `toml:"ca_bundle,omitempty"`
-	IsolatedBuild   *bool     `toml:"isolated_build,omitempty"`
-	ProtectGit      *bool     `toml:"protect_git,omitempty"`
-	Ports           []Port    `toml:"ports,omitempty"`
+	Backend         string                   `toml:"backend,omitempty"`
+	Agent           string                   `toml:"agent,omitempty"`
+	Agents          map[string]AgentSettings `toml:"agents,omitempty"`
+	Paths           []string                 `toml:"paths,omitempty"`
+	Mounts          []string                 `toml:"mounts,omitempty"`
+	Snapshots       []string                 `toml:"snapshots,omitempty"`
+	AllowedHosts    []string                 `toml:"allowed_hosts,omitempty"`
+	AllowedNetworks []string                 `toml:"allowed_networks,omitempty"`
+	Env             []string                 `toml:"env,omitempty"`
+	EnvFile         []string                 `toml:"env_file,omitempty"`
+	Secrets         Secrets                  `toml:"secrets,omitempty"`
+	BuildContext    string                   `toml:"build_context,omitempty"`
+	Dockerfile      string                   `toml:"dockerfile,omitempty"`
+	Image           string                   `toml:"image,omitempty"`
+	SSHAuthSock     *bool                    `toml:"ssh_auth_sock,omitempty"`
+	GitConfig       *bool                    `toml:"git_config,omitempty"`
+	CPU             *float64                 `toml:"cpu,omitempty"`
+	Memory          *string                  `toml:"memory,omitempty"`
+	ExposePort      *bool                    `toml:"expose_port,omitempty"`
+	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
+	FilteredDNS     *bool                    `toml:"filtered_dns,omitempty"`
+	DNSUpstream     string                   `toml:"dns_upstream,omitempty"`
+	DNSBlockedZones []string                 `toml:"dns_blocked_zones,omitempty"`
+	CABundle        *CABundle                `toml:"ca_bundle,omitempty"`
+	IsolatedBuild   *bool                    `toml:"isolated_build,omitempty"`
+	ProtectGit      *bool                    `toml:"protect_git,omitempty"`
+	Ports           []Port                   `toml:"ports,omitempty"`
 }
 
 func ConfigDir() string {
@@ -478,7 +508,7 @@ func validateEnvEntries(entries []string, context string) error {
 		if key == "" {
 			return fmt.Errorf("%s: invalid env entry %q: key must not be empty", context, entry)
 		}
-		if reservedEnvKeys[key] {
+		if reservedEnvKey(key) {
 			return fmt.Errorf("%s: env key %q is reserved and cannot be overridden", context, key)
 		}
 	}
@@ -524,7 +554,7 @@ func validateSecretFile(path string) error {
 // reservedSecretEnvName reports env var names an env secret must never claim:
 // jailoc sets them itself, and HOME or PATH secrets would break every session.
 func reservedSecretEnvName(name string) bool {
-	return reservedEnvKeys[name] || name == "HOME" || name == "PATH"
+	return reservedEnvKey(name) || name == "HOME" || name == "PATH"
 }
 
 type secretDest int
@@ -814,6 +844,9 @@ func Validate(cfg *Config) error {
 		return v1Setting("defaults: expose_port")
 	}
 
+	if err := validateAgent(cfg.Defaults.Agent, cfg.Defaults.Agents); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
 	if err := validateBackend(cfg.Defaults.Backend); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
@@ -933,8 +966,6 @@ func Validate(cfg *Config) error {
 	}
 	sort.Strings(names)
 
-	pathOwners := map[string]string{}
-
 	for _, name := range names {
 		if !workspaceNameRe.MatchString(name) {
 			return fmt.Errorf("workspace name %q is invalid: must match [a-z0-9-]+", name)
@@ -954,12 +985,6 @@ func Validate(cfg *Config) error {
 				if p == prefix || strings.HasPrefix(p, prefix+"/") {
 					return fmt.Errorf("workspace %q: path %q conflicts with container-internal directory %q", name, p, prefix)
 				}
-			}
-
-			if owner, ok := pathOwners[p]; ok && owner != name {
-				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "warning: path %q is configured in multiple workspaces: %q and %q\n", p, owner, name)
-			} else {
-				pathOwners[p] = name
 			}
 		}
 
@@ -1059,6 +1084,9 @@ func Validate(cfg *Config) error {
 		if ws.ExposePort != nil {
 			return fmt.Errorf("workspace %q: %w", name, v1Setting("expose_port"))
 		}
+		if err := validateAgent(ws.Agent, ws.Agents); err != nil {
+			return fmt.Errorf("workspace %q: %w", name, err)
+		}
 		if err := validateBackend(ws.Backend); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
@@ -1121,6 +1149,20 @@ func validateBackend(backend string) error {
 		return v1Setting(`backend = "docker"`)
 	}
 	return fmt.Errorf("invalid backend %q: must be %q or empty", backend, BackendVM)
+}
+
+// validateAgent checks that agent and the keys of agents name built-in
+// harnesses.
+func validateAgent(name string, agents map[string]AgentSettings) error {
+	if _, ok := agent.Lookup(name); name != "" && !ok {
+		return fmt.Errorf("invalid agent %q: must be one of %s", name, strings.Join(agent.Names(), ", "))
+	}
+	for _, key := range slices.Sorted(maps.Keys(agents)) {
+		if _, ok := agent.Lookup(key); !ok {
+			return fmt.Errorf("agents: unknown agent %q: must be one of %s", key, strings.Join(agent.Names(), ", "))
+		}
+	}
+	return nil
 }
 
 // v1Setting reports a setting of the jailoc v1 Docker backend, which

@@ -14,7 +14,7 @@ flowchart LR
   end
   subgraph vm["Workspace VM"]
     guest["jailoc-guest<br/>init + SSH server"]
-    agent["opencode (UID 1000)"]
+    agent["coding agent (UID 1000)"]
   end
   jailoc -- "1. build: Docker API" --> dockerd
   dockerd -- "2. export image" --> cache
@@ -79,7 +79,7 @@ Files and directories in `snapshots`, and the Git configuration, aren't shared. 
 
 ### Persistent home
 
-Only `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` of the agent survive a restart. They live in `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` on the host, next to the Docker data disk of `enable_docker`. `jailoc down --purge` deletes them.
+Only the state directories of the workspace's coding agent (for OpenCode `~/.local/share/opencode` and `~/.local/state/opencode`, for Claude Code `~/.claude`) and `~/.cache` survive a restart. They live in `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` on the host, next to the Docker data disk of `enable_docker`. `jailoc down --purge` deletes them.
 
 ### Secrets
 

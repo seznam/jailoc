@@ -32,7 +32,7 @@ var attachSessionFlag string
 
 var rootCmd = &cobra.Command{
 	Use:          "jailoc [path]",
-	Short:        "Manage sandboxed OpenCode virtual machines",
+	Short:        "Manage sandboxed coding agent virtual machines",
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {

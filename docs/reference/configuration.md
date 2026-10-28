@@ -58,6 +58,8 @@ Defaults applied to all workspaces.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `backend` | string | `"vm"` | Accepted values: `"vm"` or empty. `"docker"` is rejected as a jailoc v1 setting. |
+| `agent` | string | `"opencode"` | Coding agent of the workspaces: `"opencode"`, `"claude"`, `"copilot"` or `"omo"`. See [Coding agents](#coding-agents). |
+| `agents` | table | `{}` | Settings per coding agent, keyed by agent name. See [`agents`](#agents). |
 | `image` | string | (none) | Pre-built image used as the base for workspace Dockerfile builds, or used directly when no workspace `dockerfile` is set. |
 | `env` | string[] | `[]` | Environment variables for every session, in `KEY=VALUE` format. |
 | `env_file` | string[] | `[]` | `.env` files loaded for all workspaces. Each file must exist at config load time. |
@@ -83,7 +85,8 @@ Defaults applied to all workspaces.
 
 ```toml
 [defaults]
-image = "myregistry.example.com/myteam/opencode-base:v1.2.3"
+agent = "claude"
+image = "myregistry.example.com/myteam/agent-base:v1.2.3"
 env = ["GOPRIVATE=*.example.com"]
 env_file = ["~/.config/jailoc/shared.env"]
 allowed_hosts = ["internal-registry.example.com"]
@@ -91,6 +94,9 @@ allowed_networks = ["10.0.0.0/8", "fd12:3456::/48"]
 ssh_auth_sock = true
 cpu = 4.0
 memory = "8g"
+
+[defaults.agents.claude]
+args = ["--model", "sonnet"]
 ```
 
 ---
@@ -103,6 +109,8 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 |-------|------|---------|-------------|
 | `paths` | string[] | `[]` | Host directories shared into the VM over virtio-fs at their original absolute paths. The first path is the working directory; with no paths, the working directory is `/home/agent`. |
 | `backend` | string | (inherit) | `"vm"` or empty. `"docker"` is rejected as a jailoc v1 setting. |
+| `agent` | string | (inherit) | Coding agent of the workspace. See [Coding agents](#coding-agents). |
+| `agents` | table | `{}` | Settings per coding agent; a set field overrides `[defaults.agents.<name>]`. See [`agents`](#agents). |
 | `image` | string | (none) | Pre-built image used directly, bypassing all build steps. Cannot be combined with `dockerfile` or `build_context`. |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to an overlay Dockerfile built on top of the base image. Build failure is fatal. Maximum file size for HTTP sources: 1 MiB. |
 | `build_context` | string | (none) | Build context of the overlay build. When empty, the Dockerfile's parent directory (local path) or a temporary directory (URL). |
@@ -129,6 +137,43 @@ dockerfile = "~/projects/my-project/overlay.Dockerfile"
 
 ---
 
+## Coding agents
+
+Each workspace runs one coding agent. Sessions start it in unattended mode, because the VM is the security boundary.
+
+| `agent` | Agent | npm package | Session command | Continue (`-c`) | Resume (`-s ID`) | Persistent home directories | Environment |
+|---|---|---|---|---|---|---|---|
+| `opencode` | OpenCode | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
+| `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `DISABLE_AUTOUPDATER=1` |
+| `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
+| `omo` | OmO | `omo-ai` | `omo --permission-preset full-access` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
+
+The package versions are pinned by the jailoc release. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
+
+jailoc installs the agent with `npm install -g` in a separate layer on top of the base image, before the workspace `dockerfile` overlay, in every image it builds: the [base image](image-resolution.md#step-5-embedded-dockerfile), a `[base] dockerfile`, and `defaults.image` with a workspace `dockerfile`. An image used directly (workspace `image`, or `defaults.image` without a workspace `dockerfile`) must contain the agent binary. Before a session starts, jailoc checks that the binary is on `PATH` in the VM.
+
+Changing `agent` of a running workspace takes effect after `jailoc restart`; sessions fail until then.
+
+### `agents`
+
+Settings per agent live in `[defaults.agents.<name>]` and `[workspaces.<ws>.agents.<name>]`, where `<name>` is one of the `agent` values. Only the settings of the selected agent apply.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `install` | bool | `true` | Install the agent in the images jailoc builds. With `false`, the image must provide the binary, for example through the workspace `dockerfile`. |
+| `args` | string[] | `[]` | Arguments appended to every session command line. A workspace list replaces the `[defaults]` list. |
+
+```toml
+[workspaces.my-project]
+paths = ["~/projects/my-project"]
+agent = "copilot"
+
+[workspaces.my-project.agents.copilot]
+args = ["--model", "gpt-5"]
+```
+
+---
+
 ## Validation Rules
 
 ### jailoc v1 settings
@@ -143,13 +188,15 @@ Any `backend` value other than `"vm"` and empty is rejected. See [Migrate from j
 
 ### `paths`
 
-`~` is expanded. An empty list is allowed; empty entries are rejected. Paths equal to or under these prefixes are rejected: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. A path configured in more than one workspace prints a warning.
+`~` is expanded. An empty list is allowed; empty entries are rejected. Paths equal to or under these prefixes are rejected: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`.
+
+Several workspaces may share a path, for example to run different agents in the same project. When the current directory matches several workspaces at the same depth, `jailoc` fails and asks for `-w`.
 
 ### `mounts`
 
 Format: `host:container[:mode]`, mode `ro` or `rw` (default `rw`). Mounts are virtio-fs directory shares.
 
-- `host`: absolute or `~` path. Must be a directory; a file mount fails at `jailoc up`. Use [`snapshots`](#snapshots) for files. An empty host (`":/home/agent/.opencode"`) removes an inherited mount with that destination.
+- `host`: absolute or `~` path. Must be a directory; a file mount fails at `jailoc up`. Use [`snapshots`](#snapshots) for files. An empty host (`":/home/agent/.agents"`) removes an inherited mount with that destination.
 - `container`: absolute after `~` expansion. Rejected when equal to or under `/`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. Destinations under `/home/agent/...` are allowed.
 
 Host paths equal to or under these entries are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`.
@@ -195,9 +242,13 @@ With `enable_docker = true` (the default), jailoc starts `dockerd` inside the wo
 
 `image` cannot be combined with `dockerfile` or `build_context`, and must not be whitespace-only. `dockerfile` accepts absolute paths, `~` paths and `http`/`https` URLs with a non-empty host (`http:///path` is rejected). Relative paths and other schemes are rejected.
 
+### `agent` and `agents`
+
+`agent` and the keys of `agents` must be `opencode`, `claude`, `copilot` or `omo`.
+
 ### `env`
 
-Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `OPENCODE_TUI_CONFIG`, `SSH_AUTH_SOCK`.
+Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`.
 
 ### `env_file`
 
@@ -237,14 +288,13 @@ Environment variables merge in this order, later wins per key:
 
 `allowed_hosts` and `allowed_networks` are unions of the defaults and workspace lists, deduplicated in order.
 
-`mounts` merges three layers keyed by destination: built-in default mounts, `[defaults].mounts`, workspace `mounts`. The last layer to set a destination wins; an empty host removes it. Built-in default mounts:
+`mounts` merges three layers keyed by destination: built-in default mounts of the workspace's agent, `[defaults].mounts`, workspace `mounts`. The last layer to set a destination wins; an empty host removes it. Built-in default mounts:
 
-| Destination | Host source | Mode |
-|---|---|---|
-| `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
-| `/home/agent/.opencode` | `~/.opencode` | `rw` |
-| `/home/agent/.claude/transcripts` | `~/.claude/transcripts` | `rw` |
-| `/home/agent/.agents` | `~/.agents` | `ro` |
+| Agent | Destination | Host source | Mode |
+|---|---|---|---|
+| `opencode` | `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
+| `opencode` | `/home/agent/.opencode` | `~/.opencode` | `rw` |
+| all | `/home/agent/.agents` | `~/.agents` | `ro` |
 
 `snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config` adds a lowest-priority snapshot of `/home/agent/.gitconfig`, which a `snapshots` entry for that destination replaces or, with an empty host, removes.
 
@@ -252,13 +302,13 @@ Environment variables merge in this order, later wins per key:
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 
 ## Persistent state
 
-`~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` keeps the agent's `~/.local/share/opencode`, `~/.local/state/opencode` and `~/.cache` across restarts. `jailoc down --purge` deletes it.
+`~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` keeps the agent's persistent home directories (see [Coding agents](#coding-agents)) and `~/.cache` across restarts. `jailoc down --purge` deletes it.
 
 ---
 

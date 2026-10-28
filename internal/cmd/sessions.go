@@ -13,8 +13,8 @@ import (
 // vmSessionOptions select the agent session a VM session attaches to.
 type vmSessionOptions struct {
 	dir      string // working directory of the agent
-	session  string // OpenCode session ID to continue (new agent session)
-	cont     bool   // continue the last OpenCode session (new agent session)
+	session  string // agent conversation ID to resume (new agent session)
+	cont     bool   // continue the last agent conversation (new agent session)
 	newAgent bool   // always start a new agent session
 	attach   string // attach to this agent session ID
 }

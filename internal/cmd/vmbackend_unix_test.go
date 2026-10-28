@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -117,10 +118,13 @@ func TestVMShares(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	oc, _ := agent.Lookup("opencode")
+	guestOpenCodeDir, guestOpenCodeState := oc.State[0].Path, oc.State[1].Path
 	cacheDir := filepath.Join(home, ".cache", "jailoc", "w")
 	ws := &workspace.Resolved{
 		Name:  "w",
 		Paths: []string{project},
+		Agent: oc,
 		Mounts: []string{
 			tools + ":/opt/tools:ro",
 			project + ":" + project + ":ro",
@@ -172,6 +176,21 @@ func TestVMShares(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(data, "home", "opencode-data")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("opencode-data created although a mount covers it: %v", err)
+	}
+
+	ws.Agent, _ = agent.Lookup("claude")
+	binds, err = vmGuestData(ws, cacheDir, shares)
+	if err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	wantBinds = []guest.Bind{
+		{Source: guest.HostDir + "/config", Target: guestConfigDir, ReadOnly: true},
+		{Source: guest.HostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
+		{Source: guest.HostDir + "/home/claude", Target: "/home/agent/.claude"},
+		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
+	}
+	if !slices.Equal(binds, wantBinds) {
+		t.Fatalf("claude binds =\n%+v\nwant\n%+v", binds, wantBinds)
 	}
 
 	ws.Mounts = []string{file + ":/opt/file.txt:ro"}
