@@ -113,7 +113,7 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 		return strategyImage, nil
 	case strategyDefaultsOverlay:
 		_, _ = color.New(color.FgCyan).Printf("Building overlay on default image %s...\n", strategyImage)
-		base, err := agentLayer(ctx, ws, strategyImage)
+		base, err := workspaceLayers(ctx, ws, strategyImage)
 		if err != nil {
 			return "", err
 		}
@@ -128,7 +128,7 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 		if err != nil {
 			return "", fmt.Errorf("resolve base image: %w", err)
 		}
-		if base, err = agentLayer(ctx, ws, base); err != nil {
+		if base, err = workspaceLayers(ctx, ws, base); err != nil {
 			return "", err
 		}
 
@@ -139,6 +139,19 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 		}
 		return final, nil
 	}
+}
+
+// workspaceLayers adds the layers jailoc builds for ws on top of base:
+// Docker when enable_docker is on, then the agent.
+func workspaceLayers(ctx context.Context, ws *workspace.Resolved, base string) (string, error) {
+	if ws.EnableDocker {
+		image, err := docker.BuildDockerImage(ctx, base)
+		if err != nil {
+			return "", fmt.Errorf("add Docker to the workspace image: %w", err)
+		}
+		base = image
+	}
+	return agentLayer(ctx, ws, base)
 }
 
 // agentLayer installs the agent of ws on base unless install = false.

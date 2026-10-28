@@ -30,6 +30,7 @@ On Linux hosts the image's root filesystem is mounted idmapped, so files owned b
 | Override `ENV PATH` without `/home/agent/.local/bin` | Breaking | Tools installed by the agent under `~/.local/bin` are not found |
 | Remove `dockerd` with `enable_docker = true` set explicitly | Fatal | `jailoc up` fails; with the default value only a warning is printed |
 | Remove `nftables` while `enable_docker` is on | Breaking | `dockerd` cannot set up container networking |
+| Use the `docker` CLI in a `RUN` step with `enable_docker = false` | Fatal | The build fails: Docker is installed only for workspaces with `enable_docker` on |
 | Remove `ca-certificates` | Breaking | TLS fails, and a forwarded `ca_bundle` has no trust store to join |
 | Remove `sudo` | Degraded | The agent cannot install packages at runtime |
 | Build for a CPU architecture other than the host's | Fatal | The VM cannot run the image |

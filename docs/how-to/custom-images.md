@@ -11,7 +11,7 @@ An image used directly (`image`) or built from a custom base Dockerfile (`[base]
 - a user `agent` with UID 1000 and home directory `/home/agent`;
 - `npm` on `PATH` when jailoc installs the [coding agent](coding-agents.md) on top of a `[base] dockerfile`, or the agent binary (for example `opencode` or `claude`) on `PATH` in an image used directly;
 - `PATH` including `/home/agent/.local/bin`, and for OpenCode `/home/agent/.opencode/bin`;
-- `dockerd` if you want Docker inside the VM (see [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm)).
+- for Docker inside the VM, `apt-get` (or `nft` on `PATH`) when jailoc adds its Docker layer on top of a `[base] dockerfile`, or `dockerd` and `nftables` in an image used directly (see [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm)).
 
 !!! warning
     A plain OS image like `ubuntu:24.04` doesn't meet these requirements. Start from the jailoc base with an overlay unless you need full control.

@@ -158,7 +158,7 @@ See the [Image resolution reference](../reference/image-resolution.md).
 
 **Symptom:** `jailoc up` fails with `enable_docker is on, but the workspace image has no dockerd`, or `docker` commands fail in the guest.
 
-**Fix:** install Docker in the image, or set `enable_docker = false`. Docker is also off when `protect_git = true`. See [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm).
+**Fix:** install Docker in an image used directly (`image`, or `defaults.image` without a workspace `dockerfile`), or set `enable_docker = false`. Images jailoc builds get Docker automatically. Docker is also off when `protect_git = true`. See [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm).
 
 ## Clean up
 
