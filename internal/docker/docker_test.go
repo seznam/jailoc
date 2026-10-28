@@ -78,6 +78,34 @@ func TestProxyBuildArgs(t *testing.T) {
 	}
 }
 
+func TestDockerLayerDockerfile(t *testing.T) {
+	t.Parallel()
+
+	const stages = "FROM ubuntu:24.04 AS docker\nRUN true\n"
+	layer := "RUN command -v nft >/dev/null || (apt-get update \\\n" +
+		"    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables \\\n" +
+		"    && rm -rf /var/lib/apt/lists/*)\n" +
+		"COPY --from=docker /out/bin/ /usr/local/bin/\n" +
+		"COPY --from=docker /out/cli-plugins/ /usr/local/lib/docker/cli-plugins/\n"
+	head := "ARG BASE\n" + stages + "\nFROM ${BASE}\n"
+	tests := []struct {
+		user string
+		want string
+	}{
+		{"", head + layer},
+		{"root", head + layer},
+		{"agent", head + "USER root\n" + layer + "USER agent\n"},
+	}
+	for _, tt := range tests {
+		t.Run("user="+tt.user, func(t *testing.T) {
+			t.Parallel()
+			if got := string(dockerLayerDockerfile([]byte(stages), tt.user)); got != tt.want {
+				t.Fatalf("dockerLayerDockerfile() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAgentDockerfile(t *testing.T) {
 	t.Parallel()
 

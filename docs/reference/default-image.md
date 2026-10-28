@@ -2,7 +2,7 @@
 
 The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below. This image is used when no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile). jailoc unpacks it into the VM image cache and boots it as the root file system of the workspace VM.
 
-Core tool versions (Node.js, the npm language servers, Docker, Buildx, Compose) are pinned as `ARG` declarations at the top of the Dockerfile.
+Core tool versions (Node.js, the npm language servers) are pinned as `ARG` declarations at the top of the Dockerfile.
 
 The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of the VM and starts sessions over SSH.
 
@@ -38,9 +38,9 @@ The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of th
 | unzip | `unzip` (apt) | `unzip` |
 | xz-utils | `xz-utils` (apt) | `xz` |
 
-## Docker
+## Docker layer
 
-Docker CE static binaries, checksum-verified. With `enable_docker = true`, jailoc-guest starts `dockerd` from these binaries inside the workspace VM.
+The base image contains no Docker. For workspaces with `enable_docker = true` (the default), jailoc adds a separate layer with Docker CE static binaries, checksum-verified, and `nftables`, the firewall backend of `dockerd`; see [Image Resolution](image-resolution.md#docker-layer-steps-2-4-and-5). jailoc-guest starts `dockerd` from these binaries inside the workspace VM. Versions are pinned in the embedded [`docker.Dockerfile`](https://github.com/seznam/jailoc/blob/main/internal/embed/assets/docker.Dockerfile).
 
 | Tool | Source | Binary |
 |------|--------|--------|
@@ -64,7 +64,6 @@ The base image contains no coding agent. jailoc installs the workspace's agent (
 
 | Tool | Purpose |
 |------|---------|
-| `nftables` | Firewall backend of `dockerd` inside the VM |
 | `ca-certificates` | TLS certificate store; a forwarded `ca_bundle` is added to it |
 | `libatomic1` | Required by the Node.js runtime |
 
