@@ -101,7 +101,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		return err
 	}
 	spec.Guest.Binds = internal
-	if err := configureVMDocker(cfg, ws, &spec); err != nil {
+	if err := configureVMDocker(ws, &spec); err != nil {
 		return err
 	}
 	if ws.ProtectGit {
@@ -586,9 +586,8 @@ func restartVMIfRunning(ctx context.Context, ws *workspace.Resolved) error {
 var dockerdPaths = []string{"usr/local/bin/dockerd", "usr/bin/dockerd", "usr/sbin/dockerd", "bin/dockerd"}
 
 // configureVMDocker enables the Docker daemon of the workspace VM when
-// enable_docker is on and the image ships dockerd. Without dockerd an
-// explicit enable_docker = true is an error and the default only a warning.
-func configureVMDocker(cfg *config.Config, ws *workspace.Resolved, spec *vm.Spec) error {
+// enable_docker is on; the image must ship dockerd.
+func configureVMDocker(ws *workspace.Resolved, spec *vm.Spec) error {
 	if !ws.EnableDocker {
 		return nil
 	}
@@ -597,12 +596,7 @@ func configureVMDocker(cfg *config.Config, ws *workspace.Resolved, spec *vm.Spec
 		return fmt.Errorf("workspace %q: %w", ws.Name, err)
 	}
 	if !has {
-		explicit := cfg.Defaults.EnableDocker != nil || cfg.Workspaces[ws.Name].EnableDocker != nil
-		if explicit {
-			return fmt.Errorf("workspace %q: enable_docker is on, but the workspace image has no dockerd; install Docker in the image or set enable_docker = false", ws.Name)
-		}
-		_, _ = color.New(color.FgYellow).Printf("Docker is not available in workspace %s: the image has no dockerd (set enable_docker = false to silence this)\n", ws.Name)
-		return nil
+		return fmt.Errorf("workspace %q: enable_docker is on, but the workspace image has no dockerd; install Docker in the image or set enable_docker = false", ws.Name)
 	}
 	spec.Docker = true
 	spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}

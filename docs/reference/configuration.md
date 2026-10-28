@@ -82,7 +82,7 @@ Defaults applied to all workspaces.
 | `git_config` | bool | `true` | Copy the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only to `/home/agent/.gitconfig`. |
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
-| `enable_docker` | bool | `true` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
+| `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 | `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config` and linked worktree `commondir` pointers read-only inside the VM for repositories under workspace `paths`, including symlinked workspace roots. Disable `sudo` and Docker there. |
 | `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. |
 | `filtered_dns` | bool | `false` | Filter DNS answers in the network broker. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
@@ -306,7 +306,7 @@ The bundle is added to the VM's system trust store, which its Docker daemon also
 
 ### `enable_docker`
 
-With `enable_docker = true` (the default), jailoc starts `dockerd` inside the workspace VM when the image contains `dockerd`. Without `dockerd`, an explicit `enable_docker = true` fails at `jailoc up` and the default only prints a warning. `enable_docker = true` together with `protect_git = true` is rejected, because Docker access is root access inside the VM; `protect_git` alone turns Docker off. In the images jailoc builds, Docker is installed only when `enable_docker` is on; see [Docker layer](image-resolution.md#docker-layer-steps-2-4-and-5).
+With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an image without `dockerd` fails `jailoc up`. `enable_docker = true` together with `protect_git = true` is rejected, because Docker access is root access inside the VM; `protect_git` alone turns Docker off. In the images jailoc builds, Docker is installed only when `enable_docker` is on; see [Docker layer](image-resolution.md#docker-layer-steps-2-4-and-5).
 
 ### `cpu` and `memory`
 

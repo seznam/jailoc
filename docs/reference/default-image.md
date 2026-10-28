@@ -40,7 +40,7 @@ The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of th
 
 ## Docker layer
 
-The base image contains no Docker. For workspaces with `enable_docker = true` (the default), jailoc adds a separate layer with Docker CE static binaries, checksum-verified, and `nftables`, the firewall backend of `dockerd`; see [Image Resolution](image-resolution.md#docker-layer-steps-2-4-and-5). jailoc-guest starts `dockerd` from these binaries inside the workspace VM. Versions are pinned in the embedded [`docker.Dockerfile`](https://github.com/seznam/jailoc/blob/main/internal/embed/assets/docker.Dockerfile).
+The base image contains no Docker. For workspaces with `enable_docker = true` (off by default), jailoc adds a separate layer with Docker CE static binaries, checksum-verified, and `nftables`, the firewall backend of `dockerd`; see [Image Resolution](image-resolution.md#docker-layer-steps-2-4-and-5). jailoc-guest starts `dockerd` from these binaries inside the workspace VM. Versions are pinned in the embedded [`docker.Dockerfile`](https://github.com/seznam/jailoc/blob/main/internal/embed/assets/docker.Dockerfile).
 
 | Tool | Source | Binary |
 |------|--------|--------|
