@@ -24,10 +24,14 @@ Run headless OpenCode coding agents in sandboxed micro-VMs.
 
 **Requirements:** macOS on Apple Silicon, or Linux amd64 with KVM (`/dev/kvm` access) and Landlock (Linux 5.19 or later). Docker Engine must be running on the host to build workspace images. Upgrading from jailoc v1? Run `jailoc migrate`.
 
-### go install
+### Build from source
+
+`go install …@latest` produces a binary without the embedded VM init (`jailoc-guest`), so build from a checkout:
 
 ```bash
-go install github.com/seznam/jailoc/cmd/jailoc@latest
+git clone https://github.com/seznam/jailoc.git && cd jailoc
+go generate ./internal/guestbin
+go install ./cmd/jailoc
 ```
 
 Make sure `$GOPATH/bin` (default `$HOME/go/bin`) is on your `PATH`.

@@ -21,7 +21,7 @@ Key facts:
 
 ## How-to Guides
 
-- [Installation](https://seznam.github.io/jailoc/how-to/installation/): go install, Nix and pre-built binaries, host requirements
+- [Installation](https://seznam.github.io/jailoc/how-to/installation/): host requirements, pre-built binaries, building from source, VM runtime
 - [Workspace Configuration](https://seznam.github.io/jailoc/how-to/workspace-configuration/): Add workspaces, set paths, mounts, snapshots, ports and per-workspace options
 - [Custom Images](https://seznam.github.io/jailoc/how-to/custom-images/): URL Dockerfile presets, local Dockerfiles, build context, isolated builds
 - [Network Access](https://seznam.github.io/jailoc/how-to/network-access/): allowed_hosts, allowed_networks, filtered DNS, verifying the policy

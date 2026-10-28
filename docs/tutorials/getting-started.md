@@ -17,13 +17,7 @@ docker info
 
 ## Install jailoc
 
-Install the latest release with `go install`:
-
-```bash
-go install github.com/seznam/jailoc/cmd/jailoc@{{ version }}
-```
-
-Alternatively, download a pre-built binary from [GitHub Releases](https://github.com/seznam/jailoc/releases).
+Download the archive for your platform from [GitHub Releases](https://github.com/seznam/jailoc/releases), extract it, and place the `jailoc` binary on your `PATH`. To build from source instead, see [How to install jailoc](../how-to/installation.md#build-from-source).
 
 After installation, confirm it's on your `PATH`:
 

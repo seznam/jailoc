@@ -51,21 +51,24 @@ The workspace VMs don't use Docker. You need Docker Engine on the host only for:
 
 Without a usable host daemon, `"auto"` builds images in a builder VM.
 
-## Install with go install
-
-```bash
-go install github.com/seznam/jailoc/cmd/jailoc@{{ version }}
-```
-
-The binary lands in `$GOPATH/bin` (or `$HOME/go/bin` by default). Make sure that directory is on your `PATH`.
-
 ## Install a pre-built binary
 
 Pre-built archives for macOS (arm64) and Linux (amd64) are published with every release. Download the one matching your platform from the [GitHub Releases page](https://github.com/seznam/jailoc/releases), extract it, and place the binary on your `PATH`.
+
+## Build from source
+
+`go install github.com/seznam/jailoc/cmd/jailoc@...` produces a binary without `jailoc-guest`, the VM init, and cannot start workspaces. Build from a checkout instead, embedding the guest binary with `go generate`:
+
+```bash
+git clone https://github.com/seznam/jailoc.git
+cd jailoc
+go generate ./internal/guestbin
+go install ./cmd/jailoc
+```
+
+The binary lands in `$GOPATH/bin` (or `$HOME/go/bin` by default). Make sure that directory is on your `PATH`.
 
 ## Let jailoc fetch the VM runtime
 
 You don't install the VM runtime by hand. The first `jailoc up` downloads the pinned runtime for your platform (the `go-microvm-runner` process, libkrun and the libkrunfw guest kernel), verifies its SHA-256 checksums and unpacks it into `~/.cache/jailoc-vm/runtime/`. Later starts reuse it. If the download or the checksum check fails, see [Troubleshooting](troubleshooting.md#vm-runtime-download-fails).
 
-!!! note
-    A jailoc built from source without `go generate ./internal/guestbin` has no embedded `jailoc-guest` and looks for it next to the runner instead. See [Development](../development.md).
