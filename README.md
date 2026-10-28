@@ -22,7 +22,7 @@ Run headless OpenCode coding agents in sandboxed micro-VMs.
 
 ## Installation
 
-**Requirements:** macOS on Apple Silicon, or Linux amd64 with KVM (`/dev/kvm` access). Docker Engine must be running on the host to build workspace images. Upgrading from jailoc v1? Run `jailoc migrate`.
+**Requirements:** macOS on Apple Silicon, or Linux amd64 with KVM (`/dev/kvm` access) and Landlock (Linux 5.19 or later). Docker Engine must be running on the host to build workspace images. Upgrading from jailoc v1? Run `jailoc migrate`.
 
 ### go install
 

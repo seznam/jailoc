@@ -356,6 +356,9 @@ func commonOptions(spec Spec) []microvm.Option {
 	if spec.LibDir != "" {
 		backend = append(backend, libkrun.WithLibDir(spec.LibDir))
 	}
+	if s := vmmSpawner(); s != nil {
+		backend = append(backend, libkrun.WithSpawner(s))
+	}
 	opts := []microvm.Option{
 		microvm.WithName("jailoc-" + spec.Workspace),
 		microvm.WithCPUs(spec.CPUs),

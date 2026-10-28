@@ -76,6 +76,12 @@ ls -l /dev/kvm
 sudo usermod -aG kvm "$USER"
 ```
 
+## VM process can't be confined
+
+**Symptom:** on Linux, the VM fails to start with `confining the VM process needs Landlock`.
+
+**Fix:** jailoc runs the VM process under Landlock and does not start a VM without it. Use Linux 5.19 or later and check that `landlock` appears in `/sys/kernel/security/lsm`; if it doesn't, add it to the `lsm=` kernel parameter and reboot. See [How to install jailoc](installation.md#check-your-platform).
+
 ## VM runtime download fails
 
 **Symptom:** the first `jailoc up` fails while `Downloading VM runtime ...` with `download ...: HTTP <code>` or `checksum mismatch for ...`.

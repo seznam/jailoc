@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -299,6 +300,35 @@ func TestWorkspaceVM(t *testing.T) {
 		}
 		if got := mustGuest(ctx, t, "stat -c %u:%g /etc/passwd ~ "+project); got != "0:0\n1000:1000\n1000:1000" {
 			t.Fatalf("guest ownership = %q, want root files, agent home and project", got)
+		}
+	})
+
+	t.Run("runner confined on Linux", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("Landlock confinement of the runner is Linux-only")
+		}
+		want, err := filepath.EvalSymlinks(os.Getenv("JAILOC_VM_RUNNER"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		exes, _ := filepath.Glob("/proc/[0-9]*/exe")
+		found := false
+		for _, exe := range exes {
+			if target, err := os.Readlink(exe); err != nil || target != want {
+				continue
+			}
+			status, err := os.ReadFile(filepath.Join(filepath.Dir(exe), "status")) //nolint:gosec // G304: procfs
+			if err != nil {
+				continue
+			}
+			found = true
+			// jailoc sets no_new_privs right before it applies the Landlock domain.
+			if !strings.Contains(string(status), "NoNewPrivs:\t1") {
+				t.Fatalf("runner %s was started without the Landlock confinement", filepath.Dir(exe))
+			}
+		}
+		if !found {
+			t.Fatal("no running go-microvm-runner process found")
 		}
 	})
 

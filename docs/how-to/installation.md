@@ -9,7 +9,7 @@ Every workspace runs in its own libkrun micro-VM. jailoc supports two host platf
 | Platform | Hypervisor | Requirement |
 |----------|------------|-------------|
 | macOS on Apple Silicon (`darwin/arm64`) | Hypervisor.framework | None |
-| Linux on x86-64 (`linux/amd64`) | KVM | Read and write access to `/dev/kvm` |
+| Linux on x86-64 (`linux/amd64`) | KVM | Read and write access to `/dev/kvm`; Linux 5.19 or later with Landlock enabled |
 
 On Linux, check that KVM is available and that your user can open it:
 
@@ -22,6 +22,14 @@ If the device belongs to the `kvm` group, add yourself to it and log in again:
 ```bash
 sudo usermod -aG kvm "$USER"
 ```
+
+jailoc confines the VM process with Landlock and refuses to start a VM when the kernel lacks it. Check that `landlock` is listed among the active security modules:
+
+```bash
+cat /sys/kernel/security/lsm
+```
+
+If it is missing, add `landlock` to the `lsm=` kernel parameter.
 
 !!! note "Linux file ownership"
     On Linux, libkrun's virtio-fs shows the real host owner of every file, so `jailoc-guest` mounts the VM's root filesystem and the shares idmapped: inside the VM your files appear as root's or the agent's, and on the host everything belongs to your user. Root inside the VM cannot give a shared file another host owner. If the guest kernel rejects idmapped mounts, the agent falls back to your user's UID and GID and `sudo` does not grant root.
