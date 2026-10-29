@@ -59,6 +59,32 @@ from_command = "security find-generic-password -s anthropic -w"
 
 `jailoc down --purge` deletes the state, including logins.
 
+## Share or discard agent state
+
+By default each workspace keeps its own agent state. To reuse logins and sessions across workspaces, name a profile; to start clean every time, set `profile = false`:
+
+```toml
+[defaults.agents.claude]
+profile = "work"
+
+[workspaces.scratch.agents.claude]
+profile = false
+```
+
+A named profile lives in `~/.local/share/jailoc/profiles/<name>`, survives `jailoc down --purge`, and is used by one running workspace at a time: stop the other workspace before starting one with the same profile. A custom agent does not inherit `profile` from the agent it is derived from. See [Agent profiles](../reference/configuration.md#agent-profiles).
+
+## Mount agent configuration
+
+`agents.<name>.mounts` adds mounts only while that agent is selected, for example a separate OpenCode configuration for a custom agent:
+
+```toml
+[defaults.agents.opencode-legacy]
+from = "opencode"
+mounts = ["~/.config/opencode-legacy:/home/agent/.config/opencode"]
+```
+
+An entry with an empty host, such as `":/home/agent/.agents"`, removes a built-in mount. See [Agent mounts](../reference/configuration.md#agent-mounts).
+
 ## Pass extra arguments
 
 `args` is appended to every session command line:

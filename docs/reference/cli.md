@@ -79,7 +79,7 @@ Shuts down the workspace VM and its network broker. All agent sessions end. The 
 
 | Flag | Description |
 |------|-------------|
-| `--purge` | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM and, with `isolated_build`, the workspace's builder VM and build cache. |
+| `--purge` | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
 
 ---
 
@@ -116,7 +116,8 @@ Running sessions keep running with their old environment; sessions started after
 
 Changes to the following need a new VM. `jailoc reload` lists them, and [`jailoc restart`](#jailoc-restart) applies them:
 
-- `paths` and `mounts`
+- `paths` and `mounts`, including `agents.<name>.mounts`
+- the agent's `profile`
 - `cpu`, `memory`
 - `enable_docker`, `protect_git`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
@@ -128,7 +129,7 @@ Fails when the workspace is not running.
 
 ### `jailoc status`
 
-Show whether the workspace VM is running.
+Show whether the workspace VM is running and, for a running VM, where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
 
 ```
 jailoc status [workspace] [flags]

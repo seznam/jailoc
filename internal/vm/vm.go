@@ -106,6 +106,11 @@ type Spec struct {
 	// Agent is the agent harness of a workspace VM; empty in specs written
 	// before jailoc ran other agents than OpenCode.
 	Agent string `json:"agent,omitempty"`
+	// Profile is the named agent profile whose state directories the
+	// workspace VM shares; EphemeralProfile marks agent state that starts
+	// empty with every VM. Neither is set for per-workspace state.
+	Profile          string `json:"profile,omitempty"`
+	EphemeralProfile bool   `json:"ephemeral_profile,omitempty"`
 	// Guest is the guest configuration (workspace VMs); the supervisor
 	// fills in the authorized key.
 	Guest *guest.Config `json:"guest,omitempty"`

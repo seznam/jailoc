@@ -3251,6 +3251,13 @@ func TestAgentValidation(t *testing.T) {
 		{name: "version with shell characters", ws: Workspace{Agents: map[string]AgentSettings{"omo": {Version: "1.0.0' && id"}}}, wantError: `invalid version`},
 		{name: "agent env reserved", ws: Workspace{Env: []string{"CLAUDE_CONFIG_DIR=/tmp"}}, wantError: `env key "CLAUDE_CONFIG_DIR" is reserved`},
 		{name: "TUI config env reserved", defaults: Defaults{Env: []string{"OPENCODE_TUI_CONFIG=/tmp/x.json"}}, wantError: `env key "OPENCODE_TUI_CONFIG" is reserved`},
+		{name: "agent mounts", defaults: Defaults{Agents: map[string]AgentSettings{"claude": {Mounts: []string{"~/.claude-work:/home/agent/.claude:rw", ":/home/agent/.agents"}}}}},
+		{name: "agent mount invalid spec", ws: Workspace{Agents: map[string]AgentSettings{"claude": {Mounts: []string{"relative:/x"}}}}, wantError: `workspace "test": agents.claude: mounts: invalid mount spec`},
+		{name: "agent mount forbidden host", ws: Workspace{Agents: map[string]AgentSettings{"claude": {Mounts: []string{"~/.ssh:/home/agent/.ssh"}}}}, wantError: `agents.claude: mounts: mount host path`},
+		{name: "agent mount forbidden guest path", defaults: Defaults{Agents: map[string]AgentSettings{"omo": {Mounts: []string{"/tmp/x:/usr/local/bin"}}}}, wantError: `defaults: agents.omo: mounts: mount container path "/usr/local/bin" is not allowed`},
+		{name: "named profile", ws: Workspace{Agents: map[string]AgentSettings{"claude": {Profile: new(NamedProfile("work"))}}}},
+		{name: "ephemeral profile", defaults: Defaults{Agents: map[string]AgentSettings{"claude": {Profile: new(EphemeralProfile())}}}},
+		{name: "invalid profile name", ws: Workspace{Agents: map[string]AgentSettings{"claude": {Profile: new(NamedProfile("../x"))}}}, wantError: `agents.claude: invalid profile name "../x"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3298,6 +3305,63 @@ install = false
 	ws := cfg.Workspaces["test"]
 	if ws.Agent != "omo" || ws.Agents["omo"].Install == nil || *ws.Agents["omo"].Install {
 		t.Fatalf("unexpected workspace: %+v", ws)
+	}
+}
+
+func TestLoadAgentProfileTOML(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		value     string
+		want      *Profile
+		wantError string
+	}{
+		{name: "unset", value: ""},
+		{name: "false", value: "profile = false", want: new(EphemeralProfile())},
+		{name: "name", value: `profile = "opencode-legacy"`, want: new(NamedProfile("opencode-legacy"))},
+		{name: "true", value: "profile = true", wantError: "profile: true is not valid"},
+		{name: "invalid name", value: `profile = "a/b"`, wantError: `invalid profile name "a/b"`},
+		{name: "empty name", value: `profile = ""`, wantError: `invalid profile name ""`},
+		{name: "number", value: "profile = 1", wantError: "expected false or a profile name"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			writeFile(t, path, "[workspaces.test]\npaths = [\"/data/work\"]\n\n[workspaces.test.agents.claude]\nmounts = [\":/home/agent/.agents\"]\n"+tc.value+"\n")
+			cfg, err := LoadFrom(path)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("LoadFrom error = %v, want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFrom: %v", err)
+			}
+			settings := cfg.Workspaces["test"].Agents["claude"]
+			if !slices.Equal(settings.Mounts, []string{":/home/agent/.agents"}) {
+				t.Fatalf("mounts = %#v", settings.Mounts)
+			}
+			if !reflect.DeepEqual(settings.Profile, tc.want) {
+				t.Fatalf("profile = %#v, want %#v", settings.Profile, tc.want)
+			}
+
+			data, err := Encode(cfg)
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			path2 := filepath.Join(dir, "config2.toml")
+			writeFile(t, path2, string(data))
+			second, err := LoadFrom(path2)
+			if err != nil {
+				t.Fatalf("second LoadFrom: %v\n%s", err, data)
+			}
+			if got := second.Workspaces["test"].Agents["claude"].Profile; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("round-tripped profile = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 

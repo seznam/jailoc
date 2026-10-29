@@ -1639,3 +1639,64 @@ func TestResolveAgent(t *testing.T) {
 		t.Fatalf("Resolve unknown agent error = %v", err)
 	}
 }
+
+func TestResolveAgentMountsAndProfile(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Mounts: []string{"/h/global:/z:rw"},
+			Agents: map[string]config.AgentSettings{
+				"claude": {Mounts: []string{"/h/def-claude:/x:rw", "/h/def-claude-y:/y:rw"}, Profile: new(config.NamedProfile("base"))},
+				"opus":   {From: "claude", Mounts: []string{"/h/def-opus:/y:rw"}},
+			},
+		},
+		Workspaces: map[string]config.Workspace{
+			// The built-in's workspace table overrides its defaults table, the
+			// custom agent's tables follow, [defaults] mounts come last.
+			"derived": {Paths: []string{"/tmp/a"}, Agent: "opus", Agents: map[string]config.AgentSettings{
+				"claude": {Mounts: []string{"/h/ws-claude:/x:rw", ":/home/agent/.agents"}},
+				"opus":   {Mounts: []string{"/h/ws-opus:/z:ro"}},
+			}},
+			"builtin": {Paths: []string{"/tmp/b"}, Agent: "claude"},
+			"ephemeral": {Paths: []string{"/tmp/c"}, Agent: "opus", Agents: map[string]config.AgentSettings{
+				"opus": {Profile: new(config.EphemeralProfile())},
+			}},
+			"own-profile": {Paths: []string{"/tmp/d"}, Agent: "claude", Agents: map[string]config.AgentSettings{
+				"claude": {Profile: new(config.NamedProfile("mine"))},
+			}},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		wantMounts  []string
+		wantProfile *config.Profile
+	}{
+		{"derived", []string{"/h/ws-claude:/x:rw", "/h/def-opus:/y:rw", "/h/global:/z:rw"}, nil},
+		{"builtin", []string{"~/.agents:/home/agent/.agents:ro", "/h/def-claude:/x:rw", "/h/def-claude-y:/y:rw", "/h/global:/z:rw"}, new(config.NamedProfile("base"))},
+		{"ephemeral", nil, new(config.EphemeralProfile())},
+		{"own-profile", nil, new(config.NamedProfile("mine"))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := workspace.Resolve(cfg, tt.name)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if !reflect.DeepEqual(resolved.AgentProfile, tt.wantProfile) {
+				t.Fatalf("profile = %#v, want %#v", resolved.AgentProfile, tt.wantProfile)
+			}
+			if tt.wantMounts == nil {
+				return
+			}
+			want, err := config.MergeMounts(tt.wantMounts)
+			if err != nil {
+				t.Fatalf("MergeMounts: %v", err)
+			}
+			if !reflect.DeepEqual(resolved.Mounts, want) {
+				t.Fatalf("mounts = %#v, want %#v", resolved.Mounts, want)
+			}
+		})
+	}
+}
