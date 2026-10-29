@@ -423,6 +423,17 @@ print("ipv6-dns-ok")
 PY`)
 	})
 
+	t.Run("memory: zram swap and reclaim", func(t *testing.T) {
+		// The reclaim loop writes the root cgroup's memory.reclaim.
+		mustGuest(ctx, t, "echo 1M | sudo -n tee /sys/fs/cgroup/memory.reclaim")
+		if got := mustGuest(ctx, t, "cat /proc/swaps"); !strings.Contains(got, "/dev/zram0") {
+			t.Fatalf("/proc/swaps = %q", got)
+		}
+		if got := mustGuest(ctx, t, "cat /proc/sys/vm/swappiness"); got != "100" {
+			t.Fatalf("swappiness = %q", got)
+		}
+	})
+
 	t.Run("SSH agent", func(t *testing.T) {
 		if got := mustGuest(ctx, t, "/.jailoc/jailoc-guest run -- ssh-add -l"); !strings.Contains(got, agentComment) {
 			t.Fatalf("ssh-add -l = %q", got)
