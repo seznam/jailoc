@@ -101,11 +101,19 @@ func Init(logger *slog.Logger) error {
 	if err := mountPrivate(); err != nil {
 		return err
 	}
-	if err := mountShares(logger, cfg.Shares, acct, mapper); err != nil {
-		return err
-	}
-	if err := bindInternal(cfg.Binds, acct); err != nil {
-		return err
+	// Shares and internal binds nest in both directions (a share inside a
+	// persistent home directory, a persistent directory inside a share), so
+	// they are mounted in one order, parents before children.
+	for _, m := range mountOrder(cfg.Shares, cfg.Binds) {
+		var err error
+		if m.share != nil {
+			err = mountShare(logger, *m.share, acct, mapper)
+		} else {
+			err = bindInternal(*m.bind, acct)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	live := &liveState{logger: logger, acct: acct, created: map[string]bool{}}
 	if err := live.setSnapshots(cfg.Snapshots); err != nil {
@@ -192,29 +200,24 @@ func loadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-// mountShares mounts the virtio-fs shares, parents before children.
-// mountShares mounts the virtio-fs shares at their guest paths. Missing
-// mount points and parents inside the agent's home belong to the agent, so
-// the agent can still create siblings such as ~/.config/<tool>.
-func mountShares(logger *slog.Logger, shares []Share, acct account, mapper *idmapper) error {
-	sorted := slices.Clone(shares)
-	slices.SortStableFunc(sorted, func(a, b Share) int { return len(a.GuestPath) - len(b.GuestPath) })
-	for _, s := range sorted {
-		if err := makeParents(s.GuestPath, acct); err != nil {
-			return fmt.Errorf("create mount point %s: %w", s.GuestPath, err)
-		}
-		var err error
-		for range mountRetries {
-			if err = mapper.mountShare(s.Tag, s.GuestPath, s.ReadOnly); err == nil {
-				break
-			}
-			time.Sleep(250 * time.Millisecond)
-		}
-		if err != nil {
-			return fmt.Errorf("mount share %s on %s: %w", s.Tag, s.GuestPath, err)
-		}
-		logger.Info("mounted share", "path", s.GuestPath, "read_only", s.ReadOnly)
+// mountShare mounts the virtio-fs share s at its guest path. Missing mount
+// points and parents inside the agent's home belong to the agent, so the
+// agent can still create siblings such as ~/.config/<tool>.
+func mountShare(logger *slog.Logger, s Share, acct account, mapper *idmapper) error {
+	if err := makeParents(s.GuestPath, acct); err != nil {
+		return fmt.Errorf("create mount point %s: %w", s.GuestPath, err)
 	}
+	var err error
+	for range mountRetries {
+		if err = mapper.mountShare(s.Tag, s.GuestPath, s.ReadOnly); err == nil {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if err != nil {
+		return fmt.Errorf("mount share %s on %s: %w", s.Tag, s.GuestPath, err)
+	}
+	logger.Info("mounted share", "path", s.GuestPath, "read_only", s.ReadOnly)
 	return nil
 }
 
@@ -351,29 +354,24 @@ func mountPrivate() error {
 	return nil
 }
 
-// bindInternal binds directories of the internal share into place,
-// shorter targets first. Missing parents inside the agent's home belong
-// to the agent.
-func bindInternal(binds []Bind, acct account) error {
-	sorted := slices.Clone(binds)
-	slices.SortStableFunc(sorted, func(a, b Bind) int { return len(a.Target) - len(b.Target) })
-	for _, b := range sorted {
-		if !within(b.Source, HostDir) || within(b.Source, ControlDir) {
-			return fmt.Errorf("bind %s: source %s is outside the internal share", b.Target, b.Source)
-		}
-		if err := makeParents(b.Target, acct); err != nil {
-			return fmt.Errorf("bind %s: %w", b.Target, err)
-		}
-		if err := syscall.Mount(b.Source, b.Target, "", syscall.MS_BIND, ""); err != nil {
-			return fmt.Errorf("bind %s: %w", b.Target, err)
-		}
-		flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_NOSUID | syscall.MS_NODEV)
-		if b.ReadOnly {
-			flags |= syscall.MS_RDONLY
-		}
-		if err := syscall.Mount("", b.Target, "", flags, ""); err != nil {
-			return fmt.Errorf("bind %s: remount: %w", b.Target, err)
-		}
+// bindInternal binds b, a directory of the internal share, into place.
+// Missing parents inside the agent's home belong to the agent.
+func bindInternal(b Bind, acct account) error {
+	if !within(b.Source, HostDir) || within(b.Source, ControlDir) {
+		return fmt.Errorf("bind %s: source %s is outside the internal share", b.Target, b.Source)
+	}
+	if err := makeParents(b.Target, acct); err != nil {
+		return fmt.Errorf("bind %s: %w", b.Target, err)
+	}
+	if err := syscall.Mount(b.Source, b.Target, "", syscall.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind %s: %w", b.Target, err)
+	}
+	flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_NOSUID | syscall.MS_NODEV)
+	if b.ReadOnly {
+		flags |= syscall.MS_RDONLY
+	}
+	if err := syscall.Mount("", b.Target, "", flags, ""); err != nil {
+		return fmt.Errorf("bind %s: remount: %w", b.Target, err)
 	}
 	return nil
 }
@@ -501,10 +499,6 @@ func mountPoint(path string, dir bool) error {
 		}
 		return f.Close()
 	}
-}
-
-func within(path, dir string) bool {
-	return path == dir || strings.HasPrefix(path, dir+"/")
 }
 
 func ownedDir(path string, acct account, mode os.FileMode) error {
