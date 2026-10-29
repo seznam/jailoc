@@ -95,7 +95,9 @@ After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (
 
 ## Unpacking into the VM
 
-jailoc exports the final image with `docker save` and unpacks it into `~/.cache/jailoc-vm/images` under `jailoc.local/rootfs:<image ID>`. An image ID already in the cache is not unpacked again. Unpacked images that no workspace or builder uses are pruned.
+jailoc exports the final image with `docker save` and unpacks it into `~/.cache/jailoc-vm/images` under `jailoc.local/rootfs:<image ID>`. An image ID already in the cache is not unpacked again, and layers already in the cache are skipped while the export streams in. Unpacked images that no workspace or builder uses are pruned. `docker save` must write an OCI image layout, which requires Docker Engine 25 or later.
+
+jailoc labels the images it builds with `com.github.seznam.jailoc`. After unpacking, it removes labelled `jailoc-*` images from the Docker daemon that no workspace's last `jailoc up` used and that are older than one hour.
 
 The image's `ENTRYPOINT`, `CMD`, `USER`, `WORKDIR` and `EXPOSE` are not used; see [Overlay Compatibility](overlay-compatibility.md).
 
