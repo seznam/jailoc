@@ -54,6 +54,8 @@ const (
 #   install = true      # false: the image provides the agent binary
 #   version = "2.1.312" # npm version installed instead of the pinned one
 #   args = []           # appended to every agent start
+#   mounts = [":/home/agent/.agents"]  # merged over the agent's built-in mounts; ":/path" removes one
+#   profile = "work"    # state shared across workspaces, one running VM at a time; false: emptied on every start
 # [defaults.agents.claude-opus]  # a custom agent: agent = "claude-opus"
 #   from = "claude"     # built-in agent it is derived from
 #   args = ["--model", "opus"]
@@ -210,6 +212,12 @@ type AgentSettings struct {
 	// when the configuration is written back: it clears the defaults' args,
 	// which an omitted list inherits.
 	Args []string `toml:"args"`
+	// Mounts are merged by guest path over the harness mounts, before the
+	// [defaults] and workspace mounts.
+	Mounts []string `toml:"mounts,omitempty"`
+	// Profile selects where the harness keeps its state. Unset keeps it per
+	// workspace; a custom agent does not inherit it from its From.
+	Profile *Profile `toml:"profile,omitempty"`
 }
 
 type Mount struct {
@@ -1200,6 +1208,14 @@ func validateAgent(name string, agents, inherited map[string]AgentSettings) erro
 		if s.Version != "" && !agentVersionRe.MatchString(s.Version) {
 			return fmt.Errorf("agents.%s: invalid version %q: must be an exact npm version such as 1.2.3", key, s.Version)
 		}
+		if s.Profile != nil {
+			if name, ok := s.Profile.Name(); ok && !agentNameRe.MatchString(name) {
+				return fmt.Errorf("agents.%s: invalid profile name %q: must match [a-z0-9-]+", key, name)
+			}
+		}
+		if err := validateAgentMounts(s.Mounts); err != nil {
+			return fmt.Errorf("agents.%s: %w", key, err)
+		}
 	}
 	if name == "" {
 		return nil
@@ -1214,6 +1230,31 @@ func validateAgent(name string, agents, inherited map[string]AgentSettings) erro
 		return nil
 	}
 	return fmt.Errorf("invalid agent %q: must be one of %s or a custom agent defined under agents", name, builtins)
+}
+
+// validateAgentMounts checks the mounts of an agents table like workspace
+// mounts: ":/guest" entries remove an inherited mount.
+func validateAgentMounts(mounts []string) error {
+	for _, spec := range mounts {
+		m, err := ParseMount(spec)
+		if err != nil {
+			return fmt.Errorf("mounts: %w", err)
+		}
+		if err := validateMountHostPath(m.Host, "mounts"); err != nil {
+			return err
+		}
+		container, err := ExpandPath(m.Container)
+		if err != nil {
+			return fmt.Errorf("mounts: expand mount container path %q: %w", m.Container, err)
+		}
+		container = filepath.Clean(container)
+		for _, prefix := range forbiddenMountContainerPrefixes {
+			if container == prefix || strings.HasPrefix(container, prefix+"/") {
+				return fmt.Errorf("mounts: mount container path %q is not allowed (conflicts with container-internal directory %q)", container, prefix)
+			}
+		}
+	}
+	return nil
 }
 
 // v1Setting reports a setting of the jailoc v1 Docker backend, which

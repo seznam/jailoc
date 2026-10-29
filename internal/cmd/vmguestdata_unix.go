@@ -21,9 +21,10 @@ import (
 
 // Directories inside the guest data directory of a workspace VM.
 const (
-	guestDataConfig = "config" // copy of the workspace's jailoc config dir
-	guestDataCache  = "cache"  // copy of the workspace's jailoc cache dir
-	guestDataHome   = "home"   // persistent home directories
+	guestDataConfig    = "config"    // copy of the workspace's jailoc config dir
+	guestDataCache     = "cache"     // copy of the workspace's jailoc cache dir
+	guestDataHome      = "home"      // persistent home directories
+	guestDataEphemeral = "ephemeral" // agent state of profile = false, emptied on VM start
 )
 
 // persistentHomeDirs survive restarts: the state of the workspace's agent
@@ -35,9 +36,11 @@ func persistentHomeDirs(h agent.Harness) []agent.StateDir {
 // vmGuestData prepares the guest data directory of the workspace VM, its
 // only internal share, and returns the binds that place its parts in the
 // guest: copies of the workspace's jailoc config and cache directories
-// read-only, persistent home directories read-write unless a share covers
-// them. The copies are refreshed on every up and reload.
-func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share) ([]guest.Bind, error) {
+// read-only, home directories read-write unless a share covers them. The
+// agent's state is persistent, or ephemeral with profile = false: start
+// (a new VM, not a reload) empties it. The copies are refreshed on every
+// up and reload.
+func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, start bool) ([]guest.Bind, error) {
 	stateDir := vmStateDir(ws.Name)
 	if err := migrateHomeDirs(stateDir); err != nil {
 		return nil, err
@@ -64,11 +67,20 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share) ([]
 		}
 		binds = append(binds, guest.Bind{Source: src(guestDataCache + "/tui-plugin"), Target: tuiPluginContainerDir, ReadOnly: true})
 	}
+	ephemeral := ws.AgentProfile != nil && ws.AgentProfile.Ephemeral()
+	if ephemeral && start {
+		if err := root.RemoveAll(guestDataEphemeral); err != nil {
+			return nil, fmt.Errorf("empty ephemeral agent state: %w", err)
+		}
+	}
 	for _, d := range persistentHomeDirs(ws.Agent) {
 		if slices.ContainsFunc(shares, func(s vm.Share) bool { return s.GuestPath == d.Path }) {
 			continue
 		}
 		rel := guestDataHome + "/" + d.Name
+		if ephemeral && slices.Contains(ws.Agent.State, d) {
+			rel = guestDataEphemeral + "/" + d.Name
+		}
 		if err := root.MkdirAll(rel, 0o700); err != nil {
 			return nil, fmt.Errorf("create %s: %w", rel, err)
 		}
