@@ -25,6 +25,9 @@ const (
 	defaultConfigContent = `# jailoc configuration
 # See: https://github.com/seznam/jailoc
 
+# Keys that detach from an agent session, like tmux: Ctrl-b, then d.
+# detach_keys = "ctrl-b,d"
+
 [base]
 # dockerfile = ""
 
@@ -249,6 +252,7 @@ type Secrets struct {
 type Config struct {
 	Mode         string               `toml:"mode,omitempty"`
 	PasswordMode string               `toml:"password_mode,omitempty"`
+	DetachKeys   string               `toml:"detach_keys,omitempty"`
 	Base         BaseConfig           `toml:"base,omitempty"`
 	VM           VMConfig             `toml:"vm,omitempty"`
 	Defaults     Defaults             `toml:"defaults,omitempty"`
@@ -863,6 +867,11 @@ func Validate(cfg *Config) error {
 		return v1Setting("password_mode")
 	case cfg.Defaults.ExposePort != nil:
 		return v1Setting("defaults: expose_port")
+	}
+	if cfg.DetachKeys != "" {
+		if _, err := ParseDetachKeys(cfg.DetachKeys); err != nil {
+			return err
+		}
 	}
 
 	if err := validateAgent(cfg.Defaults.Agent, cfg.Defaults.Agents, nil); err != nil {

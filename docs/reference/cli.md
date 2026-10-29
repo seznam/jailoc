@@ -43,6 +43,7 @@ jailoc [path] [flags]
 | `--attach ID` | | Attach to the agent session with this ID (see [`jailoc sessions`](#jailoc-sessions)). |
 | `--continue` | `-c` | Start a session that continues the agent's last conversation. |
 | `--session ID` | `-s` | Start a session that continues the agent conversation with this ID. |
+| `--detach-keys KEYS` | | Key sequence that detaches from the session, for example `ctrl-a,d`. Overrides [`detach_keys`](configuration.md#top-level-fields). Default `ctrl-b,d`. |
 | `--version` | `-v` | Print the jailoc version. |
 
 Mutually exclusive: `--session` with `--continue`, `--new` with `--attach`, `--attach` with `--session` or `--continue`.
@@ -53,7 +54,7 @@ If the workspace VM is not running, jailoc starts it as [`jailoc up`](#jailoc-up
 
 - Without flags, attaches to the session already running in the target directory, or starts one.
 - `--session` and `--continue` always start a new session.
-- `Ctrl-\` or closing the terminal detaches; the agent keeps running.
+- The detach keys (`Ctrl-b`, then `d`, by default) or closing the terminal detach; the agent keeps running. Typing `Ctrl-b` twice sends one `Ctrl-b` to the agent.
 - Attaching from a second terminal takes the session over and detaches the first one.
 
 See the [sessions how-to](../how-to/sessions.md).

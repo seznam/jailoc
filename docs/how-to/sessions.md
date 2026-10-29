@@ -23,7 +23,25 @@ Running `jailoc` from a second terminal takes the session over and detaches the 
 
 ## Detach
 
-Press `Ctrl-\` or close the terminal window. The agent keeps working. Run `jailoc` again to come back.
+Press `Ctrl-b`, then `d`, or close the terminal window. The agent keeps working. Run `jailoc` again to come back.
+
+To send `Ctrl-b` to the agent itself, for example to background a task in Claude Code, press `Ctrl-b` twice.
+
+### Change the detach keys
+
+If `Ctrl-b` clashes with your tmux prefix or is awkward on your keyboard layout, set other keys in `~/.config/jailoc/config.toml`:
+
+```toml
+detach_keys = "ctrl-a,d"
+```
+
+Or for one session:
+
+```bash
+jailoc --detach-keys 'ctrl-\'
+```
+
+See [`detach_keys`](../reference/configuration.md#top-level-fields) for the key syntax.
 
 ## Start another session
 
