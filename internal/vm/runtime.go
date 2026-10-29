@@ -53,29 +53,29 @@ var runtimeMirror string
 // .github/workflows/vm-runtime.yml builds the runner from the go-microvm
 // revision in go.mod (block disks and simplified virtio-fs ownership). On
 // darwin/arm64 libkrun comes from the go-microvm v0.0.41 release and the
-// firmware is that release's artifact. On linux/amd64 the runner, libkrun and
-// the firmware (libkrunfw) are built with go-microvm's builder image.
+// firmware (libkrunfw) is the Homebrew build. On linux/amd64 the runner,
+// libkrun and the firmware are built with go-microvm's builder image.
 var releases = map[string]Release{
 	"darwin/arm64": {
-		Version: "v0.0.41-jailoc.5",
+		Version: "v0.0.41-jailoc.6",
 		Runtime: Artifact{
-			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.5/go-microvm-runtime-darwin-arm64.tar.gz",
-			SHA256: "2d0894c07965444ccd21481cc4348226a3466f3107a5bcba90542e14d17be45f",
+			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.6/go-microvm-runtime-darwin-arm64.tar.gz",
+			SHA256: "6a72f4b1c9d8fa7df91a484d9fce5c6cbf575af17e60052ea34e444ab918c9c0",
 		},
 		Firmware: Artifact{
-			URL:    "https://github.com/stacklok/go-microvm/releases/download/v0.0.41/go-microvm-firmware-darwin-arm64.tar.gz",
-			SHA256: "02ff1ca992c3b104cf6c4d0c2995fac5aa8646e7f7cafa0ee72b734b69fc5216",
+			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.6/go-microvm-firmware-darwin-arm64.tar.gz",
+			SHA256: "9d87712c6277039758465394f59b308e99587dce265b858e67ee1e3cf95a59ef",
 		},
 	},
 	"linux/amd64": {
-		Version: "v0.0.41-jailoc.5",
+		Version: "v0.0.41-jailoc.6",
 		Runtime: Artifact{
-			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.5/go-microvm-runtime-linux-amd64.tar.gz",
-			SHA256: "f381b27d9161e1ba4ae3c90a324659d4c5b7118ea791ddfc4aad48e2092e81ab",
+			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.6/go-microvm-runtime-linux-amd64.tar.gz",
+			SHA256: "d8100fe681817acbf01d9175b6698478732cb917cfb615480c0404aa2c05d724",
 		},
 		Firmware: Artifact{
-			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.5/go-microvm-firmware-linux-amd64.tar.gz",
-			SHA256: "4b2ddb9d8dd4333facd4ce0bee6c0735ccc9407ce66ea610dae1f0cd99bc659b",
+			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.6/go-microvm-firmware-linux-amd64.tar.gz",
+			SHA256: "264349238e93fa4031ecad484e1c5b04253335c80dbe92b12dc055119c3481f6",
 		},
 	},
 }
