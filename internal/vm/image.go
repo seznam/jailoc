@@ -1,15 +1,24 @@
 package vm
 
 import (
+	"archive/tar"
+	"bufio"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/stacklok/go-microvm/image"
 )
 
@@ -24,7 +33,9 @@ func RootFSRef(imageID string) string {
 
 // ImportImage extracts a built workspace image into the image cache under
 // ref, unless it is already there. save writes the image as a `docker save`
-// tarball.
+// tarball in OCI layout (Docker Engine 25 or later). Layer blobs whose
+// content is already in the layer cache are dropped while the tarball is
+// read, so only new layers are kept on disk until they are unpacked.
 func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer) error) error {
 	unlock, err := lockCache(cacheDir)
 	if err != nil {
@@ -35,26 +46,162 @@ func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer)
 	if cache.LookupRef(ref) != nil {
 		return nil
 	}
-	tmp, err := os.CreateTemp(cacheDir, ".save-*.tar")
+	dir, err := os.MkdirTemp(cacheDir, ".save-*")
 	if err != nil {
-		return fmt.Errorf("create image tarball: %w", err)
+		return fmt.Errorf("create image layout directory: %w", err)
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if err := save(tmp); err != nil {
-		_ = tmp.Close()
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	pr, pw := io.Pipe()
+	saveErr := make(chan error, 1)
+	go func() {
+		err := save(pw)
+		pw.CloseWithError(err)
+		saveErr <- err
+	}()
+	unpackErr := unpackLayout(pr, dir, cache.LayerCache())
+	// Unblock save if unpacking stopped early.
+	_ = pr.CloseWithError(errors.New("image tarball reader closed"))
+	if err := <-saveErr; err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close image tarball: %w", err)
+	if unpackErr != nil {
+		return unpackErr
 	}
-	img, err := tarball.ImageFromPath(tmp.Name(), nil)
+
+	img, err := layoutImage(dir)
 	if err != nil {
-		return fmt.Errorf("read image tarball: %w", err)
+		return err
 	}
 	if _, err := image.PullWithFetcher(ctx, ref, cache, staticFetcher{img: img}); err != nil {
 		return fmt.Errorf("unpack workspace image: %w", err)
 	}
 	return nil
+}
+
+// unpackLayout writes the OCI layout files of a `docker save` tarball to dir,
+// dropping blobs that are layers already in lc.
+func unpackLayout(r io.Reader, dir string, lc *image.LayerCache) error {
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read image tarball: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := path.Clean(hdr.Name)
+		blob := strings.HasPrefix(name, "blobs/sha256/") && validHex(strings.TrimPrefix(name, "blobs/sha256/"))
+		if !blob && !slices.Contains(layoutFiles, name) {
+			continue
+		}
+		target := filepath.Join(dir, filepath.FromSlash(name))
+		if err := writeFile(target, tr, hdr.Size, 0o600); err != nil {
+			return err
+		}
+		if !blob {
+			continue
+		}
+		diffID, ok, err := layerDiffID(target)
+		if err != nil {
+			return err
+		}
+		if ok && lc.Has(diffID) {
+			if err := os.Remove(target); err != nil {
+				return fmt.Errorf("drop cached layer blob: %w", err)
+			}
+		}
+	}
+}
+
+// layoutFiles are the non-blob files of an OCI layout `docker save` writes.
+var layoutFiles = []string{"index.json", "oci-layout"}
+
+func validHex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+// layerDiffID returns the digest of the uncompressed content of a layer blob.
+// ok is false for blobs that are not uncompressed or gzip-compressed tar
+// archives (image configs, manifests, other compressions); they are kept.
+func layerDiffID(blob string) (v1.Hash, bool, error) {
+	f, err := os.Open(blob) //nolint:gosec // G304: blob is a sha256 path inside jailoc's own temp layout
+	if err != nil {
+		return v1.Hash{}, false, fmt.Errorf("open layer blob: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	br := bufio.NewReaderSize(f, 1<<20)
+	var r io.Reader = br
+	if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		zr, err := gzip.NewReader(br)
+		if err != nil {
+			return v1.Hash{}, false, nil //nolint:nilerr // not a gzip layer; keep the blob
+		}
+		defer func() { _ = zr.Close() }()
+		r = zr
+	} else if header, _ := br.Peek(tarMagicEnd); len(header) < tarMagicEnd || string(header[257:262]) != "ustar" {
+		return v1.Hash{}, false, nil
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		// A blob that fails to decompress is not a layer jailoc can match;
+		// keep it and let the unpacker report real corruption.
+		return v1.Hash{}, false, nil //nolint:nilerr // see above
+	}
+	return v1.Hash{Algorithm: "sha256", Hex: hex.EncodeToString(h.Sum(nil))}, true, nil
+}
+
+// tarMagicEnd is the end offset of the "ustar" magic in a tar header.
+const tarMagicEnd = 262
+
+// layoutImage returns the image for the host architecture from the OCI
+// layout in dir.
+func layoutImage(dir string) (v1.Image, error) {
+	if _, err := os.Stat(filepath.Join(dir, "index.json")); err != nil {
+		return nil, fmt.Errorf("docker save did not write an OCI image layout; jailoc needs Docker Engine 25 or later: %w", err)
+	}
+	idx, err := layout.ImageIndexFromPath(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read image layout: %w", err)
+	}
+	return indexImage(idx)
+}
+
+func indexImage(idx v1.ImageIndex) (v1.Image, error) {
+	manifest, err := idx.IndexManifest()
+	if err != nil {
+		return nil, fmt.Errorf("read image index: %w", err)
+	}
+	for _, desc := range manifest.Manifests {
+		if desc.Platform != nil && (desc.Platform.OS != "linux" || desc.Platform.Architecture != runtime.GOARCH) {
+			continue
+		}
+		switch {
+		case desc.MediaType.IsImage():
+			img, err := idx.Image(desc.Digest)
+			if err != nil {
+				return nil, fmt.Errorf("read image %s: %w", desc.Digest, err)
+			}
+			return img, nil
+		case desc.MediaType.IsIndex():
+			child, err := idx.ImageIndex(desc.Digest)
+			if err != nil {
+				return nil, fmt.Errorf("read image index %s: %w", desc.Digest, err)
+			}
+			if img, err := indexImage(child); err == nil {
+				return img, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("image layout has no linux/%s image", runtime.GOARCH)
 }
 
 type staticFetcher struct{ img v1.Image }
