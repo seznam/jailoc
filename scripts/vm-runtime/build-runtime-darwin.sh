@@ -4,16 +4,17 @@
 #
 # The bundle reuses libkrun and its GPU dependencies from a go-microvm release
 # and replaces the runner with one built from the go-microvm revision jailoc
-# pins in go.mod. The firmware tarball (libkrunfw, GPL-2.0) is used unchanged
-# from the same go-microvm release.
+# pins in go.mod. The firmware tarball (libkrunfw, GPL-2.0) packages the
+# Homebrew libkrunfw: go-microvm releases ship an older one, built without zram.
 #
 # Usage: build-runtime-darwin.sh GO_MICROVM_CHECKOUT UPSTREAM_TAG OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
 #   UPSTREAM_TAG         go-microvm release providing libkrun (e.g. v0.0.41)
 #   OUT_DIR              receives go-microvm-runtime-darwin-arm64.tar.gz
 #
-# Requires: macOS on arm64, Go, Homebrew libkrun (to compile the runner), gh,
-# go-task. Prints the SHA-256 values to pin in internal/vm/runtime.go.
+# Requires: macOS on arm64, Go, Homebrew libkrun (to compile the runner) and
+# libkrunfw, gh, go-task. Prints the SHA-256 values to pin in
+# internal/vm/runtime.go.
 set -euo pipefail
 
 src=${1:?go-microvm checkout}
@@ -28,9 +29,9 @@ work=$(mktemp -d)
 trap 'rm -r "$work"' EXIT
 
 gh release download "$tag" --repo stacklok/go-microvm \
-  --pattern "$name.tar.gz" --pattern "go-microvm-firmware-darwin-arm64.tar.gz" --pattern sha256sums.txt \
+  --pattern "$name.tar.gz" --pattern sha256sums.txt \
   --dir "$work"
-(cd "$work" && grep -- '-darwin-arm64.tar.gz' sha256sums.txt | shasum -a 256 -c -)
+(cd "$work" && grep -- "$name.tar.gz" sha256sums.txt | shasum -a 256 -c -)
 tar -xzf "$work/$name.tar.gz" -C "$work"
 
 (cd "$src" && task build-dev-darwin)
@@ -45,6 +46,18 @@ if otool -L "$work/$name/go-microvm-runner" | grep -q /opt/homebrew; then
   exit 1
 fi
 
+fw=go-microvm-firmware-darwin-arm64
+mkdir "$work/$fw"
+cp "$(brew --prefix libkrunfw)/lib/libkrunfw.5.dylib" "$work/$fw/"
+chmod u+w "$work/$fw/libkrunfw.5.dylib"
+install_name_tool -id @loader_path/libkrunfw.5.dylib "$work/$fw/libkrunfw.5.dylib"
+codesign --force -s - "$work/$fw/libkrunfw.5.dylib"
+brew list --versions libkrunfw | awk '{print "v" $2}' > "$work/$fw/VERSION"
+cat > "$work/$fw/LICENSE-GPL" <<'EOF'
+libkrunfw is licensed under the GNU General Public License v2.0 (GPL-2.0).
+See https://github.com/libkrun/libkrunfw for full license text.
+EOF
+
 COPYFILE_DISABLE=1 tar -czf "$out/$name.tar.gz" -C "$work" "$name"
-cp "$work/go-microvm-firmware-darwin-arm64.tar.gz" "$out/"
-shasum -a 256 "$out/$name.tar.gz" "$out/go-microvm-firmware-darwin-arm64.tar.gz"
+COPYFILE_DISABLE=1 tar -czf "$out/$fw.tar.gz" -C "$work" "$fw"
+shasum -a 256 "$out/$name.tar.gz" "$out/$fw.tar.gz"

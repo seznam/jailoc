@@ -6,7 +6,8 @@ name: VM runtime
 # Push a tag named vm-runtime-<go-microvm release>-jailoc.<n>, for example
 # vm-runtime-v0.0.41-jailoc.1. The runner is built from the go-microvm
 # revision that go.mod pins at the tagged commit. On macOS, libkrun comes
-# from the go-microvm release named in the tag; on Linux, go-microvm's
+# from the go-microvm release named in the tag and libkrunfw from Homebrew;
+# on Linux, go-microvm's
 # builder image provides libkrun and libkrunfw at the versions that revision
 # pins.
 
@@ -66,7 +67,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: runtime-darwin-arm64
-          path: dist/go-microvm-runtime-darwin-arm64.tar.gz
+          path: dist/*.tar.gz
           if-no-files-found: error
 
   linux-amd64:
@@ -135,4 +136,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/sha256sums.txt \
             --prerelease --latest=false \
             --title "VM runtime ${GITHUB_REF_NAME#vm-runtime-}" \
-            --notes "VM runtime for jailoc workspace VMs. go-microvm-runner is built from ${repo}@${version##*-}. darwin-arm64: libkrun and its libraries come from stacklok/go-microvm ${upstream}; the firmware (libkrunfw) is downloaded from that release. linux-amd64: the runner, libkrun and libkrunfw (firmware tarball, GPL-2.0) are built with go-microvm's builder image at the versions in its versions.env."
+            --notes "VM runtime for jailoc workspace VMs. go-microvm-runner is built from ${repo}@${version##*-}. darwin-arm64: libkrun and its libraries come from stacklok/go-microvm ${upstream}; the firmware (libkrunfw, GPL-2.0) is the Homebrew libkrunfw bottle. linux-amd64: the runner, libkrun and libkrunfw (firmware tarball, GPL-2.0) are built with go-microvm's builder image at the versions in its versions.env."
