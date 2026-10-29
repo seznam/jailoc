@@ -8,7 +8,17 @@ The file is auto-created with defaults on first run. All fields are optional unl
 
 ## Top-level fields
 
-The configuration has no settings of its own at the root level, only the tables `[vm]`, `[base]`, `[defaults]` and `[workspaces.<name>]`.
+Besides the tables `[vm]`, `[base]`, `[defaults]` and `[workspaces.<name>]`, the configuration has one setting at the root level. Put it before the first table.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `detach_keys` | string | `"ctrl-b,d"` | Key sequence that detaches the terminal from an agent session. The `--detach-keys` flag of [`jailoc`](cli.md#jailoc) overrides it. |
+
+`detach_keys` is a comma-separated list of keys, typed one after another, in the format of `docker attach --detach-keys`. A key is `ctrl-<letter>` (lowercase), one of `ctrl-@`, `ctrl-[`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, `DEL`, or a single character other than a comma. While a session is attached, jailoc holds back input that starts like the sequence until the next key decides. Typing the first key twice sends it once to the agent, as in tmux. Keys match also when the agent switches the terminal to an extended keyboard mode (xterm modifyOtherKeys or the kitty keyboard protocol): key release and repeat events, presses of a modifier key alone, and Caps Lock or Num Lock do not break the sequence.
+
+```toml
+detach_keys = "ctrl-a,d"
+```
 
 The jailoc v1 settings `mode` and `password_mode` are rejected at config load time. See [jailoc v1 settings](#jailoc-v1-settings).
 
@@ -58,8 +68,8 @@ Defaults applied to all workspaces.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `backend` | string | `"vm"` | Accepted values: `"vm"` or empty. `"docker"` is rejected as a jailoc v1 setting. |
-| `agent` | string | `"opencode"` | Coding agent of the workspaces: `"opencode"`, `"claude"`, `"copilot"` or `"omo"`. See [Coding agents](#coding-agents). |
-| `agents` | table | `{}` | Settings per coding agent, keyed by agent name. See [`agents`](#agents). |
+| `agent` | string | `"opencode"` | Coding agent of the workspaces: `"opencode"`, `"claude"`, `"copilot"`, `"omo"` or a [custom agent](#custom-agents). See [Coding agents](#coding-agents). |
+| `agents` | table | `{}` | Settings per coding agent and custom agent definitions, keyed by agent name. See [`agents`](#agents). |
 | `image` | string | (none) | Pre-built image used as the base for workspace Dockerfile builds, or used directly when no workspace `dockerfile` is set. |
 | `env` | string[] | `[]` | Environment variables for every session, in `KEY=VALUE` format. |
 | `env_file` | string[] | `[]` | `.env` files loaded for all workspaces. Each file must exist at config load time. |
@@ -148,20 +158,24 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
 | `omo` | OmO | `omo-ai` | `omo --permission-preset full-access` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
 
-The package versions are pinned by the jailoc release. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
+The package versions are pinned by the jailoc release; `version` in [`agents`](#agents) installs another one. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
 
 jailoc installs the agent with `npm install -g` in a separate layer on top of the base image, before the workspace `dockerfile` overlay, in every image it builds: the [base image](image-resolution.md#step-5-embedded-dockerfile), a `[base] dockerfile`, and `defaults.image` with a workspace `dockerfile`. An image used directly (workspace `image`, or `defaults.image` without a workspace `dockerfile`) must contain the agent binary. Before a session starts, jailoc checks that the binary is on `PATH` in the VM.
 
-Changing `agent` of a running workspace takes effect after `jailoc restart`; sessions fail until then.
+Changing `agent` or the agent's `profile` of a running workspace takes effect after `jailoc restart`; sessions fail until then.
 
 ### `agents`
 
-Settings per agent live in `[defaults.agents.<name>]` and `[workspaces.<ws>.agents.<name>]`, where `<name>` is one of the `agent` values. Only the settings of the selected agent apply.
+Settings per agent live in `[defaults.agents.<name>]` and `[workspaces.<ws>.agents.<name>]`, where `<name>` is a built-in agent or a [custom agent](#custom-agents). Only the settings of the selected agent apply.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
+| `from` | string | | Custom agents only: the built-in agent it is derived from. |
 | `install` | bool | `true` | Install the agent in the images jailoc builds. With `false`, the image must provide the binary, for example through the workspace `dockerfile`. |
-| `args` | string[] | `[]` | Arguments appended to every session command line. A workspace list replaces the `[defaults]` list. |
+| `version` | string | (pinned) | npm version installed instead of the version pinned by jailoc, e.g. `"2.1.400"`. Must be an exact version; dist-tags such as `latest` are rejected. |
+| `args` | string[] | `[]` | Arguments appended to every session command line. A workspace list replaces the `[defaults]` list; `args = []` clears it. |
+| `mounts` | string[] | `[]` | Mounts added while the agent is selected, same syntax and validation as [`mounts`](#workspaces). An empty host (`":/home/agent/.agents"`) removes a mount added by the agent or an earlier table. See [Agent mounts](#agent-mounts). |
+| `profile` | `false` or string | (unset) | Where the agent's persistent home directories live. Unset: per workspace. `false`: per workspace, emptied on every VM start. A name: shared profile `~/.local/share/jailoc/profiles/<name>`. See [Agent profiles](#agent-profiles). |
 
 ```toml
 [workspaces.my-project]
@@ -169,7 +183,67 @@ paths = ["~/projects/my-project"]
 agent = "copilot"
 
 [workspaces.my-project.agents.copilot]
+version = "1.0.110"
 args = ["--model", "gpt-5"]
+```
+
+### Custom agents
+
+An `agents` table whose name is not a built-in agent defines a custom agent: the built-in agent named by `from` under another name, with its own settings. Select it with `agent` like a built-in one. It is installed, started and persisted like the agent it is derived from.
+
+```toml
+[defaults.agents.claude]
+version = "2.1.400"
+
+[defaults.agents.claude-opus]
+from = "claude"
+args = ["--model", "opus"]
+
+[workspaces.my-project]
+paths = ["~/projects/my-project"]
+agent = "claude-opus"
+```
+
+A custom agent defined in `[defaults]` can be selected and configured in any workspace; one defined in a workspace only there. Each field except `mounts` and `profile` takes the first value set in: the workspace's table of the agent, the defaults' table of the agent, then, for a custom agent, the workspace's and the defaults' table of the agent it is derived from. In the example, `claude-opus` installs Claude Code 2.1.400.
+
+### Agent mounts
+
+The mounts of the selected agent are merged by guest path; a later entry replaces an earlier one with the same guest path, an empty host removes it. The order is:
+
+1. the built-in mounts of the agent's harness, including `~/.agents:/home/agent/.agents:ro`
+2. `mounts` of the built-in agent's table in `[defaults]`, then in the workspace
+3. for a custom agent, `mounts` of its own table in `[defaults]`, then in the workspace
+4. `[defaults].mounts`, then the workspace's `mounts`
+
+```toml
+[defaults.agents.opencode-legacy]
+from = "opencode"
+mounts = [
+  "~/.config/opencode-legacy:/home/agent/.config/opencode",
+  ":/home/agent/.opencode",
+]
+```
+
+### Agent profiles
+
+`profile` selects where the agent's persistent home directories (see [Coding agents](#coding-agents)) are stored. It is read from the selected agent's own tables: the workspace's, then the defaults'. A custom agent does not inherit `profile` from the agent it is derived from.
+
+| Value | Storage | Lifetime |
+|---|---|---|
+| unset | `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home/<dir>` | until `jailoc down --purge` |
+| `false` | per workspace | emptied on every VM start |
+| `"<name>"` | `~/.local/share/jailoc/profiles/<name>/<dir>` | until deleted by hand; `jailoc down --purge` keeps it |
+
+`<dir>` is the name of the harness's state directory (`opencode-data`, `opencode-state`, `claude`, `copilot`, `omo`), so one profile can hold the state of several harnesses, and two agents of the same harness share it when they name the same profile. `~/.cache` stays per workspace. A mount over a persistent home directory replaces it.
+
+A named profile is used by one running workspace at a time: `jailoc up` and `jailoc restart` fail while another workspace using the profile is running.
+
+!!! warning
+    Every workspace using a named profile can change what the harness executes in the others (hooks, plugins, MCP servers, instructions stored in its state directory), read the login and resume the sessions stored there. Share a profile only between workspaces of the same trust level. See [Threat Model](../explanation/threat-model.md#limiting-private-data-access).
+
+```toml
+[workspaces.old-project.agents.opencode]
+profile = "opencode-legacy"
 ```
 
 ---
@@ -244,7 +318,7 @@ With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an
 
 ### `agent` and `agents`
 
-`agent` and the keys of `agents` must be `opencode`, `claude`, `copilot` or `omo`.
+`agent` must be `opencode`, `claude`, `copilot`, `omo` or a custom agent defined in the workspace's or the defaults' `agents`. A key of `agents` that is not a built-in agent is a custom agent: its name must match `^[a-z0-9-]+$` and `from`, set in that table or in the defaults' table of the same name, must be a built-in agent (custom agents cannot be derived from custom agents). `from` is rejected on built-in agents. `version` must be an exact npm version (`1.2.3`, optionally with a `-prerelease` and `+build` suffix). `mounts` follows the rules of `mounts`. `profile` must be `false` or a name matching `^[a-z0-9-]+$`; `true` is rejected.
 
 ### `env`
 
@@ -302,13 +376,13 @@ Environment variables merge in this order, later wins per key:
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 
 ## Persistent state
 
-`~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` keeps the agent's persistent home directories (see [Coding agents](#coding-agents)) and `~/.cache` across restarts. `jailoc down --purge` deletes it.
+`~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` keeps the agent's persistent home directories (see [Coding agents](#coding-agents)) and `~/.cache` across restarts. `jailoc down --purge` deletes it. An agent [`profile`](#agent-profiles) moves the agent's directories to a shared profile or makes them ephemeral.
 
 ---
 

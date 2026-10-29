@@ -16,7 +16,14 @@ jailoc [command] [flags]
 
 ### Workspace resolution
 
-Commands that accept an optional `[workspace]` argument use it first. Without the argument and without `--workspace`, they resolve the workspace whose configured path best matches the current working directory (longest prefix) and fall back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
+Commands pick the workspace in this order:
+
+1. The `[workspace]` argument, for commands that accept one.
+2. The `--workspace` flag.
+3. The workspace whose `paths` entry is the longest prefix of the current directory. If several workspaces tie on the deepest match, the command fails and asks for `-w`.
+4. `default`.
+
+`jailoc add` matches the path being added instead of the current directory. With `--workspace`, the added path must lie under one of that workspace's paths.
 
 ---
 
@@ -36,6 +43,7 @@ jailoc [path] [flags]
 | `--attach ID` | | Attach to the agent session with this ID (see [`jailoc sessions`](#jailoc-sessions)). |
 | `--continue` | `-c` | Start a session that continues the agent's last conversation. |
 | `--session ID` | `-s` | Start a session that continues the agent conversation with this ID. |
+| `--detach-keys KEYS` | | Key sequence that detaches from the session, for example `ctrl-a,d`. Overrides [`detach_keys`](configuration.md#top-level-fields). Default `ctrl-b,d`. |
 | `--version` | `-v` | Print the jailoc version. |
 
 Mutually exclusive: `--session` with `--continue`, `--new` with `--attach`, `--attach` with `--session` or `--continue`.
@@ -46,7 +54,7 @@ If the workspace VM is not running, jailoc starts it as [`jailoc up`](#jailoc-up
 
 - Without flags, attaches to the session already running in the target directory, or starts one.
 - `--session` and `--continue` always start a new session.
-- `Ctrl-\` or closing the terminal detaches; the agent keeps running.
+- The detach keys (`Ctrl-b`, then `d`, by default) or closing the terminal detach; the agent keeps running. Typing `Ctrl-b` twice sends one `Ctrl-b` to the agent.
 - Attaching from a second terminal takes the session over and detaches the first one.
 
 See the [sessions how-to](../how-to/sessions.md).
@@ -79,7 +87,7 @@ Shuts down the workspace VM and its network broker. All agent sessions end. The 
 
 | Flag | Description |
 |------|-------------|
-| `--purge` | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM and, with `isolated_build`, the workspace's builder VM and build cache. |
+| `--purge` | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
 
 ---
 
@@ -116,7 +124,8 @@ Running sessions keep running with their old environment; sessions started after
 
 Changes to the following need a new VM. `jailoc reload` lists them, and [`jailoc restart`](#jailoc-restart) applies them:
 
-- `paths` and `mounts`
+- `paths` and `mounts`, including `agents.<name>.mounts`
+- the agent's `profile`
 - `cpu`, `memory`
 - `enable_docker`, `protect_git`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
@@ -128,7 +137,7 @@ Fails when the workspace is not running.
 
 ### `jailoc status`
 
-Show whether the workspace VM is running.
+Show whether the workspace VM is running and, for a running VM, where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
 
 ```
 jailoc status [workspace] [flags]

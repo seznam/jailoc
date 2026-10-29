@@ -109,7 +109,7 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 		return vm.Spec{}, nil, err
 	}
 	// Refreshes the configuration and cache copies the guest reads.
-	internal, err := vmGuestData(ws, cacheDir, shares)
+	internal, err := vmGuestData(ws, cacheDir, shares, false)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
@@ -146,7 +146,12 @@ func snapshotsReloadable(running vm.Spec) bool {
 // and the configuration but cannot change while the VM runs.
 func restartOnlyChanges(running, want vm.Spec) []string {
 	var out []string
-	if !slices.Equal(sortedShares(running.Shares), sortedShares(want.Shares)) || !slices.Equal(running.Guest.Binds, want.Guest.Binds) {
+	// A new profile also changes shares and binds; report it once.
+	profileChanged := running.Profile != want.Profile || running.EphemeralProfile != want.EphemeralProfile
+	if profileChanged {
+		out = append(out, "profile")
+	}
+	if !profileChanged && (!slices.Equal(sortedShares(running.Shares), sortedShares(want.Shares)) || !slices.Equal(running.Guest.Binds, want.Guest.Binds)) {
 		out = append(out, "paths and mounts")
 	}
 	if running.CPUs != want.CPUs {

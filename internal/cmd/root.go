@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ var sessionFlag string
 var continueFlag bool
 var newSessionFlag bool
 var attachSessionFlag string
+var detachKeysFlag string
 
 var rootCmd = &cobra.Command{
 	Use:          "jailoc [path]",
@@ -55,6 +57,10 @@ var rootCmd = &cobra.Command{
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
+		}
+		detachKeys, err := config.ParseDetachKeys(cmp.Or(detachKeysFlag, cfg.DetachKeys, config.DefaultDetachKeys))
+		if err != nil {
+			return err
 		}
 
 		if !workspaceExplicit {
@@ -111,7 +117,7 @@ var rootCmd = &cobra.Command{
 
 		return runSessionVM(ctx, cfg, ws, vmSessionOptions{
 			dir: targetPath, session: sessionFlag, cont: continueFlag,
-			newAgent: newSessionFlag, attach: attachSessionFlag,
+			newAgent: newSessionFlag, attach: attachSessionFlag, detach: detachKeys,
 		})
 	},
 }
@@ -123,6 +129,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "continue the last session")
 	rootCmd.Flags().BoolVar(&newSessionFlag, "new", false, "start a new agent session instead of attaching to the running one")
 	rootCmd.Flags().StringVar(&attachSessionFlag, "attach", "", "attach to the agent session with this ID (see jailoc sessions)")
+	rootCmd.Flags().StringVar(&detachKeysFlag, "detach-keys", "", "key sequence that detaches from the session, e.g. \"ctrl-b,d\" (default: detach_keys from the config, else \""+config.DefaultDetachKeys+"\")")
 	rootCmd.MarkFlagsMutuallyExclusive("session", "continue")
 	rootCmd.MarkFlagsMutuallyExclusive("new", "attach")
 	rootCmd.MarkFlagsMutuallyExclusive("attach", "session")

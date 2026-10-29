@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -24,11 +25,14 @@ const (
 	defaultConfigContent = `# jailoc configuration
 # See: https://github.com/seznam/jailoc
 
+# Keys that detach from an agent session, like tmux: Ctrl-b, then d.
+# detach_keys = "ctrl-b,d"
+
 [base]
 # dockerfile = ""
 
 [defaults]
-# agent = "opencode"  # opencode, claude, copilot or omo
+# agent = "opencode"  # opencode, claude, copilot, omo or an agent defined under agents
 # image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
@@ -50,8 +54,14 @@ const (
 # [defaults.secrets.file.MY_FILE]
 #   from_file = "/path/to/secret"  # written to /run/secrets/MY_FILE
 # [defaults.agents.claude]
-#   install = true  # false: the image provides the agent binary
-#   args = []       # appended to every agent start
+#   install = true      # false: the image provides the agent binary
+#   version = "2.1.312" # npm version installed instead of the pinned one
+#   args = []           # appended to every agent start
+#   mounts = [":/home/agent/.agents"]  # merged over the agent's built-in mounts; ":/path" removes one
+#   profile = "work"    # state shared across workspaces, one running VM at a time; false: emptied on every start
+# [defaults.agents.claude-opus]  # a custom agent: agent = "claude-opus"
+#   from = "claude"     # built-in agent it is derived from
+#   args = ["--model", "opus"]
 
 [workspaces.default]
 paths = []
@@ -190,13 +200,27 @@ var forbiddenMountHostPaths = []string{
 }
 
 // AgentSettings is an [<scope>.agents.<name>] table: settings of the agent
-// harness name, used when the workspace runs it.
+// harness name, used when the workspace runs it. A name that is not a
+// built-in agent defines a custom agent derived from the built-in From.
 type AgentSettings struct {
+	// From is the built-in agent a custom agent is derived from.
+	From string `toml:"from,omitempty"`
 	// Install adds the built-in image layer that installs the harness;
 	// false leaves it to the workspace image. Unset means true.
 	Install *bool `toml:"install,omitempty"`
-	// Args are appended to every start of the agent.
-	Args []string `toml:"args,omitempty"`
+	// Version is the npm version of the harness the image layer installs
+	// instead of the version pinned by jailoc.
+	Version string `toml:"version,omitempty"`
+	// Args are appended to every start of the agent. An empty list is kept
+	// when the configuration is written back: it clears the defaults' args,
+	// which an omitted list inherits.
+	Args []string `toml:"args"`
+	// Mounts are merged by guest path over the harness mounts, before the
+	// [defaults] and workspace mounts.
+	Mounts []string `toml:"mounts,omitempty"`
+	// Profile selects where the harness keeps its state. Unset keeps it per
+	// workspace; a custom agent does not inherit it from its From.
+	Profile *Profile `toml:"profile,omitempty"`
 }
 
 type Mount struct {
@@ -228,6 +252,7 @@ type Secrets struct {
 type Config struct {
 	Mode         string               `toml:"mode,omitempty"`
 	PasswordMode string               `toml:"password_mode,omitempty"`
+	DetachKeys   string               `toml:"detach_keys,omitempty"`
 	Base         BaseConfig           `toml:"base,omitempty"`
 	VM           VMConfig             `toml:"vm,omitempty"`
 	Defaults     Defaults             `toml:"defaults,omitempty"`
@@ -843,8 +868,13 @@ func Validate(cfg *Config) error {
 	case cfg.Defaults.ExposePort != nil:
 		return v1Setting("defaults: expose_port")
 	}
+	if cfg.DetachKeys != "" {
+		if _, err := ParseDetachKeys(cfg.DetachKeys); err != nil {
+			return err
+		}
+	}
 
-	if err := validateAgent(cfg.Defaults.Agent, cfg.Defaults.Agents); err != nil {
+	if err := validateAgent(cfg.Defaults.Agent, cfg.Defaults.Agents, nil); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
 	if err := validateBackend(cfg.Defaults.Backend); err != nil {
@@ -1084,7 +1114,7 @@ func Validate(cfg *Config) error {
 		if ws.ExposePort != nil {
 			return fmt.Errorf("workspace %q: %w", name, v1Setting("expose_port"))
 		}
-		if err := validateAgent(ws.Agent, ws.Agents); err != nil {
+		if err := validateAgent(ws.Agent, ws.Agents, cfg.Defaults.Agents); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if err := validateBackend(ws.Backend); err != nil {
@@ -1151,15 +1181,86 @@ func validateBackend(backend string) error {
 	return fmt.Errorf("invalid backend %q: must be %q or empty", backend, BackendVM)
 }
 
-// validateAgent checks that agent and the keys of agents name built-in
-// harnesses.
-func validateAgent(name string, agents map[string]AgentSettings) error {
-	if _, ok := agent.Lookup(name); name != "" && !ok {
-		return fmt.Errorf("invalid agent %q: must be one of %s", name, strings.Join(agent.Names(), ", "))
-	}
+var (
+	agentNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+	// agentVersionRe matches exact npm versions. Dist-tags such as latest
+	// are rejected: the image layer is rebuilt only when its Dockerfile,
+	// which holds the version, changes.
+	agentVersionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+)
+
+// validateAgent checks the agent of a scope and its agents tables. A key
+// that is not a built-in agent defines a custom agent: its from, set in
+// agents or in inherited (the defaults' tables of a workspace), names a
+// built-in agent. name must be a built-in agent or a custom agent defined
+// in either.
+func validateAgent(name string, agents, inherited map[string]AgentSettings) error {
+	builtins := strings.Join(agent.Names(), ", ")
 	for _, key := range slices.Sorted(maps.Keys(agents)) {
-		if _, ok := agent.Lookup(key); !ok {
-			return fmt.Errorf("agents: unknown agent %q: must be one of %s", key, strings.Join(agent.Names(), ", "))
+		s := agents[key]
+		if _, ok := agent.Lookup(key); ok {
+			if s.From != "" {
+				return fmt.Errorf("agents.%s: from is only for custom agents; %s is a built-in agent", key, key)
+			}
+		} else {
+			if !agentNameRe.MatchString(key) {
+				return fmt.Errorf("agents: invalid agent name %q: must match [a-z0-9-]+", key)
+			}
+			from := cmp.Or(s.From, inherited[key].From)
+			if from == "" {
+				return fmt.Errorf("agents.%s: custom agent needs from, the built-in agent it is derived from (%s)", key, builtins)
+			}
+			if _, ok := agent.Lookup(from); !ok {
+				return fmt.Errorf("agents.%s: from %q is not a built-in agent: must be one of %s", key, from, builtins)
+			}
+		}
+		if s.Version != "" && !agentVersionRe.MatchString(s.Version) {
+			return fmt.Errorf("agents.%s: invalid version %q: must be an exact npm version such as 1.2.3", key, s.Version)
+		}
+		if s.Profile != nil {
+			if name, ok := s.Profile.Name(); ok && !agentNameRe.MatchString(name) {
+				return fmt.Errorf("agents.%s: invalid profile name %q: must match [a-z0-9-]+", key, name)
+			}
+		}
+		if err := validateAgentMounts(s.Mounts); err != nil {
+			return fmt.Errorf("agents.%s: %w", key, err)
+		}
+	}
+	if name == "" {
+		return nil
+	}
+	if _, ok := agent.Lookup(name); ok {
+		return nil
+	}
+	if _, ok := agents[name]; ok {
+		return nil
+	}
+	if _, ok := inherited[name]; ok {
+		return nil
+	}
+	return fmt.Errorf("invalid agent %q: must be one of %s or a custom agent defined under agents", name, builtins)
+}
+
+// validateAgentMounts checks the mounts of an agents table like workspace
+// mounts: ":/guest" entries remove an inherited mount.
+func validateAgentMounts(mounts []string) error {
+	for _, spec := range mounts {
+		m, err := ParseMount(spec)
+		if err != nil {
+			return fmt.Errorf("mounts: %w", err)
+		}
+		if err := validateMountHostPath(m.Host, "mounts"); err != nil {
+			return err
+		}
+		container, err := ExpandPath(m.Container)
+		if err != nil {
+			return fmt.Errorf("mounts: expand mount container path %q: %w", m.Container, err)
+		}
+		container = filepath.Clean(container)
+		for _, prefix := range forbiddenMountContainerPrefixes {
+			if container == prefix || strings.HasPrefix(container, prefix+"/") {
+				return fmt.Errorf("mounts: mount container path %q is not allowed (conflicts with container-internal directory %q)", container, prefix)
+			}
 		}
 	}
 	return nil

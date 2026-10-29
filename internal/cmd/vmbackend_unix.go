@@ -305,6 +305,20 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 		}
 		add(host, m.Container, m.Mode == "ro")
 	}
+	// A named profile shares the agent's state directories that no mount
+	// covers; vmGuestData keeps the rest per workspace.
+	if name := workspaceProfile(ws); name != "" {
+		for _, d := range ws.Agent.State {
+			if _, ok := byGuest[filepath.Clean(d.Path)]; ok {
+				continue
+			}
+			host := filepath.Join(profilesDir(), name, d.Name)
+			if err := os.MkdirAll(host, 0o700); err != nil {
+				return nil, fmt.Errorf("workspace %q: create profile directory %q: %w", ws.Name, host, err)
+			}
+			add(host, d.Path, false)
+		}
+	}
 
 	guestPaths := make([]string, 0, len(byGuest))
 	for p := range byGuest {

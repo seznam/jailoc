@@ -24,13 +24,13 @@ Each page belongs to exactly one quadrant. Do not mix purposes within a page.
 
 ```
 docs/
-  index.md                         Landing page — hero image, Mermaid overview diagram, link hub
+  index.md                         Landing page — hero image, why jailoc, link hub
   development.md                   Contributor guide — build, test, CI, conventions
   tutorials/
     getting-started.md             Install + first workspace walkthrough
   how-to/
     installation.md                Install, host requirements, VM runtime
-    workspace-configuration.md     Paths, mounts, snapshots, ports, protect_git, Docker, reload vs restart
+    workspace-configuration.md     Workspace selection, paths, env, mounts, snapshots, ports, protect_git, Docker, resources, reload vs restart
     custom-images.md               URL Dockerfile presets, local Dockerfiles, build context, isolated builds
     network-access.md              allowed_hosts, allowed_networks, filtered DNS, verifying rules
     secrets.md                     from_env / from_file / from_command secrets, rotation with reload
@@ -47,7 +47,7 @@ docs/
     default-image.md               Tools in the embedded base image
     overlay-compatibility.md       Rules for workspace Dockerfile overlays
   explanation/
-    overview.md                    Startup sequence, package layout
+    overview.md                    Startup sequence, why a VM
     threat-model.md                What jailoc protects against and what it does not
     architecture.md                Builder/workspace VMs, jailoc-guest, shares, persistent home
     network-isolation.md           Userspace network broker, IPv4/IPv6 policy, filtered DNS

@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,7 +32,10 @@ type Resolved struct {
 	// AgentInstall adds the built-in image layer that installs Agent.
 	AgentInstall bool
 	// AgentArgs are appended to every start of Agent.
-	AgentArgs       []string
+	AgentArgs []string
+	// AgentProfile is where Agent keeps its state: nil per workspace, see
+	// config.Profile otherwise.
+	AgentProfile    *config.Profile
 	Mounts          []string
 	Snapshots       []string // read-only snapshots (host:container:ro)
 	Port            int
@@ -138,11 +142,11 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	mergedEnv = append(mergedEnv, ws.Env...)
 	mergedEnv = dedupEnvByKeyLastWins(mergedEnv)
 
-	h, err := resolveAgent(cfg, ws)
+	h, settings, err := resolveAgent(cfg, ws)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %s: %w", name, err)
 	}
-	mergedMounts, err := config.MergeMounts(h.DefaultMounts(), cfg.Defaults.Mounts, ws.Mounts)
+	mergedMounts, err := config.MergeMounts(h.DefaultMounts(), settings.Mounts, cfg.Defaults.Mounts, ws.Mounts)
 	if err != nil {
 		return nil, fmt.Errorf("merge mounts for workspace %s: %w", name, err)
 	}
@@ -153,8 +157,9 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Name:            name,
 		Paths:           paths,
 		Agent:           h,
-		AgentInstall:    boolPtrWithDefault(cfg.Defaults.Agents[h.Name].Install, ws.Agents[h.Name].Install, true),
-		AgentArgs:       ws.Agents[h.Name].Args,
+		AgentInstall:    settings.Install == nil || *settings.Install,
+		AgentArgs:       settings.Args,
+		AgentProfile:    settings.Profile,
 		Mounts:          mergedMounts,
 		Port:            PortForWorkspace(cfg, name),
 		AllowedHosts:    ws.AllowedHosts,
@@ -175,9 +180,6 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		DNSUpstream:     ws.DNSUpstream,
 		DNSBlockedZones: ws.DNSBlockedZones,
 		CABundle:        caBundleWithDefault(cfg.Defaults.CABundle, ws.CABundle),
-	}
-	if r.AgentArgs == nil {
-		r.AgentArgs = cfg.Defaults.Agents[h.Name].Args
 	}
 	if r.DNSUpstream == "" {
 		r.DNSUpstream = cfg.Defaults.DNSUpstream
@@ -202,21 +204,43 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	return r, nil
 }
 
-// resolveAgent returns the harness of ws: its own agent, the default one or
-// agent.Default.
-func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, error) {
-	name := ws.Agent
-	if name == "" {
-		name = cfg.Defaults.Agent
-	}
-	if name == "" {
-		name = agent.Default
-	}
+// resolveAgent returns the harness of ws, its own agent, the default one or
+// agent.Default, and its settings. A custom agent is the built-in agent it
+// is derived from under its own name. Each setting comes from the first
+// agents table that sets it: the workspace's and the defaults' table of the
+// agent, then those of the built-in agent a custom agent is derived from.
+// The harness installs the version the settings select. Mounts are the
+// tables' mounts in merge order: the built-in agent's defaults and
+// workspace tables, then a custom agent's own. Profile is only taken from
+// the agent's own tables.
+func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, config.AgentSettings, error) {
+	name := cmp.Or(ws.Agent, cfg.Defaults.Agent, agent.Default)
+	tables := []config.AgentSettings{ws.Agents[name], cfg.Defaults.Agents[name]}
 	h, ok := agent.Lookup(name)
 	if !ok {
-		return agent.Harness{}, fmt.Errorf("unknown agent %q: must be one of %s", name, strings.Join(agent.Names(), ", "))
+		from := cmp.Or(tables[0].From, tables[1].From)
+		if h, ok = agent.Lookup(from); !ok {
+			return agent.Harness{}, config.AgentSettings{}, fmt.Errorf("unknown agent %q: must be one of %s or a custom agent defined under agents", name, strings.Join(agent.Names(), ", "))
+		}
+		h.Name = name
+		tables = append(tables, ws.Agents[from], cfg.Defaults.Agents[from])
 	}
-	return h, nil
+	var settings config.AgentSettings
+	for _, t := range tables {
+		if settings.Install == nil {
+			settings.Install = t.Install
+		}
+		if settings.Args == nil {
+			settings.Args = t.Args
+		}
+		settings.Version = cmp.Or(settings.Version, t.Version)
+	}
+	for _, t := range slices.Backward(tables) {
+		settings.Mounts = append(settings.Mounts, t.Mounts...)
+	}
+	settings.Profile = cmp.Or(tables[0].Profile, tables[1].Profile)
+	h.Version = cmp.Or(settings.Version, h.Version)
+	return h, settings, nil
 }
 
 // mergeUnique returns a followed by the entries of b not already present.

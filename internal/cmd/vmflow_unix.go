@@ -68,7 +68,10 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
-	internal, err := vmGuestData(ws, cacheDir, shares)
+	if err := claimProfile(ws); err != nil {
+		return fmt.Errorf("workspace %q: %w", ws.Name, err)
+	}
+	internal, err := vmGuestData(ws, cacheDir, shares, true)
 	if err != nil {
 		return err
 	}
@@ -318,7 +321,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	}
 	agent := vmSSHAgent(ws)
 	g.SSHAgent = agent != ""
-	return vm.Spec{
+	spec := vm.Spec{
 		Kind:        vm.KindWorkspace,
 		Workspace:   ws.Name,
 		StateDir:    vmStateDir(ws.Name),
@@ -336,7 +339,12 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Guest:       g,
 		Forwards:    vmForwards(ws.Ports),
 		SSHAgent:    agent,
-	}, nil
+	}
+	if ws.AgentProfile != nil {
+		spec.Profile, _ = ws.AgentProfile.Name()
+		spec.EphemeralProfile = ws.AgentProfile.Ephemeral()
+	}
+	return spec, nil
 }
 
 // vmSSHAgent returns the host SSH agent socket to relay into the workspace
@@ -472,6 +480,11 @@ func downVM(ws *workspace.Resolved, purge bool) error {
 	if err := stopSupervisor(stateDir); err != nil {
 		return err
 	}
+	if spec, err := vm.ReadSpec(stateDir); err == nil && spec.Profile != "" {
+		if err := releaseProfile(ws.Name, spec.Profile); err != nil {
+			return fmt.Errorf("workspace %q: %w", ws.Name, err)
+		}
+	}
 	if err := stopSupervisor(filepath.Join(stateDir, "builder")); err != nil {
 		return err
 	}
@@ -500,7 +513,22 @@ func statusVM(ws *workspace.Resolved) error {
 	}
 	fmt.Printf("State:     running (supervisor pid %d)\n", st.PID)
 	fmt.Printf("Started:   %s\n", st.Updated.Local().Format(time.RFC3339))
+	if spec, err := vm.ReadSpec(vmStateDir(ws.Name)); err == nil {
+		fmt.Printf("Profile:   %s\n", profileLabel(*spec))
+	}
 	return nil
+}
+
+// profileLabel describes where the agent of a workspace VM keeps its state.
+func profileLabel(spec vm.Spec) string {
+	switch {
+	case spec.Profile != "":
+		return spec.Profile
+	case spec.EphemeralProfile:
+		return "none (agent state is emptied on every start)"
+	default:
+		return "workspace"
+	}
 }
 
 // logsVM prints the supervisor and guest console logs; follow keeps

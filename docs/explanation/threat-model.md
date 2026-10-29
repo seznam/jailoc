@@ -62,6 +62,8 @@ The agent sees only the directories shared through `paths` and `mounts`, the fil
 
 Shared directories are live: anything the agent writes there lands on the host. Snapshots are read-only and never write back. Secrets live in guest memory under `/run/secrets` and in session environments, so anything running as `agent` can read them, and the agent can use `sudo` unless `protect_git` is set; treat every configured secret as visible to the agent. See [Secrets](secrets.md).
 
+Agent state can also carry across workspaces. A named agent profile and a read-write agent configuration mount, such as OpenCode's default `~/.config/opencode` mount, are shared by every workspace that uses them, and OpenCode's mount also by the host. Harnesses run or obey what they find there: hooks, plugins, MCP server commands, instructions. Logins and resumable sessions live there too. An agent manipulated in one workspace can plant a hook that runs in another workspace with that workspace's paths, secrets and allowed networks, read the shared login, or leave text that a resumed session feeds back to the model. Workspaces that share a profile or a writable configuration mount share one trust level.
+
 These controls don't stop prompt injection. They limit the blast radius, so a manipulated agent can't reach internal services, the host system or data outside its workspace.
 
 ## Further reading

@@ -61,16 +61,7 @@ After the token-generated push, a contributor with write access must select **Ap
 
 ## Default image contents
 
-The embedded Dockerfile defines an Ubuntu 24.04 base image. Exact versions are pinned there.
-
-| Category | Tools |
-|----------|-------|
-| Runtimes | Node.js, Python 3 |
-| Package managers | npm |
-| Language servers | typescript-language-server, pyright, yaml-language-server, bash-language-server |
-| CLI tools | ripgrep, fd, jq, git, openssh-client, curl |
-
-Source: [`internal/embed/assets/Dockerfile`](https://github.com/seznam/jailoc/blob/master/internal/embed/assets/Dockerfile)
+The embedded base image is defined in [`internal/embed/assets/Dockerfile`](https://github.com/seznam/jailoc/blob/main/internal/embed/assets/Dockerfile). Its contents are listed in [Default Image Contents](reference/default-image.md).
 
 ## Project conventions
 

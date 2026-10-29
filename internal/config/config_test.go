@@ -3234,13 +3234,30 @@ func TestAgentValidation(t *testing.T) {
 		{name: "unset agent", ws: Workspace{}},
 		{name: "workspace agent", ws: Workspace{Agent: "claude"}},
 		{name: "defaults agent", defaults: Defaults{Agent: "omo"}},
-		{name: "unknown workspace agent", ws: Workspace{Agent: "vim"}, wantError: `workspace "test": invalid agent "vim": must be one of opencode, claude, copilot, omo`},
+		{name: "unknown workspace agent", ws: Workspace{Agent: "vim"}, wantError: `workspace "test": invalid agent "vim": must be one of opencode, claude, copilot, omo or a custom agent defined under agents`},
 		{name: "unknown defaults agent", defaults: Defaults{Agent: "vim"}, wantError: `defaults: invalid agent "vim"`},
 		{name: "settings of another agent", ws: Workspace{Agent: "claude", Agents: map[string]AgentSettings{"copilot": {Args: []string{"--banner"}}}}},
-		{name: "settings of unknown agent", ws: Workspace{Agents: map[string]AgentSettings{"vim": {}}}, wantError: `workspace "test": agents: unknown agent "vim"`},
-		{name: "defaults settings of unknown agent", defaults: Defaults{Agents: map[string]AgentSettings{"vim": {}}}, wantError: `defaults: agents: unknown agent "vim"`},
+		{name: "custom agent without from", ws: Workspace{Agents: map[string]AgentSettings{"vim": {}}}, wantError: `workspace "test": agents.vim: custom agent needs from`},
+		{name: "defaults custom agent without from", defaults: Defaults{Agents: map[string]AgentSettings{"vim": {}}}, wantError: `defaults: agents.vim: custom agent needs from`},
+		{name: "custom agent", ws: Workspace{Agent: "claude-opus", Agents: map[string]AgentSettings{"claude-opus": {From: "claude", Version: "2.1.400"}}}},
+		{name: "custom agent from defaults", defaults: Defaults{Agents: map[string]AgentSettings{"claude-opus": {From: "claude"}}}, ws: Workspace{Agent: "claude-opus"}},
+		{name: "defaults agent is custom", defaults: Defaults{Agent: "claude-opus", Agents: map[string]AgentSettings{"claude-opus": {From: "claude"}}}},
+		{name: "workspace settings of defaults custom agent", defaults: Defaults{Agents: map[string]AgentSettings{"claude-opus": {From: "claude"}}}, ws: Workspace{Agents: map[string]AgentSettings{"claude-opus": {Args: []string{"-v"}}}}},
+		{name: "custom agent from custom agent", ws: Workspace{Agents: map[string]AgentSettings{"a": {From: "claude"}, "b": {From: "a"}}}, wantError: `agents.b: from "a" is not a built-in agent`},
+		{name: "from on built-in agent", ws: Workspace{Agents: map[string]AgentSettings{"claude": {From: "omo"}}}, wantError: `agents.claude: from is only for custom agents`},
+		{name: "invalid custom agent name", ws: Workspace{Agents: map[string]AgentSettings{"Claude_X": {From: "claude"}}}, wantError: `invalid agent name "Claude_X"`},
+		{name: "version override", defaults: Defaults{Agents: map[string]AgentSettings{"claude": {Version: "2.1.400-beta.1"}}}},
+		{name: "dist-tag version", defaults: Defaults{Agents: map[string]AgentSettings{"claude": {Version: "latest"}}}, wantError: `defaults: agents.claude: invalid version "latest"`},
+		{name: "version with shell characters", ws: Workspace{Agents: map[string]AgentSettings{"omo": {Version: "1.0.0' && id"}}}, wantError: `invalid version`},
 		{name: "agent env reserved", ws: Workspace{Env: []string{"CLAUDE_CONFIG_DIR=/tmp"}}, wantError: `env key "CLAUDE_CONFIG_DIR" is reserved`},
 		{name: "TUI config env reserved", defaults: Defaults{Env: []string{"OPENCODE_TUI_CONFIG=/tmp/x.json"}}, wantError: `env key "OPENCODE_TUI_CONFIG" is reserved`},
+		{name: "agent mounts", defaults: Defaults{Agents: map[string]AgentSettings{"claude": {Mounts: []string{"~/.claude-work:/home/agent/.claude:rw", ":/home/agent/.agents"}}}}},
+		{name: "agent mount invalid spec", ws: Workspace{Agents: map[string]AgentSettings{"claude": {Mounts: []string{"relative:/x"}}}}, wantError: `workspace "test": agents.claude: mounts: invalid mount spec`},
+		{name: "agent mount forbidden host", ws: Workspace{Agents: map[string]AgentSettings{"claude": {Mounts: []string{"~/.ssh:/home/agent/.ssh"}}}}, wantError: `agents.claude: mounts: mount host path`},
+		{name: "agent mount forbidden guest path", defaults: Defaults{Agents: map[string]AgentSettings{"omo": {Mounts: []string{"/tmp/x:/usr/local/bin"}}}}, wantError: `defaults: agents.omo: mounts: mount container path "/usr/local/bin" is not allowed`},
+		{name: "named profile", ws: Workspace{Agents: map[string]AgentSettings{"claude": {Profile: new(NamedProfile("work"))}}}},
+		{name: "ephemeral profile", defaults: Defaults{Agents: map[string]AgentSettings{"claude": {Profile: new(EphemeralProfile())}}}},
+		{name: "invalid profile name", ws: Workspace{Agents: map[string]AgentSettings{"claude": {Profile: new(NamedProfile("../x"))}}}, wantError: `agents.claude: invalid profile name "../x"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3288,5 +3305,106 @@ install = false
 	ws := cfg.Workspaces["test"]
 	if ws.Agent != "omo" || ws.Agents["omo"].Install == nil || *ws.Agents["omo"].Install {
 		t.Fatalf("unexpected workspace: %+v", ws)
+	}
+}
+
+func TestLoadAgentProfileTOML(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		value     string
+		want      *Profile
+		wantError string
+	}{
+		{name: "unset", value: ""},
+		{name: "false", value: "profile = false", want: new(EphemeralProfile())},
+		{name: "name", value: `profile = "opencode-legacy"`, want: new(NamedProfile("opencode-legacy"))},
+		{name: "true", value: "profile = true", wantError: "profile: true is not valid"},
+		{name: "invalid name", value: `profile = "a/b"`, wantError: `invalid profile name "a/b"`},
+		{name: "empty name", value: `profile = ""`, wantError: `invalid profile name ""`},
+		{name: "number", value: "profile = 1", wantError: "expected false or a profile name"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			writeFile(t, path, "[workspaces.test]\npaths = [\"/data/work\"]\n\n[workspaces.test.agents.claude]\nmounts = [\":/home/agent/.agents\"]\n"+tc.value+"\n")
+			cfg, err := LoadFrom(path)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("LoadFrom error = %v, want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFrom: %v", err)
+			}
+			settings := cfg.Workspaces["test"].Agents["claude"]
+			if !slices.Equal(settings.Mounts, []string{":/home/agent/.agents"}) {
+				t.Fatalf("mounts = %#v", settings.Mounts)
+			}
+			if !reflect.DeepEqual(settings.Profile, tc.want) {
+				t.Fatalf("profile = %#v, want %#v", settings.Profile, tc.want)
+			}
+
+			data, err := Encode(cfg)
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			path2 := filepath.Join(dir, "config2.toml")
+			writeFile(t, path2, string(data))
+			second, err := LoadFrom(path2)
+			if err != nil {
+				t.Fatalf("second LoadFrom: %v\n%s", err, data)
+			}
+			if got := second.Workspaces["test"].Agents["claude"].Profile; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("round-tripped profile = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentArgsRoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `[defaults.agents.claude]
+args = ["--model", "opus"]
+
+[workspaces.cleared]
+paths = ["/data/cleared"]
+
+[workspaces.cleared.agents.claude]
+args = []
+
+[workspaces.inherited]
+paths = ["/data/inherited"]
+
+[workspaces.inherited.agents.claude]
+install = false
+`)
+	first, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	data, err := Encode(first)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	path2 := filepath.Join(dir, "config2.toml")
+	writeFile(t, path2, string(data))
+	second, err := LoadFrom(path2)
+	if err != nil {
+		t.Fatalf("second LoadFrom: %v", err)
+	}
+	if args := second.Workspaces["cleared"].Agents["claude"].Args; args == nil || len(args) != 0 {
+		t.Errorf("cleared args = %#v, want an explicitly empty list", args)
+	}
+	if args := second.Workspaces["inherited"].Agents["claude"].Args; args != nil {
+		t.Errorf("inherited args = %#v, want nil (inherit defaults)", args)
+	}
+	if args := second.Defaults.Agents["claude"].Args; !slices.Equal(args, []string{"--model", "opus"}) {
+		t.Errorf("defaults args = %#v", args)
 	}
 }

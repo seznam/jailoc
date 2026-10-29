@@ -32,8 +32,172 @@ import (
 	"golang.org/x/term"
 )
 
-// detachKey (Ctrl-\) detaches from a session without stopping the agent.
-const detachKey = 0x1c
+// detachMatcher finds the detach key sequence in terminal input that may
+// arrive split across reads. Keys that start the sequence are held back
+// until the next key decides. As in tmux, typing the first key twice sends
+// it once to the agent.
+//
+// Agents may switch the terminal to an extended keyboard mode (xterm
+// modifyOtherKeys, kitty keyboard protocol), in which Ctrl-b arrives as an
+// escape sequence instead of byte 0x02, so input is split into keys and each
+// key is decoded before it is compared. Key release and repeat events and
+// presses of modifier keys alone do not break a sequence.
+type detachMatcher struct {
+	keys []byte
+	idx  int    // keys matched so far
+	held []byte // input since the first matched key
+}
+
+func newDetachMatcher(keys []byte) *detachMatcher {
+	return &detachMatcher{keys: keys}
+}
+
+// feed returns the input to forward to the agent and whether the sequence
+// was completed; input after a completed sequence is dropped. Matched keys
+// are held across reads; a partial escape sequence is not, since terminals
+// write each one at once and holding it would delay the Esc key.
+func (m *detachMatcher) feed(chunk []byte) (out []byte, detach bool) {
+	for len(chunk) > 0 {
+		n, complete := nextKey(chunk)
+		tok := chunk[:n]
+		chunk = chunk[n:]
+		if !complete {
+			out = append(append(out, m.held...), tok...)
+			m.idx, m.held = 0, nil
+			break
+		}
+		if out, detach = m.settle(out, tok); detach {
+			return out, true
+		}
+	}
+	return out, false
+}
+
+func (m *detachMatcher) settle(out, tok []byte) ([]byte, bool) {
+	key, ok, ignore := decodeKey(tok)
+	switch {
+	case ignore && m.idx > 0:
+		m.held = append(m.held, tok...)
+		return out, false
+	case ok && key == m.keys[m.idx]:
+		m.held = append(m.held, tok...)
+		if m.idx++; m.idx == len(m.keys) {
+			m.idx, m.held = 0, nil
+			return out, true
+		}
+		return out, false
+	case m.idx == 1 && ok && key == m.keys[0]:
+		// The first key again: send it once, as tmux does.
+		m.idx, m.held = 0, nil
+		return append(out, tok...), false
+	case m.idx > 0:
+		// Not the sequence: send the held keys and try this one as its start.
+		out = append(out, m.held...)
+		m.idx, m.held = 0, nil
+		return m.settle(out, tok)
+	}
+	return append(out, tok...), false
+}
+
+// nextKey returns the length of the first key in in: a CSI escape sequence,
+// an SS3 sequence, Esc with the key typed with Alt, or a single byte.
+// complete is false when in ends inside an escape sequence.
+func nextKey(in []byte) (n int, complete bool) {
+	if in[0] != 0x1b || len(in) == 1 {
+		return 1, true
+	}
+	switch in[1] {
+	case '[':
+		for i := 2; i < len(in); i++ {
+			switch b := in[i]; {
+			case b >= 0x40 && b <= 0x7e:
+				return i + 1, true
+			case b < 0x20 || b > 0x7e:
+				return i, true
+			}
+		}
+		return len(in), false
+	case 'O':
+		if len(in) < 3 {
+			return len(in), false
+		}
+		return 3, true
+	}
+	return 2, true
+}
+
+// Kitty keyboard protocol key codes of the modifier keys: shift, control,
+// alt, super, hyper and meta (left and right), ISO level 3 and 5 shift.
+const kittyModifierFirst, kittyModifierLast = 57441, 57454
+
+// decodeKey returns the byte a key sends without extended keyboard modes.
+// ignore reports a key release or repeat, or a press of a modifier key
+// alone, which carry no input.
+func decodeKey(tok []byte) (key byte, ok, ignore bool) {
+	if len(tok) == 1 {
+		return tok[0], true, false
+	}
+	if len(tok) < 3 || tok[1] != '[' || tok[2] < '0' || tok[2] > ';' {
+		return 0, false, false
+	}
+	final := tok[len(tok)-1]
+	var params [][]int
+	for p := range bytes.SplitSeq(tok[2:len(tok)-1], []byte(";")) {
+		var sub []int
+		for s := range bytes.SplitSeq(p, []byte(":")) {
+			v, err := strconv.Atoi(string(s))
+			if err != nil {
+				v = 0 // an empty field takes its default
+			}
+			sub = append(sub, v)
+		}
+		params = append(params, sub)
+	}
+	if len(params) >= 2 && len(params[1]) >= 2 && params[1][1] >= 2 {
+		return 0, false, true // kitty release (3) or repeat (2) event
+	}
+	var code, shifted, mods int
+	switch {
+	case final == 'u':
+		code = params[0][0]
+		if len(params[0]) >= 2 {
+			shifted = params[0][1]
+		}
+		if len(params) >= 2 {
+			mods = params[1][0]
+		}
+		if code >= kittyModifierFirst && code <= kittyModifierLast {
+			return 0, false, true
+		}
+	case final == '~' && len(params) == 3 && params[0][0] == 27:
+		mods, code = params[1][0], params[2][0]
+	default:
+		return 0, false, false
+	}
+	// Modifiers are sent plus one; Caps Lock and Num Lock do not change keys.
+	const shift, ctrl, locks = 1, 4, 64 | 128
+	switch max(mods-1, 0) &^ locks {
+	case 0:
+		if code >= 0 && code < 0x80 {
+			return byte(code), true, false
+		}
+	case shift:
+		switch {
+		case shifted > 0 && shifted < 0x80:
+			return byte(shifted), true, false
+		case code >= 'a' && code <= 'z':
+			return byte(code - 0x20), true, false
+		}
+	case ctrl:
+		switch {
+		case code >= 'a' && code <= 'z':
+			return byte(code - 0x60), true, false
+		case code >= '@' && code <= '_':
+			return byte(code - 0x40), true, false
+		}
+	}
+	return 0, false, false
+}
 
 type sessionOutcome int
 
@@ -46,8 +210,8 @@ const (
 
 // runSessionVM starts the workspace if needed and attaches the terminal to
 // a detachable agent session in the VM: the one started in the same
-// directory, or a new one. Closing the terminal or pressing Ctrl-\ detaches
-// and leaves the agent running.
+// directory, or a new one. Closing the terminal or typing the detach keys
+// detaches and leaves the agent running.
 func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, opts vmSessionOptions) error {
 	if st, err := runningVM(vmStateDir(ws.Name)); err != nil {
 		return err
@@ -117,7 +281,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 		return fmt.Errorf("start session in workspace %q: %w", ws.Name, err)
 	}
 
-	id, outcome, code := relaySession(fd, interactive, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
+	id, outcome, code := relaySession(fd, interactive, opts.detach, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
 	// The guest command exits only after its input closes.
 	_ = stdin.Close()
 	_ = sess.Wait()
@@ -147,7 +311,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 // relaySession connects the local terminal to the session protocol on
 // in/out until the session ends, the user detaches or another terminal
 // takes the session over.
-func relaySession(fd int, interactive bool, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int) {
+func relaySession(fd int, interactive bool, detachKeys []byte, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int) {
 	var writeMu sync.Mutex
 	send := func(f session.Frame) error {
 		writeMu.Lock()
@@ -183,21 +347,22 @@ func relaySession(fd int, interactive bool, in io.WriteCloser, out io.Reader, ro
 	}
 
 	detached := make(chan struct{})
+	matcher := newDetachMatcher(detachKeys)
 	go func() {
 		buf := make([]byte, 32<<10)
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
-				chunk := buf[:n]
-				if i := bytes.IndexByte(chunk, detachKey); i >= 0 && interactive {
-					if i > 0 {
-						_ = send(session.Frame{Type: session.FrameData, Payload: append([]byte(nil), chunk[:i]...)})
-					}
-					close(detached)
-					_ = in.Close()
+				chunk, detach := append([]byte(nil), buf[:n]...), false
+				if interactive && len(detachKeys) > 0 {
+					chunk, detach = matcher.feed(chunk)
+				}
+				if len(chunk) > 0 && send(session.Frame{Type: session.FrameData, Payload: chunk}) != nil {
 					return
 				}
-				if send(session.Frame{Type: session.FrameData, Payload: append([]byte(nil), chunk...)}) != nil {
+				if detach {
+					close(detached)
+					_ = in.Close()
 					return
 				}
 			}

@@ -59,6 +59,46 @@ from_command = "security find-generic-password -s anthropic -w"
 
 `jailoc down --purge` deletes the state, including logins.
 
+## Share or discard agent state
+
+By default each workspace keeps its own agent state. To reuse logins and sessions across workspaces, name a profile; to start clean every time, set `profile = false`:
+
+```toml
+[defaults.agents.claude]
+profile = "work"
+
+[workspaces.scratch.agents.claude]
+profile = false
+```
+
+A named profile lives in `~/.local/share/jailoc/profiles/<name>`, survives `jailoc down --purge`, and is used by one running workspace at a time: stop the other workspace before starting one with the same profile. A custom agent does not inherit `profile` from the agent it is derived from. See [Agent profiles](../reference/configuration.md#agent-profiles).
+
+!!! warning
+    A profile carries the harness's hooks, plugins and MCP server settings along with the login, so an agent in one workspace can change what runs in every other workspace on the same profile. Share a profile only between workspaces you trust equally.
+
+## Mount agent configuration
+
+`agents.<name>.mounts` adds mounts only while that agent is selected, for example a separate OpenCode configuration for a custom agent:
+
+```toml
+[defaults.agents.opencode-legacy]
+from = "opencode"
+mounts = ["~/.config/opencode-legacy:/home/agent/.config/opencode"]
+```
+
+An entry with an empty host, such as `":/home/agent/.agents"`, removes a built-in mount. See [Agent mounts](../reference/configuration.md#agent-mounts).
+
+## Keep OpenCode from changing its configuration
+
+The built-in OpenCode mount shares `~/.config/opencode` read-write with the host and every OpenCode workspace, so an agent can add plugins or instructions that run everywhere else. Mount it read-only:
+
+```toml
+[defaults.agents.opencode]
+mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
+```
+
+OpenCode then can't install plugins inside the VM. Install them on the host, where `~/.config/opencode` is writable.
+
 ## Pass extra arguments
 
 `args` is appended to every session command line:
@@ -68,9 +108,36 @@ from_command = "security find-generic-password -s anthropic -w"
 args = ["--model", "sonnet"]
 ```
 
+## Use another version
+
+jailoc pins the version of each agent. To install another one, set `version`:
+
+```toml
+[defaults.agents.claude]
+version = "2.1.400"
+```
+
+The next `jailoc up` or `jailoc restart` builds the agent layer with that version. Use an exact version: the layer is rebuilt only when the version changes, so `latest` is rejected.
+
+## Define a custom agent
+
+A custom agent is a built-in agent under another name with its own settings, for example a model preset or a version you want to try next to the pinned one:
+
+```toml
+[defaults.agents.claude-opus]
+from = "claude"
+args = ["--model", "opus"]
+
+[workspaces.my-project-opus]
+paths = ["~/projects/my-project"]
+agent = "claude-opus"
+```
+
+Settings not set on the custom agent come from the agent it is derived from: here `claude-opus` installs the same Claude Code version as `claude`. See [Custom agents](../reference/configuration.md#custom-agents).
+
 ## Install the agent yourself
 
-To provide the agent from your own overlay Dockerfile, for example another version, turn off the built-in installation:
+To provide the agent from your own overlay Dockerfile, for example a build of your own, turn off the built-in installation:
 
 ```toml
 [workspaces.my-project-claude]

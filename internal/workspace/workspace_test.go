@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -1578,29 +1579,45 @@ func TestResolveAgent(t *testing.T) {
 			Agents: map[string]config.AgentSettings{
 				"claude":  {Args: []string{"--model", "opus"}},
 				"copilot": {Install: new(false), Args: []string{"--banner"}},
+				"omo":     {Version: "5.2.0"},
+				"omo-ci":  {From: "omo", Args: []string{"--print"}},
 			},
 		},
 		Workspaces: map[string]config.Workspace{
 			"inherit":  {Paths: []string{"/tmp/a"}},
 			"override": {Paths: []string{"/tmp/b"}, Agent: "copilot", Agents: map[string]config.AgentSettings{"copilot": {Args: []string{}}}},
 			"opencode": {Paths: []string{"/tmp/c"}, Agent: "opencode"},
+			// Derived in the workspace: own args, the built-in's defaults
+			// install, own version.
+			"derived": {Paths: []string{"/tmp/d"}, Agent: "claude-opus", Agents: map[string]config.AgentSettings{
+				"claude-opus": {From: "claude", Version: "2.1.400"},
+				"claude":      {Install: new(false)},
+			}},
+			// Derived in the defaults: version of the built-in's table.
+			"derived-defaults": {Paths: []string{"/tmp/e"}, Agent: "omo-ci"},
+			"version":          {Paths: []string{"/tmp/f"}, Agent: "omo", Agents: map[string]config.AgentSettings{"omo": {Version: "5.3.0"}}},
 		},
 	}
+	claude, _ := agent.Lookup("claude")
 
 	tests := []struct {
 		name        string
 		wantAgent   string
 		wantInstall bool
 		wantArgs    []string
+		wantVersion string
 		wantMounts  []string
 	}{
-		{"inherit", "claude", true, []string{"--model", "opus"}, []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
-		{"override", "copilot", false, []string{}, []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
-		{"opencode", "opencode", true, nil, []string{
+		{"inherit", "claude", true, []string{"--model", "opus"}, claude.Version, []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
+		{"override", "copilot", false, []string{}, "", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
+		{"opencode", "opencode", true, nil, "", []string{
 			filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
 			filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 			filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 		}},
+		{"derived", "claude-opus", false, []string{"--model", "opus"}, "2.1.400", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
+		{"derived-defaults", "omo-ci", true, []string{"--print"}, "5.2.0", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
+		{"version", "omo", true, nil, "5.3.0", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1611,6 +1628,9 @@ func TestResolveAgent(t *testing.T) {
 			if resolved.Agent.Name != tt.wantAgent || resolved.AgentInstall != tt.wantInstall || !reflect.DeepEqual(resolved.AgentArgs, tt.wantArgs) {
 				t.Fatalf("agent = %q install=%v args=%#v, want %q install=%v args=%#v", resolved.Agent.Name, resolved.AgentInstall, resolved.AgentArgs, tt.wantAgent, tt.wantInstall, tt.wantArgs)
 			}
+			if tt.wantVersion != "" && resolved.Agent.Version != tt.wantVersion {
+				t.Fatalf("version = %q, want %q", resolved.Agent.Version, tt.wantVersion)
+			}
 			if !reflect.DeepEqual(resolved.Mounts, tt.wantMounts) {
 				t.Fatalf("mounts = %#v, want %#v", resolved.Mounts, tt.wantMounts)
 			}
@@ -1619,5 +1639,66 @@ func TestResolveAgent(t *testing.T) {
 
 	if _, err := workspace.Resolve(&config.Config{Workspaces: map[string]config.Workspace{"x": {Agent: "vim"}}}, "x"); err == nil || !strings.Contains(err.Error(), `unknown agent "vim"`) {
 		t.Fatalf("Resolve unknown agent error = %v", err)
+	}
+}
+
+func TestResolveAgentMountsAndProfile(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Mounts: []string{"/h/global:/z:rw"},
+			Agents: map[string]config.AgentSettings{
+				"claude": {Mounts: []string{"/h/def-claude:/x:rw", "/h/def-claude-y:/y:rw"}, Profile: new(config.NamedProfile("base"))},
+				"opus":   {From: "claude", Mounts: []string{"/h/def-opus:/y:rw"}},
+			},
+		},
+		Workspaces: map[string]config.Workspace{
+			// The built-in's workspace table overrides its defaults table, the
+			// custom agent's tables follow, [defaults] mounts come last.
+			"derived": {Paths: []string{"/tmp/a"}, Agent: "opus", Agents: map[string]config.AgentSettings{
+				"claude": {Mounts: []string{"/h/ws-claude:/x:rw", ":/home/agent/.agents"}},
+				"opus":   {Mounts: []string{"/h/ws-opus:/z:ro"}},
+			}},
+			"builtin": {Paths: []string{"/tmp/b"}, Agent: "claude"},
+			"ephemeral": {Paths: []string{"/tmp/c"}, Agent: "opus", Agents: map[string]config.AgentSettings{
+				"opus": {Profile: new(config.EphemeralProfile())},
+			}},
+			"own-profile": {Paths: []string{"/tmp/d"}, Agent: "claude", Agents: map[string]config.AgentSettings{
+				"claude": {Profile: new(config.NamedProfile("mine"))},
+			}},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		wantMounts  []string
+		wantProfile *config.Profile
+	}{
+		{"derived", []string{"/h/ws-claude:/x:rw", "/h/def-opus:/y:rw", "/h/global:/z:rw"}, nil},
+		{"builtin", []string{"~/.agents:/home/agent/.agents:ro", "/h/def-claude:/x:rw", "/h/def-claude-y:/y:rw", "/h/global:/z:rw"}, new(config.NamedProfile("base"))},
+		{"ephemeral", nil, new(config.EphemeralProfile())},
+		{"own-profile", nil, new(config.NamedProfile("mine"))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := workspace.Resolve(cfg, tt.name)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if !reflect.DeepEqual(resolved.AgentProfile, tt.wantProfile) {
+				t.Fatalf("profile = %#v, want %#v", resolved.AgentProfile, tt.wantProfile)
+			}
+			if tt.wantMounts == nil {
+				return
+			}
+			want, err := config.MergeMounts(tt.wantMounts)
+			if err != nil {
+				t.Fatalf("MergeMounts: %v", err)
+			}
+			if !reflect.DeepEqual(resolved.Mounts, want) {
+				t.Fatalf("mounts = %#v, want %#v", resolved.Mounts, want)
+			}
+		})
 	}
 }
