@@ -174,6 +174,8 @@ memory = "16g"
 
 Workspace values override defaults. Without either, the VM gets 2 vCPUs and `4g`. `cpu` is rounded up to whole vCPUs. `memory` is a positive integer optionally followed by `k`, `m` or `g`, and must be at least `512m`. The limits apply to the whole VM, including its Docker daemon.
 
+Inside the VM, jailoc swaps to compressed memory (zram, half of `memory`) and trims part of the file cache every minute; freed pages are reported to the host through the balloon device.
+
 ## Apply changes to a running workspace
 
 After editing the config, apply it without restarting:

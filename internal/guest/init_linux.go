@@ -134,6 +134,11 @@ func Init(logger *slog.Logger) error {
 		return err
 	}
 
+	if err := setupZram(logger); err != nil {
+		logger.Warn("zram swap disabled", "error", err)
+	}
+	defer startReclaim(logger)()
+
 	// By default the agent may become root through sudo: the VM is the
 	// isolation boundary, and network policy and share permissions are
 	// enforced on the host. Guest-side protections (Pins, ReadOnly) only
