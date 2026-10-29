@@ -44,7 +44,7 @@ Here's what happens on first run:
 
 ## Detach and come back
 
-Press `Ctrl-\` to detach from the session. The agent keeps running inside the VM. Run `jailoc` again from the same directory to reattach to it.
+Press `Ctrl-b`, then `d`, to detach from the session. The agent keeps running inside the VM. Run `jailoc` again from the same directory to reattach to it.
 
 To see the sessions running in the workspace:
 

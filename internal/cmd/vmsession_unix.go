@@ -32,8 +32,41 @@ import (
 	"golang.org/x/term"
 )
 
-// detachKey (Ctrl-\) detaches from a session without stopping the agent.
-const detachKey = 0x1c
+// detachMatcher finds the detach key sequence in terminal input that may
+// arrive split across reads. Input that only starts like the sequence is
+// held back until the next key decides. As in tmux, typing the first key
+// twice sends it once to the agent.
+type detachMatcher struct {
+	keys []byte
+	held int
+}
+
+// feed returns the input to forward to the agent and whether the sequence
+// was completed; input after a completed sequence is dropped.
+func (m *detachMatcher) feed(chunk []byte) (out []byte, detach bool) {
+	for _, b := range chunk {
+		switch {
+		case b == m.keys[m.held]:
+			m.held++
+			if m.held == len(m.keys) {
+				m.held = 0
+				return out, true
+			}
+		case m.held == 1 && b == m.keys[0]:
+			out = append(out, b)
+			m.held = 0
+		default:
+			out = append(out, m.keys[:m.held]...)
+			m.held = 0
+			if b == m.keys[0] && len(m.keys) > 1 {
+				m.held = 1
+			} else {
+				out = append(out, b)
+			}
+		}
+	}
+	return out, false
+}
 
 type sessionOutcome int
 
@@ -46,8 +79,8 @@ const (
 
 // runSessionVM starts the workspace if needed and attaches the terminal to
 // a detachable agent session in the VM: the one started in the same
-// directory, or a new one. Closing the terminal or pressing Ctrl-\ detaches
-// and leaves the agent running.
+// directory, or a new one. Closing the terminal or typing the detach keys
+// detaches and leaves the agent running.
 func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, opts vmSessionOptions) error {
 	if st, err := runningVM(vmStateDir(ws.Name)); err != nil {
 		return err
@@ -117,7 +150,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 		return fmt.Errorf("start session in workspace %q: %w", ws.Name, err)
 	}
 
-	id, outcome, code := relaySession(fd, interactive, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
+	id, outcome, code := relaySession(fd, interactive, opts.detach, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
 	// The guest command exits only after its input closes.
 	_ = stdin.Close()
 	_ = sess.Wait()
@@ -147,7 +180,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 // relaySession connects the local terminal to the session protocol on
 // in/out until the session ends, the user detaches or another terminal
 // takes the session over.
-func relaySession(fd int, interactive bool, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int) {
+func relaySession(fd int, interactive bool, detachKeys []byte, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int) {
 	var writeMu sync.Mutex
 	send := func(f session.Frame) error {
 		writeMu.Lock()
@@ -183,21 +216,22 @@ func relaySession(fd int, interactive bool, in io.WriteCloser, out io.Reader, ro
 	}
 
 	detached := make(chan struct{})
+	matcher := &detachMatcher{keys: detachKeys}
 	go func() {
 		buf := make([]byte, 32<<10)
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
-				chunk := buf[:n]
-				if i := bytes.IndexByte(chunk, detachKey); i >= 0 && interactive {
-					if i > 0 {
-						_ = send(session.Frame{Type: session.FrameData, Payload: append([]byte(nil), chunk[:i]...)})
-					}
-					close(detached)
-					_ = in.Close()
+				chunk, detach := append([]byte(nil), buf[:n]...), false
+				if interactive && len(detachKeys) > 0 {
+					chunk, detach = matcher.feed(chunk)
+				}
+				if len(chunk) > 0 && send(session.Frame{Type: session.FrameData, Payload: chunk}) != nil {
 					return
 				}
-				if send(session.Frame{Type: session.FrameData, Payload: append([]byte(nil), chunk...)}) != nil {
+				if detach {
+					close(detached)
+					_ = in.Close()
 					return
 				}
 			}

@@ -8,7 +8,17 @@ The file is auto-created with defaults on first run. All fields are optional unl
 
 ## Top-level fields
 
-The configuration has no settings of its own at the root level, only the tables `[vm]`, `[base]`, `[defaults]` and `[workspaces.<name>]`.
+Besides the tables `[vm]`, `[base]`, `[defaults]` and `[workspaces.<name>]`, the configuration has one setting at the root level. Put it before the first table.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `detach_keys` | string | `"ctrl-b,d"` | Key sequence that detaches the terminal from an agent session. The `--detach-keys` flag of [`jailoc`](cli.md#jailoc) overrides it. |
+
+`detach_keys` is a comma-separated list of keys, typed one after another, in the format of `docker attach --detach-keys`. A key is `ctrl-<letter>` (lowercase), one of `ctrl-@`, `ctrl-[`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, `DEL`, or a single character other than a comma. While a session is attached, jailoc holds back input that starts like the sequence until the next key decides. Typing the first key twice sends it once to the agent, as in tmux.
+
+```toml
+detach_keys = "ctrl-a,d"
+```
 
 The jailoc v1 settings `mode` and `password_mode` are rejected at config load time. See [jailoc v1 settings](#jailoc-v1-settings).
 

@@ -17,6 +17,7 @@ type vmSessionOptions struct {
 	cont     bool   // continue the last agent conversation (new agent session)
 	newAgent bool   // always start a new agent session
 	attach   string // attach to this agent session ID
+	detach   []byte // key sequence that detaches from the session
 }
 
 var sessionsCmd = &cobra.Command{
