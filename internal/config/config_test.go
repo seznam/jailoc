@@ -3290,3 +3290,47 @@ install = false
 		t.Fatalf("unexpected workspace: %+v", ws)
 	}
 }
+
+func TestAgentArgsRoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `[defaults.agents.claude]
+args = ["--model", "opus"]
+
+[workspaces.cleared]
+paths = ["/data/cleared"]
+
+[workspaces.cleared.agents.claude]
+args = []
+
+[workspaces.inherited]
+paths = ["/data/inherited"]
+
+[workspaces.inherited.agents.claude]
+install = false
+`)
+	first, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	data, err := Encode(first)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	path2 := filepath.Join(dir, "config2.toml")
+	writeFile(t, path2, string(data))
+	second, err := LoadFrom(path2)
+	if err != nil {
+		t.Fatalf("second LoadFrom: %v", err)
+	}
+	if args := second.Workspaces["cleared"].Agents["claude"].Args; args == nil || len(args) != 0 {
+		t.Errorf("cleared args = %#v, want an explicitly empty list", args)
+	}
+	if args := second.Workspaces["inherited"].Agents["claude"].Args; args != nil {
+		t.Errorf("inherited args = %#v, want nil (inherit defaults)", args)
+	}
+	if args := second.Defaults.Agents["claude"].Args; !slices.Equal(args, []string{"--model", "opus"}) {
+		t.Errorf("defaults args = %#v", args)
+	}
+}
