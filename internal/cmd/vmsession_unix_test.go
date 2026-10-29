@@ -38,6 +38,20 @@ func TestDetachMatcher(t *testing.T) {
 		{name: "esc is not held", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b"}, wantOut: "\x1b"},
 		{name: "esc after prefix is not held", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x02", "\x1b"}, wantOut: "\x02\x1b"},
 		{name: "other escape sequences pass", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[A\x1b[99;5u"}, wantOut: "\x1b[A\x1b[99;5u"},
+		{name: "kitty release events between keys", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;5u", "\x1b[98;5:3u", "\x1b[100u"}, wantDetach: true},
+		{name: "kitty repeat events between keys", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;5u\x1b[98;5:2u\x1b[98;5:3u", "\x1b[100;1u"}, wantDetach: true},
+		{name: "kitty modifier key presses", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[57442u\x1b[98;5u\x1b[57442;5:3u\x1b[98;1:3u", "\x1b[100u"}, wantOut: "\x1b[57442u", wantDetach: true},
+		{name: "kitty release of other key between keys", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;5u\x1b[1;5:3A", "d"}, wantDetach: true},
+		{name: "kitty ctrl-b with caps lock", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;69u", "\x1b[100;65u"}, wantDetach: true},
+		{name: "kitty ctrl-b with num lock", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;133u", "d"}, wantDetach: true},
+		{name: "kitty alternate keys", keys: []byte{ctrlB, 'D'}, chunks: []string{"\x1b[98:66:98;5u", "\x1b[100:68;2u"}, wantDetach: true},
+		{name: "kitty shift letter without alternate", keys: []byte{ctrlB, 'D'}, chunks: []string{"\x1b[98;5u", "\x1b[100;2u"}, wantDetach: true},
+		{name: "kitty ctrl-shift-b is not ctrl-b", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;6u", "d"}, wantOut: "\x1b[98;6ud"},
+		{name: "kitty release forwarded outside sequence", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[97;1:3u"}, wantOut: "\x1b[97;1:3u"},
+		{name: "kitty esc key", keys: []byte{0x1b}, chunks: []string{"\x1b[27u"}, wantDetach: true},
+		{name: "alt key is not esc", keys: []byte{0x1b}, chunks: []string{"\x1bd"}, wantOut: "\x1bd"},
+		{name: "partial escape sequence flushes held keys", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x02", "\x1b[9"}, wantOut: "\x02\x1b[9"},
+		{name: "terminal reply passes", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[?1u\x1b[12;40R"}, wantOut: "\x1b[?1u\x1b[12;40R"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
