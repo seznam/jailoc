@@ -195,8 +195,10 @@ type AgentSettings struct {
 	// Install adds the built-in image layer that installs the harness;
 	// false leaves it to the workspace image. Unset means true.
 	Install *bool `toml:"install,omitempty"`
-	// Args are appended to every start of the agent.
-	Args []string `toml:"args,omitempty"`
+	// Args are appended to every start of the agent. An empty list is kept
+	// when the configuration is written back: it clears the defaults' args,
+	// which an omitted list inherits.
+	Args []string `toml:"args"`
 }
 
 type Mount struct {
