@@ -1,13 +1,13 @@
 # Workspace overlay image for developing jailoc inside a jailoc workspace VM.
 # Extends the jailoc base image with the toolchain CI uses: Go, gopls and
-# golangci-lint. Node.js and npm for the TUI plugin come from the base image;
-# Docker for the integration tests runs in the VM with enable_docker.
+# golangci-lint. Node.js and npm for the TUI plugin come from the base image.
 #
 # Usage — add to ~/.config/jailoc/config.toml:
 #
 #   [workspaces.jailoc]
 #   paths = ["/path/to/jailoc"]
 #   dockerfile = "https://raw.githubusercontent.com/seznam/jailoc/main/dev/Dockerfile.jailoc"
+#   enable_docker = true  # only for the Docker integration tests (-tags integration)
 #
 # jailoc injects the resolved base image via the BASE build arg.
 

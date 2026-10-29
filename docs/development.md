@@ -113,4 +113,4 @@ paths = ["/path/to/jailoc"]
 dockerfile = "https://raw.githubusercontent.com/seznam/jailoc/main/dev/Dockerfile.jailoc"
 ```
 
-Then run `jailoc up jailoc`. The standard build and test commands work inside the VM unchanged.
+Then run `jailoc up jailoc`. The standard build and test commands work inside the VM unchanged. The Docker integration tests (`-tags integration`) also need `enable_docker = true`; the VM integration tests cannot run inside a workspace VM.
