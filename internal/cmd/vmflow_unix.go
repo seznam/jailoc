@@ -237,7 +237,7 @@ func useHostDocker(builder string, isolated bool, hostErr error) (bool, error) {
 // cache.
 func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (string, error) {
 	_, _ = color.New(color.FgCyan).Printf("Resolving image for workspace %s...\n", ws.Name)
-	finalImage, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
+	finalImage, chain, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
 	if err != nil {
 		return "", fmt.Errorf("resolve image for workspace %q: %w", ws.Name, err)
 	}
@@ -258,7 +258,71 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 		return "", err
 	}
 	pruneImageCache(ref)
+	pruneDockerImages(ctx, ws.Name, chain)
 	return ref, nil
+}
+
+// dockerImagesFile records, per workspace, the IDs of the Docker images its
+// last image build used.
+const dockerImagesFile = "docker-images.json"
+
+// pruneDockerImages records the images in chain as used by workspace and
+// removes the images jailoc built that no workspace records, from the
+// daemon that built them. Failures only warn: removal frees disk space and
+// a removed image is rebuilt on demand.
+func pruneDockerImages(ctx context.Context, workspace string, chain []string) {
+	warn := func(err error) {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: prune Docker images: %v\n", err)
+	}
+	ids := make([]string, 0, len(chain))
+	for _, ref := range chain {
+		id, err := docker.ImageID(ctx, ref)
+		if err != nil {
+			warn(err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	data, err := json.Marshal(ids)
+	if err != nil {
+		warn(fmt.Errorf("encode image IDs: %w", err))
+		return
+	}
+	if err := os.MkdirAll(vmStateDir(workspace), 0o700); err != nil {
+		warn(fmt.Errorf("create workspace state dir: %w", err))
+		return
+	}
+	if err := os.WriteFile(filepath.Join(vmStateDir(workspace), dockerImagesFile), data, 0o600); err != nil {
+		warn(fmt.Errorf("record workspace images: %w", err))
+		return
+	}
+
+	keep := map[string]bool{}
+	files, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", dockerImagesFile))
+	for _, path := range files {
+		data, err := os.ReadFile(path) //nolint:gosec // G304: jailoc-owned state path
+		if err != nil {
+			warn(fmt.Errorf("read %s: %w", path, err))
+			return
+		}
+		var recorded []string
+		if err := json.Unmarshal(data, &recorded); err != nil {
+			warn(fmt.Errorf("parse %s: %w", path, err))
+			return
+		}
+		for _, id := range recorded {
+			keep[id] = true
+		}
+	}
+	// The grace period spares the images a concurrent `jailoc up` of
+	// another workspace is building and has not recorded yet.
+	removed, err := docker.PruneImages(ctx, keep, time.Hour)
+	if err != nil {
+		warn(err)
+	}
+	if removed > 0 {
+		_, _ = color.New(color.FgCyan).Printf("Removed %d unused jailoc image(s) from Docker\n", removed)
+	}
 }
 
 // pruneImageCache removes unpacked workspace images that no workspace or

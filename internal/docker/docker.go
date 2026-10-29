@@ -117,6 +117,7 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:      []string{tag},
 		BuildArgs: proxyBuildArgs(),
+		Labels:    buildLabels(),
 		Remove:    true,
 	})
 	if err != nil {
@@ -160,6 +161,7 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:      []string{presetTag},
 		BuildArgs: proxyBuildArgs(),
+		Labels:    buildLabels(),
 		Remove:    true,
 	})
 	if err != nil {
@@ -242,6 +244,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:       []string{overlayTag},
 		BuildArgs:  overlayBuildArgs,
+		Labels:     buildLabels(),
 		Dockerfile: filepath.Base(tmpDockerfilePath),
 		Remove:     true,
 	})
@@ -318,6 +321,7 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
 		Tags:      []string{tag},
 		BuildArgs: buildArgs,
+		Labels:    buildLabels(),
 		Remove:    true,
 	})
 	if err != nil {
