@@ -36,35 +36,115 @@ import (
 // arrive split across reads. Input that only starts like the sequence is
 // held back until the next key decides. As in tmux, typing the first key
 // twice sends it once to the agent.
+//
+// Agents may switch the terminal to an extended keyboard mode (xterm
+// modifyOtherKeys, kitty keyboard protocol), in which Ctrl-b arrives as an
+// escape sequence instead of byte 0x02, so each key matches any of its
+// encodings.
 type detachMatcher struct {
-	keys []byte
-	held int
+	keys [][][]byte // encodings of each key of the sequence
+	idx  int        // keys matched so far
+	done []byte     // input of the matched keys
+	cur  []byte     // input that starts like key idx
+}
+
+func newDetachMatcher(keys []byte) *detachMatcher {
+	m := &detachMatcher{}
+	for _, k := range keys {
+		m.keys = append(m.keys, keyEncodings(k))
+	}
+	return m
+}
+
+// keyEncodings returns the input a terminal may send for key k: the plain
+// byte, and its kitty keyboard protocol and modifyOtherKeys forms.
+func keyEncodings(k byte) [][]byte {
+	enc := [][]byte{{k}}
+	switch {
+	case k >= 0x01 && k <= 0x1a: // ctrl-a..ctrl-z
+		enc = append(enc, ctrlEncodings(int(k)+0x60)...)
+	case k >= 0x1b && k <= 0x1f: // ctrl-[ ctrl-\ ctrl-] ctrl-^ ctrl-_
+		enc = append(enc, ctrlEncodings(int(k)+0x40)...)
+	case k >= 0x20 && k < 0x7f:
+		enc = append(enc, fmt.Appendf(nil, "\x1b[%du", k), fmt.Appendf(nil, "\x1b[%d;1u", k), fmt.Appendf(nil, "\x1b[%d;1:1u", k))
+	}
+	return enc
+}
+
+func ctrlEncodings(code int) [][]byte {
+	return [][]byte{
+		fmt.Appendf(nil, "\x1b[%d;5u", code),
+		fmt.Appendf(nil, "\x1b[%d;5:1u", code),
+		fmt.Appendf(nil, "\x1b[27;5;%d~", code),
+	}
+}
+
+// match reports whether in is one of the encodings or a prefix of one.
+func match(encodings [][]byte, in []byte) (full, prefix bool) {
+	for _, e := range encodings {
+		if bytes.Equal(e, in) {
+			return true, false
+		}
+		if bytes.HasPrefix(e, in) {
+			prefix = true
+		}
+	}
+	return false, prefix
 }
 
 // feed returns the input to forward to the agent and whether the sequence
-// was completed; input after a completed sequence is dropped.
+// was completed; input after a completed sequence is dropped. Matched keys
+// are held across reads; a partial escape sequence is not, since terminals
+// write each one at once and holding it would delay the Esc key.
 func (m *detachMatcher) feed(chunk []byte) (out []byte, detach bool) {
 	for _, b := range chunk {
-		switch {
-		case b == m.keys[m.held]:
-			m.held++
-			if m.held == len(m.keys) {
-				m.held = 0
-				return out, true
-			}
-		case m.held == 1 && b == m.keys[0]:
-			out = append(out, b)
-			m.held = 0
-		default:
-			out = append(out, m.keys[:m.held]...)
-			m.held = 0
-			if b == m.keys[0] && len(m.keys) > 1 {
-				m.held = 1
-			} else {
-				out = append(out, b)
-			}
+		m.cur = append(m.cur, b)
+		if out, detach = m.settle(out); detach {
+			return out, true
 		}
 	}
+	if len(m.cur) > 0 {
+		out = append(append(out, m.done...), m.cur...)
+		m.idx, m.done, m.cur = 0, nil, nil
+	}
+	return out, false
+}
+
+func (m *detachMatcher) settle(out []byte) ([]byte, bool) {
+	for len(m.cur) > 0 {
+		full, prefix := match(m.keys[m.idx], m.cur)
+		if full {
+			m.done, m.cur = append(m.done, m.cur...), nil
+			if m.idx++; m.idx == len(m.keys) {
+				m.idx, m.done = 0, nil
+				return out, true
+			}
+			return out, false
+		}
+		if m.idx == 1 {
+			// The first key again: send it once, as tmux does.
+			firstFull, firstPrefix := match(m.keys[0], m.cur)
+			if firstFull && !prefix {
+				out = append(out, m.cur...)
+				m.idx, m.done, m.cur = 0, nil, nil
+				return out, false
+			}
+			prefix = prefix || firstPrefix
+		}
+		if prefix {
+			return out, false
+		}
+		if m.idx > 0 {
+			// Not the sequence: send the matched keys and try the rest
+			// as its start.
+			out = append(out, m.done...)
+			m.idx, m.done = 0, nil
+			continue
+		}
+		out = append(out, m.cur[0])
+		m.cur = m.cur[1:]
+	}
+	m.cur = nil
 	return out, false
 }
 
@@ -216,7 +296,7 @@ func relaySession(fd int, interactive bool, detachKeys []byte, in io.WriteCloser
 	}
 
 	detached := make(chan struct{})
-	matcher := &detachMatcher{keys: detachKeys}
+	matcher := newDetachMatcher(detachKeys)
 	go func() {
 		buf := make([]byte, 32<<10)
 		for {

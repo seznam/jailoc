@@ -29,11 +29,20 @@ func TestDetachMatcher(t *testing.T) {
 		{name: "three keys partial mismatch", keys: []byte{ctrlB, 'd', 'q'}, chunks: []string{"\x02dx\x02dq"}, wantOut: "\x02dx", wantDetach: true},
 		{name: "mismatch restarts on prefix", keys: []byte{ctrlB, 'd', 'q'}, chunks: []string{"\x02d\x02dq"}, wantOut: "\x02d", wantDetach: true},
 		{name: "repeated key sequence", keys: []byte{ctrlB, ctrlB}, chunks: []string{"a\x02", "\x02"}, wantOut: "a", wantDetach: true},
+		{name: "kitty ctrl-b", keys: []byte{ctrlB, 'd'}, chunks: []string{"x\x1b[98;5u", "d"}, wantOut: "x", wantDetach: true},
+		{name: "kitty ctrl-b with event type", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;5:1u", "\x1b[100u"}, wantDetach: true},
+		{name: "modifyOtherKeys ctrl-b", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[27;5;98~", "d"}, wantDetach: true},
+		{name: "kitty ctrl-backslash", keys: []byte{ctrlBackslash}, chunks: []string{"\x1b[92;5u"}, wantDetach: true},
+		{name: "kitty ctrl-b twice sends it once", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;5u", "\x1b[98;5u", "d"}, wantOut: "\x1b[98;5ud"},
+		{name: "kitty ctrl-b then arrow", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[98;5u", "\x1b[A"}, wantOut: "\x1b[98;5u\x1b[A"},
+		{name: "esc is not held", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b"}, wantOut: "\x1b"},
+		{name: "esc after prefix is not held", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x02", "\x1b"}, wantOut: "\x02\x1b"},
+		{name: "other escape sequences pass", keys: []byte{ctrlB, 'd'}, chunks: []string{"\x1b[A\x1b[99;5u"}, wantOut: "\x1b[A\x1b[99;5u"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := &detachMatcher{keys: tt.keys}
+			m := newDetachMatcher(tt.keys)
 			var out []byte
 			var detach bool
 			for _, c := range tt.chunks {
