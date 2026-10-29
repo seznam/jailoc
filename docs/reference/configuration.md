@@ -58,8 +58,8 @@ Defaults applied to all workspaces.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `backend` | string | `"vm"` | Accepted values: `"vm"` or empty. `"docker"` is rejected as a jailoc v1 setting. |
-| `agent` | string | `"opencode"` | Coding agent of the workspaces: `"opencode"`, `"claude"`, `"copilot"` or `"omo"`. See [Coding agents](#coding-agents). |
-| `agents` | table | `{}` | Settings per coding agent, keyed by agent name. See [`agents`](#agents). |
+| `agent` | string | `"opencode"` | Coding agent of the workspaces: `"opencode"`, `"claude"`, `"copilot"`, `"omo"` or a [custom agent](#custom-agents). See [Coding agents](#coding-agents). |
+| `agents` | table | `{}` | Settings per coding agent and custom agent definitions, keyed by agent name. See [`agents`](#agents). |
 | `image` | string | (none) | Pre-built image used as the base for workspace Dockerfile builds, or used directly when no workspace `dockerfile` is set. |
 | `env` | string[] | `[]` | Environment variables for every session, in `KEY=VALUE` format. |
 | `env_file` | string[] | `[]` | `.env` files loaded for all workspaces. Each file must exist at config load time. |
@@ -148,7 +148,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
 | `omo` | OmO | `omo-ai` | `omo --permission-preset full-access` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
 
-The package versions are pinned by the jailoc release. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
+The package versions are pinned by the jailoc release; `version` in [`agents`](#agents) installs another one. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
 
 jailoc installs the agent with `npm install -g` in a separate layer on top of the base image, before the workspace `dockerfile` overlay, in every image it builds: the [base image](image-resolution.md#step-5-embedded-dockerfile), a `[base] dockerfile`, and `defaults.image` with a workspace `dockerfile`. An image used directly (workspace `image`, or `defaults.image` without a workspace `dockerfile`) must contain the agent binary. Before a session starts, jailoc checks that the binary is on `PATH` in the VM.
 
@@ -156,12 +156,14 @@ Changing `agent` of a running workspace takes effect after `jailoc restart`; ses
 
 ### `agents`
 
-Settings per agent live in `[defaults.agents.<name>]` and `[workspaces.<ws>.agents.<name>]`, where `<name>` is one of the `agent` values. Only the settings of the selected agent apply.
+Settings per agent live in `[defaults.agents.<name>]` and `[workspaces.<ws>.agents.<name>]`, where `<name>` is a built-in agent or a [custom agent](#custom-agents). Only the settings of the selected agent apply.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
+| `from` | string | | Custom agents only: the built-in agent it is derived from. |
 | `install` | bool | `true` | Install the agent in the images jailoc builds. With `false`, the image must provide the binary, for example through the workspace `dockerfile`. |
-| `args` | string[] | `[]` | Arguments appended to every session command line. A workspace list replaces the `[defaults]` list. |
+| `version` | string | (pinned) | npm version installed instead of the version pinned by jailoc, e.g. `"2.1.400"`. Must be an exact version; dist-tags such as `latest` are rejected. |
+| `args` | string[] | `[]` | Arguments appended to every session command line. A workspace list replaces the `[defaults]` list; `args = []` clears it. |
 
 ```toml
 [workspaces.my-project]
@@ -169,8 +171,28 @@ paths = ["~/projects/my-project"]
 agent = "copilot"
 
 [workspaces.my-project.agents.copilot]
+version = "1.0.110"
 args = ["--model", "gpt-5"]
 ```
+
+### Custom agents
+
+An `agents` table whose name is not a built-in agent defines a custom agent: the built-in agent named by `from` under another name, with its own settings. Select it with `agent` like a built-in one. It is installed, started and persisted like the agent it is derived from.
+
+```toml
+[defaults.agents.claude]
+version = "2.1.400"
+
+[defaults.agents.claude-opus]
+from = "claude"
+args = ["--model", "opus"]
+
+[workspaces.my-project]
+paths = ["~/projects/my-project"]
+agent = "claude-opus"
+```
+
+A custom agent defined in `[defaults]` can be selected and configured in any workspace; one defined in a workspace only there. Each field takes the first value set in: the workspace's table of the agent, the defaults' table of the agent, then, for a custom agent, the workspace's and the defaults' table of the agent it is derived from. In the example, `claude-opus` installs Claude Code 2.1.400.
 
 ---
 
@@ -244,7 +266,7 @@ With `enable_docker = true` (the default), jailoc starts `dockerd` inside the wo
 
 ### `agent` and `agents`
 
-`agent` and the keys of `agents` must be `opencode`, `claude`, `copilot` or `omo`.
+`agent` must be `opencode`, `claude`, `copilot`, `omo` or a custom agent defined in the workspace's or the defaults' `agents`. A key of `agents` that is not a built-in agent is a custom agent: its name must match `^[a-z0-9-]+$` and `from`, set in that table or in the defaults' table of the same name, must be a built-in agent (custom agents cannot be derived from custom agents). `from` is rejected on built-in agents. `version` must be an exact npm version (`1.2.3`, optionally with a `-prerelease` and `+build` suffix).
 
 ### `env`
 
@@ -302,7 +324,7 @@ Environment variables merge in this order, later wins per key:
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 
