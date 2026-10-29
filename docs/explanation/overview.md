@@ -8,7 +8,7 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 `jailoc up` runs these steps in order:
 
-**1. Config loading.** jailoc reads `~/.config/jailoc/config.toml`, writing a default one on first run. jailoc v1 settings (`backend = "docker"`, `mode`, `password_mode`, `expose_port`) are rejected with a pointer to [`jailoc migrate`](../how-to/migrate-from-v1.md).
+**1. Config loading.** jailoc reads `~/.config/jailoc/config.toml`, writing a default one on first run, and validates it.
 
 **2. Workspace resolution.** The workspace name becomes a resolved description: shared paths and mounts, snapshots, allowed hosts and networks, secrets, CPU and memory.
 
@@ -18,7 +18,7 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 **5. VM start.** A detached supervisor starts the network broker and boots the VM from a copy-on-write clone of the unpacked image. `jailoc-guest`, the VM's init process, mounts the shares, prepares the `agent` user and starts an SSH server. jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
 
-Sessions run over SSH: `jailoc` attaches to a running agent session or starts a new one. No agent server port is published on the host and no server password exists. See [Manage sessions](../how-to/sessions.md).
+Sessions run over SSH: `jailoc` attaches to a running agent session or starts a new one. The host publishes no agent port, so nothing outside jailoc can reach the agent. See [Manage sessions](../how-to/sessions.md).
 
 `jailoc reload` applies network policy, published ports, the SSH agent, the CA bundle, snapshots, environment and secrets to a running VM. Changes to shares, CPU, memory, `enable_docker` or `protect_git` take effect after `jailoc restart`.
 

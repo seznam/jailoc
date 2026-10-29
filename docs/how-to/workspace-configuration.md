@@ -2,6 +2,8 @@
 
 This guide shows how to define and tune workspaces in jailoc's configuration file. For every field, its type and its validation rules, see the [Configuration reference](../reference/configuration.md).
 
+Separate guides cover [network access](network-access.md) (`allowed_hosts`, `allowed_networks`), [custom images](custom-images.md) (`image`, `dockerfile`, `build_context`), [SSH and Git passthrough](ssh-git-passthrough.md) (`ssh_auth_sock`) and [coding agents](coding-agents.md) (`agent`, `agents`).
+
 ## Find the config file
 
 jailoc stores its configuration at:
@@ -12,15 +14,9 @@ jailoc stores its configuration at:
 
 The file is created on first run with a `default` workspace already in place. Edit it with any text editor.
 
-## Understand workspace detection
+## Select a workspace
 
-Most commands accept `--workspace`. When it's omitted, jailoc picks the workspace in this order:
-
-1. **Explicit `--workspace` flag**: use that workspace.
-2. **Longest-prefix match of the current directory**: compare the current directory against every workspace's `paths`. The longest matching prefix wins; equal-length matches break alphabetically.
-3. **`default` fallback**: if no path matches, use the `default` workspace.
-
-Given these two workspaces:
+Commands use the workspace whose `paths` contain the current directory, the most specific one if several do, and fall back to `default`. Given these two workspaces:
 
 ```toml
 [workspaces.broad]
@@ -30,9 +26,14 @@ paths = ["/home/you/projects"]
 paths = ["/home/you/projects/api"]
 ```
 
-Running `jailoc up` from `/home/you/projects/api/src` selects `specific`. Running it from `/home/you/projects/other` selects `broad`.
+Running `jailoc up` from `/home/you/projects/api/src` selects `specific`. Running it from `/home/you/projects/other` selects `broad`. To pick a workspace explicitly, pass its name:
 
-`jailoc add` uses the path being added, not the current directory, for detection. If `--workspace` is set and the added path isn't under one of that workspace's paths, jailoc returns an error.
+```bash
+jailoc up api
+jailoc -w api sessions
+```
+
+See [Workspace resolution](../reference/cli.md#workspace-resolution) for the exact order.
 
 ## Define a workspace
 
@@ -61,40 +62,6 @@ paths = [
 ```
 
 Each workspace gets its own VM. Define as many `[workspaces.<name>]` sections as you need.
-
-## Allow specific hosts or networks
-
-The guest can't reach private or reserved addresses by default. Open specific ones with `allowed_hosts` and `allowed_networks`:
-
-```toml
-[workspaces.api]
-paths = ["/home/you/projects/api"]
-allowed_hosts = ["internal-registry.example.com"]
-allowed_networks = ["10.10.5.0/24"]
-```
-
-See [How to allow specific hosts or networks](network-access.md).
-
-## Set a custom image
-
-Use a pre-built image:
-
-```toml
-[workspaces.myproject]
-paths = ["/home/you/projects/myproject"]
-image = "myregistry.example.com/myteam/myimage:v1.2.3"
-```
-
-Or build an overlay from a Dockerfile, optionally with its own build context:
-
-```toml
-[workspaces.myproject]
-paths = ["/home/you/projects/myproject"]
-dockerfile = "~/projects/myproject/docker/overlay.Dockerfile"
-build_context = "~/projects/myproject"
-```
-
-See [How to use a custom image](custom-images.md).
 
 ## Set environment variables
 
@@ -185,15 +152,6 @@ At every `jailoc up`, jailoc finds the repositories under the workspace paths, i
 With `enable_docker = true` (the default), the guest runs its own Docker daemon when the image contains `dockerd`. The built-in image ships Docker CE with the `buildx` and `compose` plugins. Images, containers and volumes live on a 20 GiB data disk that survives `jailoc down`; `jailoc down --purge` deletes it.
 
 A custom image without `dockerd` starts without Docker and prints a warning. Set `enable_docker = false` to silence it. With an explicit `enable_docker = true`, such an image fails `jailoc up`.
-
-## Forward the SSH agent
-
-```toml
-[defaults]
-ssh_auth_sock = true
-```
-
-See [How to pass through SSH and Git config](ssh-git-passthrough.md).
 
 ## Set CPU and memory
 
