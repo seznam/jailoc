@@ -68,9 +68,36 @@ from_command = "security find-generic-password -s anthropic -w"
 args = ["--model", "sonnet"]
 ```
 
+## Use another version
+
+jailoc pins the version of each agent. To install another one, set `version`:
+
+```toml
+[defaults.agents.claude]
+version = "2.1.400"
+```
+
+The next `jailoc up` or `jailoc restart` builds the agent layer with that version. Use an exact version: the layer is rebuilt only when the version changes, so `latest` is rejected.
+
+## Define a custom agent
+
+A custom agent is a built-in agent under another name with its own settings, for example a model preset or a version you want to try next to the pinned one:
+
+```toml
+[defaults.agents.claude-opus]
+from = "claude"
+args = ["--model", "opus"]
+
+[workspaces.my-project-opus]
+paths = ["~/projects/my-project"]
+agent = "claude-opus"
+```
+
+Settings not set on the custom agent come from the agent it is derived from: here `claude-opus` installs the same Claude Code version as `claude`. See [Custom agents](../reference/configuration.md#custom-agents).
+
 ## Install the agent yourself
 
-To provide the agent from your own overlay Dockerfile, for example another version, turn off the built-in installation:
+To provide the agent from your own overlay Dockerfile, for example a build of your own, turn off the built-in installation:
 
 ```toml
 [workspaces.my-project-claude]
