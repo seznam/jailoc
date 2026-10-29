@@ -14,7 +14,7 @@ Besides the tables `[vm]`, `[base]`, `[defaults]` and `[workspaces.<name>]`, the
 |-------|------|---------|-------------|
 | `detach_keys` | string | `"ctrl-b,d"` | Key sequence that detaches the terminal from an agent session. The `--detach-keys` flag of [`jailoc`](cli.md#jailoc) overrides it. |
 
-`detach_keys` is a comma-separated list of keys, typed one after another, in the format of `docker attach --detach-keys`. A key is `ctrl-<letter>` (lowercase), one of `ctrl-@`, `ctrl-[`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, `DEL`, or a single character other than a comma. While a session is attached, jailoc holds back input that starts like the sequence until the next key decides. Typing the first key twice sends it once to the agent, as in tmux.
+`detach_keys` is a comma-separated list of keys, typed one after another, in the format of `docker attach --detach-keys`. A key is `ctrl-<letter>` (lowercase), one of `ctrl-@`, `ctrl-[`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, `DEL`, or a single character other than a comma. While a session is attached, jailoc holds back input that starts like the sequence until the next key decides. Typing the first key twice sends it once to the agent, as in tmux. Keys match also when the agent switches the terminal to an extended keyboard mode (xterm modifyOtherKeys or the kitty keyboard protocol): key release and repeat events, presses of a modifier key alone, and Caps Lock or Num Lock do not break the sequence.
 
 ```toml
 detach_keys = "ctrl-a,d"
