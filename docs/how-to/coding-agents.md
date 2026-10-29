@@ -73,6 +73,9 @@ profile = false
 
 A named profile lives in `~/.local/share/jailoc/profiles/<name>`, survives `jailoc down --purge`, and is used by one running workspace at a time: stop the other workspace before starting one with the same profile. A custom agent does not inherit `profile` from the agent it is derived from. See [Agent profiles](../reference/configuration.md#agent-profiles).
 
+!!! warning
+    A profile carries the harness's hooks, plugins and MCP server settings along with the login, so an agent in one workspace can change what runs in every other workspace on the same profile. Share a profile only between workspaces you trust equally.
+
 ## Mount agent configuration
 
 `agents.<name>.mounts` adds mounts only while that agent is selected, for example a separate OpenCode configuration for a custom agent:
@@ -84,6 +87,17 @@ mounts = ["~/.config/opencode-legacy:/home/agent/.config/opencode"]
 ```
 
 An entry with an empty host, such as `":/home/agent/.agents"`, removes a built-in mount. See [Agent mounts](../reference/configuration.md#agent-mounts).
+
+## Keep OpenCode from changing its configuration
+
+The built-in OpenCode mount shares `~/.config/opencode` read-write with the host and every OpenCode workspace, so an agent can add plugins or instructions that run everywhere else. Mount it read-only:
+
+```toml
+[defaults.agents.opencode]
+mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
+```
+
+OpenCode then can't install plugins inside the VM. Install them on the host, where `~/.config/opencode` is writable.
 
 ## Pass extra arguments
 

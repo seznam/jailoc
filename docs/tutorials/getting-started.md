@@ -9,11 +9,7 @@ You need one of these hosts:
 - **macOS on Apple Silicon**. jailoc uses Hypervisor.framework.
 - **Linux on amd64** with KVM. Your user needs read and write access to `/dev/kvm`.
 
-You also need **Docker Engine** running on the host. jailoc uses it to build the workspace image, which it then exports into the VM. Verify Docker is running:
-
-```bash
-docker info
-```
+Docker Engine on the host is optional. When it's running, jailoc builds workspace images with it; otherwise it builds them in a separate builder VM.
 
 ## Install jailoc
 
@@ -39,7 +35,7 @@ Here's what happens on first run:
 1. **Config creation**: jailoc writes a default config to `~/.config/jailoc/config.toml` if it doesn't exist yet.
 2. **Workspace prompt**: if the current directory isn't part of any configured workspace, jailoc asks whether to add it. Confirm, and the workspace is saved to your config.
 3. **Runtime download**: jailoc downloads its pinned VM runtime and checks its SHA-256 digest. This happens once.
-4. **Image build**: jailoc builds the workspace image with Docker and unpacks it into a VM root filesystem.
+4. **Image build**: jailoc builds the workspace image, with host Docker or in a builder VM, and unpacks it into a VM root filesystem.
 5. **VM start**: jailoc boots the workspace VM, shares your project directory into it, and starts the network broker.
 6. **Attach**: jailoc opens an agent session over SSH and attaches your terminal to it.
 

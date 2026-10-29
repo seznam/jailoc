@@ -35,7 +35,7 @@ Key facts:
 
 ## Explanation
 
-- [Overview](https://seznam.github.io/jailoc/explanation/overview/): Startup sequence and package layout
+- [Overview](https://seznam.github.io/jailoc/explanation/overview/): Startup sequence and why jailoc uses a VM
 - [Threat Model](https://seznam.github.io/jailoc/explanation/threat-model/): What jailoc protects against and what it does not
 - [Architecture](https://seznam.github.io/jailoc/explanation/architecture/): Builder and workspace VMs, image export, jailoc-guest init, SSH sessions, virtio-fs shares, persistent home, Docker inside the VM
 - [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): Userspace network broker, IPv4 and IPv6 policy, filtered DNS

@@ -228,6 +228,9 @@ mounts = [
 
 A named profile is used by one running workspace at a time: `jailoc up` and `jailoc restart` fail while another workspace using the profile is running.
 
+!!! warning
+    Every workspace using a named profile can change what the harness executes in the others (hooks, plugins, MCP servers, instructions stored in its state directory), read the login and resume the sessions stored there. Share a profile only between workspaces of the same trust level. See [Threat Model](../explanation/threat-model.md#limiting-private-data-access).
+
 ```toml
 [workspaces.old-project.agents.opencode]
 profile = "opencode-legacy"

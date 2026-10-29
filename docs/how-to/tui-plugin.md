@@ -2,11 +2,11 @@
 
 The TUI sidebar plugin shows the workspace name in the OpenCode sidebar of a jailoc session. It applies to workspaces with `agent = "opencode"`, the default.
 
-## Setup
+## Load the plugin
 
 The plugin is bundled with jailoc and needs no configuration. At `jailoc up`, jailoc writes the plugin and a TUI config to its cache directory and shares them read-only into the VM. Every session starts with `OPENCODE_TUI_CONFIG` pointing at that config, so OpenCode loads the plugin automatically.
 
-## Apply changes
+## Update the plugin
 
 The plugin files are written at `jailoc up`. After upgrading jailoc, restart the workspace:
 
@@ -14,9 +14,9 @@ The plugin files are written at `jailoc up`. After upgrading jailoc, restart the
 jailoc restart <name>
 ```
 
-## Troubleshooting
+## Fix a missing plugin
 
-### Plugin not showing in sidebar
+### The sidebar doesn't show the workspace
 
 Check the environment inside a session:
 
@@ -26,7 +26,7 @@ env | grep -E 'JAILOC|OPENCODE_TUI_CONFIG'
 
 You should see `JAILOC=1`, `JAILOC_WORKSPACE=<name>` and `OPENCODE_TUI_CONFIG=/etc/jailoc-cache/tui-container.json`. The plugin renders nothing without `JAILOC`.
 
-### Plugin not loading
+### The plugin doesn't load
 
 Check that the plugin directory is visible in the VM:
 

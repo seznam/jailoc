@@ -16,7 +16,14 @@ jailoc [command] [flags]
 
 ### Workspace resolution
 
-Commands that accept an optional `[workspace]` argument use it first. Without the argument and without `--workspace`, they resolve the workspace whose configured path best matches the current working directory (longest prefix) and fall back to `default`. See the [workspace configuration how-to](../how-to/workspace-configuration.md) for the full resolution order.
+Commands pick the workspace in this order:
+
+1. The `[workspace]` argument, for commands that accept one.
+2. The `--workspace` flag.
+3. The workspace whose `paths` entry is the longest prefix of the current directory. If several workspaces tie on the deepest match, the command fails and asks for `-w`.
+4. `default`.
+
+`jailoc add` matches the path being added instead of the current directory. With `--workspace`, the added path must lie under one of that workspace's paths.
 
 ---
 
