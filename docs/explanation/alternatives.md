@@ -57,3 +57,27 @@ Apple's [`container`](https://github.com/apple/container) tool runs each contain
 ## What jailoc uses
 
 libkrun provides the VM on both hosts (Hypervisor.framework on macOS, KVM on Linux), virtio-fs for shares, and a virtio-net interface whose only peer is jailoc's broker. go-microvm wraps it as a Go library, and jailoc downloads a pinned, checksum-verified runtime. See [Architecture](architecture.md) for the components and [Threat Model](threat-model.md) for what the boundary protects against.
+
+## Design choices
+
+Inside the VM boundary, jailoc makes a few choices of its own, each over an alternative that other sandboxes use.
+
+### Network policy on the host, not in the guest
+
+Firewall rules inside the guest (iptables, nftables) would be in reach of guest root, and an HTTP proxy configured through `HTTP_PROXY` only covers tools that honour it. jailoc's broker sits on the host as the VM's only network peer, so every packet passes it whatever the guest does. It decides on destination addresses only: it does not decrypt TLS or read host names from traffic, and DNS answers alone never open a private address. See [Network Isolation](network-isolation.md).
+
+### Public allowed, private denied
+
+The default policy allows the public internet and denies private and reserved ranges. An allow-only-listed-hosts default would stop more, but agents need package registries, model APIs and documentation from many hosts. The default protects internal infrastructure; it does not stop the agent from sending code to a public server. See [Threat Model](threat-model.md).
+
+### Sessions over SSH
+
+The agent does not run behind an HTTP server on a published port with a password, as in jailoc v1, or behind an exec API like microsandbox's. jailoc attaches to the guest's SSH server with a per-workspace key and a pinned host key, and a session holder inside the VM keeps the agent running when the connection drops, so a terminal can re-attach later. See [Architecture](architecture.md#sessions).
+
+### Images from Dockerfiles
+
+Workspaces use ordinary Dockerfiles rather than custom VM disk images or provisioning scripts. jailoc builds them with host Docker (or a builder VM with `isolated_build`) and unpacks the result into the VM's root file system. Users keep a format they know, and Docker never runs the workspace. See [Image Resolution](../reference/image-resolution.md).
+
+### Secrets inside the VM
+
+jailoc reads secrets on the host and delivers them over SSH into guest memory, so they never sit in the image, on a share or on the host disk. The agent can still read their values, because tools in the VM need them. microsandbox takes a different approach: it substitutes secrets on the host side of the network so the guest never sees the real value. See [Secrets](secrets.md).
