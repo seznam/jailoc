@@ -435,6 +435,20 @@ PY`)
 		}
 	})
 
+	t.Run("OOM scores of a session", func(t *testing.T) {
+		// The session program records its PID and that of a child it starts;
+		// the session holder is its parent.
+		mustGuest(ctx, t, `/.jailoc/jailoc-guest session open --new -C /tmp -- sh -c 'sleep 600 & echo $$ $! > /tmp/oom-pids; wait' </dev/null >/dev/null 2>&1`)
+		got := mustGuest(ctx, t, `for i in $(seq 1 50); do test -s /tmp/oom-pids && break; sleep 0.1; done; sleep 0.5
+read agent child < /tmp/oom-pids
+holder=$(sed -n 's/^PPid:[[:space:]]*//p' /proc/$agent/status)
+cat /proc/$holder/oom_score_adj /proc/$agent/oom_score_adj /proc/$child/oom_score_adj
+kill $child $agent`)
+		if got != "-1000\n-500\n0" {
+			t.Fatalf("oom_score_adj of holder, agent, child = %q, want -1000, -500, 0", got)
+		}
+	})
+
 	t.Run("SSH agent", func(t *testing.T) {
 		if got := mustGuest(ctx, t, "/.jailoc/jailoc-guest run -- ssh-add -l"); !strings.Contains(got, agentComment) {
 			t.Fatalf("ssh-add -l = %q", got)

@@ -151,6 +151,12 @@ func Init(logger *slog.Logger) error {
 	} else {
 		defer stopExecLog()
 	}
+	// Started before the SSH server, so it sees every session start.
+	if stopOOMGuard, err := startOOMGuard(logger); err != nil {
+		logger.Warn("agent OOM protection disabled", "error", err)
+	} else {
+		defer stopOOMGuard()
+	}
 	var docker *dockerDaemon
 	if cfg.Docker != nil {
 		if docker, err = startDocker(logger, cfg.Docker, acct); err != nil {
