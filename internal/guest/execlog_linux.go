@@ -21,8 +21,6 @@ const (
 	cnIdxProc         = 1
 	cnValProc         = 1
 	procCnMcastListen = 1
-	procEventExec     = 0x00000002
-	cnMsgLen          = 20 // struct cn_msg without data
 	execLogMax        = 16 << 20
 )
 
