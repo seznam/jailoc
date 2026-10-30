@@ -84,9 +84,12 @@ func TestDockerLayerDockerfile(t *testing.T) {
 	t.Parallel()
 
 	const stages = "FROM ubuntu:24.04 AS docker\nRUN true\n"
-	layer := "RUN command -v nft >/dev/null || (apt-get update \\\n" +
+	layer := "ARG JAILOC_CLEAN_CACHES\n" +
+		"RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \\\n" +
+		"    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \\\n" +
+		"    command -v nft >/dev/null || (apt-get update \\\n" +
 		"    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables \\\n" +
-		"    && rm -rf /var/lib/apt/lists/*)\n" +
+		"    && if [ -n \"$JAILOC_CLEAN_CACHES\" ]; then apt-get clean && rm -rf /var/lib/apt/lists/*; fi)\n" +
 		"COPY --from=docker /out/bin/ /usr/local/bin/\n" +
 		"COPY --from=docker /out/cli-plugins/ /usr/local/lib/docker/cli-plugins/\n"
 	head := "ARG BASE\n" + stages + "\nFROM ${BASE}\n"
