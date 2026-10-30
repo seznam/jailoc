@@ -90,4 +90,5 @@ nav:
     - Architecture: explanation/architecture.md
     - Network Isolation: explanation/network-isolation.md
     - Secrets: explanation/secrets.md
+    - Why Not Something Else: explanation/alternatives.md
   - Development: development.md

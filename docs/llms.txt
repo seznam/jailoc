@@ -40,6 +40,7 @@ Key facts:
 - [Architecture](https://seznam.github.io/jailoc/explanation/architecture/): Builder and workspace VMs, image export, jailoc-guest init, SSH sessions, virtio-fs shares, persistent home, Docker inside the VM
 - [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): Userspace network broker, IPv4 and IPv6 policy, filtered DNS
 - [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Destination and source secret mapping, delivery over SSH, tmpfs storage in the guest
+- [Why Not Something Else](https://seznam.github.io/jailoc/explanation/alternatives/): Why jailoc does not build on plain containers, gVisor, Kata Containers, Firecracker, microsandbox, general-purpose VMs or Apple Containerization
 
 ## Optional
 
