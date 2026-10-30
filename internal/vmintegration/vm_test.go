@@ -449,6 +449,30 @@ kill $child $agent`)
 		}
 	})
 
+	t.Run("OOM kill spares the agent", func(t *testing.T) {
+		// The session program holds 60% of RAM, then starts a child that
+		// allocates until the kernel OOM killer steps in. Random bytes defeat
+		// zram compression. The child must be the victim, not the agent.
+		mustGuest(ctx, t, `cat > /tmp/oom-agent.py <<'PY'
+import os, subprocess, sys
+total = int(open("/proc/meminfo").readline().split()[1]) * 1024
+held = [os.urandom(16 << 20) for _ in range(total * 6 // 10 // (16 << 20))]
+hog = "import os\nb = []\nwhile True: b.append(os.urandom(16 << 20))"
+child = subprocess.Popen([sys.executable, "-c", hog])
+open("/tmp/oom-child", "w").write(str(child.pid))
+code = child.wait()
+open("/tmp/oom-result.tmp", "w").write(str(code))
+os.rename("/tmp/oom-result.tmp", "/tmp/oom-result")
+PY
+/.jailoc/jailoc-guest session open --new -C /tmp -- python3 /tmp/oom-agent.py </dev/null >/dev/null 2>&1`)
+		got := mustGuest(ctx, t, `for i in $(seq 1 1200); do test -s /tmp/oom-result && break; sleep 0.1; done
+echo "$(cat /tmp/oom-result)"
+sudo -n dmesg | grep -q "Killed process $(cat /tmp/oom-child) " && echo child-killed`)
+		if got != "-9\nchild-killed" {
+			t.Fatalf("OOM result = %q, want the child killed (-9) and the agent alive to report it", got)
+		}
+	})
+
 	t.Run("SSH agent", func(t *testing.T) {
 		if got := mustGuest(ctx, t, "/.jailoc/jailoc-guest run -- ssh-add -l"); !strings.Contains(got, agentComment) {
 			t.Fatalf("ssh-add -l = %q", got)
