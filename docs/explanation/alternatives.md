@@ -2,6 +2,9 @@
 
 jailoc runs each workspace in its own libkrun micro-VM, driven through go-microvm, with a host-side network broker. Several other isolation tools exist. This page explains why jailoc does not build on them.
 
+!!! note "Research date"
+    The statements about third-party tools reflect their documentation and issue trackers as of 2026-10-30. These projects change quickly; check the linked sources for their current state.
+
 The requirements behind the choice:
 
 - **Two hosts**: macOS on Apple silicon and Linux on x86-64, with the same behaviour on both.
@@ -35,11 +38,13 @@ Kata runs each container in a lightweight VM, which matches jailoc's boundary. I
 
 ## Firecracker
 
-Firecracker is a minimal KVM-based VMM. It is Linux-only and deliberately has no shared-filesystem device, so live project directories would need block devices or a network filesystem. jailoc needs virtio-fs shares on both hosts.
+Firecracker is a minimal KVM-based VMM. It is Linux-only and has no shared-filesystem device: the maintainers rejected 9p and virtio-fs over attack surface and snapshot complexity, and virtio-fs is not on the roadmap ([firecracker#1180](https://github.com/firecracker-microvm/firecracker/issues/1180), [firecracker#1351](https://github.com/firecracker-microvm/firecracker/pull/1351)). Projects built on it, such as Kata Containers and firecracker-containerd, fall back to block devices for the same reason ([firecracker-containerd docs](https://github.com/firecracker-microvm/firecracker-containerd/blob/main/docs/remote-snapshotter.md)). Live project directories would need block devices or a network filesystem. jailoc needs virtio-fs shares on both hosts.
 
 ## microsandbox
 
-microsandbox also runs workloads in libkrun micro-VMs, so the isolation model is close to jailoc's. It is designed as a sandbox server with SDKs for running untrusted code snippets, and it owns the VM lifecycle, image handling and networking. jailoc needs control over those pieces: jailoc-guest as init, SSH-based agent sessions, secrets delivered over SSH into tmpfs, staged snapshots, and a broker that enforces `allowed_hosts` and `allowed_networks` per workspace. Building on go-microvm, a Go library over libkrun, keeps those in the jailoc binary.
+[microsandbox](https://github.com/superradcompany/microsandbox) is the closest match. It runs OCI images in libkrun micro-VMs on macOS (Apple silicon), Linux (KVM) and Windows, embeds as an SDK (Rust, TypeScript, Python, Go, Ruby) without a daemon, and checks guest traffic against a host-controlled policy that blocks private networks by default and supports host and port allowlists ([networking docs](https://docs.microsandbox.dev/networking/overview)).
+
+The difference is ownership of the guest. microsandbox spawns its own `msb` runtime and guest agent (`agentd`) and exposes an exec-style API ([SDK setup](https://docs.microsandbox.dev/sdk/setup)). jailoc needs its own init inside the guest: jailoc-guest runs the SSH server for interactive agent sessions, receives secrets over SSH into tmpfs, applies staged snapshots, enforces `protect_git`, and runs a nested Docker daemon for `enable_docker`. Its network policy also follows jailoc's config model (`allowed_hosts` resolved through filtered DNS, `allowed_networks`, IPv4 and IPv6). go-microvm exposes the VM and leaves the guest to jailoc. microsandbox also describes itself as beta software with breaking changes expected.
 
 ## General-purpose VMs (Lima, Colima, OrbStack, Vagrant)
 
@@ -47,7 +52,7 @@ These start long-lived Linux VMs with a full distribution. They provide the kern
 
 ## Apple Containerization
 
-Apple's `container` tool runs each container in its own lightweight VM with Virtualization.framework. It is macOS-only, so it cannot cover Linux hosts, and its networking does not give jailoc a host-side point to enforce per-workspace egress policy.
+Apple's [`container`](https://github.com/apple/container) tool runs each container in its own lightweight VM with Virtualization.framework. It is macOS-only and relies on macOS 26 features, so it cannot cover Linux hosts. Containers attach to vmnet networks, which give each container an IP on a NAT or host-only subnet and isolate networks from each other ([networking docs](https://github.com/apple/container/blob/main/docs/networking.md), [technical overview](https://github.com/apple/container/blob/main/docs/technical-overview.md)). There is no per-destination egress policy, so blocking private networks while allowing selected internal hosts would need a separate enforcement point.
 
 ## What jailoc uses
 
