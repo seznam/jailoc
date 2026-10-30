@@ -7,11 +7,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stacklok/go-microvm/image"
 )
 
 func TestPruneImages(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
+	// Mark the cache as current so it keeps the entries written below.
+	image.NewCache(dir).LayerCache()
 	past := time.Now().Add(-2 * time.Hour)
 	digest := func(n string) string { return "sha256:" + n + "0000" }
 	addImage := func(name string, old bool) string {

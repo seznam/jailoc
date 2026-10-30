@@ -93,4 +93,4 @@ require (
 // exec-session exit status under the PID 1 reaper (branch
 // fix/sshd-exec-exit-status) and copy-on-write rootfs layer composition
 // (#153) on top of upstream main, until they are merged upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261030215059-79116ba930d6
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261030220314-858bf63983e5
