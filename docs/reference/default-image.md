@@ -19,10 +19,10 @@ The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of th
 
 | Server | Install method | Binary |
 |--------|---------------|--------|
-| typescript-language-server | `npm install -g` (builder stage) | `typescript-language-server` |
-| pyright | `npm install -g` (builder stage) | `pyright`, `pyright-langserver` |
-| yaml-language-server | `npm install -g` (builder stage) | `yaml-language-server` |
-| bash-language-server | `npm install -g` (builder stage) | `bash-language-server` |
+| typescript-language-server | `npm install -g` | `typescript-language-server` |
+| pyright | `npm install -g` | `pyright`, `pyright-langserver` |
+| yaml-language-server | `npm install -g` | `yaml-language-server` |
+| bash-language-server | `npm install -g` | `bash-language-server` |
 
 ## CLI tools
 

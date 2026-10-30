@@ -15,6 +15,8 @@ During `jailoc up` and `jailoc restart`, jailoc resolves the workspace image wit
 
 `jailoc down --purge` deletes the workspace's builder VM and its build cache.
 
+jailoc builds with BuildKit when the daemon reports it as its default builder, and with the classic builder otherwise. With BuildKit, the embedded Dockerfile and the agent layer keep apt and npm downloads in BuildKit cache mounts, which survive image pruning; the classic builder gets the same Dockerfiles without the cache mounts. Preset and overlay Dockerfiles are built as written.
+
 ---
 
 ## Resolution Cascade

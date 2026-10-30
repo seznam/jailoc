@@ -103,8 +103,13 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 	buildContextDir := tmpDir
 	slog.Debug("building image", "tag", tag, "context", buildContextDir)
 
+	version, err := builderVersion(ctx, cli)
+	if err != nil {
+		return err
+	}
+	buildArgs := proxyBuildArgs()
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
-	if err := os.WriteFile(dockerfilePath, embed.Dockerfile(), 0o600); err != nil {
+	if err := os.WriteFile(dockerfilePath, forBuilder(version, embed.Dockerfile(), buildArgs), 0o600); err != nil {
 		return fmt.Errorf("write embedded Dockerfile to %q: %w", dockerfilePath, err)
 	}
 
@@ -114,19 +119,14 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 	}
 	defer func() { _ = buildCtx.Close() }()
 
-	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
+	err = imageBuild(ctx, cli, buildCtx, version, build.ImageBuildOptions{
 		Tags:      []string{tag},
-		BuildArgs: proxyBuildArgs(),
+		BuildArgs: buildArgs,
 		Labels:    buildLabels(),
 		Remove:    true,
 	})
 	if err != nil {
 		return fmt.Errorf("build embedded image in %q: %w", tmpDir, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if err := displayStream(resp.Body); err != nil {
-		return fmt.Errorf("read embedded build output: %w", err)
 	}
 
 	return nil
@@ -158,7 +158,11 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	}
 	defer func() { _ = buildCtx.Close() }()
 
-	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
+	version, err := builderVersion(ctx, cli)
+	if err != nil {
+		return "", err
+	}
+	err = imageBuild(ctx, cli, buildCtx, version, build.ImageBuildOptions{
 		Tags:      []string{presetTag},
 		BuildArgs: proxyBuildArgs(),
 		Labels:    buildLabels(),
@@ -166,11 +170,6 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	})
 	if err != nil {
 		return "", fmt.Errorf("build preset image in %q: %w", tmpDir, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if err := displayStream(resp.Body); err != nil {
-		return "", fmt.Errorf("read preset build output: %w", err)
 	}
 
 	return presetTag, nil
@@ -240,8 +239,12 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	overlayBuildArgs := proxyBuildArgs()
 	overlayBuildArgs["BASE"] = &baseArg
 
+	version, err := builderVersion(ctx, engineCli)
+	if err != nil {
+		return "", err
+	}
 	_, _ = color.New(color.FgCyan).Printf("Building workspace overlay image (sending build context to Docker daemon)...\n")
-	resp, err := engineCli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
+	err = imageBuild(ctx, engineCli, buildCtx, version, build.ImageBuildOptions{
 		Tags:       []string{overlayTag},
 		BuildArgs:  overlayBuildArgs,
 		Labels:     buildLabels(),
@@ -250,11 +253,6 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	})
 	if err != nil {
 		return "", fmt.Errorf("build workspace overlay image %q from %q: %w", overlayTag, buildContextDir, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if err := displayStream(resp.Body); err != nil {
-		return "", fmt.Errorf("read workspace overlay build output for %q: %w", ws.Name, err)
 	}
 
 	return overlayTag, nil
@@ -297,7 +295,12 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 	if inspect.Config != nil {
 		user = inspect.Config.User
 	}
-	content := dockerfile(user)
+	version, err := builderVersion(ctx, cli)
+	if err != nil {
+		return "", err
+	}
+	buildArgs := proxyBuildArgs()
+	content := forBuilder(version, dockerfile(user), buildArgs)
 
 	tmpDir, err := os.MkdirTemp("", "jailoc-layer-dockerfile-")
 	if err != nil {
@@ -315,10 +318,9 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 
 	hash := sha256.Sum256(append([]byte(inspect.ID+"\n"), content...))
 	tag := fmt.Sprintf("%s:%x", repo, hash[:8])
-	buildArgs := proxyBuildArgs()
 	buildArgs["BASE"] = &base
 	_, _ = color.New(color.FgCyan).Printf("Installing %s into the image...\n", label)
-	resp, err := cli.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
+	err = imageBuild(ctx, cli, buildCtx, version, build.ImageBuildOptions{
 		Tags:      []string{tag},
 		BuildArgs: buildArgs,
 		Labels:    buildLabels(),
@@ -326,10 +328,6 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 	})
 	if err != nil {
 		return "", fmt.Errorf("build the %s image layer: %w", label, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if err := displayStream(resp.Body); err != nil {
-		return "", fmt.Errorf("read the %s image layer build output: %w", label, err)
 	}
 	return tag, nil
 }
@@ -373,8 +371,11 @@ func agentDockerfile(h agent.Harness, user string) []byte {
 	}
 	// npm installs the pinned version without running curl | bash. npm 11
 	// runs install scripts of global packages only when allowed; harnesses
-	// use them to set up their native binaries.
-	fmt.Fprintf(&b, "RUN npm install -g --allow-scripts='%s' '%s@%s' && npm cache clean --force\n", h.Package, h.Package, h.Version)
+	// use them to set up their native binaries. The npm cache lives in a
+	// BuildKit cache mount; see forBuilder for the classic builder.
+	fmt.Fprintf(&b, "ARG %s\n", cleanCachesArg)
+	fmt.Fprintf(&b, "RUN --mount=type=cache,target=/root/.npm npm install -g --cache /root/.npm --allow-scripts='%s' '%s@%s' \\\n"+
+		"    && if [ -n \"$%s\" ]; then rm -rf /root/.npm; fi\n", h.Package, h.Package, h.Version, cleanCachesArg)
 	if switchUser {
 		fmt.Fprintf(&b, "USER %s\n", user)
 	}

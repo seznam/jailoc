@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/api/types/build"
+
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -110,7 +112,9 @@ func TestAgentDockerfile(t *testing.T) {
 	t.Parallel()
 
 	claude, _ := agent.Lookup("claude")
-	install := "RUN npm install -g --allow-scripts='@anthropic-ai/claude-code' '@anthropic-ai/claude-code@" + claude.Version + "' && npm cache clean --force\n"
+	install := "ARG JAILOC_CLEAN_CACHES\n" +
+		"RUN --mount=type=cache,target=/root/.npm npm install -g --cache /root/.npm --allow-scripts='@anthropic-ai/claude-code' '@anthropic-ai/claude-code@" + claude.Version + "' \\\n" +
+		"    && if [ -n \"$JAILOC_CLEAN_CACHES\" ]; then rm -rf /root/.npm; fi\n"
 	tests := []struct {
 		user string
 		want string
@@ -126,6 +130,43 @@ func TestAgentDockerfile(t *testing.T) {
 			t.Parallel()
 			if got := string(agentDockerfile(claude, tt.user)); got != tt.want {
 				t.Fatalf("agentDockerfile() =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestForBuilder(t *testing.T) {
+	t.Parallel()
+
+	dockerfile := "FROM x\n" +
+		"RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \\\n" +
+		"    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \\\n" +
+		"    apt-get update\n" +
+		"RUN --mount=type=cache,target=/root/.npm npm install -g x \\\n" +
+		"    && true\n" +
+		"RUN --mount=type=secret,id=s cat /run/secrets/s\n"
+	tests := []struct {
+		name      string
+		version   build.BuilderVersion
+		want      string
+		wantClean bool
+	}{
+		{"buildkit", build.BuilderBuildKit, dockerfile, false},
+		{"classic", build.BuilderV1, "FROM x\n" +
+			"RUN apt-get update\n" +
+			"RUN npm install -g x \\\n" +
+			"    && true\n" +
+			"RUN --mount=type=secret,id=s cat /run/secrets/s\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			args := map[string]*string{}
+			if got := string(forBuilder(tt.version, []byte(dockerfile), args)); got != tt.want {
+				t.Fatalf("forBuilder() =\n%s\nwant\n%s", got, tt.want)
+			}
+			if v, ok := args[cleanCachesArg]; ok != tt.wantClean || (ok && *v != "1") {
+				t.Fatalf("args[%s] = %v, %v, want set %v", cleanCachesArg, v, ok, tt.wantClean)
 			}
 		})
 	}
