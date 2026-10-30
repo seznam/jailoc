@@ -426,7 +426,7 @@ PY`)
 
 	t.Run("memory: zram swap and reclaim", func(t *testing.T) {
 		// The reclaim loop writes the root cgroup's memory.reclaim.
-		mustGuest(ctx, t, "echo 1M | sudo -n tee /sys/fs/cgroup/memory.reclaim")
+		mustGuest(ctx, t, "echo 1M swappiness=0 | sudo -n tee /sys/fs/cgroup/memory.reclaim")
 		if got := mustGuest(ctx, t, "cat /proc/swaps"); !strings.Contains(got, "/dev/zram0") {
 			t.Fatalf("/proc/swaps = %q", got)
 		}
