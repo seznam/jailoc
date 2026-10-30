@@ -8,6 +8,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/versions"
 	dockerclient "github.com/docker/docker/client"
 )
 
@@ -50,9 +51,13 @@ func ImageID(ctx context.Context, ref string) (string, error) {
 	return inspect.ID, nil
 }
 
+// minSaveAPIVersion is the Engine API version of Docker Engine 25, the first
+// release whose `docker save` writes an OCI image layout.
+const minSaveAPIVersion = "1.44"
+
 // HostArchitecture checks that the Docker daemon selected by the environment
-// answers and builds Linux images for the CPU architecture jailoc runs on,
-// which is the architecture of its VMs.
+// answers, is Docker Engine 25 or later, and builds Linux images for the CPU
+// architecture jailoc runs on, which is the architecture of its VMs.
 func HostArchitecture(ctx context.Context) error {
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
@@ -68,6 +73,19 @@ func HostArchitecture(ctx context.Context) error {
 	}
 	if want := linuxArch(runtime.GOARCH); info.Architecture != want {
 		return fmt.Errorf("docker daemon architecture is %s, VMs need %s", info.Architecture, want)
+	}
+	v, err := cli.ServerVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("query Docker daemon version: %w", err)
+	}
+	return checkSaveAPIVersion(v.Version, v.APIVersion)
+}
+
+// checkSaveAPIVersion rejects a daemon whose `docker save` predates the OCI
+// image layout jailoc imports.
+func checkSaveAPIVersion(version, apiVersion string) error {
+	if versions.LessThan(apiVersion, minSaveAPIVersion) {
+		return fmt.Errorf("docker daemon %s (API %s) is older than Docker Engine 25 (API %s)", version, apiVersion, minSaveAPIVersion)
 	}
 	return nil
 }
