@@ -28,4 +28,4 @@ A container shares the host kernel, so a kernel exploit or a misconfigured privi
 
 Docker on the host is used only to build images (unless the builder VM does it) and by `jailoc migrate`. Workspaces never run on it.
 
-See [Architecture](architecture.md) for the components and [Threat Model](threat-model.md) for what the boundary protects against.
+See [Architecture](architecture.md) for the components and [Threat Model](threat-model.md) for what the boundary protects against. [Why Not Something Else](alternatives.md) compares jailoc with other sandboxing tools.
