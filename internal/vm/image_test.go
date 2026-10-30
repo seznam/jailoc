@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -81,7 +82,7 @@ func TestImportImageSkipsCachedLayers(t *testing.T) {
 
 	// A second save of an image with the same layers keeps only non-layer blobs.
 	dir := t.TempDir()
-	if err := unpackLayout(bytes.NewReader(saved), dir, image.NewCache(cacheDir).LayerCache()); err != nil {
+	if err := unpackLayout(t.Context(), bytes.NewReader(saved), dir, image.NewCache(cacheDir).LayerCache()); err != nil {
 		t.Fatalf("unpackLayout: %v", err)
 	}
 	layers, err := img.Layers()
@@ -131,5 +132,39 @@ func TestImportImageRejectsLegacyTarball(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Docker Engine 25") {
 		t.Errorf("error %q does not name the Docker Engine requirement", err)
+	}
+}
+
+func TestImportImageReportsUnpackError(t *testing.T) {
+	t.Parallel()
+	// save keeps writing after the unpacker gave up; the user must see why
+	// unpacking failed, not that save lost its reader.
+	err := ImportImage(context.Background(), t.TempDir(), RootFSRef("sha256:3333"), func(w io.Writer) error {
+		_, err := w.Write(bytes.Repeat([]byte("not a tar archive "), 1<<16))
+		return err
+	})
+	if err == nil {
+		t.Fatal("ImportImage accepted a corrupt tarball")
+	}
+	if !strings.Contains(err.Error(), "read image tarball") {
+		t.Errorf("error %q is not the unpack error", err)
+	}
+}
+
+func TestImportImageStopsWhenCancelled(t *testing.T) {
+	t.Parallel()
+	img, err := random.Image(1024, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := saveTarball(t, img)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = ImportImage(ctx, t.TempDir(), RootFSRef("sha256:4444"), func(w io.Writer) error {
+		_, err := w.Write(saved)
+		return err
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("ImportImage after cancel = %v, want context.Canceled", err)
 	}
 }

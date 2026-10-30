@@ -59,14 +59,16 @@ func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer)
 		pw.CloseWithError(err)
 		saveErr <- err
 	}()
-	unpackErr := unpackLayout(pr, dir, cache.LayerCache())
-	// Unblock save if unpacking stopped early.
+	unpackErr := unpackLayout(ctx, pr, dir, cache.LayerCache())
+	// Unblock save if unpacking stopped early; its error is then only the
+	// consequence of the unpack error.
 	_ = pr.CloseWithError(errors.New("image tarball reader closed"))
-	if err := <-saveErr; err != nil {
-		return err
-	}
+	err = <-saveErr
 	if unpackErr != nil {
 		return unpackErr
+	}
+	if err != nil {
+		return err
 	}
 
 	img, err := layoutImage(dir)
@@ -81,9 +83,12 @@ func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer)
 
 // unpackLayout writes the OCI layout files of a `docker save` tarball to dir,
 // dropping blobs that are layers already in lc.
-func unpackLayout(r io.Reader, dir string, lc *image.LayerCache) error {
+func unpackLayout(ctx context.Context, r io.Reader, dir string, lc *image.LayerCache) error {
 	tr := tar.NewReader(r)
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("read image tarball: %w", err)
+		}
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -99,6 +104,10 @@ func unpackLayout(r io.Reader, dir string, lc *image.LayerCache) error {
 		if !blob && !slices.Contains(layoutFiles, name) {
 			continue
 		}
+		// An uncompressed layer's digest is its DiffID: skip it unread.
+		if blob && lc.Has(v1.Hash{Algorithm: "sha256", Hex: path.Base(name)}) {
+			continue
+		}
 		target := filepath.Join(dir, filepath.FromSlash(name))
 		if err := writeFile(target, tr, hdr.Size, 0o600); err != nil {
 			return err
@@ -106,7 +115,7 @@ func unpackLayout(r io.Reader, dir string, lc *image.LayerCache) error {
 		if !blob {
 			continue
 		}
-		diffID, ok, err := layerDiffID(target)
+		diffID, ok, err := layerDiffID(ctx, target)
 		if err != nil {
 			return err
 		}
@@ -132,7 +141,7 @@ func validHex(s string) bool {
 // layerDiffID returns the digest of the uncompressed content of a layer blob.
 // ok is false for blobs that are not uncompressed or gzip-compressed tar
 // archives (image configs, manifests, other compressions); they are kept.
-func layerDiffID(blob string) (v1.Hash, bool, error) {
+func layerDiffID(ctx context.Context, blob string) (v1.Hash, bool, error) {
 	f, err := os.Open(blob) //nolint:gosec // G304: blob is a sha256 path inside jailoc's own temp layout
 	if err != nil {
 		return v1.Hash{}, false, fmt.Errorf("open layer blob: %w", err)
@@ -151,12 +160,28 @@ func layerDiffID(blob string) (v1.Hash, bool, error) {
 		return v1.Hash{}, false, nil
 	}
 	h := sha256.New()
-	if _, err := io.Copy(h, r); err != nil {
+	if _, err := io.Copy(h, ctxReader{ctx: ctx, r: r}); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return v1.Hash{}, false, fmt.Errorf("hash layer blob: %w", ctxErr)
+		}
 		// A blob that fails to decompress is not a layer jailoc can match;
 		// keep it and let the unpacker report real corruption.
 		return v1.Hash{}, false, nil //nolint:nilerr // see above
 	}
 	return v1.Hash{Algorithm: "sha256", Hex: hex.EncodeToString(h.Sum(nil))}, true, nil
+}
+
+// ctxReader stops reading once ctx is done.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 // tarMagicEnd is the end offset of the "ustar" magic in a tar header.
