@@ -213,6 +213,7 @@ const (
 // directory, or a new one. Closing the terminal or typing the detach keys
 // detaches and leaves the agent running.
 func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, opts vmSessionOptions) error {
+	start := time.Now()
 	if st, err := runningVM(vmStateDir(ws.Name)); err != nil {
 		return err
 	} else if st == nil {
@@ -280,6 +281,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	if err := sess.Start(shellJoin(cmdline)); err != nil {
 		return fmt.Errorf("start session in workspace %q: %w", ws.Name, err)
 	}
+	logStep("open agent session", start, "workspace", ws.Name)
 
 	id, outcome, code := relaySession(fd, interactive, opts.detach, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
 	// The guest command exits only after its input closes.
