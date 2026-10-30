@@ -65,6 +65,18 @@ With `protect_git`, `jailoc-guest` bind-mounts `.git/hooks` and `.git/config` of
 
 `jailoc down` asks the guest to stop over a control share, so open files are flushed before the VM powers off.
 
+### Memory pressure
+
+When the VM runs out of memory, the kernel's OOM killer ends the process with the highest score, which is mostly its memory use. The agent is usually the largest process, but the memory pressure mostly comes from what it starts: test runs, builds, containers. Losing the agent ends the session and its in-flight work, so `jailoc-guest`, which runs as root, sets `oom_score_adj` for session processes:
+
+| Process | `oom_score_adj` |
+|---------|-----------------|
+| Session holders and attached `jailoc-guest` clients | -1000: never killed, so a session can be reattached |
+| The session program (the agent) | -500: killed only when it uses half of the VM memory more than any other process |
+| Processes the agent starts | 0: the kernel default |
+
+A forked process inherits its parent's `oom_score_adj`, and only root may lower it, while sessions run as `agent`. `jailoc-guest` follows process starts through the kernel's proc connector and resets every process the agent forks right after the fork, so the agent needs no changes. A child keeps the agent's value for the short time before `jailoc-guest` handles the event. PID 1 is never an OOM victim. Any program started in a session counts as an agent, including one the agent starts with `jailoc-guest session open`.
+
 ## Files
 
 ### Shares
