@@ -9,7 +9,7 @@ During `jailoc up` and `jailoc restart`, jailoc resolves the workspace image wit
 | `[vm] builder` | `isolated_build` | Docker daemon used |
 |---|---|---|
 | any | `true` | Builder VM of the workspace (`~/.cache/jailoc-vm/workspaces/<workspace>/builder`), with its own build cache and the workspace's network policy |
-| `"auto"` or empty | `false` | Host daemon when it answers and runs Linux on the host's CPU architecture, otherwise the shared builder VM |
+| `"auto"` or empty | `false` | Host daemon when it answers, is Docker Engine 25 or later, and runs Linux on the host's CPU architecture, otherwise the shared builder VM |
 | `"docker"` | `false` | Host daemon; `jailoc up` fails when it is unusable |
 | `"vm"` | `false` | Shared builder VM (`~/.cache/jailoc-vm/builder`) |
 
@@ -95,7 +95,7 @@ After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (
 
 ## Unpacking into the VM
 
-jailoc exports the final image with `docker save` and unpacks it into `~/.cache/jailoc-vm/images` under `jailoc.local/rootfs:<image ID>`. An image ID already in the cache is not unpacked again, and layers already in the cache are skipped while the export streams in. Unpacked images that no workspace or builder uses are pruned. `docker save` must write an OCI image layout, which requires Docker Engine 25 or later.
+jailoc exports the final image with `docker save` and unpacks it into `~/.cache/jailoc-vm/images` under `jailoc.local/rootfs:<image ID>`. An image ID already in the cache is not unpacked again, and layers already in the cache are skipped while the export streams in. Unpacked images that no workspace or builder uses are pruned. `docker save` must write an OCI image layout, which requires Docker Engine 25 or later; with an older host daemon, `"auto"` builds in the shared builder VM and `"docker"` fails.
 
 jailoc labels the images it builds with `com.github.seznam.jailoc`. After unpacking, it removes labelled `jailoc-*` images from the Docker daemon that no workspace's last `jailoc up` used and that are older than one hour.
 
