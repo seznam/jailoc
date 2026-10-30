@@ -14,6 +14,8 @@ The requirements behind the choice:
 - **Ordinary Linux userland**: package managers, language toolchains and a nested Docker daemon (`enable_docker`) must work unmodified.
 - **One binary**: jailoc is a Go CLI; the sandbox has to be embeddable as a library, not a separate service to install and operate.
 
+Candidates were tested against one executable contract from four positions inside a workspace: guest root, a normal guest user, a bridged container and a privileged host-network container. The decision and its evidence are recorded in [ADR 0002](../adr/0002-libkrun-vm-with-host-network-broker.md).
+
 ## Plain containers (Docker, Podman, Dev Containers)
 
 jailoc v1 ran workspaces as Docker containers. A container shares the host kernel, so a kernel bug or a misconfigured capability, mount or socket ends on the host. Giving the agent root and its own Docker daemon inside a container means either a privileged container or a mounted host Docker socket, and both hand the host to the agent. Network rules applied with iptables live in a kernel the container shares.
@@ -46,9 +48,13 @@ Firecracker is a minimal KVM-based VMM. It is Linux-only and has no shared-files
 
 The difference is ownership of the guest. microsandbox spawns its own `msb` runtime and guest agent (`agentd`) and exposes an exec-style API ([SDK setup](https://docs.microsandbox.dev/sdk/setup)). jailoc needs its own init inside the guest: jailoc-guest runs the SSH server for interactive agent sessions, receives secrets over SSH into tmpfs, applies staged snapshots, enforces `protect_git`, and runs a nested Docker daemon for `enable_docker`. Its network policy also follows jailoc's config model (`allowed_hosts` resolved through filtered DNS, `allowed_networks`, IPv4 and IPv6). go-microvm exposes the VM and leaves the guest to jailoc. microsandbox also describes itself as beta software with breaking changes expected.
 
+## smolvm
+
+smolvm also runs libkrun micro-VMs and passed jailoc's filesystem and Docker checks. It has a built-in network policy with an external decider, but its network stack cannot be replaced: jailoc would depend on smolvm's policy semantics and its DNS interception instead of enforcing its own. Its `--block-private` option alone covers IPv4 only.
+
 ## General-purpose VMs (Lima, Colima, OrbStack, Vagrant)
 
-These start long-lived Linux VMs with a full distribution. They provide the kernel boundary but not the rest: no per-workspace VM by default, no egress policy enforced outside the guest, and mounts that are usually configured broadly (often the whole home directory). jailoc would end up as a layer of scripts around a VM it does not control.
+These start long-lived Linux VMs with a full distribution. They provide the kernel boundary but not the rest: no per-workspace VM by default, no egress policy enforced outside the guest, and mounts that are usually configured broadly (often the whole home directory). Lima also always attaches its own user-mode network interface next to any socket network, so a host broker cannot be the guest's only path out. jailoc would end up as a layer of scripts around a VM it does not control.
 
 ## Apple Containerization
 
@@ -64,7 +70,7 @@ Inside the VM boundary, jailoc makes a few choices of its own, each over an alte
 
 ### Network policy on the host, not in the guest
 
-Firewall rules inside the guest (iptables, nftables) would be in reach of guest root, and an HTTP proxy configured through `HTTP_PROXY` only covers tools that honour it. jailoc's broker sits on the host as the VM's only network peer, so every packet passes it whatever the guest does. It decides on destination addresses only: it does not decrypt TLS or read host names from traffic, and DNS answers alone never open a private address. See [Network Isolation](network-isolation.md).
+Firewall rules inside the guest (iptables, nftables) would be in reach of guest root, and an HTTP proxy configured through `HTTP_PROXY` only covers tools that honour it. Host-side alternatives fall short too: nftables on a TAP device works on Linux only and lets traffic through when the table fails to load, and the firewall options built into VM tools (go-microvm `WithFirewallRules`, smolvm `--block-private`) each cover part of the policy, IPv4 only or with host IPv6 addresses leaking, and differ per backend. jailoc's broker sits on the host as the VM's only network peer, so every packet passes it whatever the guest does. It decides on destination addresses only: it does not decrypt TLS or read host names from traffic, and DNS answers alone never open a private address. See [Network Isolation](network-isolation.md).
 
 ### Public allowed, private denied
 
