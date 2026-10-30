@@ -92,7 +92,7 @@ func TestDockerLayerDockerfile(t *testing.T) {
 		"    && if [ -n \"$JAILOC_CLEAN_CACHES\" ]; then apt-get clean && rm -rf /var/lib/apt/lists/*; fi)\n" +
 		"COPY --from=docker /out/bin/ /usr/local/bin/\n" +
 		"COPY --from=docker /out/cli-plugins/ /usr/local/lib/docker/cli-plugins/\n"
-	head := "ARG BASE\n" + stages + "\nFROM ${BASE}\n"
+	head := layerHead + stages + "\nFROM ${BASE}\n"
 	tests := []struct {
 		user string
 		want string
@@ -122,11 +122,11 @@ func TestAgentDockerfile(t *testing.T) {
 		user string
 		want string
 	}{
-		{"", "ARG BASE\nFROM ${BASE}\n" + install},
-		{"root", "ARG BASE\nFROM ${BASE}\n" + install},
-		{"0:0", "ARG BASE\nFROM ${BASE}\n" + install},
-		{"agent", "ARG BASE\nFROM ${BASE}\nUSER root\n" + install + "USER agent\n"},
-		{"1000:1000", "ARG BASE\nFROM ${BASE}\nUSER root\n" + install + "USER 1000:1000\n"},
+		{"", layerHead + "FROM ${BASE}\n" + install},
+		{"root", layerHead + "FROM ${BASE}\n" + install},
+		{"0:0", layerHead + "FROM ${BASE}\n" + install},
+		{"agent", layerHead + "FROM ${BASE}\nUSER root\n" + install + "USER agent\n"},
+		{"1000:1000", layerHead + "FROM ${BASE}\nUSER root\n" + install + "USER 1000:1000\n"},
 	}
 	for _, tt := range tests {
 		t.Run("user="+tt.user, func(t *testing.T) {

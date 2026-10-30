@@ -338,12 +338,16 @@ func asRoot(user string) bool {
 	return user != "" && user != "root" && user != "0" && !strings.HasPrefix(user, "0:") && !strings.HasPrefix(user, "root:")
 }
 
+// layerHead starts a layer Dockerfile. jailoc always passes BASE, so the
+// BuildKit check for an ARG without a valid default in FROM only adds noise.
+const layerHead = "# check=skip=InvalidDefaultArgInFrom\nARG BASE\n"
+
 // dockerLayerDockerfile appends to stages, which leave the Docker files in
 // /out of the docker stage, a final stage that copies them onto BASE and
 // installs nftables unless nft is present, as root, restoring the user.
 func dockerLayerDockerfile(stages []byte, user string) []byte {
 	var b strings.Builder
-	b.WriteString("ARG BASE\n")
+	b.WriteString(layerHead)
 	b.Write(stages)
 	b.WriteString("\nFROM ${BASE}\n")
 	switchUser := asRoot(user)
@@ -367,7 +371,7 @@ func dockerLayerDockerfile(stages []byte, user string) []byte {
 // agentDockerfile installs h as root and restores the base image's user.
 func agentDockerfile(h agent.Harness, user string) []byte {
 	var b strings.Builder
-	b.WriteString("ARG BASE\nFROM ${BASE}\n")
+	b.WriteString(layerHead + "FROM ${BASE}\n")
 	switchUser := asRoot(user)
 	if switchUser {
 		b.WriteString("USER root\n")
