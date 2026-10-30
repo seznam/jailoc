@@ -30,6 +30,7 @@ import (
 	"github.com/stacklok/go-microvm/hypervisor/libkrun"
 	"github.com/stacklok/go-microvm/image"
 	propnet "github.com/stacklok/go-microvm/net"
+	"go.opentelemetry.io/otel"
 )
 
 // Guest network served by the broker. Every workspace has its own broker and
@@ -214,6 +215,13 @@ func Run(ctx context.Context, spec Spec) (err error) {
 			_, _ = fmt.Fprintf(spec.Log, "%s "+format+"\n", append([]any{time.Now().UTC().Format(time.RFC3339)}, args...)...)
 		}
 	}
+	start := time.Now()
+	step := func() time.Duration {
+		d := time.Since(start).Round(time.Millisecond)
+		start = time.Now()
+		return d
+	}
+	otel.SetTracerProvider(stepTracer{})
 	workspace := spec.Kind == KindWorkspace
 	st := State{PID: os.Getpid()}
 	sockets := []string{nicSocket(spec.StateDir)}
@@ -275,7 +283,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		return err
 	}
 	st.BrokerPID = bp.PID()
-	logf("broker ready pid=%d", bp.PID())
+	logf("broker ready pid=%d after %s", bp.PID(), step())
 
 	opts := builderOptions(spec)
 	if workspace {
@@ -286,7 +294,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		_ = bp.Stop(5 * time.Second)
 		return fmt.Errorf("start vm: %w", err)
 	}
-	logf("vm started")
+	logf("vm started after %s", step())
 	stopBoth := func() {
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -311,7 +319,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		stopBoth()
 		return err
 	}
-	logf("%s ready", spec.Kind)
+	logf("%s ready after %s", spec.Kind, step())
 
 	out := brokerproc.Supervise(ctx, bp, vmHandle{vm: vm, stateDir: spec.StateDir}, 500*time.Millisecond, stopGrace)
 	logf("supervise %s", out.Reason)

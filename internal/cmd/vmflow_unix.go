@@ -43,6 +43,7 @@ func builderStateDir(ws *workspace.Resolved) string {
 // runUpVM builds the workspace image in a builder VM and boots it as the
 // workspace VM.
 func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) error {
+	upStart := time.Now()
 	stateDir := vmStateDir(ws.Name)
 	if st, err := runningVM(stateDir); err != nil {
 		return err
@@ -83,14 +84,18 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		return err
 	}
 
+	start := time.Now()
 	rt, err := vmRuntime(ctx, cfg)
 	if err != nil {
 		return err
 	}
+	logStep("prepare VM runtime", start)
+	start = time.Now()
 	ref, err := buildWorkspaceImage(ctx, cfg, ws, rt)
 	if err != nil {
 		return err
 	}
+	logStep("workspace image", start, "ref", ref)
 
 	binds, err := stageSnapshots(stateDir, snapshots, "")
 	if err != nil {
@@ -128,13 +133,18 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err := os.Remove(secretsMarker(stateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("reset secrets marker: %w", err)
 	}
+	start = time.Now()
 	if _, err := startSupervisor(ctx, spec, "VM for workspace "+ws.Name); err != nil {
 		return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
 	}
+	logStep("start workspace VM", start)
+	start = time.Now()
 	if err := deliverSecrets(ctx, stateDir, payload); err != nil {
 		_ = stopSupervisor(stateDir)
 		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
+	logStep("deliver secrets", start)
+	logStep("up", upStart, "workspace", ws.Name)
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s started\n", ws.Name)
 	return nil
 }
@@ -203,10 +213,12 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	if ws.IsolatedBuild {
 		spec.Workspace = ws.Name + "-builder"
 	}
+	start := time.Now()
 	st, err := startSupervisor(ctx, spec, label)
 	if err != nil {
 		return "", fmt.Errorf("start image builder: %w", err)
 	}
+	logStep("start builder VM", start)
 	defer func() {
 		if err := stopSupervisor(dir); err != nil {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: stop image builder: %v\n", err)
@@ -241,14 +253,17 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	if err != nil {
 		return "", fmt.Errorf("resolve image for workspace %q: %w", ws.Name, err)
 	}
+	start := time.Now()
 	if err := docker.EnsureImage(ctx, finalImage); err != nil {
 		return "", err
 	}
+	logStep("ensure image", start, "image", finalImage)
 	id, err := docker.ImageID(ctx, finalImage)
 	if err != nil {
 		return "", err
 	}
 	ref := vm.RootFSRef(id)
+	start = time.Now()
 	err = vm.ImportImage(ctx, filepath.Join(vmRootDir(), "images"), ref, func(w io.Writer) error {
 		_, _ = color.New(color.FgCyan).Printf("Unpacking image %s for the workspace VM...\n", finalImage)
 		_, err := docker.SaveImage(ctx, finalImage, w)
@@ -257,8 +272,11 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	if err != nil {
 		return "", err
 	}
+	logStep("import image into VM cache", start, "ref", ref)
+	start = time.Now()
 	pruneImageCache(ref)
 	pruneDockerImages(ctx, ws.Name, chain)
+	logStep("prune images", start)
 	return ref, nil
 }
 

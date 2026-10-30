@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
@@ -119,26 +120,36 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 		if err != nil {
 			return "", nil, err
 		}
+		start := time.Now()
 		final, err := docker.BuildOverlayImage(ctx, chain[len(chain)-1], *ws)
 		if err != nil {
 			return "", nil, fmt.Errorf("build workspace overlay image: %w", err)
 		}
+		if final != chain[len(chain)-1] {
+			logStep("build overlay image", start, "image", final)
+		}
 		return final, append(chain, final), nil
 	default: // strategyCascade
 		_, _ = color.New(color.FgCyan).Printf("Resolving base image...\n")
+		start := time.Now()
 		base, err := docker.ResolveBaseImage(ctx, cfg, version)
 		if err != nil {
 			return "", nil, fmt.Errorf("resolve base image: %w", err)
 		}
+		logStep("resolve base image", start, "image", base)
 		chain, err := workspaceLayers(ctx, ws, []string{base})
 		if err != nil {
 			return "", nil, err
 		}
 
 		slog.Debug("building workspace layer", "base", chain[len(chain)-1], "dockerfile", ws.Dockerfile)
+		start = time.Now()
 		final, err := docker.BuildOverlayImage(ctx, chain[len(chain)-1], *ws)
 		if err != nil {
 			return "", nil, fmt.Errorf("build workspace overlay image: %w", err)
+		}
+		if final != chain[len(chain)-1] {
+			logStep("build overlay image", start, "image", final)
 		}
 		return final, append(chain, final), nil
 	}
@@ -149,20 +160,30 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 // chain with the images it built appended.
 func workspaceLayers(ctx context.Context, ws *workspace.Resolved, chain []string) ([]string, error) {
 	if ws.EnableDocker {
+		start := time.Now()
 		image, err := docker.BuildDockerImage(ctx, chain[len(chain)-1])
 		if err != nil {
 			return nil, fmt.Errorf("add Docker to the workspace image: %w", err)
 		}
+		logStep("build Docker layer", start, "image", image)
 		chain = append(chain, image)
 	}
 	if !ws.AgentInstall {
 		return chain, nil
 	}
+	start := time.Now()
 	image, err := docker.BuildAgentImage(ctx, chain[len(chain)-1], ws.Agent)
 	if err != nil {
 		return nil, fmt.Errorf("install %s into the workspace image: %w", ws.Agent.Title, err)
 	}
+	logStep("build agent layer", start, "image", image)
 	return append(chain, image), nil
+}
+
+// logStep logs how long the step that began at start took, for finding
+// slow phases in jailoc.log.
+func logStep(step string, start time.Time, args ...any) {
+	slog.Info("step finished", append([]any{"step", step, "duration", time.Since(start).Round(time.Millisecond)}, args...)...)
 }
 
 const tuiPluginContainerDir = "/etc/jailoc-tui-plugin"
