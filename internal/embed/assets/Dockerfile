@@ -12,8 +12,10 @@
 # Preset/overlay images (e.g. jailoc-szn-preset) extend this with additional
 # language runtimes and tooling via `FROM <this-image>`.
 #
-# Multi-stage build: "builder" compiles language servers and npm modules,
-# final stage copies only the resulting binaries to keep the image small.
+# Single stage: none of the npm language servers below ship native addons, so
+# no compiler toolchain is needed. apt and npm downloads use BuildKit cache
+# mounts; for the classic builder jailoc strips the mounts and sets
+# JAILOC_CLEAN_CACHES so the RUN steps clean up after themselves.
 # =============================================================================
 
 ARG NODE_VERSION=26.5.0
@@ -23,21 +25,30 @@ ARG TS_VERSION=6.0.3
 ARG PYRIGHT_VERSION=1.1.411
 ARG BASH_LS_VERSION=5.6.0
 
-# =============================================================================
-# Builder stage — compile language servers and install npm modules.
-# None of the build-time packages (gcc, make, etc.) end up in the final image.
-# =============================================================================
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-# Build-time dependencies: compilers for native npm addons (node-gyp),
-# curl for downloading tarballs, xz-utils for .tar.xz extraction.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates xz-utils \
-    build-essential make gcc g++ python3 \
-    && rm -rf /var/lib/apt/lists/*
+ARG JAILOC_CLEAN_CACHES
+# Runtime packages:
+#   curl, ca-certificates  — HTTPS fetches (uv install, package downloads)
+#   git, openssh-client    — repo operations (clone, push over SSH)
+#   sudo                   — agent user has passwordless sudo for apt installs
+#   python3                — Python runtime for pyright and user scripts
+#   ripgrep (rg), fd-find, jq — fast search/filter tools used by coding agents
+#   unzip, xz-utils        — archive extraction for runtime downloads
+#   libatomic1             — required by Node.js 26+ runtime
+# docker-clean is moved aside during the install so downloaded packages stay
+# in the cache mount, and restored so the image behaves like stock Ubuntu.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    mv /etc/apt/apt.conf.d/docker-clean /etc/apt/docker-clean \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates git openssh-client sudo \
+    python3 ripgrep fd-find jq unzip xz-utils libatomic1 \
+    && mv /etc/apt/docker-clean /etc/apt/apt.conf.d/docker-clean \
+    && if [ -n "$JAILOC_CLEAN_CACHES" ]; then apt-get clean && rm -rf /var/lib/apt/lists/*; fi
 
-# Node.js — needed here to run `npm install` for language servers below.
+# Node.js — runtime for npm-based language servers and corepack (Yarn).
 # Installed from the official tarball (not apt) for version control.
 ARG NODE_VERSION
 RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
@@ -51,55 +62,14 @@ ARG TS_LS_VERSION
 ARG TS_VERSION
 ARG PYRIGHT_VERSION
 ARG BASH_LS_VERSION
-RUN npm install -g \
+RUN --mount=type=cache,target=/root/.npm \
+    npm install -g --cache /root/.npm \
     yaml-language-server@${YAML_LS_VERSION} \
     typescript-language-server@${TS_LS_VERSION} \
     typescript@${TS_VERSION} \
     pyright@${PYRIGHT_VERSION} \
-    bash-language-server@${BASH_LS_VERSION}
-
-# =============================================================================
-# Final stage — minimal runtime image with only what the agent needs.
-# =============================================================================
-FROM ubuntu:24.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-# Runtime packages:
-#   curl, ca-certificates  — HTTPS fetches (uv install, package downloads)
-#   git, openssh-client    — repo operations (clone, push over SSH)
-#   sudo                   — agent user has passwordless sudo for apt installs
-#   python3                — Python runtime for pyright and user scripts
-#   ripgrep (rg), fd-find, jq — fast search/filter tools used by coding agents
-#   unzip, xz-utils        — archive extraction for runtime downloads
-#   libatomic1             — required by Node.js 26+ runtime
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates git openssh-client sudo \
-    python3 ripgrep fd-find jq unzip xz-utils libatomic1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Node.js — installed again in the final stage (not copied from builder)
-# because the builder's /usr/local is polluted with build-time files.
-# Needed at runtime for npm-based language servers and corepack (Yarn).
-ARG NODE_VERSION
-RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') \
-    && curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz \
-    | tar -xJC /usr/local --strip-components=1
-
-# Copy npm global modules — these were `npm install -g`'d in builder.
-# Copied as directories because npm global modules are not standalone binaries.
-COPY --from=builder /usr/local/lib/node_modules/yaml-language-server /usr/local/lib/node_modules/yaml-language-server
-COPY --from=builder /usr/local/lib/node_modules/typescript-language-server /usr/local/lib/node_modules/typescript-language-server
-COPY --from=builder /usr/local/lib/node_modules/typescript /usr/local/lib/node_modules/typescript
-COPY --from=builder /usr/local/lib/node_modules/pyright /usr/local/lib/node_modules/pyright
-COPY --from=builder /usr/local/lib/node_modules/bash-language-server /usr/local/lib/node_modules/bash-language-server
-
-# Symlink npm module entry points into /usr/local/bin so they're on PATH.
-# Required because COPY doesn't preserve the symlinks `npm install -g` creates.
-RUN ln -sf /usr/local/lib/node_modules/yaml-language-server/bin/yaml-language-server /usr/local/bin/yaml-language-server \
-    && ln -sf /usr/local/lib/node_modules/typescript-language-server/lib/cli.mjs /usr/local/bin/typescript-language-server \
-    && ln -sf /usr/local/lib/node_modules/pyright/index.js /usr/local/bin/pyright \
-    && ln -sf /usr/local/lib/node_modules/pyright/langserver.index.js /usr/local/bin/pyright-langserver \
-    && ln -sf /usr/local/lib/node_modules/bash-language-server/out/cli.js /usr/local/bin/bash-language-server
+    bash-language-server@${BASH_LS_VERSION} \
+    && if [ -n "$JAILOC_CLEAN_CACHES" ]; then rm -rf /root/.npm; fi
 
 # Agent user (UID 1000) — the non-root identity the agent process runs as.
 # UID 1000 matches the default host user for bind-mount permission compatibility.
