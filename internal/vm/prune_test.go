@@ -56,6 +56,13 @@ func TestPruneImages(t *testing.T) {
 	freshRef := addRef(RootFSRef("dd"), digest("dd"), false)
 	orphanOld := addImage("ee", true)
 	orphanNew := addImage("ff", false)
+	snapshot := filepath.Join(dir, "snapshots", "sha256-0f0f")
+	if err := os.MkdirAll(snapshot, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(snapshot, past, past); err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := PruneImages(dir, []string{RootFSRef("bb")})
 	if err != nil {
@@ -64,7 +71,7 @@ func TestPruneImages(t *testing.T) {
 	if res.Refs != 1 || res.Images != 2 {
 		t.Fatalf("result = %+v, want 1 reference and 2 images removed", res)
 	}
-	for _, p := range []string{stale, staleRef, orphanOld} {
+	for _, p := range []string{stale, staleRef, orphanOld, snapshot} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("%s still exists (err %v)", p, err)
 		}

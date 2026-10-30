@@ -28,7 +28,8 @@ type PruneResult struct {
 
 // PruneImages drops workspace images from the image cache at cacheDir that
 // no reference in keep names, and the unpacked images no reference points
-// to any more. Extracted layers unused for two weeks are removed as well.
+// to any more, with the composed-layer snapshots none of the remaining images
+// starts with. Extracted layers unused for two weeks are removed as well.
 // Only workspace image references (RootFSRef) are dropped; other references
 // such as the builder image stay. Entries changed within the last hour are
 // kept.
@@ -89,6 +90,10 @@ func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 			return res, fmt.Errorf("remove unpacked image %s: %w", name, err)
 		}
 		res.Images++
+	}
+
+	if _, err := image.NewCache(cacheDir).PruneSnapshots(pruneGrace); err != nil {
+		return res, fmt.Errorf("remove unused image snapshots: %w", err)
 	}
 
 	n, err := image.NewCache(cacheDir).LayerCache().Evict(layerUnusedLimit)
