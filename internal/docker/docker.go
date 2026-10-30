@@ -350,9 +350,12 @@ func dockerLayerDockerfile(stages []byte, user string) []byte {
 	if switchUser {
 		b.WriteString("USER root\n")
 	}
-	b.WriteString("RUN command -v nft >/dev/null || (apt-get update \\\n" +
-		"    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables \\\n" +
-		"    && rm -rf /var/lib/apt/lists/*)\n")
+	fmt.Fprintf(&b, "ARG %s\n", cleanCachesArg)
+	fmt.Fprintf(&b, "RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \\\n"+
+		"    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \\\n"+
+		"    command -v nft >/dev/null || (apt-get update \\\n"+
+		"    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables \\\n"+
+		"    && if [ -n \"$%s\" ]; then apt-get clean && rm -rf /var/lib/apt/lists/*; fi)\n", cleanCachesArg)
 	b.WriteString("COPY --from=docker /out/bin/ /usr/local/bin/\n")
 	b.WriteString("COPY --from=docker /out/cli-plugins/ /usr/local/lib/docker/cli-plugins/\n")
 	if switchUser {

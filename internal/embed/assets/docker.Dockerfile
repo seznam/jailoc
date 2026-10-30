@@ -14,8 +14,12 @@ ARG COMPOSE_VERSION=5.6.1
 
 FROM ubuntu:24.04 AS docker
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# The apt cache mounts are stripped for the classic builder; this stage isn't
+# part of the final image, so it leaves its apt files behind either way.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
 ARG DOCKER_VERSION
 ARG BUILDX_VERSION
 ARG COMPOSE_VERSION
