@@ -115,7 +115,10 @@ func startReclaim(logger *slog.Logger) func() {
 				continue
 			}
 			if cgroup {
-				err := os.WriteFile(cgroupReclaim, []byte(strconv.FormatUint(target, 10)), 0)
+				// swappiness=0 keeps the trim to file cache: without it the
+				// kernel also swaps anonymous memory out to zram. Kernels
+				// without the argument reject the write and fall back below.
+				err := os.WriteFile(cgroupReclaim, []byte(strconv.FormatUint(target, 10)+" swappiness=0"), 0)
 				// EAGAIN: the kernel reclaimed less than asked.
 				if err == nil || errors.Is(err, syscall.EAGAIN) {
 					continue
