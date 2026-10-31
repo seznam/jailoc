@@ -1,9 +1,7 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
-	"os"
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -17,35 +15,31 @@ var reloadCmd = &cobra.Command{
 allowed_hosts, allowed_networks, filtered_dns, ports,
 ssh_auth_sock, ca_bundle, env and secrets. Running sessions keep running.
 Changes that need a new VM are listed; apply them with jailoc restart.
-jailoc up on a running VM workspace does the same.`,
+jailoc up on a running VM workspace does the same.
+With --all, reloads every running workspace.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
-		if len(args) > 0 {
-			workspaceFlag = args[0]
-		} else if !workspaceExplicit {
-			if cwd, err := os.Getwd(); err == nil {
-				resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, cwd)
-				switch {
-				case cwdErr == nil:
-					workspaceFlag = resolved.Name
-				case errors.Is(cwdErr, workspace.ErrNoMatch):
-				default:
-					return fmt.Errorf("resolve workspace from current directory: %w", cwdErr)
+		wss, err := targetWorkspaces(cfg, args)
+		if err != nil {
+			return err
+		}
+		return forEachWorkspace(ctx, wss, func(ws *workspace.Resolved) error {
+			if allFlag {
+				if running, err := workspaceRunning(ws); err != nil || !running {
+					return err
 				}
 			}
-		}
-		ws, err := workspace.Resolve(cfg, workspaceFlag)
-		if err != nil {
-			return fmt.Errorf("resolve workspace: %w", err)
-		}
-		return reloadVM(cmd.Context(), ws)
+			return reloadVM(ctx, ws)
+		})
 	},
 }
 
 func init() {
+	addAllFlag(reloadCmd, "reload all running workspaces")
 	rootCmd.AddCommand(reloadCmd)
 }

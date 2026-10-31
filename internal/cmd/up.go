@@ -26,7 +26,7 @@ import (
 var upCmd = &cobra.Command{
 	Use:   "up [workspace]",
 	Short: "Start a workspace environment",
-	Long:  "Start a workspace VM. If already running, apply reloadable configuration changes.",
+	Long:  "Start a workspace VM. If already running, apply reloadable configuration changes.\nWith --all, does this for every configured workspace.",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runUp(cmd.Context(), args)
@@ -39,30 +39,14 @@ func runUp(ctx context.Context, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if len(args) > 0 {
-		workspaceFlag = args[0]
-	} else if !workspaceExplicit {
-		cwd, err := os.Getwd()
-		if err == nil {
-			resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, cwd)
-			switch {
-			case cwdErr == nil:
-				workspaceFlag = resolved.Name
-			case errors.Is(cwdErr, workspace.ErrNoMatch):
-				// no workspace matches CWD — keep default
-			default:
-				return fmt.Errorf("resolve workspace from current directory: %w", cwdErr)
-			}
-		}
-	}
-
-	slog.Debug("resolving workspace", "name", workspaceFlag, "explicit", workspaceExplicit)
-	ws, err := workspace.Resolve(cfg, workspaceFlag)
+	wss, err := targetWorkspaces(cfg, args)
 	if err != nil {
-		return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
+		return err
 	}
-
-	return runUpVM(ctx, cfg, ws)
+	return forEachWorkspace(ctx, wss, func(ws *workspace.Resolved) error {
+		slog.Debug("starting workspace", "name", ws.Name)
+		return runUpVM(ctx, cfg, ws)
+	})
 }
 
 // workspaceCacheDir holds the generated files of a workspace that the guest
@@ -424,5 +408,6 @@ func resolveGitConfig(enabled bool) string {
 }
 
 func init() {
+	addAllFlag(upCmd, "start all configured workspaces")
 	rootCmd.AddCommand(upCmd)
 }
