@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"regexp"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/docker/docker/pkg/jsonmessage"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	bkclient "github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/util/progress/progressui"
 )
 
@@ -56,6 +58,24 @@ func forBuilder(version build.BuilderVersion, dockerfile []byte, args map[string
 // on stderr.
 func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Reader, version build.BuilderVersion, opts build.ImageBuildOptions) error {
 	opts.Version = version
+	if version == build.BuilderBuildKit {
+		// BuildKit resolves base images through a client session, as docker
+		// build does; without attachables, registry access is anonymous.
+		sess, err := session.NewSession(ctx, "")
+		if err != nil {
+			return fmt.Errorf("create BuildKit session: %w", err)
+		}
+		dial := func(ctx context.Context, proto string, meta map[string][]string) (net.Conn, error) {
+			return cli.DialHijack(ctx, "/session", proto, meta)
+		}
+		go func() {
+			if err := sess.Run(ctx, dial); err != nil {
+				slog.Debug("BuildKit session ended", "error", err)
+			}
+		}()
+		defer func() { _ = sess.Close() }()
+		opts.SessionID = sess.ID()
+	}
 	resp, err := cli.ImageBuild(ctx, buildCtx, opts)
 	if err != nil {
 		return fmt.Errorf("start build: %w", err)
