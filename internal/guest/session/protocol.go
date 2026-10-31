@@ -21,14 +21,16 @@ import (
 
 // Frame types. Client to holder: Hello, Data, Resize. Holder to client:
 // Data, Exit, Kicked. Info carries the session ID from the guest's session
-// command to the client before the holder's stream starts.
+// command to the client before the holder's stream starts; Started follows
+// it when the command started a new session.
 const (
-	FrameInfo   byte = 'I'
-	FrameHello  byte = 'H'
-	FrameData   byte = 'D'
-	FrameResize byte = 'R'
-	FrameExit   byte = 'X'
-	FrameKicked byte = 'K'
+	FrameInfo    byte = 'I'
+	FrameStarted byte = 'S'
+	FrameHello   byte = 'H'
+	FrameData    byte = 'D'
+	FrameResize  byte = 'R'
+	FrameExit    byte = 'X'
+	FrameKicked  byte = 'K'
 )
 
 const maxFrame = 1 << 20

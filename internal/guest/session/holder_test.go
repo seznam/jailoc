@@ -193,9 +193,10 @@ func TestOpenSharesOneSession(t *testing.T) {
 	opts := Options{Name: "sleep", Dir: "/", Argv: []string{"/bin/sleep", "60"}, Env: []string{"PATH=/bin"}, Rows: 24, Cols: 80}
 	ids := make([]string, 8)
 	errs := make([]error, len(ids))
+	created := make([]bool, len(ids))
 	var wg sync.WaitGroup
 	for i := range ids {
-		wg.Go(func() { ids[i], errs[i] = Open(dir, opts, []string{exe}) })
+		wg.Go(func() { ids[i], created[i], errs[i] = Open(dir, opts, []string{exe}) })
 	}
 	wg.Wait()
 	t.Cleanup(func() {
@@ -211,5 +212,14 @@ func TestOpenSharesOneSession(t *testing.T) {
 		if ids[i] != ids[0] {
 			t.Fatalf("concurrent Open started sessions %v", ids)
 		}
+	}
+	n := 0
+	for _, c := range created {
+		if c {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("concurrent Open reported %d created sessions, want 1", n)
 	}
 }
