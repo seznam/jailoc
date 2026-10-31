@@ -4,7 +4,7 @@ go 1.26.8
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/compose-spec/compose-go/v2 v2.14.0
+	github.com/compose-spec/compose-go/v2 v2.16.2
 	github.com/containerd/errdefs v1.0.0
 	github.com/creack/pty v1.1.24
 	github.com/docker/docker v28.5.2+incompatible
@@ -12,7 +12,7 @@ require (
 	github.com/google/go-containerregistry v0.22.1
 	github.com/hashicorp/go-version v1.9.0
 	github.com/moby/buildkit v0.34.1
-	github.com/moby/go-archive v0.3.2
+	github.com/moby/go-archive v0.3.3
 	github.com/moby/term v0.5.2
 	github.com/spf13/cobra v1.10.2
 	github.com/stacklok/go-microvm v0.0.0
@@ -20,7 +20,7 @@ require (
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.60.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	gvisor.dev/gvisor v0.0.0-20260413194555-9680d69bf798
