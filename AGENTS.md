@@ -17,7 +17,7 @@ cmd/jailoc/main.go          Entry point → cmd.Execute(version, commit, date)
 cmd/jailoc-guest/           VM init + SSH server inside the guest (embedded via internal/guestbin)
 cmd/jailoc-netbroker/       Host-side network broker process, one per workspace VM
 internal/
-  cmd/                       Cobra CLI: root (attach/new/continue sessions) + add, config, down, logs, migrate, reload, restart, sessions, status, up
+  cmd/                       Cobra CLI: root (attach/new/continue sessions) + add, config, down, list, logs, migrate, reload, restart, sessions, status, up
   agent/                     Built-in coding agent harnesses (opencode1, opencode2, claude, copilot, omo; opencode = alias of opencode2): npm package, session flags, env, persisted dirs, default mounts
   config/                    TOML config parsing, validation (rejects v1 settings), mutation (~/.config/jailoc/config.toml), default config content
   workspace/                 Workspace name → resolved paths, allowed hosts/networks, CWD matching

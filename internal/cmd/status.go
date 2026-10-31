@@ -17,7 +17,7 @@ var statusCmd = &cobra.Command{
 	RunE:  runStatus,
 }
 
-func runStatus(_ *cobra.Command, args []string) error {
+func runStatus(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -41,7 +41,7 @@ func runStatus(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve workspace: %w", err)
 	}
-	return statusVM(ws)
+	return statusVM(cmd.Context(), ws)
 }
 
 func init() {

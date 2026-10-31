@@ -137,11 +137,45 @@ Fails when the workspace is not running.
 
 ### `jailoc status`
 
-Show whether the workspace VM is running and, for a running VM, where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
+Show the agent of the workspace (with the package version jailoc installs and extra `args`) and whether its VM is running.
+
+For a running VM it also shows the uptime, CPUs, memory and Docker disk, where the agent's persistent home directories live (the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`), the number of agent sessions, and whether the VM runs the current configuration: `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `agent`, `profile`, `enable_docker`, `protect_git`, or an upgraded jailoc), `jailoc reload` when the configuration file changed after the VM started or was last reloaded. For a stopped VM it shows when it stopped and the last error. `Data` is the VM state directory on the host.
 
 ```
 jailoc status [workspace] [flags]
 ```
+
+```
+Workspace: myproject
+Backend:   vm
+Agent:     claude (@anthropic-ai/claude-code@2.1.312)
+State:     running (supervisor pid 4242)
+Started:   2026-10-31T09:12:44+01:00 (up 2h5m)
+Resources: 2 CPUs, 4096 MiB memory
+Profile:   workspace
+Sessions:  2 (1 attached); `jailoc sessions myproject` lists them
+Config:    changed since the VM started; `jailoc reload myproject` applies it
+Data:      ~/.cache/jailoc-vm/workspaces/myproject
+```
+
+---
+
+### `jailoc list`
+
+List every configured workspace with its agent, whether its VM is running, the agent sessions of a running VM (and how many have a terminal attached) and its paths. `*` marks the workspace of the current directory. Alias: `jailoc ls`.
+
+```
+jailoc list
+```
+
+```
+  WORKSPACE  AGENT      STATE    SESSIONS        PATHS
+  default    opencode   running  0               ~/projects
+* myproject  claude     running  2 (1 attached)  ~/projects/myproject
+  scratch    opencode1  stopped  -               -
+```
+
+`SESSIONS` shows `?` when jailoc cannot reach a running VM within 5 seconds.
 
 ---
 
