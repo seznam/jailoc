@@ -1,12 +1,9 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
-	"os"
 
 	"github.com/seznam/jailoc/internal/config"
-	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -22,28 +19,22 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if len(args) > 0 {
-		workspaceFlag = args[0]
-	} else if !workspaceExplicit {
-		cwd, err := os.Getwd()
-		if err == nil {
-			resolved, _, cwdErr := workspace.ResolveFromCWD(cfg, cwd)
-			switch {
-			case cwdErr == nil:
-				workspaceFlag = resolved.Name
-			case errors.Is(cwdErr, workspace.ErrNoMatch):
-			default:
-				return fmt.Errorf("resolve workspace from current directory: %w", cwdErr)
-			}
+	wss, err := targetWorkspaces(cfg, args)
+	if err != nil {
+		return err
+	}
+	for i, ws := range wss {
+		if i > 0 {
+			fmt.Println()
+		}
+		if err := statusVM(cmd.Context(), ws); err != nil {
+			return fmt.Errorf("workspace %q: %w", ws.Name, err)
 		}
 	}
-	ws, err := workspace.Resolve(cfg, workspaceFlag)
-	if err != nil {
-		return fmt.Errorf("resolve workspace: %w", err)
-	}
-	return statusVM(cmd.Context(), ws)
+	return nil
 }
 
 func init() {
+	addAllFlag(statusCmd, "show the status of all configured workspaces")
 	rootCmd.AddCommand(statusCmd)
 }

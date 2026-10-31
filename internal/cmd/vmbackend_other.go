@@ -38,6 +38,8 @@ func restartVMIfRunning(context.Context, *workspace.Resolved) error { return err
 
 func reloadVM(context.Context, *workspace.Resolved) error { return errVMUnsupported }
 
+func workspaceRunning(*workspace.Resolved) (bool, error) { return false, errVMUnsupported }
+
 func trafficVM(context.Context, *workspace.Resolved, logView, bool, io.Writer) error {
 	return errVMUnsupported
 }

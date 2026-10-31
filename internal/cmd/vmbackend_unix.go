@@ -89,6 +89,12 @@ func runningVM(stateDir string) (*vm.State, error) {
 	return st, nil
 }
 
+// workspaceRunning reports whether the VM of ws runs.
+func workspaceRunning(ws *workspace.Resolved) (bool, error) {
+	st, err := runningVM(vmStateDir(ws.Name))
+	return st != nil, err
+}
+
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false
