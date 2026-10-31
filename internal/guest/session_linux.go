@@ -92,14 +92,24 @@ func openSession(self string, args []string, stdin io.Reader, stdout io.Writer) 
 		}
 		holder := []string{self, "session", "serve"}
 		var err error
+		created := true
 		if *newSession {
 			*id, err = session.Create(SessionsDir, opts, holder)
 		} else {
-			*id, err = session.Open(SessionsDir, opts, holder)
+			*id, created, err = session.Open(SessionsDir, opts, holder)
 		}
 		if err != nil {
 			return err
 		}
+		if err := session.WriteFrame(stdout, session.Frame{Type: session.FrameInfo, Payload: []byte(*id)}); err != nil {
+			return err
+		}
+		if created {
+			if err := session.WriteFrame(stdout, session.Frame{Type: session.FrameStarted}); err != nil {
+				return err
+			}
+		}
+		return session.Attach(SessionsDir, *id, stdin, stdout)
 	}
 	if err := session.WriteFrame(stdout, session.Frame{Type: session.FrameInfo, Payload: []byte(*id)}); err != nil {
 		return err
