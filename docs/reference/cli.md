@@ -23,6 +23,8 @@ Commands pick the workspace in this order:
 3. The workspace whose `paths` entry is the longest prefix of the current directory. If several workspaces tie on the deepest match, the command fails and asks for `-w`.
 4. `default`.
 
+With `--all` (`-A`), `up`, `down`, `restart`, `reload` and `status` act on every configured workspace one after another, in name order, and do not take a `[workspace]` argument or `--workspace`. A failure in one workspace does not stop the others; the command reports all failures and exits non-zero.
+
 `jailoc add` matches the path being added instead of the current directory. With `--workspace`, the added path must lie under one of that workspace's paths.
 
 ---
@@ -73,6 +75,10 @@ Validates secret sources on the host, builds the workspace image with the host D
 
 When the VM already runs, `jailoc up` does what [`jailoc reload`](#jailoc-reload) does.
 
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--all` | `-A` | Start every configured workspace, in name order. |
+
 ---
 
 ### `jailoc down`
@@ -85,9 +91,10 @@ jailoc down [workspace] [flags]
 
 Shuts down the workspace VM and its network broker. All agent sessions end. The persistent home directories (the [agent's state directories](configuration.md#coding-agents) and `~/.cache`) are kept.
 
-| Flag | Description |
-|------|-------------|
-| `--purge` | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--all` | `-A` | Stop every configured workspace. Combined with `--purge`, purges every workspace. |
+| `--purge` | | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
 
 ---
 
@@ -100,6 +107,10 @@ jailoc restart [workspace] [flags]
 ```
 
 Equivalent to `jailoc down` followed by `jailoc up`: rebuilds the workspace image and ends running sessions. If the workspace is not running, starts it.
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--all` | `-A` | Restart every running workspace. Stopped workspaces stay stopped. |
 
 ---
 
@@ -133,6 +144,10 @@ Changes to the following need a new VM. `jailoc reload` lists them, and [`jailoc
 
 Fails when the workspace is not running.
 
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--all` | `-A` | Reload every running workspace. Stopped workspaces are skipped. |
+
 ---
 
 ### `jailoc status`
@@ -144,6 +159,10 @@ For a running VM it also shows the uptime, CPUs, memory and Docker disk, where t
 ```
 jailoc status [workspace] [flags]
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--all` | `-A` | Show the status of every configured workspace. |
 
 ```
 Workspace: myproject
