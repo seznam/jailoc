@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -620,24 +623,191 @@ func downVM(ws *workspace.Resolved, purge bool) error {
 	return nil
 }
 
-// statusVM prints whether the workspace VM runs.
-func statusVM(ws *workspace.Resolved) error {
-	st, err := runningVM(vmStateDir(ws.Name))
+// statusVM prints the agent of the workspace, whether its VM runs and, for a
+// running VM, its resources, sessions and whether it runs the current
+// configuration; for a stopped VM, when and why it stopped.
+func statusVM(ctx context.Context, ws *workspace.Resolved) error {
+	stateDir := vmStateDir(ws.Name)
+	st, err := runningVM(stateDir)
 	if err != nil {
 		return err
 	}
+	home, _ := os.UserHomeDir() // without a home directory paths stay absolute
 	fmt.Printf("Workspace: %s\n", ws.Name)
 	fmt.Printf("Backend:   vm\n")
+	fmt.Printf("Agent:     %s\n", agentLabel(ws))
 	if st == nil {
-		fmt.Printf("State:     stopped\n")
+		last, err := vm.ReadState(stateDir)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		fmt.Printf("State:     %s\n", stoppedLabel(last))
+		if last != nil && last.Error != "" {
+			fmt.Printf("Error:     %s\n", last.Error)
+		}
+		fmt.Printf("Data:      %s\n", shortenHome(stateDir, home))
 		return nil
 	}
 	fmt.Printf("State:     running (supervisor pid %d)\n", st.PID)
-	fmt.Printf("Started:   %s\n", st.Updated.Local().Format(time.RFC3339))
-	if spec, err := vm.ReadSpec(vmStateDir(ws.Name)); err == nil {
-		fmt.Printf("Profile:   %s\n", profileLabel(*spec))
+	fmt.Printf("Started:   %s (up %s)\n", st.Updated.Local().Format(time.RFC3339), formatUptime(time.Since(st.Updated)))
+	spec, err := vm.ReadSpec(stateDir)
+	if err != nil {
+		return err
 	}
+	fmt.Printf("Resources: %s\n", resourcesLabel(*spec))
+	fmt.Printf("Profile:   %s\n", profileLabel(*spec))
+	sessionsCtx, cancel := context.WithTimeout(ctx, listSessionsTimeout)
+	defer cancel()
+	if infos, err := vmSessions(sessionsCtx, ws); err != nil {
+		fmt.Printf("Sessions:  unknown (%v)\n", err)
+	} else {
+		attached := 0
+		for _, info := range infos {
+			if info.Attached {
+				attached++
+			}
+		}
+		label := sessionsLabel(len(infos), attached)
+		if len(infos) > 0 {
+			label += fmt.Sprintf("; `jailoc sessions %s` lists them", ws.Name)
+		}
+		fmt.Printf("Sessions:  %s\n", label)
+	}
+	fmt.Printf("Config:    %s\n", configLabel(ws, *spec, configChangedSince(stateDir)))
+	fmt.Printf("Data:      %s\n", shortenHome(stateDir, home))
 	return nil
+}
+
+// agentLabel names the agent of the workspace, the package version jailoc
+// installs and the arguments added to every start.
+func agentLabel(ws *workspace.Resolved) string {
+	label := ws.Agent.Name
+	switch {
+	case !ws.AgentInstall:
+		label += " (installed by the image)"
+	case ws.Agent.Package != "":
+		label += " (" + ws.Agent.Package + "@" + cmp.Or(ws.Agent.Version, "latest") + ")"
+	}
+	if len(ws.AgentArgs) > 0 {
+		label += ", args: " + strings.Join(ws.AgentArgs, " ")
+	}
+	return label
+}
+
+// stoppedLabel describes a stopped VM from its last supervisor state, nil
+// when the VM never started.
+func stoppedLabel(last *vm.State) string {
+	switch {
+	case last == nil:
+		return "stopped (never started)"
+	case last.Ready:
+		// The supervisor clears Ready when it exits; it was killed.
+		return fmt.Sprintf("stopped (supervisor pid %d exited unexpectedly)", last.PID)
+	default:
+		return "stopped since " + last.Updated.Local().Format(time.RFC3339)
+	}
+}
+
+func formatUptime(d time.Duration) string {
+	if d < time.Minute {
+		return "less than a minute"
+	}
+	return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
+}
+
+func resourcesLabel(spec vm.Spec) string {
+	label := fmt.Sprintf("%d CPUs, %d MiB memory", spec.CPUs, spec.MemoryMiB)
+	if spec.Docker {
+		label += fmt.Sprintf(", %d GiB Docker disk", cmp.Or(spec.DiskSize, int64(vm.DefaultDiskSize))>>30)
+	}
+	return label
+}
+
+func sessionsLabel(sessions, attached int) string {
+	if attached == 0 {
+		return strconv.Itoa(sessions)
+	}
+	return fmt.Sprintf("%d (%d attached)", sessions, attached)
+}
+
+// configChangedSince reports whether the configuration file changed after
+// the VM spec was last written by up, restart or reload.
+func configChangedSince(stateDir string) bool {
+	configInfo, err := os.Stat(config.ConfigPath())
+	if err != nil {
+		return false
+	}
+	specInfo, err := os.Stat(vm.SpecFile(stateDir))
+	return err == nil && configInfo.ModTime().After(specInfo.ModTime())
+}
+
+// configLabel tells whether the running VM matches the configuration: the
+// settings that need a restart, or a reload after any other change of the
+// configuration file.
+func configLabel(ws *workspace.Resolved, running vm.Spec, changed bool) string {
+	if restart := statusRestartChanges(ws, running); len(restart) > 0 {
+		return fmt.Sprintf("`jailoc restart %s` needed for %s; this ends running sessions", ws.Name, joinList(restart))
+	}
+	if changed {
+		return fmt.Sprintf("changed since the VM started; `jailoc reload %s` applies it", ws.Name)
+	}
+	return "up to date"
+}
+
+// statusRestartChanges names the settings that differ between the running
+// VM and the workspace and need a restart. Unlike restartOnlyChanges it
+// reads nothing but the resolved workspace, so status changes nothing.
+func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
+	var out []string
+	var profile string
+	var ephemeral bool
+	if ws.AgentProfile != nil {
+		profile, _ = ws.AgentProfile.Name()
+		ephemeral = ws.AgentProfile.Ephemeral()
+	}
+	if running.Profile != profile || running.EphemeralProfile != ephemeral {
+		out = append(out, "profile")
+	}
+	if running.CPUs != uint32(math.Ceil(ws.CPU)) {
+		out = append(out, "cpu")
+	}
+	if mem, err := vmMemoryMiB(ws.Memory); err == nil && running.MemoryMiB != mem {
+		out = append(out, "memory")
+	}
+	if running.Docker != ws.EnableDocker {
+		out = append(out, "enable_docker")
+	}
+	if running.Guest != nil && running.Guest.NoPrivilegeEscalation != ws.ProtectGit {
+		out = append(out, "protect_git")
+	}
+	// Specs written before jailoc ran other agents than OpenCode name none.
+	if cmp.Or(running.Agent, agent.Default) != ws.Agent.Name {
+		out = append(out, "agent")
+	}
+	if current, err := guestbin.Path(filepath.Join(vmRootDir(), "guest")); err == nil && filepath.Clean(current) != filepath.Clean(running.GuestBinary) {
+		out = append(out, "the upgraded jailoc guest")
+	}
+	return out
+}
+
+// workspaceStatus reports whether the workspace VM runs and, for a running
+// VM, how many agent sessions it has and how many of them have a terminal
+// attached.
+func workspaceStatus(ctx context.Context, ws *workspace.Resolved) (running bool, sessions, attached int, err error) {
+	st, err := runningVM(vmStateDir(ws.Name))
+	if err != nil || st == nil {
+		return false, 0, 0, err
+	}
+	infos, err := vmSessions(ctx, ws)
+	if err != nil {
+		return true, 0, 0, err
+	}
+	for _, info := range infos {
+		if info.Attached {
+			attached++
+		}
+	}
+	return true, len(infos), attached, nil
 }
 
 // profileLabel describes where the agent of a workspace VM keeps its state.

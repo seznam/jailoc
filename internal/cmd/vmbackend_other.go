@@ -26,7 +26,11 @@ func stopSessionVM(context.Context, *workspace.Resolved, string) error { return 
 
 func downVM(*workspace.Resolved, bool) error { return errVMUnsupported }
 
-func statusVM(*workspace.Resolved) error { return errVMUnsupported }
+func statusVM(context.Context, *workspace.Resolved) error { return errVMUnsupported }
+
+func workspaceStatus(context.Context, *workspace.Resolved) (bool, int, int, error) {
+	return false, 0, 0, errVMUnsupported
+}
 
 func logsVM(context.Context, *workspace.Resolved, bool, io.Writer) error { return errVMUnsupported }
 

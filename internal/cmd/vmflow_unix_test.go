@@ -5,11 +5,15 @@ package cmd
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -90,5 +94,84 @@ func TestSecretsPayload(t *testing.T) {
 	}
 	if len(got.Files) != 1 || string(got.Files["netrc"]) != "file-value\n" {
 		t.Errorf("Files = %q, want only netrc with the command output", got.Files)
+	}
+}
+
+func TestStatusRestartChanges(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
+	if err != nil {
+		guestBinary = ""
+	}
+	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g", ProtectGit: true}
+	matching := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestBinary: guestBinary, Guest: &guest.Config{NoPrivilegeEscalation: true}}
+	if got := statusRestartChanges(ws, matching); len(got) != 0 {
+		t.Errorf("matching spec: got %v, want no changes", got)
+	}
+	if got := statusRestartChanges(ws, vm.Spec{GuestBinary: guestBinary, Guest: &guest.Config{NoPrivilegeEscalation: true}, CPUs: 2, MemoryMiB: 4096}); len(got) != 0 {
+		t.Errorf("spec without agent: got %v, want no changes (opencode is the default)", got)
+	}
+	changed := vm.Spec{Agent: "claude", CPUs: 4, MemoryMiB: 2048, Docker: true, Profile: "work", GuestBinary: guestBinary, Guest: &guest.Config{}}
+	want := []string{"profile", "cpu", "memory", "enable_docker", "protect_git", "agent"}
+	if got := statusRestartChanges(ws, changed); !slices.Equal(got, want) {
+		t.Errorf("changed spec: got %v, want %v", got, want)
+	}
+	if guestBinary != "" {
+		matching.GuestBinary = "/old/jailoc-guest"
+		if got := statusRestartChanges(ws, matching); !slices.Equal(got, []string{"the upgraded jailoc guest"}) {
+			t.Errorf("stale guest: got %v", got)
+		}
+	}
+}
+
+func TestConfigLabel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g"}
+	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
+	if err != nil {
+		guestBinary = ""
+	}
+	running := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestBinary: guestBinary}
+	if got := configLabel(ws, running, false); got != "up to date" {
+		t.Errorf("unchanged: got %q", got)
+	}
+	if got, want := configLabel(ws, running, true), "changed since the VM started; `jailoc reload ws` applies it"; got != want {
+		t.Errorf("changed: got %q, want %q", got, want)
+	}
+	running.CPUs = 1
+	if got, want := configLabel(ws, running, true), "`jailoc restart ws` needed for cpu; this ends running sessions"; got != want {
+		t.Errorf("restart: got %q, want %q", got, want)
+	}
+}
+
+func TestStatusLabels(t *testing.T) {
+	t.Parallel()
+	stopped := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"never started", stoppedLabel(nil), "stopped (never started)"},
+		{"killed", stoppedLabel(&vm.State{PID: 42, Ready: true}), "stopped (supervisor pid 42 exited unexpectedly)"},
+		{"stopped", stoppedLabel(&vm.State{Updated: stopped}), "stopped since " + stopped.Local().Format(time.RFC3339)},
+		{"uptime seconds", formatUptime(30 * time.Second), "less than a minute"},
+		{"uptime minutes", formatUptime(5*time.Minute + 20*time.Second), "5m"},
+		{"uptime hours", formatUptime(26*time.Hour + 3*time.Minute), "26h3m"},
+		{"resources", resourcesLabel(vm.Spec{CPUs: 2, MemoryMiB: 4096}), "2 CPUs, 4096 MiB memory"},
+		{"resources docker", resourcesLabel(vm.Spec{CPUs: 2, MemoryMiB: 4096, Docker: true}), "2 CPUs, 4096 MiB memory, 20 GiB Docker disk"},
+		{"sessions", sessionsLabel(2, 0), "2"},
+		{"sessions attached", sessionsLabel(2, 1), "2 (1 attached)"},
+		{"agent", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "claude", Package: "@anthropic-ai/claude-code", Version: "2.1.312"}, AgentInstall: true}), "claude (@anthropic-ai/claude-code@2.1.312)"},
+		{"agent args", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "omo", Package: "omo-ai"}, AgentInstall: true, AgentArgs: []string{"--model", "x"}}), "omo (omo-ai@latest), args: --model x"},
+		{"agent from image", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "opencode", Package: "@opencode/cli"}}), "opencode (installed by the image)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.got != tt.want {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
 	}
 }
