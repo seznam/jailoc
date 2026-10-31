@@ -1,5 +1,132 @@
 # Changelog
 
+## [2.0.0-rc](https://github.com/seznam/jailoc/compare/v1.19.0...v2.0.0-rc) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** enable_docker defaults to false. Set enable_docker = true in [defaults] or a workspace to keep Docker inside the VM.
+* **image:** the embedded base image no longer contains Docker or nftables. Workspace overlays that run the docker CLI during the build need enable_docker on; a [base] dockerfile without nft on PATH needs apt-get for the Docker layer.
+* **agent:** OpenCode is no longer part of the embedded base image; jailoc installs it in a separate layer. A `[base] dockerfile` needs npm on PATH, and an image used directly (`image`, or `defaults.image` without a workspace `dockerfile`) must contain the agent binary. The default mount of ~/.claude/transcripts is removed.
+* the Docker backend and remote mode are gone, copies is renamed to snapshots, and env secrets are no longer written to /run/secrets.
+
+### Features
+
+* **agent:** add OpenCode 2 harness and workspace indicator for every agent ([d2baf9e](https://github.com/seznam/jailoc/commit/d2baf9e09b0d2896c9503b639c229f3b9380868e))
+* **agent:** add per-agent mounts and state profiles ([5e7d2dc](https://github.com/seznam/jailoc/commit/5e7d2dcb3e1204805829158f610808399d66c9f9))
+* **agent:** derive custom agents and override agent versions ([896d7b7](https://github.com/seznam/jailoc/commit/896d7b7d1b72191eeb86cc4c02405bed8d14cfa2))
+* **agent:** run Claude Code, Copilot CLI and OmO besides OpenCode ([cba7c65](https://github.com/seznam/jailoc/commit/cba7c65b92508f51082efb04de7b1bdd2777d82a))
+* **cmd:** add jailoc list and show agent, resources, sessions and drift in status ([72a28cd](https://github.com/seznam/jailoc/commit/72a28cd072e83963d552b0eb96f8aa97b74ab17e))
+* **config:** make enable_docker opt-in ([7b56f4f](https://github.com/seznam/jailoc/commit/7b56f4f6d02513c1f5bc4b40aa2bedcbcd64ed3a))
+* **docker:** build images with BuildKit and cache apt/npm downloads ([c84294f](https://github.com/seznam/jailoc/commit/c84294f32ca4ef8fad3224de7f9dc2b1b59f2ec5))
+* **docker:** cache apt downloads in the Docker layer ([e173042](https://github.com/seznam/jailoc/commit/e173042ff13945e59121a1c18022853f20a64bac))
+* **docker:** remove superseded jailoc images after import ([2285165](https://github.com/seznam/jailoc/commit/22851656bec635c80659c492bfbfba6c80d27074))
+* **guest:** enable zram swap and periodic memory reclaim ([58ea081](https://github.com/seznam/jailoc/commit/58ea0818c821cde65f6454d93f5f114c4d24f9cb))
+* **guest:** make the agent the least preferred OOM victim in its session ([2f9eccd](https://github.com/seznam/jailoc/commit/2f9eccdcfbcc179f9c049de55af38b0a3ba71000))
+* **image:** install Docker only for workspaces with enable_docker ([67730e0](https://github.com/seznam/jailoc/commit/67730e023ecbcc41459f67b9b0d563491c9c844e))
+* make jailoc v2 VM-only ([c2377b8](https://github.com/seznam/jailoc/commit/c2377b8cfd62c1793daece04a774188c4145e365))
+* **netbroker:** add userspace network broker and supervision ([95e718b](https://github.com/seznam/jailoc/commit/95e718b417eb9120e89ea21eebca61cfdf841fb1))
+* **netbroker:** record TLS server names and HTTP requests of allowed connections ([d05f6e4](https://github.com/seznam/jailoc/commit/d05f6e4d59fecb26e5b2972650d10c42853feed0))
+* **netbroker:** route guest IPv6 egress through the broker policy ([c1cf406](https://github.com/seznam/jailoc/commit/c1cf4063a46a5485f456190462aac512e67da939))
+* **session:** make detach keys configurable, default to ctrl-b,d ([05a6cb4](https://github.com/seznam/jailoc/commit/05a6cb427fb7a5563092a0ae53eae6735806a0a8))
+* **session:** show that the agent is starting ([fd1d04f](https://github.com/seznam/jailoc/commit/fd1d04f000f283f5244871f415f8b34d7620921d))
+* **vm:** add experimental VM backend for workspaces ([f9dc9d8](https://github.com/seznam/jailoc/commit/f9dc9d869cd72e7a332a9646aebb0c6dfdb6bd6f))
+* **vm:** add jailoc migrate to move all workspaces to the VM backend ([2a67940](https://github.com/seznam/jailoc/commit/2a679406321d83116d27e07c135413a1ce6d9bd4))
+* **vm:** add read-only copies for files and directories ([f96e9d1](https://github.com/seznam/jailoc/commit/f96e9d1c62f6ef4b65ef89c55f15b56aa6d35ece))
+* **vm:** add traffic, strace, exec and shell commands ([314461b](https://github.com/seznam/jailoc/commit/314461bf761a93ae71c2fb66517f027020a2e71a))
+* **vm:** apply configuration changes to running VM workspaces ([5f1fcc8](https://github.com/seznam/jailoc/commit/5f1fcc882cc3df9a83ee722cc73cea756708dbcf))
+* **vm:** build workspace images with the host Docker daemon when available ([d14b475](https://github.com/seznam/jailoc/commit/d14b4750f893061be9fa4d54e2459d085e21f869))
+* **vm:** fall back to the builder VM when host Docker is older than Engine 25 ([6b082ec](https://github.com/seznam/jailoc/commit/6b082ec8ba8c270e53614c8be776bf0d3c436d1e))
+* **vm:** idmap the root filesystem and shares on Linux hosts ([58f9f3a](https://github.com/seznam/jailoc/commit/58f9f3ab0498aae8977ce862db5a1dba08fcc57a))
+* **vm:** let the agent use sudo inside the workspace VM ([b4332e5](https://github.com/seznam/jailoc/commit/b4332e50621a8ba74c784568f82e4d53c4af5aab))
+* **vm:** log the duration of each image and boot step ([585a069](https://github.com/seznam/jailoc/commit/585a069e6eae0722cacf4e16e78bfe7f9418025b))
+* **vm:** persist OpenCode state across workspace VM restarts ([a332c39](https://github.com/seznam/jailoc/commit/a332c3968fb7a52ba45c827cf6edae16b701ed67))
+* **vm:** pin the linux/amd64 VM runtime ([29b261e](https://github.com/seznam/jailoc/commit/29b261e106a3c7a0388bc25d2a994f60c3f86880))
+* **vm:** pin VM runtime v0.0.41-jailoc.6 with zram-capable firmware ([d6c0a13](https://github.com/seznam/jailoc/commit/d6c0a134f72adf3f97f8efa5262ac137cd212825))
+* **vm:** protect Git hooks and config with protect_git ([62e75d2](https://github.com/seznam/jailoc/commit/62e75d2685b2de080f9a5311bdf2469af0c20585))
+* **vm:** prune unused workspace images from the image cache ([a7a848b](https://github.com/seznam/jailoc/commit/a7a848b1e5954a3cd3f6aeb8a60714f1104c804c))
+* **vm:** run agents in detachable sessions ([b386f5f](https://github.com/seznam/jailoc/commit/b386f5f48a2e07ec0293a7ebe8d1935507e0a715))
+* **vm:** run Docker and publish ports in workspace VMs ([a7944b2](https://github.com/seznam/jailoc/commit/a7944b2ae0a0f8e9dd267faee16e9350b7b845e6))
+* **vm:** stream docker save and skip cached layers on import ([e1541b1](https://github.com/seznam/jailoc/commit/e1541b121c85fc57e2c81f65c96bae9eb2aa0db4))
+* **vm:** support SSH agent, filtered DNS, CA bundle and memory limits ([a2f52e9](https://github.com/seznam/jailoc/commit/a2f52e9393e77b62d5ba170a42ad529f4b886094))
+
+
+### Bug Fixes
+
+* **cmd:** allow workspaces without shared paths ([9aed390](https://github.com/seznam/jailoc/commit/9aed390c3e2b977106c7aa2243d8e47cb569aba4))
+* **cmd:** escape terminal controls in inspection output ([7041197](https://github.com/seznam/jailoc/commit/704119745bac15f8fb087ffed02b133f98835b2c))
+* **cmd:** follow a replaced log file in logs -f ([0aec3d5](https://github.com/seznam/jailoc/commit/0aec3d58af35a9aadcc35e00304dd9ac18724dbc))
+* **cmd:** protect git directories that gitfiles and submodules point at ([1f485d5](https://github.com/seznam/jailoc/commit/1f485d54f12f9771d7630492e5dd3be592129c02))
+* **cmd:** protect git metadata through worktree pointers and symlink roots ([4ae3b67](https://github.com/seznam/jailoc/commit/4ae3b677949504ce87e0e0d83417d620929ff805))
+* **cmd:** resolve symlinked snapshot source directories ([dfbed0f](https://github.com/seznam/jailoc/commit/dfbed0ff21ff93bb2dc8ee1abe7b38f50ab3b396))
+* **config:** keep an explicitly empty agents args list when rewriting config ([af93004](https://github.com/seznam/jailoc/commit/af9300491cf1901ecbd825d3839a06b6e978b9a8))
+* **deps:** bump brace-expansion from 2.1.4 to 2.1.7 ([#249](https://github.com/seznam/jailoc/issues/249)) ([526d3a6](https://github.com/seznam/jailoc/commit/526d3a62415610d206e7345a4ec2c1d95969d9b9))
+* **deps:** bump certifi ([41ad53b](https://github.com/seznam/jailoc/commit/41ad53bf96b7832e0744086582ec46031d3a9a67))
+* **deps:** bump goreleaser/goreleaser-action ([#251](https://github.com/seznam/jailoc/issues/251)) ([d8df5e8](https://github.com/seznam/jailoc/commit/d8df5e89c6ce64fe8376e6c0a02e6e5780845052))
+* **deps:** bump the all group across 1 directory with 4 updates ([#250](https://github.com/seznam/jailoc/issues/250)) ([feb956a](https://github.com/seznam/jailoc/commit/feb956aeb2b63801dfbd68ab61fc589f716eb231))
+* **deps:** bump the uv group across 1 directory with 2 updates ([#248](https://github.com/seznam/jailoc/issues/248)) ([5f81a1d](https://github.com/seznam/jailoc/commit/5f81a1dccc414d62bedc2e0a4116bbe39eabdaae))
+* **deps:** track upstream go-microvm main with the remaining fork patches ([969488f](https://github.com/seznam/jailoc/commit/969488f98e5961370775ddb400b5a8960516fe7f))
+* **docker:** attach a BuildKit session to image builds ([0b21076](https://github.com/seznam/jailoc/commit/0b210765a9e9b81a8e4897502808cf7fe8baa5a0))
+* **docker:** prune images only when no other jailoc up is running ([d8c7c1f](https://github.com/seznam/jailoc/commit/d8c7c1f1b83caa6d56879b91e9bb74567f3ec64d))
+* **docker:** pull the host platform when the cached image is for another ([cad9ee7](https://github.com/seznam/jailoc/commit/cad9ee7638de88281ec2378732df48aaf913e5fd))
+* **docker:** skip the BuildKit default ARG check in layer Dockerfiles ([be823b7](https://github.com/seznam/jailoc/commit/be823b7a5992136c6395ecb3b76829b87bb4f0b1))
+* **guestbin:** build jailoc-guest without VCS stamp to avoid needless restarts ([05f1520](https://github.com/seznam/jailoc/commit/05f1520f86286305098063eafaa8d6bae32e90ec))
+* **guest:** keep the periodic reclaim to file cache ([64f97f9](https://github.com/seznam/jailoc/commit/64f97f9c82d08d0f7fe3865a902de0e791b6e932))
+* **guest:** mount shares inside persistent home directories on top ([8bfdd6e](https://github.com/seznam/jailoc/commit/8bfdd6e1674dc36a127d5959a3e1f82da753568c))
+* **guest:** share one session between concurrent opens in a directory ([300ea38](https://github.com/seznam/jailoc/commit/300ea38f9e99d5da962672a5c9072aeae940291c))
+* **netbroker:** close open service connections when a service is removed ([960d52a](https://github.com/seznam/jailoc/commit/960d52a11bfc2ceb0cfd3c4bee8f595dab5bc646))
+* **netbroker:** close removed runtime listeners before reload returns ([4b158bd](https://github.com/seznam/jailoc/commit/4b158bd68160d05f42a96cb47125d91e54c781ca))
+* **nix:** bump nixpkgs for Go 1.26.8 and update vendorHash ([94e0c40](https://github.com/seznam/jailoc/commit/94e0c4090343679cd336b97e9b2e22d3ac462568))
+* **nix:** embed jailoc-guest in the Nix package ([600ded1](https://github.com/seznam/jailoc/commit/600ded1040b135cdea349ed4ba948de59c63d1ca))
+* **nix:** Update `vendorHash` on Dependabot PRs ([#245](https://github.com/seznam/jailoc/issues/245)) ([5e4e39e](https://github.com/seznam/jailoc/commit/5e4e39e8bee5bbc62234b6303f9aa8672209b956))
+* **session:** decode kitty key events when matching detach keys ([5239a3d](https://github.com/seznam/jailoc/commit/5239a3d59f8f12b0ccf0e34269e3bb762161d955))
+* **session:** match detach keys in extended keyboard modes ([99b2207](https://github.com/seznam/jailoc/commit/99b22075883d88b1cc6d3fd76f226483a554f9a6))
+* **vm:** confine the VM runner with Landlock on Linux ([525cdf8](https://github.com/seznam/jailoc/commit/525cdf82ae3cc9c55d9f14fe46b8298bf7e62e02))
+* **vm:** do not require world-readable secret files ([56afb87](https://github.com/seznam/jailoc/commit/56afb8712ef2cdf315e7e91ffbad59eb5957474e))
+* **vm:** honor the image PATH in workspace VMs ([c42994d](https://github.com/seznam/jailoc/commit/c42994d1281c873be039123e853b9adf58a8340c))
+* **vm:** include [defaults] allowed hosts and networks in the broker policy ([f69525a](https://github.com/seznam/jailoc/commit/f69525a4df66cc0200518f3339d02050d95373ab))
+* **vm:** keep session exit status from the guest zombie reaper ([8323897](https://github.com/seznam/jailoc/commit/8323897116b90274ef75bdd25c6de1b74a837d48))
+* **vm:** keep setuid bits in layer-cached workspace images ([77e08de](https://github.com/seznam/jailoc/commit/77e08de481c6bd4af8cbb56677bbedaac8069b14))
+* **vm:** keep setuid bits in workspace images on Linux hosts ([31eb19e](https://github.com/seznam/jailoc/commit/31eb19e7185c7f127faff5875ee029f40ab4799a))
+* **vm:** patch libkrun for 19 device interrupts on Linux x86_64 ([fdad514](https://github.com/seznam/jailoc/commit/fdad514e83f906b98eb6747c289df8d56d2ff62b))
+* **vm:** pin the VM runtime with patched Linux libkrun ([e7ee01f](https://github.com/seznam/jailoc/commit/e7ee01f2c7507450ca4e6ed486810ee14ee8ede9))
+* **vm:** record the session holder PID before accepting clients ([08e6c07](https://github.com/seznam/jailoc/commit/08e6c074032e9ec48ddadad3ac60c284ed8b6583))
+* **vm:** repin go-microvm to discard old-format layers before import ([263e613](https://github.com/seznam/jailoc/commit/263e613823af40dda0845d34d4a953e684d28272))
+* **vm:** report session start failures immediately ([8deab31](https://github.com/seznam/jailoc/commit/8deab31d99fe5629a76d4ffc9275729056b4226c))
+* **vm:** report unpack errors, honour cancellation and skip cached blobs unread ([36eb8c9](https://github.com/seznam/jailoc/commit/36eb8c9a48a4985f863c83b60baec1b88b99915c))
+* **vm:** reset terminal modes after a VM session ends ([64e6de6](https://github.com/seznam/jailoc/commit/64e6de6243b8d3b92928d8e573708db38b15552f))
+* **vm:** route libkrun device interrupts above 15 on Linux x86_64 ([41ae170](https://github.com/seznam/jailoc/commit/41ae1701ae16d350eb1d8aff7b62539e0c2b3f7d))
+* **vm:** run the agent with the host user's IDs on Linux ([6fbfa8a](https://github.com/seznam/jailoc/commit/6fbfa8ac8aa90cc1e59f6981e7673023060ce017))
+* **vm:** stop the builder VM when its data disk cannot be mounted ([41dfd21](https://github.com/seznam/jailoc/commit/41dfd21f17c7701ccaed2cc0b4b3176a4832df63))
+* **vm:** trust the CA bundle before the builder VM downloads packages ([fc58be6](https://github.com/seznam/jailoc/commit/fc58be6666f8e393e49bb3ab74bcea3bb54477d3))
+* **vm:** use one internal share per workspace VM ([419c032](https://github.com/seznam/jailoc/commit/419c032d9c6b1827fbd8c0e6aad6080a91b89250))
+* **vm:** use simplified virtio-fs ownership only on macOS ([70b9eaa](https://github.com/seznam/jailoc/commit/70b9eaa2d58204f7b852e723a2129ea571fdca18))
+* **vm:** wait for FUSE INIT before idmapping a share ([b5db579](https://github.com/seznam/jailoc/commit/b5db57907ba364439c7f51cad7c1664c3f76c11d))
+
+
+### Performance Improvements
+
+* **netbroker:** use a 64 KiB MTU and buffered NIC reads ([ff68918](https://github.com/seznam/jailoc/commit/ff689182d0676835716a210014ef0fb1bd3582be))
+* **vm:** prune composed-layer snapshots with unused images ([21d5b4d](https://github.com/seznam/jailoc/commit/21d5b4df61dd288bcc8bef8834ddaeaa3ecf7540))
+
+
+### Documentation
+
+* build from source instead of go install ([7308c20](https://github.com/seznam/jailoc/commit/7308c206325ca194b7e380617e8f53ed91d0ee7d))
+* describe detach keys in extended keyboard modes ([c0189ef](https://github.com/seznam/jailoc/commit/c0189efb874635c89a8ac3267b3f3d70a9bad9a5))
+* describe jailoc v2 as VM-only ([eb08f4d](https://github.com/seznam/jailoc/commit/eb08f4ddfa7df7cfb171bb2228fbea77c8d2633d))
+* describe workspace boundary fixes ([9f6d5b9](https://github.com/seznam/jailoc/commit/9f6d5b9acf03ad4a64d48f63c60a3200d2749053))
+* **dev:** note enable_docker for the Docker integration tests ([0a3d8c9](https://github.com/seznam/jailoc/commit/0a3d8c9a6b037d629ba8f27aa856ae664ca66271))
+* tighten Diátaxis structure, drop v1 mentions, warn about shared profiles ([3521a27](https://github.com/seznam/jailoc/commit/3521a279554953dc6491f9267544d725018d7484))
+* **vm:** list VM backend restrictions and image cache pruning ([19f48ff](https://github.com/seznam/jailoc/commit/19f48ffcc6612a36de34b4ef60b4e667537af6a5))
+
+
+### Tests
+
+* **vm:** enable Docker in the integration workspace ([df93ebd](https://github.com/seznam/jailoc/commit/df93ebd3d6f3dde21ec231eb2dc6767017a0259b))
+* **vmintegration:** check a real OOM kill spares the agent ([200a01f](https://github.com/seznam/jailoc/commit/200a01f4e1019f015db586393ae81a45d0ec78b5))
+* **vm:** print the runner log when the VM integration test fails ([db1e82f](https://github.com/seznam/jailoc/commit/db1e82f4fc3fcbb4e25495a851380f232dd4705f))
+
 ## [1.19.0](https://github.com/seznam/jailoc/compare/v1.18.0...v1.19.0) (2026-09-23)
 
 
