@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/stacklok/go-microvm/net/topology"
@@ -69,10 +70,27 @@ func serveRelay(ctx context.Context, logger *slog.Logger, l net.Listener, upstre
 				_ = u.Close()
 			})
 			defer stop()
-			done := make(chan struct{}, 2)
-			go func() { _, _ = io.Copy(u, c); done <- struct{}{} }()
-			go func() { _, _ = io.Copy(c, u); done <- struct{}{} }()
-			<-done
+			spliceConns(c, u)
 		}()
 	}
+}
+
+// spliceConns copies both directions until each ends. When one side stops
+// sending, its peer's write side is closed so EOF-delimited protocols still
+// get their response.
+func spliceConns(a, b net.Conn) {
+	var wg sync.WaitGroup
+	cp := func(dst, src net.Conn) {
+		defer wg.Done()
+		_, _ = io.Copy(dst, src)
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		} else {
+			_ = dst.Close()
+		}
+	}
+	wg.Add(2)
+	go cp(a, b)
+	go cp(b, a)
+	wg.Wait()
 }
