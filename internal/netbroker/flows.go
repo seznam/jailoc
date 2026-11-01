@@ -198,11 +198,11 @@ func (b *Broker) startServiceTarget(ctx context.Context, port uint16, route func
 				h, err := d.DialContext(dctx, r.target.network, r.target.addr)
 				cancel()
 				if err != nil {
-					b.record(map[string]any{"event": "service-error", "guest_port": s.GuestPort, "error": err.Error()})
+					b.record(map[string]any{"event": "service-error", "guest_port": s.GuestPort, "network": r.target.network, "target": r.target.addr, "error": err.Error()})
 					_ = c.Close()
 					return
 				}
-				b.record(map[string]any{"event": "service", "guest_port": s.GuestPort})
+				b.record(map[string]any{"event": "service", "guest_port": s.GuestPort, "network": r.target.network, "target": r.target.addr})
 				stop := context.AfterFunc(r.ctx, func() {
 					_ = c.Close()
 					_ = h.Close()
