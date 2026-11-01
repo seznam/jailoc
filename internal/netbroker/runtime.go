@@ -104,8 +104,21 @@ type runtimeForward struct {
 }
 
 type runtimeService struct {
-	stop   func()
-	target atomic.Pointer[serviceTarget]
+	stop        func()
+	ctx         context.Context
+	route       atomic.Pointer[serviceRoute]
+	cancelRoute context.CancelFunc
+}
+
+// retarget sends new connections to t and closes the open ones to the
+// previous target, so a reload also revokes access to a replaced target.
+func (r *runtimeService) retarget(t serviceTarget) {
+	rctx, cancel := context.WithCancel(r.ctx)
+	r.route.Store(&serviceRoute{target: t, ctx: rctx})
+	if r.cancelRoute != nil {
+		r.cancelRoute()
+	}
+	r.cancelRoute = cancel
 }
 
 // runtimeState tracks the listeners started from a Runtime.
@@ -116,8 +129,9 @@ type runtimeState struct {
 }
 
 // ApplyRuntime reconciles the running forwards and services with rt:
-// removed ones stop, new ones start, and a changed service target applies to
-// the next connection. It returns one error per entry that failed to start.
+// removed ones stop, new ones start, and a service whose target changed closes
+// its open connections and dials the new target from the next connection. It
+// returns one error per entry that failed to start.
 func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 	s := &b.runtime
 	s.mu.Lock()
@@ -164,13 +178,15 @@ func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 	}
 	for port, target := range wantS {
 		if r, ok := s.services[port]; ok {
-			r.target.Store(&target)
+			if r.route.Load().target != target {
+				r.retarget(target)
+			}
 			continue
 		}
-		r := &runtimeService{}
-		r.target.Store(&target)
 		sctx, cancel := context.WithCancel(ctx)
-		closeL, err := b.startServiceTarget(sctx, port, func() serviceTarget { return *r.target.Load() })
+		r := &runtimeService{ctx: sctx}
+		r.retarget(target)
+		closeL, err := b.startServiceTarget(sctx, port, func() serviceRoute { return *r.route.Load() })
 		if err != nil {
 			cancel()
 			errs = append(errs, fmt.Errorf("service %d: %w", port, err))
