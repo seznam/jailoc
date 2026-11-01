@@ -52,7 +52,7 @@ The guest has IPv6 (`fd00:127::2/64`). Global IPv6 addresses are reachable like 
 - a name in `allowed_hosts` that resolves to a ULA address opens that single address.
 
 !!! warning
-    Some ranges stay blocked whatever you allow: loopback, link-local, multicast, documentation and other reserved IPv6 ranges, Teredo, cloud metadata endpoints, host addresses and the broker gateway. IPv4 embedded in IPv6 (IPv4-mapped, NAT64 `64:ff9b::/96`, 6to4) follows the IPv4 rules for the embedded address.
+    Some ranges stay blocked whatever you allow: loopback, link-local, multicast, documentation and other reserved IPv6 ranges, Teredo, cloud metadata endpoints, host addresses and the broker gateway. To reach a service on the host, use [`host_ports`](workspace-configuration.md#reach-host-services). IPv4 embedded in IPv6 (IPv4-mapped, NAT64 `64:ff9b::/96`, 6to4) follows the IPv4 rules for the embedded address.
 
 ## Apply rules to all workspaces
 

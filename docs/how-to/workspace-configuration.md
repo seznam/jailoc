@@ -133,6 +133,35 @@ ports = [3000, "8080:80"]
 
 `3000` makes guest port 3000 available on host `127.0.0.1:3000`. `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. The service must listen on `0.0.0.0` (or the guest address `192.168.127.2`), not on `127.0.0.1`. Containers started with `docker run -p` inside the guest are reachable the same way.
 
+## Reach host services
+
+The network broker blocks the guest from the host. To let the agent use a service that listens on the host, such as a local MCP server or a browser started with `--remote-debugging-port`, list it in `host_ports`:
+
+```toml
+[workspaces.myproject]
+host_ports = [9222, "8931:3845", "7100:~/.cache/mcp.sock"]
+```
+
+`9222` relays guest port 9222 to host `127.0.0.1:9222`. `"8931:3845"` relays guest port 8931 to host `127.0.0.1:3845`. `"7100:~/.cache/mcp.sock"` relays guest port 7100 to a host Unix socket. In the guest, connect to any of:
+
+- `localhost:9222` (unless a guest process already listens on that port)
+- `host.jailoc.internal:9222` or `host.docker.internal:9222`
+- `192.168.127.1:9222`
+
+For example, attach Playwright MCP to a host Chrome:
+
+```bash
+# on the host, with a dedicated profile
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.cache/jailoc-chrome"
+# in the guest
+npx @playwright/mcp --cdp-endpoint http://localhost:9222
+```
+
+The host service must listen on `127.0.0.1` (or the socket path). Remove an entry and run `jailoc reload` to cut access; open connections are closed.
+
+!!! warning
+    Each entry gives the agent the same access to that service as a local process on the host. A browser debugging port controls the browser with all its logins, and a container runtime socket is root on the host. jailoc warns about both.
+
 ## Protect Git hooks and configuration
 
 Workspace paths are shared read-write, including `.git`. Git on the host runs hooks and commands named in `.git/config` (such as `core.fsmonitor`), so an agent that writes there can run code on your host. Prevent it with:
@@ -184,4 +213,4 @@ After editing the config, apply it without restarting:
 jailoc reload myproject
 ```
 
-Network rules, DNS filtering, `ports`, `ssh_auth_sock`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets apply live. Running sessions keep their old environment. Other changes, such as `paths`, `mounts`, `cpu`, `memory`, `enable_docker`, `protect_git` and the image, need a new VM. `jailoc reload` lists them; apply them with `jailoc restart`, which ends running sessions.
+Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets apply live. Running sessions keep their old environment. Other changes, such as `paths`, `mounts`, `cpu`, `memory`, `enable_docker`, `protect_git` and the image, need a new VM. `jailoc reload` lists them; apply them with `jailoc restart`, which ends running sessions.

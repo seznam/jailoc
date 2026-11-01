@@ -36,40 +36,43 @@ func startAgentRelay(logger *slog.Logger, acct account) (func(), error) {
 	}
 	upstream := net.JoinHostPort(topology.GatewayIP, strconv.Itoa(SSHAgentPort))
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		for {
-			c, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer func() { _ = c.Close() }()
-				var d net.Dialer
-				dctx, dcancel := context.WithTimeout(ctx, 10*time.Second)
-				u, err := d.DialContext(dctx, "tcp", upstream)
-				dcancel()
-				if err != nil {
-					logger.Warn("ssh agent: connect to host", "error", err)
-					return
-				}
-				defer func() { _ = u.Close() }()
-				// Stopping the relay closes open connections too, so that
-				// disabling forwarding ends signing at once.
-				stop := context.AfterFunc(ctx, func() {
-					_ = c.Close()
-					_ = u.Close()
-				})
-				defer stop()
-				done := make(chan struct{}, 2)
-				go func() { _, _ = io.Copy(u, c); done <- struct{}{} }()
-				go func() { _, _ = io.Copy(c, u); done <- struct{}{} }()
-				<-done
-			}()
-		}
-	}()
+	go serveRelay(ctx, logger, l, upstream, "ssh agent")
 	return func() {
 		cancel()
 		_ = l.Close()
 		_ = os.Remove(SSHAgentSocket)
 	}, nil
+}
+
+// serveRelay relays every connection accepted on l to upstream until l is
+// closed. Cancelling ctx closes the open connections too, so that disabling
+// a relay ends its use at once.
+func serveRelay(ctx context.Context, logger *slog.Logger, l net.Listener, upstream, name string) {
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer func() { _ = c.Close() }()
+			var d net.Dialer
+			dctx, dcancel := context.WithTimeout(ctx, 10*time.Second)
+			u, err := d.DialContext(dctx, "tcp", upstream)
+			dcancel()
+			if err != nil {
+				logger.Warn(name+": connect to host", "error", err)
+				return
+			}
+			defer func() { _ = u.Close() }()
+			stop := context.AfterFunc(ctx, func() {
+				_ = c.Close()
+				_ = u.Close()
+			})
+			defer stop()
+			done := make(chan struct{}, 2)
+			go func() { _, _ = io.Copy(u, c); done <- struct{}{} }()
+			go func() { _, _ = io.Copy(c, u); done <- struct{}{} }()
+			<-done
+		}()
+	}
 }

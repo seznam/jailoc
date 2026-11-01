@@ -120,11 +120,22 @@ type Spec struct {
 	Docker bool `json:"docker,omitempty"`
 	// SSHAgent is the host SSH agent socket relayed into a workspace VM.
 	SSHAgent string `json:"ssh_agent,omitempty"`
+	// HostServices are host loopback ports and unix sockets the broker
+	// relays to a workspace VM's gateway (host_ports).
+	HostServices []HostService `json:"host_services,omitempty"`
 	// CABundle is a host PEM file the builder's Docker daemon trusts in
 	// addition to the image's CA certificates.
 	CABundle string `json:"ca_bundle,omitempty"`
 	// Log receives lifecycle messages and the broker's output.
 	Log io.Writer `json:"-"`
+}
+
+// HostService relays guest connections to the gateway's GuestPort to the
+// host loopback address TCP or the host unix socket Path.
+type HostService struct {
+	GuestPort uint16 `json:"guest_port"`
+	TCP       string `json:"tcp,omitempty"`
+	Path      string `json:"path,omitempty"`
 }
 
 // SpecFile is where jailoc stores the spec of the workspace's VM.
@@ -610,8 +621,8 @@ func TrafficLog(stateDir string) string { return filepath.Join(stateDir, "broker
 // PolicyFile is the network policy the broker reloads on SIGHUP.
 func PolicyFile(stateDir string) string { return filepath.Join(stateDir, "policy.json") }
 
-// BrokerRuntimeFile lists the published ports and the SSH agent service the
-// broker reapplies on SIGHUP.
+// BrokerRuntimeFile lists the published ports and the host services (SSH
+// agent, host_ports) the broker reapplies on SIGHUP.
 func BrokerRuntimeFile(stateDir string) string { return filepath.Join(stateDir, "runtime.json") }
 
 // WriteBrokerRuntime writes the broker runtime file of spec.
@@ -622,7 +633,8 @@ func WriteBrokerRuntime(spec Spec) error {
 	}
 	type service struct {
 		GuestPort uint16 `json:"guest_port"`
-		Path      string `json:"path"`
+		Path      string `json:"path,omitempty"`
+		TCP       string `json:"tcp,omitempty"`
 	}
 	rt := struct {
 		Forwards []forward `json:"forwards"`
@@ -633,6 +645,11 @@ func WriteBrokerRuntime(spec Spec) error {
 	}
 	if spec.Kind == KindWorkspace && spec.SSHAgent != "" {
 		rt.Services = append(rt.Services, service{GuestPort: guest.SSHAgentPort, Path: spec.SSHAgent})
+	}
+	if spec.Kind == KindWorkspace {
+		for _, h := range spec.HostServices {
+			rt.Services = append(rt.Services, service{GuestPort: h.GuestPort, Path: h.Path, TCP: h.TCP})
+		}
 	}
 	data, err := json.Marshal(rt)
 	if err != nil {

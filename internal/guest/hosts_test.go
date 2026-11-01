@@ -29,7 +29,7 @@ func TestAddHostsEntry(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := addHostsEntry(path, "ws"); err != nil {
+			if err := addHostsEntry(path, "127.0.1.1", "ws"); err != nil {
 				t.Fatalf("addHostsEntry: %v", err)
 			}
 			got, err := os.ReadFile(path) //nolint:gosec // G304: test file

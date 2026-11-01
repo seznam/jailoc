@@ -90,8 +90,8 @@ func TestParsePolicyRejects(t *testing.T) {
 
 func TestParseRuntime(t *testing.T) {
 	t.Parallel()
-	ok := `{"forwards":[{"host":"127.0.0.1:18080","guest_port":8080}],"services":[{"guest_port":7022,"path":"/tmp/agent.sock"}]}`
-	if rt, err := ParseRuntime([]byte(ok), "ok"); err != nil || len(rt.Forwards) != 1 || len(rt.Services) != 1 {
+	ok := `{"forwards":[{"host":"127.0.0.1:18080","guest_port":8080}],"services":[{"guest_port":7022,"path":"/tmp/agent.sock"},{"guest_port":9222,"tcp":"127.0.0.1:9222"}]}`
+	if rt, err := ParseRuntime([]byte(ok), "ok"); err != nil || len(rt.Forwards) != 1 || len(rt.Services) != 2 {
 		t.Fatalf("ParseRuntime(ok) = %+v, %v", rt, err)
 	}
 	for name, in := range map[string]string{
@@ -101,6 +101,10 @@ func TestParseRuntime(t *testing.T) {
 		"duplicate host":    `{"forwards":[{"host":"127.0.0.1:80","guest_port":80},{"host":"127.0.0.1:80","guest_port":81}]}`,
 		"dns service":       `{"services":[{"guest_port":53,"path":"/tmp/x"}]}`,
 		"relative path":     `{"services":[{"guest_port":7022,"path":"agent.sock"}]}`,
+		"public tcp":        `{"services":[{"guest_port":9222,"tcp":"10.0.0.1:9222"}]}`,
+		"zero tcp port":     `{"services":[{"guest_port":9222,"tcp":"127.0.0.1:0"}]}`,
+		"path and tcp":      `{"services":[{"guest_port":9222,"path":"/a","tcp":"127.0.0.1:9222"}]}`,
+		"no target":         `{"services":[{"guest_port":9222}]}`,
 		"duplicate service": `{"services":[{"guest_port":7022,"path":"/a"},{"guest_port":7022,"path":"/b"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {

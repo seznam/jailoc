@@ -38,7 +38,7 @@ func Main(args []string) error {
 	var forwards, unixForwards, services, dnsFallback multi
 	fs.Var(&forwards, "forward", "publish a guest TCP port: 127.0.0.1:HOSTPORT=GUESTPORT (repeatable, loopback only)")
 	fs.Var(&unixForwards, "forward-unix", "publish a guest TCP port on a host unix socket: PATH=GUESTPORT (repeatable, mode 0600)")
-	fs.Var(&services, "service", "relay guest TCP connections to the gateway port to a host unix socket: GUESTPORT=PATH (repeatable)")
+	fs.Var(&services, "service", "relay guest TCP connections to the gateway port to a host unix socket or loopback TCP address: GUESTPORT=PATH or GUESTPORT=tcp:ADDR:PORT (repeatable)")
 	fs.Var(&dnsFallback, "dns-upstream", "DNS upstream when the policy names none (repeatable, default: host /etc/resolv.conf)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -223,13 +223,20 @@ func parseUnixForward(s string) (Forward, error) {
 	return Forward{UnixPath: path, GuestPort: uint16(gp)}, nil
 }
 
+// parseService parses GUESTPORT=PATH or GUESTPORT=tcp:LOOPBACKADDR:PORT.
 func parseService(s string) (Service, error) {
-	port, path, ok := strings.Cut(s, "=")
+	port, target, ok := strings.Cut(s, "=")
 	n, err := strconv.ParseUint(port, 10, 16)
-	if !ok || err != nil || n == 0 || path == "" || port == "53" {
-		return Service{}, fmt.Errorf("service %q: want GUESTPORT=PATH with a port other than 53", s)
+	if !ok || err != nil || n == 0 || target == "" || port == "53" {
+		return Service{}, fmt.Errorf("service %q: want GUESTPORT=PATH or GUESTPORT=tcp:ADDR:PORT with a port other than 53", s)
 	}
-	return Service{GuestPort: uint16(n), UnixPath: path}, nil
+	if addr, isTCP := strings.CutPrefix(target, "tcp:"); isTCP {
+		if err := validateServiceTarget("", addr); err != nil {
+			return Service{}, fmt.Errorf("service %q: %w", s, err)
+		}
+		return Service{GuestPort: uint16(n), TCP: netip.MustParseAddrPort(addr)}, nil
+	}
+	return Service{GuestPort: uint16(n), UnixPath: target}, nil
 }
 
 func parseUpstream(s string) (netip.AddrPort, error) {

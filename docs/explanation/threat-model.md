@@ -58,7 +58,7 @@ Public internet egress stays open, since the agent needs it to work. Data can st
 
 ### Limiting private data access
 
-The agent sees only the directories shared through `paths` and `mounts`, the files staged through `snapshots`, and the secrets configured for the workspace. Host credentials, SSH keys and unrelated projects aren't in the VM. The SSH agent, when forwarded, signs on the host and never hands keys to the guest, but anything in the guest can ask it to sign while it is forwarded.
+The agent sees only the directories shared through `paths` and `mounts`, the files staged through `snapshots`, and the secrets configured for the workspace. Host credentials, SSH keys and unrelated projects aren't in the VM. The SSH agent, when forwarded, signs on the host and never hands keys to the guest, but anything in the guest can ask it to sign while it is forwarded. Each `host_ports` entry opens one host service to the guest outside the network policy; the agent can do with it whatever a local host process can, which for a browser debugging port or a container runtime socket means controlling the browser or the host.
 
 Shared directories are live: anything the agent writes there lands on the host. Snapshots are read-only and never write back. Secrets live in guest memory under `/run/secrets` and in session environments, so anything running as `agent` can read them, and the agent can use `sudo` unless `protect_git` is set; treat every configured secret as visible to the agent. See [Secrets](secrets.md).
 
