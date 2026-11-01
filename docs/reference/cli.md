@@ -195,7 +195,7 @@ jailoc logs [workspace] [flags]
 
 ### `jailoc traffic`
 
-Print the network activity of a workspace VM from the network broker's log: allowed and denied connections with the DNS name they were looked up by, the TLS server name and ALPN or the HTTP method, host and path (without query string) of allowed TCP connections, DNS answers, names blocked by `filtered_dns`, failed dials and connections to published ports. The log persists after the VM stops.
+Print the network activity of a workspace VM from the network broker's log: allowed and denied connections with the DNS name they were looked up by, the TLS server name and ALPN or the HTTP method, host and path (without query string) of allowed TCP connections, DNS answers, names blocked by `filtered_dns`, failed dials, connections to published ports and connections relayed to `host_ports` with their host target. The log persists after the VM stops.
 
 ```
 jailoc traffic [workspace] [flags]
@@ -206,7 +206,7 @@ jailoc traffic [workspace] [flags]
 | `--follow` | `-f` | Keep printing new events until interrupted. |
 | `--lines N` | `-n` | Number of past events to print. Default `100`; `0` prints none, `-1` all. |
 | `--json` | | Print the shown events as their JSON log lines, unchanged. |
-| `--all` | | Also show DHCP, NIC, gateway service and jailoc's own SSH connections. |
+| `--all` | | Also show DHCP, NIC, SSH agent forwarding and jailoc's own SSH connections. |
 
 Without `--json`, control characters in logged values are escaped. TLS connections are identified from the unencrypted ClientHello only; their content is not decrypted.
 
