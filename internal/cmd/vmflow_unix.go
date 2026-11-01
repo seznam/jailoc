@@ -445,24 +445,29 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	}
 	agent := vmSSHAgent(ws)
 	g.SSHAgent = agent != ""
+	hostServices := vmHostServices(ws)
+	for _, s := range hostServices {
+		g.HostPorts = append(g.HostPorts, s.GuestPort)
+	}
 	spec := vm.Spec{
-		Kind:        vm.KindWorkspace,
-		Workspace:   ws.Name,
-		StateDir:    vmStateDir(ws.Name),
-		Image:       ref,
-		CPUs:        uint32(math.Ceil(ws.CPU)),
-		MemoryMiB:   memMiB,
-		Shares:      shares,
-		Policy:      policy,
-		RunnerPath:  rt.runner,
-		LibDir:      rt.libDir,
-		ImageCache:  filepath.Join(vmRootDir(), "images"),
-		Broker:      []string{exe, "netbroker"},
-		GuestBinary: rt.guest,
-		Agent:       ws.Agent.Name,
-		Guest:       g,
-		Forwards:    vmForwards(ws.Ports),
-		SSHAgent:    agent,
+		Kind:         vm.KindWorkspace,
+		Workspace:    ws.Name,
+		StateDir:     vmStateDir(ws.Name),
+		Image:        ref,
+		CPUs:         uint32(math.Ceil(ws.CPU)),
+		MemoryMiB:    memMiB,
+		Shares:       shares,
+		Policy:       policy,
+		RunnerPath:   rt.runner,
+		LibDir:       rt.libDir,
+		ImageCache:   filepath.Join(vmRootDir(), "images"),
+		Broker:       []string{exe, "netbroker"},
+		GuestBinary:  rt.guest,
+		Agent:        ws.Agent.Name,
+		Guest:        g,
+		Forwards:     vmForwards(ws.Ports),
+		SSHAgent:     agent,
+		HostServices: hostServices,
 	}
 	if ws.AgentProfile != nil {
 		spec.Profile, _ = ws.AgentProfile.Name()
@@ -483,6 +488,30 @@ func vmSSHAgent(ws *workspace.Resolved) string {
 		return ""
 	}
 	return sock
+}
+
+// vmHostServices returns the host_ports relays of the workspace VM and warns
+// about targets that hand the agent broad control of the host.
+func vmHostServices(ws *workspace.Resolved) []vm.HostService {
+	var out []vm.HostService
+	for _, t := range ws.HostPorts {
+		s := vm.HostService{GuestPort: uint16(t.Guest)} //nolint:gosec // G115: validated to 1-65535
+		target := fmt.Sprintf("127.0.0.1:%d", t.HostPort)
+		if t.Socket != "" {
+			s.Path = t.Socket
+			target = t.Socket
+			if info, err := os.Stat(t.Socket); err != nil || info.Mode()&os.ModeSocket == 0 {
+				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: host_ports %d: %s is not a socket yet; connections fail until it exists\n", t.Guest, t.Socket)
+			}
+		} else {
+			s.TCP = target
+		}
+		if why := t.Dangerous(); why != "" {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: host_ports %d relays to %s: %s\n", t.Guest, target, why)
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // workspaceCABundle is the materialized CA bundle of the workspace, or "".

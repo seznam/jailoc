@@ -78,6 +78,7 @@ Defaults applied to all workspaces.
 | `allowed_hosts` | string[] | `[]` | Hostnames whose A and AAAA records are allowed through the network broker even when they resolve to private addresses. |
 | `allowed_networks` | string[] | `[]` | IPv4 and IPv6 CIDR ranges allowed through the network broker. |
 | `ports` | (int \| string)[] | `[]` | Guest ports published on host `127.0.0.1`. See [`ports`](#ports). |
+| `host_ports` | (int \| string)[] | `[]` | Host `127.0.0.1` ports or Unix sockets reachable from the guest. See [`host_ports`](#host_ports). |
 | `ssh_auth_sock` | bool | `false` | Relay the host SSH agent (`$SSH_AUTH_SOCK`) into the VM at `/run/ssh-agent.sock` and copy `~/.ssh/known_hosts` into it. |
 | `git_config` | bool | `true` | Copy the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only to `/home/agent/.gitconfig`. |
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
@@ -129,6 +130,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `allowed_hosts` | string[] | `[]` | Merged with `[defaults].allowed_hosts`. |
 | `allowed_networks` | string[] | `[]` | Merged with `[defaults].allowed_networks`. |
 | `ports` | (int \| string)[] | `[]` | Merged with `[defaults].ports`. |
+| `host_ports` | (int \| string)[] | `[]` | Merged with `[defaults].host_ports`. |
 | `env` | string[] | `[]` | Overrides `[defaults].env` entries with the same key. |
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
@@ -290,6 +292,25 @@ jailoc copies the sources when the VM starts and again on every `jailoc reload`,
 
 Each entry is a port number (`3000`: guest 3000 on host 3000) or `"HOST:GUEST"` (`"8080:80"`: guest 80 on host 8080), with ports 1 to 65535. A host port may appear only once per list. A workspace entry replaces a `[defaults]` entry with the same host port. Ports are published on host `127.0.0.1` only.
 
+### `host_ports`
+
+Each entry makes a host service reachable from the guest:
+
+| Entry | Guest port | Host target |
+|-------|------------|-------------|
+| `9222` | 9222 | `127.0.0.1:9222` |
+| `"8931:3845"` | 8931 | `127.0.0.1:3845` |
+| `"7100:/tmp/mcp.sock"` | 7100 | Unix socket `/tmp/mcp.sock` (absolute or `~/`) |
+
+Ports are 1 to 65535. A guest port may appear only once per list; a workspace entry replaces a `[defaults]` entry with the same guest port. Guest ports 22, 53, 2375 and 7022 are reserved.
+
+Inside the guest each port is reachable on the gateway `192.168.127.1`, on the names `host.jailoc.internal` and `host.docker.internal`, and on `127.0.0.1` and `[::1]` when nothing in the guest already listens on that port. TCP targets are always host loopback. A Unix socket that does not exist yet produces a warning; connections fail until it exists.
+
+jailoc warns when an entry targets port 9222 (Chrome DevTools Protocol) or a container runtime socket (`docker.sock`, `containerd.sock`, `podman.sock`, `buildkitd.sock`).
+
+!!! warning
+    Host services reached through `host_ports` bypass the network policy. Anything in the guest gets the same access to them as a local process on the host.
+
 ### `allowed_hosts` and `allowed_networks`
 
 `allowed_networks` entries must parse with Go's `net.ParseCIDR`; IPv4 and IPv6 CIDRs are accepted. `allowed_hosts` entries are resolved on the host for A and AAAA records, and each address is allowed as a `/32` or `/128`. Some IPv6 ranges stay denied regardless of these lists; see [Network isolation](../explanation/network-isolation.md).
@@ -377,7 +398,7 @@ Environment variables merge in this order, later wins per key:
 
 `snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config` adds a lowest-priority snapshot of `/home/agent/.gitconfig`, which a `snapshots` entry for that destination replaces or, with an empty host, removes.
 
-`ports` merges by host port; the workspace entry wins.
+`ports` merges by host port; the workspace entry wins. `host_ports` merges by guest port; the workspace entry wins.
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 

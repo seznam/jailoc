@@ -153,17 +153,21 @@ func (b *Broker) startForward(ctx context.Context, f Forward) (func(), error) {
 }
 
 // startService accepts guest connections to the gateway's s.GuestPort and
-// relays each to the host unix socket s.UnixPath.
+// relays each to the host unix socket s.UnixPath or TCP address s.TCP.
 func (b *Broker) startService(ctx context.Context, s Service) error {
-	_, err := b.startServicePath(ctx, s.GuestPort, func() string { return s.UnixPath })
+	t := serviceTarget{network: "unix", addr: s.UnixPath}
+	if s.TCP.IsValid() {
+		t = serviceTarget{network: "tcp", addr: s.TCP.String()}
+	}
+	_, err := b.startServiceTarget(ctx, s.GuestPort, func() serviceTarget { return t })
 	return err
 }
 
-// startServicePath is startService with the socket path looked up for every
-// connection, so a runtime reload can change it without a restart.
+// startServiceTarget is startService with the host target looked up for
+// every connection, so a runtime reload can change it without a restart.
 // Cancelling ctx closes the listener and every open connection, so that a
 // removed service, such as SSH agent forwarding, is revoked at once.
-func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() string) (func(), error) {
+func (b *Broker) startServiceTarget(ctx context.Context, port uint16, target func() serviceTarget) (func(), error) {
 	s := Service{GuestPort: port}
 	l, err := gonet.ListenTCP(b.stack, *guestAddr(b.cfg.Gateway, s.GuestPort), ipv4.ProtocolNumber)
 	if err != nil {
@@ -182,7 +186,8 @@ func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() 
 			go func() {
 				var d net.Dialer
 				dctx, cancel := context.WithTimeout(ctx, dialTimeout)
-				h, err := d.DialContext(dctx, "unix", path())
+				t := target()
+				h, err := d.DialContext(dctx, t.network, t.addr)
 				cancel()
 				if err != nil {
 					b.record(map[string]any{"event": "service-error", "guest_port": s.GuestPort, "error": err.Error()})
