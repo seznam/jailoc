@@ -6,7 +6,7 @@ Common failures of jailoc workspaces and how to fix them.
 
 jailoc writes its own structured log to `~/.cache/jailoc/jailoc.log`. It rotates at startup above 5 MB to `jailoc.log.1`; if the rename fails, the file is truncated instead. Without a home directory, the log goes to `$TMPDIR/jailoc/jailoc.log`. Look for `level=ERROR` lines.
 
-To find out where a slow start spends its time, list the duration of each step: image builds, the import into the VM image cache, the per-boot rootfs clone, VM start and session start.
+To find out where a slow start spends its time, list the duration of each step: image builds, the import into the VM image cache, the rootfs clone on macOS, VM start and session start.
 
 ```bash
 grep -E 'step finished' ~/.cache/jailoc/jailoc.log | tail -n 30

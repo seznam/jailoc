@@ -58,7 +58,15 @@ func Init(logger *slog.Logger) error {
 		return fmt.Errorf("essential mounts: %w", err)
 	}
 	var mapper *idmapper
-	if cfg.IDMap != nil {
+	switch {
+	case cfg.RootShare != "":
+		if mapper, err = overlayRoot(logger, cfg); err != nil {
+			return fmt.Errorf("root filesystem: %w", err)
+		}
+		if err := remountAfterPivot(logger); err != nil {
+			return err
+		}
+	case cfg.IDMap != nil:
 		if mapper, err = idmapRoot(logger, *cfg.IDMap, cfg.Home, cfg.UID, cfg.GID); err != nil {
 			// Without idmapped mounts the agent runs with the host user's IDs,
 			// so its files on virtio-fs keep their owner.

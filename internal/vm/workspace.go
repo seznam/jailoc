@@ -26,6 +26,7 @@ const (
 	clientKeyFile  = "id_ed25519"
 	hostPubKeyFile = "ssh_host_key.pub"
 	internalTag    = "jailocint"
+	rootTag        = "jailocroot"
 )
 
 type fileContent struct {
@@ -104,6 +105,9 @@ func prepareGuest(spec Spec) (map[string]fileContent, error) {
 		cfg.Shares = append(cfg.Shares, guest.Share{Tag: shareTag(i), GuestPath: s.guestPath(), ReadOnly: s.ReadOnly})
 	}
 	cfg.Shares = append(cfg.Shares, guest.Share{Tag: internalTag, GuestPath: guest.HostDir})
+	if rootShare {
+		cfg.RootShare = rootTag
+	}
 	cfgJSON, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode guest config: %w", err)
@@ -123,6 +127,12 @@ func shareTag(i int) string { return fmt.Sprintf("jailoc%d", i) }
 // go-microvm rejects it on other hosts, where guests see host ownership.
 const simplifiedOwnership = runtime.GOOS == "darwin"
 
+// rootShare boots workspace VMs from the cached image shared read-only, with
+// the guest assembling an overlay root, instead of from a copy of the image
+// made on every start. Copying is cheap only where the host clones files
+// (APFS on macOS), so the share is used on Linux.
+const rootShare = runtime.GOOS == "linux"
+
 func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option {
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares)+1)
 	for i, s := range spec.Shares {
@@ -133,6 +143,9 @@ func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option 
 	if spec.Docker {
 		// The only disk, so the guest sees it as /dev/vda (guest.DockerDisk).
 		opts = append(opts, microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}))
+	}
+	if rootShare {
+		opts = append(opts, microvm.WithRootFSShare(rootTag))
 	}
 	return append(opts,
 		microvm.WithVirtioFS(mounts...),
