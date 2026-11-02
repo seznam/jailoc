@@ -15,7 +15,7 @@ require (
 	github.com/moby/go-archive v0.3.2
 	github.com/moby/term v0.5.2
 	github.com/spf13/cobra v1.10.2
-	github.com/stacklok/go-microvm v0.0.0
+	github.com/stacklok/go-microvm v0.0.44
 	github.com/vishvananda/netlink v1.3.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
@@ -116,11 +116,3 @@ require (
 	google.golang.org/grpc v1.84.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
-
-// go-microvm fork: simplified virtio-fs ownership (stacklok/go-microvm#135),
-// exec-session exit status (#143), setuid bits on Linux hosts (#149) and
-// exec-session exit status under the PID 1 reaper (branch
-// fix/sshd-exec-exit-status), copy-on-write rootfs layer composition (#153)
-// and private storage for set-id rootfs trees (#157) on top of upstream main,
-// until they are merged upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261102185232-8879c9895db2
