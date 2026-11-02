@@ -28,7 +28,7 @@ func trafficVM(ctx context.Context, ws *workspace.Resolved, v logView, all bool,
 
 func execLogVM(ctx context.Context, ws *workspace.Resolved, v logView, all bool, w io.Writer) error {
 	root := vm.GuestDataDir(vmStateDir(ws.Name))
-	f := execFormatter{all: all}
+	f := newExecFormatter(all)
 	return tailLog(ctx, w, []logFile{{root: root, path: vm.ExecLogName + ".1"}, {root: root, path: vm.ExecLogName}}, v, f.line)
 }
 

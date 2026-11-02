@@ -28,13 +28,15 @@ const (
 )
 
 // procEvent is a proc connector event. For a fork, pid and tgid are the
-// parent's; for an exec or exit, the process's.
+// parent's; for an exec or exit, the process's. exitCode is the wait status
+// of an exit.
 type procEvent struct {
 	what      uint32
 	pid       int
 	tgid      int
 	childPID  int
 	childTGID int
+	exitCode  uint32
 }
 
 // parseProcEvents returns the proc connector events in a netlink datagram.
@@ -49,7 +51,7 @@ func parseProcEvents(b []byte) []procEvent {
 		msg := b[nlmsgHdrLen:l]
 		// proc_event: what u32, cpu u32, timestamp u64, then the union:
 		// fork {parent pid, parent tgid, child pid, child tgid},
-		// exec and exit {pid, tgid, ...}.
+		// exec {pid, tgid}, exit {pid, tgid, exit code, exit signal, ...}.
 		if len(msg) >= cnMsgLen+24 {
 			ev := msg[cnMsgLen:]
 			e := procEvent{what: ne.Uint32(ev[0:]), pid: int(ne.Uint32(ev[16:])), tgid: int(ne.Uint32(ev[20:]))}
@@ -57,7 +59,12 @@ func parseProcEvents(b []byte) []procEvent {
 			case e.what == procEventFork && len(ev) >= 32:
 				e.childPID, e.childTGID = int(ne.Uint32(ev[24:])), int(ne.Uint32(ev[28:]))
 				out = append(out, e)
-			case e.what == procEventExec, e.what == procEventExit:
+			case e.what == procEventExit:
+				if len(ev) >= 28 {
+					e.exitCode = ne.Uint32(ev[24:])
+				}
+				out = append(out, e)
+			case e.what == procEventExec:
 				out = append(out, e)
 			}
 		}

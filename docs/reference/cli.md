@@ -234,7 +234,7 @@ Without `--json`, control characters in logged values are escaped. TLS connectio
 
 ### `jailoc strace`
 
-Print the processes started in a workspace VM: time, PID, parent PID, user, working directory and command line. The guest records every process start from boot; the log of the previous boot is kept as `exec.prev.jsonl` in the VM state directory.
+Print the processes started in a workspace VM: time, PID, parent PID, user, working directory and command line, and the processes that failed: time, PID, exit status (`exit N`) or the signal that killed them, and command line. The guest records every process start from boot and the exit of each recorded process; the log of the previous boot is kept as `exec.prev.jsonl` in the VM state directory.
 
 ```
 jailoc strace [workspace] [flags]
@@ -242,10 +242,10 @@ jailoc strace [workspace] [flags]
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--follow` | `-f` | Keep printing new processes until interrupted. |
-| `--lines N` | `-n` | Number of past processes to print. Default `100`; `0` prints none, `-1` all. |
+| `--follow` | `-f` | Keep printing new lines until interrupted. |
+| `--lines N` | `-n` | Number of past lines to print. Default `100`; `0` prints none, `-1` all. |
 | `--json` | | Print the shown records as JSON lines, unchanged. |
-| `--all` | | Also show jailoc's own guest processes. |
+| `--all` | | Also show jailoc's own guest processes and processes that exit with status 0. |
 
 Without `--json`, control characters in logged values are escaped. The record is written inside the VM: root in the VM (`sudo`) can stop or alter it. Processes that exit before the guest reads their details show only their name.
 
