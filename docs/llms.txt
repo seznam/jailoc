@@ -5,7 +5,7 @@
 Key facts:
 
 - Every workspace is a per-workspace libkrun micro-VM; `jailoc-guest` is the VM init and agent sessions run over SSH into the guest
-- Supported hosts: macOS on Apple Silicon (Hypervisor.framework) and Linux amd64 (KVM, `/dev/kvm` access required); jailoc downloads a pinned, SHA-256-verified VM runtime
+- Supported hosts: macOS on Apple Silicon (Hypervisor.framework) and Linux amd64 or experimental arm64 (KVM, `/dev/kvm` access required); release builds embed the VM runtime
 - Workspace images are built with Docker Engine on the host (or in a builder VM with `isolated_build`) and exported into the VM root filesystem
 - All guest traffic passes through a host-side network broker: public destinations are allowed, private and reserved IPv4/IPv6 ranges are denied unless listed in `allowed_hosts` or `allowed_networks`
 - Config lives at `~/.config/jailoc/config.toml` (TOML); persistent VM home state lives under `~/.cache/jailoc-vm/workspaces/<workspace>/home`

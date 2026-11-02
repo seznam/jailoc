@@ -227,19 +227,19 @@ func sameVMSpec(a, b vm.Spec) bool {
 }
 
 // vmRuntime is the runner, its library directory and the jailoc-guest
-// binary: the configured runner or the pinned runtime jailoc downloads on
-// first use, and the guest binary embedded in jailoc (release builds) or
-// next to the runner.
+// binary: the configured runner or the runtime embedded in jailoc (release
+// builds), and the guest binary embedded in jailoc (release builds) or next
+// to the runner.
 type vmRuntimeFiles struct {
 	runner, libDir, guest string
 }
 
-func vmRuntime(ctx context.Context, cfg *config.Config) (vmRuntimeFiles, error) {
+func vmRuntime(cfg *config.Config) (vmRuntimeFiles, error) {
 	var rt vmRuntimeFiles
 	if cfg.VM.Runner != "" {
 		rt = vmRuntimeFiles{runner: cfg.VM.Runner, libDir: vmLibDir(cfg.VM.LibDir)}
 	} else {
-		runner, libDir, err := vm.EnsureRuntime(ctx, filepath.Join(vmRootDir(), "runtime"), os.Stdout)
+		runner, libDir, err := vm.EnsureRuntime(filepath.Join(vmRootDir(), "runtime"), os.Stdout)
 		if err != nil {
 			return rt, fmt.Errorf("prepare VM runtime: %w", err)
 		}

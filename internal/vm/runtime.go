@@ -2,21 +2,18 @@ package vm
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 )
 
 // RunnerBinary is the file name of the VM runner inside a runtime bundle.
@@ -24,79 +21,52 @@ const RunnerBinary = "go-microvm-runner"
 
 const (
 	maxArtifactSize  = 256 << 20
-	downloadTimeout  = 10 * time.Minute
 	runtimeCompleted = ".complete"
+	// runtimeTarball and firmwareTarball are the file names of the embedded
+	// runtime (runner and libkrun) and firmware (libkrunfw, GPL-2.0)
+	// tarballs inside runtimebin/<goos>-<goarch>/.
+	runtimeTarball  = "runtime.tar.gz"
+	firmwareTarball = "firmware.tar.gz"
 )
 
-// Artifact is a pinned tarball: its URL and expected SHA-256.
-type Artifact struct {
-	URL    string
-	SHA256 string
-}
+// ErrRuntimeNotEmbedded reports a jailoc build without the VM runtime.
+var ErrRuntimeNotEmbedded = errors.New("this jailoc build does not include the VM runtime")
 
-// Release is a pinned VM runtime for one platform: the runtime tarball
-// (runner and libkrun) and the firmware tarball (libkrunfw, GPL-2.0).
-// Both use the go-microvm release layout: one top-level directory holding
-// the files.
-type Release struct {
-	Version  string
-	Runtime  Artifact
-	Firmware Artifact
-}
-
-// runtimeMirror replaces the scheme and host of every pinned URL when set at
-// build time (-ldflags -X), so release candidates can be tested against a
-// local server. The checksums still apply.
-var runtimeMirror string
-
-// releases pins the runtime per GOOS/GOARCH; other platforms are unsupported.
-// .github/workflows/vm-runtime.yml builds the runner from the go-microvm
-// revision in go.mod (block disks and simplified virtio-fs ownership). On
-// darwin/arm64 libkrun comes from the go-microvm v0.0.41 release and the
-// firmware (libkrunfw) is the Homebrew build. On linux/amd64 the runner,
-// libkrun and the firmware are built with go-microvm's builder image.
-var releases = map[string]Release{
-	"darwin/arm64": {
-		Version: "v0.0.41-jailoc.6",
-		Runtime: Artifact{
-			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.6/go-microvm-runtime-darwin-arm64.tar.gz",
-			SHA256: "6a72f4b1c9d8fa7df91a484d9fce5c6cbf575af17e60052ea34e444ab918c9c0",
-		},
-		Firmware: Artifact{
-			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.6/go-microvm-firmware-darwin-arm64.tar.gz",
-			SHA256: "9d87712c6277039758465394f59b308e99587dce265b858e67ee1e3cf95a59ef",
-		},
-	},
-	"linux/amd64": {
-		Version: "v0.0.41-jailoc.6",
-		Runtime: Artifact{
-			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.6/go-microvm-runtime-linux-amd64.tar.gz",
-			SHA256: "d8100fe681817acbf01d9175b6698478732cb917cfb615480c0404aa2c05d724",
-		},
-		Firmware: Artifact{
-			URL:    "https://github.com/seznam/jailoc/releases/download/vm-runtime-v0.0.41-jailoc.6/go-microvm-firmware-linux-amd64.tar.gz",
-			SHA256: "264349238e93fa4031ecad484e1c5b04253335c80dbe92b12dc055119c3481f6",
-		},
-	},
-}
-
-// EnsureRuntime returns the runner and library directory of the pinned VM
-// runtime for this platform, downloading and unpacking it into cacheDir on
-// first use. Progress messages go to progress.
-func EnsureRuntime(ctx context.Context, cacheDir string, progress io.Writer) (runner, libDir string, err error) {
-	platform := runtime.GOOS + "/" + runtime.GOARCH
-	rel, ok := releases[platform]
-	if !ok {
-		return "", "", fmt.Errorf("VM runtime is not supported on %s (supported: darwin/arm64, linux/amd64); set runner and lib_dir in the [vm] section of the config to use a self-built runtime", platform)
+// EnsureRuntime returns the runner and library directory of the VM runtime
+// embedded in this build, unpacking it into cacheDir on first use. Release
+// builds embed the runtime that .github/workflows/vm-runtime.yml builds for
+// darwin/arm64, linux/amd64 and linux/arm64; other builds report
+// ErrRuntimeNotEmbedded. Progress messages go to progress.
+func EnsureRuntime(cacheDir string, progress io.Writer) (runner, libDir string, err error) {
+	rt, fw := embeddedRuntime()
+	if len(rt) == 0 || len(fw) == 0 {
+		return "", "", fmt.Errorf("%w for %s/%s; use a release build of jailoc or set runner and lib_dir in the [vm] section of the config", ErrRuntimeNotEmbedded, runtime.GOOS, runtime.GOARCH)
 	}
-	return ensureRelease(ctx, http.DefaultClient, cacheDir, rel, progress)
+	return unpackRuntime(cacheDir, rt, fw, progress)
 }
 
-func ensureRelease(ctx context.Context, client *http.Client, cacheDir string, rel Release, progress io.Writer) (string, string, error) {
-	dir := filepath.Join(cacheDir, rel.Version)
+// embeddedRuntime returns the runtime and firmware tarballs embedded for
+// this platform, or nil when the build has none.
+func embeddedRuntime() (rt, fw []byte) {
+	if runtimeDir == "" {
+		return nil, nil
+	}
+	// A missing file means the build carries no runtime; the caller reports it.
+	rt, _ = runtimeFiles.ReadFile(path.Join(runtimeDir, runtimeTarball))
+	fw, _ = runtimeFiles.ReadFile(path.Join(runtimeDir, firmwareTarball))
+	return rt, fw
+}
+
+// unpackRuntime unpacks the runtime and firmware tarballs into a cacheDir
+// subdirectory keyed by their SHA-256, so every runtime is unpacked once and
+// is shared by jailoc builds that embed the same one.
+func unpackRuntime(cacheDir string, rt, fw []byte, progress io.Writer) (string, string, error) {
+	rtSum, fwSum := sha256.Sum256(rt), sha256.Sum256(fw)
+	stamp := hex.EncodeToString(rtSum[:]) + " " + hex.EncodeToString(fwSum[:]) + "\n"
+	key := sha256.Sum256([]byte(stamp))
+	dir := filepath.Join(cacheDir, hex.EncodeToString(key[:])[:16])
 	runner := filepath.Join(dir, "runtime", RunnerBinary)
 	libDir := filepath.Join(dir, "runtime") + string(os.PathListSeparator) + filepath.Join(dir, "firmware")
-	stamp := rel.Runtime.SHA256 + " " + rel.Firmware.SHA256 + "\n"
 	if b, err := os.ReadFile(filepath.Join(dir, runtimeCompleted)); err == nil && string(b) == stamp { //nolint:gosec // G304: path inside the jailoc cache directory
 		return runner, libDir, nil
 	}
@@ -104,23 +74,23 @@ func ensureRelease(ctx context.Context, client *http.Client, cacheDir string, re
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		return "", "", fmt.Errorf("create runtime cache: %w", err)
 	}
-	tmp, err := os.MkdirTemp(cacheDir, ".download-")
+	tmp, err := os.MkdirTemp(cacheDir, ".unpack-")
 	if err != nil {
 		return "", "", fmt.Errorf("create runtime staging directory: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 
-	_, _ = fmt.Fprintf(progress, "Downloading VM runtime %s...\n", rel.Version)
+	_, _ = fmt.Fprintln(progress, "Unpacking VM runtime...")
 	for _, part := range []struct {
 		name string
-		art  Artifact
-	}{{"runtime", rel.Runtime}, {"firmware", rel.Firmware}} {
-		if err := fetchArtifact(ctx, client, part.art, filepath.Join(tmp, part.name)); err != nil {
-			return "", "", fmt.Errorf("VM runtime %s %s: %w", rel.Version, part.name, err)
+		data []byte
+	}{{"runtime", rt}, {"firmware", fw}} {
+		if err := untar(bytes.NewReader(part.data), filepath.Join(tmp, part.name)); err != nil {
+			return "", "", fmt.Errorf("VM runtime %s: %w", part.name, err)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "runtime", RunnerBinary)); err != nil {
-		return "", "", fmt.Errorf("VM runtime %s: %s missing from the runtime tarball", rel.Version, RunnerBinary)
+		return "", "", fmt.Errorf("VM runtime: %s missing from the runtime tarball", RunnerBinary)
 	}
 	if err := os.WriteFile(filepath.Join(tmp, runtimeCompleted), []byte(stamp), 0o600); err != nil {
 		return "", "", fmt.Errorf("write runtime stamp: %w", err)
@@ -130,73 +100,13 @@ func ensureRelease(ctx context.Context, client *http.Client, cacheDir string, re
 		return "", "", fmt.Errorf("remove stale runtime: %w", err)
 	}
 	if err := os.Rename(tmp, dir); err != nil {
-		// A concurrent jailoc may have installed the same release first.
+		// A concurrent jailoc may have installed the same runtime first.
 		if b, rerr := os.ReadFile(filepath.Join(dir, runtimeCompleted)); rerr == nil && string(b) == stamp { //nolint:gosec // G304: path inside the jailoc cache directory
 			return runner, libDir, nil
 		}
 		return "", "", fmt.Errorf("install VM runtime: %w", err)
 	}
 	return runner, libDir, nil
-}
-
-// fetchArtifact downloads a tarball, verifies its checksum and unpacks its
-// single top-level directory into dest.
-func fetchArtifact(ctx context.Context, client *http.Client, art Artifact, dest string) error {
-	u, err := artifactURL(art.URL)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	resp, err := client.Do(req) //nolint:gosec // G107: URL is pinned in the binary
-	if err != nil {
-		return fmt.Errorf("download %s: %w", u, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: HTTP %d", u, resp.StatusCode)
-	}
-
-	f, err := os.CreateTemp(filepath.Dir(dest), ".artifact-")
-	if err != nil {
-		return fmt.Errorf("create temporary file: %w", err)
-	}
-	defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
-	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxArtifactSize+1))
-	if err != nil {
-		return fmt.Errorf("download %s: %w", u, err)
-	}
-	if n > maxArtifactSize {
-		return fmt.Errorf("download %s: larger than %d bytes", u, maxArtifactSize)
-	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != art.SHA256 {
-		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", u, got, art.SHA256)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("rewind %s: %w", f.Name(), err)
-	}
-	return untar(f, dest)
-}
-
-func artifactURL(raw string) (string, error) {
-	if runtimeMirror == "" {
-		return raw, nil
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", raw, err)
-	}
-	m, err := url.Parse(runtimeMirror)
-	if err != nil {
-		return "", fmt.Errorf("parse runtime mirror: %w", err)
-	}
-	u.Scheme, u.Host = m.Scheme, m.Host
-	return u.String(), nil
 }
 
 // untar unpacks a gzip tarball whose entries share one top-level directory,

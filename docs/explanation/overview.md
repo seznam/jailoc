@@ -12,7 +12,7 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 **2. Workspace resolution.** The workspace name becomes a resolved description: shared paths and mounts, snapshots, allowed hosts and networks, secrets, CPU and memory.
 
-**3. Runtime check.** On first use jailoc downloads the pinned VM runtime (the go-microvm runner, libkrun and the libkrunfw guest kernel) and verifies its SHA-256. Supported hosts are Apple Silicon Macs (Hypervisor.framework) and Linux on amd64 (KVM).
+**3. Runtime check.** On first use jailoc unpacks the VM runtime embedded in its binary (the go-microvm runner, libkrun and the libkrunfw guest kernel) into its cache. Supported hosts are Apple Silicon Macs (Hypervisor.framework) and Linux on amd64 or, experimentally, arm64 (KVM).
 
 **4. Image build and export.** The workspace image is built with Docker, either on the host daemon or inside a builder VM, then exported and unpacked into a local image cache. See [Image Resolution](../reference/image-resolution.md).
 

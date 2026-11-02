@@ -58,15 +58,15 @@ jailoc migrate
 
 See [Migrate from jailoc v1](migrate-from-v1.md).
 
-## Platform isn't supported
+## VM runtime is missing
 
 **Symptom:** `jailoc up` fails with:
 
 ```
-VM runtime is not supported on <os>/<arch> (supported: darwin/arm64, linux/amd64); set runner and lib_dir in the [vm] section of the config to use a self-built runtime
+this jailoc build does not include the VM runtime for <os>/<arch>; use a release build of jailoc or set runner and lib_dir in the [vm] section of the config
 ```
 
-**Fix:** run jailoc on macOS (Apple Silicon) or Linux (amd64), or set `[vm] runner` and `[vm] lib_dir` to a runtime you built yourself. See [How to install jailoc](installation.md#check-your-platform).
+**Fix:** release builds embed the runtime for macOS (Apple Silicon) and Linux (amd64, arm64). On another platform, or with a binary built from source, set `[vm] runner` and `[vm] lib_dir` to a runtime you built yourself. See [How to install jailoc](installation.md#build-from-source).
 
 ## VM can't open /dev/kvm
 
@@ -87,14 +87,6 @@ sudo usermod -aG kvm "$USER"
 **Symptom:** on Linux, the VM fails to start with `confining the VM process needs Landlock`.
 
 **Fix:** jailoc runs the VM process under Landlock and does not start a VM without it. Use Linux 5.19 or later and check that `landlock` appears in `/sys/kernel/security/lsm`; if it doesn't, add it to the `lsm=` kernel parameter and reboot. See [How to install jailoc](installation.md#check-your-platform).
-
-## VM runtime download fails
-
-**Symptom:** the first `jailoc up` fails while `Downloading VM runtime ...` with `download ...: HTTP <code>` or `checksum mismatch for ...`.
-
-jailoc downloads a pinned runtime and checks its SHA-256 before unpacking it into `~/.cache/jailoc-vm/runtime/`. A failed or mismatching download is discarded and nothing is installed.
-
-**Fix:** check that the host reaches GitHub (and your proxy settings), then run `jailoc up` again. A persistent checksum mismatch means the download is altered on the way, for example by a proxy that rewrites responses. Don't work around it; fix the network path.
 
 ## VM doesn't become ready
 

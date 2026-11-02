@@ -6,7 +6,7 @@ This page is for contributors. It covers how to build and test the project local
 
 - Go 1.26+
 - Docker Engine, for building workspace images
-- macOS on Apple Silicon or Linux amd64 with KVM, for running workspace VMs
+- macOS on Apple Silicon or Linux (amd64, experimental arm64) with KVM, for running workspace VMs
 
 ## Building and testing
 
@@ -16,6 +16,12 @@ go build ./cmd/jailoc
 
 # Embed jailoc-guest, the VM init (release builds do this automatically)
 go generate ./internal/guestbin
+go build ./cmd/jailoc
+
+# Embed the VM runtime (release builds do this automatically); without it,
+# set [vm] runner and lib_dir. Needs a go-microvm checkout at the revision
+# pinned in go.mod, see the script header for other requirements.
+scripts/vm-runtime/build-runtime-linux.sh /path/to/go-microvm internal/vm/runtimebin/linux-amd64
 go build ./cmd/jailoc
 
 # Verify all packages compile (pre-commit)
@@ -44,9 +50,9 @@ The pipeline runs on GitHub Actions. Most workflows trigger on every branch and 
 | Docs | Tags matching `v*` — runs on `push` with `v*` ref | Builds documentation with MkDocs and deploys to GitHub Pages |
 | Pre-release | Manual (`workflow_dispatch`) with a ref and a version such as `1.20.0-rc.1` | Tags the ref and publishes GoReleaser binaries as a GitHub pre-release; no docs deploy, no release-please involvement |
 | VM Integration | PRs and pushes to `main` touching VM code, manual | Builds the go-microvm runner and libkrun from the pinned revision and boots real workspace VMs on a GitHub-hosted x64 Linux runner with KVM (`go test -tags vmintegration ./internal/vmintegration/`) |
-| VM runtime | Tags matching `vm-runtime-*` | Builds the macOS VM runtime bundle (go-microvm runner and libkrun) and publishes it as a pre-release |
+| VM runtime | Called by the release workflows; pull requests touching `scripts/vm-runtime/` | Builds the VM runtime (go-microvm runner, libkrun, libkrunfw) for darwin/arm64, linux/amd64 and linux/arm64 as artifacts that the release places in `internal/vm/runtimebin/` |
 
-GoReleaser runs `go generate ./internal/guestbin` before building, so release binaries embed `jailoc-guest`. It builds static binaries (`CGO_ENABLED=0`) for `linux/darwin` x `amd64/arm64`. Configs live in `.goreleaser.yml` and `.github/workflows/`.
+GoReleaser runs `go generate ./internal/guestbin` before building, so release binaries embed `jailoc-guest`, and refuses to build unless the release workflow has placed all VM runtimes in `internal/vm/runtimebin/`. It builds static binaries (`CGO_ENABLED=0`) for `darwin/arm64`, `linux/amd64` and `linux/arm64`. Configs live in `.goreleaser.yml` and `.github/workflows/`.
 
 ### Dependabot Nix vendorHash
 

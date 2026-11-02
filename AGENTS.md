@@ -8,7 +8,7 @@
 **Language**: Go 1.26+
 **Key deps**: stacklok/go-microvm (libkrun), gvisor.dev/gvisor (netbroker stack), docker/docker (image builds, migrate), google/go-containerregistry, golang.org/x/crypto/ssh, BurntSushi/toml, spf13/cobra
 
-**Hosts**: darwin/arm64 (Hypervisor.framework) and linux/amd64 (KVM). jailoc downloads a pinned go-microvm runner + libkrun + libkrunfw runtime and verifies its SHA-256 (`internal/vm/runtime.go`).
+**Hosts**: darwin/arm64 (Hypervisor.framework), linux/amd64 and experimental linux/arm64 (KVM). Release builds embed the go-microvm runner + libkrun + libkrunfw runtime (`internal/vm/runtime.go`, `internal/vm/runtimebin/`); other builds need `[vm] runner` / `lib_dir`.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ internal/
   workspace/                 Workspace name → resolved paths, allowed hosts/networks, CWD matching
   docker/                    Docker Engine SDK — image resolution/build on the host, v1 volume export for migrate
   embed/                     go:embed assets (Dockerfile, TUI plugin)
-  vm/                        go-microvm/libkrun VM lifecycle, runtime download, image export into rootfs
+  vm/                        go-microvm/libkrun VM lifecycle, embedded runtime unpacking, image export into rootfs
   guest/                     jailoc-guest: init, SSH sessions, secrets, Docker in the VM
   guestbin/                  go:generate-embedded jailoc-guest binaries
   netbroker/                 gVisor userspace network stack + IPv4/IPv6 egress policy + filtered DNS
@@ -38,7 +38,7 @@ docs/                        MkDocs documentation (Diátaxis framework, see docs
 1. `config.Load` → read `~/.config/jailoc/config.toml`; v1 settings fail validation with a hint to run `jailoc migrate`
 2. `workspace.Resolve` → name → paths, mounts, snapshots, allowed hosts/networks
 3. Validate secret sources, prepare CA bundle and TUI plugin config, compute virtio-fs shares and staged `snapshots`
-4. `vmRuntime` → download/verify the pinned VM runtime (or use `[vm] runner` / `lib_dir`)
+4. `vmRuntime` → unpack the embedded VM runtime (or use `[vm] runner` / `lib_dir`)
 5. `buildWorkspaceImage` → build the image with host Docker (or a builder VM with `isolated_build`) and unpack it into the VM image cache
 6. `startSupervisor` → boot the workspace VM (jailoc-guest as init) with its netbroker; persistent home under `~/.cache/jailoc-vm/workspaces/<ws>/home`
 7. `secretsPayload` (read on the host before boot, incl. `from_command`) → `deliverSecrets` over SSH; the guest writes file secrets to `/run/secrets` (tmpfs) and env secrets to the session environment
@@ -117,8 +117,8 @@ Run `go build`, `go test ./...`, and `golangci-lint run` inside as usual.
 GitHub Actions workflows:
 - **CI** (`.github/workflows/ci.yml`): runs on push/PR to main — `go test`, golangci-lint v2.15.0, and a TUI plugin sync check (`dist/tui-*.js` vs embedded copies)
 - **VM Integration** (`.github/workflows/vm-integration.yml`): PRs/pushes to main touching VM code — boots real workspace VMs on an x64 Linux runner with KVM
-- **VM runtime** (`.github/workflows/vm-runtime.yml`): `vm-runtime-*` tags — builds and publishes the VM runtime bundle
-- **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, then GoReleaser runs `go generate ./internal/guestbin` and publishes binaries (Linux/Darwin × amd64/arm64, `CGO_ENABLED=0`)
+- **VM runtime** (`.github/workflows/vm-runtime.yml`): reusable workflow called by both release workflows, plus PRs touching `scripts/vm-runtime/` — builds runtime artifacts for darwin/arm64, linux/amd64, linux/arm64
+- **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, builds the VM runtimes into `internal/vm/runtimebin/`, then GoReleaser runs `go generate ./internal/guestbin` and publishes binaries (darwin/arm64, linux/amd64, linux/arm64, `CGO_ENABLED=0`)
 - **Re-release** (`.github/workflows/release.yml`): manual `workflow_dispatch` fallback — re-runs GoReleaser for an existing tag
 - **Docs** (`.github/workflows/release-please.yml`): runs as part of the release process — zensical + mkdocs-macros-plugin → GitHub Pages
 
