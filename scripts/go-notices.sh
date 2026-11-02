@@ -16,8 +16,10 @@ shift 2
 cd "$dir"
 
 format='{{with .Module}}{{if not .Main}}{{.Path}} {{.Version}}{{with .Replace}} => {{.Path}} {{.Version}}{{end}}	{{if .Replace}}{{.Replace.Dir}}{{else}}{{.Dir}}{{end}}{{end}}{{end}}'
+# Abort on any failed go list: in a loop inside a command substitution a
+# later successful platform would otherwise hide it.
 modules=$(for platform in $platforms; do
-	GOOS=${platform%/*} GOARCH=${platform#*/} go list -deps -f "$format" "$@"
+	GOOS=${platform%/*} GOARCH=${platform#*/} go list -deps -f "$format" "$@" || exit 1
 done | sed '/^$/d' | sort -u)
 
 notice() {
