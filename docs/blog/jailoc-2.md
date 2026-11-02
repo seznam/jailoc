@@ -17,7 +17,7 @@ jailoc 1 put your coding agent in a Docker container. That was a good fence, but
 
 Each workspace gets a VM booted with `jailoc-guest` as its init. Your project directories are shared in over virtio-fs at their original paths. Everything else on the host, like `~/.ssh`, your browser profiles and other projects, simply doesn't exist inside.
 
-You don't install a hypervisor stack. jailoc downloads a pinned runtime (the VM runner, `libkrun` and `libkrunfw`) on first use and checks its SHA-256 before running anything. Docker on the host is only needed to build workspace images. With `isolated_build = true`, even that moves into a builder VM of its own.
+You don't install a hypervisor stack. Release binaries embed the VM runtime (the VM runner, `libkrun` and `libkrunfw`) and unpack it on first use, so nothing is downloaded. Docker on the host is only needed to build workspace images. With `isolated_build = true`, even that moves into a builder VM of its own.
 
 ```bash
 jailoc up my-project    # build the image, boot the VM
