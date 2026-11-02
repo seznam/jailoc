@@ -61,8 +61,10 @@ nft add table inet jailoc
 nft add chain inet jailoc input '{ type filter hook input priority -10; policy accept; }'
 nft add rule inet jailoc input tcp dport "$DOCKER_PORT" ip saddr != "$GATEWAY" drop
 
-# Pid files and sockets in the root filesystem are never live at boot.
-rm -f /var/run/docker.pid /var/run/docker.sock /var/run/docker/containerd/containerd.pid
+# Runtime state lives on tmpfs: the virtio-fs root filesystem belongs to the
+# host user on Linux hosts, so dockerd cannot chown its socket there. It
+# also leaves no stale pid files or sockets from an earlier boot.
+mount -t tmpfs -o mode=755,nosuid,nodev tmpfs /run || fail "mount /run failed"
 
 dockerd --data-root /var/lib/docker --firewall-backend=nftables \
 	-H unix:///var/run/docker.sock -G "$AGENT_GID" \
