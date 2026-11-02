@@ -1,8 +1,20 @@
 # Configuration Reference
 
-Configuration file location: `~/.config/jailoc/config.toml`
+## File location
 
-The file is auto-created with defaults on first run. All fields are optional unless noted.
+| Source | Precedence |
+|--------|------------|
+| `--config <file>` | 1 |
+| `JAILOC_CONFIG=<file>` | 2 |
+| `~/.config/jailoc/config.toml` | 3 (default) |
+
+`~` is expanded and relative paths are resolved against the current directory. The default file is auto-created with defaults on first run; a file set with `--config` or `JAILOC_CONFIG` must exist.
+
+Per-workspace files, such as the CA bundle copied by [`ca_bundle`](#ca_bundle), live in `workspaces/<name>/` next to the configuration file.
+
+VM state under `~/.cache/jailoc-vm/` is keyed by workspace name only and is shared by all configuration files: workspaces with the same name in two files control the same VM.
+
+All fields are optional unless noted.
 
 ---
 

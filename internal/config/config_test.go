@@ -439,6 +439,64 @@ func TestLoadMissingFileAutoCreates(t *testing.T) {
 	}
 }
 
+func TestConfigPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		flag string
+		env  string
+		want string
+	}{
+		{name: "default", want: filepath.Join(home, ".config", "jailoc", "config.toml")},
+		{name: "env", env: "/etc/jailoc/work.toml", want: "/etc/jailoc/work.toml"},
+		{name: "flag wins over env", flag: "/srv/flag.toml", env: "/etc/jailoc/work.toml", want: "/srv/flag.toml"},
+		{name: "tilde expanded", env: "~/jailoc/work.toml", want: filepath.Join(home, "jailoc", "work.toml")},
+		{name: "relative made absolute", flag: "work.toml", want: filepath.Join(wd, "work.toml")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(PathEnv, tt.env)
+			SetPath(tt.flag)
+			t.Cleanup(func() { SetPath("") })
+
+			if got := ConfigPath(); got != tt.want {
+				t.Fatalf("ConfigPath() = %q, want %q", got, tt.want)
+			}
+			if got, want := ConfigDir(), filepath.Dir(tt.want); got != want {
+				t.Fatalf("ConfigDir() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestLoadCustomPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "work.toml")
+	t.Setenv(PathEnv, path)
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("Load() with missing custom config error = %v, want does not exist", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("missing custom config was created: stat error = %v", err)
+	}
+
+	writeFile(t, path, "[workspaces.work]\npaths = [\"/data/work\"]\n")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if _, ok := cfg.Workspaces["work"]; !ok {
+		t.Fatalf("expected workspace from custom config, got %#v", cfg.Workspaces)
+	}
+}
+
 func TestLoadExistingEmptyPathsOk(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -340,22 +340,66 @@ type Workspace struct {
 	HostPorts       []HostPort               `toml:"host_ports,omitempty"`
 }
 
-func ConfigDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "~/.config/jailoc/"
-	}
+// PathEnv names the environment variable that sets the configuration file.
+const PathEnv = "JAILOC_CONFIG"
 
-	return home + "/.config/jailoc/"
+// pathOverride is the configuration file set with --config; it wins over
+// PathEnv.
+var pathOverride string
+
+// SetPath makes path the configuration file instead of PathEnv or the
+// default ~/.config/jailoc/config.toml.
+func SetPath(path string) {
+	pathOverride = path
+}
+
+// customPath returns the absolute configuration file set with --config or
+// PathEnv, or "" for the default one.
+func customPath() string {
+	p := cmp.Or(pathOverride, os.Getenv(PathEnv))
+	if p == "" {
+		return ""
+	}
+	// Both fail only without a home or working directory; the path is then
+	// used as given and loading it reports the problem.
+	if expanded, err := ExpandPath(p); err == nil {
+		p = expanded
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	return p
+}
+
+// ConfigDir is the directory of the configuration file, which also holds
+// the per-workspace files under workspaces/<name>/.
+func ConfigDir() string {
+	return filepath.Dir(ConfigPath())
 }
 
 func ConfigPath() string {
-	return ConfigDir() + "config.toml"
+	if p := customPath(); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "~/.config/jailoc/config.toml"
+	}
+
+	return filepath.Join(home, ".config", "jailoc", "config.toml")
 }
 
 func Load() (*Config, error) {
 	configPath := ConfigPath()
 	slog.Debug("loading config", "path", configPath)
+
+	// Only the default file is created when missing: a missing file set
+	// explicitly is more likely a typo than a new configuration.
+	if customPath() != "" {
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			return nil, fmt.Errorf("config file %q (from --config or %s) does not exist", configPath, PathEnv)
+		}
+	}
 
 	cfg, err := loadFrom(configPath, true)
 	if err != nil {
