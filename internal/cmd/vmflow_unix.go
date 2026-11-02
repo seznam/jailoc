@@ -89,7 +89,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	}
 
 	start := time.Now()
-	rt, err := vmRuntime(ctx, cfg)
+	rt, err := vmRuntime(cfg)
 	if err != nil {
 		return err
 	}

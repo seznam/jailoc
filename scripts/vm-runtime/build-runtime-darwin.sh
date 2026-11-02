@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the darwin/arm64 VM runtime bundle that jailoc downloads on first use
-# of backend = "vm" (internal/vm/runtime.go).
+# Build the darwin/arm64 VM runtime tarballs that release builds of jailoc
+# embed (internal/vm/runtime.go).
 #
 # The bundle reuses libkrun and its GPU dependencies from a go-microvm release
 # and replaces the runner with one built from the go-microvm revision jailoc
@@ -10,11 +10,11 @@
 # Usage: build-runtime-darwin.sh GO_MICROVM_CHECKOUT UPSTREAM_TAG OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
 #   UPSTREAM_TAG         go-microvm release providing libkrun (e.g. v0.0.41)
-#   OUT_DIR              receives go-microvm-runtime-darwin-arm64.tar.gz
+#   OUT_DIR              receives runtime.tar.gz and firmware.tar.gz, for
+#                        example internal/vm/runtimebin/darwin-arm64
 #
 # Requires: macOS on arm64, Go, Homebrew libkrun (to compile the runner) and
-# libkrunfw, gh, go-task. Prints the SHA-256 values to pin in
-# internal/vm/runtime.go.
+# libkrunfw, gh, go-task.
 set -euo pipefail
 
 src=${1:?go-microvm checkout}
@@ -58,6 +58,6 @@ libkrunfw is licensed under the GNU General Public License v2.0 (GPL-2.0).
 See https://github.com/libkrun/libkrunfw for full license text.
 EOF
 
-COPYFILE_DISABLE=1 tar -czf "$out/$name.tar.gz" -C "$work" "$name"
-COPYFILE_DISABLE=1 tar -czf "$out/$fw.tar.gz" -C "$work" "$fw"
-shasum -a 256 "$out/$name.tar.gz" "$out/$fw.tar.gz"
+COPYFILE_DISABLE=1 tar -czf "$out/runtime.tar.gz" -C "$work" "$name"
+COPYFILE_DISABLE=1 tar -czf "$out/firmware.tar.gz" -C "$work" "$fw"
+shasum -a 256 "$out/runtime.tar.gz" "$out/firmware.tar.gz"

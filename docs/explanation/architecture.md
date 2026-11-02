@@ -108,4 +108,4 @@ The broker also carries a few host services: the SSH and Docker sockets for jail
 - **Start time:** the first start builds and exports the image. Later starts reuse the cache; a builder VM has to boot before it can check the cache.
 - **Resources:** `cpu` and `memory` size the whole VM, including its Docker daemon. Nothing limits processes inside it. A build in the builder VM adds the builder's own CPU and memory.
 - **Docker inside the VM:** with `enable_docker`, containers share the VM's CPU, memory and network rules.
-- **Platform:** darwin/arm64 and linux/amd64 (with access to `/dev/kvm` and Landlock, Linux 5.19 or later). Other platforms need a self-built go-microvm runtime set through `[vm] runner` and `[vm] lib_dir`.
+- **Platform:** darwin/arm64, linux/amd64 and experimental linux/arm64 (on Linux with access to `/dev/kvm` and Landlock, Linux 5.19 or later). Release builds embed the go-microvm runtime for these platforms; other platforms and builds from source need a self-built runtime set through `[vm] runner` and `[vm] lib_dir`.

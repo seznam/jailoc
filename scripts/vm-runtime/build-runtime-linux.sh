@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the linux/amd64 VM runtime bundles that jailoc downloads on first use
-# of the VM backend (internal/vm/runtime.go).
+# Build the linux VM runtime tarballs for the host architecture (amd64 or
+# arm64) that release builds of jailoc embed (internal/vm/runtime.go).
 #
 # go-microvm's builder image compiles the runner from the go-microvm revision
 # jailoc pins in go.mod and provides libkrun and libkrunfw at the versions
@@ -11,19 +11,21 @@
 #
 # Usage: build-runtime-linux.sh GO_MICROVM_CHECKOUT OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
-#   OUT_DIR              receives go-microvm-runtime-linux-amd64.tar.gz and
-#                        go-microvm-firmware-linux-amd64.tar.gz
+#   OUT_DIR              receives runtime.tar.gz and firmware.tar.gz, for
+#                        example internal/vm/runtimebin/linux-amd64
 #
-# Requires: Linux on x86_64, go-task, podman or docker. Prints the SHA-256
-# values to pin in internal/vm/runtime.go.
+# Requires: Linux on x86_64 or aarch64, go-task, podman or docker.
 set -euo pipefail
 
 src=${1:?go-microvm checkout}
 out=${2:?output directory}
-runtime_name=go-microvm-runtime-linux-amd64
-firmware_name=go-microvm-firmware-linux-amd64
-
-[ "$(uname -s)/$(uname -m)" = "Linux/x86_64" ] || { echo "must run on Linux x86_64" >&2; exit 1; }
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64) arch=amd64 ;;
+  Linux/aarch64) arch=arm64 ;;
+  *) echo "must run on Linux x86_64 or aarch64" >&2; exit 1 ;;
+esac
+runtime_name=go-microvm-runtime-linux-$arch
+firmware_name=go-microvm-firmware-linux-$arch
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 work=$(mktemp -d)
@@ -57,6 +59,6 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
-tar --owner=0 --group=0 -czf "$out/$runtime_name.tar.gz" -C "$work" "$runtime_name"
-tar --owner=0 --group=0 -czf "$out/$firmware_name.tar.gz" -C "$work" "$firmware_name"
-sha256sum "$out/$runtime_name.tar.gz" "$out/$firmware_name.tar.gz"
+tar --owner=0 --group=0 -czf "$out/runtime.tar.gz" -C "$work" "$runtime_name"
+tar --owner=0 --group=0 -czf "$out/firmware.tar.gz" -C "$work" "$firmware_name"
+sha256sum "$out/runtime.tar.gz" "$out/firmware.tar.gz"

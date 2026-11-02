@@ -6,6 +6,9 @@ before:
   hooks:
     # Embed jailoc-guest (VM backend) for linux/arm64 and linux/amd64.
     - go generate ./internal/guestbin
+    # The release workflows place the VM runtimes built by vm-runtime.yml
+    # here; internal/vm embeds them.
+    - sh -c 'for p in darwin-arm64 linux-amd64 linux-arm64; do for f in runtime firmware; do test -s internal/vm/runtimebin/$p/$f.tar.gz || { echo "missing VM runtime internal/vm/runtimebin/$p/$f.tar.gz" >&2; exit 1; }; done; done'
 
 builds:
   - id: jailoc
@@ -17,6 +20,10 @@ builds:
     goarch:
       - amd64
       - arm64
+    ignore:
+      # libkrun on macOS needs Apple silicon.
+      - goos: darwin
+        goarch: amd64
     ldflags:
       - -s -w
       - -X main.version={{.Version}}

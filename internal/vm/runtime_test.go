@@ -4,16 +4,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 )
 
@@ -56,27 +50,6 @@ func makeTarball(t *testing.T, entries []tarEntry) []byte {
 	return buf.Bytes()
 }
 
-func sum(b []byte) string {
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:])
-}
-
-func serve(t *testing.T, files map[string][]byte) (*httptest.Server, *atomic.Int32) {
-	t.Helper()
-	var hits atomic.Int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		b, ok := files[r.URL.Path]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write(b)
-	}))
-	t.Cleanup(ts.Close)
-	return ts, &hits
-}
-
 var (
 	goodRuntime = []tarEntry{
 		{name: "rt/", typeflag: tar.TypeDir, mode: 0o755},
@@ -89,26 +62,21 @@ var (
 	}
 )
 
-func TestEnsureReleaseDownloadsOnce(t *testing.T) {
+func TestUnpackRuntimeOnce(t *testing.T) {
 	t.Parallel()
 	rt, fw := makeTarball(t, goodRuntime), makeTarball(t, goodFirmware)
-	ts, hits := serve(t, map[string][]byte{"/rt.tar.gz": rt, "/fw.tar.gz": fw})
-	rel := Release{
-		Version:  "v1",
-		Runtime:  Artifact{URL: ts.URL + "/rt.tar.gz", SHA256: sum(rt)},
-		Firmware: Artifact{URL: ts.URL + "/fw.tar.gz", SHA256: sum(fw)},
-	}
 	cache := t.TempDir()
 	var progress bytes.Buffer
 
-	runner, libDir, err := ensureRelease(context.Background(), ts.Client(), cache, rel, &progress)
+	runner, libDir, err := unpackRuntime(cache, rt, fw, &progress)
 	if err != nil {
-		t.Fatalf("ensureRelease: %v", err)
+		t.Fatalf("unpackRuntime: %v", err)
 	}
-	if want := filepath.Join(cache, "v1", "runtime", RunnerBinary); runner != want {
-		t.Fatalf("runner = %q, want %q", runner, want)
+	dir := filepath.Dir(filepath.Dir(runner))
+	if filepath.Dir(dir) != cache || filepath.Base(runner) != RunnerBinary {
+		t.Fatalf("runner = %q, want <cache>/<key>/runtime/%s", runner, RunnerBinary)
 	}
-	wantLib := filepath.Join(cache, "v1", "runtime") + string(os.PathListSeparator) + filepath.Join(cache, "v1", "firmware")
+	wantLib := filepath.Join(dir, "runtime") + string(os.PathListSeparator) + filepath.Join(dir, "firmware")
 	if libDir != wantLib {
 		t.Fatalf("libDir = %q, want %q", libDir, wantLib)
 	}
@@ -119,64 +87,59 @@ func TestEnsureReleaseDownloadsOnce(t *testing.T) {
 	if info.Mode().Perm()&0o100 == 0 {
 		t.Fatalf("runner mode %v is not executable", info.Mode())
 	}
-	if b, err := os.ReadFile(filepath.Join(cache, "v1", "firmware", "libkrunfw.5.dylib")); err != nil || string(b) != "fw" { //nolint:gosec // G304: test temp dir
+	if b, err := os.ReadFile(filepath.Join(dir, "firmware", "libkrunfw.5.dylib")); err != nil || string(b) != "fw" { //nolint:gosec // G304: test temp dir
 		t.Fatalf("firmware = %q, %v", b, err)
 	}
-	if !strings.Contains(progress.String(), "Downloading VM runtime v1") {
+	if !strings.Contains(progress.String(), "Unpacking VM runtime") {
 		t.Fatalf("progress = %q", progress.String())
 	}
 
 	progress.Reset()
-	if _, _, err := ensureRelease(context.Background(), ts.Client(), cache, rel, &progress); err != nil {
-		t.Fatalf("second ensureRelease: %v", err)
+	again, _, err := unpackRuntime(cache, rt, fw, &progress)
+	if err != nil {
+		t.Fatalf("second unpackRuntime: %v", err)
 	}
-	if got := hits.Load(); got != 2 {
-		t.Fatalf("server hits = %d, want 2 (second call must use the cache)", got)
+	if again != runner || progress.Len() != 0 {
+		t.Fatalf("second call: runner %q, progress %q; want the cached runtime", again, progress.String())
 	}
-	if progress.Len() != 0 {
-		t.Fatalf("cached call printed %q", progress.String())
+
+	other := makeTarball(t, append(goodFirmware[:1:1], tarEntry{name: "fw/VERSION", body: "v2", mode: 0o644}))
+	runner2, _, err := unpackRuntime(cache, rt, other, io.Discard)
+	if err != nil {
+		t.Fatalf("unpackRuntime with other firmware: %v", err)
 	}
-	if entries, _ := os.ReadDir(cache); len(entries) != 1 {
-		t.Fatalf("cache dir has %d entries, want only the release", len(entries))
+	if runner2 == runner {
+		t.Fatalf("different firmware reused runtime directory %q", runner)
+	}
+	if entries, _ := os.ReadDir(cache); len(entries) != 2 {
+		t.Fatalf("cache dir has %d entries, want one per runtime", len(entries))
 	}
 }
 
-func TestEnsureReleaseRejects(t *testing.T) {
+func TestUnpackRuntimeRejects(t *testing.T) {
 	t.Parallel()
 	fw := makeTarball(t, goodFirmware)
 	tests := []struct {
 		name    string
-		runtime []tarEntry
-		badSum  bool
+		runtime []byte
 		want    string
 	}{
-		{name: "checksum mismatch", runtime: goodRuntime, badSum: true, want: "checksum mismatch"},
-		{name: "path traversal", runtime: []tarEntry{{name: "../evil", body: "x", mode: 0o644}}, want: "unsafe path"},
-		{name: "absolute path", runtime: []tarEntry{{name: "/etc/evil", body: "x", mode: 0o644}}, want: "unsafe path"},
-		{name: "symlink", runtime: []tarEntry{{name: "rt/link", typeflag: tar.TypeSymlink, link: "/etc/passwd"}}, want: "unsupported entry"},
-		{name: "missing runner", runtime: []tarEntry{{name: "rt/libkrun.1.dylib", body: "x", mode: 0o644}}, want: "missing from the runtime tarball"},
+		{name: "not gzip", runtime: []byte("plain"), want: "open gzip"},
+		{name: "path traversal", runtime: makeTarball(t, []tarEntry{{name: "../evil", body: "x", mode: 0o644}}), want: "unsafe path"},
+		{name: "absolute path", runtime: makeTarball(t, []tarEntry{{name: "/etc/evil", body: "x", mode: 0o644}}), want: "unsafe path"},
+		{name: "symlink", runtime: makeTarball(t, []tarEntry{{name: "rt/link", typeflag: tar.TypeSymlink, link: "/etc/passwd"}}), want: "unsupported entry"},
+		{name: "missing runner", runtime: makeTarball(t, []tarEntry{{name: "rt/libkrun.1.dylib", body: "x", mode: 0o644}}), want: "missing from the runtime tarball"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			rt := makeTarball(t, tt.runtime)
-			ts, _ := serve(t, map[string][]byte{"/rt.tar.gz": rt, "/fw.tar.gz": fw})
-			rtSum := sum(rt)
-			if tt.badSum {
-				rtSum = strings.Repeat("0", 64)
-			}
-			rel := Release{
-				Version:  "v1",
-				Runtime:  Artifact{URL: ts.URL + "/rt.tar.gz", SHA256: rtSum},
-				Firmware: Artifact{URL: ts.URL + "/fw.tar.gz", SHA256: sum(fw)},
-			}
 			cache := t.TempDir()
-			_, _, err := ensureRelease(context.Background(), ts.Client(), cache, rel, io.Discard)
+			_, _, err := unpackRuntime(cache, tt.runtime, fw, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
-			if _, statErr := os.Stat(filepath.Join(cache, "v1")); !os.IsNotExist(statErr) {
-				t.Fatalf("release directory exists after failure: %v", statErr)
+			if entries, _ := os.ReadDir(cache); len(entries) != 0 {
+				t.Fatalf("cache has %d entries after failure, want none", len(entries))
 			}
 		})
 	}

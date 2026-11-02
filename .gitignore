@@ -16,3 +16,4 @@ dist/
 *.tgz
 vendor/
 internal/guestbin/bin/*/jailoc-guest
+internal/vm/runtimebin/*/*.tar.gz

@@ -18,11 +18,11 @@ Run coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO) in sandboxed 
 - 📁 **File isolation**: each workspace is a separate VM with its own kernel. The agent only sees directories you explicitly share and files you copy in. SSH keys, browser profiles, and other projects are invisible.
 - 🌐 **Network isolation**: all VM traffic goes through a host-side network broker that blocks private and reserved IPv4 and IPv6 ranges by default. You allowlist only what the agent needs. No pivoting to internal infrastructure.
 - 🐳 **Sandboxed Docker**: opt in with `enable_docker = true` and the Docker daemon runs inside the workspace VM. No host socket mounting.
-- ⚡ **Zero config to start**: `jailoc` downloads the VM runtime, builds the image, boots the VM and attaches you to the agent.
+- ⚡ **Zero config to start**: `jailoc` unpacks its embedded VM runtime, builds the image, boots the VM and attaches you to the agent.
 
 ## Installation
 
-**Requirements:** macOS on Apple Silicon, or Linux amd64 with KVM (`/dev/kvm` access) and Landlock (Linux 5.19 or later). Docker Engine must be running on the host to build workspace images. Upgrading from jailoc v1? Run `jailoc migrate`.
+**Requirements:** macOS on Apple Silicon, or Linux amd64 (arm64 experimental) with KVM (`/dev/kvm` access) and Landlock (Linux 5.19 or later). Docker Engine must be running on the host to build workspace images. Upgrading from jailoc v1? Run `jailoc migrate`.
 
 ### Build from source
 
@@ -34,7 +34,7 @@ go generate ./internal/guestbin
 go install ./cmd/jailoc
 ```
 
-Make sure `$GOPATH/bin` (default `$HOME/go/bin`) is on your `PATH`.
+Make sure `$GOPATH/bin` (default `$HOME/go/bin`) is on your `PATH`. Source builds don't embed the VM runtime; set `[vm] runner` and `lib_dir` or build the runtime first, see [installation](https://seznam.github.io/jailoc/how-to/installation/#build-from-source).
 
 ### Nix
 
@@ -58,9 +58,11 @@ and include the package in your `environment.systemPackages` or `home.packages`:
 inputs.jailoc.packages."${pkgs.stdenv.hostPlatform.system}".jailoc
 ```
 
+The Nix package is a source build, so it doesn't embed the VM runtime either: set `[vm] runner` and `lib_dir` as described in [installation](https://seznam.github.io/jailoc/how-to/installation/#build-from-source).
+
 ### Pre-built binaries
 
-Download the archive for your platform from [GitHub Releases](https://github.com/seznam/jailoc/releases) (Linux/macOS × amd64/arm64), extract, and place the `jailoc` binary on your `PATH`.
+Download the archive for your platform from [GitHub Releases](https://github.com/seznam/jailoc/releases) (macOS arm64, Linux amd64/arm64), extract, and place the `jailoc` binary on your `PATH`.
 
 ## 🛠️ Development
 

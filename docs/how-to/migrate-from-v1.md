@@ -23,7 +23,7 @@ In v1 an unset `backend` meant Docker, so `jailoc migrate` treats every workspac
 
 ## Check the prerequisites
 
-- A supported host: macOS on Apple Silicon, or Linux on amd64 with read and write access to `/dev/kvm`. See [Installation](installation.md).
+- A supported host: macOS on Apple Silicon, or Linux on amd64 (arm64 experimental) with read and write access to `/dev/kvm`. See [Installation](installation.md).
 - Docker Engine running on the host. `jailoc migrate` needs it to stop v1 workspaces and copy their data volumes.
 
 ## Preview the migration

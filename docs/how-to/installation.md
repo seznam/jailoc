@@ -4,12 +4,13 @@ This guide covers the supported platforms, prerequisites and installation method
 
 ## Check your platform
 
-Every workspace runs in its own libkrun micro-VM. jailoc supports two host platforms:
+Every workspace runs in its own libkrun micro-VM. jailoc supports these host platforms:
 
 | Platform | Hypervisor | Requirement |
 |----------|------------|-------------|
 | macOS on Apple Silicon (`darwin/arm64`) | Hypervisor.framework | None |
 | Linux on x86-64 (`linux/amd64`) | KVM | Read and write access to `/dev/kvm`; Linux 5.19 or later with Landlock enabled |
+| Linux on ARM64 (`linux/arm64`) | KVM | Same as `linux/amd64`; experimental, not covered by the VM integration tests |
 
 On Linux, check that KVM is available and that your user can open it:
 
@@ -34,7 +35,7 @@ If it is missing, add `landlock` to the `lsm=` kernel parameter.
 !!! note "Linux file ownership"
     On Linux, libkrun's virtio-fs shows the real host owner of every file, so `jailoc-guest` mounts the VM's root filesystem and the shares idmapped: inside the VM your files appear as root's or the agent's, and on the host everything belongs to your user. Root inside the VM cannot give a shared file another host owner. If the guest kernel rejects idmapped mounts, the agent falls back to your user's UID and GID and `sudo` does not grant root.
 
-Other platforms are unsupported. If you build the [go-microvm](https://github.com/stacklok/go-microvm) runner and libkrun yourself, point jailoc at them in the [`[vm]` section](../reference/configuration.md):
+Other platforms, including Intel Macs, are unsupported. If you build the [go-microvm](https://github.com/stacklok/go-microvm) runner and libkrun yourself, point jailoc at them in the [`[vm]` section](../reference/configuration.md):
 
 ```toml
 [vm]
@@ -53,7 +54,7 @@ Without a usable host daemon, `"auto"` builds images in a builder VM.
 
 ## Install a pre-built binary
 
-Pre-built archives for macOS (arm64) and Linux (amd64) are published with every release. Download the one matching your platform from the [GitHub Releases page](https://github.com/seznam/jailoc/releases), extract it, and place the binary on your `PATH`.
+Pre-built archives for macOS (arm64) and Linux (amd64, arm64) are published with every release. Download the one matching your platform from the [GitHub Releases page](https://github.com/seznam/jailoc/releases), extract it, and place the binary on your `PATH`.
 
 ## Build from source
 
@@ -68,7 +69,9 @@ go install ./cmd/jailoc
 
 The binary lands in `$GOPATH/bin` (or `$HOME/go/bin` by default). Make sure that directory is on your `PATH`.
 
-## Let jailoc fetch the VM runtime
+A source build doesn't include the VM runtime (the `go-microvm-runner` process, libkrun and the libkrunfw guest kernel) and fails to start workspaces with `this jailoc build does not include the VM runtime`. Either set `runner` and `lib_dir` in the [`[vm]` section](../reference/configuration.md) as shown in [Check your platform](#check-your-platform), or build the runtime into `internal/vm/runtimebin/<os>-<arch>/` before `go install` with `scripts/vm-runtime/build-runtime-linux.sh` or `scripts/vm-runtime/build-runtime-darwin.sh` (see the comments in each script for its requirements).
 
-You don't install the VM runtime by hand. The first `jailoc up` downloads the pinned runtime for your platform (the `go-microvm-runner` process, libkrun and the libkrunfw guest kernel), verifies its SHA-256 checksums and unpacks it into `~/.cache/jailoc-vm/runtime/`. Later starts reuse it. If the download or the checksum check fails, see [Troubleshooting](troubleshooting.md#vm-runtime-download-fails).
+## Know where the VM runtime lives
+
+Release binaries embed the VM runtime for their platform. The first `jailoc up` unpacks it into `~/.cache/jailoc-vm/runtime/`; later starts reuse it. Nothing is downloaded. The runtime includes libkrunfw, which is licensed under GPL-2.0; its source is at [libkrun/libkrunfw](https://github.com/libkrun/libkrunfw).
 

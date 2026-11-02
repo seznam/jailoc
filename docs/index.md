@@ -20,7 +20,7 @@ jailoc can't break the trifecta entirely. The agent still processes untrusted co
 
     The agent can still make outbound requests to the **public internet**. If a prompt injection attack instructs the agent to exfiltrate workspace source code to an attacker-controlled public server, jailoc's network policy won't block it. jailoc protects your internal infrastructure and limits file access. It isn't a complete defense against the [lethal trifecta](explanation/threat-model.md).
 
-jailoc runs on macOS with Apple Silicon and on Linux amd64 with KVM. See [Installation](how-to/installation.md) for host requirements.
+jailoc runs on macOS with Apple Silicon and on Linux amd64 (arm64 experimental) with KVM. See [Installation](how-to/installation.md) for host requirements.
 
 ## Documentation
 
