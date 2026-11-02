@@ -24,6 +24,7 @@ import (
 )
 
 var workspaceFlag string
+var configFlag string
 var workspaceExplicit bool
 var appVersion string
 var sessionFlag string
@@ -44,6 +45,7 @@ var rootCmd = &cobra.Command{
 			color.NoColor = true
 		}
 		workspaceExplicit = cmd.Flags().Changed("workspace")
+		config.SetPath(configFlag)
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -124,6 +126,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&workspaceFlag, "workspace", "w", "default", "workspace name")
+	rootCmd.PersistentFlags().StringVar(&configFlag, "config", "", "configuration file (default: $"+config.PathEnv+", else ~/.config/jailoc/config.toml)")
 	rootCmd.PersistentFlags().Bool("no-color", false, "disable colored output")
 	rootCmd.Flags().StringVarP(&sessionFlag, "session", "s", "", "session ID to continue")
 	rootCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "continue the last session")

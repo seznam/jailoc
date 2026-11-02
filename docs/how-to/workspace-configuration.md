@@ -14,6 +14,15 @@ jailoc stores its configuration at:
 
 The file is created on first run with a `default` workspace already in place. Edit it with any text editor.
 
+To use another file, pass `--config` or set `JAILOC_CONFIG`:
+
+```sh
+jailoc --config ~/work/jailoc.toml up
+export JAILOC_CONFIG=~/work/jailoc.toml
+```
+
+The file must exist. Give its workspaces names that no other configuration file uses: VMs are identified by workspace name alone. See [File location](../reference/configuration.md#file-location).
+
 ## Select a workspace
 
 Commands use the workspace whose `paths` contain the current directory, the most specific one if several do, and fall back to `default`. Given these two workspaces:

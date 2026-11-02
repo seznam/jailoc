@@ -13,6 +13,7 @@ jailoc [command] [flags]
 |------|-------|---------|-------------|
 | `--workspace` | `-w` | `default` | Target workspace name. Overrides path-based auto-detection where applicable. |
 | `--no-color` | | `false` | Disable colored output. |
+| `--config` | | `$JAILOC_CONFIG`, else `~/.config/jailoc/config.toml` | Configuration file to use. See [configuration file location](configuration.md#file-location). |
 
 ### Workspace resolution
 
@@ -293,7 +294,7 @@ Print the resolved configuration.
 jailoc config [flags]
 ```
 
-Reads `~/.config/jailoc/config.toml`, resolves defaults and `~` expansions, and prints the result. Secrets are listed per scope, under `Defaults Secrets:` and under each workspace, as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token")` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
+Reads the configuration file, resolves defaults and `~` expansions, and prints the result. Secrets are listed per scope, under `Defaults Secrets:` and under each workspace, as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token")` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
 
 ---
 
@@ -305,7 +306,7 @@ Add a directory to a workspace's `paths` list.
 jailoc add [path] [flags]
 ```
 
-Appends `path` (default: the current working directory) to `workspaces.<name>.paths` in `~/.config/jailoc/config.toml`. The path must not be under a forbidden system prefix; see the [configuration reference](configuration.md#paths). Secret sources of the target workspace are validated before the configuration changes. If the workspace VM is running, it is restarted so the new share takes effect.
+Appends `path` (default: the current working directory) to `workspaces.<name>.paths` in the configuration file. The path must not be under a forbidden system prefix; see the [configuration reference](configuration.md#paths). Secret sources of the target workspace are validated before the configuration changes. If the workspace VM is running, it is restarted so the new share takes effect.
 
 Without `--workspace`, the workspace is resolved from the path being added (longest prefix). If `--workspace` is set and the path is not under any configured path of that workspace, `jailoc add` returns an error.
 
@@ -324,7 +325,7 @@ jailoc migrate [flags]
 | `--dry-run` | | Print the planned changes and the resulting `config.toml` without changing anything. |
 | `--yes` | `-y` | Accept the default answer to every question. Required when standard input is not a terminal. |
 
-A workspace counts as a jailoc v1 Docker workspace unless its effective `backend` is `"vm"`. `jailoc migrate` rewrites `~/.config/jailoc/config.toml`:
+A workspace counts as a jailoc v1 Docker workspace unless its effective `backend` is `"vm"`. `jailoc migrate` rewrites the configuration file:
 
 - Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
 - Lists the jailoc v1 settings `mode`, `password_mode` and `expose_port` per scope and removes them after confirmation. Declining stops the migration.
