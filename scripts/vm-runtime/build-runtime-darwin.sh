@@ -2,33 +2,36 @@
 # Build the darwin/arm64 VM runtime tarballs that release builds of jailoc
 # embed (internal/vm/runtime.go).
 #
-# The bundle reuses libkrun and its GPU dependencies from a go-microvm release
-# and replaces the runner with one built from the go-microvm revision jailoc
-# pins in go.mod. The firmware tarball builds libkrunfw from the prebuilt
-# kernel bundle of the libkrunfw release go-microvm names in versions.env
-# (go-microvm releases ship an older one, built without zram), pinned by
-# checksum below. libkrunfw contains the Linux kernel (GPL-2.0-only) and is
-# otherwise LGPL-2.1-only; its source is published with jailoc releases
+# libkrun is built from the release go-microvm names in versions.env, with
+# jailoc's patches (build-libkrun-linux.sh explains them; on arm64 they change
+# nothing) and the same features as on Linux, so the runtime needs no GPU
+# libraries. It is built with cargo-auditable, which records the Rust crates it
+# contains so SBOM tools such as syft can list them. The runner is built from
+# the go-microvm revision jailoc pins in go.mod against that libkrun. The
+# firmware tarball builds libkrunfw from the prebuilt kernel bundle of the
+# libkrunfw release go-microvm names in versions.env, pinned by checksum
+# below. libkrunfw contains the Linux kernel (GPL-2.0-only) and is otherwise
+# LGPL-2.1-only; its source is published with jailoc releases
 # (build-runtime-source.sh).
 #
-# Usage: build-runtime-darwin.sh GO_MICROVM_CHECKOUT UPSTREAM_TAG OUT_DIR
+# Usage: build-runtime-darwin.sh GO_MICROVM_CHECKOUT OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
-#   UPSTREAM_TAG         go-microvm release providing libkrun (e.g. v0.0.41)
 #   OUT_DIR              receives runtime.tar.gz and firmware.tar.gz, for
 #                        example internal/vm/runtimebin/darwin-arm64
 #
-# Requires: macOS on arm64, Go, Homebrew libkrun (to compile the runner), gh,
-# go-task, curl, make and a C compiler.
+# Requires: macOS on arm64 with Xcode command line tools, Go, Rust (cargo),
+# go-task, lld, xz, curl and git.
 set -euo pipefail
 
 src=${1:?go-microvm checkout}
-tag=${2:?upstream go-microvm release tag}
-out=${3:?output directory}
+out=${2:?output directory}
+here=$(cd "$(dirname "$0")" && pwd)
 name=go-microvm-runtime-darwin-arm64
 # libkrunfw-prebuilt-aarch64.tgz of this libkrunfw release; update both when
 # go-microvm moves to a newer libkrunfw.
 libkrunfw=v5.6.2
 libkrunfw_sha256=adef6739cc3bda2a1b57f04c08ccbfdf206a6c831d76b32de1beddc0e7984e86
+cargo_auditable=0.7.7
 
 [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ] || { echo "must run on macOS arm64" >&2; exit 1; }
 mkdir -p "$out"
@@ -36,41 +39,60 @@ out=$(cd "$out" && pwd)
 work=$(mktemp -d)
 trap 'rm -r "$work"' EXIT
 
-want=$(grep '^LIBKRUNFW_VERSION=' "$src/versions.env" | cut -d= -f2)
-if [ "$want" != "$libkrunfw" ]; then
-  echo "go-microvm wants libkrunfw $want, this script pins $libkrunfw" >&2
+version() { grep "^$1=" "$src/versions.env" | cut -d= -f2; }
+libkrun=$(version LIBKRUN_VERSION)
+if [ "$(version LIBKRUNFW_VERSION)" != "$libkrunfw" ]; then
+  echo "go-microvm wants libkrunfw $(version LIBKRUNFW_VERSION), this script pins $libkrunfw" >&2
   exit 1
 fi
 
-gh release download "$tag" --repo stacklok/go-microvm \
-  --pattern "$name.tar.gz" --pattern sha256sums.txt \
-  --dir "$work"
-(cd "$work" && grep -- "$name.tar.gz" sha256sums.txt | shasum -a 256 -c -)
-tar -xzf "$work/$name.tar.gz" -C "$work"
+git clone --quiet --depth 1 --branch "$libkrun" https://github.com/libkrun/libkrun "$work/libkrun"
+for p in "$here"/libkrun-patches/*.patch; do
+  echo "applying $(basename "$p")"
+  patch -d "$work/libkrun" -p1 --forward < "$p"
+done
+# The Makefile runs cargo build; a cargo in front of the real one on PATH
+# turns that into cargo auditable build.
+cargo install --locked --root "$work/auditable" "cargo-auditable@$cargo_auditable"
+printf '#!/bin/sh\nexec %s auditable "$@"\n' "$(command -v cargo)" > "$work/auditable/bin/cargo"
+chmod +x "$work/auditable/bin/cargo"
+PATH=$work/auditable/bin:$PATH make -C "$work/libkrun" BLK=1 NET=1
+mkdir "$work/lib"
+cp "$work"/libkrun/target/release/libkrun.1.*.dylib "$work/lib/libkrun.1.dylib"
+otool -l "$work/lib/libkrun.1.dylib" | grep -q "sectname \.dep-v0" ||
+  { echo "libkrun.1.dylib has no cargo-auditable data" >&2; exit 1; }
+install_name_tool -id @loader_path/libkrun.1.dylib "$work/lib/libkrun.1.dylib"
+ln -s libkrun.1.dylib "$work/lib/libkrun.dylib"
 
-(cd "$src" && task build-dev-darwin)
+# The runner links the libkrun built above, found through CGO_LDFLAGS before
+# the Homebrew directories go-microvm's cgo flags name.
+(cd "$src" && CGO_LDFLAGS="-L$work/lib" task build-dev-darwin)
+mkdir "$work/$name"
 cp "$src/bin/go-microvm-runner" "$work/$name/go-microvm-runner"
-install_name_tool -change "$(brew --prefix libkrun)/lib/libkrun.1.dylib" \
-  @loader_path/libkrun.1.dylib "$work/$name/go-microvm-runner"
-codesign --force -s - --entitlements "$src/assets/entitlements.plist" "$work/$name/go-microvm-runner"
-rev=$(git -C "$src" rev-parse --short HEAD)
-echo "$tag+$rev" > "$work/$name/VERSION"
-install -m 0444 "$src/LICENSE" "$work/$name/LICENSE"
-cat > "$work/$name/NOTICE" <<EOF
-go-microvm-runner is built from go-microvm $rev ($(git -C "$src" remote get-url origin)),
-licensed under the Apache License 2.0, see LICENSE. libkrun (Apache-2.0),
-virglrenderer (MIT), libepoxy (MIT) and MoltenVK (Apache-2.0) come unmodified
-from the go-microvm $tag release (https://github.com/stacklok/go-microvm).
-
-The license texts and notices of these libraries and of the Go modules and
-Rust crates built into these files are in THIRD_PARTY_NOTICES in the jailoc
-release archive.
-EOF
-
-if otool -L "$work/$name/go-microvm-runner" | grep -q /opt/homebrew; then
-  echo "runner still links Homebrew libraries" >&2
+cp "$work/lib/libkrun.1.dylib" "$work/$name/libkrun.1.dylib"
+codesign --force -s - "$work/$name/libkrun.1.dylib"
+if otool -L "$work/$name/go-microvm-runner" "$work/$name/libkrun.1.dylib" | grep -Eq '/opt/homebrew|/usr/local'; then
+  echo "runtime links Homebrew libraries" >&2
   exit 1
 fi
+otool -L "$work/$name/go-microvm-runner" | grep -q '@loader_path/libkrun.1.dylib' ||
+  { echo "runner does not load libkrun from its own directory" >&2; exit 1; }
+rev=$(git -C "$src" rev-parse --short HEAD)
+repo=$(git -C "$src" remote get-url origin)
+install -m 0444 "$src/LICENSE" "$work/$name/LICENSE"
+patches=$(cd "$here/libkrun-patches" && ls -- *.patch | cut -c1-4 | paste -sd, -)
+echo "$rev libkrun-$libkrun+jailoc-patches-$patches" > "$work/$name/VERSION"
+cat > "$work/$name/NOTICE" <<EOF
+go-microvm-runner is built from go-microvm $rev ($repo) and
+libkrun.1.dylib from libkrun $libkrun (https://github.com/libkrun/libkrun).
+Both are licensed under the Apache License 2.0, see LICENSE.
+
+jailoc modified libkrun with the patches $patches from
+https://github.com/seznam/jailoc/tree/main/scripts/vm-runtime/libkrun-patches.
+
+The notices of the Go modules and Rust crates built into these files are in
+THIRD_PARTY_NOTICES in the jailoc release archive.
+EOF
 
 fw=go-microvm-firmware-darwin-arm64
 mkdir "$work/$fw"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Print the licenses and notices of everything in the VM runtime that release
 # builds of jailoc embed: libkrunfw, libkrun with the Rust crates built into it,
-# go-microvm-runner with the Go modules built into it, and the macOS GPU
-# libraries. GoReleaser appends the result to THIRD_PARTY_NOTICES.
+# and go-microvm-runner with the Go modules built into it. GoReleaser appends
+# the result to THIRD_PARTY_NOTICES.
 #
 # Usage: build-runtime-notices.sh GO_MICROVM_CHECKOUT OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
@@ -53,7 +53,7 @@ EOF
 	section "VM runtime: libkrun $libkrun"
 	cat <<EOF
 libkrun (https://github.com/libkrun/libkrun) is licensed under the Apache
-License 2.0. On Linux, jailoc builds it with the patches in
+License 2.0. jailoc builds it with the patches in
 https://github.com/seznam/jailoc/tree/main/scripts/vm-runtime/libkrun-patches.
 The Rust standard library built into it is licensed under MIT OR Apache-2.0;
 it is used under the Apache License 2.0. The Rust crates built into libkrun
@@ -62,7 +62,7 @@ and their licenses follow.
 EOF
 	file "libkrun (LICENSE)" "$work/libkrun/LICENSE"
 	(cd "$work/libkrun" && cargo about generate --fail --locked \
-		-c "$here/about.toml" -m src/libkrun/Cargo.toml --features "blk net gpu" \
+		-c "$here/about.toml" -m src/libkrun/Cargo.toml --features "blk net" \
 		"$here/about.hbs")
 	printf '\n'
 
@@ -75,16 +75,6 @@ License 2.0. The Go modules built into it and their licenses follow.
 EOF
 	file "go-microvm (LICENSE)" "$src/LICENSE"
 	CGO_ENABLED=1 "$here/../go-notices.sh" "$src" "darwin/arm64 linux/amd64 linux/arm64" ./runner/cmd/go-microvm-runner
-
-	section "VM runtime on macOS: GPU libraries"
-	cat <<EOF
-On macOS, the VM runtime contains virglrenderer (MIT), libepoxy (MIT) and
-MoltenVK (Apache-2.0) unmodified.
-
-EOF
-	file "virglrenderer (COPYING)" "$here/licenses/virglrenderer-COPYING"
-	file "libepoxy (COPYING)" "$here/licenses/libepoxy-COPYING"
-	file "MoltenVK (LICENSE)" "$here/licenses/MoltenVK-LICENSE"
 } >"$out/vm-runtime-notices.txt"
 
 wc -c "$out/vm-runtime-notices.txt"

@@ -5,8 +5,8 @@
 # jailoc_<version>_vm-runtime-source.tar next to the binaries.
 #
 # The libkrunfw source tree and the kernel tarball come from go-microvm's
-# builder image, the same image that builds the Linux libkrunfw
-# (build-runtime-linux.sh). The macOS libkrunfw is built from the prebuilt
+# builder image, pinned by digest (builder-image.sh), the same image that
+# builds the Linux libkrunfw (build-runtime-linux.sh). The macOS libkrunfw is built from the prebuilt
 # kernel bundle of the same libkrunfw release (build-runtime-darwin.sh), which
 # libkrunfw compiles from this source.
 #
@@ -25,12 +25,13 @@ out=$(cd "$out" && pwd)
 work=$(mktemp -d)
 trap 'rm -r "$work"' EXIT
 runtime=$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)
-version=$(grep '^LIBKRUN_VERSION=' "$src/versions.env" | cut -d= -f2)
+# shellcheck source=scripts/vm-runtime/builder-image.sh
+. "$here/builder-image.sh"
+image=$(builder_image "$src")
 dir=$work/vm-runtime-source
 mkdir -p "$dir/go-microvm" "$dir/jailoc/scripts"
 
-"$runtime" run --rm -v "$dir:/out" \
-  "ghcr.io/stacklok/go-microvm-builder:$version" \
+"$runtime" run --rm -v "$dir:/out" "$image" \
   sh -euc '
     tag=$(git -C /opt/libkrunfw describe --tags --exact-match)
     git -C /opt/libkrunfw archive --format=tar --prefix="libkrunfw-$tag/" \
