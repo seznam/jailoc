@@ -106,12 +106,13 @@ jobs:
           git clone --quiet "https://${REPO}" "$RUNNER_TEMP/go-microvm"
           git -C "$RUNNER_TEMP/go-microvm" checkout --quiet "$REV"
 
-      - name: Build go-microvm runner and libkrun
+      - name: Build go-microvm runner, libkrun guest init and libkrun
         working-directory: ${{ runner.temp }}/go-microvm
         run: |
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           task build-runner
-          "$GITHUB_WORKSPACE/scripts/vm-runtime/build-libkrun-linux.sh" "$PWD" bin
+          "$GITHUB_WORKSPACE/scripts/vm-runtime/build-init.sh" "$PWD" "$RUNNER_TEMP/init"
+          "$GITHUB_WORKSPACE/scripts/vm-runtime/build-libkrun-linux.sh" "$PWD" "$RUNNER_TEMP/init/init.krun" bin
           ls -l bin
 
       - name: Run VM integration tests
