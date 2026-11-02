@@ -10,9 +10,11 @@ name: VM runtime
 #
 # The runner is built from the go-microvm revision that go.mod pins, and
 # libkrun from source at the release that revision pins, with jailoc's patches
-# and cargo-auditable. On macOS, libkrunfw is built from its pinned prebuilt
-# kernel bundle; on Linux, go-microvm's builder image, pinned by digest,
-# provides libkrunfw and the build environment.
+# and cargo-auditable. libkrun's guest init is built against musl on Linux
+# (build-init.sh); the macOS build reuses the linux-arm64 one. On macOS,
+# libkrunfw is built from its pinned prebuilt kernel bundle; on Linux,
+# go-microvm's builder image, pinned by digest, provides libkrunfw and the
+# build environment.
 
 on:
   workflow_call:
@@ -37,6 +39,8 @@ jobs:
   darwin-arm64:
     name: Build darwin-arm64 runtime
     runs-on: macos-15
+    # libkrun's guest init is a Linux binary; take the musl one built on arm64.
+    needs: linux
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,11 +66,16 @@ jobs:
           git clone --quiet "https://${REPO}" "$RUNNER_TEMP/go-microvm"
           git -C "$RUNNER_TEMP/go-microvm" checkout --quiet "$REV"
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: libkrun-init-linux-arm64
+          path: init
+
       - name: Install build tools
-        run: brew install go-task lld xz
+        run: brew install go-task
 
       - name: Build runtime
-        run: scripts/vm-runtime/build-runtime-darwin.sh "$RUNNER_TEMP/go-microvm" dist
+        run: scripts/vm-runtime/build-runtime-darwin.sh "$RUNNER_TEMP/go-microvm" init dist
 
       - if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -113,8 +122,20 @@ jobs:
       - name: Install Task
         run: go install github.com/go-task/task/v3/cmd/task@v3.54.0
 
+      - name: Build libkrun guest init
+        run: scripts/vm-runtime/build-init.sh "$RUNNER_TEMP/go-microvm" init
+
+      # The darwin-arm64 job embeds the same init, also on pull requests.
+      - if: matrix.arch == 'arm64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: libkrun-init-linux-arm64
+          path: init/
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Build runtime
-        run: scripts/vm-runtime/build-runtime-linux.sh "$RUNNER_TEMP/go-microvm" dist
+        run: scripts/vm-runtime/build-runtime-linux.sh "$RUNNER_TEMP/go-microvm" init dist
 
       - if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

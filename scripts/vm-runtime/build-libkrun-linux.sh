@@ -19,11 +19,15 @@
 # with its license texts is copied from the same image. The image is pinned by
 # digest (builder-image.sh).
 #
+# The guest init libkrun embeds is the musl build from build-init.sh, so no
+# glibc code ends up in libkrun.
+#
 # libkrun is built with cargo-auditable, which records the Rust crates it
 # contains in a .dep-v0 section, so SBOM tools such as syft can list them.
 #
-# Usage: build-libkrun-linux.sh GO_MICROVM_CHECKOUT OUT_DIR
+# Usage: build-libkrun-linux.sh GO_MICROVM_CHECKOUT INIT OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
+#   INIT                 init.krun from build-init.sh
 #   OUT_DIR              receives libkrun.so.1, libkrunfw.so.5, the libkrunfw
 #                        LICENSE-* files and builder-versions.env
 #
@@ -31,7 +35,8 @@
 set -euo pipefail
 
 src=${1:?go-microvm checkout}
-out=${2:?output directory}
+init=${2:?init.krun}
+out=${3:?output directory}
 here=$(cd "$(dirname "$0")" && pwd)
 patches=$here/libkrun-patches
 # shellcheck source=scripts/vm-runtime/builder-image.sh
@@ -43,12 +48,13 @@ case "$(uname -s)/$(uname -m)" in
 esac
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
+init=$(cd "$(dirname "$init")" && pwd)/$(basename "$init")
 runtime=$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 image=$(builder_image "$src")
 cargo_auditable=0.7.7
 
 "$runtime" run --rm \
-  -v "$patches:/patches:ro" -v "$out:/out" \
+  -v "$patches:/patches:ro" -v "$init:/init/init.krun:ro" -v "$out:/out" \
   -e CARGO_AUDITABLE_VERSION="$cargo_auditable" \
   "$image" \
   sh -euc '
@@ -69,7 +75,7 @@ cargo_auditable=0.7.7
     cargo install --locked --root /opt/auditable "cargo-auditable@$CARGO_AUDITABLE_VERSION"
     printf "#!/bin/sh\nexec %s auditable \"\$@\"\n" "$(command -v cargo)" > /opt/auditable/bin/cargo
     chmod +x /opt/auditable/bin/cargo
-    PATH=/opt/auditable/bin:$PATH make BLK=1 NET=1
+    PATH=/opt/auditable/bin:$PATH KRUN_INIT_BINARY_PATH=/init/init.krun make BLK=1 NET=1
     cp target/release/libkrun.so.1.* /out/libkrun.so.1
     readelf -S /out/libkrun.so.1 | grep -q "\.dep-v0" ||
       { echo "libkrun.so.1 has no cargo-auditable data" >&2; exit 1; }
