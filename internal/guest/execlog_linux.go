@@ -25,10 +25,11 @@ const (
 )
 
 // startExecLog records every exec in the guest to the exec log in the
-// control share. It uses the kernel proc connector, which reports execs of
-// all processes, including short-lived ones; their details are read from
-// /proc right after the event and may be missing when the process already
-// exited. The log is informational: guest root can disable or rewrite it.
+// control share, and the exit status of each recorded process. It uses the
+// kernel proc connector, which reports execs and exits of all processes,
+// including short-lived ones; exec details are read from /proc right after
+// the event and may be missing when the process already exited. The log is
+// informational: guest root can disable or rewrite it.
 func startExecLog(logger *slog.Logger) (stop func(), err error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, unix.NETLINK_CONNECTOR)
 	if err != nil {
@@ -47,16 +48,36 @@ func startExecLog(logger *slog.Logger) (stop func(), err error) {
 	stop = func() { once.Do(func() { _ = unix.Close(fd) }) }
 	go func() {
 		buf := make([]byte, 8192)
+		// started holds the recorded processes still running, so exits are
+		// logged only for processes whose start is in the log.
+		started := map[int]struct{}{}
 		for {
 			n, _, err := unix.Recvfrom(fd, buf, 0)
 			if err != nil {
+				if err == unix.ENOBUFS {
+					pruneExited(started)
+				}
 				if err == unix.EINTR || err == unix.ENOBUFS {
 					continue
 				}
 				return
 			}
-			for _, pid := range execPIDs(buf[:n]) {
-				if err := w.write(readExec(pid)); err != nil {
+			for _, ev := range parseProcEvents(buf[:n]) {
+				var rec ExecRecord
+				switch {
+				case ev.what == procEventExec:
+					started[ev.tgid] = struct{}{}
+					rec = readExec(ev.tgid)
+				case ev.what == procEventExit && ev.pid == ev.tgid:
+					if _, ok := started[ev.pid]; !ok {
+						continue
+					}
+					delete(started, ev.pid)
+					rec = exitRecord(ev.pid, ev.exitCode)
+				default:
+					continue
+				}
+				if err := w.write(rec); err != nil {
 					logger.Warn("exec log write", "error", err)
 				}
 			}
@@ -81,27 +102,27 @@ func procListenMessage() []byte {
 	return b
 }
 
-// execPIDs returns the thread group IDs of exec events in a netlink
-// datagram.
-func execPIDs(b []byte) []int {
-	var out []int
-	ne := binary.NativeEndian
-	for len(b) >= unix.NLMSG_HDRLEN {
-		l := int(ne.Uint32(b[0:]))
-		if l < unix.NLMSG_HDRLEN || l > len(b) {
-			break
+// pruneExited forgets processes that exited while proc events were dropped.
+func pruneExited(started map[int]struct{}) {
+	for pid := range started {
+		if _, err := os.Stat("/proc/" + strconv.Itoa(pid)); err != nil {
+			delete(started, pid)
 		}
-		msg := b[unix.NLMSG_HDRLEN:l]
-		// proc_event: what u32, cpu u32, timestamp u64, then exec {pid, tgid}.
-		if len(msg) >= cnMsgLen+24 {
-			ev := msg[cnMsgLen:]
-			if ne.Uint32(ev[0:]) == procEventExec {
-				out = append(out, int(ne.Uint32(ev[20:])))
-			}
-		}
-		b = b[(l+unix.NLMSG_ALIGNTO-1)&^(unix.NLMSG_ALIGNTO-1):]
 	}
-	return out
+}
+
+// exitRecord is the exit of pid with the given wait status.
+func exitRecord(pid int, status uint32) ExecRecord {
+	e := ExecRecord{Time: time.Now().UTC(), Event: "exit", PID: pid, UID: -1}
+	if sig := unix.Signal(status & 0x7f); sig != 0 {
+		e.Signal = unix.SignalName(sig)
+		if e.Signal == "" {
+			e.Signal = "signal " + strconv.Itoa(int(sig))
+		}
+		return e
+	}
+	e.Code = int(status>>8) & 0xff
+	return e
 }
 
 func readExec(pid int) ExecRecord {

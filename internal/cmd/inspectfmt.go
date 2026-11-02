@@ -184,17 +184,46 @@ func (f *trafficFormatter) dest(addr string) string {
 	return escapeVisible(addr)
 }
 
-// execFormatter renders exec log records.
+// execFormatter renders exec log records. It remembers the command of each
+// running process to label its exit.
 type execFormatter struct {
-	all bool // also show jailoc's own guest processes
+	all   bool // also show jailoc's own guest processes and exits with status 0
+	procs map[int]execProc
 }
 
-func (f execFormatter) line(raw []byte) string {
+type execProc struct {
+	cmd    string
+	hidden bool
+}
+
+func newExecFormatter(all bool) *execFormatter {
+	return &execFormatter{all: all, procs: map[int]execProc{}}
+}
+
+func (f *execFormatter) line(raw []byte) string {
 	var e guest.ExecRecord
 	if err := json.Unmarshal(raw, &e); err != nil || e.PID == 0 {
 		return ""
 	}
-	if !f.all && isGuestProcess(e) {
+	switch e.Event {
+	case "":
+		return f.start(e)
+	case "exit":
+		return f.exit(e)
+	}
+	return ""
+}
+
+func (f *execFormatter) start(e guest.ExecRecord) string {
+	cmd := escapeVisible(shellQuote(e.Argv))
+	name := cmd
+	if cmd == "" {
+		name = escapeVisible(e.Comm)
+		cmd = colDim.Sprint("[" + name + ", exited]")
+	}
+	hidden := !f.all && isGuestProcess(e)
+	f.procs[e.PID] = execProc{cmd: name, hidden: hidden}
+	if hidden {
 		return ""
 	}
 	user := strconv.Itoa(e.UID)
@@ -210,12 +239,30 @@ func (f execFormatter) line(raw []byte) string {
 	if rest, ok := strings.CutPrefix(cwd, "/home/agent"); ok {
 		cwd = "~" + rest
 	}
-	cmd := escapeVisible(shellQuote(e.Argv))
-	if cmd == "" {
-		cmd = colDim.Sprint("[" + escapeVisible(e.Comm) + ", exited]")
-	}
 	return fmt.Sprintf("%s  %7d %s  %-5s %s  %s",
 		colDim.Sprint(e.Time.Local().Format("15:04:05")), e.PID, colDim.Sprintf("←%-7d", e.PPID), user, colInfo.Sprint(escapeVisible(cwd)), cmd)
+}
+
+// exit renders a process exit in the parent PID column: failures always,
+// status 0 only with --all.
+func (f *execFormatter) exit(e guest.ExecRecord) string {
+	p := f.procs[e.PID]
+	delete(f.procs, e.PID)
+	status, col := "exit "+strconv.Itoa(e.Code), colDeny
+	switch {
+	case e.Signal != "":
+		status = escapeVisible(e.Signal)
+	case e.Code == 0:
+		if !f.all {
+			return ""
+		}
+		col = colDim
+	}
+	if p.hidden {
+		return ""
+	}
+	return fmt.Sprintf("%s  %7d %s  %s",
+		colDim.Sprint(e.Time.Local().Format("15:04:05")), e.PID, col.Sprintf("%-8s", status), colDim.Sprint(p.cmd))
 }
 
 func escapeVisible(s string) string {

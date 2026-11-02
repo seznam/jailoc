@@ -60,7 +60,7 @@ func TestTrafficFormatter(t *testing.T) {
 
 func TestExecFormatter(t *testing.T) {
 	t.Parallel()
-	f := execFormatter{}
+	f := newExecFormatter(false)
 	got := plain(f.line([]byte(`{"time":"2026-10-27T10:00:00Z","pid":42,"ppid":7,"uid":1000,"comm":"git","cwd":"/home/agent/proj","argv":["git","commit","-m","fix it"],"exe":"/usr/bin/git"}`)))
 	if want := "42 ←7 agent ~/proj git commit -m 'fix it'"; !strings.HasSuffix(got, want) {
 		t.Fatalf("line = %q, want suffix %q", got, want)
@@ -73,6 +73,50 @@ func TestExecFormatter(t *testing.T) {
 	}
 	if out := plain(f.line([]byte(`{"time":"2026-10-27T10:00:00Z","pid":44,"uid":0,"comm":"true"}`))); !strings.HasSuffix(out, "root [true, exited]") {
 		t.Fatalf("exited process line = %q", out)
+	}
+}
+
+func TestExecFormatterExits(t *testing.T) {
+	t.Parallel()
+	const (
+		gitStart  = `{"time":"2026-10-27T10:00:00Z","pid":42,"ppid":7,"uid":1000,"argv":["git","push"]}`
+		guestRun  = `{"time":"2026-10-27T10:00:00Z","pid":43,"uid":0,"exe":"/.jailoc/jailoc-guest","argv":["/.jailoc/jailoc-guest","run"]}`
+		shortLive = `{"time":"2026-10-27T10:00:00Z","pid":44,"uid":0,"comm":"true"}`
+	)
+	tests := []struct {
+		name    string
+		all     bool
+		records []string
+		want    string // plain exit line, "" when hidden
+	}{
+		{name: "failure", records: []string{gitStart, `{"event":"exit","pid":42,"code":128}`}, want: "42 exit 128 git push"},
+		{name: "signal", records: []string{gitStart, `{"event":"exit","pid":42,"signal":"SIGKILL"}`}, want: "42 SIGKILL git push"},
+		{name: "success hidden", records: []string{gitStart, `{"event":"exit","pid":42}`}},
+		{name: "success with all", all: true, records: []string{gitStart, `{"event":"exit","pid":42}`}, want: "42 exit 0 git push"},
+		{name: "guest process", records: []string{guestRun, `{"event":"exit","pid":43,"code":1}`}},
+		{name: "guest process with all", all: true, records: []string{guestRun, `{"event":"exit","pid":43,"code":1}`}, want: "43 exit 1 /.jailoc/jailoc-guest run"},
+		{name: "exited before read", records: []string{shortLive, `{"event":"exit","pid":44,"code":1}`}, want: "44 exit 1 true"},
+		{name: "start not in log", records: []string{`{"event":"exit","pid":45,"code":3}`}, want: "45 exit 3"},
+		{name: "unknown event", records: []string{`{"event":"fork","pid":46}`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := newExecFormatter(tt.all)
+			var out string
+			for _, r := range tt.records {
+				out = f.line([]byte(r))
+			}
+			if got := plain(out); tt.want == "" && got != "" || tt.want != "" && !strings.HasSuffix(got, tt.want) {
+				t.Fatalf("exit line = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	f := newExecFormatter(false)
+	f.line([]byte(gitStart))
+	f.line([]byte(`{"event":"exit","pid":42,"code":1}`))
+	if out := plain(f.line([]byte(`{"event":"exit","pid":42,"code":1}`))); !strings.HasSuffix(out, "42 exit 1") {
+		t.Fatalf("second exit of a reused PID kept the old command: %q", out)
 	}
 }
 
@@ -119,7 +163,6 @@ func TestExecFormatterEscapesGuestFields(t *testing.T) {
 	t.Parallel()
 	attack := "\x1b]52;c;payload\a\r\n\u009b\u202e"
 	want := `\x1b]52;c;payload\a\r\n\u009b\u202e`
-	f := execFormatter{}
 	for _, record := range []struct {
 		name string
 		argv []string
@@ -131,7 +174,7 @@ func TestExecFormatterEscapesGuestFields(t *testing.T) {
 		t.Run(record.name, func(t *testing.T) {
 			t.Parallel()
 			raw, _ := json.Marshal(map[string]any{"pid": 42, "uid": 1000, "cwd": "/home/agent/" + attack, "argv": record.argv, "comm": record.comm})
-			out := f.line(raw)
+			out := newExecFormatter(false).line(raw)
 			if !strings.Contains(out, want) || strings.Contains(out, attack) {
 				t.Fatalf("exec line = %q, want visible controls only", out)
 			}
