@@ -392,9 +392,12 @@ Environment variables merge in this order, later wins per key:
 
 | Agent | Destination | Host source | Mode |
 |---|---|---|---|
-| `opencode` | `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
-| `opencode` | `/home/agent/.opencode` | `~/.opencode` | `rw` |
+| `opencode`, `opencode1`, `opencode2` | `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
+| `opencode`, `opencode1`, `opencode2` | `/home/agent/.opencode` | `~/.opencode` | `rw` |
+| `opencode1` | `/home/agent/.omo` | `~/.omo` | `rw` |
 | all | `/home/agent/.agents` | `~/.agents` | `ro` |
+
+The `opencode1` mount of `~/.omo` serves the OmO plugin (`oh-my-openagent`), which writes its configuration, state and lock files there. It gives every OpenCode 1 workspace write access to the host's `~/.omo`. Make it read-only with `[defaults.agents.opencode1] mounts = ["~/.omo:/home/agent/.omo:ro"]`, or remove it with `mounts = [":/home/agent/.omo"]`; with the mount removed, `~/.omo` lives in the VM root filesystem and is lost on restart.
 
 `snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config` adds a lowest-priority snapshot of `/home/agent/.gitconfig`, which a `snapshots` entry for that destination replaces or, with an empty host, removes.
 
