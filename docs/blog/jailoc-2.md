@@ -69,6 +69,8 @@ jailoc -c                    # new session continuing the last conversation
 jailoc sessions stop 3f2a    # end one
 ```
 
+![jailoc sessions listing five sessions running OmO, OpenCode, Copilot CLI and Claude Code, two attached and three detached, one continuing the previous conversation](img/sessions.png)
+
 Read more: [Sessions](../how-to/sessions.md).
 
 ## A network broker with opinions
@@ -88,10 +90,20 @@ Sandboxing is good. Knowing what happened inside the sandbox is better.
 
 ```bash
 jailoc traffic -f    # live connections, DNS answers, TLS server names, HTTP method + path
-jailoc strace -f     # every process started in the VM, with its command line
+jailoc strace -f     # every process started in the VM, and every one that failed
 ```
 
-`traffic` reads the broker's log, so it also lists denied connections and what was blocked by DNS filtering. `strace` records every process start from boot. For the times you want to look yourself, `jailoc exec -- <cmd>` runs a command as the agent user, and `jailoc shell` drops you into a login shell.
+`traffic` reads the broker's log, so it also lists denied connections and what was blocked by DNS filtering. Here the agent reaches the model API, npm, GitHub and an internal GitLab listed in `allowed_networks`, then tries the production database by name (blocked by `filtered_dns`), by IP (denied range) and the cloud metadata endpoint (always denied):
+
+![jailoc traffic output: allowed TLS and SSH connections, an allowed internal host, a DNS query blocked with NXDOMAIN, denied connections to a private address and to the cloud metadata endpoint, and an inbound connection to a published dev server port](img/traffic.png)
+
+`strace` records every process start from boot, with parent, user, working directory and full command line, plus the exit status or signal of every process that failed, so the same session reads as a story:
+
+![jailoc strace output: OpenCode starting npm, git and go, running apt-get as root through sudo, then psql and curl attempts that fail with exit codes 2 and 7, and the vite dev server](img/strace.png)
+
+For the times you want to look yourself, `jailoc exec -- <cmd>` runs a command as the agent user, and `jailoc shell` drops you into a login shell. Both get exactly what the agent gets: the same user, the same shared directories at their host paths, the same secrets and the same network policy, so you can check what the agent can reach before it tries:
+
+![jailoc shell session in workspace shop: id shows the unprivileged agent user, /run/secrets holds the npmrc secret, the npm registry answers 200, the production database name does not resolve and the cloud metadata endpoint refuses the connection](img/shell.png)
 
 Read more: [CLI Reference](../reference/cli.md#jailoc-traffic).
 
