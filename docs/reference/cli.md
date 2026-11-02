@@ -247,7 +247,7 @@ jailoc strace [workspace] [flags]
 | `--json` | | Print the shown records as JSON lines, unchanged. |
 | `--all` | | Also show jailoc's own guest processes and processes that exit with status 0. |
 
-Without `--json`, control characters in logged values are escaped. The record is written inside the VM: root in the VM (`sudo`) can stop or alter it. Processes that exit before the guest reads their details show only their name.
+Without `--json`, control characters in logged values are escaped. The record is written inside the VM: root in the VM (`sudo`) can stop or alter it. Processes that exit before the guest reads their details show only their name. When the guest misses process events during a burst, failures of the processes running at that moment are not recorded.
 
 ---
 

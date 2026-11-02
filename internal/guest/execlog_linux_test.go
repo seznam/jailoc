@@ -49,3 +49,21 @@ func TestExecTrackerReportsLastThreadExit(t *testing.T) {
 		t.Error("exit of an untracked process reported")
 	}
 }
+
+func TestExecTrackerForgetsProcessesAfterDroppedEvents(t *testing.T) {
+	t.Parallel()
+	procs := execTracker{}
+	procs.exec(10)
+	procs.fork(procEvent{what: procEventFork, pid: 10, tgid: 10, childPID: 11, childTGID: 10})
+
+	// The exit of thread 11 is lost with the dropped events.
+	procs.dropped()
+	if _, done := procs.exit(procEvent{what: procEventExit, pid: 10, tgid: 10, exitCode: 3 << 8}); done {
+		t.Error("exit reported from a thread count that missed dropped events")
+	}
+
+	procs.exec(20)
+	if status, done := procs.exit(procEvent{what: procEventExit, pid: 20, tgid: 20, exitCode: 1 << 8}); !done || status != 1<<8 {
+		t.Errorf("exit of a process started after the drop = (%#x, %v), want (%#x, true)", status, done, 1<<8)
+	}
+}
