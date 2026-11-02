@@ -1,0 +1,27 @@
+# cargo-about configuration for the libkrun notices in build-runtime-notices.sh.
+accepted = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+targets = [
+  "aarch64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-gnu",
+]
+
+# libkrun's copy of crosvm's rutabaga_gfx only has a license file.
+[krun-rutabaga-gfx.clarify]
+license = "BSD-3-Clause"
+
+[[krun-rutabaga-gfx.clarify.files]]
+path = "LICENSE"
+checksum = "0fc4bdcfde77da140a55a68268f55a8cd045d7b9fbf86c5fd8b2bc5cf233e959"

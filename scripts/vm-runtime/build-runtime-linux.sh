@@ -7,7 +7,8 @@
 # that revision names in versions.env, so the runner and the libraries come
 # from the same glibc and match the combination the VM integration test uses.
 # libkrun is then rebuilt with jailoc's patches (build-libkrun-linux.sh).
-# The firmware tarball carries libkrunfw (GPL-2.0) separately.
+# The firmware tarball carries libkrunfw (GPL-2.0-only kernel, LGPL-2.1-only
+# library) with its license texts and where to get its source.
 #
 # Usage: build-runtime-linux.sh GO_MICROVM_CHECKOUT OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
@@ -33,20 +34,47 @@ trap 'rm -r "$work"' EXIT
 
 (cd "$src" && task build-runner)
 "$(dirname "$0")/build-libkrun-linux.sh" "$src" "$src/bin"
-libkrun=$(grep '^LIBKRUN_VERSION=' "$src/versions.env" | cut -d= -f2)
-libkrunfw=$(grep '^LIBKRUNFW_VERSION=' "$src/versions.env" | cut -d= -f2)
+version() { grep "^$1=" "$2" | cut -d= -f2; }
+libkrun=$(version LIBKRUN_VERSION "$src/bin/builder-versions.env")
+libkrunfw=$(version LIBKRUNFW_VERSION "$src/bin/builder-versions.env")
+kernel=$(version KERNEL_VERSION "$src/bin/builder-versions.env")
+if [ "$libkrun" != "$(version LIBKRUN_VERSION "$src/versions.env")" ] ||
+  [ "$libkrunfw" != "$(version LIBKRUNFW_VERSION "$src/versions.env")" ]; then
+  echo "builder image has libkrun $libkrun and libkrunfw $libkrunfw, not the versions in $src/versions.env" >&2
+  exit 1
+fi
 rev=$(git -C "$src" rev-parse --short HEAD)
+repo=$(git -C "$src" remote get-url origin)
 
 mkdir -p "$work/$runtime_name" "$work/$firmware_name"
 install -m 0755 "$src/bin/go-microvm-runner" "$work/$runtime_name/go-microvm-runner"
 install -m 0444 "$src/bin/libkrun.so.1" "$work/$runtime_name/libkrun.so.1"
+install -m 0444 "$src/LICENSE" "$work/$runtime_name/LICENSE"
 patches=$(cd "$(dirname "$0")/libkrun-patches" && ls -- *.patch | cut -c1-4 | paste -sd, -)
 echo "$rev libkrun-$libkrun+jailoc-patches-$patches" > "$work/$runtime_name/VERSION"
+cat > "$work/$runtime_name/NOTICE" <<EOF
+go-microvm-runner is built from go-microvm $rev ($repo) and
+libkrun.so.1 from libkrun $libkrun (https://github.com/libkrun/libkrun).
+Both are licensed under the Apache License 2.0, see LICENSE.
+
+jailoc modified libkrun with the patches $patches from
+https://github.com/seznam/jailoc/tree/main/scripts/vm-runtime/libkrun-patches.
+
+The notices of the Go modules and Rust crates built into these files are in
+THIRD_PARTY_NOTICES in the jailoc release archive.
+EOF
 install -m 0444 "$src/bin/libkrunfw.so.5" "$work/$firmware_name/libkrunfw.so.5"
+install -m 0444 "$src/bin/LICENSE-GPL-2.0-only" "$src/bin/LICENSE-LGPL-2.1-only" "$work/$firmware_name/"
 echo "$libkrunfw" > "$work/$firmware_name/VERSION"
-cat > "$work/$firmware_name/LICENSE-GPL" <<'EOF'
-libkrunfw is licensed under the GNU General Public License v2.0 (GPL-2.0).
-See https://github.com/libkrun/libkrunfw for full license text.
+cat > "$work/$firmware_name/SOURCE" <<EOF
+libkrunfw $libkrunfw (https://github.com/libkrun/libkrunfw) contains the Linux
+kernel ($kernel), licensed under GPL-2.0-only (LICENSE-GPL-2.0-only).
+The rest of libkrunfw is licensed under LGPL-2.1-only (LICENSE-LGPL-2.1-only).
+
+The complete corresponding source code, including the Linux kernel source,
+the libkrunfw patches and kernel configuration, and the build scripts, is
+published as jailoc_<version>_vm-runtime-source.tar with every jailoc release
+at https://github.com/seznam/jailoc/releases, next to the binaries.
 EOF
 
 # The runner finds libkrun through LD_LIBRARY_PATH, which jailoc sets to the

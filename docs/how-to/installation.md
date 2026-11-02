@@ -73,5 +73,22 @@ A source build doesn't include the VM runtime (the `go-microvm-runner` process, 
 
 ## Know where the VM runtime lives
 
-Release binaries embed the VM runtime for their platform. The first `jailoc up` unpacks it into `~/.cache/jailoc-vm/runtime/`; later starts reuse it. Nothing is downloaded. The runtime includes libkrunfw, which is licensed under GPL-2.0; its source is at [libkrun/libkrunfw](https://github.com/libkrun/libkrunfw).
+Release binaries embed the VM runtime for their platform. The first `jailoc up` unpacks it into `~/.cache/jailoc-vm/runtime/`; later starts reuse it. Nothing is downloaded.
+
+### Check the runtime licenses
+
+jailoc itself is MIT-licensed. The embedded runtime carries its own licenses:
+
+| Component | License | Notes |
+|-----------|---------|-------|
+| `go-microvm-runner` | Apache-2.0 | Runs as a separate process |
+| libkrun | Apache-2.0 | On Linux, built with the patches in `scripts/vm-runtime/libkrun-patches/` |
+| libkrunfw | LGPL-2.1-only (library), GPL-2.0-only (bundled Linux kernel) | |
+| virglrenderer, libepoxy, MoltenVK | MIT, MIT, Apache-2.0 | macOS only |
+
+Every release archive contains `THIRD_PARTY_NOTICES` with the license texts of all bundled Go modules, Rust crates and runtime libraries. Each unpacked runtime directory contains `LICENSE`, `NOTICE`, the libkrunfw license texts and a `SOURCE` file.
+
+The complete corresponding source of libkrunfw, including the Linux kernel tarball and the build scripts, is attached to every [GitHub Release](https://github.com/seznam/jailoc/releases) as `jailoc_<version>_vm-runtime-source.tar`.
+
+To use your own libkrunfw build, point `lib_dir` in the [`[vm]` section](../reference/configuration.md) at a directory with your `libkrun` and `libkrunfw` libraries and set `runner` to a matching `go-microvm-runner`.
 

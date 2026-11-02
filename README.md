@@ -90,3 +90,7 @@ The default base image (Ubuntu 24.04) ships with:
 | CLI tools | rg (ripgrep), fdfind, jq, git, openssh-client, curl, sudo |
 
 jailoc installs the workspace's coding agent and, with `enable_docker`, Docker on top of it. Exact versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile). See the [default image reference](https://seznam.github.io/jailoc/reference/default-image/) for the full list of installed tools.
+
+## License
+
+jailoc is [MIT](LICENSE)-licensed. Release binaries embed a VM runtime with Apache-2.0, LGPL-2.1 and GPL-2.0 components (libkrunfw bundles a Linux kernel); see `THIRD_PARTY_NOTICES` in each release archive and the [runtime licenses](https://seznam.github.io/jailoc/how-to/installation/#check-the-runtime-licenses). The libkrunfw source is attached to every release as `jailoc_<version>_vm-runtime-source.tar`.
