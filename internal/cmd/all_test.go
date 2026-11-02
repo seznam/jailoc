@@ -93,3 +93,20 @@ func TestForEachWorkspaceStopsOnCancel(t *testing.T) {
 		t.Fatalf("visited = %v, error = %v", visited, err)
 	}
 }
+
+func TestForEachWorkspaceHonorsCancelledContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	err := forEachWorkspace(ctx, []*workspace.Resolved{{Name: "a"}}, func(ws *workspace.Resolved) error {
+		called = true
+		return nil
+	})
+	if called {
+		t.Fatalf("callback called on already cancelled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}

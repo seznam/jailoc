@@ -67,11 +67,19 @@ func vmRootDir() string {
 
 func vmStateDir(name string) string { return filepath.Join(vmRootDir(), "workspaces", name) }
 
-func setDockerHost(socket string) error {
+func setDockerHost(socket string) (func(), error) {
+	orig, set := os.LookupEnv("DOCKER_HOST")
 	if err := os.Setenv("DOCKER_HOST", "unix://"+socket); err != nil {
-		return fmt.Errorf("set DOCKER_HOST: %w", err)
+		return nil, fmt.Errorf("set DOCKER_HOST: %w", err)
 	}
-	return nil
+	restore := func() {
+		if set {
+			_ = os.Setenv("DOCKER_HOST", orig)
+		} else {
+			_ = os.Unsetenv("DOCKER_HOST")
+		}
+	}
+	return restore, nil
 }
 
 // runningVM returns the state of a ready VM whose supervisor is alive.

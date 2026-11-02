@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -23,15 +24,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	for i, ws := range wss {
-		if i > 0 {
+	first := true
+	return forEachWorkspace(cmd.Context(), wss, func(ws *workspace.Resolved) error {
+		if !first {
 			fmt.Println()
 		}
-		if err := statusVM(cmd.Context(), ws); err != nil {
-			return fmt.Errorf("workspace %q: %w", ws.Name, err)
-		}
-	}
-	return nil
+		first = false
+		return statusVM(cmd.Context(), ws)
+	})
 }
 
 func init() {
