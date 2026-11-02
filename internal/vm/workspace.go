@@ -129,9 +129,8 @@ const simplifiedOwnership = runtime.GOOS == "darwin"
 
 // rootShare boots workspace VMs from the cached image shared read-only, with
 // the guest assembling an overlay root, instead of from a copy of the image
-// made on every start. Copying is cheap only where the host clones files
-// (APFS on macOS), so the share is used on Linux.
-const rootShare = runtime.GOOS == "linux"
+// made on every start.
+const rootShare = true
 
 func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option {
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares)+1)
