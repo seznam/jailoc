@@ -72,7 +72,7 @@ The Dockerfile is loaded from a local path or HTTP(S) URL (maximum 1 MiB) and bu
 
 **Trigger:** none of the above apply.
 
-The Dockerfile embedded in the jailoc binary is built as `jailoc-base:embedded`. See [Default Image](default-image.md).
+The Dockerfile embedded in the jailoc binary is built as `jailoc-base:embedded`, unless that image was already built from the same Dockerfile and build arguments. Updates of its `ubuntu:24.04` base reach the image only after `docker rmi jailoc-base:embedded`. See [Default Image](default-image.md).
 
 ### Docker layer (steps 2, 4 and 5)
 
@@ -90,7 +90,7 @@ After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (
 
 ## Build details
 
-- `<content-hash>` is derived from the SHA-256 of the Dockerfile content: 8 hex characters for workspace overlays, 16 for `[base] dockerfile` presets. The Docker and agent layer hashes also cover the base image ID.
+- `<content-hash>` is derived from the SHA-256 of the Dockerfile content: 8 hex characters for workspace overlays, 16 for `[base] dockerfile` presets. The Docker and agent layer hashes also cover the base image ID, and a layer whose tag already exists is not built again.
 - Host proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY` and lowercase variants) are passed as build arguments to every build.
 - Overlay build context: `build_context` when set; otherwise the Dockerfile's parent directory for a local path, or an empty temporary directory for a URL.
 - Images from steps 1 and 3 are pulled for `linux/<host architecture>` when the daemon does not have them.
