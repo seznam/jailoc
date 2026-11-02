@@ -52,18 +52,11 @@ func idmapRoot(logger *slog.Logger, m IDMap, home string, agentUID, agentGID uin
 	if err := os.MkdirAll(newRootDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create %s: %w", newRootDir, err)
 	}
-	rootNS, err := userNamespace([]syscall.SysProcIDMap{{ContainerID: int(m.UID), HostID: 0, Size: 1}},
-		[]syscall.SysProcIDMap{{ContainerID: int(m.GID), HostID: 0, Size: 1}})
+	rootNS, sharesNS, err := idNamespaces(m, agentUID, agentGID)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rootNS.Close() }()
-	sharesNS, err := userNamespace(
-		[]syscall.SysProcIDMap{{ContainerID: int(m.UID), HostID: int(agentUID), Size: 1}, {ContainerID: 0, HostID: 0, Size: 1}},
-		[]syscall.SysProcIDMap{{ContainerID: int(m.GID), HostID: int(agentGID), Size: 1}, {ContainerID: 0, HostID: 0, Size: 1}})
-	if err != nil {
-		return nil, err
-	}
 	mapper := &idmapper{shares: sharesNS}
 
 	// pivot_root refuses a shared parent mount.
@@ -89,16 +82,36 @@ func idmapRoot(logger *slog.Logger, m IDMap, home string, agentUID, agentGID uin
 	return mapper, nil
 }
 
+// idNamespaces returns user namespaces for idmapped mounts: rootNS maps the
+// host user to root, sharesNS the host user to the agent and root to root.
+func idNamespaces(m IDMap, agentUID, agentGID uint32) (rootNS, sharesNS *os.File, err error) {
+	rootNS, err = userNamespace([]syscall.SysProcIDMap{{ContainerID: int(m.UID), HostID: 0, Size: 1}},
+		[]syscall.SysProcIDMap{{ContainerID: int(m.GID), HostID: 0, Size: 1}})
+	if err != nil {
+		return nil, nil, err
+	}
+	sharesNS, err = userNamespace(
+		[]syscall.SysProcIDMap{{ContainerID: int(m.UID), HostID: int(agentUID), Size: 1}, {ContainerID: 0, HostID: 0, Size: 1}},
+		[]syscall.SysProcIDMap{{ContainerID: int(m.GID), HostID: int(agentGID), Size: 1}, {ContainerID: 0, HostID: 0, Size: 1}})
+	if err != nil {
+		_ = rootNS.Close()
+		return nil, nil, err
+	}
+	return rootNS, sharesNS, nil
+}
+
 // attachIdmapped clones the mount at src without its submounts, applies the
-// idmapping of the user namespace ns and attaches it at dst.
+// idmapping of the user namespace ns, when set, and attaches it at dst.
 func attachIdmapped(src, dst string, ns *os.File) error {
 	fd, err := unix.OpenTree(unix.AT_FDCWD, src, unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC)
 	if err != nil {
 		return fmt.Errorf("clone %s: %w", src, err)
 	}
 	defer func() { _ = unix.Close(fd) }()
-	if err := unix.MountSetattr(fd, "", unix.AT_EMPTY_PATH, &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_IDMAP, Userns_fd: uint64(ns.Fd())}); err != nil {
-		return fmt.Errorf("set idmapping: %w", err)
+	if ns != nil {
+		if err := unix.MountSetattr(fd, "", unix.AT_EMPTY_PATH, &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_IDMAP, Userns_fd: uint64(ns.Fd())}); err != nil {
+			return fmt.Errorf("set idmapping: %w", err)
+		}
 	}
 	if err := unix.MoveMount(fd, "", unix.AT_FDCWD, dst, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
 		return fmt.Errorf("attach at %s: %w", dst, err)

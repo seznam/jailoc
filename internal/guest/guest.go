@@ -103,6 +103,11 @@ type Config struct {
 	// as the agent in its home and the shares. Without it, or when the guest
 	// kernel cannot idmap, the agent takes the host user's IDs.
 	IDMap *IDMap `json:"idmap,omitempty"`
+	// RootShare is the virtio-fs tag of the workspace image's root file
+	// system, shared read-only. The boot root file system then holds only
+	// jailoc's own files, and the guest assembles its root as an overlay of
+	// them over the image with writes kept in memory.
+	RootShare string `json:"root_share,omitempty"`
 	// SSHAgent exposes the host SSH agent at SSHAgentSocket, relayed
 	// through the broker gateway.
 	SSHAgent bool `json:"ssh_agent,omitempty"`

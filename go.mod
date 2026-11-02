@@ -116,3 +116,7 @@ require (
 	google.golang.org/grpc v1.84.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+// Fork with WithRootFSShare (stacklok/go-microvm feat/rootfs-share) on top of
+// upstream v0.0.44, until merged upstream.
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261102210945-7c0bfebd9439
