@@ -201,6 +201,10 @@ func DialSSH(ctx context.Context, stateDir string) (*ssh.Client, error) {
 	return ssh.NewClient(c, chans, reqs), nil
 }
 
+// sshRetry is how long waitSSH waits between attempts. The guest answers within
+// a few hundred milliseconds of boot, so a short interval saves most of a retry.
+const sshRetry = 50 * time.Millisecond
+
 // waitSSH waits until the guest SSH server completes a handshake.
 func waitSSH(ctx context.Context, stateDir string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -218,7 +222,7 @@ func waitSSH(ctx context.Context, stateDir string, timeout time.Duration) error 
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("wait for guest ssh: %w", ctx.Err())
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(sshRetry):
 		}
 	}
 }
