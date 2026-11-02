@@ -9,6 +9,10 @@ before:
     # The release workflows place the VM runtimes built by vm-runtime.yml
     # here; internal/vm embeds them.
     - sh -c 'for p in darwin-arm64 linux-amd64 linux-arm64; do for f in runtime firmware; do test -s internal/vm/runtimebin/$p/$f.tar.gz || { echo "missing VM runtime internal/vm/runtimebin/$p/$f.tar.gz" >&2; exit 1; }; done; done'
+    # The release workflows also place the runtime's notices and the
+    # corresponding source of libkrunfw in build/vm-runtime.
+    - scripts/third-party-notices.sh build/vm-runtime/vm-runtime-notices.txt build/THIRD_PARTY_NOTICES
+    - test -s build/vm-runtime/vm-runtime-source.tar
 
 builds:
   - id: jailoc
@@ -36,10 +40,18 @@ archives:
   - id: jailoc
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - src: build/THIRD_PARTY_NOTICES
+        strip_parent: true
 
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  extra_files:
+    - glob: build/vm-runtime/vm-runtime-source.tar
+      name_template: "{{ .ProjectName }}_{{ .Version }}_vm-runtime-source.tar"
 
 changelog:
   disable: true
@@ -51,6 +63,11 @@ release:
   prerelease: auto
   mode: append
   use_existing_draft: true
+  # Complete corresponding source of the GPL-2.0-only kernel and the
+  # LGPL-2.1-only library in libkrunfw, which the embedded VM runtime contains.
+  extra_files:
+    - glob: build/vm-runtime/vm-runtime-source.tar
+      name_template: "{{ .ProjectName }}_{{ .Version }}_vm-runtime-source.tar"
   github:
     owner: seznam
     name: jailoc

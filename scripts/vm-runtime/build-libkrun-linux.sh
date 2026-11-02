@@ -14,9 +14,14 @@
 # The patches are applied to the source tree inside the builder image,
 # which has the matching toolchain, and the result replaces libkrun.so.1.
 #
+# The image tag names only the libkrun release, so the versions of libkrun
+# and libkrunfw are read from their source trees in the image, and libkrunfw
+# with its license texts is copied from the same image.
+#
 # Usage: build-libkrun-linux.sh GO_MICROVM_CHECKOUT OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
-#   OUT_DIR              receives libkrun.so.1
+#   OUT_DIR              receives libkrun.so.1, libkrunfw.so.5, the libkrunfw
+#                        LICENSE-* files and builder-versions.env
 #
 # Requires: Linux on x86_64 or aarch64, podman or docker.
 set -euo pipefail
@@ -38,6 +43,13 @@ version=$(grep '^LIBKRUN_VERSION=' "$src/versions.env" | cut -d= -f2)
   -v "$patches:/patches:ro" -v "$out:/out" \
   "ghcr.io/stacklok/go-microvm-builder:$version" \
   sh -euc '
+    libkrun=$(git -C /opt/libkrun describe --tags --exact-match)
+    libkrunfw=$(git -C /opt/libkrunfw describe --tags --exact-match)
+    kernel=$(sed -n "s/^KERNEL_VERSION = //p" /opt/libkrunfw/Makefile)
+    printf "LIBKRUN_VERSION=%s\nLIBKRUNFW_VERSION=%s\nKERNEL_VERSION=%s\n" \
+      "$libkrun" "$libkrunfw" "$kernel" > /out/builder-versions.env
+    cp /opt/libkrun-built/libkrunfw.so.5 /opt/libkrunfw/LICENSE-GPL-2.0-only \
+      /opt/libkrunfw/LICENSE-LGPL-2.1-only /out/
     cd /opt/libkrun
     for p in /patches/*.patch; do
       echo "applying $(basename "$p")"
