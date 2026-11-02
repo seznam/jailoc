@@ -96,7 +96,9 @@ func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 		return res, fmt.Errorf("remove unused image snapshots: %w", err)
 	}
 
-	n, err := image.NewCache(cacheDir).LayerCache().Evict(layerUnusedLimit)
+	// Pruning must not migrate the cache format, so the layers are evicted
+	// without their parent cache.
+	n, err := image.NewLayerCache(filepath.Join(cacheDir, "layers")).Evict(layerUnusedLimit)
 	res.Layers = n
 	if err != nil {
 		return res, fmt.Errorf("remove unused image layers: %w", err)
@@ -132,8 +134,8 @@ func removeTree(path string) error {
 // lockCache serializes image cache imports and pruning between jailoc
 // processes.
 func lockCache(cacheDir string) (func(), error) {
-	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
-		return nil, fmt.Errorf("create image cache: %w", err)
+	if err := privateCacheDir(cacheDir); err != nil {
+		return nil, err
 	}
 	f, err := os.OpenFile(filepath.Join(cacheDir, ".jailoc.lock"), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: lock file inside jailoc's image cache
 	if err != nil {
@@ -144,4 +146,17 @@ func lockCache(cacheDir string) (func(), error) {
 		return nil, fmt.Errorf("lock image cache: %w", err)
 	}
 	return func() { _ = f.Close() }, nil
+}
+
+// privateCacheDir creates the image cache with mode 0700, or restricts an
+// existing one. On Linux hosts go-microvm keeps setuid and setgid bits in
+// cached rootfs trees and only uses a cache no other user can reach.
+func privateCacheDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create image cache: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("make image cache private: %w", err)
+	}
+	return nil
 }

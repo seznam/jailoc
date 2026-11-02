@@ -7,15 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/stacklok/go-microvm/image"
 )
 
 func TestPruneImages(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	// Mark the cache as current so it keeps the entries written below.
-	image.NewCache(dir).LayerCache()
 	past := time.Now().Add(-2 * time.Hour)
 	digest := func(n string) string { return "sha256:" + n + "0000" }
 	addImage := func(name string, old bool) string {
@@ -87,5 +83,30 @@ func TestPruneImages(t *testing.T) {
 	}
 	for _, p := range []string{current, builder, fresh, orphanNew} {
 		_ = os.Chmod(filepath.Join(p, "etc", "ro"), 0o700) //nolint:gosec // G302: test cleanup
+	}
+}
+
+func TestPrivateCacheDir(t *testing.T) {
+	t.Parallel()
+	for name, existing := range map[string]bool{"missing": false, "existing": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := filepath.Join(t.TempDir(), "images")
+			if existing {
+				if err := os.Mkdir(dir, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := privateCacheDir(dir); err != nil {
+				t.Fatalf("privateCacheDir: %v", err)
+			}
+			info, err := os.Stat(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if perm := info.Mode().Perm(); perm != 0o700 {
+				t.Fatalf("mode = %o, want 700", perm)
+			}
+		})
 	}
 }

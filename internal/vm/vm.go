@@ -255,6 +255,11 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	if err := os.MkdirAll(spec.StateDir, 0o700); err != nil {
 		return fmt.Errorf("create vm state dir: %w", err)
 	}
+	if spec.ImageCache != "" {
+		if err := privateCacheDir(spec.ImageCache); err != nil {
+			return err
+		}
+	}
 	if err := writeState(spec.StateDir, st); err != nil {
 		return err
 	}
