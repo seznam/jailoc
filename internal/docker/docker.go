@@ -62,7 +62,6 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 	}
 	defer func() { _ = engineCli.Close() }()
 
-	_, _ = color.New(color.FgCyan).Printf("Building embedded base image...\n")
 	if err := buildEmbeddedImage(ctx, engineCli, embeddedTag); err != nil {
 		return "", fmt.Errorf("build embedded base image: %w", err)
 	}
@@ -108,11 +107,20 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 		return err
 	}
 	buildArgs := proxyBuildArgs()
+	content := forBuilder(version, embed.Dockerfile(), buildArgs)
+	hash := contentHash(content)
+	if haveImage(ctx, cli, tag, hash) {
+		slog.Debug("embedded base image is up to date", "tag", tag)
+		return nil
+	}
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
-	if err := os.WriteFile(dockerfilePath, forBuilder(version, embed.Dockerfile(), buildArgs), 0o600); err != nil {
+	if err := os.WriteFile(dockerfilePath, content, 0o600); err != nil {
 		return fmt.Errorf("write embedded Dockerfile to %q: %w", dockerfilePath, err)
 	}
 
+	_, _ = color.New(color.FgCyan).Printf("Building embedded base image...\n")
+	labels := buildLabels()
+	labels[ContentLabel] = hash
 	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
 	if err != nil {
 		return fmt.Errorf("create build context tar for %q: %w", tmpDir, err)
@@ -122,7 +130,7 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 	err = imageBuild(ctx, cli, buildCtx, version, build.ImageBuildOptions{
 		Tags:      []string{tag},
 		BuildArgs: buildArgs,
-		Labels:    buildLabels(),
+		Labels:    labels,
 		Remove:    true,
 	})
 	if err != nil {
@@ -301,6 +309,13 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 	}
 	buildArgs := proxyBuildArgs()
 	content := forBuilder(version, dockerfile(user), buildArgs)
+	hash := sha256.Sum256(append([]byte(inspect.ID+"\n"), content...))
+	tag := fmt.Sprintf("%s:%x", repo, hash[:8])
+	// The tag names the base image and the Dockerfile, so an existing image
+	// is the result of this build.
+	if haveImage(ctx, cli, tag, "") {
+		return tag, nil
+	}
 
 	tmpDir, err := os.MkdirTemp("", "jailoc-layer-dockerfile-")
 	if err != nil {
@@ -316,8 +331,6 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 	}
 	defer func() { _ = buildCtx.Close() }()
 
-	hash := sha256.Sum256(append([]byte(inspect.ID+"\n"), content...))
-	tag := fmt.Sprintf("%s:%x", repo, hash[:8])
 	buildArgs["BASE"] = &base
 	_, _ = color.New(color.FgCyan).Printf("Installing %s into the image...\n", label)
 	err = imageBuild(ctx, cli, buildCtx, version, build.ImageBuildOptions{

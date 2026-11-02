@@ -2,7 +2,10 @@ package docker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -17,6 +20,26 @@ const ImageLabel = "com.github.seznam.jailoc"
 
 // buildLabels are the labels of every image jailoc builds.
 func buildLabels() map[string]string { return map[string]string{ImageLabel: "1"} }
+
+// ContentLabel records the hash of the Dockerfile and build arguments an
+// image was built from, so an unchanged build can be skipped.
+const ContentLabel = "com.github.seznam.jailoc.content"
+
+// contentHash returns the ContentLabel value of a build of dockerfile.
+func contentHash(dockerfile []byte) string {
+	sum := sha256.Sum256(dockerfile)
+	return hex.EncodeToString(sum[:])
+}
+
+// haveImage reports whether the daemon has tag for the VM platform and,
+// when hash is set, built from content with that ContentLabel.
+func haveImage(ctx context.Context, cli dockerclient.APIClient, tag, hash string) bool {
+	info, err := cli.ImageInspect(ctx, tag)
+	if err != nil || imagePlatform(info) != "linux/"+runtime.GOARCH {
+		return false
+	}
+	return hash == "" || info.Config != nil && info.Config.Labels[ContentLabel] == hash
+}
 
 // PruneImages removes the images jailoc built that are not in keep (image
 // IDs) and older than grace, together with their untagged intermediate
