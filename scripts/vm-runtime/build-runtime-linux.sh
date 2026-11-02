@@ -6,6 +6,7 @@
 # jailoc pins in go.mod and provides libkrun and libkrunfw at the versions
 # that revision names in versions.env, so the runner and the libraries come
 # from the same glibc and match the combination the VM integration test uses.
+# The builder image is pinned by digest (builder-image.sh).
 # libkrun is then rebuilt with jailoc's patches (build-libkrun-linux.sh).
 # The firmware tarball carries libkrunfw (GPL-2.0-only kernel, LGPL-2.1-only
 # library) with its license texts and where to get its source.
@@ -31,9 +32,18 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd)
 work=$(mktemp -d)
 trap 'rm -r "$work"' EXIT
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=scripts/vm-runtime/builder-image.sh
+. "$here/builder-image.sh"
+builder_image "$src" >/dev/null
+runtime=$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
+# go-microvm's Taskfile refers to the builder image by tag; point the tag at
+# the pinned digest so the runner is built in the same image.
+"$runtime" pull "$builder_repo@$builder_digest"
+"$runtime" tag "$builder_repo@$builder_digest" "$builder_repo:$builder_tag"
 (cd "$src" && task build-runner)
-"$(dirname "$0")/build-libkrun-linux.sh" "$src" "$src/bin"
+"$here/build-libkrun-linux.sh" "$src" "$src/bin"
 version() { grep "^$1=" "$2" | cut -d= -f2; }
 libkrun=$(version LIBKRUN_VERSION "$src/bin/builder-versions.env")
 libkrunfw=$(version LIBKRUNFW_VERSION "$src/bin/builder-versions.env")

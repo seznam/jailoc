@@ -8,11 +8,11 @@ name: VM runtime
 # other two in build/vm-runtime before GoReleaser runs. Pull requests that
 # change the build run it as a check without uploading artifacts.
 #
-# The runner is built from the go-microvm revision that go.mod pins. On macOS,
-# libkrun comes from the go-microvm release in GO_MICROVM_RELEASE and libkrunfw
-# is built from its pinned prebuilt kernel bundle; on Linux, go-microvm's
-# builder image provides libkrun and libkrunfw at the versions that revision
-# pins.
+# The runner is built from the go-microvm revision that go.mod pins, and
+# libkrun from source at the release that revision pins, with jailoc's patches
+# and cargo-auditable. On macOS, libkrunfw is built from its pinned prebuilt
+# kernel bundle; on Linux, go-microvm's builder image, pinned by digest,
+# provides libkrunfw and the build environment.
 
 on:
   workflow_call:
@@ -32,8 +32,6 @@ permissions:
 env:
   # https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # go-microvm release that provides libkrun for darwin-arm64.
-  GO_MICROVM_RELEASE: v0.0.41
 
 jobs:
   darwin-arm64:
@@ -64,16 +62,11 @@ jobs:
           git clone --quiet "https://${REPO}" "$RUNNER_TEMP/go-microvm"
           git -C "$RUNNER_TEMP/go-microvm" checkout --quiet "$REV"
 
-      - name: Install libkrun and Task
-        run: |
-          brew tap slp/krun
-          brew trust slp/krun
-          brew install libkrun go-task
+      - name: Install build tools
+        run: brew install go-task lld xz
 
       - name: Build runtime
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: scripts/vm-runtime/build-runtime-darwin.sh "$RUNNER_TEMP/go-microvm" "$GO_MICROVM_RELEASE" dist
+        run: scripts/vm-runtime/build-runtime-darwin.sh "$RUNNER_TEMP/go-microvm" dist
 
       - if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
