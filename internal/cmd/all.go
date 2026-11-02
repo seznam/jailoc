@@ -67,6 +67,9 @@ func targetWorkspaces(cfg *config.Config, args []string) ([]*workspace.Resolved,
 // stop the remaining workspaces; the failures are returned joined. It stops
 // when ctx is cancelled.
 func forEachWorkspace(ctx context.Context, wss []*workspace.Resolved, fn func(*workspace.Resolved) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(wss) == 1 {
 		return fn(wss[0])
 	}

@@ -228,9 +228,11 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: stop image builder: %v\n", err)
 		}
 	}()
-	if err := setDockerHost(st.DockerSocket); err != nil {
+	restoreHost, err := setDockerHost(st.DockerSocket)
+	if err != nil {
 		return "", err
 	}
+	defer restoreHost()
 	return importWorkspaceImage(ctx, cfg, ws)
 }
 
