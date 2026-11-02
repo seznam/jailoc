@@ -181,6 +181,7 @@ type holder struct {
 	rows     uint16
 	cols     uint16
 	output   atomic.Uint64 // bytes read from the program
+	ended    bool          // the program exited and the session entry is being removed
 }
 
 // Serve runs the holder of session id until its program exits.
@@ -255,7 +256,10 @@ func Serve(stateDir, id string) error {
 	if errors.As(waitErr, &exitErr) {
 		code = exitErr.ExitCode()
 	}
+	// Mark the session ended so a detaching client does not write back the
+	// entry the deferred cleanup removes.
 	h.mu.Lock()
+	h.ended = true
 	c := h.current
 	h.mu.Unlock()
 	if c != nil {
@@ -317,6 +321,11 @@ func (h *holder) attach(conn net.Conn) {
 	c := &client{conn: conn, out: make(chan Frame, clientQueue), done: make(chan struct{})}
 
 	h.mu.Lock()
+	if h.ended {
+		h.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
 	if old := h.current; old != nil {
 		old.send(Frame{Type: FrameKicked})
 	}
@@ -333,7 +342,7 @@ func (h *holder) attach(conn net.Conn) {
 	h.readLoop(c)
 
 	h.mu.Lock()
-	if h.current == c {
+	if h.current == c && !h.ended {
 		h.current = nil
 		h.info.Attached = false
 		_ = writeInfo(h.stateDir, h.info)
