@@ -56,7 +56,7 @@ func startExecLog(logger *slog.Logger) (stop func(), err error) {
 			n, _, err := unix.Recvfrom(fd, buf, 0)
 			if err != nil {
 				if err == unix.ENOBUFS {
-					procs.prune()
+					procs.dropped()
 				}
 				if err == unix.EINTR || err == unix.ENOBUFS {
 					continue
@@ -143,13 +143,11 @@ func (t execTracker) exit(ev procEvent) (status uint32, done bool) {
 	return p.status, true
 }
 
-// prune forgets processes that exited while proc events were dropped.
-func (t execTracker) prune() {
-	for tgid := range t {
-		if _, err := os.Stat("/proc/" + strconv.Itoa(tgid)); err != nil {
-			delete(t, tgid)
-		}
-	}
+// dropped forgets every tracked process after the kernel dropped proc
+// events: a lost fork or exit leaves thread counts wrong, so later exits of
+// these processes are left out of the log rather than logged wrongly.
+func (t execTracker) dropped() {
+	clear(t)
 }
 
 // exitRecord is the exit of pid with the given wait status.
