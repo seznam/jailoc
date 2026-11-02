@@ -119,6 +119,10 @@ var openCodeMounts = []string{
 	"~/.opencode:/home/agent/.opencode:rw",
 }
 
+// OpenCode 1 commonly runs with the OmO (oh-my-openagent) plugin, which expects
+// ~/.omo to be writable for migration locks, configuration and state.
+var openCode1Mounts = append(slices.Clone(openCodeMounts), "~/.omo:/home/agent/.omo:rw")
+
 const (
 	openCodeConfigDir = "/home/agent/.config/opencode"
 	// OpenCode (v1.14.22+) writes this file on startup and crashes with
@@ -141,7 +145,7 @@ var harnesses = []Harness{
 			{Name: "opencode-data", Path: "/home/agent/.local/share/opencode"},
 			{Name: "opencode-state", Path: "/home/agent/.local/state/opencode"},
 		},
-		Mounts:          openCodeMounts,
+		Mounts:          openCode1Mounts,
 		TUIPlugin:       OpenCode1TUI,
 		ConfigDir:       openCodeConfigDir,
 		ConfigGitignore: openCodeConfigGitignore,
