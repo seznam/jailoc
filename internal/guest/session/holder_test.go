@@ -160,6 +160,15 @@ func TestStopSession(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	c := dial(t, dir, id, 24, 80)
+	// Stop only once the holder has the client: a program that exits before
+	// then has no one to send its exit code to.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if infos, _ := List(dir); len(infos) == 1 && infos[0].Attached {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err := Stop(dir, id); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -167,7 +176,7 @@ func TestStopSession(t *testing.T) {
 	if code, _ := ParseExit(f.Payload); code == 0 {
 		t.Fatalf("stopped session exited with 0")
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if infos, _ := List(dir); len(infos) == 0 {
 			break
