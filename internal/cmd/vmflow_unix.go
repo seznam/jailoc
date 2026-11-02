@@ -896,9 +896,6 @@ func restartVMIfRunning(ctx context.Context, ws *workspace.Resolved) error {
 	if st, err := runningVM(vmStateDir(ws.Name)); err != nil || st == nil {
 		return err
 	}
-	if err := downVM(ws, false); err != nil {
-		return err
-	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("reload config for restart: %w", err)
@@ -906,6 +903,14 @@ func restartVMIfRunning(ctx context.Context, ws *workspace.Resolved) error {
 	ws2, err := workspace.Resolve(cfg, ws.Name)
 	if err != nil {
 		return fmt.Errorf("re-resolve workspace for restart: %w", err)
+	}
+	// Fail before stopping, so an invalid secret source does not leave the
+	// workspace down.
+	if err := validateSecretSources(ws2); err != nil {
+		return fmt.Errorf("validate secrets for workspace %q: %w", ws2.Name, err)
+	}
+	if err := downVM(ws, false); err != nil {
+		return err
 	}
 	return runUpVM(ctx, cfg, ws2)
 }

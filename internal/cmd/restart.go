@@ -28,6 +28,11 @@ var restartCmd = &cobra.Command{
 			if allFlag {
 				return restartVMIfRunning(ctx, ws)
 			}
+			// Fail before stopping, so an invalid secret source does not
+			// leave the workspace down.
+			if err := validateSecretSources(ws); err != nil {
+				return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
+			}
 			if err := downVM(ws, false); err != nil {
 				return err
 			}
