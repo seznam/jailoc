@@ -7,12 +7,14 @@
 # that revision names in versions.env, so the runner and the libraries come
 # from the same glibc and match the combination the VM integration test uses.
 # The builder image is pinned by digest (builder-image.sh).
-# libkrun is then rebuilt with jailoc's patches (build-libkrun-linux.sh).
+# libkrun is then rebuilt with jailoc's patches and the musl guest init from
+# INIT_DIR (build-libkrun-linux.sh, build-init.sh).
 # The firmware tarball carries libkrunfw (GPL-2.0-only kernel, LGPL-2.1-only
 # library) with its license texts and where to get its source.
 #
-# Usage: build-runtime-linux.sh GO_MICROVM_CHECKOUT OUT_DIR
+# Usage: build-runtime-linux.sh GO_MICROVM_CHECKOUT INIT_DIR OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
+#   INIT_DIR             build-init.sh output for the host architecture
 #   OUT_DIR              receives runtime.tar.gz and firmware.tar.gz, for
 #                        example internal/vm/runtimebin/linux-amd64
 #
@@ -20,7 +22,8 @@
 set -euo pipefail
 
 src=${1:?go-microvm checkout}
-out=${2:?output directory}
+init_dir=${2:?init directory}
+out=${3:?output directory}
 case "$(uname -s)/$(uname -m)" in
   Linux/x86_64) arch=amd64 ;;
   Linux/aarch64) arch=arm64 ;;
@@ -42,9 +45,16 @@ runtime=$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 # the pinned digest so the runner is built in the same image.
 "$runtime" pull "$builder_repo@$builder_digest"
 "$runtime" tag "$builder_repo@$builder_digest" "$builder_repo:$builder_tag"
-(cd "$src" && task build-runner)
-"$here/build-libkrun-linux.sh" "$src" "$src/bin"
 version() { grep "^$1=" "$2" | cut -d= -f2; }
+if [ "$(version LIBKRUN_VERSION "$init_dir/init.env")" != "$(version LIBKRUN_VERSION "$src/versions.env")" ] ||
+  [ "$(version ARCH "$init_dir/init.env")" != "$arch" ]; then
+  echo "$init_dir/init.krun is not built from the libkrun in $src/versions.env for $arch" >&2
+  exit 1
+fi
+musl=$(version MUSL_VERSION "$init_dir/init.env")
+gcc=$(version GCC_VERSION "$init_dir/init.env")
+(cd "$src" && task build-runner)
+"$here/build-libkrun-linux.sh" "$src" "$init_dir/init.krun" "$src/bin"
 libkrun=$(version LIBKRUN_VERSION "$src/bin/builder-versions.env")
 libkrunfw=$(version LIBKRUNFW_VERSION "$src/bin/builder-versions.env")
 kernel=$(version KERNEL_VERSION "$src/bin/builder-versions.env")
@@ -69,6 +79,11 @@ Both are licensed under the Apache License 2.0, see LICENSE.
 
 jailoc modified libkrun with the patches $patches from
 https://github.com/seznam/jailoc/tree/main/scripts/vm-runtime/libkrun-patches.
+
+libkrun embeds its guest init (init.krun), built from the same libkrun source
+and statically linked against musl libc $musl (MIT, https://musl.libc.org) and
+the GCC $gcc runtime libraries (GPL-3.0 with the GCC Runtime Library
+Exception).
 
 The notices of the Go modules and Rust crates built into these files are in
 THIRD_PARTY_NOTICES in the jailoc release archive.

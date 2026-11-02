@@ -69,7 +69,7 @@ go install ./cmd/jailoc
 
 The binary lands in `$GOPATH/bin` (or `$HOME/go/bin` by default). Make sure that directory is on your `PATH`.
 
-A source build doesn't include the VM runtime (the `go-microvm-runner` process, libkrun and the libkrunfw guest kernel) and fails to start workspaces with `this jailoc build does not include the VM runtime`. Either set `runner` and `lib_dir` in the [`[vm]` section](../reference/configuration.md) as shown in [Check your platform](#check-your-platform), or build the runtime into `internal/vm/runtimebin/<os>-<arch>/` before `go install` with `scripts/vm-runtime/build-runtime-linux.sh` or `scripts/vm-runtime/build-runtime-darwin.sh` (see the comments in each script for its requirements).
+A source build doesn't include the VM runtime (the `go-microvm-runner` process, libkrun and the libkrunfw guest kernel) and fails to start workspaces with `this jailoc build does not include the VM runtime`. Either set `runner` and `lib_dir` in the [`[vm]` section](../reference/configuration.md) as shown in [Check your platform](#check-your-platform), or build the runtime into `internal/vm/runtimebin/<os>-<arch>/` before `go install` with `scripts/vm-runtime/build-init.sh` followed by `scripts/vm-runtime/build-runtime-linux.sh` or `scripts/vm-runtime/build-runtime-darwin.sh` (see the comments in each script for its requirements).
 
 ## Know where the VM runtime lives
 
@@ -83,6 +83,7 @@ jailoc itself is MIT-licensed. The embedded runtime carries its own licenses:
 |-----------|---------|-------|
 | `go-microvm-runner` | Apache-2.0 | Runs as a separate process |
 | libkrun | Apache-2.0 | Built with the patches in `scripts/vm-runtime/libkrun-patches/` |
+| musl libc | MIT | Statically linked into libkrun's guest init |
 | libkrunfw | LGPL-2.1-only (library), GPL-2.0-only (bundled Linux kernel) | |
 
 Every release archive contains `THIRD_PARTY_NOTICES` with the license texts of all bundled Go modules, Rust crates and runtime libraries. Each unpacked runtime directory contains `LICENSE`, `NOTICE`, the libkrunfw license texts and a `SOURCE` file.
