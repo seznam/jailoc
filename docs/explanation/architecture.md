@@ -43,7 +43,7 @@ Building on the host daemon is fastest, but Dockerfile `RUN` steps then run with
 
 ## Inside the guest
 
-On Linux hosts, the VM boots from a small root file system that holds only `jailoc-guest` and its configuration, and the unpacked image in the image cache is shared into the VM read-only. `jailoc-guest` lays an overlay over the two and switches to it, with writes held in VM memory (swappable to compressed RAM), so files written outside the shares and the persistent home count against `memory` and are discarded when the VM stops. On macOS, the root file system is a copy-on-write clone of the unpacked image, discarded on every start. `jailoc-guest` prepares the system and then serves SSH:
+The VM boots from a small root file system that holds only `jailoc-guest` and its configuration, and the unpacked image in the image cache is shared into the VM read-only. `jailoc-guest` lays an overlay over the two and switches to it, with writes held in VM memory (swappable to compressed RAM), so files written outside the shares and the persistent home count against `memory` and are discarded when the VM stops. `jailoc-guest` prepares the system and then serves SSH:
 
 1. configures the network addresses, the broker as gateway and DNS resolver, and the hostname,
 2. on Linux hosts, switches to idmapped mounts of the root filesystem and the shares, because libkrun's virtio-fs shows the real host owner of every file there: your user's files appear as root's in the root filesystem and as the agent's in the home and shared directories, and files the agent creates belong to your user on the host,
