@@ -56,6 +56,17 @@ done
 cargo install --locked --root "$work/auditable" "cargo-auditable@$cargo_auditable"
 printf '#!/bin/sh\nexec %s auditable "$@"\n' "$(command -v cargo)" > "$work/auditable/bin/cargo"
 chmod +x "$work/auditable/bin/cargo"
+# bindgen in libkrun's build scripts loads libclang at run time; use the one
+# that ships with the active Xcode or command line tools.
+if [ -z "${LIBCLANG_PATH:-}" ]; then
+  dev=$(xcode-select -p)
+  for dir in "$dev/Toolchains/XcodeDefault.xctoolchain/usr/lib" "$dev/usr/lib"; do
+    if [ -e "$dir/libclang.dylib" ]; then
+      export LIBCLANG_PATH=$dir
+      break
+    fi
+  done
+fi
 PATH=$work/auditable/bin:$PATH make -C "$work/libkrun" BLK=1 NET=1
 mkdir "$work/lib"
 cp "$work"/libkrun/target/release/libkrun.1.*.dylib "$work/lib/libkrun.1.dylib"
