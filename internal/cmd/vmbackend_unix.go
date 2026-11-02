@@ -155,7 +155,7 @@ func startSupervisor(ctx context.Context, spec vm.Spec, label string) (*vm.State
 
 	deadline := time.NewTimer(vmStartTimeout)
 	defer deadline.Stop()
-	tick := time.NewTicker(200 * time.Millisecond)
+	tick := time.NewTicker(50 * time.Millisecond) // state.json is tiny; a short poll returns as soon as the VM is ready
 	defer tick.Stop()
 	for {
 		select {
