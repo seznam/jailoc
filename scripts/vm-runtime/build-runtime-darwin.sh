@@ -51,13 +51,8 @@ for p in "$here"/libkrun-patches/*.patch; do
   echo "applying $(basename "$p")"
   patch -d "$work/libkrun" -p1 --forward < "$p"
 done
-# The Makefile runs cargo build; a cargo in front of the real one on PATH
-# turns that into cargo auditable build.
-cargo install --locked --root "$work/auditable" "cargo-auditable@$cargo_auditable"
-printf '#!/bin/sh\nexec %s auditable "$@"\n' "$(command -v cargo)" > "$work/auditable/bin/cargo"
-chmod +x "$work/auditable/bin/cargo"
-# bindgen in libkrun's build scripts loads libclang at run time; use the one
-# that ships with the active Xcode or command line tools.
+# bindgen in libkrun's build scripts needs libclang; use the one that ships
+# with the active Xcode or command line tools.
 if [ -z "${LIBCLANG_PATH:-}" ]; then
   dev=$(xcode-select -p)
   for dir in "$dev/Toolchains/XcodeDefault.xctoolchain/usr/lib" "$dev/usr/lib"; do
@@ -67,6 +62,19 @@ if [ -z "${LIBCLANG_PATH:-}" ]; then
     fi
   done
 fi
+[ -e "${LIBCLANG_PATH:-}/libclang.dylib" ] || {
+  echo "libclang.dylib not found; set LIBCLANG_PATH" >&2
+  exit 1
+}
+# The Makefile runs cargo build; a cargo in front of the real one on PATH
+# turns that into cargo auditable build. It also sets the dyld fallback path
+# for the krun-display build script, which links @rpath/libclang.dylib: SIP
+# strips DYLD_* variables when make and sh start, so they can only be set
+# right before cargo runs.
+cargo install --locked --root "$work/auditable" "cargo-auditable@$cargo_auditable"
+printf '#!/bin/sh\nexport DYLD_FALLBACK_LIBRARY_PATH=%s\nexec %s auditable "$@"\n' \
+  "'$LIBCLANG_PATH:/usr/local/lib:/usr/lib'" "$(command -v cargo)" > "$work/auditable/bin/cargo"
+chmod +x "$work/auditable/bin/cargo"
 PATH=$work/auditable/bin:$PATH make -C "$work/libkrun" BLK=1 NET=1
 mkdir "$work/lib"
 cp "$work"/libkrun/target/release/libkrun.1.*.dylib "$work/lib/libkrun.1.dylib"
