@@ -143,10 +143,10 @@ Read more: [Secrets](../how-to/secrets.md), [Secrets architecture](../explanatio
 
 !!! warning "Breaking changes"
 
-    - The Docker backend, remote mode and the published OpenCode port are gone. v1 settings (`backend = "docker"`, `mode`, `password_mode`, `expose_port`) fail config load.
-    - `copies` is renamed to `snapshots`; single-file mounts must become snapshots.
-    - `enable_docker` defaults to `false`.
-    - The base image doesn't contain Docker, nftables or OpenCode; jailoc installs the agent in a separate layer.
+    - The Docker backend, remote mode and the published OpenCode port are gone. v1 settings (`mode`, `password_mode`, `expose_port`) fail config load.
+    - `mounts` must be directories: the VM shares directories only. Move single-file mounts to `snapshots`.
+    - `enable_docker` defaults to `false`, and Docker runs inside the VM instead of a sidecar container.
+    - The base image doesn't contain OpenCode; jailoc installs the selected agent in a separate layer.
 
 One command handles most of it:
 
