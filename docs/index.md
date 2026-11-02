@@ -66,6 +66,10 @@ Background on how jailoc works and why it's designed the way it is.
 - [Network Isolation](explanation/network-isolation.md)
 - [Secrets](explanation/secrets.md)
 
+### Blog
+
+- [jailoc 2: every agent gets its own computer](blog/jailoc-2.md)
+
 ### Development
 
 - [Contributing & Development](development.md)

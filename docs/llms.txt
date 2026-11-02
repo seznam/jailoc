@@ -44,4 +44,5 @@ Key facts:
 ## Optional
 
 - [Getting Started Tutorial](https://seznam.github.io/jailoc/tutorials/getting-started/): Step-by-step walkthrough for first-time users
+- [jailoc 2: every agent gets its own computer](https://seznam.github.io/jailoc/blog/jailoc-2/): Blog post tour of the v2 features — per-workspace micro-VMs, multiple coding agents, persistent sessions, network broker, traffic/strace inspection, live reload, Docker in the VM, protect_git, secrets, upgrading from v1
 - [Development Guide](https://seznam.github.io/jailoc/development/): Build from source, run tests, CI pipeline, contribution conventions

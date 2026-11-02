@@ -90,4 +90,6 @@ nav:
     - Architecture: explanation/architecture.md
     - Network Isolation: explanation/network-isolation.md
     - Secrets: explanation/secrets.md
+  - Blog:
+    - "jailoc 2: every agent gets its own computer": blog/jailoc-2.md
   - Development: development.md
