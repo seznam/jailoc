@@ -43,8 +43,9 @@ func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer)
 	}
 	defer unlock()
 	cache := image.NewCache(cacheDir)
-	if cache.LookupRef(ref) != nil {
-		return nil
+	if rfs := cache.LookupRef(ref); rfs != nil {
+		// Heals images unpacked before ownership was normalized.
+		return normalizeOwnership(rfs.Path)
 	}
 	dir, err := os.MkdirTemp(cacheDir, ".save-*")
 	if err != nil {
@@ -75,10 +76,11 @@ func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer)
 	if err != nil {
 		return err
 	}
-	if _, err := image.PullWithFetcher(ctx, ref, cache, staticFetcher{img: img}); err != nil {
+	rfs, err := image.PullWithFetcher(ctx, ref, cache, staticFetcher{img: img})
+	if err != nil {
 		return fmt.Errorf("unpack workspace image: %w", err)
 	}
-	return nil
+	return normalizeOwnership(rfs.Path)
 }
 
 // unpackLayout writes the OCI layout files of a `docker save` tarball to dir,
