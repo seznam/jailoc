@@ -8,9 +8,10 @@ import (
 	"strings"
 )
 
-// addHostsEntry maps hostname to 127.0.1.1 in the hosts file at path unless
-// a line already names it, so tools such as sudo resolve the VM hostname.
-func addHostsEntry(path, hostname string) error {
+// addHostsEntry maps hostname to addr in the hosts file at path unless a
+// line already names it: the VM hostname to 127.0.1.1, so tools such as sudo
+// resolve it, and the host aliases to the broker gateway.
+func addHostsEntry(path, addr, hostname string) error {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: fixed system path or test file
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", path, err)
@@ -30,7 +31,7 @@ func addHostsEntry(path, hostname string) error {
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
-	text += "127.0.1.1\t" + hostname + "\n"
+	text += addr + "\t" + hostname + "\n"
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil { //nolint:gosec // G306: /etc/hosts is world-readable
 		return fmt.Errorf("write %s: %w", path, err)
 	}

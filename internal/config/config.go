@@ -306,6 +306,7 @@ type Defaults struct {
 	IsolatedBuild   *bool                    `toml:"isolated_build,omitempty"`
 	ProtectGit      *bool                    `toml:"protect_git,omitempty"`
 	Ports           []Port                   `toml:"ports,omitempty"`
+	HostPorts       []HostPort               `toml:"host_ports,omitempty"`
 }
 
 type Workspace struct {
@@ -336,6 +337,7 @@ type Workspace struct {
 	IsolatedBuild   *bool                    `toml:"isolated_build,omitempty"`
 	ProtectGit      *bool                    `toml:"protect_git,omitempty"`
 	Ports           []Port                   `toml:"ports,omitempty"`
+	HostPorts       []HostPort               `toml:"host_ports,omitempty"`
 }
 
 func ConfigDir() string {
@@ -979,6 +981,9 @@ func Validate(cfg *Config) error {
 	if err := validatePorts(cfg.Defaults.Ports); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
+	if err := validateHostPorts(cfg.Defaults.HostPorts); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
 
 	if cfg.Defaults.CPU != nil && (*cfg.Defaults.CPU <= 0 || math.IsNaN(*cfg.Defaults.CPU) || math.IsInf(*cfg.Defaults.CPU, 0)) {
 		return fmt.Errorf("defaults: cpu must be a finite number greater than 0")
@@ -1128,6 +1133,9 @@ func Validate(cfg *Config) error {
 			ws.Snapshots[i] = normalized
 		}
 		if err := validatePorts(ws.Ports); err != nil {
+			return fmt.Errorf("workspace %q: %w", name, err)
+		}
+		if err := validateHostPorts(ws.HostPorts); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) && explicitTrue(cfg.Defaults.ProtectGit, ws.ProtectGit) {

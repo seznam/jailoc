@@ -153,17 +153,29 @@ func (b *Broker) startForward(ctx context.Context, f Forward) (func(), error) {
 }
 
 // startService accepts guest connections to the gateway's s.GuestPort and
-// relays each to the host unix socket s.UnixPath.
+// relays each to the host unix socket s.UnixPath or TCP address s.TCP.
 func (b *Broker) startService(ctx context.Context, s Service) error {
-	_, err := b.startServicePath(ctx, s.GuestPort, func() string { return s.UnixPath })
+	t := serviceTarget{network: "unix", addr: s.UnixPath}
+	if s.TCP.IsValid() {
+		t = serviceTarget{network: "tcp", addr: s.TCP.String()}
+	}
+	_, err := b.startServiceTarget(ctx, s.GuestPort, func() serviceRoute { return serviceRoute{target: t, ctx: ctx} })
 	return err
 }
 
-// startServicePath is startService with the socket path looked up for every
-// connection, so a runtime reload can change it without a restart.
-// Cancelling ctx closes the listener and every open connection, so that a
-// removed service, such as SSH agent forwarding, is revoked at once.
-func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() string) (func(), error) {
+// serviceRoute is where a gateway service sends a new connection: the host
+// target to dial and a context that closes the connection when cancelled.
+type serviceRoute struct {
+	target serviceTarget
+	ctx    context.Context
+}
+
+// startServiceTarget accepts guest connections to the gateway's port and
+// relays each along the route current at accept time. Cancelling ctx closes the
+// listener and every open connection, and cancelling a route's ctx closes the
+// connections made along it, so that a removed or retargeted service, such as
+// SSH agent forwarding, is revoked at once.
+func (b *Broker) startServiceTarget(ctx context.Context, port uint16, route func() serviceRoute) (func(), error) {
 	s := Service{GuestPort: port}
 	l, err := gonet.ListenTCP(b.stack, *guestAddr(b.cfg.Gateway, s.GuestPort), ipv4.ProtocolNumber)
 	if err != nil {
@@ -180,17 +192,18 @@ func (b *Broker) startServicePath(ctx context.Context, port uint16, path func() 
 				return
 			}
 			go func() {
+				r := route()
 				var d net.Dialer
-				dctx, cancel := context.WithTimeout(ctx, dialTimeout)
-				h, err := d.DialContext(dctx, "unix", path())
+				dctx, cancel := context.WithTimeout(r.ctx, dialTimeout)
+				h, err := d.DialContext(dctx, r.target.network, r.target.addr)
 				cancel()
 				if err != nil {
-					b.record(map[string]any{"event": "service-error", "guest_port": s.GuestPort, "error": err.Error()})
+					b.record(map[string]any{"event": "service-error", "guest_port": s.GuestPort, "network": r.target.network, "target": r.target.addr, "error": err.Error()})
 					_ = c.Close()
 					return
 				}
-				b.record(map[string]any{"event": "service", "guest_port": s.GuestPort})
-				stop := context.AfterFunc(ctx, func() {
+				b.record(map[string]any{"event": "service", "guest_port": s.GuestPort, "network": r.target.network, "target": r.target.addr})
+				stop := context.AfterFunc(r.ctx, func() {
 					_ = c.Close()
 					_ = h.Close()
 				})

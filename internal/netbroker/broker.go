@@ -47,10 +47,12 @@ type Forward struct {
 }
 
 // Service relays guest TCP connections to the gateway's GuestPort to the
-// host unix socket UnixPath.
+// host unix socket UnixPath or, when TCP is valid, to the host loopback TCP
+// address TCP.
 type Service struct {
 	GuestPort uint16
 	UnixPath  string
+	TCP       netip.AddrPort
 }
 
 // Config describes the virtual network served to one guest.

@@ -17,14 +17,16 @@ import (
 // workspace bundle can be applied on top of the original.
 const originalCA = "/run/jailoc-system-ca.crt"
 
-// liveState applies Reload requests: the CA bundle, the SSH agent relay and
-// the snapshot binds.
+// liveState applies Reload requests: the CA bundle, the SSH agent relay, the
+// host port mirrors and the snapshot binds.
 type liveState struct {
 	logger    *slog.Logger
 	acct      account
 	seq       int64
 	applied   Reload
 	stopAgent func()
+	// hostPorts stop the loopback mirrors of host_ports, by port.
+	hostPorts map[uint16]func()
 	// snapshots are the bound snapshots, in bind order.
 	snapshots []Snapshot
 	// created holds the snapshot mount points the guest created.
@@ -51,6 +53,7 @@ func (l *liveState) apply(r Reload) error {
 		l.stopAgent()
 		l.stopAgent = nil
 	}
+	l.setHostPorts(r.HostPorts)
 	l.applied = r
 	return nil
 }
@@ -99,7 +102,7 @@ func (l *liveState) poll() {
 		l.logger.Error("reload", "error", err)
 		done.Error = err.Error()
 	} else {
-		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "snapshots", len(r.Snapshots))
+		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots))
 	}
 	out, _ := json.Marshal(done)
 	tmp := filepath.Join(ControlDir, ReloadDoneFile+".tmp")

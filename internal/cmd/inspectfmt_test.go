@@ -31,6 +31,9 @@ func TestTrafficFormatter(t *testing.T) {
 		`{"event":"future-event","time":"2026-10-27T10:00:06Z"}`,
 		`{"event":"ingress","host":"/state/ssh.sock","guest_port":22,"time":"2026-10-27T10:00:07Z"}`,
 		`{"event":"ingress","host":"127.0.0.1:18080","guest_port":8080,"time":"2026-10-27T10:00:08Z"}`,
+		`{"event":"service","guest_port":7022,"network":"unix","target":"/tmp/agent.sock","time":"2026-10-27T10:00:09Z"}`,
+		`{"event":"service","guest_port":9222,"network":"tcp","target":"127.0.0.1:9222","time":"2026-10-27T10:00:10Z"}`,
+		`{"event":"service-error","guest_port":7100,"network":"unix","target":"/tmp/figma.sock","error":"connection refused","time":"2026-10-27T10:00:11Z"}`,
 		`not json`,
 	}
 	var got []string
@@ -47,6 +50,8 @@ func TestTrafficFormatter(t *testing.T) {
 		"└ http GET plain.example/index",
 		"BLOCK dns blocked.example → NXDOMAIN (filtered_dns)",
 		"IN tcp 127.0.0.1:18080 → guest port 8080",
+		"HOST tcp gateway port 9222 → 127.0.0.1:9222",
+		"FAIL gateway port 7100 → /tmp/figma.sock: connection refused",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -88,7 +93,8 @@ func TestTrafficFormatterEscapesGuestFields(t *testing.T) {
 		{"dns blocked", trafficEvent{Event: "dns", Name: attack, Blocked: true}},
 		{"dial error", trafficEvent{Event: "dial-error", Proto: attack, Dst: attack, Error: attack}},
 		{"ingress", trafficEvent{Event: "ingress", Host: attack, GuestPort: 8080}},
-		{"service error", trafficEvent{Event: "service-error", Error: attack}},
+		{"service", trafficEvent{Event: "service", Network: attack, Target: attack, GuestPort: 9222}},
+		{"service error", trafficEvent{Event: "service-error", Target: attack, Error: attack}},
 		{"reload", trafficEvent{Event: "reload", PolicyError: attack, RuntimeErrors: []string{attack}}},
 		{"unknown event", trafficEvent{Event: attack}},
 	}

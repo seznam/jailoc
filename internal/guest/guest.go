@@ -44,6 +44,10 @@ const (
 	SSHAgentSocket = "/run/ssh-agent.sock"
 )
 
+// HostAliases resolve to the broker gateway in /etc/hosts, where host_ports
+// reach host services.
+var HostAliases = []string{"host.jailoc.internal", "host.docker.internal"}
+
 // IDMap holds the host user's IDs as virtio-fs reports them in the guest.
 type IDMap struct {
 	UID uint32 `json:"uid"`
@@ -102,6 +106,9 @@ type Config struct {
 	// SSHAgent exposes the host SSH agent at SSHAgentSocket, relayed
 	// through the broker gateway.
 	SSHAgent bool `json:"ssh_agent,omitempty"`
+	// HostPorts are the broker gateway ports relayed to host services
+	// (host_ports); the guest mirrors each on its loopback.
+	HostPorts []uint16 `json:"host_ports,omitempty"`
 	// Pins are paths bound onto themselves so that they cannot be renamed
 	// or removed in the guest; they keep their share's writability.
 	Pins []string `json:"pins,omitempty"`

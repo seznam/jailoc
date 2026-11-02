@@ -33,6 +33,8 @@ type trafficEvent struct {
 	Error         string    `json:"error"`
 	Host          string    `json:"host"`
 	GuestPort     int       `json:"guest_port"`
+	Network       string    `json:"network"`
+	Target        string    `json:"target"`
 	SNI           string    `json:"sni"`
 	ALPN          []string  `json:"alpn"`
 	Method        string    `json:"method"`
@@ -132,8 +134,13 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 			return "" // jailoc's own SSH sessions
 		}
 		return fmt.Sprintf("%s  %s  tcp  %s → guest port %d", ts, colInfo.Sprint("IN   "), escapeVisible(e.Host), e.GuestPort)
+	case "service":
+		if e.GuestPort == guest.SSHAgentPort && !f.all {
+			return "" // SSH agent forwarding
+		}
+		return fmt.Sprintf("%s  %s  %-4s gateway port %d%s", ts, colInfo.Sprint("HOST "), escapeVisible(e.Network), e.GuestPort, serviceTarget(e))
 	case "service-error":
-		return fmt.Sprintf("%s  %s  gateway port %d: %s", ts, colDeny.Sprint("FAIL "), e.GuestPort, escapeVisible(e.Error))
+		return fmt.Sprintf("%s  %s  gateway port %d%s: %s", ts, colDeny.Sprint("FAIL "), e.GuestPort, serviceTarget(e), escapeVisible(e.Error))
 	case "reload":
 		msg := "configuration reloaded"
 		if e.PolicyError != "" {
@@ -154,6 +161,15 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 		return fmt.Sprintf("%s  %s  %s %s", ts, colDim.Sprint("     "), escapeVisible(e.Event), colDim.Sprint(escapeVisible(string(data))))
 	}
 	return ""
+}
+
+// serviceTarget renders the host target of a gateway service event, or ""
+// for events from brokers that did not record it.
+func serviceTarget(e trafficEvent) string {
+	if e.Target == "" {
+		return ""
+	}
+	return " → " + escapeVisible(e.Target)
 }
 
 // dest renders an address with the DNS name it was looked up by.

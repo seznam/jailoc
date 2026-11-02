@@ -161,6 +161,21 @@ func TestBrokerEndToEnd(t *testing.T) {
 	log := &syncBuf{}
 	status := &syncBuf{}
 	fwdSock := filepath.Join(t.TempDir(), "fwd.sock")
+	tcpSvc, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("tcp service: %v", err)
+	}
+	t.Cleanup(func() { _ = tcpSvc.Close() })
+	go func() {
+		for {
+			c, err := tcpSvc.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = c.Write([]byte("hello from host tcp"))
+			_ = c.Close()
+		}
+	}()
 	svcSock := filepath.Join(t.TempDir(), "svc.sock")
 	svc, err := net.Listen("unix", svcSock)
 	if err != nil {
@@ -185,9 +200,12 @@ func TestBrokerEndToEnd(t *testing.T) {
 			{Host: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), ingress), GuestPort: 4096},
 			{UnixPath: fwdSock, GuestPort: 4096},
 		},
-		Services: []Service{{GuestPort: 7022, UnixPath: svcSock}},
-		Log:      log,
-		Status:   status,
+		Services: []Service{
+			{GuestPort: 7022, UnixPath: svcSock},
+			{GuestPort: 9222, TCP: netip.MustParseAddrPort(tcpSvc.Addr().String())},
+		},
+		Log:    log,
+		Status: status,
 	}, pol)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -284,6 +302,20 @@ func TestBrokerEndToEnd(t *testing.T) {
 		got, _ := io.ReadAll(c)
 		_ = c.Close()
 		if string(got) != "hello from host" {
+			t.Fatalf("service got %q", got)
+		}
+	})
+	t.Run("gateway service reaches the host loopback port", func(t *testing.T) {
+		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+		defer dcancel()
+		c, err := gonet.DialContextTCP(dctx, g, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), Port: 9222}, ipv4.ProtocolNumber)
+		if err != nil {
+			t.Fatalf("dial service: %v", err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got, _ := io.ReadAll(c)
+		_ = c.Close()
+		if string(got) != "hello from host tcp" {
 			t.Fatalf("service got %q", got)
 		}
 	})
@@ -429,6 +461,80 @@ func TestBrokerEndToEnd(t *testing.T) {
 		var ne net.Error
 		if _, err := c.Read(make([]byte, 1)); err == nil || (errors.As(err, &ne) && ne.Timeout()) {
 			t.Fatalf("guest side read = %v, want the connection closed", err)
+		}
+	})
+	t.Run("retargeting a runtime service closes connections to the old target", func(t *testing.T) {
+		oldL, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen old: %v", err)
+		}
+		t.Cleanup(func() { _ = oldL.Close() })
+		accepted := make(chan net.Conn, 1)
+		go func() {
+			c, err := oldL.Accept()
+			if err == nil {
+				accepted <- c
+			}
+		}()
+		newL, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen new: %v", err)
+		}
+		t.Cleanup(func() { _ = newL.Close() })
+		go func() {
+			for {
+				c, err := newL.Accept()
+				if err != nil {
+					return
+				}
+				_, _ = c.Write([]byte("new target"))
+				_ = c.Close()
+			}
+		}()
+		dialService := func() net.Conn {
+			dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+			defer dcancel()
+			c, err := gonet.DialContextTCP(dctx, g, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), Port: 7025}, ipv4.ProtocolNumber)
+			if err != nil {
+				t.Fatalf("dial service: %v", err)
+			}
+			return c
+		}
+
+		if errs := b.ApplyRuntime(ctx, &Runtime{Services: []RuntimeService{{GuestPort: 7025, TCP: oldL.Addr().String()}}}); len(errs) > 0 {
+			t.Fatalf("apply: %v", errs)
+		}
+		c := dialService()
+		defer func() { _ = c.Close() }()
+		var h net.Conn
+		select {
+		case h = <-accepted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("old target did not get the connection")
+		}
+		defer func() { _ = h.Close() }()
+
+		if errs := b.ApplyRuntime(ctx, &Runtime{Services: []RuntimeService{{GuestPort: 7025, TCP: newL.Addr().String()}}}); len(errs) > 0 {
+			t.Fatalf("apply retarget: %v", errs)
+		}
+		_ = h.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := h.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatalf("old target read = %v, want EOF after the service was retargeted", err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var ne net.Error
+		if _, err := c.Read(make([]byte, 1)); err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+			t.Fatalf("guest side read = %v, want the connection closed", err)
+		}
+		nc := dialService()
+		_ = nc.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got, _ := io.ReadAll(nc)
+		_ = nc.Close()
+		if string(got) != "new target" {
+			t.Fatalf("retargeted service got %q, want new target", got)
+		}
+		if errs := b.ApplyRuntime(ctx, &Runtime{}); len(errs) > 0 {
+			t.Fatalf("apply empty: %v", errs)
 		}
 	})
 	t.Run("blocked DNS zone gets NXDOMAIN", func(t *testing.T) {

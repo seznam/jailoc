@@ -26,10 +26,42 @@ type RuntimeForward struct {
 	GuestPort uint16 `json:"guest_port"`
 }
 
-// RuntimeService relays the gateway's GuestPort to the host unix socket Path.
+// RuntimeService relays the gateway's GuestPort to the host unix socket Path
+// or, when TCP is set, to the host loopback TCP address TCP.
 type RuntimeService struct {
 	GuestPort uint16 `json:"guest_port"`
-	Path      string `json:"path"`
+	Path      string `json:"path,omitempty"`
+	TCP       string `json:"tcp,omitempty"`
+}
+
+// serviceTarget is the host endpoint a gateway service dials.
+type serviceTarget struct {
+	network string
+	addr    string
+}
+
+func (s RuntimeService) target() serviceTarget {
+	if s.TCP != "" {
+		return serviceTarget{network: "tcp", addr: s.TCP}
+	}
+	return serviceTarget{network: "unix", addr: s.Path}
+}
+
+// validateServiceTarget accepts exactly one of an absolute unix socket path
+// and a host loopback TCP address.
+func validateServiceTarget(path, tcp string) error {
+	switch {
+	case path != "" && tcp != "":
+		return fmt.Errorf("want a socket path or a TCP address, not both")
+	case tcp != "":
+		ap, err := netip.ParseAddrPort(tcp)
+		if err != nil || !ap.Addr().IsLoopback() || ap.Port() == 0 {
+			return fmt.Errorf("TCP target %q: want a loopback address and a non-zero port", tcp)
+		}
+	case !filepath.IsAbs(path):
+		return fmt.Errorf("socket path %q: want an absolute path", path)
+	}
+	return nil
 }
 
 // ParseRuntime validates a runtime file. Unknown fields are rejected.
@@ -53,8 +85,11 @@ func ParseRuntime(data []byte, source string) (*Runtime, error) {
 	}
 	ports := map[uint16]bool{}
 	for _, s := range rt.Services {
-		if s.GuestPort == 0 || s.GuestPort == 53 || !filepath.IsAbs(s.Path) {
-			return nil, fmt.Errorf("runtime %s: service %d -> %q: want a port other than 0 and 53 and an absolute socket path", source, s.GuestPort, s.Path)
+		if s.GuestPort == 0 || s.GuestPort == 53 {
+			return nil, fmt.Errorf("runtime %s: service %d: want a port other than 0 and 53", source, s.GuestPort)
+		}
+		if err := validateServiceTarget(s.Path, s.TCP); err != nil {
+			return nil, fmt.Errorf("runtime %s: service %d: %w", source, s.GuestPort, err)
 		}
 		if ports[s.GuestPort] {
 			return nil, fmt.Errorf("runtime %s: duplicate service port %d", source, s.GuestPort)
@@ -69,8 +104,21 @@ type runtimeForward struct {
 }
 
 type runtimeService struct {
-	stop func()
-	path atomic.Pointer[string]
+	stop        func()
+	ctx         context.Context
+	route       atomic.Pointer[serviceRoute]
+	cancelRoute context.CancelFunc
+}
+
+// retarget sends new connections to t and closes the open ones to the
+// previous target, so a reload also revokes access to a replaced target.
+func (r *runtimeService) retarget(t serviceTarget) {
+	rctx, cancel := context.WithCancel(r.ctx)
+	r.route.Store(&serviceRoute{target: t, ctx: rctx})
+	if r.cancelRoute != nil {
+		r.cancelRoute()
+	}
+	r.cancelRoute = cancel
 }
 
 // runtimeState tracks the listeners started from a Runtime.
@@ -81,8 +129,9 @@ type runtimeState struct {
 }
 
 // ApplyRuntime reconciles the running forwards and services with rt:
-// removed ones stop, new ones start, and a changed service path applies to
-// the next connection. It returns one error per entry that failed to start.
+// removed ones stop, new ones start, and a service whose target changed closes
+// its open connections and dials the new target from the next connection. It
+// returns one error per entry that failed to start.
 func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 	s := &b.runtime
 	s.mu.Lock()
@@ -95,9 +144,9 @@ func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 	for _, f := range rt.Forwards {
 		wantF[f] = true
 	}
-	wantS := map[uint16]string{}
+	wantS := map[uint16]serviceTarget{}
 	for _, sv := range rt.Services {
-		wantS[sv.GuestPort] = sv.Path
+		wantS[sv.GuestPort] = sv.target()
 	}
 	// Stop removed entries first so a host port can move between guest ports.
 	for f, r := range s.forwards {
@@ -127,15 +176,17 @@ func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 		}
 		s.forwards[f] = &runtimeForward{stop: func() { closeL(); cancel() }}
 	}
-	for port, path := range wantS {
+	for port, target := range wantS {
 		if r, ok := s.services[port]; ok {
-			r.path.Store(&path)
+			if r.route.Load().target != target {
+				r.retarget(target)
+			}
 			continue
 		}
-		r := &runtimeService{}
-		r.path.Store(&path)
 		sctx, cancel := context.WithCancel(ctx)
-		closeL, err := b.startServicePath(sctx, port, func() string { return *r.path.Load() })
+		r := &runtimeService{ctx: sctx}
+		r.retarget(target)
+		closeL, err := b.startServiceTarget(sctx, port, func() serviceRoute { return *r.route.Load() })
 		if err != nil {
 			cancel()
 			errs = append(errs, fmt.Errorf("service %d: %w", port, err))

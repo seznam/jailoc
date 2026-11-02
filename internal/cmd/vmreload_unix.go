@@ -27,7 +27,7 @@ const reloadTimeout = 15 * time.Second
 
 // reloadVM applies the current configuration to a running workspace VM
 // without restarting it: network policy (allowed_hosts, allowed_networks,
-// filtered_dns), published ports, the SSH agent, the CA bundle, snapshots,
+// filtered_dns), published ports, host ports, the SSH agent, the CA bundle, snapshots,
 // environment and secrets. Settings that need a new VM are reported, not
 // applied.
 func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
@@ -66,9 +66,11 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
 	next.Policy = want.Policy
 	next.Forwards = want.Forwards
 	next.SSHAgent = want.SSHAgent
+	next.HostServices = want.HostServices
 	g := *running.Guest
 	g.CABundle = want.Guest.CABundle
 	g.SSHAgent = want.Guest.SSHAgent
+	g.HostPorts = want.Guest.HostPorts
 	g.Snapshots = binds
 	next.Guest = &g
 
@@ -242,7 +244,7 @@ func reloadBroker(spec vm.Spec, pid int) error {
 				return fmt.Errorf("invalid policy, the broker now denies all new connections: %s", ev.PolicyError)
 			}
 			if len(ev.RuntimeErrors) > 0 {
-				return fmt.Errorf("published ports: %s", joinList(ev.RuntimeErrors))
+				return fmt.Errorf("published ports and host ports: %s", joinList(ev.RuntimeErrors))
 			}
 			return nil
 		}
@@ -281,7 +283,7 @@ func brokerReloadEvent(path string, offset int64) (brokerReload, bool) {
 // reloadGuest asks the guest init to apply the CA bundle, SSH agent and snapshots of g
 // and waits for its answer.
 func reloadGuest(stateDir string, g guest.Config) error {
-	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, Snapshots: g.Snapshots}
+	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode reload request: %w", err)

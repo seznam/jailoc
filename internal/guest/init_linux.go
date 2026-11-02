@@ -27,6 +27,7 @@ import (
 	"github.com/stacklok/go-microvm/guest/netcfg"
 	"github.com/stacklok/go-microvm/guest/reaper"
 	"github.com/stacklok/go-microvm/guest/sshd"
+	"github.com/stacklok/go-microvm/net/topology"
 )
 
 const (
@@ -73,8 +74,13 @@ func Init(logger *slog.Logger) error {
 		if err := syscall.Sethostname([]byte(cfg.Hostname)); err != nil {
 			logger.Warn("set hostname", "error", err)
 		}
-		if err := addHostsEntry("/etc/hosts", cfg.Hostname); err != nil {
+		if err := addHostsEntry("/etc/hosts", "127.0.1.1", cfg.Hostname); err != nil {
 			logger.Warn("add hostname to /etc/hosts", "error", err)
+		}
+	}
+	for _, alias := range HostAliases {
+		if err := addHostsEntry("/etc/hosts", topology.GatewayIP, alias); err != nil {
+			logger.Warn("add host alias to /etc/hosts", "alias", alias, "error", err)
 		}
 	}
 	if err := netcfg.Configure(logger); err != nil {
@@ -115,7 +121,7 @@ func Init(logger *slog.Logger) error {
 			return err
 		}
 	}
-	live := &liveState{logger: logger, acct: acct, created: map[string]bool{}}
+	live := &liveState{logger: logger, acct: acct, created: map[string]bool{}, hostPorts: map[uint16]func(){}}
 	if err := live.setSnapshots(cfg.Snapshots); err != nil {
 		return err
 	}
@@ -130,7 +136,7 @@ func Init(logger *slog.Logger) error {
 			return err
 		}
 	}
-	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, Snapshots: cfg.Snapshots}); err != nil {
+	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots}); err != nil {
 		return err
 	}
 

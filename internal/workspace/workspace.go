@@ -58,7 +58,10 @@ type Resolved struct {
 	// a backend "vm" workspace read-only in the VM and disables sudo there.
 	ProtectGit bool
 	// Ports are guest ports published on host 127.0.0.1 (backend "vm").
-	Ports           []config.PortForward
+	Ports []config.PortForward
+	// HostPorts are host 127.0.0.1 ports or unix sockets relayed to the
+	// guest on the gateway and guest loopback (backend "vm").
+	HostPorts       []config.HostPortTarget
 	FilteredDNS     bool
 	DNSUpstream     string
 	DNSBlockedZones []string
@@ -191,6 +194,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		r.EnableDocker = false
 	}
 	r.Ports = config.MergePorts(cfg.Defaults.Ports, ws.Ports)
+	r.HostPorts = config.MergeHostPorts(cfg.Defaults.HostPorts, ws.HostPorts)
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
 	r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
 	snapshots, err := config.MergeMounts(cfg.Defaults.Snapshots, ws.Snapshots)
