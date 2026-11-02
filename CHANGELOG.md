@@ -1,5 +1,40 @@
 # Changelog
 
+## [2.0.0-rc.1](https://github.com/seznam/jailoc/compare/v2.0.0-rc...v2.0.0-rc.1) (2026-11-02)
+
+
+### Features
+
+* **release:** attest builds, pin the builder image and build macOS libkrun from source ([34c3a18](https://github.com/seznam/jailoc/commit/34c3a185017af6cd5187dfbea43c2f051c690350))
+* **release:** publish SPDX SBOMs for archives and VM runtimes ([8b6aba5](https://github.com/seznam/jailoc/commit/8b6aba585edfb9681f31ce3affb1c5026c71e6ee))
+* **strace:** show the exit status or signal of failed processes ([b59e331](https://github.com/seznam/jailoc/commit/b59e331646ddb8efd979766045bbb49efe2cb719))
+* **vm:** embed the VM runtime in release builds and add linux/arm64 ([2f0f90f](https://github.com/seznam/jailoc/commit/2f0f90f5e9a4875a8fe3cef22858fc2d88f5afe2))
+* **vm:** ship license notices and libkrunfw source with the embedded runtime ([907c5b9](https://github.com/seznam/jailoc/commit/907c5b9dacb451fc4a5492e0037f717e75ccd905))
+
+
+### Bug Fixes
+
+* **ci:** build the musl guest init for the VM integration libkrun ([40773f3](https://github.com/seznam/jailoc/commit/40773f3598d48704e790bd9ce75aba2a9a2ba838))
+* **deps:** bump actions/setup-python ([d458f6e](https://github.com/seznam/jailoc/commit/d458f6e5533ffa0e5c06267ab852d0a44ddeb542))
+* **release:** build the VM runtime, notices and source in the prerelease workflow and fail go-notices on go list errors ([4af5f18](https://github.com/seznam/jailoc/commit/4af5f18729f64b6987c199d2cd4e20e88bba92a5))
+* **release:** give the krun-display build script a path to libclang on macOS ([3c1b367](https://github.com/seznam/jailoc/commit/3c1b367d8f0e9cfdd5cf6944ef5856171ba51c96))
+* **release:** link libkrun's guest init against musl instead of glibc ([8e151c8](https://github.com/seznam/jailoc/commit/8e151c8e36f09fb336599274b5a5cb8986cf2560))
+* **release:** point bindgen at the Xcode libclang when building macOS libkrun ([4a57aec](https://github.com/seznam/jailoc/commit/4a57aec715d706e84d8aed7c496a6050b688d832))
+* **release:** restore the executable bit on the VM runtime build scripts ([927ce36](https://github.com/seznam/jailoc/commit/927ce36d87913f9b87bebe88e887eff695d6dda7))
+* **session:** keep a detaching client from re-creating an ended session entry ([fdc78b8](https://github.com/seznam/jailoc/commit/fdc78b8e237af23ccf9d8f18e9c2fe05c5005a72))
+* **strace:** report a process exit when its last thread exits ([1d0a9fe](https://github.com/seznam/jailoc/commit/1d0a9fea0be65ae978d6be968570bf732cffd65d))
+* **strace:** stop tracking processes after dropped proc events ([a2a7b17](https://github.com/seznam/jailoc/commit/a2a7b17b380ff6f08a18f47c2f754f3744312a89))
+* **vm:** allow the private image cache directory mode in gosec ([7b1a7a6](https://github.com/seznam/jailoc/commit/7b1a7a624088092bfbfd11dadd22c87f34bd1fe3))
+* **vm:** keep the image cache private for set-id rootfs trees ([d270be3](https://github.com/seznam/jailoc/commit/d270be39aadad130c8618e8939df39378b32e278))
+
+
+### Documentation
+
+* **blog:** add jailoc 2 release blog post ([7ae25b1](https://github.com/seznam/jailoc/commit/7ae25b130eef05a1383d8905362cbccd8f977d34))
+* **blog:** add traffic, strace, sessions and shell screenshots to the v2 post ([f58fa23](https://github.com/seznam/jailoc/commit/f58fa23b776a59e9f467aac94b5a3d62b97dd519))
+* **blog:** fix v1 breaking changes in jailoc 2 post ([dc952c5](https://github.com/seznam/jailoc/commit/dc952c5cd83a3cc4e3ad5b56a146188b7d47f28b))
+* **blog:** say the VM runtime is embedded, not downloaded ([ff5b8c2](https://github.com/seznam/jailoc/commit/ff5b8c22b325867f7d1c61ffdba11de0d644267a))
+
 ## [2.0.0-rc](https://github.com/seznam/jailoc/compare/v1.19.0...v2.0.0-rc) (2026-11-02)
 
 
