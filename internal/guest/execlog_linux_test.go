@@ -26,3 +26,26 @@ func TestExitRecord(t *testing.T) {
 		})
 	}
 }
+
+func TestExecTrackerReportsLastThreadExit(t *testing.T) {
+	t.Parallel()
+	procs := execTracker{}
+	procs.exec(10)
+	procs.fork(procEvent{what: procEventFork, pid: 10, tgid: 10, childPID: 11, childTGID: 10})
+	procs.fork(procEvent{what: procEventFork, pid: 10, tgid: 10, childPID: 12, childTGID: 12}) // child process, not a thread
+
+	// The leader exits first with pthread_exit; the worker then calls exit_group(7).
+	if _, done := procs.exit(procEvent{what: procEventExit, pid: 10, tgid: 10}); done {
+		t.Fatal("process reported done while a thread is still running")
+	}
+	status, done := procs.exit(procEvent{what: procEventExit, pid: 11, tgid: 10, exitCode: 7 << 8})
+	if !done || status != 7<<8 {
+		t.Fatalf("last thread exit = (%#x, %v), want (%#x, true)", status, done, 7<<8)
+	}
+	if _, done := procs.exit(procEvent{what: procEventExit, pid: 10, tgid: 10}); done {
+		t.Error("exit of a finished process reported again")
+	}
+	if _, done := procs.exit(procEvent{what: procEventExit, pid: 12, tgid: 12}); done {
+		t.Error("exit of an untracked process reported")
+	}
+}

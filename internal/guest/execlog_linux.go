@@ -25,7 +25,8 @@ const (
 )
 
 // startExecLog records every exec in the guest to the exec log in the
-// control share, and the exit status of each recorded process. It uses the
+// control share, and the exit status of each recorded process once its last
+// thread exits. It uses the
 // kernel proc connector, which reports execs and exits of all processes,
 // including short-lived ones; exec details are read from /proc right after
 // the event and may be missing when the process already exited. The log is
@@ -48,14 +49,14 @@ func startExecLog(logger *slog.Logger) (stop func(), err error) {
 	stop = func() { once.Do(func() { _ = unix.Close(fd) }) }
 	go func() {
 		buf := make([]byte, 8192)
-		// started holds the recorded processes still running, so exits are
+		// procs tracks the recorded processes still running, so exits are
 		// logged only for processes whose start is in the log.
-		started := map[int]struct{}{}
+		procs := execTracker{}
 		for {
 			n, _, err := unix.Recvfrom(fd, buf, 0)
 			if err != nil {
 				if err == unix.ENOBUFS {
-					pruneExited(started)
+					procs.prune()
 				}
 				if err == unix.EINTR || err == unix.ENOBUFS {
 					continue
@@ -64,16 +65,19 @@ func startExecLog(logger *slog.Logger) (stop func(), err error) {
 			}
 			for _, ev := range parseProcEvents(buf[:n]) {
 				var rec ExecRecord
-				switch {
-				case ev.what == procEventExec:
-					started[ev.tgid] = struct{}{}
+				switch ev.what {
+				case procEventExec:
+					procs.exec(ev.tgid)
 					rec = readExec(ev.tgid)
-				case ev.what == procEventExit && ev.pid == ev.tgid:
-					if _, ok := started[ev.pid]; !ok {
+				case procEventFork:
+					procs.fork(ev)
+					continue
+				case procEventExit:
+					status, done := procs.exit(ev)
+					if !done {
 						continue
 					}
-					delete(started, ev.pid)
-					rec = exitRecord(ev.pid, ev.exitCode)
+					rec = exitRecord(ev.tgid, status)
 				default:
 					continue
 				}
@@ -102,11 +106,48 @@ func procListenMessage() []byte {
 	return b
 }
 
-// pruneExited forgets processes that exited while proc events were dropped.
-func pruneExited(started map[int]struct{}) {
-	for pid := range started {
-		if _, err := os.Stat("/proc/" + strconv.Itoa(pid)); err != nil {
-			delete(started, pid)
+// execTracker counts the live threads of each recorded process by thread
+// group ID. The kernel reports an exit per thread, and the group leader can
+// exit (pthread_exit) before the rest, so a process ends with its last thread.
+type execTracker map[int]*trackedProc
+
+type trackedProc struct {
+	threads int
+	status  uint32 // wait status of the last thread that exited
+}
+
+// exec starts tracking tgid; a process has a single thread right after exec.
+func (t execTracker) exec(tgid int) {
+	t[tgid] = &trackedProc{threads: 1}
+}
+
+// fork counts a new thread of a tracked process.
+func (t execTracker) fork(ev procEvent) {
+	if p := t[ev.childTGID]; p != nil && ev.childPID != ev.childTGID {
+		p.threads++
+	}
+}
+
+// exit records a thread exit and reports the process's wait status once its
+// last thread is gone.
+func (t execTracker) exit(ev procEvent) (status uint32, done bool) {
+	p := t[ev.tgid]
+	if p == nil {
+		return 0, false
+	}
+	p.status = ev.exitCode
+	if p.threads--; p.threads > 0 {
+		return 0, false
+	}
+	delete(t, ev.tgid)
+	return p.status, true
+}
+
+// prune forgets processes that exited while proc events were dropped.
+func (t execTracker) prune() {
+	for tgid := range t {
+		if _, err := os.Stat("/proc/" + strconv.Itoa(tgid)); err != nil {
+			delete(t, tgid)
 		}
 	}
 }
