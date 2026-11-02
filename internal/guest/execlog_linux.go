@@ -25,10 +25,12 @@ const (
 )
 
 // startExecLog records every exec in the guest to the exec log in the
-// control share. It uses the kernel proc connector, which reports execs of
-// all processes, including short-lived ones; their details are read from
-// /proc right after the event and may be missing when the process already
-// exited. The log is informational: guest root can disable or rewrite it.
+// control share, and the exit status of each recorded process once its last
+// thread exits. It uses the
+// kernel proc connector, which reports execs and exits of all processes,
+// including short-lived ones; exec details are read from /proc right after
+// the event and may be missing when the process already exited. The log is
+// informational: guest root can disable or rewrite it.
 func startExecLog(logger *slog.Logger) (stop func(), err error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, unix.NETLINK_CONNECTOR)
 	if err != nil {
@@ -47,16 +49,39 @@ func startExecLog(logger *slog.Logger) (stop func(), err error) {
 	stop = func() { once.Do(func() { _ = unix.Close(fd) }) }
 	go func() {
 		buf := make([]byte, 8192)
+		// procs tracks the recorded processes still running, so exits are
+		// logged only for processes whose start is in the log.
+		procs := execTracker{}
 		for {
 			n, _, err := unix.Recvfrom(fd, buf, 0)
 			if err != nil {
+				if err == unix.ENOBUFS {
+					procs.dropped()
+				}
 				if err == unix.EINTR || err == unix.ENOBUFS {
 					continue
 				}
 				return
 			}
-			for _, pid := range execPIDs(buf[:n]) {
-				if err := w.write(readExec(pid)); err != nil {
+			for _, ev := range parseProcEvents(buf[:n]) {
+				var rec ExecRecord
+				switch ev.what {
+				case procEventExec:
+					procs.exec(ev.tgid)
+					rec = readExec(ev.tgid)
+				case procEventFork:
+					procs.fork(ev)
+					continue
+				case procEventExit:
+					status, done := procs.exit(ev)
+					if !done {
+						continue
+					}
+					rec = exitRecord(ev.tgid, status)
+				default:
+					continue
+				}
+				if err := w.write(rec); err != nil {
 					logger.Warn("exec log write", "error", err)
 				}
 			}
@@ -81,27 +106,62 @@ func procListenMessage() []byte {
 	return b
 }
 
-// execPIDs returns the thread group IDs of exec events in a netlink
-// datagram.
-func execPIDs(b []byte) []int {
-	var out []int
-	ne := binary.NativeEndian
-	for len(b) >= unix.NLMSG_HDRLEN {
-		l := int(ne.Uint32(b[0:]))
-		if l < unix.NLMSG_HDRLEN || l > len(b) {
-			break
-		}
-		msg := b[unix.NLMSG_HDRLEN:l]
-		// proc_event: what u32, cpu u32, timestamp u64, then exec {pid, tgid}.
-		if len(msg) >= cnMsgLen+24 {
-			ev := msg[cnMsgLen:]
-			if ne.Uint32(ev[0:]) == procEventExec {
-				out = append(out, int(ne.Uint32(ev[20:])))
-			}
-		}
-		b = b[(l+unix.NLMSG_ALIGNTO-1)&^(unix.NLMSG_ALIGNTO-1):]
+// execTracker counts the live threads of each recorded process by thread
+// group ID. The kernel reports an exit per thread, and the group leader can
+// exit (pthread_exit) before the rest, so a process ends with its last thread.
+type execTracker map[int]*trackedProc
+
+type trackedProc struct {
+	threads int
+	status  uint32 // wait status of the last thread that exited
+}
+
+// exec starts tracking tgid; a process has a single thread right after exec.
+func (t execTracker) exec(tgid int) {
+	t[tgid] = &trackedProc{threads: 1}
+}
+
+// fork counts a new thread of a tracked process.
+func (t execTracker) fork(ev procEvent) {
+	if p := t[ev.childTGID]; p != nil && ev.childPID != ev.childTGID {
+		p.threads++
 	}
-	return out
+}
+
+// exit records a thread exit and reports the process's wait status once its
+// last thread is gone.
+func (t execTracker) exit(ev procEvent) (status uint32, done bool) {
+	p := t[ev.tgid]
+	if p == nil {
+		return 0, false
+	}
+	p.status = ev.exitCode
+	if p.threads--; p.threads > 0 {
+		return 0, false
+	}
+	delete(t, ev.tgid)
+	return p.status, true
+}
+
+// dropped forgets every tracked process after the kernel dropped proc
+// events: a lost fork or exit leaves thread counts wrong, so later exits of
+// these processes are left out of the log rather than logged wrongly.
+func (t execTracker) dropped() {
+	clear(t)
+}
+
+// exitRecord is the exit of pid with the given wait status.
+func exitRecord(pid int, status uint32) ExecRecord {
+	e := ExecRecord{Time: time.Now().UTC(), Event: "exit", PID: pid, UID: -1}
+	if sig := unix.Signal(status & 0x7f); sig != 0 {
+		e.Signal = unix.SignalName(sig)
+		if e.Signal == "" {
+			e.Signal = "signal " + strconv.Itoa(int(sig))
+		}
+		return e
+	}
+	e.Code = int(status>>8) & 0xff
+	return e
 }
 
 func readExec(pid int) ExecRecord {

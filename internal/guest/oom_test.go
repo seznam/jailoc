@@ -27,13 +27,13 @@ func TestParseProcEvents(t *testing.T) {
 	b = append(b, procMessage(procEventFork, 10, 10, 11, 11)...)
 	b = append(b, procMessage(procEventExec, 11, 11)...)
 	b = append(b, procMessage(0x00000004, 11, 11, 0, 0)...) // uid change: skipped
-	b = append(b, procMessage(procEventExit, 12, 11, 0, 0)...)
+	b = append(b, procMessage(procEventExit, 12, 11, 2<<8, 17)...)
 	b = append(b, 1, 2, 3) // truncated trailer
 	got := parseProcEvents(b)
 	want := []procEvent{
 		{what: procEventFork, pid: 10, tgid: 10, childPID: 11, childTGID: 11},
 		{what: procEventExec, pid: 11, tgid: 11},
-		{what: procEventExit, pid: 12, tgid: 11},
+		{what: procEventExit, pid: 12, tgid: 11, exitCode: 2 << 8},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("events = %+v, want %+v", got, want)
