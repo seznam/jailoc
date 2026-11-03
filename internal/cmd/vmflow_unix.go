@@ -650,7 +650,7 @@ func downVM(ws *workspace.Resolved, purge bool) error {
 		return err
 	}
 	if purge {
-		if err := os.RemoveAll(stateDir); err != nil {
+		if err := vm.RemoveTree(stateDir); err != nil {
 			return fmt.Errorf("delete vm state: %w", err)
 		}
 		_, _ = color.New(color.FgGreen).Printf("Workspace %s VM deleted\n", ws.Name)

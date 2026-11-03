@@ -352,7 +352,39 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 	for _, p := range guestPaths {
 		shares = append(shares, byGuest[p])
 	}
+	if err := checkNestedShares(shares); err != nil {
+		return nil, fmt.Errorf("workspace %q: %w", ws.Name, err)
+	}
 	return shares, nil
+}
+
+// checkNestedShares rejects a share whose host path runs through a symbolic
+// link inside another read-write share. The workspace can replace such a
+// link, which would make the next start share a different host directory.
+func checkNestedShares(shares []vm.Share) error {
+	for _, w := range shares {
+		if w.ReadOnly {
+			continue
+		}
+		for _, s := range shares {
+			rel, err := filepath.Rel(w.HostPath, s.HostPath)
+			if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+				continue
+			}
+			p := w.HostPath
+			for part := range strings.SplitSeq(rel, "/") {
+				p = filepath.Join(p, part)
+				info, err := os.Lstat(p)
+				if err != nil {
+					return fmt.Errorf("share %s: %w", s.HostPath, err)
+				}
+				if info.Mode()&os.ModeSymlink != 0 {
+					return fmt.Errorf("share %s: %s is a symbolic link inside the read-write share %s; use the path it points to", s.HostPath, p, w.HostPath)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // vmMinMemoryMiB is the smallest workspace VM that boots reliably.

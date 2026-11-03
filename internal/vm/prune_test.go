@@ -110,3 +110,24 @@ func TestPrivateCacheDir(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveTree(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "state")
+	locked := filepath.Join(dir, "a", "locked")
+	if err := os.MkdirAll(filepath.Join(locked, "b"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "b", "f"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveTree(dir); err != nil {
+		t.Fatalf("RemoveTree() = %v", err)
+	}
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Fatalf("Lstat after RemoveTree = %v, want not exist", err)
+	}
+}
