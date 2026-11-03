@@ -18,9 +18,10 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 |------|---------|
 | `supervisor.log` | VM supervisor output: broker and VM start, readiness with the time each took, shutdown reason |
 | `microvm/console.log` | Guest console: boot and SSH connections |
-| `broker.jsonl` | Network broker decisions, one JSON object per line; read it with `jailoc traffic` |
+| `broker.jsonl`, `broker.jsonl.1` | Network broker decisions, one JSON object per line, rotated at 16 MiB; read them with `jailoc traffic` |
 | `guest/control/exec.jsonl` | Processes started in the guest and their exits; read it with `jailoc strace` |
-| `guest/` | The internal share the guest can write: control files, configuration copies, snapshots, persistent home directories (`guest/home`) |
+| `guest/` | The internal share the guest can write: control files and persistent home directories (`guest/home`) |
+| `guest-ro/` | The read-only internal share: configuration copies and staged snapshots |
 | `state.json` | Supervisor PID and readiness |
 
 Print the two logs with:
