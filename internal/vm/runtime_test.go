@@ -144,3 +144,32 @@ func TestUnpackRuntimeRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteSpecAtomic(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	spec := Spec{
+		Workspace: "test-ws",
+		StateDir:  dir,
+		Image:     "jailoc-test:latest",
+		CPUs:      2,
+		MemoryMiB: 1024,
+	}
+	if err := WriteSpec(spec); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	read, err := ReadSpec(dir)
+	if err != nil {
+		t.Fatalf("ReadSpec: %v", err)
+	}
+	if read.Workspace != spec.Workspace || read.Image != spec.Image {
+		t.Fatalf("read = %+v, want %+v", read, spec)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "spec.json" {
+		t.Fatalf("entries = %v, want only spec.json without leftover temp files", entries)
+	}
+}

@@ -108,7 +108,7 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 	}
 	buildArgs := proxyBuildArgs()
 	content := forBuilder(version, embed.Dockerfile(), buildArgs)
-	hash := contentHash(content)
+	hash := contentHash(content, buildArgs)
 	if haveImage(ctx, cli, tag, hash) {
 		slog.Debug("embedded base image is up to date", "tag", tag)
 		return nil

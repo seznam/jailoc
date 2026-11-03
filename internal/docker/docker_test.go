@@ -80,6 +80,33 @@ func TestProxyBuildArgs(t *testing.T) {
 	}
 }
 
+func TestContentHash(t *testing.T) {
+	t.Parallel()
+	content := []byte("FROM ubuntu:24.04\n")
+	h1 := contentHash(content, nil)
+	h2 := contentHash(content, map[string]*string{})
+	if h1 != h2 {
+		t.Errorf("contentHash(nil) = %q != contentHash(empty) = %q", h1, h2)
+	}
+	v1 := "http://proxy1:8080"
+	hWithProxy := contentHash(content, map[string]*string{"HTTP_PROXY": &v1})
+	if hWithProxy == h1 {
+		t.Errorf("contentHash with HTTP_PROXY matches hash without proxy")
+	}
+	v2 := "http://proxy2:8080"
+	hWithProxy2 := contentHash(content, map[string]*string{"HTTP_PROXY": &v2})
+	if hWithProxy2 == hWithProxy {
+		t.Errorf("contentHash did not change when proxy value changed")
+	}
+	// Order of keys should not affect hash
+	a, b := "foo", "bar"
+	m1 := map[string]*string{"A": &a, "B": &b}
+	m2 := map[string]*string{"B": &b, "A": &a}
+	if contentHash(content, m1) != contentHash(content, m2) {
+		t.Errorf("contentHash is not deterministic with respect to map iteration order")
+	}
+}
+
 func TestDockerLayerDockerfile(t *testing.T) {
 	t.Parallel()
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,10 +26,21 @@ func buildLabels() map[string]string { return map[string]string{ImageLabel: "1"}
 // image was built from, so an unchanged build can be skipped.
 const ContentLabel = "com.github.seznam.jailoc.content"
 
-// contentHash returns the ContentLabel value of a build of dockerfile.
-func contentHash(dockerfile []byte) string {
-	sum := sha256.Sum256(dockerfile)
-	return hex.EncodeToString(sum[:])
+// contentHash returns the ContentLabel value of a build of dockerfile with args.
+func contentHash(dockerfile []byte, args map[string]*string) string {
+	h := sha256.New()
+	h.Write(dockerfile)
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if v := args[k]; v != nil {
+			_, _ = fmt.Fprintf(h, "\x00%s=%s", k, *v)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // haveImage reports whether the daemon has tag for the VM platform and,
