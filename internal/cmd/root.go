@@ -83,7 +83,21 @@ var rootCmd = &cobra.Command{
 		}
 
 		if attachSessionFlag == "" && !workspace.MatchesCWD(ws, targetPath) {
-			_, _ = color.New(color.FgYellow, color.Bold).Printf("Path %s is not in workspace %s. Add it? [y/N]: ", targetPath, ws.Name)
+			running, err := workspaceRunning(ws)
+			if err != nil {
+				return fmt.Errorf("check workspace %q: %w", ws.Name, err)
+			}
+			prompt := fmt.Sprintf("Path %s is not in workspace %s. Add it? [y/N]: ", targetPath, ws.Name)
+			if running {
+				// A new share needs a new VM: say so before the user agrees.
+				if err := validateSecretSources(ws); err != nil {
+					return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
+				}
+				prompt = fmt.Sprintf("Path %s is not in workspace %s. Adding it restarts the running workspace, "+
+					"which ends all its agent sessions (attached and detached) and discards its ephemeral VM state. "+
+					"Add it and restart? [y/N]: ", targetPath, ws.Name)
+			}
+			_, _ = color.New(color.FgYellow, color.Bold).Print(prompt)
 			answer, err := readLineCtx(ctx)
 			if err != nil {
 				return fmt.Errorf("read add-to-workspace prompt response: %w", err)

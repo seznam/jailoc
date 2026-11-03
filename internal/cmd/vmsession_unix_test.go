@@ -13,6 +13,7 @@ import (
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/vm"
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestAttachOutsideWorkspaceDoesNotAddPath(t *testing.T) {
@@ -50,6 +51,75 @@ func TestAttachOutsideWorkspaceDoesNotAddPath(t *testing.T) {
 	if err != nil || string(got) != content {
 		t.Fatalf("attach changed configuration: %q, %v", got, err)
 	}
+}
+
+// fakeRunningVM marks workspace name as running, backed by the test process.
+func fakeRunningVM(t *testing.T, name string) {
+	t.Helper()
+	state := vmStateDir(name)
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vm.StateFile(state), fmt.Appendf(nil, `{"pid":%d,"ready":true}`, os.Getpid()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddPathToRunningWorkspaceValidatesSecretsFirst(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("JAILOC_TEST_MISSING_TOKEN", "")
+	path := filepath.Join(home, "config.toml")
+	content := "[workspaces.w]\npaths = [\"/existing-project\"]\n\n" +
+		"[workspaces.w.secrets.env.TOKEN]\nfrom_env = \"JAILOC_TEST_MISSING_TOKEN\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.SetPath(path)
+	oldWorkspace, oldExplicit, oldAttach := workspaceFlag, workspaceExplicit, attachSessionFlag
+	oldContext := rootCmd.Context()
+	t.Cleanup(func() {
+		config.SetPath("")
+		workspaceFlag, workspaceExplicit, attachSessionFlag = oldWorkspace, oldExplicit, oldAttach
+		rootCmd.SetContext(oldContext)
+	})
+	workspaceFlag, workspaceExplicit, attachSessionFlag = "w", true, ""
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rootCmd.SetContext(ctx)
+	fakeRunningVM(t, "w")
+
+	err := rootCmd.RunE(rootCmd, []string{home})
+	if err == nil || !strings.Contains(err.Error(), "JAILOC_TEST_MISSING_TOKEN") {
+		t.Fatalf("expected secret validation error before prompting, got %v", err)
+	}
+	got, err := os.ReadFile(path) //nolint:gosec // G304: configuration created inside t.TempDir
+	if err != nil || string(got) != content {
+		t.Fatalf("failed validation changed configuration: %q, %v", got, err)
+	}
+
+	// The restart path used by `jailoc add` and `jailoc restart` checks
+	// secrets before it stops the VM; stopping it would signal this process.
+	ws, err := workspace.Resolve(mustLoadConfig(t), "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = restartVMIfRunning(context.Background(), ws)
+	if err == nil || !strings.Contains(err.Error(), "JAILOC_TEST_MISSING_TOKEN") {
+		t.Fatalf("expected restart to fail secret validation, got %v", err)
+	}
+	if running, err := workspaceRunning(ws); err != nil || !running {
+		t.Fatalf("workspace stopped after failed validation: running=%v, err=%v", running, err)
+	}
+}
+
+func mustLoadConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 func TestDetachMatcher(t *testing.T) {
