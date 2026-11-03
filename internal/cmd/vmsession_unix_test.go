@@ -4,7 +4,10 @@ package cmd
 
 import (
 	"bytes"
+	"strings"
 	"testing"
+
+	"github.com/seznam/jailoc/internal/vm"
 )
 
 func TestDetachMatcher(t *testing.T) {
@@ -71,5 +74,45 @@ func TestDetachMatcher(t *testing.T) {
 				t.Fatalf("feed(%q) = %q, %v; want %q, %v", tt.chunks, out, detach, tt.wantOut, tt.wantDetach)
 			}
 		})
+	}
+}
+
+func TestCheckDirMounted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	state := vmStateDir("w")
+	spec := vm.Spec{
+		StateDir:  state,
+		Workspace: "w",
+		Shares: []vm.Share{
+			{HostPath: "/home/user/project"},
+		},
+	}
+	if err := vm.WriteSpec(spec); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := checkDirMounted("w", ""); err != nil {
+		t.Errorf("empty dir error = %v, want nil", err)
+	}
+	if err := checkDirMounted("w", "/home/user/project"); err != nil {
+		t.Errorf("exact mount error = %v, want nil", err)
+	}
+	if err := checkDirMounted("w", "/home/user/project/sub/dir"); err != nil {
+		t.Errorf("sub-directory error = %v, want nil", err)
+	}
+
+	err := checkDirMounted("w", "/home/user/other")
+	if err == nil {
+		t.Fatal("unmounted dir error = nil, want error")
+	}
+	want := "workspace \"w\" is running, but /home/user/other is not mounted in the VM; run `jailoc restart w`"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("got error %q, want it to contain %q", err.Error(), want)
+	}
+
+	// Missing spec should return nil without failing
+	if err := checkDirMounted("nonexistent-ws", "/any/dir"); err != nil {
+		t.Errorf("missing spec error = %v, want nil", err)
 	}
 }

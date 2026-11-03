@@ -225,7 +225,12 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 		return err
 	} else if err := checkAgentCurrent(ws); err != nil {
 		return err
-	} else if err := ensureSecrets(ctx, ws); err != nil {
+	} else if opts.attach == "" {
+		if err := checkDirMounted(ws.Name, opts.dir); err != nil {
+			return err
+		}
+	}
+	if err := ensureSecrets(ctx, ws); err != nil {
 		return err
 	}
 	client, err := vm.DialSSH(ctx, vmStateDir(ws.Name))
@@ -512,6 +517,24 @@ func checkAgentCurrent(ws *workspace.Resolved) error {
 		return fmt.Errorf("workspace %q runs %s, but its configuration selects %s; run `jailoc restart %s` to switch (this ends its running sessions)", ws.Name, running, ws.Agent.Name, ws.Name)
 	}
 	return nil
+}
+
+// checkDirMounted reports a running workspace VM that does not mount dir:
+// the directory cannot be accessed inside the VM until it is restarted.
+func checkDirMounted(name, dir string) error {
+	if dir == "" {
+		return nil
+	}
+	spec, err := vm.ReadSpec(vmStateDir(name))
+	if err != nil || spec == nil {
+		return nil //nolint:nilerr // a missing spec is reported by the session itself
+	}
+	for _, s := range spec.Shares {
+		if workspace.PathMatches(s.HostPath, dir) {
+			return nil
+		}
+	}
+	return fmt.Errorf("workspace %q is running, but %s is not mounted in the VM; run `jailoc restart %s` to apply changes (this ends its running sessions)", name, dir, name)
 }
 
 // checkAgentBinary reports a workspace VM whose image lacks the agent, for

@@ -413,6 +413,11 @@ func pathSegments(p string) int {
 	return len(strings.Split(trimmed, string(filepath.Separator)))
 }
 
+// PathMatches reports whether path is equal to or inside base.
+func PathMatches(base, path string) bool {
+	return pathMatchesCWD(base, path)
+}
+
 func pathMatchesCWD(base, cwd string) bool {
 	if base == "" {
 		return false
