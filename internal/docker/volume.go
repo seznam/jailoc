@@ -84,9 +84,10 @@ func StopComposeContainers(ctx context.Context, workspace string) error {
 	return nil
 }
 
-// ExportVolume copies the content of the named volume into dst, which must
-// not exist yet. It reports false when the volume does not exist.
-func ExportVolume(ctx context.Context, volume, dst string) (bool, error) {
+// ExportVolume copies the content of the named volume into dst, a path
+// relative to root that must not exist yet. It reports false when the
+// volume does not exist.
+func ExportVolume(ctx context.Context, volume string, root *os.Root, dst string) (bool, error) {
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		return false, fmt.Errorf("create Docker Engine client: %w", err)
@@ -128,19 +129,27 @@ func ExportVolume(ctx context.Context, volume, dst string) (bool, error) {
 		return false, fmt.Errorf("read volume %s: %w", volume, err)
 	}
 	defer func() { _ = rc.Close() }()
-	if err := extractTar(rc, dst); err != nil {
+	if err := extractTar(rc, root, dst); err != nil {
 		return false, fmt.Errorf("extract volume %s: %w", volume, err)
 	}
 	return true, nil
 }
 
 // extractTar unpacks an archive whose entries share one top-level directory
-// into dst, dropping that directory. Entries escaping dst are rejected;
-// devices, pipes and hard links are skipped.
-func extractTar(r io.Reader, dst string) error {
-	if err := os.MkdirAll(dst, 0o700); err != nil {
-		return err
+// into dst under parent, dropping that directory. Entries escaping dst are rejected;
+// devices, pipes and hard links are skipped. Symbolic links are kept as
+// they are, since they name paths in the VM, and every write goes through
+// an os.Root so that no link leads it outside dst.
+func extractTar(r io.Reader, parent *os.Root, dst string) error {
+	if err := parent.MkdirAll(dst, 0o700); err != nil {
+		return fmt.Errorf("create destination: %w", err)
 	}
+	root, err := parent.OpenRoot(dst)
+	if err != nil {
+		return fmt.Errorf("open destination: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
 	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
@@ -148,44 +157,43 @@ func extractTar(r io.Reader, dst string) error {
 			return nil
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("read archive: %w", err)
 		}
 		name := filepath.Clean(hdr.Name)
 		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") {
-			return fmt.Errorf("archive entry %q escapes the destination", hdr.Name)
+			return fmt.Errorf("archive entry %q is outside the destination", hdr.Name)
 		}
 		_, rel, found := strings.Cut(name, "/")
 		if !found || rel == "" {
 			continue
 		}
-		target := filepath.Join(dst, rel)
 		mode := os.FileMode(hdr.Mode).Perm() //nolint:gosec // G115: tar mode bits fit in FileMode
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, mode|0o700); err != nil {
-				return err
+			if err := root.MkdirAll(rel, mode|0o700); err != nil {
+				return fmt.Errorf("create archive directory %q: %w", hdr.Name, err)
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-				return err
+			if err := root.MkdirAll(filepath.Dir(rel), 0o700); err != nil {
+				return fmt.Errorf("create parent for archive file %q: %w", hdr.Name, err)
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode|0o600) //nolint:gosec // G304: path checked against dst above
+			f, err := root.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode|0o600)
 			if err != nil {
-				return err
+				return fmt.Errorf("create archive file %q: %w", hdr.Name, err)
 			}
 			if _, err := io.Copy(f, tr); err != nil { //nolint:gosec // G110: volume content is the user's own data
 				_ = f.Close()
-				return err
+				return fmt.Errorf("write archive file %q: %w", hdr.Name, err)
 			}
 			if err := f.Close(); err != nil {
-				return err
+				return fmt.Errorf("close archive file %q: %w", hdr.Name, err)
 			}
 		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-				return err
+			if err := root.MkdirAll(filepath.Dir(rel), 0o700); err != nil {
+				return fmt.Errorf("create parent for archive link %q: %w", hdr.Name, err)
 			}
-			if err := os.Symlink(hdr.Linkname, target); err != nil {
-				return err
+			if err := root.Symlink(hdr.Linkname, rel); err != nil {
+				return fmt.Errorf("create archive link %q: %w", hdr.Name, err)
 			}
 		}
 	}
