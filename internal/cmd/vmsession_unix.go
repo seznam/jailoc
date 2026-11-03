@@ -530,7 +530,8 @@ func checkDirMounted(name, dir string) error {
 		return nil //nolint:nilerr // a missing spec is reported by the session itself
 	}
 	for _, s := range spec.Shares {
-		if workspace.PathMatches(s.HostPath, dir) {
+		guestPath := cmp.Or(s.GuestPath, s.HostPath)
+		if filepath.Clean(guestPath) == filepath.Clean(s.HostPath) && workspace.PathMatches(s.HostPath, dir) {
 			return nil
 		}
 	}

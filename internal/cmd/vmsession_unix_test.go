@@ -4,11 +4,53 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/vm"
 )
+
+func TestAttachOutsideWorkspaceDoesNotAddPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, "config.toml")
+	content := "[workspaces.w]\npaths = [\"/existing-project\"]\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.SetPath(path)
+	oldWorkspace, oldExplicit, oldAttach := workspaceFlag, workspaceExplicit, attachSessionFlag
+	oldContext := rootCmd.Context()
+	t.Cleanup(func() {
+		config.SetPath("")
+		workspaceFlag, workspaceExplicit, attachSessionFlag = oldWorkspace, oldExplicit, oldAttach
+		rootCmd.SetContext(oldContext)
+	})
+	workspaceFlag, workspaceExplicit, attachSessionFlag = "w", true, "abcdef"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rootCmd.SetContext(ctx)
+	state := vmStateDir("w")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vm.StateFile(state), fmt.Appendf(nil, `{"pid":%d,"ready":true}`, os.Getpid()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := rootCmd.RunE(rootCmd, []string{home})
+	if err == nil || strings.Contains(err.Error(), "prompt") || strings.Contains(err.Error(), "restart") {
+		t.Fatalf("expected attachment failure without prompting or restarting, got %v", err)
+	}
+	got, err := os.ReadFile(path) //nolint:gosec // G304: configuration created inside t.TempDir
+	if err != nil || string(got) != content {
+		t.Fatalf("attach changed configuration: %q, %v", got, err)
+	}
+}
 
 func TestDetachMatcher(t *testing.T) {
 	t.Parallel()
@@ -86,6 +128,8 @@ func TestCheckDirMounted(t *testing.T) {
 		Workspace: "w",
 		Shares: []vm.Share{
 			{HostPath: "/home/user/project"},
+			{HostPath: "/projects", GuestPath: "/opt/projects"},
+			{HostPath: "/same", GuestPath: "/same"},
 		},
 	}
 	if err := vm.WriteSpec(spec); err != nil {
@@ -100,6 +144,15 @@ func TestCheckDirMounted(t *testing.T) {
 	}
 	if err := checkDirMounted("w", "/home/user/project/sub/dir"); err != nil {
 		t.Errorf("sub-directory error = %v, want nil", err)
+	}
+	if err := checkDirMounted("w", "/same/new"); err != nil {
+		t.Errorf("explicit same-path mount error = %v, want nil", err)
+	}
+	if err := checkDirMounted("w", "/projects/new"); err == nil {
+		t.Error("relocated mount accepted unavailable host path")
+	}
+	if err := checkDirMounted("w", "/home/user/project-other"); err == nil {
+		t.Error("sibling directory accepted as mounted")
 	}
 
 	err := checkDirMounted("w", "/home/user/other")
