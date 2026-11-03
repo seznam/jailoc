@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -32,7 +33,14 @@ func connectTestBroker(t *testing.T, broker *Broker) *stack.Stack {
 	ready := make(readyStatus)
 	broker.cfg.Status = ready
 	t.Cleanup(broker.stack.Close)
-	socket := filepath.Join(t.TempDir(), "nic.sock")
+	// A short directory keeps the socket path within the 104-byte sun_path
+	// limit on macOS, which t.TempDir() exceeds for long subtest names.
+	dir, err := os.MkdirTemp("", "nb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "nic.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
