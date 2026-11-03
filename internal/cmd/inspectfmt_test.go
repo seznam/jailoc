@@ -299,3 +299,11 @@ func TestTailLogFollowsReplacedFile(t *testing.T) {
 		t.Fatalf("tailLog: %v", err)
 	}
 }
+
+func TestEscapeLines(t *testing.T) {
+	t.Parallel()
+	got := escapeLines("first \x1b]52;c;aGk=\x07\nsecond\r")
+	if want := `first \x1b]52;c;aGk=\a` + "\n" + `second\r`; got != want {
+		t.Fatalf("escapeLines = %q, want %q", got, want)
+	}
+}

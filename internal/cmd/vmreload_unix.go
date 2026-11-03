@@ -299,7 +299,7 @@ func reloadGuest(stateDir string, g guest.Config) error {
 		var done guest.ReloadDone
 		if b, err := vm.ReadControl(stateDir, guest.ReloadDoneFile); err == nil && json.Unmarshal(b, &done) == nil && done.Seq == req.Seq {
 			if done.Error != "" {
-				return fmt.Errorf("guest: %s", done.Error)
+				return fmt.Errorf("guest: %s", escapeLines(done.Error))
 			}
 			return nil
 		}
