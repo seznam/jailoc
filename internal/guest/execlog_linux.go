@@ -5,9 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +33,8 @@ const (
 // kernel proc connector, which reports execs and exits of all processes,
 // including short-lived ones; exec details are read from /proc right after
 // the event and may be missing when the process already exited. The log is
-// informational: guest root can disable or rewrite it.
+// informational: guest root can disable or rewrite it. Values of the
+// delivered secrets are replaced in recorded arguments.
 func startExecLog(logger *slog.Logger) (stop func(), err error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, unix.NETLINK_CONNECTOR)
 	if err != nil {
@@ -45,6 +49,7 @@ func startExecLog(logger *slog.Logger) (stop func(), err error) {
 		return nil, fmt.Errorf("exec log: subscribe to proc events: %w", err)
 	}
 	w := &execWriter{path: filepath.Join(ControlDir, ExecLogFile)}
+	secrets := &secretValues{}
 	var once sync.Once
 	stop = func() { once.Do(func() { _ = unix.Close(fd) }) }
 	go func() {
@@ -69,6 +74,7 @@ func startExecLog(logger *slog.Logger) (stop func(), err error) {
 				case procEventExec:
 					procs.exec(ev.tgid)
 					rec = readExec(ev.tgid)
+					rec.Argv = redact(rec.Argv, secrets.current())
 				case procEventFork:
 					procs.fork(ev)
 					continue
@@ -194,6 +200,103 @@ func readExec(pid int) ExecRecord {
 		}
 	}
 	return e
+}
+
+// minSecretLen is the shortest secret value redacted from the exec log;
+// shorter values would mask ordinary arguments.
+const minSecretLen = 8
+
+// redacted replaces secret values in recorded arguments.
+const redacted = "[redacted]"
+
+// redact returns argv with every occurrence of a value replaced. argv is not
+// modified.
+func redact(argv, values []string) []string {
+	var out []string
+	for i, a := range argv {
+		r := a
+		for _, v := range values {
+			r = strings.ReplaceAll(r, v, redacted)
+		}
+		if r != a && out == nil {
+			out = slices.Clone(argv)
+		}
+		if out != nil {
+			out[i] = r
+		}
+	}
+	if out == nil {
+		return argv
+	}
+	return out
+}
+
+// secretValues caches the values of the secrets in SecretsDir and EnvFile,
+// reloaded when either changes.
+type secretValues struct {
+	stamp  string
+	values []string
+}
+
+func (s *secretValues) current() []string {
+	var stamp strings.Builder
+	for _, p := range []string{SecretsDir, EnvFile} {
+		if info, err := os.Stat(p); err == nil {
+			fmt.Fprintf(&stamp, "%d/%d;", info.ModTime().UnixNano(), info.Size())
+		}
+	}
+	if stamp.String() != s.stamp {
+		s.stamp, s.values = stamp.String(), loadSecretValues(SecretsDir, EnvFile)
+	}
+	return s.values
+}
+
+// loadSecretValues reads the file secrets in dir and the values of the
+// entries in envFile, longest first so that a value containing another is
+// replaced whole. Each value is also split into lines, for multi-line
+// secrets passed piecewise.
+func loadSecretValues(dir, envFile string) []string {
+	seen := map[string]bool{}
+	add := func(v string) {
+		for _, s := range append([]string{v}, strings.Split(v, "\n")...) {
+			if s = strings.TrimSpace(s); len(s) >= minSecretLen {
+				seen[s] = true
+			}
+		}
+	}
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".tmp-") {
+				continue
+			}
+			if data, err := readLimited(filepath.Join(dir, e.Name())); err == nil {
+				add(string(data))
+			}
+		}
+	}
+	if data, err := readLimited(envFile); err == nil {
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if _, v, ok := strings.Cut(line, "="); ok {
+				add(v)
+			}
+		}
+	}
+	values := slices.Collect(maps.Keys(seen))
+	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
+	return values
+}
+
+// readLimited reads up to 1 MiB of the regular file at path.
+func readLimited(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0) //nolint:gosec // G304: secrets written by WriteSecrets
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return io.ReadAll(io.LimitReader(f, 1<<20))
 }
 
 // execWriter appends records and rotates the file at execLogMax bytes.
