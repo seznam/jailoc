@@ -53,6 +53,7 @@ docs/
     architecture.md                Builder/workspace VMs, jailoc-guest, shares, persistent home
     network-isolation.md           Userspace network broker, IPv4/IPv6 policy, filtered DNS
     secrets.md                     Secret delivery over SSH, tmpfs storage in the guest
+    resource-use.md                Memory reclaim, zram, image cache, disks, broker limits, log rotation
   blog/
     jailoc-2.md                    v2 release post (outside Diátaxis; temporal language allowed)
 ```

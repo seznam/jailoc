@@ -41,6 +41,7 @@ Key facts:
 - [Architecture](https://seznam.github.io/jailoc/explanation/architecture/): Builder and workspace VMs, image export, jailoc-guest init, SSH sessions, virtio-fs shares, persistent home, Docker inside the VM
 - [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): Userspace network broker, IPv4 and IPv6 policy, filtered DNS
 - [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Destination and source secret mapping, delivery over SSH, tmpfs storage in the guest
+- [Resource Use](https://seznam.github.io/jailoc/explanation/resource-use/): VM memory reclaim, free page reporting, compressed swap, content-addressed image cache, sparse disks, builder VM lifetime, broker limits, log rotation
 
 ## Optional
 
