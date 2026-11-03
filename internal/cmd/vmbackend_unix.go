@@ -361,27 +361,63 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 // checkNestedShares rejects a share whose host path runs through a symbolic
 // link inside another read-write share. The workspace can replace such a
 // link, which would make the next start share a different host directory.
+// Both paths are compared as written and with symbolic links resolved, so a
+// share configured through an alias of the other share's directory is
+// checked too.
 func checkNestedShares(shares []vm.Share) error {
 	for _, w := range shares {
 		if w.ReadOnly {
 			continue
 		}
 		for _, s := range shares {
-			rel, err := filepath.Rel(w.HostPath, s.HostPath)
-			if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-				continue
-			}
-			p := w.HostPath
-			for part := range strings.SplitSeq(rel, "/") {
-				p = filepath.Join(p, part)
-				info, err := os.Lstat(p)
-				if err != nil {
-					return fmt.Errorf("share %s: %w", s.HostPath, err)
-				}
-				if info.Mode()&os.ModeSymlink != 0 {
-					return fmt.Errorf("share %s: %s is a symbolic link inside the read-write share %s; use the path it points to", s.HostPath, p, w.HostPath)
+			for _, base := range hostPathForms(w.HostPath, false) {
+				for _, target := range hostPathForms(s.HostPath, true) {
+					if err := checkNoLinkBelow(base, target, s.HostPath, w.HostPath); err != nil {
+						return err
+					}
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// hostPathForms returns p as written and with symbolic links resolved. With
+// parentOnly, only the parent is resolved, so a link at p itself stays
+// visible to checkNoLinkBelow.
+func hostPathForms(p string, parentOnly bool) []string {
+	forms := []string{p}
+	var real string
+	var err error
+	if parentOnly {
+		var dir string
+		dir, err = filepath.EvalSymlinks(filepath.Dir(p))
+		real = filepath.Join(dir, filepath.Base(p))
+	} else {
+		real, err = filepath.EvalSymlinks(p)
+	}
+	if err == nil && real != p {
+		forms = append(forms, real)
+	}
+	return forms
+}
+
+// checkNoLinkBelow fails when target lies strictly inside base and a path
+// component between them is a symbolic link.
+func checkNoLinkBelow(base, target, share, writable string) error {
+	rel, err := filepath.Rel(base, target)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return nil
+	}
+	p := base
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		p = filepath.Join(p, part)
+		info, err := os.Lstat(p)
+		if err != nil {
+			return fmt.Errorf("share %s: %w", share, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("share %s: %s is a symbolic link inside the read-write share %s; use the path it points to", share, p, writable)
 		}
 	}
 	return nil
