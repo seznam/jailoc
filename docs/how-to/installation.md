@@ -52,6 +52,19 @@ The workspace VMs don't use Docker. You need Docker Engine on the host only for:
 
 Without a usable host daemon, `"auto"` builds images in a builder VM.
 
+## Install with Homebrew
+
+On macOS and Linux, install the latest release from the [seznam/homebrew-tap](https://github.com/seznam/homebrew-tap) tap:
+
+```bash
+brew install --cask seznam/tap/jailoc
+```
+
+Upgrade with `brew upgrade --cask jailoc`. The tap carries stable releases only; install release candidates from the [GitHub Releases page](https://github.com/seznam/jailoc/releases).
+
+!!! note "Unsigned binary"
+    jailoc binaries are not signed or notarized by Apple. The cask removes the `com.apple.quarantine` attribute from `jailoc` after installation so that Gatekeeper does not block it.
+
 ## Install a pre-built binary
 
 Pre-built archives for macOS (arm64) and Linux (amd64, arm64) are published with every release. Download the one matching your platform from the [GitHub Releases page](https://github.com/seznam/jailoc/releases), extract it, and place the binary on your `PATH`.
