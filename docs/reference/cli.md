@@ -51,7 +51,7 @@ jailoc [path] [flags]
 
 Mutually exclusive: `--session` with `--continue`, `--new` with `--attach`, `--attach` with `--session` or `--continue`.
 
-The target directory is `path` (`~` is expanded) or the current working directory, and must be a directory. Without `--workspace`, the workspace is resolved from the target directory. When the directory is not under any path of the workspace, jailoc asks whether to add it. When several workspaces match the directory at the same depth, jailoc fails and asks for `--workspace`.
+The target directory is `path` (`~` is expanded) or the current working directory, and must be a directory. Without `--workspace`, the workspace is resolved from the target directory. When the directory is not under any path of the workspace, jailoc asks whether to add it. If the workspace VM is running, the new share needs a restart: jailoc checks the secret sources first, warns that the restart ends all agent sessions of the workspace, and restarts the VM after you confirm. When several workspaces match the directory at the same depth, jailoc fails and asks for `--workspace`.
 
 If the workspace VM is not running, jailoc starts it as [`jailoc up`](#jailoc-up) does. It checks that the agent binary is on `PATH` in the VM and runs the agent (see [Coding agents](configuration.md#coding-agents)) over SSH, in a detachable session whose working directory is the target directory:
 

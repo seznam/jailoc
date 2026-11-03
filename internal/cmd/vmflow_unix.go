@@ -891,12 +891,10 @@ func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Write
 }
 
 // restartVMIfRunning restarts a running workspace VM so configuration
-// changes (e.g. new paths) take effect.
+// changes (e.g. new paths) take effect. The configuration and secret sources
+// are checked before the VM stops, so a detectable error keeps it running.
 func restartVMIfRunning(ctx context.Context, ws *workspace.Resolved) error {
 	if st, err := runningVM(vmStateDir(ws.Name)); err != nil || st == nil {
-		return err
-	}
-	if err := downVM(ws, false); err != nil {
 		return err
 	}
 	cfg, err := config.Load()
@@ -906,6 +904,12 @@ func restartVMIfRunning(ctx context.Context, ws *workspace.Resolved) error {
 	ws2, err := workspace.Resolve(cfg, ws.Name)
 	if err != nil {
 		return fmt.Errorf("re-resolve workspace for restart: %w", err)
+	}
+	if err := validateSecretSources(ws2); err != nil {
+		return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
+	}
+	if err := downVM(ws, false); err != nil {
+		return err
 	}
 	return runUpVM(ctx, cfg, ws2)
 }
