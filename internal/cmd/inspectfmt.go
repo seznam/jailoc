@@ -129,6 +129,12 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 		}
 	case "dial-error":
 		return fmt.Sprintf("%s  %s  %-4s %-48s %s", ts, colDeny.Sprint("FAIL "), escapeVisible(e.Proto), f.dest(e.Dst), colDeny.Sprint(escapeVisible(e.Error)))
+	case "flow-limit":
+		msg := colDeny.Sprint("too many open connections")
+		if e.Dst == "" {
+			return fmt.Sprintf("%s  %s  %-4s gateway port %d %s", ts, colDeny.Sprint("LIMIT"), escapeVisible(e.Proto), e.GuestPort, msg)
+		}
+		return fmt.Sprintf("%s  %s  %-4s %-48s %s", ts, colDeny.Sprint("LIMIT"), escapeVisible(e.Proto), f.dest(e.Dst), msg)
 	case "ingress":
 		if e.GuestPort == guest.SSHPort && !f.all {
 			return "" // jailoc's own SSH sessions
