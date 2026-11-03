@@ -63,7 +63,7 @@ func TestBindReadOnlyUnmountsOwnMount(t *testing.T) {
 	parent := filepath.Join(dir, "parent")
 	decoy := filepath.Join(dir, "decoy")
 	for _, d := range []string{src, parent, decoy, filepath.Join(parent, "target"), filepath.Join(decoy, "target")} {
-		if err := os.Mkdir(d, 0o755); err != nil {
+		if err := os.Mkdir(d, 0o750); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,7 +93,7 @@ func TestBindReadOnlyUnmountsOwnMount(t *testing.T) {
 	if err := unmountSnapshot(fd); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(decoy, "target", "f"))
+	data, err := os.ReadFile(filepath.Join(decoy, "target", "f")) //nolint:gosec // test path
 	if err != nil || string(data) != "snapshot" {
 		t.Fatalf("decoy mount was detached: %q, %v", data, err)
 	}
