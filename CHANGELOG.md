@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.0.0-rc.2](https://github.com/seznam/jailoc/compare/v2.0.0-rc.1...v2.0.0-rc.2) (2026-11-03)
+
+
+### Features
+
+* **release:** publish Homebrew cask to seznam/homebrew-tap ([4ad0e85](https://github.com/seznam/jailoc/commit/4ad0e852a9f7af8f94203812917ca8cebeb9e035))
+
+
+### Bug Fixes
+
+* **vm:** write spec atomically and hash build arguments in image cache key ([7e90d49](https://github.com/seznam/jailoc/commit/7e90d49ff715297cac968c8e18ad33be9dbf5706))
+
+
+### Performance Improvements
+
+* **docker:** skip builds of up-to-date embedded base and layer images ([83abada](https://github.com/seznam/jailoc/commit/83abada16d9a369eefff7378827476f77de4bcf1))
+* **vm:** boot macOS workspaces through the guest overlay too ([099ffd5](https://github.com/seznam/jailoc/commit/099ffd5fc3741913f8cc870f0d19d673f4d25d9b))
+* **vm:** boot workspaces from the shared image cache through a guest overlay ([e5028ce](https://github.com/seznam/jailoc/commit/e5028ce142f2561a9eaaa3162f35d823f932a570))
+* **vm:** poll for the started guest every 50ms ([2b1990e](https://github.com/seznam/jailoc/commit/2b1990e00861200199dc0f204098d14df83af422))
+
 ## [2.0.0-rc.1](https://github.com/seznam/jailoc/compare/v2.0.0-rc...v2.0.0-rc.1) (2026-11-02)
 
 
