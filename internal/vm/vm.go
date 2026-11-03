@@ -141,7 +141,8 @@ type HostService struct {
 // SpecFile is where jailoc stores the spec of the workspace's VM.
 func SpecFile(stateDir string) string { return filepath.Join(stateDir, "spec.json") }
 
-// WriteSpec stores spec in its state directory.
+// WriteSpec stores spec in its state directory atomically so readers never
+// observe an empty or partially written file.
 func WriteSpec(spec Spec) error {
 	if err := os.MkdirAll(spec.StateDir, 0o700); err != nil {
 		return fmt.Errorf("create vm state dir: %w", err)
@@ -150,8 +151,20 @@ func WriteSpec(spec Spec) error {
 	if err != nil {
 		return fmt.Errorf("encode vm spec: %w", err)
 	}
-	if err := os.WriteFile(SpecFile(spec.StateDir), data, 0o600); err != nil {
+	tmp, err := os.CreateTemp(spec.StateDir, ".spec-*.json")
+	if err != nil {
+		return fmt.Errorf("create temporary vm spec: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("write vm spec: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write vm spec: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), SpecFile(spec.StateDir)); err != nil {
+		return fmt.Errorf("replace vm spec: %w", err)
 	}
 	return nil
 }

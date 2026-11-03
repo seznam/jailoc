@@ -388,9 +388,15 @@ func pruneImageCache(current string) {
 	more, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", "builder", vm.SpecFile("")))
 	specs = append(append(specs, more...), filepath.Join(vmRootDir(), "builder", vm.SpecFile("")))
 	for _, path := range specs {
-		if spec, err := vm.ReadSpec(filepath.Dir(path)); err == nil {
-			keep = append(keep, spec.Image)
+		spec, err := vm.ReadSpec(filepath.Dir(path))
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: prune VM image cache skipped: cannot read %s: %v\n", path, err)
+				return
+			}
+			continue
 		}
+		keep = append(keep, spec.Image)
 	}
 	res, err := vm.PruneImages(filepath.Join(vmRootDir(), "images"), keep)
 	if err != nil {
