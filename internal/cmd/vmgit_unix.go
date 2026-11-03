@@ -126,10 +126,70 @@ func (r *shareRoot) guestOf(hostPath string) string {
 	return filepath.Join(r.guest, rel)
 }
 
+// view is the guest path at which a writable share shows a host path.
+type view struct{ guest, root string }
+
+// views returns every guest path at which a writable share shows the
+// symlink-free host path full. A guest path under a deeper share's mount
+// point is hidden by that share and left out.
+func (p *gitProtector) views(full string) []view {
+	var out []view
+	for i := range p.roots {
+		r := &p.roots[i]
+		if !within(full, r.real) {
+			continue
+		}
+		guest := r.guestOf(full)
+		hidden := false
+		for j := range p.roots {
+			q := &p.roots[j]
+			if len(q.guest) > len(r.guest) && within(guest, q.guest) {
+				hidden = true
+				break
+			}
+		}
+		if !hidden {
+			out = append(out, view{guest: guest, root: r.guest})
+		}
+	}
+	return out
+}
+
+// within reports whether path is base or below it.
+func within(path, base string) bool {
+	rel, err := filepath.Rel(base, path)
+	return err == nil && filepath.IsLocal(rel)
+}
+
+// pinHost pins the host directory full and its parents up to the share in
+// every writable share that shows it.
+func (p *gitProtector) pinHost(full string) {
+	for _, v := range p.views(full) {
+		p.pinUpTo(v.guest, v.root)
+	}
+}
+
+// readOnlyHost marks the host path full read-only and pins its parents in
+// every writable share that shows it.
+func (p *gitProtector) readOnlyHost(full string) {
+	for _, v := range p.views(full) {
+		p.pinUpTo(filepath.Dir(v.guest), v.root)
+		p.ro[v.guest] = true
+	}
+}
+
 // gitConfig is what jailoc reads from a repository configuration.
 type gitConfig struct {
-	hooksPath      string // core.hooksPath, already expanded
-	worktreeConfig bool   // extensions.worktreeConfig
+	hooksPaths     []string // every core.hooksPath value, already expanded
+	worktreeConfig bool     // extensions.worktreeConfig
+}
+
+// clone returns a copy of c that can be changed without changing c.
+func (c *gitConfig) clone() gitConfig {
+	if c == nil {
+		return gitConfig{}
+	}
+	return gitConfig{hooksPaths: slices.Clone(c.hooksPaths), worktreeConfig: c.worktreeConfig}
 }
 
 // gitProtector collects the protections of the repositories under roots.
@@ -145,14 +205,14 @@ type gitProtector struct {
 // host path gitPath.
 func (p *gitProtector) repo(r *shareRoot, gitPath string, d fs.DirEntry) error {
 	worktree := filepath.Dir(gitPath)
-	p.pinUpTo(filepath.Dir(r.guestOf(gitPath)), r.guest)
+	p.pinHost(filepath.Dir(gitPath))
 	if d.IsDir() {
 		return p.gitDir(r, gitPath, worktree)
 	}
 	// A gitfile (separate git directory, worktree or submodule checkout)
 	// points at the real git directory; keep the pointer itself unchanged
 	// and protect what it points at.
-	p.ro[r.guestOf(gitPath)] = true
+	p.readOnlyHost(gitPath)
 	if !d.Type().IsRegular() {
 		return nil
 	}
@@ -177,41 +237,66 @@ func (p *gitProtector) linked(target, worktree string) error {
 	return p.gitDir(r, dir, worktree)
 }
 
-// gitDir pins the host git directory dir and the directories between it
-// and its share, and marks its hooks and configuration read-only. A
-// worktree git directory takes hooks and config from its common directory,
-// which is protected instead. Submodule git directories under dir/modules
-// are protected the same way. worktree is the checkout using dir, or empty
-// when unknown.
+// gitDir protects the host git directory dir, used by the checkout
+// worktree (empty when unknown), and the files its configuration makes Git
+// read or run for that checkout. A worktree git directory takes hooks and
+// config from its common directory, which is protected as well.
 func (p *gitProtector) gitDir(r *shareRoot, dir, worktree string) error {
-	if common, ok := readPointer(filepath.Join(dir, "commondir")); ok {
-		if !p.done[dir] {
-			p.done[dir] = true
-			p.pinUpTo(r.guestOf(dir), r.guest)
-			p.ro[r.guestOf(filepath.Join(dir, "commondir"))] = true
-		}
-		commonDir := resolvePointer(dir, common)
-		if err := p.linked(commonDir, worktree); err != nil {
-			return err
-		}
-		cfg := &gitConfig{}
-		if _, real, err := p.locate(commonDir); err == nil && p.config[real] != nil {
-			cfg = p.config[real]
-		}
-		if cfg.worktreeConfig {
-			if err := p.configFile(filepath.Join(dir, "config.worktree"), cfg, 0); err != nil {
-				return err
-			}
-		} else if _, err := p.protect(filepath.Join(dir, "config.worktree"), false, false); err != nil {
-			return err
-		}
-		return p.hooksPath(cfg, worktree, dir)
+	common, err := p.protectGitDir(r, dir)
+	if err != nil {
+		return err
 	}
+	// Settings of one worktree must not leak into another, so each starts
+	// from a copy of the common configuration.
+	cfg := p.config[common].clone()
+	if cfg.worktreeConfig {
+		if err := p.configFile(filepath.Join(dir, "config.worktree"), &cfg, 0); err != nil {
+			return err
+		}
+	} else if _, err := p.protect(filepath.Join(dir, "config.worktree"), false, false); err != nil {
+		return err
+	}
+	return p.hooksPath(&cfg, worktree, dir)
+}
+
+// protectGitDir pins the git directory dir and protects the hooks and
+// configuration it uses, and returns the directory holding them: dir, or
+// the common directory of a worktree git directory (empty when that is not
+// under a writable share).
+func (p *gitProtector) protectGitDir(r *shareRoot, dir string) (string, error) {
+	common, ok := readPointer(filepath.Join(dir, "commondir"))
+	if !ok {
+		return dir, p.protectCommonDir(r, dir)
+	}
+	if !p.done[dir] {
+		p.done[dir] = true
+		p.pinHost(dir)
+		p.readOnlyHost(filepath.Join(dir, "commondir"))
+	}
+	cr, commonDir, err := p.locate(resolvePointer(dir, common))
+	if err != nil || cr == nil {
+		return "", err
+	}
+	if info, err := os.Stat(commonDir); err != nil || !info.IsDir() {
+		return "", nil //nolint:nilerr // not a git directory
+	}
+	// Git does not follow a commondir of a common directory; refusing it
+	// also stops a commondir that points back at itself.
+	if _, ok := readPointer(filepath.Join(commonDir, "commondir")); ok {
+		return "", fmt.Errorf("%s: commondir points at %s, which has a commondir of its own; protect_git cannot protect it", r.guestOf(dir), cr.guestOf(commonDir))
+	}
+	return commonDir, p.protectCommonDir(cr, commonDir)
+}
+
+// protectCommonDir pins the git directory dir, which holds hooks and
+// configuration, marks them read-only and records the configuration.
+// Submodule git directories under dir/modules are protected the same way.
+func (p *gitProtector) protectCommonDir(r *shareRoot, dir string) error {
 	if p.done[dir] {
-		return p.hooksPath(p.config[dir], worktree, dir)
+		return nil
 	}
 	p.done[dir] = true
-	p.pinUpTo(r.guestOf(dir), r.guest)
+	p.pinHost(dir)
 	hooks, err := p.protect(filepath.Join(dir, "hooks"), true, true)
 	if err != nil {
 		return err
@@ -222,16 +307,6 @@ func (p *gitProtector) gitDir(r *shareRoot, dir, worktree string) error {
 	cfg := &gitConfig{}
 	p.config[dir] = cfg
 	if err := p.configFile(filepath.Join(dir, "config"), cfg, 0); err != nil {
-		return err
-	}
-	if cfg.worktreeConfig {
-		if err := p.configFile(filepath.Join(dir, "config.worktree"), cfg, 0); err != nil {
-			return err
-		}
-	} else if _, err := p.protect(filepath.Join(dir, "config.worktree"), false, false); err != nil {
-		return err
-	}
-	if err := p.hooksPath(cfg, worktree, dir); err != nil {
 		return err
 	}
 	modules := filepath.Join(dir, "modules")
@@ -272,7 +347,9 @@ func (p *gitProtector) configFile(path string, cfg *gitConfig, depth int) error 
 	for _, e := range parseGitConfig(data) {
 		switch {
 		case e.section == "core" && e.key == "hookspath":
-			cfg.hooksPath = expandGitPath(e.value, "")
+			// Every value is kept: an includeIf jailoc does not evaluate
+			// may or may not apply.
+			cfg.hooksPaths = append(cfg.hooksPaths, expandGitPath(e.value, ""))
 		case e.section == "extensions" && e.key == "worktreeconfig":
 			cfg.worktreeConfig = gitBool(e.value)
 		case (e.section == "include" || e.section == "includeif") && e.key == "path" && e.value != "":
@@ -285,33 +362,38 @@ func (p *gitProtector) configFile(path string, cfg *gitConfig, depth int) error 
 	return nil
 }
 
-// hooksPath protects the core.hooksPath directory of cfg. A relative
+// hooksPath protects the core.hooksPath directories of cfg. A relative
 // hooksPath is relative to the worktree, or to the git directory dir of a
 // bare repository.
 func (p *gitProtector) hooksPath(cfg *gitConfig, worktree, dir string) error {
-	if cfg == nil || cfg.hooksPath == "" {
-		return nil
-	}
-	path := cfg.hooksPath
-	if !filepath.IsAbs(path) {
-		base := worktree
-		if base == "" {
-			base = dir
+	for _, path := range cfg.hooksPaths {
+		if path == "" {
+			continue
 		}
-		path = filepath.Join(base, path)
+		if !filepath.IsAbs(path) {
+			base := worktree
+			if base == "" {
+				base = dir
+			}
+			path = filepath.Join(base, path)
+		}
+		hooks, err := p.protect(path, true, true)
+		if err != nil {
+			return err
+		}
+		if err := p.hookTargets(hooks); err != nil {
+			return err
+		}
 	}
-	hooks, err := p.protect(path, true, true)
-	if err != nil {
-		return err
-	}
-	return p.hookTargets(hooks)
+	return nil
 }
 
 // maxHookEntries bounds the entries of a hooks directory jailoc inspects.
 const maxHookEntries = 1024
 
 // hookTargets protects the files that symlinked hooks in the host
-// directory dir point at.
+// directory dir point at. A hook pointing at a missing file in a writable
+// share fails, because the agent could create that file.
 func (p *gitProtector) hookTargets(dir string) error {
 	if dir == "" {
 		return nil
@@ -320,19 +402,28 @@ func (p *gitProtector) hookTargets(dir string) error {
 	if err != nil {
 		return nil //nolint:nilerr // unreadable hooks directory: git cannot run its hooks either
 	}
-	for i, e := range entries {
-		if i >= maxHookEntries {
-			break
-		}
+	if len(entries) > maxHookEntries {
+		return fmt.Errorf("hooks directory %s has more than %d entries; protect_git cannot check them", dir, maxHookEntries)
+	}
+	for _, e := range entries {
 		if e.Type()&fs.ModeSymlink == 0 {
 			continue
 		}
-		link, err := os.Readlink(filepath.Join(dir, e.Name()))
+		hook := filepath.Join(dir, e.Name())
+		link, err := os.Readlink(hook)
 		if err != nil {
 			continue
 		}
-		if _, err := p.protect(resolvePointer(dir, link), false, false); err != nil {
+		target := resolvePointer(dir, link)
+		full, err := p.protect(target, false, false)
+		if err != nil {
 			return err
+		}
+		if full != "" {
+			continue
+		}
+		if r, _, _ := p.locate(target); r != nil {
+			return fmt.Errorf("hook %s points at %s, which does not exist; protect_git cannot protect it (remove the hook or create the file)", hook, target)
 		}
 	}
 	return nil
@@ -365,8 +456,7 @@ func (p *gitProtector) protect(path string, dir, create bool) (string, error) {
 	case !dir && !info.Mode().IsRegular():
 		return "", fmt.Errorf("protect %s: not a regular file; protect_git cannot protect it", guest)
 	}
-	p.pinUpTo(filepath.Dir(guest), r.guest)
-	p.ro[guest] = true
+	p.readOnlyHost(full)
 	return full, nil
 }
 
@@ -559,13 +649,14 @@ type gitConfigEntry struct{ section, key, value string }
 
 // parseGitConfig returns the variables of a Git configuration file with
 // lower-case section (without subsection) and key names. It covers the
-// syntax Git writes and common hand edits; continuation lines are not
-// joined.
+// syntax Git writes and common hand edits, including values continued on
+// the next line with a trailing backslash.
 func parseGitConfig(data []byte) []gitConfigEntry {
 	var out []gitConfigEntry
 	section := ""
-	for line := range strings.SplitSeq(string(data), "\n") {
-		line = strings.TrimSpace(line)
+	lines := strings.Split(string(data), "\n")
+	for n := 0; n < len(lines); n++ {
+		line := strings.TrimSpace(lines[n])
 		if strings.HasPrefix(line, "[") {
 			end := strings.IndexByte(line, ']')
 			if end < 0 {
@@ -589,7 +680,14 @@ func parseGitConfig(data []byte) []gitConfigEntry {
 			key = strings.TrimSpace(key)
 			value = "true"
 		} else {
-			value = gitConfigValue(value)
+			raw := value
+			v, more := gitConfigValue(raw)
+			for more && n+1 < len(lines) {
+				n++
+				raw = raw[:len(raw)-1] + strings.TrimRight(lines[n], "\r")
+				v, more = gitConfigValue(raw)
+			}
+			value = v
 		}
 		if key != "" {
 			out = append(out, gitConfigEntry{section: section, key: key, value: value})
@@ -599,15 +697,18 @@ func parseGitConfig(data []byte) []gitConfigEntry {
 }
 
 // gitConfigValue decodes a Git configuration value: quotes, escapes and
-// trailing comments.
-func gitConfigValue(raw string) string {
+// trailing comments. continued reports a trailing backslash outside a
+// comment, which continues the value on the next line.
+func gitConfigValue(raw string) (value string, continued bool) {
 	var b strings.Builder
 	quoted := false
 	pending := "" // unquoted whitespace kept only before more content
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
 		switch {
-		case c == '\\' && i+1 < len(raw):
+		case c == '\\' && i+1 == len(raw):
+			return b.String(), true
+		case c == '\\':
 			i++
 			b.WriteString(pending)
 			pending = ""
@@ -624,7 +725,7 @@ func gitConfigValue(raw string) string {
 		case c == '"':
 			quoted = !quoted
 		case !quoted && (c == '#' || c == ';'):
-			return strings.TrimSpace(b.String())
+			return strings.TrimSpace(b.String()), false
 		case !quoted && (c == ' ' || c == '\t'):
 			if b.Len() > 0 {
 				pending += string(c)
@@ -635,7 +736,7 @@ func gitConfigValue(raw string) string {
 			b.WriteByte(c)
 		}
 	}
-	return b.String()
+	return b.String(), false
 }
 
 // gitBool reports whether a Git configuration value is true.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/seznam/jailoc/internal/vm"
@@ -217,5 +218,190 @@ func TestGitProtectionMissingRoot(t *testing.T) {
 	t.Parallel()
 	if _, _, err := gitProtection([]vm.Share{{HostPath: filepath.Join(t.TempDir(), "missing")}}); err == nil {
 		t.Fatal("want error for a missing workspace path")
+	}
+}
+
+// gitTree returns helpers creating directories and files under base.
+func gitTree(t *testing.T, base string) (mk func(string), write func(string, string)) {
+	t.Helper()
+	mk = func(rel string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(base, rel), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write = func(rel, content string) {
+		t.Helper()
+		mk(filepath.Dir(rel))
+		if err := os.WriteFile(filepath.Join(base, rel), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return mk, write
+}
+
+func TestGitProtectionWorktreeConfigStaysPerWorktree(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mk, write := gitTree(t, root)
+	mk(".git/hooks")
+	write(".git/config", "[extensions]\n\tworktreeConfig = true\n")
+	write(".git/worktrees/w1/commondir", "../..\n")
+	write(".git/worktrees/w1/config.worktree", "[core]\n\thooksPath = h1\n")
+	write("w1/.git", "gitdir: ../.git/worktrees/w1\n")
+	write(".git/worktrees/w2/commondir", "../..\n")
+	write("w2/.git", "gitdir: ../.git/worktrees/w2\n")
+
+	_, ro, err := gitProtection([]vm.Share{{HostPath: root}})
+	if err != nil {
+		t.Fatalf("gitProtection: %v", err)
+	}
+	if !slices.Contains(ro, filepath.Join(root, "w1/h1")) {
+		t.Errorf("read-only = %v, want w1/h1", ro)
+	}
+	for _, p := range []string{filepath.Join(root, "w2/h1"), filepath.Join(root, "h1")} {
+		if slices.Contains(ro, p) {
+			t.Errorf("read-only = %v, has %s from another worktree", ro, p)
+		}
+		if _, err := os.Lstat(p); err == nil {
+			t.Errorf("%s created from another worktree's config", p)
+		}
+	}
+}
+
+func TestGitProtectionEveryGuestView(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	mk, write := gitTree(t, base)
+	mk("proj/.git/hooks")
+	write("proj/.git/config", "[core]\n")
+	proj := filepath.Join(base, "proj")
+
+	_, ro, err := gitProtection([]vm.Share{{HostPath: proj, GuestPath: "/a"}, {HostPath: proj, GuestPath: "/b"}})
+	if err != nil {
+		t.Fatalf("gitProtection: %v", err)
+	}
+	want := []string{"/a/.git/config", "/a/.git/hooks", "/b/.git/config", "/b/.git/hooks"}
+	if !slices.Equal(ro, want) {
+		t.Errorf("read-only = %v\nwant       %v", ro, want)
+	}
+}
+
+func TestGitProtectionEveryHooksPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mk, write := gitTree(t, root)
+	mk(".git/hooks")
+	write(".git/config", "[core]\n\thooksPath = h1\n[includeIf \"gitdir:/elsewhere/\"]\n\tpath = other.gitconfig\n")
+	write(".git/other.gitconfig", "[core]\n\thooksPath = h2\n")
+
+	_, ro, err := gitProtection([]vm.Share{{HostPath: root}})
+	if err != nil {
+		t.Fatalf("gitProtection: %v", err)
+	}
+	for _, p := range []string{"h1", "h2", ".git/other.gitconfig"} {
+		if !slices.Contains(ro, filepath.Join(root, p)) {
+			t.Errorf("read-only = %v, want %s", ro, p)
+		}
+	}
+}
+
+func TestGitProtectionHookErrors(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, root string)
+		want  string
+	}{
+		{
+			name: "too many hooks",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				for i := range maxHookEntries + 1 {
+					if err := os.WriteFile(filepath.Join(root, ".git/hooks", "h"+strconv.Itoa(i)), nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+			want: "more than 1024 entries",
+		},
+		{
+			name: "hook pointing at a missing file",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Symlink("../../scripts/pre-commit", filepath.Join(root, ".git/hooks/pre-commit")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "does not exist",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			mk, write := gitTree(t, root)
+			mk(".git/hooks")
+			write(".git/config", "[core]\n")
+			tt.setup(t, root)
+			_, _, err := gitProtection([]vm.Share{{HostPath: root}})
+			if err == nil {
+				t.Fatal("want error")
+			}
+			assertContains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestGitProtectionCommondirLoop(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		files map[string]string
+	}{
+		{
+			name: "commondir pointing at itself",
+			files: map[string]string{
+				".git/worktrees/w/commondir": ".\n",
+				"w/.git":                     "gitdir: ../.git/worktrees/w\n",
+			},
+		},
+		{
+			name: "commondirs pointing at each other",
+			files: map[string]string{
+				".git/worktrees/w1/commondir": "../w2\n",
+				".git/worktrees/w2/commondir": "../w1\n",
+				"w/.git":                      "gitdir: ../.git/worktrees/w1\n",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			mk, write := gitTree(t, root)
+			mk(".git/hooks")
+			write(".git/config", "[core]\n")
+			for rel, content := range tt.files {
+				write(rel, content)
+			}
+			_, _, err := gitProtection([]vm.Share{{HostPath: root}})
+			if err == nil {
+				t.Fatal("want error")
+			}
+			assertContains(t, err.Error(), "commondir")
+		})
+	}
+}
+
+func TestParseGitConfigContinuation(t *testing.T) {
+	t.Parallel()
+	got := parseGitConfig([]byte("[core]\n\thooksPath = /a/\\\nb\n# note \\\n\teditor = vi\n"))
+	want := []gitConfigEntry{
+		{section: "core", key: "hookspath", value: "/a/b"},
+		{section: "core", key: "editor", value: "vi"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("parseGitConfig = %v, want %v", got, want)
 	}
 }
