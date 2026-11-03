@@ -284,6 +284,8 @@ func carryMounts(p *prompter, label string, mounts, snapshots *[]string, stat fu
 // the opencode-data-<workspace> volume.
 const v1OpenCodeData = "/home/agent/.local/share/opencode"
 
+// volumeTarget is a v1 volume to copy into dst, a path relative to the
+// guest data directory of the workspace.
 type volumeTarget struct {
 	workspace, volume, dst, guestPath string
 }
@@ -307,7 +309,7 @@ func migrationVolumes(cfg *config.Config, names []string) ([]volumeTarget, error
 			out = append(out, volumeTarget{
 				workspace: name,
 				volume:    docker.VolumeName(name, v.key),
-				dst:       filepath.Join(vm.GuestDataDir(vmStateDir(name)), guestDataHome, v.home),
+				dst:       filepath.Join(guestDataHome, v.home),
 				guestPath: v.guestPath,
 			})
 		}
@@ -422,27 +424,43 @@ func migrateDockerState(ctx context.Context, cfg *config.Config, names []string,
 		return err
 	}
 	for _, t := range targets {
-		if _, err := os.Stat(t.dst); err == nil {
-			_, _ = fmt.Fprintf(p.out, "%s: %s already has VM data; keeping it\n", t.workspace, t.guestPath)
-			continue
-		}
-		tmp := t.dst + ".migrating"
-		if err := os.RemoveAll(tmp); err != nil {
-			return fmt.Errorf("workspace %q: clear %s: %w", t.workspace, tmp, err)
-		}
-		if err := os.MkdirAll(filepath.Dir(t.dst), 0o700); err != nil {
-			return fmt.Errorf("workspace %q: create %s: %w", t.workspace, filepath.Dir(t.dst), err)
-		}
-		copied, err := docker.ExportVolume(ctx, t.volume, tmp)
-		if err != nil {
-			return fmt.Errorf("workspace %q: copy %s: %w", t.workspace, t.volume, err)
-		}
-		if copied {
-			if err := os.Rename(tmp, t.dst); err != nil {
-				return fmt.Errorf("workspace %q: install %s: %w", t.workspace, t.dst, err)
-			}
-			_, _ = fmt.Fprintf(p.out, "%s: copied Docker volume %s to %s\n", t.workspace, t.volume, t.guestPath)
+		if err := migrateVolume(ctx, p, t); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// migrateVolume copies the volume of t into the guest data directory of
+// its workspace. The directory is shared with the VM, so every step goes
+// through an os.Root and no link in it leads a write elsewhere.
+func migrateVolume(ctx context.Context, p *prompter, t volumeTarget) error {
+	root, err := vm.OpenGuestData(vmStateDir(t.workspace))
+	if err != nil {
+		return fmt.Errorf("workspace %q: %w", t.workspace, err)
+	}
+	defer func() { _ = root.Close() }()
+	if _, err := root.Lstat(t.dst); err == nil {
+		_, _ = fmt.Fprintf(p.out, "%s: %s already has VM data; keeping it\n", t.workspace, t.guestPath)
+		return nil
+	}
+	tmp := t.dst + ".migrating"
+	if err := root.RemoveAll(tmp); err != nil {
+		return fmt.Errorf("workspace %q: clear %s: %w", t.workspace, tmp, err)
+	}
+	if err := root.MkdirAll(filepath.Dir(t.dst), 0o700); err != nil {
+		return fmt.Errorf("workspace %q: create %s: %w", t.workspace, filepath.Dir(t.dst), err)
+	}
+	copied, err := docker.ExportVolume(ctx, t.volume, root, tmp)
+	if err != nil {
+		return fmt.Errorf("workspace %q: copy %s: %w", t.workspace, t.volume, err)
+	}
+	if !copied {
+		return nil
+	}
+	if err := root.Rename(tmp, t.dst); err != nil {
+		return fmt.Errorf("workspace %q: install %s: %w", t.workspace, t.dst, err)
+	}
+	_, _ = fmt.Fprintf(p.out, "%s: copied Docker volume %s to %s\n", t.workspace, t.volume, t.guestPath)
 	return nil
 }

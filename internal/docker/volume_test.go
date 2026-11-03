@@ -3,6 +3,7 @@ package docker
 import (
 	"archive/tar"
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,7 @@ func TestExtractTar(t *testing.T) {
 		tar.Header{Name: "volume/link", Typeflag: tar.TypeSymlink, Linkname: "storage/session.json"},
 		tar.Header{Name: "volume/fifo", Typeflag: tar.TypeFifo},
 	)
-	if err := extractTar(archive, dst); err != nil {
+	if err := extractTarAt(t, archive, dst); err != nil {
 		t.Fatalf("extractTar: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dst, "storage", "session.json")) //nolint:gosec // G304: test file
@@ -59,11 +60,55 @@ func TestExtractTar(t *testing.T) {
 	}
 }
 
-func TestExtractTarRejectsEscape(t *testing.T) {
+func TestExtractTarRejectsEntryOutsideDestination(t *testing.T) {
 	t.Parallel()
 	archive := tarOf(t, tar.Header{Name: "volume/../../evil", Typeflag: tar.TypeReg, Mode: 0o600})
-	err := extractTar(archive, filepath.Join(t.TempDir(), "out"))
-	if err == nil || !strings.Contains(err.Error(), "escapes") {
-		t.Fatalf("extractTar error = %v, want escape rejection", err)
+	err := extractTarAt(t, archive, filepath.Join(t.TempDir(), "out"))
+	if err == nil || !strings.Contains(err.Error(), "outside the destination") {
+		t.Fatalf("extractTar error = %v, want outside-destination rejection", err)
 	}
+}
+
+func TestExtractTarDoesNotFollowLinkOutsideDestination(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	dst := filepath.Join(base, "dst")
+	outside := filepath.Join(base, "outside")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	archive := tarOf(t,
+		tar.Header{Name: "volume/out", Typeflag: tar.TypeSymlink, Linkname: outside},
+		tar.Header{Name: "volume/out/pwned", Typeflag: tar.TypeReg, Mode: 0o600},
+	)
+	if err := extractTarAt(t, archive, dst); err == nil {
+		t.Fatal("extractTar error = nil, want an error for a file under a link leaving the destination")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "pwned")); !os.IsNotExist(err) {
+		t.Fatalf("outside file should not exist: %v", err)
+	}
+}
+
+func TestExtractTarKeepsAbsoluteLink(t *testing.T) {
+	t.Parallel()
+	dst := filepath.Join(t.TempDir(), "out")
+	archive := tarOf(t, tar.Header{Name: "volume/link", Typeflag: tar.TypeSymlink, Linkname: "/home/agent/data"})
+	if err := extractTarAt(t, archive, dst); err != nil {
+		t.Fatalf("extractTar: %v", err)
+	}
+	got, err := os.Readlink(filepath.Join(dst, "link"))
+	if err != nil || got != "/home/agent/data" {
+		t.Fatalf("link = %q, %v; want /home/agent/data", got, err)
+	}
+}
+
+// extractTarAt extracts archive into the absolute path dst.
+func extractTarAt(t *testing.T, archive io.Reader, dst string) error {
+	t.Helper()
+	root, err := os.OpenRoot(filepath.Dir(dst))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	return extractTar(archive, root, filepath.Base(dst))
 }
