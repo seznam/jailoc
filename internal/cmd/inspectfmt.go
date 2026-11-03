@@ -283,6 +283,16 @@ func escapeVisible(s string) string {
 	return out.String()
 }
 
+// escapeLines is escapeVisible for multi-line text: it keeps the line
+// breaks and escapes every other control character.
+func escapeLines(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = escapeVisible(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // isGuestProcess reports jailoc's own guest processes: jailoc-guest and
 // the shell the SSH server starts it with.
 func isGuestProcess(e guest.ExecRecord) bool {

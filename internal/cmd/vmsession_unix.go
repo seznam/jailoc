@@ -424,7 +424,7 @@ func listSessionsVM(ctx context.Context, ws *workspace.Resolved) error {
 		if info.Attached {
 			state = "attached"
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", info.ID, state, info.Created.Local().Format(time.DateTime), info.Dir, info.Name)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", escapeVisible(info.ID), state, info.Created.Local().Format(time.DateTime), escapeVisible(info.Dir), escapeVisible(info.Name))
 	}
 	return tw.Flush()
 }
@@ -475,7 +475,7 @@ func vmCommand(ctx context.Context, ws *workspace.Resolved, cmdline []string) ([
 	if err := sess.Run(shellJoin(cmdline)); err != nil {
 		var exitErr *ssh.ExitError
 		if errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("%s", strings.TrimPrefix(strings.TrimSpace(stderr.String()), "jailoc-guest: "))
+			return nil, fmt.Errorf("%s", escapeLines(strings.TrimPrefix(strings.TrimSpace(stderr.String()), "jailoc-guest: ")))
 		}
 		return nil, fmt.Errorf("run in workspace %q: %w", ws.Name, err)
 	}
