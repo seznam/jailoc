@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a new feature or a change to existing behavior.
+labels: [feature]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you're trying to do and why jailoc doesn't let you do it today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How you'd like it to work, e.g. a new config field or CLI flag.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security impact
+      description: Does this weaken isolation between the agent and the host, other workspaces or the network? See [security boundaries](https://seznam.github.io/jailoc/explanation/security-boundaries/).
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

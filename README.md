@@ -77,7 +77,8 @@ Download the archive for your platform from [GitHub Releases](https://github.com
 ## 🛠️ Development
 
 ```bash
-# Build from source
+# Build from source (embeds the jailoc-guest VM init)
+go generate ./internal/guestbin
 go build ./cmd/jailoc
 
 # Run unit tests
@@ -85,8 +86,10 @@ go test ./...
 
 # Run VM integration tests (requires KVM or macOS and a go-microvm runtime)
 JAILOC_VM_RUNNER=/path/to/go-microvm-runner JAILOC_VM_LIBDIR=/path/to/libs \
-  go test -tags vmintegration -timeout 45m ./internal/vmintegration/
+  go test -tags vmintegration -count=1 -timeout 50m ./internal/vmintegration/
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community guidelines.
 
 ## 📦 What's in the default image
 
