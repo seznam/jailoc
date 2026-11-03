@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/seznam/jailoc/internal/vm"
 )
 
 func TestGitProtection(t *testing.T) {
@@ -54,7 +56,7 @@ func TestGitProtection(t *testing.T) {
 	mk("out")
 	write("out/.git", "gitdir: /nonexistent/jailoc/outside.git\n")
 
-	pins, ro, err := gitProtection([]string{root})
+	pins, ro, err := gitProtection([]vm.Share{{HostPath: root}})
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
@@ -115,7 +117,7 @@ func TestGitProtectionSymlinkRoot(t *testing.T) {
 	}
 	write("wt/.git", "gitdir: "+resolved+"\n")
 
-	pins, ro, err := gitProtection([]string{root})
+	pins, ro, err := gitProtection([]vm.Share{{HostPath: root}})
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
@@ -139,9 +141,81 @@ func TestGitProtectionSymlinkRoot(t *testing.T) {
 	}
 }
 
+func TestGitProtectionShares(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	mk := func(rel string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(base, rel), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(rel, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(base, rel), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A mount at another guest path holding a repository with
+	// extensions.worktreeConfig, core.hooksPath and an include.
+	mk("mnt/repo/.git/hooks")
+	mk("mnt/repo/tools/hooks")
+	write("mnt/repo/.git/config", "[extensions]\n\tworktreeConfig = true\n[core]\n\thooksPath = tools/hooks\n[include]\n\tpath = ../shared.gitconfig\n")
+	write("mnt/repo/shared.gitconfig", "[user]\n\tname = x\n")
+	write("mnt/repo/tools/hooks/real-hook", "#!/bin/sh\n")
+	if err := os.Symlink("real-hook", filepath.Join(base, "mnt/repo/tools/hooks/pre-commit")); err != nil {
+		t.Fatal(err)
+	}
+	// A bare repository.
+	mk("mnt/bare.git/objects")
+	mk("mnt/bare.git/refs")
+	write("mnt/bare.git/HEAD", "ref: refs/heads/main\n")
+	// A read-only mount is not scanned.
+	mk("ro/other/.git/hooks")
+
+	shares := []vm.Share{
+		{HostPath: filepath.Join(base, "mnt"), GuestPath: "/data"},
+		{HostPath: filepath.Join(base, "ro"), GuestPath: "/ro", ReadOnly: true},
+	}
+	_, ro, err := gitProtection(shares)
+	if err != nil {
+		t.Fatalf("gitProtection: %v", err)
+	}
+	wantRO := []string{
+		"/data/bare.git/config", "/data/bare.git/hooks",
+		"/data/repo/.git/config", "/data/repo/.git/config.worktree", "/data/repo/.git/hooks",
+		"/data/repo/shared.gitconfig", "/data/repo/tools/hooks", "/data/repo/tools/hooks/real-hook",
+	}
+	if !slices.Equal(ro, wantRO) {
+		t.Errorf("read-only = %v\nwant       %v", ro, wantRO)
+	}
+	if _, err := os.Stat(filepath.Join(base, "mnt/repo/.git/config.worktree")); err != nil {
+		t.Errorf("config.worktree not created: %v", err)
+	}
+}
+
+func TestGitProtectionSymlinkedConfig(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "repo/.git/hooks"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real-config"), []byte("[core]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../real-config", filepath.Join(root, "repo/.git/config")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := gitProtection([]vm.Share{{HostPath: root}})
+	if err == nil {
+		t.Fatal("want error for a symlinked git config")
+	}
+	assertContains(t, err.Error(), "symbolic link")
+}
+
 func TestGitProtectionMissingRoot(t *testing.T) {
 	t.Parallel()
-	if _, _, err := gitProtection([]string{filepath.Join(t.TempDir(), "missing")}); err == nil {
+	if _, _, err := gitProtection([]vm.Share{{HostPath: filepath.Join(t.TempDir(), "missing")}}); err == nil {
 		t.Fatal("want error for a missing workspace path")
 	}
 }
