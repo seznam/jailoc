@@ -370,6 +370,10 @@ func TestCheckNestedShares(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(project, "link")); err != nil {
 		t.Fatal(err)
 	}
+	alias := filepath.Join(dir, "alias")
+	if err := os.Symlink(project, alias); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name    string
 		shares  []vm.Share
@@ -379,6 +383,8 @@ func TestCheckNestedShares(t *testing.T) {
 		{"separate directories", []vm.Share{{HostPath: project}, {HostPath: outside, GuestPath: "/data"}}, ""},
 		{"link in read-only share", []vm.Share{{HostPath: project, ReadOnly: true}, {HostPath: filepath.Join(project, "link"), GuestPath: "/data"}}, ""},
 		{"link in read-write share", []vm.Share{{HostPath: project}, {HostPath: filepath.Join(project, "link", "x"), GuestPath: "/data"}}, "symbolic link"},
+		{"link below an alias of a read-write share", []vm.Share{{HostPath: alias}, {HostPath: filepath.Join(project, "link"), GuestPath: "/data"}}, "symbolic link"},
+		{"directory below an alias of a read-write share", []vm.Share{{HostPath: alias}, {HostPath: filepath.Join(project, "real"), GuestPath: "/data"}}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
