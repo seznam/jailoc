@@ -24,6 +24,8 @@ jobs:
     name: GoReleaser
     needs: vm-runtime
     runs-on: ubuntu-latest
+    # HOMEBREW_TAP_DEPLOY_KEY lives in this environment, limited to main and v* tags.
+    environment: homebrew-tap
     permissions:
       contents: write
       id-token: write
