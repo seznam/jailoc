@@ -73,7 +73,7 @@ docs/
 - Code blocks with language hint: ` ```bash `, ` ```toml `, ` ```go `
 - Tables for structured reference data (config fields, CLI flags, port assignments)
 - Admonitions for warnings and notes: `!!! warning`, `!!! note`, `!!! danger` — not blockquotes
-- Mermaid diagrams for architecture visuals: ` ```mermaid ` (superfences renders them)
+- Diagrams: hand-written SVG in the section's `img/` directory for component and architecture pictures (style and steps in the `svg-diagrams` skill, `.agents/skills/svg-diagrams/`); Mermaid (` ```mermaid `, rendered by superfences) for small flows and sequences
 - Internal cross-references use relative paths: `[text](../how-to/network-access.md)`
 
 ### Template variables
