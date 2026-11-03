@@ -37,13 +37,13 @@ flowchart LR
 
 The hypervisor (KVM on Linux, Hypervisor.framework on macOS) separates the guest kernel from the host kernel. Guest root controls the guest and nothing else; everything it can reach on the host goes through devices the VMM provides:
 
-- virtio-fs shares for workspace `paths`, `mounts` and jailoc's internal share. Read-only shares are enforced by the VMM, so guest root can't remount them writable.
+- virtio-fs shares for workspace `paths`, `mounts` and jailoc's internal shares. Read-only shares are enforced by the VMM, so guest root can't remount them writable.
 - One virtio-net interface whose only peer is the workspace's network broker.
 - Unix sockets on the host that the broker forwards: the guest SSH server for jailoc, the host SSH agent with `ssh_auth_sock`, and `host_ports` targets.
 
-libkrun's virtio-fs server doesn't confine file requests to the shared directories by itself. On Linux, jailoc runs the VMM process under Landlock with access only to the VM runtime, the VM's root filesystem, data directory and disks, the unpacked image (read-only) and the declared shares, and refuses to start a VM when the kernel lacks Landlock. Landlock doesn't cover metadata operations such as `stat`, `chmod` or extended attributes. On macOS the VMM process runs without equivalent confinement.
+libkrun's virtio-fs server doesn't confine file requests to the shared directories by itself. On Linux, jailoc runs the VMM process under Landlock with access only to the VM runtime, `/dev/kvm` and the null and random devices, the VM's root filesystem, data directory and disks, the unpacked image (read-only) and the declared shares, and refuses to start a VM when the kernel lacks Landlock. Landlock doesn't cover metadata operations such as `stat`, `chmod` or extended attributes. On macOS the VMM process runs without equivalent confinement.
 
-The host trusts nothing it reads back from the guest. The internal share is writable by the guest, so it never holds keys or the VM specification, and jailoc accesses it only in ways that can't follow a link out of it. Per-workspace state directories on the host are created with mode `0700`.
+The host trusts nothing it reads back from the guest. The read-write internal share is writable by the guest, so it never holds keys or the VM specification, and jailoc accesses it only in ways that can't follow a link out of it. Per-workspace state directories on the host are created with mode `0700`.
 
 ### Guest and network
 
@@ -64,7 +64,7 @@ Workspaces that share a profile, a writable configuration mount or a directory s
 
 ### Agent and guest root
 
-Inside the VM the agent runs as `agent` (UID 1000) and can use `sudo` from the image. Guest root is not a boundary jailoc relies on, with one exception: `protect_git` sets `no_new_privs` in `jailoc-guest`, which every session inherits, binds `.git/hooks` and `.git/config` of repositories in the shares read-only, and rejects `enable_docker`, because Docker access is root access in the VM. Without `protect_git`, the agent can rewrite Git hooks and configuration in shared repositories, and they run on the host the next time you use Git there.
+Inside the VM the agent runs as `agent` (UID 1000) and can use `sudo` from the image. Guest root is not a boundary jailoc relies on, with one exception: `protect_git` sets `no_new_privs` in `jailoc-guest`, which every session inherits, binds `.git/hooks`, `.git/config` and the Git files they point to of repositories in the read-write `paths` and `mounts` read-only, and rejects `enable_docker`, because Docker access is root access in the VM. Without `protect_git`, the agent can rewrite Git hooks and configuration in shared repositories, and they run on the host the next time you use Git there.
 
 ### Image builds and host
 

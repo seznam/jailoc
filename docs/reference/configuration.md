@@ -96,7 +96,7 @@ Defaults applied to all workspaces.
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
-| `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config` and linked worktree `commondir` pointers read-only inside the VM for repositories under workspace `paths`, including symlinked workspace roots. Disable `sudo` and Docker there. |
+| `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, `core.hooksPath` and included config files read-only inside the VM for repositories under workspace `paths` and read-write `mounts`, including symlinked workspace roots. Disable `sudo` and Docker there. |
 | `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. |
 | `filtered_dns` | bool | `false` | Filter DNS answers in the network broker. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
 | `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. |
@@ -329,7 +329,7 @@ jailoc warns when an entry targets port 9222 (Chrome DevTools Protocol) or a con
 
 ### Filtered DNS
 
-When `filtered_dns = true`, an effective `dns_upstream` and at least one effective `dns_blocked_zones` entry are required. `dns_upstream` must be a numeric IPv4 address other than unspecified, loopback, link-local or multicast. Each zone must be a DNS name of labels with letters, digits or internal hyphens (63 characters per label, 253 total); a trailing dot is accepted and `"."` is rejected. A and AAAA answers for blocked zones are filtered, matched case-insensitively including subdomains. Direct DNS to port 53 of other servers is blocked.
+When `filtered_dns = true`, an effective `dns_upstream` and at least one effective `dns_blocked_zones` entry are required. `dns_upstream` must be a numeric IPv4 address other than unspecified, loopback, link-local or multicast. Each zone must be a DNS name of labels with letters, digits or internal hyphens (63 characters per label, 253 total); a trailing dot is accepted and `"."` is rejected. Queries for names in blocked zones get NXDOMAIN, matched case-insensitively including subdomains, and so do answers that name a blocked zone anywhere, for example through a CNAME. Queries with more or fewer than one question are refused. Direct DNS to port 53 of other servers is blocked.
 
 With filtering on, an effective `allowed_hosts` entry equal to or under an effective blocked zone is rejected at config load.
 

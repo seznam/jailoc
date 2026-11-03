@@ -51,7 +51,7 @@ With `filtered_dns`, the broker's resolver forwards queries to the configured up
 
 ## Enforcement details
 
-Denied TCP connections are reset and denied UDP gets ICMP port unreachable, so tools fail fast instead of hanging. Each decision is written to `broker.jsonl` in the workspace's VM state directory, which `jailoc traffic` prints.
+Denied TCP connections are reset and denied UDP gets ICMP port unreachable, so tools fail fast instead of hanging. Each decision is written to `broker.jsonl` in the workspace's VM state directory, which `jailoc traffic` prints. The broker moves the log to `broker.jsonl.1` when it reaches 16 MiB, so it keeps at most about 32 MiB. It also caps a workspace at 4096 open TCP connections, 1024 UDP flows and 128 DNS queries in flight; connections beyond the cap are refused and logged.
 
 For allowed TCP connections, the broker also records what the first bytes the guest sends identify: the server name and ALPN protocols of a TLS ClientHello, or the method, host and path of an HTTP/1 request (query strings are dropped). It only reads the data as it passes through; it neither changes nor delays it, and encrypted content stays opaque.
 

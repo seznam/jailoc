@@ -6,7 +6,7 @@ A workspace often needs credentials: an API token for the model provider, a regi
 
 Secrets are declared under `[defaults.secrets]` or `[workspaces.<name>.secrets]`:
 
-- `secrets.env.NAME` becomes an environment variable `NAME` in every session. It isn't written to a file.
+- `secrets.env.NAME` becomes an environment variable `NAME` in every session, loaded from an in-memory environment file in the guest.
 - `secrets.file.NAME` becomes the file `/run/secrets/NAME`.
 
 Each secret has exactly one source: `from_env` (a variable in the environment of the `jailoc` process), `from_file` (a file on the host) or `from_command` (a command jailoc runs on the host, whose standard output is the value). The configuration holds the reference, never the value. `from_command` lets a password manager or keychain hold the secret, so it never sits in a plain file or the shell environment.
@@ -19,7 +19,7 @@ Once the guest's SSH server is ready, jailoc sends the values, together with the
 
 Inside the guest, `jailoc-guest` writes each file secret to `/run/secrets/NAME` with mode `0400`, owned by `agent`. `/run/secrets` is a tmpfs owned by `agent`, so the values exist only in guest memory and disappear when the VM stops. Environment entries, including env secrets, go to an in-memory environment file that every new session loads. An env secret value loses its trailing line break and must fit on one line; multi-line values belong in file secrets.
 
-jailoc never writes secret values to host disk. They aren't part of the image, the VM state directory, a share or a snapshot.
+jailoc never writes secret values to host disk. They aren't part of the image, the VM state directory, a share or a snapshot. The guest's process log (`jailoc strace`), which is kept in the VM state directory, records command lines; `jailoc-guest` replaces configured secret values of eight or more characters in them with `[redacted]`. Shorter values, values transformed by a program, and anything the agent writes to shared directories or prints to the console aren't covered.
 
 A guest that stops for any reason takes the whole VM down, and every start delivers the secrets again. jailoc also records each delivery in the VM state directory: when a session attaches to a running VM that never received its secrets, for example because `jailoc up` was interrupted right after the boot, jailoc delivers them first.
 

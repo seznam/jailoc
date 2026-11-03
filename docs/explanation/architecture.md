@@ -31,7 +31,7 @@ flowchart LR
 
 Every VM is owned by a detached supervisor process (`jailoc vm-supervise`). It starts the workspace's network broker, boots the VM through the go-microvm runner, waits until the guest is ready, and from then on keeps the two together: when either the VM or the broker exits, it stops the other. A workspace never runs without its broker.
 
-The VM runtime (runner, libkrun and the libkrunfw guest kernel) is a separate download. jailoc pins its URL and SHA-256 per platform and fetches it on first use, so the jailoc binary itself stays free of C dependencies. `jailoc-guest` is pure Go and is embedded in jailoc, so it always matches the jailoc version. Upgrading jailoc takes effect in a workspace after `jailoc restart`.
+The VM runtime (runner, libkrun and the libkrunfw guest kernel) is embedded in release builds of jailoc and unpacked into the cache on first use; builds without it need `runner` and `lib_dir` in the `[vm]` section. jailoc itself is built without cgo. `jailoc-guest` is pure Go and is embedded in jailoc, so it always matches the jailoc version. Upgrading jailoc takes effect in a workspace after `jailoc restart`.
 
 ## Images
 
@@ -57,7 +57,7 @@ The VM boots from a small root file system that holds only `jailoc-guest` and it
 
 ### protect_git
 
-With `protect_git`, `jailoc-guest` bind-mounts `.git/hooks` and `.git/config` of every repository in the shares read-only over themselves, turns the `.git` directories, the repositories and their parents into mount points that can't be renamed, and sets `no_new_privs` on all its threads. No session can then become root and undo the binds. Guest root could otherwise unmount them, which is why `protect_git` excludes `sudo` and `enable_docker` (Docker access is root access in the VM).
+With `protect_git`, `jailoc-guest` bind-mounts `.git/hooks`, `.git/config` and the Git files they point to (`core.hooksPath`, `include.path`, `config.worktree`) of every repository in the read-write `paths` and `mounts` read-only over themselves, turns the `.git` directories, the repositories and their parents into mount points that can't be renamed, and sets `no_new_privs` on all its threads. No session can then become root and undo the binds. Guest root could otherwise unmount them, which is why `protect_git` excludes `sudo` and `enable_docker` (Docker access is root access in the VM).
 
 ### Sessions
 
@@ -81,13 +81,13 @@ A forked process inherits its parent's `oom_score_adj`, and only root may lower 
 
 ### Shares
 
-Workspace `paths` and the directories in `mounts` reach the VM through virtio-fs, one share each. jailoc's own data uses a single internal share, the VM's `guest` directory on the host: copies of the workspace configuration and cache directories, the staged snapshots, the persistent home directories and the control files the host and guest exchange. The guest mounts it under a root-only directory and binds its parts into place (configuration copies read-only). Because the guest can write the whole internal share, the host keeps nothing in it that it trusts, such as keys or the VM spec, and accesses it only in ways that cannot follow a link out of it. One share keeps the number of virtio devices low; libkrun on x86_64 hosts can attach only about six shares besides it. Read-only shares are enforced by the VMM: guest root can't remount them writable. libkrun's virtio-fs server itself does not keep a guest inside a share, so on Linux the VM process runs under Landlock with access only to the shares, the VM's root filesystem, data directory and disks, the unpacked image (read-only), and the runtime (see [Threat model](threat-model.md#the-boundary-is-the-vm)). virtio-fs shares directories only, so a `mounts` entry that points at a single file isn't supported; use `snapshots` for files.
+Workspace `paths` and the directories in `mounts` reach the VM through virtio-fs, one share each. jailoc's own data uses two internal shares. The VM's `guest` directory on the host is read-write and holds the persistent home directories and the control files the host and guest exchange. The `guest-ro` directory is shared read-only and holds copies of the workspace configuration and cache directories and the staged snapshots, so guest root can't change them either. The guest mounts both under a root-only directory and binds their parts into place. Because the guest can write the `guest` share, the host keeps nothing in it that it trusts, such as keys or the VM spec, and accesses it only in ways that cannot follow a link out of it. Few internal shares keep the number of virtio devices low; libkrun on x86_64 hosts can attach only about five shares besides them. Read-only shares are enforced by the VMM: guest root can't remount them writable. libkrun's virtio-fs server itself does not keep a guest inside a share, so on Linux the VM process runs under Landlock with access only to the shares, the VM's root filesystem, data directory and disks, the unpacked image (read-only), and the runtime (see [Threat model](threat-model.md#the-boundary-is-the-vm)). virtio-fs shares directories only, so a `mounts` entry that points at a single file isn't supported; use `snapshots` for files.
 
 On macOS, shares use simplified ownership: every guest process sees shared files as its own, and files it creates are owned by the host user. Permission bits stay meaningful on the host, and ownership changes inside the guest have no effect on host files. On Linux, the guest sees the host owner and group of shared files. libkrun creates files as the host user that runs jailoc and allows it only for guest `root` or for a guest user whose uid and gid match that host user, so the `agent` user (uid and gid 1000) can create files in shares only when jailoc runs as uid and gid 1000.
 
 ### Snapshots
 
-Files and directories in `snapshots`, and the Git configuration, aren't shared. jailoc copies them into the internal share when the VM starts and on every `jailoc reload`, and the guest binds each item read-only at its destination. Each reload copies into a new directory and the guest replaces its binds; processes that opened a file earlier keep reading the old copy. Nothing the workspace does reaches the host original.
+Files and directories in `snapshots`, and the Git configuration, aren't shared. jailoc copies them into the read-only internal share when the VM starts and on every `jailoc reload`, and the guest binds each item read-only at its destination. Each reload copies into a new directory and the guest replaces its binds; processes that opened a file earlier keep reading the old copy. Nothing the workspace does reaches the host original.
 
 ### Persistent home
 

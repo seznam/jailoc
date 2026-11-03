@@ -180,10 +180,10 @@ Workspace paths are shared read-write, including `.git`. Git on the host runs ho
 protect_git = true
 ```
 
-At every `jailoc up`, jailoc finds the repositories under the workspace paths, including symlinked workspace roots. Inside the VM, it makes `.git/hooks`, `.git/config` and linked worktree `commondir` pointers read-only, including metadata of submodules, worktrees and separate git directories reached through `.git` files under the workspace paths. These git directories and their parents cannot be renamed or removed. `sudo` and Docker are disabled in that workspace, and `enable_docker = true` together with `protect_git = true` is rejected.
+At every `jailoc up`, jailoc finds the repositories, including bare ones, under the workspace paths and read-write `mounts`, including symlinked workspace roots. Inside the VM, it makes `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, a `core.hooksPath` directory and files named by `include.path` or `includeIf` read-only, including metadata of submodules, worktrees and separate git directories reached through `.git` files. A missing `.git/config` or `config.worktree` is created empty so that it can be protected. If one of these files is a symbolic link inside a share, `jailoc up` fails, because the link itself could be redirected. These git directories and their parents cannot be renamed or removed. `sudo` and Docker are disabled in that workspace, and `enable_docker = true` together with `protect_git = true` is rejected.
 
 !!! warning
-    Only repositories that exist at `jailoc up` are covered. Repositories the agent creates or clones later aren't protected until the next restart. Files that tools run from the working tree, such as `Makefile` or `package.json` scripts, aren't covered either.
+    Only repositories that exist at `jailoc up` are covered. Repositories the agent creates or clones later aren't protected until the next restart, and repositories inside `node_modules`, `.venv`, `venv`, `__pycache__`, `.tox`, `.terraform`, `.next`, `.gradle` and `.cache` aren't searched. Files that tools run from the working tree, such as `Makefile` or `package.json` scripts, aren't covered either. The protection is enforced inside the guest; it holds against the agent, not against an exploit of the guest kernel.
 
 ## Use Docker inside the VM
 
