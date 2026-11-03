@@ -108,7 +108,10 @@ homebrew_casks:
     repository:
       owner: seznam
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      # Pushed over SSH with a write-enabled deploy key of the tap repository.
+      git:
+        url: git@github.com:seznam/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY }}"
     commit_msg_template: "chore(jailoc): update to {{ .Tag }}"
     caveats: |
       On Linux, jailoc needs read-write access to /dev/kvm and a kernel with
