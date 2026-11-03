@@ -20,11 +20,14 @@ const (
 	// PrivateDir is a root-only tmpfs holding HostDir, so the agent user
 	// cannot reach jailoc's internal share.
 	PrivateDir = Dir + "/private"
-	// HostDir is the mount point of the VM's single internal share: the
-	// host's per-VM guest data directory with the control files, staged
-	// snapshots, jailoc configuration copies and persistent home
-	// directories. The guest binds parts of it into place.
+	// HostDir is the mount point of the VM's read-write internal share: the
+	// host's per-VM guest data directory with the control files and
+	// persistent home directories. The guest binds parts of it into place.
 	HostDir = PrivateDir + "/host"
+	// ReadOnlyHostDir is the mount point of the VM's read-only internal
+	// share: staged snapshots and jailoc configuration copies. The host
+	// exports it read-only, so not even guest root can change them.
+	ReadOnlyHostDir = PrivateDir + "/host-ro"
 	// ControlDir is the control directory inside HostDir; a file named
 	// "shutdown" in it powers the VM off.
 	ControlDir = HostDir + "/control"
@@ -61,10 +64,12 @@ type Share struct {
 	ReadOnly  bool   `json:"read_only,omitempty"`
 }
 
-// SnapshotsDir is the guest path of the staged snapshots inside HostDir.
-const SnapshotsDir = HostDir + "/snapshots"
+// SnapshotsDir is the guest path of the staged snapshots inside
+// ReadOnlyHostDir.
+const SnapshotsDir = ReadOnlyHostDir + "/snapshots"
 
-// Bind binds Source, a directory inside HostDir, at Target.
+// Bind binds Source, a directory inside HostDir or ReadOnlyHostDir, at
+// Target.
 type Bind struct {
 	Source   string `json:"source"`
 	Target   string `json:"target"`
@@ -89,8 +94,9 @@ type Config struct {
 	Shares        []Share  `json:"shares"`
 	AuthorizedKey string   `json:"authorized_key"`
 	Env           []string `json:"env,omitempty"`
-	// Binds place directories of the internal share (HostDir): jailoc
-	// configuration read-only, persistent home directories read-write.
+	// Binds place directories of the internal shares: jailoc
+	// configuration read-only (ReadOnlyHostDir), persistent home
+	// directories read-write (HostDir).
 	Binds []Bind `json:"binds,omitempty"`
 	// Snapshots are read-only host files and directories bound from the
 	// staged snapshots to their destinations.

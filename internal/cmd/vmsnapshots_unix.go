@@ -89,13 +89,13 @@ func overlaps(a, b string) bool {
 const snapshotsDir = "snapshots"
 
 // stageSnapshots copies every snapshot source into a new generation directory
-// of the staged snapshots and returns the guest bind list. Generations other
-// than keep, the one the running guest binds, are removed. A new directory
-// per generation keeps the guest from reading stale virtio-fs entries. The
-// guest can write the guest data directory, so every write goes through an
-// os.Root that does not follow links out of it.
+// of the staged snapshots in the read-only guest data directory and returns
+// the guest bind list. Generations other than keep, the one the running
+// guest binds, are removed. A new directory per generation keeps the guest
+// from reading stale virtio-fs entries. Every write goes through an os.Root
+// that does not follow links out of the directory.
 func stageSnapshots(stateDir string, snapshots []config.Mount, keep string) ([]guest.Snapshot, error) {
-	root, err := vm.OpenGuestData(stateDir)
+	root, err := vm.OpenGuestReadOnly(stateDir)
 	if err != nil {
 		return nil, err
 	}
