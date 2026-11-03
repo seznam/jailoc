@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"syscall"
 )
 
 // originalCA keeps the image's system CA bundle so a changed or removed
@@ -27,8 +26,10 @@ type liveState struct {
 	stopAgent func()
 	// hostPorts stop the loopback mirrors of host_ports, by port.
 	hostPorts map[uint16]func()
-	// snapshots are the bound snapshots, in bind order.
+	// snapshots are the bound snapshots, in bind order, and mounts the
+	// descriptors of their mounts.
 	snapshots []Snapshot
+	mounts    []int
 	// created holds the snapshot mount points the guest created.
 	created map[string]bool
 }
@@ -59,29 +60,30 @@ func (l *liveState) apply(r Reload) error {
 }
 
 // setSnapshots replaces the bound snapshots with next. Old binds are detached
-// lazily, so open files keep their content; mount points the guest created
-// for snapshots that are gone are removed.
+// lazily through their mount descriptors, so open files keep their content
+// and a destination replaced since the bind does not redirect the unmount;
+// mount points the guest created for snapshots that are gone are removed.
 func (l *liveState) setSnapshots(next []Snapshot) error {
 	for i := len(l.snapshots) - 1; i >= 0; i-- {
 		target := l.snapshots[i].Target
-		if err := syscall.Unmount(target, syscall.MNT_DETACH); err != nil && !errors.Is(err, syscall.EINVAL) {
+		if err := unmountSnapshot(l.mounts[i]); err != nil {
 			return fmt.Errorf("snapshot %s: unmount: %w", target, err)
 		}
-		l.snapshots = l.snapshots[:i]
+		l.snapshots, l.mounts = l.snapshots[:i], l.mounts[:i]
 		if l.created[target] && !slices.ContainsFunc(next, func(s Snapshot) bool { return s.Target == target }) {
 			_ = os.Remove(target)
 			delete(l.created, target)
 		}
 	}
 	for _, s := range next {
-		created, err := bindSnapshot(s, l.acct)
+		created, fd, err := bindSnapshot(s, l.acct)
 		if created {
 			l.created[s.Target] = true
 		}
 		if err != nil {
 			return err
 		}
-		l.snapshots = append(l.snapshots, s)
+		l.snapshots, l.mounts = append(l.snapshots, s), append(l.mounts, fd)
 	}
 	return nil
 }

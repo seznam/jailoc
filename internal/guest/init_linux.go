@@ -401,31 +401,77 @@ func bindInternal(b Bind, acct account) error {
 	return nil
 }
 
-// bindSnapshot binds a staged snapshot read-only at its destination and
-// reports whether it created the mount point. Missing parent directories are
+// bindSnapshot binds a staged snapshot read-only at its destination. It
+// reports whether it created the mount point and returns a descriptor of the
+// new mount, which unmountSnapshot takes to detach exactly this mount even if
+// the destination path changes later. Missing parent directories are
 // created; those inside the agent's home belong to the agent.
-func bindSnapshot(c Snapshot, acct account) (bool, error) {
+func bindSnapshot(c Snapshot, acct account) (bool, int, error) {
 	info, err := os.Stat(c.Source)
 	if err != nil {
-		return false, fmt.Errorf("snapshot %s: %w", c.Target, err)
+		return false, -1, fmt.Errorf("snapshot %s: %w", c.Target, err)
 	}
 	if err := makeParents(filepath.Dir(c.Target), acct); err != nil {
-		return false, fmt.Errorf("snapshot %s: %w", c.Target, err)
+		return false, -1, fmt.Errorf("snapshot %s: %w", c.Target, err)
 	}
 	_, err = os.Lstat(c.Target)
 	created := os.IsNotExist(err)
 	if err := mountPoint(c.Target, info.IsDir()); err != nil {
-		return false, fmt.Errorf("snapshot %s: %w", c.Target, err)
+		return false, -1, fmt.Errorf("snapshot %s: %w", c.Target, err)
 	}
-	if err := syscall.Mount(c.Source, c.Target, "", syscall.MS_BIND, ""); err != nil {
-		return created, fmt.Errorf("snapshot %s: bind: %w", c.Target, err)
+	fd, err := bindReadOnly(c.Source, c.Target, info.IsDir())
+	if err != nil {
+		return created, -1, fmt.Errorf("snapshot %s: %w", c.Target, err)
 	}
-	flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
-	if err := syscall.Mount("", c.Target, "", flags, ""); err != nil {
-		_ = syscall.Unmount(c.Target, syscall.MNT_DETACH)
-		return created, fmt.Errorf("snapshot %s: remount read-only: %w", c.Target, err)
+	return created, fd, nil
+}
+
+// bindReadOnly clones source as a detached read-only mount and attaches it at
+// target. The final component of target must be a directory or regular file
+// of the expected kind, not a symbolic link. It returns a descriptor of the
+// attached mount's root.
+func bindReadOnly(source, target string, dir bool) (int, error) {
+	dst, err := unix.Open(target, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open destination: %w", err)
 	}
-	return created, nil
+	defer func() { _ = unix.Close(dst) }()
+	var st unix.Stat_t
+	if err := unix.Fstat(dst, &st); err != nil {
+		return -1, fmt.Errorf("stat destination: %w", err)
+	}
+	want := uint32(unix.S_IFREG)
+	if dir {
+		want = unix.S_IFDIR
+	}
+	if st.Mode&unix.S_IFMT != want {
+		return -1, fmt.Errorf("destination changed to a different file type")
+	}
+	fd, err := unix.OpenTree(unix.AT_FDCWD, source, unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC)
+	if err != nil {
+		return -1, fmt.Errorf("clone %s: %w", source, err)
+	}
+	attr := unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY | unix.MOUNT_ATTR_NOSUID | unix.MOUNT_ATTR_NODEV}
+	if err := unix.MountSetattr(fd, "", unix.AT_EMPTY_PATH, &attr); err != nil {
+		_ = unix.Close(fd)
+		return -1, fmt.Errorf("make read-only: %w", err)
+	}
+	if err := unix.MoveMount(fd, "", dst, "", unix.MOVE_MOUNT_F_EMPTY_PATH|unix.MOVE_MOUNT_T_EMPTY_PATH); err != nil {
+		_ = unix.Close(fd)
+		return -1, fmt.Errorf("attach: %w", err)
+	}
+	return fd, nil
+}
+
+// unmountSnapshot lazily detaches the mount fd refers to and closes fd. A
+// mount that is already gone is not an error.
+func unmountSnapshot(fd int) error {
+	defer func() { _ = unix.Close(fd) }()
+	err := unix.Unmount("/proc/self/fd/"+strconv.Itoa(fd), unix.MNT_DETACH)
+	if err != nil && !errors.Is(err, unix.EINVAL) {
+		return err
+	}
+	return nil
 }
 
 // disablePrivilegeEscalation sets no_new_privs and drops every capability
@@ -505,11 +551,12 @@ func makeParents(dir string, acct account) error {
 	return nil
 }
 
-// mountPoint makes sure path exists as a directory or a regular file.
+// mountPoint makes sure path exists as a directory or a regular file. An
+// existing symbolic link or special file is rejected.
 func mountPoint(path string, dir bool) error {
 	info, err := os.Lstat(path)
 	switch {
-	case err == nil && info.IsDir() != dir:
+	case err == nil && info.IsDir() != dir, err == nil && !dir && !info.Mode().IsRegular():
 		return fmt.Errorf("destination exists as a different file type")
 	case err == nil:
 		return nil
