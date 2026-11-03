@@ -115,6 +115,9 @@ var rootCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("re-resolve workspace %q: %w", workspaceFlag, err)
 			}
+			if err := restartVMIfRunning(ctx, ws); err != nil {
+				return fmt.Errorf("restart workspace %q: %w", workspaceFlag, err)
+			}
 		}
 
 		return runSessionVM(ctx, cfg, ws, vmSessionOptions{
