@@ -395,7 +395,9 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 
 // commonOptions are shared by both VM kinds.
 func commonOptions(spec Spec) []microvm.Option {
-	backend := []libkrun.Option{}
+	// Name the runner process after the VM (jailoc-<workspace>,
+	// jailoc-builder) so ps tells VMs apart.
+	backend := []libkrun.Option{libkrun.WithProcessName("jailoc-" + spec.Workspace)}
 	if spec.RunnerPath != "" {
 		backend = append(backend, libkrun.WithRunnerPath(spec.RunnerPath))
 	}
