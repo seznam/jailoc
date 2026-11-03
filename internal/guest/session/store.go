@@ -129,7 +129,6 @@ func List(stateDir string) ([]Info, error) {
 		}
 		_ = os.Remove(infoPath(stateDir, id))
 		_ = os.Remove(socketPath(stateDir, id))
-		_ = os.Remove(logPath(stateDir, id))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LastAttach.After(out[j].LastAttach) })
 	return out, nil
