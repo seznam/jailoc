@@ -330,11 +330,25 @@ func cliConfigContent(ws *workspace.Resolved) (string, error) {
 	return string(data), nil
 }
 
+// maxAgentConfig bounds the agent config files jailoc reads from directories
+// the workspace can write.
+const maxAgentConfig = 1 << 20
+
 // configuredTUIPlugins returns the TUI plugins configured in hostDir, the
 // host directory of the guest config directory guestDir.
+// The directory is mounted read-write into the workspace, so the files are
+// read through an os.Root, must be regular and are bounded in size.
 func configuredTUIPlugins(hostDir, guestDir string) ([]json.RawMessage, error) {
+	root, err := os.OpenRoot(hostDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", hostDir, err)
+	}
+	defer func() { _ = root.Close() }()
 	for _, f := range []struct{ name, key string }{{"cli.json", "plugins"}, {"tui.json", "plugin"}} {
-		data, err := os.ReadFile(filepath.Join(hostDir, f.name)) //nolint:gosec // the agent's config directory mounted into the workspace
+		data, err := readRegular(root, f.name, maxAgentConfig)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}

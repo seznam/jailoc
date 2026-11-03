@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/seznam/jailoc/internal/brokerproc"
@@ -610,7 +611,39 @@ func ReadControl(stateDir, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = root.Close() }()
-	return root.ReadFile(path.Join(ControlName, name))
+	return readRegular(root, path.Join(ControlName, name), maxControlFile)
+}
+
+// maxControlFile bounds the control files jailoc reads back from the guest.
+const maxControlFile = 1 << 20
+
+// readRegular reads name inside root when it is a regular file of at most
+// maxSize bytes. The guest can write below root, so the file is opened
+// without blocking (a FIFO would block a plain open) and read with a bound.
+func readRegular(root *os.Root, name string, maxSize int64) ([]byte, error) {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }() // read-only
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	if info.Size() > maxSize {
+		return nil, fmt.Errorf("%s is larger than %d bytes", name, maxSize)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", name, err)
+	}
+	if int64(len(data)) > maxSize {
+		return nil, fmt.Errorf("%s is larger than %d bytes", name, maxSize)
+	}
+	return data, nil
 }
 
 // resetControl starts a boot with an empty control directory and keeps the

@@ -86,7 +86,7 @@ func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 		if !e.IsDir() || !strings.HasPrefix(name, "sha256-") || live[strings.Replace(name, "-", ":", 1)] || !old(path) {
 			continue
 		}
-		if err := removeTree(path); err != nil {
+		if err := RemoveTree(path); err != nil {
 			return res, fmt.Errorf("remove unpacked image %s: %w", name, err)
 		}
 		res.Images++
@@ -116,9 +116,10 @@ func parseRef(data []byte) (ref, digest string) {
 	return "", content
 }
 
-// removeTree deletes path, first making directories writable: unpacked
-// images keep read-only directories from the image.
-func removeTree(path string) error {
+// RemoveTree deletes path, first making directories writable: unpacked
+// images keep read-only directories from the image, and the guest can leave
+// directories without permissions in its data directory.
+func RemoveTree(path string) error {
 	if err := os.RemoveAll(path); err == nil {
 		return nil
 	}

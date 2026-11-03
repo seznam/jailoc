@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/seznam/jailoc/internal/agent"
@@ -354,4 +355,81 @@ func TestClaimProfile(t *testing.T) {
 	}
 	err := claimProfile(ws("a"))
 	assertContains(t, fmt.Sprint(err), `profile "work" is in use by running workspace "b"`)
+}
+
+func TestCheckNestedShares(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	project := filepath.Join(dir, "project")
+	outside := filepath.Join(dir, "outside")
+	for _, d := range []string{filepath.Join(project, "real"), outside} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(project, "link")); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		shares  []vm.Share
+		wantErr string
+	}{
+		{"nested directory", []vm.Share{{HostPath: project}, {HostPath: filepath.Join(project, "real"), GuestPath: "/data"}}, ""},
+		{"separate directories", []vm.Share{{HostPath: project}, {HostPath: outside, GuestPath: "/data"}}, ""},
+		{"link in read-only share", []vm.Share{{HostPath: project, ReadOnly: true}, {HostPath: filepath.Join(project, "link"), GuestPath: "/data"}}, ""},
+		{"link in read-write share", []vm.Share{{HostPath: project}, {HostPath: filepath.Join(project, "link", "x"), GuestPath: "/data"}}, "symbolic link"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := checkNestedShares(tt.shares)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("checkNestedShares() = nil, want %q", tt.wantErr)
+			}
+			assertContains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestReadRegular(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ok.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "big.json"), make([]byte, 11), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "fifo.json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link.json")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	if data, err := readRegular(root, "ok.json", 10); err != nil || string(data) != "{}" {
+		t.Fatalf("readRegular(ok.json) = %q, %v", data, err)
+	}
+	for name, want := range map[string]string{"big.json": "larger than", "fifo.json": "not a regular file", "link.json": "escapes"} {
+		_, err := readRegular(root, name, 10)
+		if err == nil {
+			t.Fatalf("readRegular(%s) = nil error", name)
+		}
+		assertContains(t, err.Error(), want)
+	}
 }

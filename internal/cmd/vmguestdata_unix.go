@@ -107,7 +107,7 @@ func addCopilotStatusLine(root *os.Root, dir string) {
 
 func setDefaultStatusLine(root *os.Root, file string) error {
 	settings := map[string]json.RawMessage{}
-	data, err := root.ReadFile(file)
+	data, err := readRegular(root, file, maxAgentConfig)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
