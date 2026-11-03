@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in jailoc doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Don't report security vulnerabilities here. Follow [SECURITY.md](https://github.com/seznam/jailoc/blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. jailoc up myworkspace
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: jailoc version
+      description: Output of `jailoc --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Host platform
+      options:
+        - macOS (Apple silicon)
+        - Linux amd64
+        - Linux arm64
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Coding agent
+      description: Harness and version, if relevant (e.g. opencode2 1.2.3, claude 2.0.0).
+  - type: textarea
+    id: config
+    attributes:
+      label: Workspace configuration
+      description: The relevant part of `~/.config/jailoc/config.toml`. Remove secrets, tokens and private hostnames.
+      render: toml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `jailoc logs` or the failing command.
+      render: text
