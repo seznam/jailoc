@@ -95,5 +95,32 @@ release:
     owner: seznam
     name: jailoc
 
+# Publishes Casks/jailoc.rb to seznam/homebrew-tap:
+#   brew install --cask seznam/tap/jailoc
+homebrew_casks:
+  - name: jailoc
+    ids: [jailoc]
+    binaries: [jailoc]
+    homepage: https://seznam.github.io/jailoc/
+    description: Run coding agents in sandboxed libkrun micro-VMs
+    # Tags such as v1.20.0-rc.1 do not update the tap.
+    skip_upload: auto
+    repository:
+      owner: seznam
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_msg_template: "chore(jailoc): update to {{ .Tag }}"
+    caveats: |
+      On Linux, jailoc needs read-write access to /dev/kvm and a kernel with
+      Landlock (5.19+). Docker is optional and only used to build images.
+    hooks:
+      post:
+        # The binary is not notarized: drop the quarantine attribute
+        # Homebrew sets on download so that Gatekeeper does not block it.
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/jailoc"]
+          end
+
 snapshot:
   version_template: "{{ incpatch .Version }}-next"

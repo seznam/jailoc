@@ -13,7 +13,13 @@ Docker Engine on the host is optional. When it's running, jailoc builds workspac
 
 ## Install jailoc
 
-Download the archive for your platform from [GitHub Releases](https://github.com/seznam/jailoc/releases), extract it, and place the `jailoc` binary on your `PATH`. To build from source instead, see [How to install jailoc](../how-to/installation.md#build-from-source).
+Install jailoc with [Homebrew](https://brew.sh/) on macOS or Linux:
+
+```bash
+brew install --cask seznam/tap/jailoc
+```
+
+Alternatively, download the archive for your platform from [GitHub Releases](https://github.com/seznam/jailoc/releases), extract it, and place the `jailoc` binary on your `PATH`. To build from source instead, see [How to install jailoc](../how-to/installation.md#build-from-source).
 
 After installation, confirm it's on your `PATH`:
 

@@ -24,6 +24,16 @@ Run coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO) in sandboxed 
 
 **Requirements:** macOS on Apple Silicon, or Linux amd64 (arm64 experimental) with KVM (`/dev/kvm` access) and Landlock (Linux 5.19 or later). Docker Engine must be running on the host to build workspace images. Upgrading from jailoc v1? Run `jailoc migrate`.
 
+### Homebrew
+
+On macOS and Linux:
+
+```bash
+brew install --cask seznam/tap/jailoc
+```
+
+The binary is not notarized by Apple; the cask removes the quarantine attribute so Gatekeeper does not block it.
+
 ### Build from source
 
 `go install …@latest` produces a binary without the embedded VM init (`jailoc-guest`), so build from a checkout:
