@@ -37,6 +37,7 @@ Key facts:
 
 - [Overview](https://seznam.github.io/jailoc/explanation/overview/): Startup sequence and why jailoc uses a VM
 - [Threat Model](https://seznam.github.io/jailoc/explanation/threat-model/): What jailoc protects against and what it does not
+- [Security Boundaries](https://seznam.github.io/jailoc/explanation/security-boundaries/): Trust levels, the VM, network, workspace, guest root and build boundaries, every channel that crosses them, what lies outside them, release integrity and vulnerability reporting
 - [Architecture](https://seznam.github.io/jailoc/explanation/architecture/): Builder and workspace VMs, image export, jailoc-guest init, SSH sessions, virtio-fs shares, persistent home, Docker inside the VM
 - [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): Userspace network broker, IPv4 and IPv6 policy, filtered DNS
 - [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Destination and source secret mapping, delivery over SSH, tmpfs storage in the guest
