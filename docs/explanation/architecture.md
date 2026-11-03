@@ -2,30 +2,7 @@
 
 Each workspace runs in its own libkrun micro-VM. This page describes the processes on the host, what happens inside the guest, how files and the network reach the VM, and how images are built.
 
-```mermaid
-flowchart LR
-  subgraph host["Host"]
-    jailoc["jailoc CLI"]
-    sup["jailoc vm-supervise"]
-    broker["jailoc netbroker<br/>userspace TCP/IP"]
-    runner["go-microvm-runner<br/>(libkrun)"]
-    cache["image cache"]
-    dockerd["Docker daemon<br/>(host or builder VM)"]
-  end
-  subgraph vm["Workspace VM"]
-    guest["jailoc-guest<br/>init + SSH server"]
-    agent["coding agent (UID 1000)"]
-  end
-  jailoc -- "1. build: Docker API" --> dockerd
-  dockerd -- "2. export image" --> cache
-  cache -- "3. root file system" --> vm
-  jailoc -- "4. SSH over Unix socket" --> broker
-  sup --> broker
-  sup --> runner
-  runner -- "virtio-net frames" --> broker
-  broker -- "policy-checked egress" --> internet["Internet"]
-  guest --> agent
-```
+![jailoc architecture: host processes (jailoc CLI, vm-supervise, jailoc-netbroker, go-microvm-runner with libkrun) with the image cache, and the workspace VM (libkrunfw kernel, jailoc-guest as PID 1, the coding agent and its processes), separated by the VM boundary that only virtio devices cross](img/architecture.svg)
 
 ## Host processes
 

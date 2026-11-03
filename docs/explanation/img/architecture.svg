@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="664" viewBox="0 0 1200 664" font-family="Inter,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+<title id="t">jailoc architecture</title>
+<desc id="d">Host processes (jailoc CLI, vm-supervise, netbroker, go-microvm-runner with libkrun) with the image cache, and the workspace VM (guest kernel, jailoc-guest as PID 1, the coding agent, its processes and file systems), separated by the VM boundary that only virtio devices cross.</desc>
+<defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA6B8"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#425CC7"/></marker></defs>
+<rect width="1200" height="664" fill="#FFFFFF" stroke="#DCE0E5" rx="8"/>
+<text x="16" y="27" fill="#24292E" font-size="16" font-weight="700">jailoc — one workspace</text>
+<text x="1184" y="27" fill="#425CC7" font-size="12" font-weight="700" text-anchor="end">third party</text>
+<rect x="1085" y="18" width="9" height="9" rx="2" fill="#425CC7"/>
+<text x="1068" y="27" fill="#8250DF" font-size="12" font-weight="700" text-anchor="end">agent</text>
+<rect x="1016" y="18" width="9" height="9" rx="2" fill="#8250DF"/>
+<text x="999" y="27" fill="#2E7D32" font-size="12" font-weight="700" text-anchor="end">jailoc in the VM</text>
+<rect x="861" y="18" width="9" height="9" rx="2" fill="#2E7D32"/>
+<text x="844" y="27" fill="#D24E00" font-size="12" font-weight="700" text-anchor="end">jailoc on the host</text>
+<rect x="691" y="18" width="9" height="9" rx="2" fill="#D24E00"/>
+<rect x="8" y="44" width="1184" height="272" fill="#FFF1E6" rx="6"/>
+<rect x="8" y="44" width="6" height="272" fill="#D24E00" rx="3"/>
+<text x="26" y="61" fill="#D24E00" font-size="12" font-weight="800" letter-spacing="0.08em">HOST</text>
+<rect x="8" y="356" width="1184" height="298" fill="#EEF8EC" rx="6"/>
+<rect x="8" y="356" width="6" height="298" fill="#2E7D32" rx="3"/>
+<text x="26" y="373" fill="#2E7D32" font-size="12" font-weight="800" letter-spacing="0.08em">WORKSPACE VM</text>
+<rect x="30" y="84" width="200" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="94" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="44" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc</text>
+<text x="44" y="124" fill="#6E7180" font-size="12">CLI</text>
+<text x="44" y="144" fill="#464C54" font-size="12.5">up · attach · reload · down</text>
+<rect x="270" y="84" width="220" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="270" y="94" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="284" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">vm-supervise</text>
+<text x="284" y="124" fill="#6E7180" font-size="12">one per workspace</text>
+<text x="284" y="144" fill="#464C54" font-size="12.5">stops VM and broker together</text>
+<rect x="540" y="84" width="310" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="540" y="94" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="554" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-netbroker</text>
+<text x="554" y="124" fill="#6E7180" font-size="12">gVisor userspace TCP/IP, one per VM</text>
+<text x="554" y="144" fill="#464C54" font-size="12.5">egress policy · filtered DNS · host services</text>
+<rect x="890" y="84" width="290" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="890" y="94" width="3" height="60" rx="1.5" fill="#9AA6B8"/>
+<text x="904" y="106" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">Internet</text>
+<text x="904" y="124" fill="#6E7180" font-size="12">public addresses allowed</text>
+<text x="904" y="144" fill="#464C54" font-size="12.5">private ones only if listed</text>
+<rect x="30" y="208" width="460" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="218" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="44" y="230" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">image cache</text>
+<text x="44" y="248" fill="#6E7180" font-size="12">content-addressed workspace images</text>
+<text x="44" y="268" fill="#464C54" font-size="12.5">unpacked once, shared by workspaces</text>
+<rect x="540" y="208" width="310" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="540" y="218" width="3" height="70" rx="1.5" fill="#425CC7"/>
+<text x="554" y="230" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">go-microvm-runner</text>
+<text x="554" y="248" fill="#6E7180" font-size="12">libkrun VMM · Landlock on Linux</text>
+<rect x="554" y="266" width="80.60000000000001" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
+<text x="594.3" y="280" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">virtio-fs</text>
+<rect x="642.6" y="266" width="88.0" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
+<text x="686.6" y="280" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">virtio-net</text>
+<rect x="738.6" y="266" width="65.80000000000001" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
+<text x="771.5" y="280" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">balloon</text>
+<rect x="812.4000000000001" y="266" width="65.80000000000001" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
+<text x="845.3000000000001" y="280" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">console</text>
+<rect x="890" y="208" width="290" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="890" y="218" width="3" height="70" rx="1.5" fill="#9AA6B8"/>
+<text x="904" y="230" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">host files</text>
+<text x="904" y="248" fill="#6E7180" font-size="12">workspace paths and mounts</text>
+<text x="904" y="268" fill="#464C54" font-size="12.5">state: guest/ (rw) · guest-ro/ (ro)</text>
+<path d="M 230 124 L 268 124" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 490 124 L 538 124" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 470 164 L 556 206" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 490 253 L 538 253" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="514" y="244" fill="#6E7180" font-size="11" text-anchor="middle">root fs</text>
+<path d="M 890 253 L 852 253" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 695 166 L 695 206" stroke="#9AA6B8" stroke-width="1.6" marker-start="url(#ag)" marker-end="url(#ag)" fill="none"/>
+<text x="703" y="190" fill="#6E7180" font-size="11">network frames</text>
+<path d="M 850 124 L 888 124" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 210 84 C 240 54, 540 54, 580 82" fill="none" stroke="#425CC7" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ab)"/>
+<rect x="320.0" y="53" width="150" height="18" rx="9" fill="#FFFFFF" stroke="#425CC7"/>
+<text x="395" y="66" fill="#425CC7" font-size="11" font-weight="600" text-anchor="middle">SSH over a Unix socket</text>
+<line x1="8" y1="336" x2="1192" y2="336" stroke="#425CC7" stroke-width="2" stroke-dasharray="7 5"/>
+<rect x="890.0" y="326" width="280" height="20" rx="10" fill="#425CC7"/>
+<text x="1030" y="340.5" fill="#FFFFFF" font-size="12" font-weight="700" text-anchor="middle">VM boundary · only virtio devices cross</text>
+<rect x="30" y="388" width="350" height="190" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="398" width="3" height="170" rx="1.5" fill="#2E7D32"/>
+<text x="44" y="410" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">file systems</text>
+<text x="44" y="428" fill="#6E7180" font-size="12">as the agent sees them</text>
+<text x="44" y="448" fill="#464C54" font-size="12.5">/ — image (ro) + overlay in memory</text>
+<text x="44" y="467" fill="#464C54" font-size="12.5">workspace paths, mounts — virtio-fs</text>
+<text x="44" y="486" fill="#464C54" font-size="12.5">~ agent state, ~/.cache — persistent</text>
+<text x="44" y="505" fill="#464C54" font-size="12.5">snapshots, config — read-only</text>
+<text x="44" y="524" fill="#464C54" font-size="12.5">/run/secrets — tmpfs</text>
+<rect x="440" y="388" width="340" height="190" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="440" y="398" width="3" height="170" rx="1.5" fill="#2E7D32"/>
+<text x="454" y="410" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-guest</text>
+<text x="454" y="428" fill="#6E7180" font-size="12">PID 1 · init and SSH server</text>
+<text x="454" y="448" fill="#464C54" font-size="12.5">mounts, idmaps, read-only binds</text>
+<text x="454" y="467" fill="#464C54" font-size="12.5">SSH: workspace key only</text>
+<text x="454" y="486" fill="#464C54" font-size="12.5">session holders survive detach</text>
+<text x="454" y="505" fill="#464C54" font-size="12.5">zram · file cache trim · OOM order</text>
+<text x="454" y="524" fill="#464C54" font-size="12.5">exec log · live reload</text>
+<rect x="840" y="388" width="340" height="84" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="840" y="398" width="3" height="64" rx="1.5" fill="#8250DF"/>
+<text x="854" y="410" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">coding agent</text>
+<text x="854" y="428" fill="#6E7180" font-size="12">UID 1000 · runs in a session</text>
+<text x="854" y="448" fill="#464C54" font-size="12.5">OpenCode · Claude Code · Copilot · OmO</text>
+<rect x="840" y="494" width="340" height="84" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="840" y="504" width="3" height="64" rx="1.5" fill="#8250DF"/>
+<text x="854" y="516" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">agent's processes</text>
+<text x="854" y="534" fill="#6E7180" font-size="12">builds · tests · tools it starts</text>
+<text x="854" y="554" fill="#464C54" font-size="12.5">first to go when memory runs out</text>
+<rect x="30" y="594" width="1150" height="40" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="604" width="3" height="20" rx="1.5" fill="#425CC7"/>
+<text x="44" y="619" font-size="13"><tspan fill="#425CC7" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">libkrunfw</tspan><tspan fill="#464C54">  guest Linux kernel · virtio drivers · free page reporting to the host · eth0 192.168.127.2, gateway .1 = broker</tspan></text>
+<path d="M 610 300 L 610 386" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="618" y="372" fill="#425CC7" font-size="11" font-weight="600">virtio-net · SSH and traffic</text>
+<path d="M 560 300 C 520 340, 380 330, 330 386" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="420" y="352" fill="#425CC7" font-size="11" font-weight="600">virtio-fs</text>
+<path d="M 780 430 L 838 430" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="788" y="423" fill="#6E7180" font-size="11">session</text>
+<path d="M 1010 472 L 1010 492" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M 440 483 L 382 483" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="392" y="476" fill="#6E7180" font-size="11">mounts</text>
+</svg>
