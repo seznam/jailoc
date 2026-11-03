@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stacklok/go-microvm/runner"
@@ -15,8 +16,8 @@ import (
 
 // TestConfinedRunnerAccess runs shell commands under the rules a VM runner
 // gets and checks that only the declared paths are reachable. Paths through
-// a share's ".." stand in for the lookups a hostile guest kernel can send to
-// libkrun's virtio-fs server.
+// a share's ".." stand in for guest-originated lookups handled by libkrun's
+// virtio-fs server.
 func TestConfinedRunnerAccess(t *testing.T) {
 	t.Parallel()
 	fd, handled, err := createRuleset()
@@ -27,21 +28,32 @@ func TestConfinedRunnerAccess(t *testing.T) {
 
 	base := t.TempDir()
 	dirs := map[string]string{}
-	for _, name := range []string{"runtime", "state/microvm/rootfs", "rw", "ro", "home"} {
+	for _, name := range []string{"runtime", "lib", "state/microvm/rootfs", "rw", "ro", "home"} {
 		dirs[name] = filepath.Join(base, name)
 		if err := os.MkdirAll(dirs[name], 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for path, data := range map[string]string{
-		filepath.Join(dirs["ro"], "file"):       "ro",
-		filepath.Join(dirs["home"], "key"):      "secret",
-		filepath.Join(base, "state/docker.img"): "",
+		filepath.Join(dirs["ro"], "file"):                   "ro",
+		filepath.Join(dirs["home"], "key"):                  "secret",
+		filepath.Join(dirs["runtime"], "go-microvm-runner"): "runner",
+		filepath.Join(dirs["runtime"], "other-file"):        "other",
+		filepath.Join(base, "state/docker.img"):             "",
 	} {
 		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	devFile, err := os.CreateTemp("/dev/shm", "jailoc-landlock-")
+	if err != nil {
+		t.Skipf("create non-listed device file: %v", err)
+	}
+	devFilePath := devFile.Name()
+	if err := devFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(devFilePath) })
 	if err := os.MkdirAll(filepath.Join(dirs["rw"], "a"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +67,7 @@ func TestConfinedRunnerAccess(t *testing.T) {
 	cfg := runner.Config{
 		RootPath:   dirs["state/microvm/rootfs"],
 		RunnerPath: filepath.Join(dirs["runtime"], "go-microvm-runner"),
-		LibDir:     dirs["runtime"],
+		LibDir:     dirs["lib"],
 		NetSocket:  filepath.Join(base, "state", "nic.sock"),
 		VirtioFS: []runner.VirtioFSMount{
 			{Tag: "rw", HostPath: dirs["rw"]},
@@ -85,10 +97,18 @@ func TestConfinedRunnerAccess(t *testing.T) {
 		{"create outside through share", `touch "$RW/../home/planted"`, false},
 		{"delete outside through root fs", `rm "$ROOT/../../../home/key"`, false},
 		{"write state dir", `echo x > "$BASE/state/spec.json"`, false},
+		{"read runner", `cat "$RUNNER"`, true},
+		{"read other runner directory file", `cat "$RUNNER_OTHER"`, false},
+		{"read dynamic loader cache", `cat /etc/ld.so.cache >/dev/null`, true},
+		{"read other etc file", `cat /etc/passwd`, false},
+		{"write null device", `echo x > /dev/null`, true},
+		{"read non-listed device file", `cat "$DEV_FILE"`, false},
 	}
 	env := append(os.Environ(),
 		"RO="+dirs["ro"], "RW="+dirs["rw"], "ROOT="+dirs["state/microvm/rootfs"],
 		"DISK="+filepath.Join(base, "state/docker.img"), "LOG="+cfg.ConsoleLog, "BASE="+base,
+		"RUNNER="+cfg.RunnerPath, "RUNNER_OTHER="+filepath.Join(dirs["runtime"], "other-file"),
+		"DEV_FILE="+devFilePath,
 	)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,6 +142,27 @@ func TestConfinedRunnerAccess(t *testing.T) {
 		})
 		if err == nil {
 			t.Fatal("connected to a socket outside the state directory")
+		}
+	})
+
+	t.Run("proc access follows process domain", func(t *testing.T) {
+		outside := exec.Command("/bin/sh", "-c", "sleep 30")
+		outside.Env = append(os.Environ(), "JAILOC_PROC_SCOPE=outside")
+		if err := outside.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = outside.Process.Kill()
+			_ = outside.Wait()
+		})
+
+		err := startConfined(rules, func() error {
+			cmd := exec.Command("/bin/sh", "-c", `cat /proc/self/status >/dev/null && ! cat "$OUTSIDE_ENV" >/dev/null 2>&1`)
+			cmd.Env = append(env, "OUTSIDE_ENV=/proc/"+strconv.Itoa(outside.Process.Pid)+"/environ")
+			return cmd.Run()
+		})
+		if err != nil {
+			t.Fatalf("proc access did not match process domain: %v", err)
 		}
 	})
 }

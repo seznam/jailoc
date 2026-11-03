@@ -64,17 +64,26 @@ func (confinedSpawner) Spawn(ctx context.Context, cfg runner.Config) (runner.Pro
 func vmmRules(cfg runner.Config) []landlockRule {
 	var rules []landlockRule
 	// Dynamic loader, system libraries, CPU and memory information.
-	for _, p := range []string{"/usr", "/lib", "/lib64", "/lib32", "/libx32", "/bin", "/sbin", "/etc", "/nix/store"} {
+	for _, p := range []string{"/usr", "/lib", "/lib64", "/lib32", "/libx32", "/bin", "/sbin", "/nix/store"} {
 		rules = append(rules, landlockRule{path: p, access: llReadExec, optional: true})
 	}
+	for _, p := range []string{"/etc/ld.so.cache", "/etc/ld.so.preload", "/etc/localtime"} {
+		rules = append(rules, landlockRule{path: p, access: llRead, optional: true})
+	}
+	// libkrun uses /proc/self/fd and reads CPU topology from sysfs. Landlock's
+	// process scoping still limits sensitive proc files to processes in the same
+	// domain, so unrelated process environments, memory, and descriptors remain unavailable.
 	for _, p := range []string{"/proc", "/sys"} {
 		rules = append(rules, landlockRule{path: p, access: llRead, optional: true})
 	}
-	// /dev/kvm, /dev/null and the random devices.
-	rules = append(rules, landlockRule{path: "/dev", access: llRead | llWrite | unix.LANDLOCK_ACCESS_FS_IOCTL_DEV, optional: true})
+	// Grant only the devices the runner opens.
+	rules = append(rules, landlockRule{path: "/dev/kvm", access: llRead | llWrite | unix.LANDLOCK_ACCESS_FS_IOCTL_DEV, optional: true})
+	for _, p := range []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom"} {
+		rules = append(rules, landlockRule{path: p, access: llRead | llWrite, optional: true})
+	}
 
 	if cfg.RunnerPath != "" {
-		rules = append(rules, landlockRule{path: filepath.Dir(cfg.RunnerPath), access: llReadExec})
+		rules = append(rules, landlockRule{path: cfg.RunnerPath, access: llReadExec})
 	}
 	for _, d := range filepath.SplitList(cfg.LibDir) {
 		if d != "" {
