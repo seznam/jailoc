@@ -62,6 +62,7 @@ Background on how jailoc works and why it's designed the way it is.
 
 - [Overview](explanation/overview.md)
 - [Threat Model](explanation/threat-model.md)
+- [Security Boundaries](explanation/security-boundaries.md)
 - [Architecture](explanation/architecture.md)
 - [Network Isolation](explanation/network-isolation.md)
 - [Secrets](explanation/secrets.md)
