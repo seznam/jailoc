@@ -82,7 +82,7 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("resolve workspace %q: %w", workspaceFlag, err)
 		}
 
-		if !workspace.MatchesCWD(ws, targetPath) {
+		if attachSessionFlag == "" && !workspace.MatchesCWD(ws, targetPath) {
 			_, _ = color.New(color.FgYellow, color.Bold).Printf("Path %s is not in workspace %s. Add it? [y/N]: ", targetPath, ws.Name)
 			answer, err := readLineCtx(ctx)
 			if err != nil {
