@@ -64,7 +64,10 @@ func Create(stateDir string, opts Options, holder []string) (string, error) {
 	if err == nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
-		defer func() { _ = logFile.Close() }()
+		defer func() {
+			_ = logFile.Close()
+			_ = os.Remove(logPath(stateDir, id))
+		}()
 	}
 	if err := cmd.Start(); err != nil {
 		_ = os.Remove(infoPath(stateDir, id))
@@ -224,6 +227,26 @@ func Serve(stateDir, id string) error {
 	if err := writeInfo(stateDir, info); err != nil {
 		return err
 	}
+	cmd := exec.Command(info.Argv[0], info.Argv[1:]...) //nolint:gosec // G204: program chosen by the jailoc host
+	cmd.Dir = info.Dir
+	cmd.Env = info.Env
+	rows, cols := info.Rows, info.Cols
+	if rows == 0 || cols == 0 {
+		rows, cols = 24, 80
+	}
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: rows, Cols: cols})
+	if err != nil {
+		return fmt.Errorf("start %s: %w", info.Argv[0], err)
+	}
+	defer func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+		_ = ptmx.Close()
+	}()
+	// Connecting to the socket publishes readiness: do not listen until the
+	// program has started successfully.
 	_ = os.Remove(socketPath(stateDir, id))
 	ln, err := net.Listen("unix", socketPath(stateDir, id))
 	if err != nil {
@@ -236,18 +259,6 @@ func Serve(stateDir, id string) error {
 	}()
 	if err := os.Chmod(socketPath(stateDir, id), 0o600); err != nil {
 		return fmt.Errorf("restrict session socket: %w", err)
-	}
-
-	cmd := exec.Command(info.Argv[0], info.Argv[1:]...) //nolint:gosec // G204: program chosen by the jailoc host
-	cmd.Dir = info.Dir
-	cmd.Env = info.Env
-	rows, cols := info.Rows, info.Cols
-	if rows == 0 || cols == 0 {
-		rows, cols = 24, 80
-	}
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: rows, Cols: cols})
-	if err != nil {
-		return fmt.Errorf("start %s: %w", info.Argv[0], err)
 	}
 	h := &holder{stateDir: stateDir, info: info, ptmx: ptmx, modes: NewModeTracker(), rows: rows, cols: cols}
 

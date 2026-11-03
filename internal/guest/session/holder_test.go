@@ -22,6 +22,7 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "jailoc-guest: %v\n", err)
 			os.Exit(2)
 		}
+		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
@@ -104,6 +105,9 @@ func TestSessionLifecycle(t *testing.T) {
 	}, []string{exe})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
+	}
+	if _, err := os.Stat(logPath(dir, id)); !os.IsNotExist(err) {
+		t.Fatalf("startup log still exists after Create: %v", err)
 	}
 
 	a := dial(t, dir, id, 24, 80)
