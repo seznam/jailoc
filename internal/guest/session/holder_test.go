@@ -4,6 +4,7 @@ package session
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,9 +19,9 @@ const holderEnv = "JAILOC_SESSION_TEST_HOLDER"
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(holderEnv); dir != "" {
 		if err := Serve(dir, os.Args[len(os.Args)-1]); err != nil {
+			fmt.Fprintf(os.Stderr, "jailoc-guest: %v\n", err)
 			os.Exit(2)
 		}
-		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
@@ -230,5 +231,28 @@ func TestOpenSharesOneSession(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("concurrent Open reported %d created sessions, want 1", n)
+	}
+}
+
+func TestSessionCreateHolderFails(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "jls-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv(holderEnv, dir)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Create(dir, Options{
+		Name: "fail", Dir: "/nonexistent-jailoc-dir-for-test", Argv: []string{"/bin/sh", "-c", "exit 0"},
+		Env: []string{"PATH=/bin"}, Rows: 24, Cols: 80,
+	}, []string{exe})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "session holder: start /bin/sh: ") || !strings.Contains(err.Error(), "no such file or directory") {
+		t.Fatalf("unexpected error message: %v", err)
 	}
 }
