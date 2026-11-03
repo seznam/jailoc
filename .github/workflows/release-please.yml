@@ -76,6 +76,8 @@ jobs:
     needs: [release-please, docs, vm-runtime]
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
+    # HOMEBREW_TAP_DEPLOY_KEY lives in this environment, limited to main and v* tags.
+    environment: homebrew-tap
     permissions:
       contents: write
       id-token: write
