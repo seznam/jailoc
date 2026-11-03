@@ -266,6 +266,9 @@ func brokerReloadEvent(path string, offset int64) (brokerReload, bool) {
 		return brokerReload{}, false
 	}
 	defer func() { _ = f.Close() }()
+	if info, err := f.Stat(); err == nil && info.Size() < offset {
+		offset = 0 // the log was rotated since offset was taken
+	}
 	if _, err := f.Seek(offset, 0); err != nil {
 		return brokerReload{}, false
 	}

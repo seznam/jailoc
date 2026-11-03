@@ -98,6 +98,8 @@ type Broker struct {
 
 	// connSeq numbers guest flows so l7 events refer to their flow event.
 	connSeq atomic.Uint64
+
+	tcpFlows, udpFlows flowLimit
 }
 
 // New builds the stack. It does not open any socket.
@@ -112,6 +114,7 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 		cfg.Log = io.Discard
 	}
 	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log)}
+	b.tcpFlows.max, b.udpFlows.max = maxTCPFlows, maxUDPFlows
 	b.dialTCP = (&net.Dialer{Timeout: dialTimeout}).Dial
 	b.dialUDP = net.DialUDP
 	b.policy.Store(p)

@@ -106,9 +106,9 @@ func Main(args []string) error {
 	}
 	var logw io.Writer = os.Stderr
 	if *logPath != "-" {
-		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		f, err := openLogFile(*logPath, maxLogSize)
 		if err != nil {
-			return fmt.Errorf("open log: %w", err)
+			return err
 		}
 		defer func() { _ = f.Close() }()
 		logw = f

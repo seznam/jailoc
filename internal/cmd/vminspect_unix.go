@@ -23,7 +23,8 @@ import (
 
 func trafficVM(ctx context.Context, ws *workspace.Resolved, v logView, all bool, w io.Writer) error {
 	f := newTrafficFormatter(all)
-	return tailLog(ctx, w, []logFile{{path: vm.TrafficLog(vmStateDir(ws.Name))}}, v, f.line)
+	path := vm.TrafficLog(vmStateDir(ws.Name))
+	return tailLog(ctx, w, []logFile{{path: path + ".1"}, {path: path}}, v, f.line)
 }
 
 func execLogVM(ctx context.Context, ws *workspace.Resolved, v logView, all bool, w io.Writer) error {

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -20,7 +21,28 @@ import (
 const (
 	dialTimeout = 10 * time.Second
 	udpIdle     = 60 * time.Second
+	// maxTCPFlows and maxUDPFlows cap the guest flows relayed at once; each
+	// holds a host socket and goroutines. New flows beyond them are refused.
+	maxTCPFlows = 4096
+	maxUDPFlows = 1024
 )
+
+// flowLimit counts active flows of one kind against a cap.
+type flowLimit struct {
+	n   atomic.Int64
+	max int64
+}
+
+// acquire reserves a flow, or reports false at the cap.
+func (l *flowLimit) acquire() bool {
+	if l.n.Add(1) > l.max {
+		l.n.Add(-1)
+		return false
+	}
+	return true
+}
+
+func (l *flowLimit) release() { l.n.Add(-1) }
 
 // handleTCP runs for every new guest TCP connection that no local listener
 // accepted. The host socket is opened only after the policy allows the real
@@ -33,8 +55,14 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true)
 		return
 	}
+	if !b.tcpFlows.acquire() {
+		b.record(map[string]any{"event": "flow-limit", "conn": conn, "proto": ProtoTCP, "dst": dst.String()})
+		r.Complete(true)
+		return
+	}
 	out, err := b.dialTCP("tcp", dst.String())
 	if err != nil {
+		b.tcpFlows.release()
 		b.record(map[string]any{"event": "dial-error", "proto": ProtoTCP, "dst": dst.String(), "error": err.Error()})
 		r.Complete(true)
 		return
@@ -42,6 +70,7 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	var wq waiter.Queue
 	ep, terr := r.CreateEndpoint(&wq)
 	if terr != nil {
+		b.tcpFlows.release()
 		_ = out.Close()
 		r.Complete(true)
 		return
@@ -51,7 +80,10 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		info["event"], info["conn"], info["dst"] = "l7", conn, dst.String()
 		b.record(info)
 	}}
-	go splice(guest, out)
+	go func() {
+		defer b.tcpFlows.release()
+		splice(guest, out)
+	}()
 }
 
 // handleUDP runs for every new guest UDP flow. Returning false makes the
@@ -60,22 +92,32 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 func (b *Broker) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
-	if !b.decide(ProtoUDP, src, dst, b.connSeq.Add(1)).Allow {
+	conn := b.connSeq.Add(1)
+	if !b.decide(ProtoUDP, src, dst, conn).Allow {
+		return false
+	}
+	if !b.udpFlows.acquire() {
+		b.record(map[string]any{"event": "flow-limit", "conn": conn, "proto": ProtoUDP, "dst": dst.String()})
 		return false
 	}
 	out, err := b.dialUDP("udp", nil, net.UDPAddrFromAddrPort(dst))
 	if err != nil {
+		b.udpFlows.release()
 		b.record(map[string]any{"event": "dial-error", "proto": ProtoUDP, "dst": dst.String(), "error": err.Error()})
 		return false
 	}
 	var wq waiter.Queue
 	ep, terr := r.CreateEndpoint(&wq)
 	if terr != nil {
+		b.udpFlows.release()
 		_ = out.Close()
 		return true
 	}
 	in := gonet.NewUDPConn(&wq, ep)
-	go relayUDP(in, out)
+	go func() {
+		defer b.udpFlows.release()
+		relayUDP(in, out)
+	}()
 	return true
 }
 
@@ -191,7 +233,13 @@ func (b *Broker) startServiceTarget(ctx context.Context, port uint16, route func
 			if err != nil {
 				return
 			}
+			if !b.tcpFlows.acquire() {
+				b.record(map[string]any{"event": "flow-limit", "proto": ProtoTCP, "guest_port": s.GuestPort})
+				_ = c.Close()
+				continue
+			}
 			go func() {
+				defer b.tcpFlows.release()
 				r := route()
 				var d net.Dialer
 				dctx, cancel := context.WithTimeout(r.ctx, dialTimeout)
