@@ -34,6 +34,8 @@ func TestTrafficFormatter(t *testing.T) {
 		`{"event":"service","guest_port":7022,"network":"unix","target":"/tmp/agent.sock","time":"2026-10-27T10:00:09Z"}`,
 		`{"event":"service","guest_port":9222,"network":"tcp","target":"127.0.0.1:9222","time":"2026-10-27T10:00:10Z"}`,
 		`{"event":"service-error","guest_port":7100,"network":"unix","target":"/tmp/figma.sock","error":"connection refused","time":"2026-10-27T10:00:11Z"}`,
+		`{"event":"flow-limit","conn":12,"proto":"tcp","dst":"1.1.1.1:443","time":"2026-10-27T10:00:12Z"}`,
+		`{"event":"flow-limit","proto":"tcp","guest_port":7100,"time":"2026-10-27T10:00:13Z"}`,
 		`not json`,
 	}
 	var got []string
@@ -52,6 +54,8 @@ func TestTrafficFormatter(t *testing.T) {
 		"IN tcp 127.0.0.1:18080 → guest port 8080",
 		"HOST tcp gateway port 9222 → 127.0.0.1:9222",
 		"FAIL gateway port 7100 → /tmp/figma.sock: connection refused",
+		"LIMIT tcp 1.1.1.1:443 too many open connections",
+		"LIMIT tcp gateway port 7100 too many open connections",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

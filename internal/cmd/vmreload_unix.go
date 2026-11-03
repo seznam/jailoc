@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -224,9 +226,15 @@ func reloadBroker(spec vm.Spec, pid int) error {
 		return fmt.Errorf("broker pid unknown")
 	}
 	logPath := filepath.Join(spec.StateDir, "broker.jsonl")
+	// Keep the current log open: if the broker rotates it before writing the
+	// reload event, the earlier part stays readable through this descriptor.
+	before, err := os.Open(logPath) //nolint:gosec // G304: jailoc-owned state path
 	var offset int64
-	if info, err := os.Stat(logPath); err == nil {
-		offset = info.Size()
+	if err == nil {
+		defer func() { _ = before.Close() }()
+		if info, err := before.Stat(); err == nil {
+			offset = info.Size()
+		}
 	}
 	if err := vm.WritePolicy(spec); err != nil {
 		return err
@@ -239,7 +247,7 @@ func reloadBroker(spec vm.Spec, pid int) error {
 	}
 	deadline := time.Now().Add(reloadTimeout)
 	for time.Now().Before(deadline) {
-		if ev, ok := brokerReloadEvent(logPath, offset); ok {
+		if ev, ok := brokerReloadEvent(before, offset, logPath); ok {
 			if ev.PolicyError != "" {
 				return fmt.Errorf("invalid policy, the broker now denies all new connections: %s", ev.PolicyError)
 			}
@@ -259,20 +267,33 @@ type brokerReload struct {
 	RuntimeErrors []string `json:"runtime_errors"`
 }
 
-// brokerReloadEvent returns the first reload event after offset in the log.
-func brokerReloadEvent(path string, offset int64) (brokerReload, bool) {
-	f, err := os.Open(path) //nolint:gosec // G304: jailoc-owned state path
+// brokerReloadEvent returns the first reload event written to the log after
+// offset. before is the log as opened before the reload, or nil when there
+// was none; when the broker has since rotated the log, the file now at path
+// is read from its start too.
+func brokerReloadEvent(before *os.File, offset int64, path string) (brokerReload, bool) {
+	if before != nil {
+		if ev, ok := scanReloadEvent(io.NewSectionReader(before, offset, math.MaxInt64-offset)); ok {
+			return ev, true
+		}
+	}
+	cur, err := os.Open(path) //nolint:gosec // G304: jailoc-owned state path
 	if err != nil {
 		return brokerReload{}, false
 	}
-	defer func() { _ = f.Close() }()
-	if info, err := f.Stat(); err == nil && info.Size() < offset {
-		offset = 0 // the log was rotated since offset was taken
+	defer func() { _ = cur.Close() }()
+	if before != nil {
+		prev, err1 := before.Stat()
+		now, err2 := cur.Stat()
+		if err1 != nil || err2 != nil || os.SameFile(prev, now) {
+			return brokerReload{}, false
+		}
 	}
-	if _, err := f.Seek(offset, 0); err != nil {
-		return brokerReload{}, false
-	}
-	sc := bufio.NewScanner(f)
+	return scanReloadEvent(cur)
+}
+
+func scanReloadEvent(r io.Reader) (brokerReload, bool) {
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		var ev brokerReload

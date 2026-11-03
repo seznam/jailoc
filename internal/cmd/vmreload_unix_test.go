@@ -1,0 +1,73 @@
+//go:build darwin || linux
+
+package cmd
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestBrokerReloadEvent(t *testing.T) {
+	t.Parallel()
+	const (
+		old    = `{"event":"reload","policy_error":"old"}` + "\n"
+		denied = `{"event":"flow","allow":false}` + "\n"
+		reload = `{"event":"reload","policy_error":"new"}` + "\n"
+	)
+	tests := []struct {
+		name  string
+		after func(t *testing.T, path string) // what the broker writes after the offset is taken
+		want  string                          // policy_error of the event found, "" when none
+	}{
+		{"appended", func(t *testing.T, path string) { appendFile(t, path, denied+reload) }, "new"},
+		{"not yet written", func(t *testing.T, path string) { appendFile(t, path, denied) }, ""},
+		{"written before rotation", func(t *testing.T, path string) {
+			appendFile(t, path, reload)
+			rotate(t, path, denied)
+		}, "new"},
+		{"written after rotation", func(t *testing.T, path string) {
+			rotate(t, path, denied+reload)
+		}, "new"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "broker.jsonl")
+			appendFile(t, path, old)
+			before, err := os.Open(path) //nolint:gosec // test path
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = before.Close() })
+			tt.after(t, path)
+			ev, ok := brokerReloadEvent(before, int64(len(old)), path)
+			if got := ev.PolicyError; ok != (tt.want != "") || got != tt.want {
+				t.Fatalf("brokerReloadEvent() = %q, %v; want %q", got, ok, tt.want)
+			}
+		})
+	}
+}
+
+func appendFile(t *testing.T, path, data string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // test path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// rotate moves path to path.1 and starts a new log with data, as the broker does.
+func rotate(t *testing.T, path, data string) {
+	t.Helper()
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, path, data)
+}
