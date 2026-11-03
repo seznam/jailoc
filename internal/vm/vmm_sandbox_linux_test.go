@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -158,7 +159,7 @@ func TestConfinedRunnerAccess(t *testing.T) {
 
 		err := startConfined(rules, func() error {
 			cmd := exec.Command("/bin/sh", "-c", `cat /proc/self/status >/dev/null && ! cat "$OUTSIDE_ENV" >/dev/null 2>&1`)
-			cmd.Env = append(env, "OUTSIDE_ENV=/proc/"+strconv.Itoa(outside.Process.Pid)+"/environ")
+			cmd.Env = append(slices.Clone(env), "OUTSIDE_ENV=/proc/"+strconv.Itoa(outside.Process.Pid)+"/environ")
 			return cmd.Run()
 		})
 		if err != nil {

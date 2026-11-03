@@ -382,7 +382,7 @@ func mountPrivate() error {
 // bindInternal binds b, a directory of an internal share, into place.
 // Missing parents inside the agent's home belong to the agent.
 func bindInternal(b Bind, acct account) error {
-	if !(within(b.Source, HostDir) || within(b.Source, ReadOnlyHostDir)) || within(b.Source, ControlDir) {
+	if (!within(b.Source, HostDir) && !within(b.Source, ReadOnlyHostDir)) || within(b.Source, ControlDir) {
 		return fmt.Errorf("bind %s: source %s is outside the internal share", b.Target, b.Source)
 	}
 	if err := makeParents(b.Target, acct); err != nil {

@@ -37,8 +37,10 @@ func TestLogFileRotates(t *testing.T) {
 func TestFlowLimit(t *testing.T) {
 	t.Parallel()
 	l := flowLimit{max: 2}
-	if !l.acquire() || !l.acquire() {
-		t.Fatal("acquire below the cap failed")
+	for range 2 {
+		if !l.acquire() {
+			t.Fatal("acquire below the cap failed")
+		}
 	}
 	if l.acquire() {
 		t.Fatal("acquire above the cap succeeded")
