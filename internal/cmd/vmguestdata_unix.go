@@ -36,13 +36,13 @@ func persistentHomeDirs(h agent.Harness) []agent.StateDir {
 	return append(slices.Clone(h.State), agent.StateDir{Name: "cache", Path: guestUserCache})
 }
 
-// vmGuestData prepares the guest data directory of the workspace VM, its
-// only internal share, and returns the binds that place its parts in the
-// guest: copies of the workspace's jailoc config and cache directories
-// read-only, home directories read-write unless a share covers them. The
-// agent's state is persistent, or ephemeral with profile = false: start
-// (a new VM, not a reload) empties it. The copies are refreshed on every
-// up and reload.
+// vmGuestData prepares the internal shares of the workspace VM and returns
+// the binds that place their parts in the guest: copies of the workspace's
+// jailoc config and cache directories read-only from the read-only share,
+// home directories read-write from the guest data directory unless a share
+// covers them. The agent's state is persistent, or ephemeral with
+// profile = false: start (a new VM, not a reload) empties it. The copies are
+// refreshed on every up and reload.
 func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, start bool) ([]guest.Bind, error) {
 	stateDir := vmStateDir(ws.Name)
 	if err := migrateHomeDirs(stateDir); err != nil {
@@ -53,22 +53,36 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		return nil, err
 	}
 	defer func() { _ = root.Close() }()
-	if err := syncDir(root, guestDataConfig, filepath.Join(config.ConfigDir(), "workspaces", ws.Name)); err != nil {
+	if start {
+		// Copies of an older layout kept them in the read-write share.
+		for _, name := range []string{guestDataConfig, guestDataCache, snapshotsDir} {
+			if err := root.RemoveAll(name); err != nil {
+				return nil, fmt.Errorf("remove %s of an older layout: %w", name, err)
+			}
+		}
+	}
+	ro, err := vm.OpenGuestReadOnly(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = ro.Close() }()
+	if err := syncDir(ro, guestDataConfig, filepath.Join(config.ConfigDir(), "workspaces", ws.Name)); err != nil {
 		return nil, fmt.Errorf("workspace %q: copy jailoc config: %w", ws.Name, err)
 	}
-	if err := syncDir(root, guestDataCache, cacheDir); err != nil {
+	if err := syncDir(ro, guestDataCache, cacheDir); err != nil {
 		return nil, fmt.Errorf("workspace %q: copy jailoc cache: %w", ws.Name, err)
 	}
 	src := func(name string) string { return path.Join(guest.HostDir, name) }
+	roSrc := func(name string) string { return path.Join(guest.ReadOnlyHostDir, name) }
 	binds := []guest.Bind{
-		{Source: src(guestDataConfig), Target: guestConfigDir, ReadOnly: true},
-		{Source: src(guestDataCache), Target: guestCacheDir, ReadOnly: true},
+		{Source: roSrc(guestDataConfig), Target: guestConfigDir, ReadOnly: true},
+		{Source: roSrc(guestDataCache), Target: guestCacheDir, ReadOnly: true},
 	}
 	if ws.Agent.TUIPlugin != agent.NoTUIPlugin {
-		if err := root.MkdirAll(guestDataCache+"/tui-plugin", 0o700); err != nil {
+		if err := ro.MkdirAll(guestDataCache+"/tui-plugin", 0o700); err != nil {
 			return nil, fmt.Errorf("create tui plugin dir: %w", err)
 		}
-		binds = append(binds, guest.Bind{Source: src(guestDataCache + "/tui-plugin"), Target: tuiPluginContainerDir, ReadOnly: true})
+		binds = append(binds, guest.Bind{Source: roSrc(guestDataCache + "/tui-plugin"), Target: tuiPluginContainerDir, ReadOnly: true})
 	}
 	ephemeral := ws.AgentProfile != nil && ws.AgentProfile.Ephemeral()
 	if ephemeral && start {

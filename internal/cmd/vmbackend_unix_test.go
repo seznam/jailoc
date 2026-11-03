@@ -164,9 +164,9 @@ func TestVMShares(t *testing.T) {
 		t.Fatalf("vmGuestData: %v", err)
 	}
 	wantBinds := []guest.Bind{
-		{Source: guest.HostDir + "/config", Target: guestConfigDir, ReadOnly: true},
-		{Source: guest.HostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
-		{Source: guest.HostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/config", Target: guestConfigDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/home/opencode-state", Target: guestOpenCodeState},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
 	}
@@ -174,7 +174,7 @@ func TestVMShares(t *testing.T) {
 		t.Fatalf("binds =\n%+v\nwant\n%+v", binds, wantBinds)
 	}
 	data := vm.GuestDataDir(vmStateDir("w"))
-	if b, err := os.ReadFile(filepath.Join(data, "cache", "tui-container.json")); err != nil || string(b) != "{}" { //nolint:gosec // G304: test file
+	if b, err := os.ReadFile(filepath.Join(vm.GuestReadOnlyDir(vmStateDir("w")), "cache", "tui-container.json")); err != nil || string(b) != "{}" { //nolint:gosec // G304: test file
 		t.Fatalf("cache not copied: %q %v", b, err)
 	}
 	if _, err := os.Stat(filepath.Join(data, "home", "opencode-data")); !errors.Is(err, os.ErrNotExist) {
@@ -187,9 +187,9 @@ func TestVMShares(t *testing.T) {
 		t.Fatalf("vmGuestData: %v", err)
 	}
 	wantBinds = []guest.Bind{
-		{Source: guest.HostDir + "/config", Target: guestConfigDir, ReadOnly: true},
-		{Source: guest.HostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
-		{Source: guest.HostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/config", Target: guestConfigDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/home/claude", Target: "/home/agent/.claude"},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
 	}
@@ -263,9 +263,9 @@ func TestVMAgentProfile(t *testing.T) {
 		t.Fatalf("vmGuestData: %v", err)
 	}
 	wantBinds := []guest.Bind{
-		{Source: guest.HostDir + "/config", Target: guestConfigDir, ReadOnly: true},
-		{Source: guest.HostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
-		{Source: guest.HostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/config", Target: guestConfigDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
@@ -282,9 +282,9 @@ func TestVMAgentProfile(t *testing.T) {
 		t.Fatalf("vmGuestData: %v", err)
 	}
 	wantBinds = []guest.Bind{
-		{Source: guest.HostDir + "/config", Target: guestConfigDir, ReadOnly: true},
-		{Source: guest.HostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
-		{Source: guest.HostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/config", Target: guestConfigDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
+		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/ephemeral/opencode-data", Target: dataDir},
 		{Source: guest.HostDir + "/ephemeral/opencode-state", Target: stateDir},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},

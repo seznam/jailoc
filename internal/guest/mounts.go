@@ -13,8 +13,8 @@ type guestMount struct {
 	bind   *Bind
 }
 
-// mountOrder lists the internal share first, as the binds' sources live in
-// it, then the other shares and the binds parents before children, whatever
+// mountOrder lists the internal shares first, as the binds' sources live in
+// them, then the other shares and the binds parents before children, whatever
 // their kind: a share inside a persistent home directory is mounted over that
 // directory's bind, not hidden by it. Mounts at the same depth keep their
 // order, shares first.

@@ -560,16 +560,31 @@ const guestShutdownWait = 20 * time.Second
 // and never stores host-only state such as keys or the spec in it.
 func GuestDataDir(stateDir string) string { return filepath.Join(stateDir, "guest") }
 
+// GuestReadOnlyDir is the per-VM directory the workspace VM mounts
+// read-only: staged snapshots and copies of jailoc configuration. The
+// VMM enforces read-only access, so the guest, root included, cannot change
+// what it binds read-only.
+func GuestReadOnlyDir(stateDir string) string { return filepath.Join(stateDir, "guest-ro") }
+
 // OpenGuestData creates the guest data directory if needed and opens it as
 // an os.Root.
 func OpenGuestData(stateDir string) (*os.Root, error) {
-	dir := GuestDataDir(stateDir)
+	return openDataDir(GuestDataDir(stateDir), "guest data dir")
+}
+
+// OpenGuestReadOnly creates the read-only guest data directory if needed
+// and opens it as an os.Root.
+func OpenGuestReadOnly(stateDir string) (*os.Root, error) {
+	return openDataDir(GuestReadOnlyDir(stateDir), "read-only guest data dir")
+}
+
+func openDataDir(dir, what string) (*os.Root, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("create guest data dir: %w", err)
+		return nil, fmt.Errorf("create %s: %w", what, err)
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, fmt.Errorf("open guest data dir: %w", err)
+		return nil, fmt.Errorf("open %s: %w", what, err)
 	}
 	return root, nil
 }

@@ -100,7 +100,7 @@ func TestStageSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := t.TempDir()
-	staged := filepath.Join(vm.GuestDataDir(state), snapshotsDir)
+	staged := filepath.Join(vm.GuestReadOnlyDir(state), snapshotsDir)
 	stale := filepath.Join(staged, "stale")
 	if err := os.MkdirAll(stale, 0o750); err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func TestStageSnapshotsDirectorySymlinkRoot(t *testing.T) {
 			if err != nil {
 				t.Fatalf("stageSnapshots: %v", err)
 			}
-			staged := filepath.Join(vm.GuestDataDir(state), snapshotsDir, snapshotGeneration(binds), "0")
+			staged := filepath.Join(vm.GuestReadOnlyDir(state), snapshotsDir, snapshotGeneration(binds), "0")
 			info, err := os.Lstat(staged)
 			if err != nil {
 				t.Fatalf("lstat staged root: %v", err)

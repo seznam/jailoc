@@ -26,6 +26,7 @@ const (
 	clientKeyFile  = "id_ed25519"
 	hostPubKeyFile = "ssh_host_key.pub"
 	internalTag    = "jailocint"
+	internalROTag  = "jailocro"
 	rootTag        = "jailocroot"
 )
 
@@ -104,7 +105,9 @@ func prepareGuest(spec Spec) (map[string]fileContent, error) {
 	for i, s := range spec.Shares {
 		cfg.Shares = append(cfg.Shares, guest.Share{Tag: shareTag(i), GuestPath: s.guestPath(), ReadOnly: s.ReadOnly})
 	}
-	cfg.Shares = append(cfg.Shares, guest.Share{Tag: internalTag, GuestPath: guest.HostDir})
+	cfg.Shares = append(cfg.Shares,
+		guest.Share{Tag: internalTag, GuestPath: guest.HostDir},
+		guest.Share{Tag: internalROTag, GuestPath: guest.ReadOnlyHostDir, ReadOnly: true})
 	if rootShare {
 		cfg.RootShare = rootTag
 	}
@@ -133,11 +136,13 @@ const simplifiedOwnership = runtime.GOOS == "darwin"
 const rootShare = true
 
 func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option {
-	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares)+1)
+	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares)+2)
 	for i, s := range spec.Shares {
 		mounts = append(mounts, microvm.VirtioFSMount{Tag: shareTag(i), HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: simplifiedOwnership})
 	}
-	mounts = append(mounts, microvm.VirtioFSMount{Tag: internalTag, HostPath: GuestDataDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership})
+	mounts = append(mounts,
+		microvm.VirtioFSMount{Tag: internalTag, HostPath: GuestDataDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership},
+		microvm.VirtioFSMount{Tag: internalROTag, HostPath: GuestReadOnlyDir(spec.StateDir), ReadOnly: true, SimplifiedOwnership: simplifiedOwnership})
 	opts := commonOptions(spec)
 	if spec.Docker {
 		// The only disk, so the guest sees it as /dev/vda (guest.DockerDisk).
