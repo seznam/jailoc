@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -59,8 +60,15 @@ func Create(stateDir string, opts Options, holder []string) (string, error) {
 	}
 	cmd := exec.Command(holder[0], append(holder[1:], id)...) //nolint:gosec // G204: holder command line chosen by jailoc-guest
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	logFile, err := os.OpenFile(logPath(stateDir, id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // G304: fixed name inside the session directory
+	if err == nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		defer func() { _ = logFile.Close() }()
+	}
 	if err := cmd.Start(); err != nil {
 		_ = os.Remove(infoPath(stateDir, id))
+		_ = os.Remove(logPath(stateDir, id))
 		return "", fmt.Errorf("start session holder: %w", err)
 	}
 	exited := make(chan error, 1)
@@ -73,9 +81,18 @@ func Create(stateDir string, opts Options, holder []string) (string, error) {
 		}
 		select {
 		case err := <-exited:
+			_ = os.Remove(infoPath(stateDir, id))
+			if data, readErr := os.ReadFile(logPath(stateDir, id)); readErr == nil {
+				_ = os.Remove(logPath(stateDir, id))
+				if msg := strings.TrimPrefix(strings.TrimSpace(string(data)), "jailoc-guest: "); msg != "" {
+					return "", fmt.Errorf("session holder: %s", msg)
+				}
+			}
 			return "", fmt.Errorf("session holder exited before accepting clients: %v", err)
 		case <-deadline:
 			_ = cmd.Process.Kill()
+			_ = os.Remove(infoPath(stateDir, id))
+			_ = os.Remove(logPath(stateDir, id))
 			return "", errors.New("session holder did not start in time")
 		case <-time.After(20 * time.Millisecond):
 		}

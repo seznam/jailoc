@@ -35,6 +35,7 @@ type Info struct {
 
 func infoPath(stateDir, id string) string   { return filepath.Join(stateDir, id+".json") }
 func socketPath(stateDir, id string) string { return filepath.Join(stateDir, id+".sock") }
+func logPath(stateDir, id string) string    { return filepath.Join(stateDir, id+".log") }
 
 func newID() (string, error) {
 	b := make([]byte, 3)
@@ -128,6 +129,7 @@ func List(stateDir string) ([]Info, error) {
 		}
 		_ = os.Remove(infoPath(stateDir, id))
 		_ = os.Remove(socketPath(stateDir, id))
+		_ = os.Remove(logPath(stateDir, id))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LastAttach.After(out[j].LastAttach) })
 	return out, nil
