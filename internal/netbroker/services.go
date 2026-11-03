@@ -3,6 +3,7 @@ package netbroker
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,7 +19,14 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-const dnsTimeout = 3 * time.Second
+const (
+	dnsTimeout = 3 * time.Second
+	// maxDNSQueries caps the queries the broker resolves at once, and
+	// maxDNSConns the open DNS-over-TCP connections, so a busy guest cannot
+	// grow the host process without bound.
+	maxDNSQueries = 128
+	maxDNSConns   = 64
+)
 
 func (b *Broker) upstreams() []netip.AddrPort {
 	if p := b.policy.Load(); p != nil && len(p.dnsUpstreams) > 0 {
@@ -46,6 +54,7 @@ func (b *Broker) startDNS(ctx context.Context) error {
 		_ = uc.Close()
 		_ = tl.Close()
 	}()
+	queries := make(chan struct{}, maxDNSQueries)
 	go func() {
 		buf := make([]byte, 65535)
 		for {
@@ -53,21 +62,38 @@ func (b *Broker) startDNS(ctx context.Context) error {
 			if err != nil {
 				return
 			}
+			select {
+			case queries <- struct{}{}:
+			default:
+				// Drop the query; the guest resolver retries.
+				continue
+			}
 			q := append([]byte(nil), buf[:n]...)
 			go func() {
+				defer func() { <-queries }()
 				if resp := b.resolve(ctx, "udp", q); resp != nil {
 					_, _ = uc.WriteTo(resp, peer)
 				}
 			}()
 		}
 	}()
+	conns := make(chan struct{}, maxDNSConns)
 	go func() {
 		for {
 			c, err := tl.Accept()
 			if err != nil {
 				return
 			}
-			go b.serveDNSTCP(ctx, c)
+			select {
+			case conns <- struct{}{}:
+			default:
+				_ = c.Close()
+				continue
+			}
+			go func() {
+				defer func() { <-conns }()
+				b.serveDNSTCP(ctx, c)
+			}()
 		}
 	}()
 	return nil
@@ -97,11 +123,22 @@ func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
 }
 
 // resolve forwards one query to the upstreams in order and returns the first
-// answer, or SERVFAIL when none answers.
+// answer, or SERVFAIL when none answers. With blocked zones, a query must
+// carry exactly one question, and an answer that names a blocked zone in any
+// record owner or CNAME target is replaced by NXDOMAIN.
 func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
-	if name := questionName(q); name != "" && b.policy.Load().blocked(name) {
-		b.record(map[string]any{"event": "dns", "network": network, "name": name, "blocked": true})
-		return nxdomain(q)
+	p := b.policy.Load()
+	filtered := p != nil && len(p.blockedZones) > 0
+	if filtered {
+		name, ok := singleQuestion(q)
+		if !ok {
+			b.record(map[string]any{"event": "dns", "network": network, "error": "query without exactly one question"})
+			return dnsError(q, 0x01) // FORMERR
+		}
+		if p.blocked(name) {
+			b.record(map[string]any{"event": "dns", "network": network, "name": name, "blocked": true})
+			return nxdomain(q)
+		}
 	}
 	var resp []byte
 	lastErr := errNoUpstream
@@ -117,7 +154,86 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
 	if resp == nil {
 		return servfail(q)
 	}
+	if filtered {
+		name, ok := blockedAnswer(p, resp)
+		if !ok {
+			return servfail(q)
+		}
+		if name != "" {
+			b.record(map[string]any{"event": "dns", "network": network, "name": name, "blocked": true})
+			return nxdomain(q)
+		}
+	}
 	return resp
+}
+
+// singleQuestion returns the name of the only question in q. It fails when
+// q does not parse or carries other than one question.
+func singleQuestion(q []byte) (string, bool) {
+	var p dnsmessage.Parser
+	if _, err := p.Start(q); err != nil {
+		return "", false
+	}
+	qs, err := p.AllQuestions()
+	if err != nil || len(qs) != 1 {
+		return "", false
+	}
+	return qs[0].Name.String(), true
+}
+
+// blockedAnswer returns the first blocked name among the record owners and
+// CNAME targets of resp, or "" when there is none. It fails when resp does
+// not parse.
+func blockedAnswer(pol *Policy, resp []byte) (string, bool) {
+	var p dnsmessage.Parser
+	if _, err := p.Start(resp); err != nil {
+		return "", false
+	}
+	qs, err := p.AllQuestions()
+	if err != nil {
+		return "", false
+	}
+	for _, q := range qs {
+		if pol.blocked(q.Name.String()) {
+			return q.Name.String(), true
+		}
+	}
+	sections := []struct {
+		header func() (dnsmessage.ResourceHeader, error)
+		skip   func() error
+	}{
+		{p.AnswerHeader, p.SkipAnswer},
+		{p.AuthorityHeader, p.SkipAuthority},
+		{p.AdditionalHeader, p.SkipAdditional},
+	}
+	for _, sec := range sections {
+		for {
+			h, err := sec.header()
+			if errors.Is(err, dnsmessage.ErrSectionDone) {
+				break
+			}
+			if err != nil {
+				return "", false
+			}
+			if pol.blocked(h.Name.String()) {
+				return h.Name.String(), true
+			}
+			if h.Type != dnsmessage.TypeCNAME {
+				if err := sec.skip(); err != nil {
+					return "", false
+				}
+				continue
+			}
+			c, err := p.CNAMEResource()
+			if err != nil {
+				return "", false
+			}
+			if pol.blocked(c.CNAME.String()) {
+				return c.CNAME.String(), true
+			}
+		}
+	}
+	return "", true
 }
 
 func exchange(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error) {
@@ -154,19 +270,6 @@ func exchange(ctx context.Context, network string, up netip.AddrPort, q []byte) 
 	return resp, nil
 }
 
-// questionName returns the name of the first question, or "".
-func questionName(q []byte) string {
-	var p dnsmessage.Parser
-	if _, err := p.Start(q); err != nil {
-		return ""
-	}
-	qs, err := p.Question()
-	if err != nil {
-		return ""
-	}
-	return qs.Name.String()
-}
-
 // nxdomain answers q with NXDOMAIN and no records.
 func nxdomain(q []byte) []byte {
 	if len(q) < 12 {
@@ -178,13 +281,16 @@ func nxdomain(q []byte) []byte {
 	return r
 }
 
-func servfail(q []byte) []byte {
+func servfail(q []byte) []byte { return dnsError(q, 0x02) }
+
+// dnsError answers q with rcode and no records.
+func dnsError(q []byte, rcode byte) []byte {
 	if len(q) < 12 {
 		return nil
 	}
 	r := append([]byte(nil), q...)
-	r[2] |= 0x80                // QR
-	r[3] = (r[3] & 0xf0) | 0x02 // RCODE SERVFAIL
+	r[2] |= 0x80                 // QR
+	r[3] = (r[3] & 0xf0) | rcode // RCODE
 	return r
 }
 
