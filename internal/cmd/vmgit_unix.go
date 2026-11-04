@@ -342,7 +342,10 @@ func (p *gitProtector) configFile(path string, cfg *gitConfig, depth int) error 
 	}
 	data, ok := readSmall(path, maxConfigSize, false)
 	if !ok {
-		return nil
+		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("git config %s cannot be read (larger than 1 MiB or not a regular file); protect_git cannot check it", path)
 	}
 	for _, e := range parseGitConfig(data) {
 		switch {
@@ -351,7 +354,8 @@ func (p *gitProtector) configFile(path string, cfg *gitConfig, depth int) error 
 			// may or may not apply.
 			cfg.hooksPaths = append(cfg.hooksPaths, expandGitPath(e.value, ""))
 		case e.section == "extensions" && e.key == "worktreeconfig":
-			cfg.worktreeConfig = gitBool(e.value)
+			// Any true value counts: an includeIf may set it.
+			cfg.worktreeConfig = cfg.worktreeConfig || gitBool(e.value)
 		case (e.section == "include" || e.section == "includeif") && e.key == "path" && e.value != "":
 			inc := expandGitPath(e.value, filepath.Dir(path))
 			if err := p.configFile(inc, cfg, depth+1); err != nil {
@@ -485,7 +489,8 @@ func createEmpty(path string, dir bool) error {
 // returns it with the symlink-free host path. A path under a share must
 // not pass through a symbolic link inside the share, because the agent
 // could repoint it. A path outside every share is resolved first, so a
-// link outside the shares into one is followed. It returns a nil share
+// link outside the shares into one is followed, while a link inside a
+// share on the way fails the same. It returns a nil share
 // when the path is not in a writable share.
 func (p *gitProtector) locate(path string) (*shareRoot, string, error) {
 	path = filepath.Clean(path)
@@ -509,6 +514,18 @@ func (p *gitProtector) locate(path string) (*shareRoot, string, error) {
 	}
 	if best != nil {
 		return best, filepath.Join(best.real, bestRel), noSymlinks(best, bestRel)
+	}
+	reals := make([]string, len(p.roots))
+	for i := range p.roots {
+		reals[i] = p.roots[i].real
+	}
+	link, i, err := linkInside(path, reals)
+	if err != nil {
+		return nil, "", err
+	}
+	if link != "" {
+		r := &p.roots[i]
+		return nil, "", fmt.Errorf("%s is a symbolic link that Git follows to a protected path; protect_git cannot keep it in place (replace it with the file or directory, or disable protect_git)", r.guestOf(link))
 	}
 	resolved := resolveExisting(path)
 	for i := range p.roots {
