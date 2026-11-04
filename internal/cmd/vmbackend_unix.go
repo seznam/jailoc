@@ -352,6 +352,9 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 	for _, p := range guestPaths {
 		shares = append(shares, byGuest[p])
 	}
+	if limit := vm.MaxShares(ws.EnableDocker); len(shares) > limit {
+		return nil, fmt.Errorf("workspace %q: %d shared directories (paths, mounts and profile state) exceed the limit of %d a VM on this host boots with; list a common parent directory in paths instead of its subdirectories", ws.Name, len(shares), limit)
+	}
 	if err := checkNestedShares(shares); err != nil {
 		return nil, fmt.Errorf("workspace %q: %w", ws.Name, err)
 	}

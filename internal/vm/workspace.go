@@ -135,6 +135,30 @@ const simplifiedOwnership = runtime.GOOS == "darwin"
 // made on every start.
 const rootShare = true
 
+// virtioIRQs is the number of interrupt lines libkrun gives virtio-mmio
+// devices: lines 5-23 of the I/O APIC on x86_64 (with the runtime's
+// IRQ_MAX patch) and SPIs 32-159 on arm64. Every share is a device.
+var virtioIRQs = map[string]int{"amd64": 19, "arm64": 128}
+
+// fixedDevices counts the virtio devices of a workspace VM besides its
+// shares and Docker disk: balloon, rng, console, network, root filesystem,
+// root image share, internal share and internal read-only share.
+const fixedDevices = 8
+
+// MaxShares returns how many shares a workspace VM on this host boots with.
+// Beyond it libkrun runs out of interrupt lines for the devices.
+func MaxShares(docker bool) int {
+	return maxShares(runtime.GOARCH, docker)
+}
+
+func maxShares(arch string, docker bool) int {
+	n := virtioIRQs[arch] - fixedDevices
+	if docker {
+		n--
+	}
+	return n
+}
+
 func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option {
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares)+2)
 	for i, s := range spec.Shares {
