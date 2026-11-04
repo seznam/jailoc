@@ -114,7 +114,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		return err
 	}
 	if ws.ProtectGit {
-		pins, readOnly, err := gitProtection(shares)
+		pins, readOnly, err := gitProtection(shares, gitInheritedConfig())
 		if err != nil {
 			return fmt.Errorf("workspace %q: %w", ws.Name, err)
 		}
