@@ -106,6 +106,27 @@ func TestVMPolicyFilteredDNS(t *testing.T) {
 	}
 }
 
+func TestVMSharesLimit(t *testing.T) {
+	t.Parallel()
+	oc, _ := agent.Lookup("opencode1")
+	for _, docker := range []bool{false, true} {
+		limit := vm.MaxShares(docker)
+		paths := make([]string, limit+1)
+		for i := range paths {
+			paths[i] = fmt.Sprintf("/src/p%02d", i)
+		}
+		ws := &workspace.Resolved{Name: "w", Paths: paths[:limit], Agent: oc, EnableDocker: docker}
+		if _, err := vmShares(ws); err != nil {
+			t.Fatalf("docker=%v: %d shares: %v", docker, limit, err)
+		}
+		ws.Paths = paths
+		_, err := vmShares(ws)
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("exceed the limit of %d", limit)) {
+			t.Fatalf("docker=%v: %d shares: err = %v, want limit error", docker, limit+1, err)
+		}
+	}
+}
+
 func TestVMShares(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -285,6 +285,8 @@ Any `backend` value other than `"vm"` and empty is rejected. See [Migrate from j
 
 Several workspaces may share a path, for example to run different agents in the same project. When the current directory matches several workspaces at the same depth, `jailoc` fails and asks for `-w`.
 
+Each path is a separate virtio-fs share. A VM boots with at most 11 shares on linux/amd64 hosts and 120 on arm64 hosts (macOS and Linux), one fewer with [`enable_docker`](#enable_docker). Paths, [`mounts`](#mounts) with a host directory and the state directories of a named [agent profile](#agent-profiles) count towards the limit; `jailoc up` and `jailoc reload` fail above it. List a common parent directory instead of many sibling directories.
+
 ### `mounts`
 
 Format: `host:container[:mode]`, mode `ro` or `rw` (default `rw`). Mounts are virtio-fs directory shares.
