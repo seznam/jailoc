@@ -129,3 +129,12 @@ func TestLoadSecretValues(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeSecretValues(t *testing.T) {
+	t.Parallel()
+	got := mergeSecretValues([]string{"old-token-1", "shared-value"}, []string{"shared-value", "a-much-longer-new-token"})
+	want := []string{"a-much-longer-new-token", "shared-value", "old-token-1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("mergeSecretValues() = %q, want %q", got, want)
+	}
+}

@@ -34,6 +34,41 @@ func TestLogFileRotates(t *testing.T) {
 	}
 }
 
+func TestLogFileRecoversFromFailedRotation(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "broker.jsonl")
+	l, err := openLogFile(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Write([]byte("aaaa\nbbbb\n")); err != nil {
+		t.Fatal(err)
+	}
+	block := filepath.Join(path+".1", "x")
+	if err := os.MkdirAll(block, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Write([]byte("cccc\n")); err == nil {
+		t.Fatal("write with a blocked rotation succeeded")
+	}
+	if err := os.RemoveAll(path + ".1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Write([]byte("dddd\n")); err != nil {
+		t.Fatalf("write after the rotation was unblocked: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cur, err := os.ReadFile(path) //nolint:gosec // G304: test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cur) != "dddd\n" {
+		t.Fatalf("log = %q", cur)
+	}
+}
+
 func TestFlowLimit(t *testing.T) {
 	t.Parallel()
 	l := flowLimit{max: 2}

@@ -231,8 +231,9 @@ func redact(argv, values []string) []string {
 	return out
 }
 
-// secretValues caches the values of the secrets in SecretsDir and EnvFile,
-// reloaded when either changes.
+// secretValues collects the values of the secrets in SecretsDir and
+// EnvFile, rereading them when either changes. Values a reload replaced
+// stay in the set, because running sessions keep the old environment.
 type secretValues struct {
 	stamp  string
 	values []string
@@ -246,7 +247,7 @@ func (s *secretValues) current() []string {
 		}
 	}
 	if stamp.String() != s.stamp {
-		s.stamp, s.values = stamp.String(), loadSecretValues(SecretsDir, EnvFile)
+		s.stamp, s.values = stamp.String(), mergeSecretValues(s.values, loadSecretValues(SecretsDir, EnvFile))
 	}
 	return s.values
 }
@@ -283,6 +284,16 @@ func loadSecretValues(dir, envFile string) []string {
 	}
 	values := slices.Collect(maps.Keys(seen))
 	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
+	return values
+}
+
+// mergeSecretValues returns the values of old and added without duplicates,
+// longest first.
+func mergeSecretValues(old, added []string) []string {
+	values := slices.Concat(old, added)
+	slices.Sort(values)
+	values = slices.Compact(values)
+	slices.SortStableFunc(values, func(a, b string) int { return len(b) - len(a) })
 	return values
 }
 
