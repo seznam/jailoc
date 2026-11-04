@@ -304,6 +304,55 @@ func TestTailLogFollowsReplacedFile(t *testing.T) {
 	}
 }
 
+func TestTailLogReadsLinesWrittenBeforeRotation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log")
+	if err := os.WriteFile(path, []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &lockedBuffer{}
+	done := make(chan error, 1)
+	go func() {
+		done <- tailLog(ctx, out, []logFile{{path: path}}, logView{lines: -1, follow: true}, func(raw []byte) string { return string(raw) })
+	}()
+	waitFor := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for out.String() != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("out = %q, want %q", out.String(), want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitFor("a\n")
+	// Append to the log and rotate it before the next poll.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // G304: test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("b\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("c\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("a\nb\nc\n")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("tailLog: %v", err)
+	}
+}
+
 func TestEscapeLines(t *testing.T) {
 	t.Parallel()
 	got := escapeLines("first \x1b]52;c;aGk=\x07\nsecond\r")
