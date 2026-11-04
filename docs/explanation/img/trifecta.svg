@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="452" viewBox="0 0 1200 452" font-family="Inter,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+<title id="t">The lethal trifecta and the legs jailoc narrows</title>
+<desc id="d">An agent is exploitable when it combines access to private data, exposure to untrusted content and the ability to communicate externally. jailoc narrows two of the legs: the workspace VM and its shares limit private data access to declared paths, mounts, snapshots and configured secrets, and the host-side network broker denies private and reserved networks and can filter DNS. Exposure to untrusted content is not controlled, and public internet egress stays open.</desc>
+<defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA6B8"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#425CC7"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#D24E00"/></marker></defs>
+<rect width="1200" height="452" fill="#FFFFFF" stroke="#DCE0E5" rx="8"/>
+<text x="16" y="27" fill="#24292E" font-size="16" font-weight="700">Lethal trifecta · where jailoc narrows it</text>
+<text x="1184" y="27" fill="#9AA6B8" font-size="12" font-weight="700" text-anchor="end">not controlled</text>
+<rect x="1066" y="18" width="9" height="9" rx="2" fill="#9AA6B8"/>
+<text x="1049.2" y="27" fill="#D24E00" font-size="12" font-weight="700" text-anchor="end">jailoc</text>
+<rect x="989" y="18" width="9" height="9" rx="2" fill="#D24E00"/>
+<text x="972.0" y="27" fill="#8250DF" font-size="12" font-weight="700" text-anchor="end">agent capability</text>
+<rect x="840" y="18" width="9" height="9" rx="2" fill="#8250DF"/>
+<rect x="8" y="44" width="1184" height="150" fill="#F4EEFC" rx="6"/>
+<rect x="8" y="44" width="6" height="150" fill="#8250DF" rx="3"/>
+<text x="26" y="61" fill="#8250DF" font-size="12" font-weight="800" letter-spacing="0.08em">AGENT CAPABILITIES</text>
+<rect x="30" y="84" width="360" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="94" width="3" height="70" rx="1.5" fill="#8250DF"/>
+<text x="44" y="106" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">private data</text>
+<text x="44" y="124" fill="#6E7180" font-size="12">files, credentials, internal repos</text>
+<text x="44" y="144" fill="#464C54" font-size="12.5">what an attacker wants to read</text>
+<rect x="420" y="84" width="360" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="420" y="94" width="3" height="70" rx="1.5" fill="#8250DF"/>
+<text x="434" y="106" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">untrusted content</text>
+<text x="434" y="124" fill="#6E7180" font-size="12">web pages, issues, documents, images</text>
+<text x="434" y="144" fill="#464C54" font-size="12.5">where injected instructions come from</text>
+<rect x="810" y="84" width="370" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="810" y="94" width="3" height="70" rx="1.5" fill="#8250DF"/>
+<text x="824" y="106" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">external communication</text>
+<text x="824" y="124" fill="#6E7180" font-size="12">HTTP requests, DNS, links</text>
+<text x="824" y="144" fill="#464C54" font-size="12.5">how stolen data leaves</text>
+<rect x="8" y="214" width="1184" height="170" fill="#FFF1E6" rx="6"/>
+<rect x="8" y="214" width="6" height="170" fill="#D24E00" rx="3"/>
+<text x="26" y="231" fill="#D24E00" font-size="12" font-weight="800" letter-spacing="0.08em">CONTROLS</text>
+<rect x="30" y="254" width="360" height="110" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="264" width="3" height="90" rx="1.5" fill="#D24E00"/>
+<text x="44" y="276" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">workspace VM</text>
+<text x="44" y="294" fill="#6E7180" font-size="12">shares, snapshots, secrets</text>
+<text x="44" y="314" fill="#464C54" font-size="12.5">only declared paths and mounts</text>
+<text x="44" y="333" fill="#464C54" font-size="12.5">snapshots read-only, secrets in memory</text>
+<text x="44" y="352" fill="#464C54" font-size="12.5">protect_git keeps Git hooks read-only</text>
+<rect x="420" y="254" width="360" height="110" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="420" y="264" width="3" height="90" rx="1.5" fill="#9AA6B8"/>
+<text x="434" y="276" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">not controlled</text>
+<text x="434" y="294" fill="#6E7180" font-size="12">the agent reads what it is given</text>
+<text x="434" y="314" fill="#464C54" font-size="12.5">prompt injection is not stopped,</text>
+<text x="434" y="333" fill="#464C54" font-size="12.5">only its blast radius is limited</text>
+<rect x="810" y="254" width="370" height="110" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="810" y="264" width="3" height="90" rx="1.5" fill="#D24E00"/>
+<text x="824" y="276" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-netbroker</text>
+<text x="824" y="294" fill="#6E7180" font-size="12">host-side network policy</text>
+<text x="824" y="314" fill="#464C54" font-size="12.5">private and reserved ranges denied</text>
+<text x="824" y="333" fill="#464C54" font-size="12.5">filtered DNS hides internal zones</text>
+<text x="824" y="352" fill="#464C54" font-size="12.5">public egress stays open</text>
+<path d="M210 250 L210 180" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="218" y="222" fill="#6E7180" font-size="11">narrows</text>
+<path d="M995 250 L995 180" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="1003" y="222" fill="#6E7180" font-size="11">narrows</text>
+<rect x="8" y="400" width="1184" height="40" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="8" y="410" width="3" height="20" rx="1.5" fill="#D24E00"/>
+<text x="24" y="425.0" font-size="13"><tspan fill="#D24E00" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">two of three legs</tspan><tspan fill="#464C54">  Any two legs are manageable; jailoc narrows private data access and external communication so all three never meet in full.</tspan></text>
+</svg>

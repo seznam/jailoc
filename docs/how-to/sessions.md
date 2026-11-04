@@ -2,6 +2,8 @@
 
 The workspace's coding agent (OpenCode unless `agent` selects another, see [Choose a coding agent](coding-agents.md)) runs in a session inside the workspace VM, reached over SSH. Sessions outlive your terminal: you can detach, re-attach, run several at once and stop them from outside.
 
+![jailoc on the host reaches the session over SSH through the Unix socket the network broker forwards into the VM; the SSH server in jailoc-guest hands the connection to a session holder that owns the agent's terminal, so the agent keeps working after you detach](img/sessions.svg)
+
 ## Start or attach to a session
 
 From a directory inside a workspace path, run:

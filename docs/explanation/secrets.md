@@ -13,6 +13,8 @@ Each secret has exactly one source: `from_env` (a variable in the environment of
 
 ## Delivery
 
+![jailoc reads secret sources on the host before boot or reload and sends them with the env entries as one payload over SSH through the network broker; jailoc-guest writes file secrets to /run/secrets and env entries to an in-memory environment file that new sessions load, so nothing lands on host disk](img/secrets.svg)
+
 jailoc reads every secret on the host before it boots the VM or applies a reload: it takes the variable from its own environment, reads the file or runs the command with `/bin/sh -c`. Commands run with the terminal attached, so a password manager can prompt for an unlock. A source that can't be read, or a command that fails or prints nothing, stops the operation before anything changes.
 
 Once the guest's SSH server is ready, jailoc sends the values, together with the workspace's `env` entries, as a single payload over the SSH connection that the broker forwards into the VM.

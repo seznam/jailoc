@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="536" viewBox="0 0 1200 536" font-family="Inter,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+<title id="t">jailoc up startup sequence</title>
+<desc id="d">jailoc up loads the config, resolves the workspace, unpacks the embedded VM runtime, builds and exports the image, and starts a detached supervisor that runs the network broker and boots the VM. Inside the VM, jailoc-guest sets up the root file system and shares and starts the SSH server; jailoc then delivers secrets over SSH and sessions run the agent.</desc>
+<defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA6B8"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#425CC7"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#D24E00"/></marker></defs>
+<rect width="1200" height="536" fill="#FFFFFF" stroke="#DCE0E5" rx="8"/>
+<text x="16" y="27" fill="#24292E" font-size="16" font-weight="700">Startup sequence · jailoc up</text>
+<text x="1184" y="27" fill="#8250DF" font-size="12" font-weight="700" text-anchor="end">agent</text>
+<rect x="1131" y="18" width="9" height="9" rx="2" fill="#8250DF"/>
+<text x="1114.0" y="27" fill="#2E7D32" font-size="12" font-weight="700" text-anchor="end">jailoc in the VM</text>
+<rect x="982" y="18" width="9" height="9" rx="2" fill="#2E7D32"/>
+<text x="964.8" y="27" fill="#D24E00" font-size="12" font-weight="700" text-anchor="end">jailoc on the host</text>
+<rect x="818" y="18" width="9" height="9" rx="2" fill="#D24E00"/>
+<rect x="8" y="44" width="1184" height="280" fill="#FFF1E6" rx="6"/>
+<rect x="8" y="44" width="6" height="280" fill="#D24E00" rx="3"/>
+<text x="26" y="61" fill="#D24E00" font-size="12" font-weight="800" letter-spacing="0.08em">HOST</text>
+<rect x="30" y="84" width="214" height="96" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="94" width="3" height="76" rx="1.5" fill="#D24E00"/>
+<text x="44" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">1 config</text>
+<text x="44" y="124" fill="#6E7180" font-size="12">load and validate</text>
+<text x="44" y="144" fill="#464C54" font-size="12.5">config.toml, written with</text>
+<text x="44" y="163" fill="#464C54" font-size="12.5">defaults on first run</text>
+<rect x="263" y="84" width="214" height="96" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="263" y="94" width="3" height="76" rx="1.5" fill="#D24E00"/>
+<text x="277" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">2 resolve</text>
+<text x="277" y="124" fill="#6E7180" font-size="12">workspace</text>
+<text x="277" y="144" fill="#464C54" font-size="12.5">paths, mounts, snapshots,</text>
+<text x="277" y="163" fill="#464C54" font-size="12.5">allow lists, secrets, size</text>
+<rect x="496" y="84" width="214" height="96" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="496" y="94" width="3" height="76" rx="1.5" fill="#D24E00"/>
+<text x="510" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">3 runtime</text>
+<text x="510" y="124" fill="#6E7180" font-size="12">embedded VM runtime</text>
+<text x="510" y="144" fill="#464C54" font-size="12.5">runner, libkrun, libkrunfw</text>
+<text x="510" y="163" fill="#464C54" font-size="12.5">unpacked into the cache</text>
+<rect x="729" y="84" width="214" height="96" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="729" y="94" width="3" height="76" rx="1.5" fill="#D24E00"/>
+<text x="743" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">4 image</text>
+<text x="743" y="124" fill="#6E7180" font-size="12">build and export</text>
+<text x="743" y="144" fill="#464C54" font-size="12.5">host Docker or builder VM,</text>
+<text x="743" y="163" fill="#464C54" font-size="12.5">unpacked into image cache</text>
+<rect x="962" y="84" width="214" height="96" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="962" y="94" width="3" height="76" rx="1.5" fill="#D24E00"/>
+<text x="976" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">5 start</text>
+<text x="976" y="124" fill="#6E7180" font-size="12">detached supervisor</text>
+<text x="976" y="144" fill="#464C54" font-size="12.5">starts jailoc-netbroker,</text>
+<text x="976" y="163" fill="#464C54" font-size="12.5">boots the workspace VM</text>
+<path d="M246 132 L260 132" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M479 132 L493 132" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M712 132 L726 132" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M945 132 L959 132" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<rect x="30" y="214" width="440" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="224" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="44" y="236" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">secrets and env</text>
+<text x="44" y="254" fill="#6E7180" font-size="12">read on the host before boot</text>
+<text x="44" y="274" fill="#464C54" font-size="12.5">sent once the guest's SSH server answers</text>
+<path d="M370 182 L370 211" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="378" y="200" fill="#6E7180" font-size="11">secret sources</text>
+<rect x="729" y="214" width="447" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="729" y="224" width="3" height="70" rx="1.5" fill="#425CC7"/>
+<text x="743" y="236" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">go-microvm-runner</text>
+<text x="743" y="254" fill="#6E7180" font-size="12">libkrun VMM, one process per workspace</text>
+<rect x="743" y="260" width="79" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
+<text x="782.5" y="274" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">virtio-fs</text>
+<rect x="830" y="260" width="86" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
+<text x="873.0" y="274" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">virtio-net</text>
+<rect x="924" y="260" width="64" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
+<text x="956.0" y="274" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">balloon</text>
+<path d="M836 182 L836 211" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="844" y="200" fill="#6E7180" font-size="11">root fs</text>
+<path d="M1069 182 L1069 211" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="1077" y="200" fill="#6E7180" font-size="11">boot</text>
+<line x1="8" y1="344" x2="1192" y2="344" stroke="#425CC7" stroke-width="2" stroke-dasharray="7 5"/>
+<rect x="848" y="334" width="305" height="20" rx="10" fill="#425CC7"/>
+<text x="1000" y="348" fill="#FFFFFF" font-size="12" font-weight="700" text-anchor="middle">VM boundary · only virtio devices cross</text>
+<rect x="8" y="364" width="1184" height="156" fill="#EEF8EC" rx="6"/>
+<rect x="8" y="364" width="6" height="156" fill="#2E7D32" rx="3"/>
+<text x="26" y="381" fill="#2E7D32" font-size="12" font-weight="800" letter-spacing="0.08em">WORKSPACE VM</text>
+<rect x="30" y="404" width="340" height="96" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="414" width="3" height="76" rx="1.5" fill="#2E7D32"/>
+<text x="44" y="426" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">root fs</text>
+<text x="44" y="444" fill="#6E7180" font-size="12">jailoc files + cached image</text>
+<text x="44" y="464" fill="#464C54" font-size="12.5">image shared read-only,</text>
+<text x="44" y="483" fill="#464C54" font-size="12.5">writes held in VM memory</text>
+<rect x="400" y="404" width="380" height="96" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="400" y="414" width="3" height="76" rx="1.5" fill="#2E7D32"/>
+<text x="414" y="426" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-guest</text>
+<text x="414" y="444" fill="#6E7180" font-size="12">PID 1 · init and SSH server</text>
+<text x="414" y="464" fill="#464C54" font-size="12.5">mounts shares, prepares the</text>
+<text x="414" y="483" fill="#464C54" font-size="12.5">agent user, starts SSH</text>
+<rect x="810" y="404" width="370" height="96" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="810" y="414" width="3" height="76" rx="1.5" fill="#8250DF"/>
+<text x="824" y="426" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">coding agent</text>
+<text x="824" y="444" fill="#6E7180" font-size="12">UID 1000</text>
+<text x="824" y="464" fill="#464C54" font-size="12.5">runs in sessions that attach</text>
+<text x="824" y="483" fill="#464C54" font-size="12.5">over SSH, no published port</text>
+<path d="M440 306 L440 401" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="448" y="384" fill="#425CC7" font-size="11" font-weight="600">secrets + env over SSH</text>
+<path d="M760 306 L760 401" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="752" y="384" fill="#425CC7" font-size="11" font-weight="600" text-anchor="end">boots kernel + init</text>
+<path d="M398 452 L373 452" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M782 452 L807 452" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+</svg>

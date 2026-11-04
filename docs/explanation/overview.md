@@ -8,6 +8,8 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 `jailoc up` runs these steps in order:
 
+![jailoc up on the host: load the config, resolve the workspace, unpack the VM runtime, build and export the image, then start the supervisor, network broker and go-microvm-runner. The runner boots the guest kernel with jailoc-guest as init, which mounts the shares and starts SSH; jailoc then delivers secrets and environment over SSH and the coding agent runs in sessions.](img/startup.svg)
+
 **1. Config loading.** jailoc reads `~/.config/jailoc/config.toml`, writing a default one on first run, and validates it.
 
 **2. Workspace resolution.** The workspace name becomes a resolved description: shared paths and mounts, snapshots, allowed hosts and networks, secrets, CPU and memory.
@@ -16,7 +18,7 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 **4. Image build and export.** The workspace image is built with Docker, either on the host daemon or inside a builder VM, then exported and unpacked into a local image cache. See [Image Resolution](../reference/image-resolution.md).
 
-**5. VM start.** A detached supervisor starts the network broker and boots the VM from a copy-on-write clone of the unpacked image. `jailoc-guest`, the VM's init process, mounts the shares, prepares the `agent` user and starts an SSH server. jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
+**5. VM start.** A detached supervisor starts the network broker and boots the VM from a small root file system that holds `jailoc-guest`; the cached image is shared into the VM read-only and writes to the root file system stay in VM memory. `jailoc-guest`, the VM's init process, mounts the shares, prepares the `agent` user and starts an SSH server. jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
 
 Sessions run over SSH: `jailoc` attaches to a running agent session or starts a new one. The host publishes no agent port, so nothing outside jailoc can reach the agent. See [Manage sessions](../how-to/sessions.md).
 

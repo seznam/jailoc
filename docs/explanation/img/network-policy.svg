@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" font-family="Inter,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+<title id="t">Network policy decisions in the broker</title>
+<desc id="d">Each new flow from the guest reaches the network broker over virtio-net and is checked in order: the broker's own addresses, hard-denied ranges, port 53 when filtered DNS is on, private ranges unless allow-listed; anything public is allowed and gets a real host socket. Denied flows are reset or answered with ICMP and logged. DNS queries to the gateway go through the filtered resolver, which answers NXDOMAIN for blocked zones and for answers that name them.</desc>
+<defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA6B8"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#425CC7"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#D24E00"/></marker></defs>
+<rect width="1200" height="800" fill="#FFFFFF" stroke="#DCE0E5" rx="8"/>
+<text x="16" y="27" fill="#24292E" font-size="16" font-weight="700">Network policy · one decision per new flow</text>
+<text x="1184" y="27" fill="#9AA6B8" font-size="12" font-weight="700" text-anchor="end">external</text>
+<rect x="1109" y="18" width="9" height="9" rx="2" fill="#9AA6B8"/>
+<text x="1092.4" y="27" fill="#8250DF" font-size="12" font-weight="700" text-anchor="end">guest</text>
+<rect x="1039" y="18" width="9" height="9" rx="2" fill="#8250DF"/>
+<text x="1022.4000000000001" y="27" fill="#D24E00" font-size="12" font-weight="700" text-anchor="end">jailoc on the host</text>
+<rect x="876" y="18" width="9" height="9" rx="2" fill="#D24E00"/>
+<rect x="8" y="44" width="1184" height="120" fill="#EEF8EC" rx="6"/>
+<rect x="8" y="44" width="6" height="120" fill="#2E7D32" rx="3"/>
+<text x="26" y="61" fill="#2E7D32" font-size="12" font-weight="800" letter-spacing="0.08em">WORKSPACE VM</text>
+<rect x="30" y="74" width="440" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="84" width="3" height="60" rx="1.5" fill="#8250DF"/>
+<text x="44" y="96" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">guest process</text>
+<text x="44" y="114" fill="#6E7180" font-size="12">any program, root included</text>
+<text x="44" y="134" fill="#464C54" font-size="12.5">opens a TCP connection or UDP flow</text>
+<rect x="900" y="74" width="280" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="900" y="84" width="3" height="60" rx="1.5" fill="#8250DF"/>
+<text x="914" y="96" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">guest resolver</text>
+<text x="914" y="114" fill="#6E7180" font-size="12">/etc/resolv.conf</text>
+<text x="914" y="134" fill="#464C54" font-size="12.5">queries the gateway</text>
+<line x1="8" y1="184" x2="1192" y2="184" stroke="#425CC7" stroke-width="2" stroke-dasharray="7 5"/>
+<rect x="502" y="174" width="377" height="20" rx="10" fill="#425CC7"/>
+<text x="690" y="188" fill="#FFFFFF" font-size="12" font-weight="700" text-anchor="middle">VM boundary · virtio-net, only peer is the broker</text>
+<rect x="8" y="204" width="1184" height="580" fill="#FFF1E6" rx="6"/>
+<rect x="8" y="204" width="6" height="580" fill="#D24E00" rx="3"/>
+<text x="26" y="221" fill="#D24E00" font-size="12" font-weight="800" letter-spacing="0.08em">HOST · JAILOC-NETBROKER</text>
+<rect x="30" y="244" width="440" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="254" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="44" y="266" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">1 broker itself</text>
+<text x="44" y="284" fill="#6E7180" font-size="12">gateway, guest subnet, host addresses</text>
+<rect x="30" y="354" width="440" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="364" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="44" y="376" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">2 hard-denied</text>
+<text x="44" y="394" fill="#6E7180" font-size="12">loopback, multicast, metadata endpoints</text>
+<text x="44" y="414" fill="#464C54" font-size="12.5">no allow list opens them</text>
+<rect x="30" y="464" width="440" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="474" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="44" y="486" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">3 port 53</text>
+<text x="44" y="504" fill="#6E7180" font-size="12">any other address, with filtered_dns</text>
+<text x="44" y="524" fill="#464C54" font-size="12.5">DNS goes to the gateway only</text>
+<rect x="30" y="574" width="440" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="584" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="44" y="596" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">4 private</text>
+<text x="44" y="614" fill="#6E7180" font-size="12">private and reserved ranges</text>
+<text x="44" y="634" fill="#464C54" font-size="12.5">allowed_networks or allowed_hosts?</text>
+<rect x="30" y="684" width="440" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="694" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="44" y="706" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">5 public</text>
+<text x="44" y="724" fill="#6E7180" font-size="12">everything else</text>
+<text x="44" y="744" fill="#464C54" font-size="12.5">allowed</text>
+<path d="M250 336 L250 351" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="260" y="349" fill="#6E7180" font-size="11">no match</text>
+<path d="M250 446 L250 461" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="260" y="459" fill="#6E7180" font-size="11">no match</text>
+<path d="M250 556 L250 571" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="260" y="569" fill="#6E7180" font-size="11">no match</text>
+<path d="M250 666 L250 681" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="260" y="679" fill="#6E7180" font-size="11">no match</text>
+<path d="M250 166 L250 241" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="260" y="215" fill="#425CC7" font-size="11" font-weight="600">new flow</text>
+<path d="M472 289 L557 289" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="514" y="283" fill="#6E7180" font-size="11" text-anchor="middle">match</text>
+<path d="M472 399 L557 399" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="514" y="393" fill="#6E7180" font-size="11" text-anchor="middle">match</text>
+<path d="M472 509 L557 509" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="514" y="503" fill="#6E7180" font-size="11" text-anchor="middle">match</text>
+<path d="M472 609 L557 609" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="514" y="603" fill="#6E7180" font-size="11" text-anchor="middle">not listed</text>
+<path d="M472 639 L515 639 L515 709 L557 709" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="523" y="672" fill="#6E7180" font-size="11">listed</text>
+<path d="M472 744 L557 744" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<rect x="560" y="244" width="300" height="420" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="560" y="254" width="3" height="400" rx="1.5" fill="#D24E00"/>
+<text x="574" y="266" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">denied</text>
+<text x="574" y="284" fill="#6E7180" font-size="12">TCP reset · ICMP port unreachable</text>
+<text x="574" y="304" fill="#464C54" font-size="12.5">tools fail fast instead of hanging</text>
+<text x="574" y="323" fill="#464C54" font-size="12.5"></text>
+<text x="574" y="342" fill="#464C54" font-size="12.5">every decision is logged to</text>
+<text x="574" y="361" fill="#464C54" font-size="12.5">broker.jsonl, shown by</text>
+<text x="574" y="380" fill="#464C54" font-size="12.5">jailoc traffic</text>
+<rect x="560" y="684" width="300" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="560" y="694" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="574" y="706" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">allowed</text>
+<text x="574" y="724" fill="#6E7180" font-size="12">real host socket, bytes spliced</text>
+<text x="574" y="744" fill="#464C54" font-size="12.5">first bytes logged: TLS SNI, HTTP</text>
+<rect x="900" y="244" width="280" height="300" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="900" y="254" width="3" height="280" rx="1.5" fill="#D24E00"/>
+<text x="914" y="266" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">filtered DNS</text>
+<text x="914" y="284" fill="#6E7180" font-size="12">gateway resolver, filtered_dns</text>
+<text x="914" y="304" fill="#464C54" font-size="12.5">one question per query</text>
+<text x="914" y="323" fill="#464C54" font-size="12.5">blocked zone → NXDOMAIN</text>
+<text x="914" y="342" fill="#464C54" font-size="12.5">otherwise forward upstream</text>
+<text x="914" y="361" fill="#464C54" font-size="12.5"></text>
+<text x="914" y="380" fill="#464C54" font-size="12.5">answer names a blocked zone,</text>
+<text x="914" y="399" fill="#464C54" font-size="12.5">CNAME targets included</text>
+<text x="914" y="418" fill="#464C54" font-size="12.5">→ NXDOMAIN</text>
+<text x="914" y="437" fill="#464C54" font-size="12.5">else answer the guest</text>
+<path d="M1040 156 L1040 241" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="1032" y="215" fill="#425CC7" font-size="11" font-weight="600" text-anchor="end">DNS to the gateway</text>
+<rect x="900" y="574" width="280" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="900" y="584" width="3" height="60" rx="1.5" fill="#9AA6B8"/>
+<text x="914" y="596" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">dns_upstream</text>
+<text x="914" y="614" fill="#6E7180" font-size="12">configured resolver</text>
+<path d="M1040 546 L1040 571" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<rect x="900" y="684" width="280" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="900" y="694" width="3" height="70" rx="1.5" fill="#9AA6B8"/>
+<text x="914" y="706" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">Internet</text>
+<text x="914" y="724" fill="#6E7180" font-size="12">public addresses</text>
+<path d="M862 729 L897 729" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+</svg>
