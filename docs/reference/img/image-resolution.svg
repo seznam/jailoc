@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="712" viewBox="0 0 1200 712" font-family="Inter,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+<title id="t">How jailoc resolves the workspace image</title>
+<desc id="d">jailoc up and jailoc restart check five sources in order. 1: if the workspace sets image, that image is used as is. 2: if defaults.image and the workspace dockerfile are both set, jailoc builds the Docker layer, the agent layer and the workspace Dockerfile on top of defaults.image as jailoc-&lt;workspace&gt;:&lt;hash&gt;. 3: if defaults.image is set, it is used as is. 4: if base.dockerfile is set, jailoc builds jailoc-base:preset-&lt;hash&gt; plus the Docker and agent layers. 5: otherwise jailoc builds jailoc-base:embedded plus the Docker and agent layers. Steps 4 and 5 add the workspace Dockerfile as an overlay when it is set. Every result is pulled if missing, exported with docker save and unpacked into the VM image cache.</desc>
+<defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA6B8"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#425CC7"/></marker></defs>
+<rect width="1200" height="712" fill="#FFFFFF" stroke="#DCE0E5" rx="8"/>
+<text x="16" y="27" fill="#24292E" font-size="16" font-weight="700">Image resolution — first match wins</text>
+<text x="1184" y="27" fill="#9AA6B8" font-size="12" font-weight="700" text-anchor="end">external image</text>
+<rect x="1066" y="18" width="9" height="9" rx="2" fill="#9AA6B8"/>
+<text x="1049" y="27" fill="#D24E00" font-size="12" font-weight="700" text-anchor="end">jailoc on the host</text>
+<rect x="902" y="18" width="9" height="9" rx="2" fill="#D24E00"/>
+<rect x="8" y="44" width="1184" height="652" fill="#FFF1E6" rx="6"/>
+<rect x="8" y="44" width="6" height="652" fill="#D24E00" rx="3"/>
+<text x="26" y="61" fill="#D24E00" font-size="12" font-weight="800" letter-spacing="0.08em">JAILOC UP · JAILOC RESTART</text>
+<rect x="30" y="84" width="360" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="94" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="44" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">1 · workspace image?</text>
+<text x="44" y="124" fill="#6E7180" font-size="12">[workspaces.&lt;name&gt;] image</text>
+<path d="M390 124 L462 124" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="412" y="117" fill="#6E7180" font-size="11">yes</text>
+<rect x="470" y="84" width="420" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="470" y="94" width="3" height="60" rx="1.5" fill="#9AA6B8"/>
+<text x="484" y="106" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">&lt;image&gt;</text>
+<text x="484" y="124" fill="#6E7180" font-size="12">used as is · no layers added</text>
+<text x="484" y="144" fill="#464C54" font-size="12.5">pulled if missing</text>
+<path d="M890 124 L952 124" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M210 164 L210 196" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="220" y="188" fill="#6E7180" font-size="11">no</text>
+<rect x="30" y="204" width="360" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="214" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="44" y="226" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">2 · defaults image + dockerfile?</text>
+<text x="44" y="244" fill="#6E7180" font-size="12">[defaults] image and workspace dockerfile</text>
+<path d="M390 244 L462 244" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="412" y="237" fill="#6E7180" font-size="11">yes</text>
+<rect x="470" y="204" width="420" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="470" y="214" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="484" y="226" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-&lt;workspace&gt;:&lt;hash&gt;</text>
+<text x="484" y="244" fill="#6E7180" font-size="12">built on defaults.image</text>
+<text x="484" y="264" fill="#464C54" font-size="12.5">Docker layer → agent layer → workspace Dockerfile</text>
+<path d="M890 244 L952 244" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M210 284 L210 316" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="220" y="308" fill="#6E7180" font-size="11">no</text>
+<rect x="30" y="324" width="360" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="334" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="44" y="346" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">3 · defaults image?</text>
+<text x="44" y="364" fill="#6E7180" font-size="12">[defaults] image</text>
+<path d="M390 364 L462 364" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="412" y="357" fill="#6E7180" font-size="11">yes</text>
+<rect x="470" y="324" width="420" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="470" y="334" width="3" height="60" rx="1.5" fill="#9AA6B8"/>
+<text x="484" y="346" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">&lt;defaults.image&gt;</text>
+<text x="484" y="364" fill="#6E7180" font-size="12">used as is · no layers added</text>
+<text x="484" y="384" fill="#464C54" font-size="12.5">pulled if missing</text>
+<path d="M890 364 L952 364" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M210 404 L210 436" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="220" y="428" fill="#6E7180" font-size="11">no</text>
+<rect x="30" y="444" width="360" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="454" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="44" y="466" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">4 · base dockerfile?</text>
+<text x="44" y="484" fill="#6E7180" font-size="12">[base] dockerfile</text>
+<path d="M390 484 L462 484" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="412" y="477" fill="#6E7180" font-size="11">yes</text>
+<rect x="470" y="444" width="420" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="470" y="454" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="484" y="466" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-base:preset-&lt;hash&gt;</text>
+<text x="484" y="484" fill="#6E7180" font-size="12">built from the base Dockerfile</text>
+<text x="484" y="504" fill="#464C54" font-size="12.5">Docker and agent layers · workspace Dockerfile if set</text>
+<path d="M890 484 L952 484" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<path d="M210 524 L210 556" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="220" y="548" fill="#6E7180" font-size="11">no</text>
+<rect x="30" y="564" width="860" height="80" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="574" width="3" height="60" rx="1.5" fill="#D24E00"/>
+<text x="44" y="586" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">5 · jailoc-base:embedded</text>
+<text x="44" y="604" fill="#6E7180" font-size="12">built from the Dockerfile embedded in jailoc</text>
+<text x="44" y="624" fill="#464C54" font-size="12.5">Docker and agent layers · workspace Dockerfile if set</text>
+<path d="M890 604 L952 604" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<rect x="960" y="84" width="220" height="560" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="960" y="94" width="3" height="540" rx="1.5" fill="#D24E00"/>
+<text x="974" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">VM image cache</text>
+<text x="974" y="124" fill="#6E7180" font-size="12">docker save → unpack</text>
+<text x="974" y="144" fill="#464C54" font-size="12.5">content-addressed by</text>
+<text x="974" y="163" fill="#464C54" font-size="12.5">image ID</text>
+<text x="974" y="182" fill="#464C54" font-size="12.5"></text>
+<text x="974" y="201" fill="#464C54" font-size="12.5">unpacked once and</text>
+<text x="974" y="220" fill="#464C54" font-size="12.5">shared by workspaces</text>
+<text x="974" y="239" fill="#464C54" font-size="12.5"></text>
+<text x="974" y="258" fill="#464C54" font-size="12.5">becomes the read-only</text>
+<text x="974" y="277" fill="#464C54" font-size="12.5">root file system</text>
+<text x="30" y="682" fill="#6E7180" font-size="12">Docker layer only with enable_docker (skipped with protect_git) · agent layer skipped with install = false</text>
+</svg>

@@ -23,19 +23,7 @@ jailoc builds with BuildKit when the daemon reports it as its default builder, a
 
 The first step that applies wins; later steps are skipped.
 
-```mermaid
-flowchart TD
-  start(["jailoc up"]) --> s1{"[1] workspace.image set?"}
-  s1 -- yes --> r1["Use image directly"]
-  s1 -- no --> s2{"[2] defaults.image set<br>AND workspace.dockerfile set?"}
-  s2 -- yes --> r2["Build Docker and agent layers and<br>workspace overlay on defaults.image"]
-  s2 -- no --> s3{"[3] defaults.image set?"}
-  s3 -- yes --> r3["Use defaults.image directly"]
-  s3 -- no --> s4{"[4] base.dockerfile set?"}
-  s4 -- yes --> r4["Build jailoc-base:preset-hash,<br>Docker and agent layers"]
-  s4 -- no --> r5["Build jailoc-base:embedded,<br>Docker and agent layers"]
-  r1 & r2 & r3 & r4 & r5 --> unpack["Pull if missing, docker save,<br>unpack into VM image cache"]
-```
+![Image resolution cascade: 1, a workspace image is used as is; 2, defaults.image with a workspace Dockerfile is built into jailoc-<workspace>:<hash> with the Docker layer, agent layer and workspace Dockerfile; 3, defaults.image is used as is; 4, base.dockerfile is built into jailoc-base:preset-<hash> with the Docker and agent layers; 5, otherwise jailoc-base:embedded is built with the Docker and agent layers. Every result is pulled if missing, exported with docker save and unpacked into the VM image cache.](img/image-resolution.svg)
 
 ### Step 1: Workspace image
 

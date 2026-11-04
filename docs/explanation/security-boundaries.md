@@ -15,23 +15,7 @@ jailoc treats everything inside a workspace VM as hostile: the coding agent, eve
 
 ## The boundaries
 
-```mermaid
-flowchart LR
-  subgraph host["Host (trusted)"]
-    cli["jailoc"]
-    broker["network broker"]
-    vmm["VMM process<br/>Landlock on Linux"]
-    files["host files"]
-  end
-  subgraph vm["Workspace VM (untrusted)"]
-    agent["agent, guest root,<br/>guest kernel"]
-  end
-  agent -- "virtio-fs shares<br/>(declared directories only)" --> vmm
-  vmm --> files
-  agent -- "virtio-net<br/>(only peer)" --> broker
-  broker -- "policy-checked egress" --> net["network"]
-  cli -- "SSH via broker socket" --> agent
-```
+![Trust boundaries of one workspace: on the trusted host, the jailoc CLI reaches the guest over SSH through the network broker's socket, the broker sends policy-checked egress to the internet, and the VMM process (Landlock on Linux) serves host files. The untrusted workspace VM (agent, guest root, guest kernel) crosses the VM boundary only through virtio-net, whose only peer is the broker, and virtio-fs shares limited to declared directories.](img/security-boundaries.svg)
 
 ### VM and host
 
