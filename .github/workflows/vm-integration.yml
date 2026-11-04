@@ -67,7 +67,7 @@ jobs:
       matrix:
         # libkrun's own integration tests run on ubuntu-26.04 because of KVM
         # bugs in older runner kernels (libkrun/libkrun#314).
-        os: [ubuntu-26.04, ubuntu-24.04]
+        os: [ubuntu-26.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
