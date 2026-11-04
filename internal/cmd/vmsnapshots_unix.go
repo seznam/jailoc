@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,32 +22,49 @@ import (
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
-// guestGitConfig is the destination of the git_config default snapshot.
-const guestGitConfig = "/home/agent/.gitconfig"
+// guestGitConfig is the destination of the ~/.gitconfig default snapshot.
+const guestGitConfig = guestHome + "/.gitconfig"
 
 // guestKnownHosts is the destination of the known_hosts default snapshot that
 // accompanies the SSH agent.
-const guestKnownHosts = "/home/agent/.ssh/known_hosts"
+const guestKnownHosts = guestHome + "/.ssh/known_hosts"
 
-// vmSnapshots returns the workspace snapshots: git_config as a default snapshot
-// of ~/.gitconfig (or ~/.config/git/config), overridden by configured snapshots.
-func vmSnapshots(ws *workspace.Resolved) ([]config.Mount, error) {
-	var defaults []string
-	if src := resolveGitConfig(ws.GitConfig); src != "" {
-		defaults = append(defaults, src+":"+guestGitConfig+":ro")
+// snapshot is a copy of a host file or directory bound read-only into the
+// guest. When data is not nil it is the content of the copy, generated from
+// the host file.
+type snapshot struct {
+	config.Mount
+	data []byte
+}
+
+// vmSnapshots returns the workspace snapshots: the Git configuration
+// (git_config, see gitConfigSnapshots) and known_hosts (ssh_auth_sock) as
+// default snapshots, overridden by configured snapshots.
+func vmSnapshots(ws *workspace.Resolved) ([]snapshot, error) {
+	var defaults []snapshot
+	home, homeErr := os.UserHomeDir()
+	if ws.GitConfig && homeErr == nil {
+		defaults = gitConfigSnapshots(home, os.Getenv("XDG_CONFIG_HOME"), func(format string, args ...any) {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "warning: workspace %q: git_config: "+format+"\n", append([]any{ws.Name}, args...)...)
+		})
 	}
-	if ws.SSHAuthSock {
-		if home, err := os.UserHomeDir(); err == nil {
-			if src := filepath.Join(home, ".ssh", "known_hosts"); isRegularFile(src) {
-				defaults = append(defaults, src+":"+guestKnownHosts+":ro")
-			}
+	if ws.SSHAuthSock && homeErr == nil {
+		if src := filepath.Join(home, ".ssh", "known_hosts"); isRegularFile(src) {
+			defaults = append(defaults, snapshot{Mount: mountOf(src, guestKnownHosts)})
 		}
 	}
-	merged, err := config.MergeMounts(defaults, ws.Snapshots)
+	specs := make([]string, 0, len(defaults))
+	byDest := make(map[string]snapshot, len(defaults))
+	for _, d := range defaults {
+		specs = append(specs, d.Host+":"+d.Container+":ro")
+		byDest[d.Container] = d
+	}
+	merged, err := config.MergeMounts(specs, ws.Snapshots)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: merge snapshots: %w", ws.Name, err)
 	}
-	snapshots := make([]config.Mount, 0, len(merged))
+	snapshots := make([]snapshot, 0, len(merged))
+	var configured []string
 	for _, spec := range merged {
 		m, err := config.ParseMount(spec)
 		if err != nil {
@@ -58,15 +76,27 @@ func vmSnapshots(ws *workspace.Resolved) ([]config.Mount, error) {
 		}
 		m.Host = host
 		m.Container = filepath.Clean(m.Container)
-		snapshots = append(snapshots, m)
+		if d, ok := byDest[m.Container]; ok && d.Host == m.Host {
+			snapshots = append(snapshots, d)
+			continue
+		}
+		snapshots = append(snapshots, snapshot{Mount: m})
+		configured = append(configured, m.Container)
 	}
-	return snapshots, nil
+	// A configured snapshot of a directory, such as ~/.config/git, replaces
+	// the default snapshots inside it.
+	return slices.DeleteFunc(snapshots, func(s snapshot) bool {
+		d, ok := byDest[s.Container]
+		return ok && d.Host == s.Host && slices.ContainsFunc(configured, func(c string) bool {
+			return c != s.Container && overlaps(c, s.Container)
+		})
+	}), nil
 }
 
 // checkSnapshots rejects snapshots whose destination overlaps a shared path:
 // binding into a share would create a mount point on the host, and binding
 // over a share's parent would hide the share.
-func checkSnapshots(ws *workspace.Resolved, snapshots []config.Mount, shares []vm.Share) error {
+func checkSnapshots(ws *workspace.Resolved, snapshots []snapshot, shares []vm.Share) error {
 	for _, c := range snapshots {
 		if overlaps(c.Container, guest.Dir) {
 			return fmt.Errorf("workspace %q: snapshot destination %q is reserved by jailoc", ws.Name, c.Container)
@@ -94,7 +124,7 @@ const snapshotsDir = "snapshots"
 // guest binds, are removed. A new directory per generation keeps the guest
 // from reading stale virtio-fs entries. Every write goes through an os.Root
 // that does not follow links out of the directory.
-func stageSnapshots(stateDir string, snapshots []config.Mount, keep string) ([]guest.Snapshot, error) {
+func stageSnapshots(stateDir string, snapshots []snapshot, keep string) ([]guest.Snapshot, error) {
 	root, err := vm.OpenGuestReadOnly(stateDir)
 	if err != nil {
 		return nil, err
@@ -124,14 +154,31 @@ func stageSnapshots(stateDir string, snapshots []config.Mount, keep string) ([]g
 	}
 	binds := make([]guest.Snapshot, 0, len(snapshots))
 	for i, c := range snapshots {
-		name := strconv.Itoa(i)
-		if err := copyTree(root, c.Host, path.Join(genDir, name)); err != nil {
+		dst := path.Join(genDir, strconv.Itoa(i))
+		if err := stageSnapshot(root, c, dst); err != nil {
 			_ = root.RemoveAll(genDir)
 			return nil, fmt.Errorf("snapshot %q: %w", c.Host, err)
 		}
-		binds = append(binds, guest.Snapshot{Source: path.Join(guest.SnapshotsDir, gen, name), Target: c.Container})
+		binds = append(binds, guest.Snapshot{Source: path.Join(guest.SnapshotsDir, gen, strconv.Itoa(i)), Target: c.Container})
 	}
 	return binds, nil
+}
+
+// stageSnapshot writes the generated content of c, or copies its source, to
+// dst inside root.
+func stageSnapshot(root *os.Root, c snapshot, dst string) error {
+	if c.data == nil {
+		return copyTree(root, c.Host, dst)
+	}
+	out, err := root.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := out.Write(c.data); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // snapshotGeneration returns the staging generation that binds come from.
@@ -208,6 +255,6 @@ func copyRegular(root *os.Root, src, dst string, perm fs.FileMode) error {
 }
 
 func isRegularFile(path string) bool {
-	info, err := os.Stat(path)
+	info, err := os.Stat(path) //nolint:gosec // G703: user-configured copy source
 	return err == nil && info.Mode().IsRegular()
 }

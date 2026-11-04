@@ -18,7 +18,6 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/agent"
-	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
@@ -97,7 +96,7 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
 
 // reloadSpec computes the workspace spec for the current configuration
 // without building an image, and the snapshots to stage.
-func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (vm.Spec, []config.Mount, error) {
+func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (vm.Spec, []snapshot, error) {
 	if err := validateSecretSources(ws); err != nil {
 		return vm.Spec{}, nil, fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
 	}

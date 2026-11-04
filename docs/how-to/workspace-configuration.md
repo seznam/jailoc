@@ -114,7 +114,7 @@ mounts = [":/home/agent/.config/ai-instructions"]
     Mounts share directories only. A mount whose host side is a file fails `jailoc up` with `shares directories only; use snapshots`. Use [`snapshots`](#snapshot-files-into-the-workspace) for single files.
 
 !!! note
-    Dangerous host paths are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Guest destinations under `/home/agent/...` are allowed; other system directories are rejected.
+    Dangerous host paths are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Guest destinations under `/home/agent/...` are allowed; other system directories are rejected. On the guest side, `~` stands for `/home/agent`: `~/.config/ai-instructions` and `/home/agent/.config/ai-instructions` are the same destination.
 
 ## Snapshot files into the workspace
 

@@ -1,6 +1,6 @@
 # How to pass through SSH and Git config
 
-This guide shows how to give the agent your SSH agent, Git configuration and SSH known hosts inside the workspace VM, for example to clone private repositories or push over SSH.
+This guide shows how to give the agent your SSH agent, Git configuration and SSH known hosts inside the workspace VM, for example to clone private repositories, push over SSH or sign commits.
 
 ## Enable SSH agent forwarding
 
@@ -27,16 +27,48 @@ jailoc reload my-project
 
 ---
 
+## Copy your Git configuration
+
+jailoc copies your Git configuration into the VM by default, as read-only snapshots taken when the VM starts and on every `jailoc reload`:
+
+| Host file | Guest file |
+|---|---|
+| `~/.gitconfig` | `/home/agent/.gitconfig` |
+| `$XDG_CONFIG_HOME/git/config` (`~/.config/git/config` when `XDG_CONFIG_HOME` is unset) | `/home/agent/.config/git/config` |
+| `$XDG_CONFIG_HOME/git/ignore` | `/home/agent/.config/git/ignore` |
+| `$XDG_CONFIG_HOME/git/attributes` | `/home/agent/.config/git/attributes` |
+
+Missing files are skipped. jailoc also follows the files these configurations reference and copies those under your home directory to the same place under `/home/agent`:
+
+- `include.path` and `includeIf.<condition>.path`, recursively
+- `core.excludesFile`, `core.attributesFile`, `commit.template`
+- `gpg.ssh.allowedSignersFile`
+- `user.signingKey` when it names a file holding an SSH public key
+
+In the copies, paths under your home directory are rewritten to `~/...`, and `includeIf "gitdir:~/..."` conditions are rewritten to your host home directory, because workspace paths keep their host location inside the VM.
+
+jailoc prints a warning and copies nothing for a referenced file that is missing, lies outside your home directory, or is in `~/.ssh`, `~/.gnupg` or `~/.aws` (except the allowed signers file and an SSH public signing key). `$XDG_CONFIG_HOME/git/credentials` is never copied.
+
+!!! note
+    SSH commit signing needs the private key, which stays on the host. Point `user.signingKey` at the public key file (for example `~/.ssh/id_ed25519.pub`) and enable `ssh_auth_sock` so `ssh-keygen` signs through the agent.
+
+To copy other files or a different configuration, add [`snapshots`](../reference/configuration.md#snapshots). A snapshot with the same destination replaces the default copy, and one with an empty host removes it:
+
+```toml
+[workspaces.my-project]
+paths = ["~/projects/my-project"]
+snapshots = [
+  "~/work.gitconfig:~/.gitconfig",
+  ":~/.config/git/ignore",
+]
+```
+
+---
+
+
 ## Disable Git configuration copying
 
-jailoc copies your Git config into the VM at `/home/agent/.gitconfig` by default. It uses the first file it finds:
-
-1. `~/.gitconfig`
-2. `~/.config/git/config`
-
-If neither exists, nothing is copied. The copy is a read-only snapshot taken when the VM starts, so host edits show up after `jailoc reload`.
-
-To turn it off for one workspace:
+To turn the copies off for one workspace:
 
 ```toml
 [workspaces.isolated]

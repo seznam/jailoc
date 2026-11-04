@@ -760,11 +760,8 @@ func ParseMount(spec string) (Mount, error) {
 		}
 	}
 
-	expandedContainer, err := ExpandPath(container)
-	if err != nil {
-		return Mount{}, fmt.Errorf("expand mount container path %q: %w", container, err)
-	}
-	if !strings.HasPrefix(expandedContainer, "/") {
+	container = expandGuestPath(container)
+	if !strings.HasPrefix(container, "/") {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: container path %q must be absolute (start with /)", spec, container)
 	}
 
@@ -786,11 +783,8 @@ func parseRemovalMount(spec string) (Mount, error) {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: mode must be ro or rw", spec)
 	}
 
-	expandedContainer, err := ExpandPath(container)
-	if err != nil {
-		return Mount{}, fmt.Errorf("expand mount container path %q: %w", container, err)
-	}
-	if !strings.HasPrefix(expandedContainer, "/") {
+	container = expandGuestPath(container)
+	if !strings.HasPrefix(container, "/") {
 		return Mount{}, fmt.Errorf("invalid mount spec %q: container path %q must be absolute (start with /)", spec, container)
 	}
 
@@ -991,13 +985,9 @@ func Validate(cfg *Config) error {
 		if err != nil {
 			return fmt.Errorf("defaults: expand mount host path %q: %w", m.Host, err)
 		}
-		expandedContainer, err := ExpandPath(m.Container)
-		if err != nil {
-			return fmt.Errorf("defaults: expand mount container path %q: %w", m.Container, err)
-		}
 
 		m.Host = expandedHost
-		m.Container = filepath.Clean(expandedContainer)
+		m.Container = filepath.Clean(m.Container)
 		if !strings.HasPrefix(m.Container, "/") {
 			return fmt.Errorf("defaults: mount container path %q must be absolute (start with /)", m.Container)
 		}
@@ -1077,11 +1067,7 @@ func Validate(cfg *Config) error {
 				return err
 			}
 
-			expandedContainer, err := ExpandPath(m.Container)
-			if err != nil {
-				return fmt.Errorf("workspace %q: expand mount container path %q: %w", name, m.Container, err)
-			}
-			cleanedContainer := filepath.Clean(expandedContainer)
+			cleanedContainer := filepath.Clean(m.Container)
 			if !strings.HasPrefix(cleanedContainer, "/") {
 				return fmt.Errorf("workspace %q: mount container path %q must be absolute (start with /)", name, cleanedContainer)
 			}
@@ -1210,11 +1196,7 @@ func normalizeSnapshot(spec, context string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: expand snapshot host path %q: %w", context, m.Host, err)
 	}
-	container, err := ExpandPath(m.Container)
-	if err != nil {
-		return "", fmt.Errorf("%s: expand snapshot destination %q: %w", context, m.Container, err)
-	}
-	container = filepath.Clean(container)
+	container := filepath.Clean(m.Container)
 	for _, prefix := range forbiddenMountContainerPrefixes {
 		if container == prefix || strings.HasPrefix(container, prefix+"/") {
 			return "", fmt.Errorf("%s: snapshot destination %q is not allowed (conflicts with system directory %q)", context, container, prefix)
@@ -1304,11 +1286,7 @@ func validateAgentMounts(mounts []string) error {
 		if err := validateMountHostPath(m.Host, "mounts"); err != nil {
 			return err
 		}
-		container, err := ExpandPath(m.Container)
-		if err != nil {
-			return fmt.Errorf("mounts: expand mount container path %q: %w", m.Container, err)
-		}
-		container = filepath.Clean(container)
+		container := filepath.Clean(m.Container)
 		for _, prefix := range forbiddenMountContainerPrefixes {
 			if container == prefix || strings.HasPrefix(container, prefix+"/") {
 				return fmt.Errorf("mounts: mount container path %q is not allowed (conflicts with container-internal directory %q)", container, prefix)
@@ -1429,6 +1407,21 @@ func ExpandPath(path string) (string, error) {
 	return strings.Replace(path, "~", home, 1), nil
 }
 
+// guestHome is the agent user's home directory inside the VM.
+const guestHome = "/home/agent"
+
+// expandGuestPath expands a leading "~" in a VM-side path (a mount or snapshot
+// destination) to the agent's home directory in the VM, not the host home.
+func expandGuestPath(path string) string {
+	if path == "~" {
+		return guestHome
+	}
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		return guestHome + "/" + rest
+	}
+	return path
+}
+
 func expandPaths(ws *Workspace) error {
 	for i, p := range ws.Paths {
 		expanded, err := ExpandPath(p)
@@ -1476,13 +1469,9 @@ func expandPaths(ws *Workspace) error {
 		if err != nil {
 			return fmt.Errorf("expand mount host path %q: %w", m.Host, err)
 		}
-		expandedContainer, err := ExpandPath(m.Container)
-		if err != nil {
-			return fmt.Errorf("expand mount container path %q: %w", m.Container, err)
-		}
 
 		m.Host = expandedHost
-		m.Container = filepath.Clean(expandedContainer)
+		m.Container = filepath.Clean(m.Container)
 		ws.Mounts[i] = formatMount(m)
 	}
 

@@ -400,8 +400,8 @@ func TestParseGitConfigContinuation(t *testing.T) {
 	t.Parallel()
 	got := parseGitConfig([]byte("[core]\n\thooksPath = /a/\\\nb\n# note \\\n\teditor = vi\n"))
 	want := []gitConfigEntry{
-		{section: "core", key: "hookspath", value: "/a/b"},
-		{section: "core", key: "editor", value: "vi"},
+		{section: "core", key: "hookspath", value: "/a/b", first: 1, last: 2},
+		{section: "core", key: "editor", value: "vi", first: 4, last: 4},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("parseGitConfig = %v, want %v", got, want)
@@ -578,7 +578,7 @@ func TestGitConfigValueKeepsQuotedSpace(t *testing.T) {
 	t.Parallel()
 	got := parseGitConfig([]byte("[core]\n\thooksPath = \" x \" # note\n"))
 	if len(got) != 1 || got[0].value != " x " {
-		t.Errorf("parseGitConfig = %q, want value %q", got, " x ")
+		t.Errorf("parseGitConfig = %+v, want value %q", got, " x ")
 	}
 }
 
