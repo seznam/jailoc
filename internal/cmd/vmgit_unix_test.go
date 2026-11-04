@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -58,7 +59,7 @@ func TestGitProtection(t *testing.T) {
 	mk("out")
 	write("out/.git", "gitdir: /nonexistent/jailoc/outside.git\n")
 
-	pins, ro, err := gitProtection([]vm.Share{{HostPath: root}})
+	pins, ro, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
@@ -119,7 +120,7 @@ func TestGitProtectionSymlinkRoot(t *testing.T) {
 	}
 	write("wt/.git", "gitdir: "+resolved+"\n")
 
-	pins, ro, err := gitProtection([]vm.Share{{HostPath: root}})
+	pins, ro, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
@@ -179,13 +180,13 @@ func TestGitProtectionShares(t *testing.T) {
 		{HostPath: filepath.Join(base, "mnt"), GuestPath: "/data"},
 		{HostPath: filepath.Join(base, "ro"), GuestPath: "/ro", ReadOnly: true},
 	}
-	_, ro, err := gitProtection(shares)
+	_, ro, err := gitProtection(shares, nil)
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
 	wantRO := []string{
 		"/data/bare.git/config", "/data/bare.git/hooks",
-		"/data/repo/.git/config", "/data/repo/.git/config.worktree", "/data/repo/.git/hooks",
+		"/data/repo/.git/config", "/data/repo/.git/config.worktree", "/data/repo/.git/hooks", "/data/repo/.git/tools/hooks",
 		"/data/repo/shared.gitconfig", "/data/repo/tools/hooks", "/data/repo/tools/hooks/real-hook",
 	}
 	if !slices.Equal(ro, wantRO) {
@@ -208,7 +209,7 @@ func TestGitProtectionSymlinkedConfig(t *testing.T) {
 	if err := os.Symlink("../../real-config", filepath.Join(root, "repo/.git/config")); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := gitProtection([]vm.Share{{HostPath: root}})
+	_, _, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 	if err == nil {
 		t.Fatal("want error for a symlinked git config")
 	}
@@ -217,7 +218,7 @@ func TestGitProtectionSymlinkedConfig(t *testing.T) {
 
 func TestGitProtectionMissingRoot(t *testing.T) {
 	t.Parallel()
-	if _, _, err := gitProtection([]vm.Share{{HostPath: filepath.Join(t.TempDir(), "missing")}}); err == nil {
+	if _, _, err := gitProtection([]vm.Share{{HostPath: filepath.Join(t.TempDir(), "missing")}}, nil); err == nil {
 		t.Fatal("want error for a missing workspace path")
 	}
 }
@@ -253,7 +254,7 @@ func TestGitProtectionWorktreeConfigStaysPerWorktree(t *testing.T) {
 	write(".git/worktrees/w2/commondir", "../..\n")
 	write("w2/.git", "gitdir: ../.git/worktrees/w2\n")
 
-	_, ro, err := gitProtection([]vm.Share{{HostPath: root}})
+	_, ro, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
@@ -278,7 +279,7 @@ func TestGitProtectionEveryGuestView(t *testing.T) {
 	write("proj/.git/config", "[core]\n")
 	proj := filepath.Join(base, "proj")
 
-	_, ro, err := gitProtection([]vm.Share{{HostPath: proj, GuestPath: "/a"}, {HostPath: proj, GuestPath: "/b"}})
+	_, ro, err := gitProtection([]vm.Share{{HostPath: proj, GuestPath: "/a"}, {HostPath: proj, GuestPath: "/b"}}, nil)
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
@@ -296,7 +297,7 @@ func TestGitProtectionEveryHooksPath(t *testing.T) {
 	write(".git/config", "[core]\n\thooksPath = h1\n[includeIf \"gitdir:/elsewhere/\"]\n\tpath = other.gitconfig\n")
 	write(".git/other.gitconfig", "[core]\n\thooksPath = h2\n")
 
-	_, ro, err := gitProtection([]vm.Share{{HostPath: root}})
+	_, ro, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 	if err != nil {
 		t.Fatalf("gitProtection: %v", err)
 	}
@@ -345,7 +346,7 @@ func TestGitProtectionHookErrors(t *testing.T) {
 			mk(".git/hooks")
 			write(".git/config", "[core]\n")
 			tt.setup(t, root)
-			_, _, err := gitProtection([]vm.Share{{HostPath: root}})
+			_, _, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -386,7 +387,7 @@ func TestGitProtectionCommondirLoop(t *testing.T) {
 			for rel, content := range tt.files {
 				write(rel, content)
 			}
-			_, _, err := gitProtection([]vm.Share{{HostPath: root}})
+			_, _, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -465,7 +466,7 @@ func TestGitProtectionConfigChecks(t *testing.T) {
 			mk, _ := gitTree(t, root)
 			mk(".git/hooks")
 			tt.setup(t, dir, root)
-			_, _, err := gitProtection([]vm.Share{{HostPath: root}})
+			_, _, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -481,7 +482,7 @@ func TestGitProtectionWorktreeConfigFromAnyInclude(t *testing.T) {
 	mk(".git/hooks")
 	write(".git/config", "[includeIf \"gitdir:/elsewhere/\"]\n\tpath = wt.gitconfig\n[extensions]\n\tworktreeConfig = false\n")
 	write(".git/wt.gitconfig", "[extensions]\n\tworktreeConfig = true\n")
-	_, ro, err := gitProtection([]vm.Share{{HostPath: root}})
+	_, ro, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,5 +492,104 @@ func TestGitProtectionWorktreeConfigFromAnyInclude(t *testing.T) {
 	}
 	if _, err := os.Stat(want); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGitProtectionReadOnlyMountHidesRepo(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mk, write := gitTree(t, root)
+	mk(".git/hooks")
+	write(".git/config", "[core]\n")
+	mk("sub/.git/hooks")
+	write("sub/.git/config", "[core]\n")
+	other := t.TempDir()
+
+	shares := []vm.Share{
+		{HostPath: root, GuestPath: "/w"},
+		{HostPath: other, GuestPath: "/w/sub", ReadOnly: true},
+		{HostPath: root, GuestPath: "/w/sub/view", ReadOnly: true},
+	}
+	_, ro, err := gitProtection(shares, nil)
+	if err != nil {
+		t.Fatalf("gitProtection: %v", err)
+	}
+	want := []string{"/w/.git/config", "/w/.git/hooks"}
+	if !slices.Equal(ro, want) {
+		t.Errorf("read-only = %v\nwant       %v", ro, want)
+	}
+}
+
+func TestGitProtectionInheritedHooksPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mk, write := gitTree(t, root)
+	mk(".git/hooks")
+	write(".git/config", "[core]\n")
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(global, []byte("[core]\n\thooksPath = "+filepath.Join(root, "global-hooks")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, ro, err := gitProtection([]vm.Share{{HostPath: root}}, []string{global, filepath.Join(root, "missing")})
+	if err != nil {
+		t.Fatalf("gitProtection: %v", err)
+	}
+	if !slices.Contains(ro, filepath.Join(root, "global-hooks")) {
+		t.Errorf("read-only = %v, want global-hooks", ro)
+	}
+}
+
+func TestGitProtectionIncludeCount(t *testing.T) {
+	t.Parallel()
+	t.Run("loop", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		mk, write := gitTree(t, root)
+		mk(".git/hooks")
+		write(".git/config", "[include]\n\tpath = a.gitconfig\n\tpath = config\n")
+		write(".git/a.gitconfig", "[include]\n\tpath = config\n\tpath = a.gitconfig\n")
+		if _, _, err := gitProtection([]vm.Share{{HostPath: root}}, nil); err != nil {
+			t.Fatalf("gitProtection: %v", err)
+		}
+	})
+	t.Run("too many files", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		mk, write := gitTree(t, root)
+		mk(".git/hooks")
+		var cfg strings.Builder
+		cfg.WriteString("[include]\n")
+		for i := range maxConfigFiles + 1 {
+			name := "inc" + strconv.Itoa(i) + ".gitconfig"
+			cfg.WriteString("\tpath = " + name + "\n")
+			write(".git/"+name, "[user]\n")
+		}
+		write(".git/config", cfg.String())
+		_, _, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
+		if err == nil {
+			t.Fatal("want error")
+		}
+		assertContains(t, err.Error(), "includes more than")
+	})
+}
+
+func TestGitConfigValueKeepsQuotedSpace(t *testing.T) {
+	t.Parallel()
+	got := parseGitConfig([]byte("[core]\n\thooksPath = \" x \" # note\n"))
+	if len(got) != 1 || got[0].value != " x " {
+		t.Errorf("parseGitConfig = %q, want value %q", got, " x ")
+	}
+}
+
+func TestGitBool(t *testing.T) {
+	t.Parallel()
+	for v, want := range map[string]bool{
+		"true": true, "Yes": true, "on": true, "1": true, "2": true, "1k": true, "0x10": true,
+		"false": false, "no": false, "off": false, "0": false, "": false, "bogus": false,
+	} {
+		if got := gitBool(v); got != want {
+			t.Errorf("gitBool(%q) = %v, want %v", v, got, want)
+		}
 	}
 }
