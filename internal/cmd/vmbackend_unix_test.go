@@ -374,11 +374,20 @@ func TestCheckNestedShares(t *testing.T) {
 	if err := os.Symlink(project, alias); err != nil {
 		t.Fatal(err)
 	}
+	// A path that leaves through an alias and comes back through a link
+	// inside the read-write share.
+	external := filepath.Join(dir, "external")
+	if err := os.Symlink(filepath.Join(alias, "link"), external); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name    string
 		shares  []vm.Share
 		wantErr string
 	}{
+		{"link reached through an alias", []vm.Share{{HostPath: project}, {HostPath: filepath.Join(alias, "link", "child"), GuestPath: "/data"}}, "symbolic link"},
+		{"link reached through an outside link", []vm.Share{{HostPath: project}, {HostPath: filepath.Join(external, "child"), GuestPath: "/data"}}, "symbolic link"},
+		{"alias of the read-write share itself", []vm.Share{{HostPath: project}, {HostPath: alias, GuestPath: "/data"}}, ""},
 		{"nested directory", []vm.Share{{HostPath: project}, {HostPath: filepath.Join(project, "real"), GuestPath: "/data"}}, ""},
 		{"separate directories", []vm.Share{{HostPath: project}, {HostPath: outside, GuestPath: "/data"}}, ""},
 		{"link in read-only share", []vm.Share{{HostPath: project, ReadOnly: true}, {HostPath: filepath.Join(project, "link"), GuestPath: "/data"}}, ""},

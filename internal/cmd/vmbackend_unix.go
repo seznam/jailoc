@@ -359,68 +359,88 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 }
 
 // checkNestedShares rejects a share whose host path runs through a symbolic
-// link inside another read-write share. The workspace can replace such a
-// link, which would make the next start share a different host directory.
-// Both paths are compared as written and with symbolic links resolved, so a
-// share configured through an alias of the other share's directory is
-// checked too.
+// link inside a read-write share. The workspace can replace such a link,
+// which would make the next start share a different host directory. The
+// share path is followed link by link, so a path that reaches a read-write
+// share through an alias of its directory is checked too.
 func checkNestedShares(shares []vm.Share) error {
+	var roots, names []string
 	for _, w := range shares {
 		if w.ReadOnly {
 			continue
 		}
-		for _, s := range shares {
-			for _, base := range hostPathForms(w.HostPath, false) {
-				for _, target := range hostPathForms(s.HostPath, true) {
-					if err := checkNoLinkBelow(base, target, s.HostPath, w.HostPath); err != nil {
-						return err
-					}
-				}
+		if real, err := filepath.EvalSymlinks(w.HostPath); err == nil {
+			roots = append(roots, real)
+			names = append(names, w.HostPath)
+		}
+	}
+	for _, s := range shares {
+		link, i, err := linkInside(s.HostPath, roots)
+		if err != nil {
+			return fmt.Errorf("share %s: %w", s.HostPath, err)
+		}
+		if link != "" {
+			return fmt.Errorf("share %s: %s is a symbolic link inside the read-write share %s; use the path it points to", s.HostPath, link, names[i])
+		}
+	}
+	return nil
+}
+
+// maxLinkHops bounds the symbolic links linkInside follows.
+const maxLinkHops = 255
+
+// linkInside follows path from the file system root, resolving symbolic
+// links one at a time, and returns the first link it passes through that
+// lies strictly inside one of roots, which must be free of symbolic links,
+// with the index of that root. It returns "" and -1 when there is none or
+// the rest of the path does not exist.
+func linkInside(path string, roots []string) (string, int, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", -1, fmt.Errorf("resolve %s: %w", path, err)
+	}
+	sep := string(filepath.Separator)
+	cur, rest, hops := sep, strings.Split(path, sep), 0
+	for len(rest) > 0 {
+		part := rest[0]
+		rest = rest[1:]
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, part)
+		info, err := os.Lstat(next)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", -1, nil
+		}
+		if err != nil {
+			return "", -1, fmt.Errorf("resolve %s: %w", path, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		for i, r := range roots {
+			if rel, err := filepath.Rel(r, next); err == nil && rel != "." && filepath.IsLocal(rel) {
+				return next, i, nil
 			}
 		}
-	}
-	return nil
-}
-
-// hostPathForms returns p as written and with symbolic links resolved. With
-// parentOnly, only the parent is resolved, so a link at p itself stays
-// visible to checkNoLinkBelow.
-func hostPathForms(p string, parentOnly bool) []string {
-	forms := []string{p}
-	var real string
-	var err error
-	if parentOnly {
-		var dir string
-		dir, err = filepath.EvalSymlinks(filepath.Dir(p))
-		real = filepath.Join(dir, filepath.Base(p))
-	} else {
-		real, err = filepath.EvalSymlinks(p)
-	}
-	if err == nil && real != p {
-		forms = append(forms, real)
-	}
-	return forms
-}
-
-// checkNoLinkBelow fails when target lies strictly inside base and a path
-// component between them is a symbolic link.
-func checkNoLinkBelow(base, target, share, writable string) error {
-	rel, err := filepath.Rel(base, target)
-	if err != nil || rel == "." || !filepath.IsLocal(rel) {
-		return nil
-	}
-	p := base
-	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
-		p = filepath.Join(p, part)
-		info, err := os.Lstat(p)
+		if hops++; hops > maxLinkHops {
+			return "", -1, fmt.Errorf("resolve %s: too many levels of symbolic links", path)
+		}
+		target, err := os.Readlink(next)
 		if err != nil {
-			return fmt.Errorf("share %s: %w", share, err)
+			return "", -1, fmt.Errorf("resolve %s: %w", path, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("share %s: %s is a symbolic link inside the read-write share %s; use the path it points to", share, p, writable)
+		if filepath.IsAbs(target) {
+			cur = sep
 		}
+		rest = append(strings.Split(target, sep), rest...)
 	}
-	return nil
+	return "", -1, nil
 }
 
 // vmMinMemoryMiB is the smallest workspace VM that boots reliably.
