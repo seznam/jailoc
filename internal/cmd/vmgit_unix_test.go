@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"syscall"
 	"testing"
 
 	"github.com/seznam/jailoc/internal/vm"
@@ -403,5 +404,92 @@ func TestParseGitConfigContinuation(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("parseGitConfig = %v, want %v", got, want)
+	}
+}
+
+func TestGitProtectionConfigChecks(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir, root string)
+		want  string
+	}{
+		{
+			name: "config larger than the limit",
+			setup: func(t *testing.T, _, root string) {
+				t.Helper()
+				data := append([]byte("[core]\n"), make([]byte, maxConfigSize)...)
+				if err := os.WriteFile(filepath.Join(root, ".git/config"), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "cannot be read",
+		},
+		{
+			name: "included config is a FIFO",
+			setup: func(t *testing.T, _, root string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, ".git/config"), []byte("[include]\n\tpath = extra.gitconfig\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := syscall.Mkfifo(filepath.Join(root, ".git/extra.gitconfig"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "not a regular file",
+		},
+		{
+			name: "include through an alias and a link inside the share",
+			setup: func(t *testing.T, dir, root string) {
+				t.Helper()
+				alias := filepath.Join(dir, "alias")
+				if err := os.Symlink(root, alias); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(t.TempDir(), filepath.Join(root, "link")); err != nil {
+					t.Fatal(err)
+				}
+				cfg := "[include]\n\tpath = " + filepath.Join(alias, "link", "x.gitconfig") + "\n"
+				if err := os.WriteFile(filepath.Join(root, ".git/config"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "symbolic link",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			root := filepath.Join(dir, "project")
+			mk, _ := gitTree(t, root)
+			mk(".git/hooks")
+			tt.setup(t, dir, root)
+			_, _, err := gitProtection([]vm.Share{{HostPath: root}})
+			if err == nil {
+				t.Fatal("want error")
+			}
+			assertContains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestGitProtectionWorktreeConfigFromAnyInclude(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mk, write := gitTree(t, root)
+	mk(".git/hooks")
+	write(".git/config", "[includeIf \"gitdir:/elsewhere/\"]\n\tpath = wt.gitconfig\n[extensions]\n\tworktreeConfig = false\n")
+	write(".git/wt.gitconfig", "[extensions]\n\tworktreeConfig = true\n")
+	_, ro, err := gitProtection([]vm.Share{{HostPath: root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, ".git/config.worktree")
+	if !slices.Contains(ro, want) {
+		t.Fatalf("read-only paths %q do not include %s", ro, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatal(err)
 	}
 }
