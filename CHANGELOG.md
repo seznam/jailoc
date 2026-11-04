@@ -1,5 +1,56 @@
 # Changelog
 
+## [2.0.0-rc.3](https://github.com/seznam/jailoc/compare/v2.0.0-rc.2...v2.0.0-rc.3) (2026-11-04)
+
+
+### Features
+
+* **git:** extend protect_git to mounts, worktree config, hooksPath and includes ([efdebf2](https://github.com/seznam/jailoc/commit/efdebf2f783011b446f8afef8dcd2ebd7baa8445))
+* **guest:** redact secret values from the exec log ([1c8a74e](https://github.com/seznam/jailoc/commit/1c8a74e9bdc6f59120aab691aa0aebe0aace409d))
+* **vm:** keep snapshots and config copies on a read-only internal share ([01b2016](https://github.com/seznam/jailoc/commit/01b201613b12538c2b0d43b2859b614b6b84ee45))
+* **vm:** name the VM runner process after the workspace ([a1bda94](https://github.com/seznam/jailoc/commit/a1bda9441801d16cdf180564abfdc42759966e8d))
+
+
+### Bug Fixes
+
+* **cmd:** check nested shares against resolved share paths ([a4eb49a](https://github.com/seznam/jailoc/commit/a4eb49a12bf146f8b8fc74d7225bea1884dcc5b9))
+* **cmd:** escape guest-provided text in session listings and errors ([0d18996](https://github.com/seznam/jailoc/commit/0d1899633b215ed5c92aca8f1d48cdb073fd0787))
+* **cmd:** find the broker reload event across log rotation and show flow limits ([7d93536](https://github.com/seznam/jailoc/commit/7d9353610d76595fa585e08d349c21e73e4f7fcf))
+* **cmd:** follow share paths link by link when checking nested shares ([86f87a5](https://github.com/seznam/jailoc/commit/86f87a52877419ed72a64acb38a2c197227c1511))
+* **cmd:** keep following a log file until it is drained after rotation ([3776192](https://github.com/seznam/jailoc/commit/377619274cc8753a321548536a96e7c068f105fa))
+* **cmd:** read guest-written files as bounded regular files ([7aff9f2](https://github.com/seznam/jailoc/commit/7aff9f202080048a52853860bd27a82721b274cf))
+* **deps:** bump the go-minor-patch group across 1 directory with 3 updates ([#267](https://github.com/seznam/jailoc/issues/267)) ([cd13211](https://github.com/seznam/jailoc/commit/cd132113bc02d17b07ac8c60ba4a726f0473fd53))
+* **git:** honour inherited hooksPath, read-only mounts and Git config value rules in protect_git ([d2b89ad](https://github.com/seznam/jailoc/commit/d2b89ada6775e56552f189a7c9ccddc8e19337f9))
+* **git:** protect every hooksPath, guest view and worktree config separately ([8caff39](https://github.com/seznam/jailoc/commit/8caff39f67b284105a2a5363ac92053ae4f2b579))
+* **git:** reject unreadable config files and links reached through share aliases ([410506d](https://github.com/seznam/jailoc/commit/410506da59d9cb854338707b22653833ed979a79))
+* **guest:** detach snapshot mounts by descriptor on reload ([ac3ba6e](https://github.com/seznam/jailoc/commit/ac3ba6ed3bb2975e49a2075e910a78cd91c7e3f7))
+* **guest:** keep redacting secret values replaced by a reload ([0291252](https://github.com/seznam/jailoc/commit/0291252bd4369a58e96ee26d7a45c61eb292627d))
+* **migrate:** extract v1 volumes inside the destination root ([9725506](https://github.com/seznam/jailoc/commit/9725506436c8c319661f5e5004e86820d64aa8c6))
+* **netbroker:** apply blocked DNS zones to answers and multi-question queries ([97a2a2d](https://github.com/seznam/jailoc/commit/97a2a2d555117385e28cbf6e552437a09588b7c2))
+* **netbroker:** reopen the traffic log after a failed rotation ([fc41fc9](https://github.com/seznam/jailoc/commit/fc41fc9f6ba53cb8811d4b842bd5875723b0d7b9))
+* **vm:** grant the VM process only the devices and files it uses ([01bd527](https://github.com/seznam/jailoc/commit/01bd527d39c1c38e6afbb47b02282a4a9f0fd129))
+* **vm:** keep unpacked image files in the user's primary group ([ec522c9](https://github.com/seznam/jailoc/commit/ec522c9b1456c5102bf2cb9d61afbad715684737))
+
+
+### Performance Improvements
+
+* **netbroker:** cap concurrent flows and rotate the traffic log ([8f50a4f](https://github.com/seznam/jailoc/commit/8f50a4f9e44548cbc4a2c0741444d26da805e4d9))
+
+
+### Documentation
+
+* add SVG diagrams for startup, network policy, files, secrets, trifecta, memory and sessions ([fbc8354](https://github.com/seznam/jailoc/commit/fbc83546d5459056590078a0ee2ecdf0c59ba14d))
+* describe protect_git coverage, internal shares, DNS filtering and broker limits ([804d600](https://github.com/seznam/jailoc/commit/804d600be661d83426662538b9d1a39fcf60ee54))
+* draw the trust boundaries and image resolution as SVG diagrams ([8055e4c](https://github.com/seznam/jailoc/commit/8055e4cc57879ff5103e03b89ecc2342b1b90d25))
+* explain VM memory, disk and host resource use ([8f654de](https://github.com/seznam/jailoc/commit/8f654dee7efc4d534f12887f49f49f770a9ec87a))
+* replace the architecture flowchart with an SVG diagram ([5f7ccec](https://github.com/seznam/jailoc/commit/5f7ccec12b97bc09c21fa6b22ca08e8b0b3de41d))
+* **security:** add security policy and security boundaries page ([4f5ead3](https://github.com/seznam/jailoc/commit/4f5ead344e8d568ad6b89920449fc08657965239))
+
+
+### Tests
+
+* **netbroker:** keep test socket paths within the macOS length limit ([e0acee4](https://github.com/seznam/jailoc/commit/e0acee4ca19531fec3a5277ed41aaafd455dca28))
+
 ## [2.0.0-rc.2](https://github.com/seznam/jailoc/compare/v2.0.0-rc.1...v2.0.0-rc.2) (2026-11-03)
 
 
