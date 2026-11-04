@@ -33,6 +33,7 @@ On Linux hosts the image's root filesystem is mounted idmapped, so files owned b
 | Use the `docker` CLI in a `RUN` step with `enable_docker = false` | Fatal | The build fails: Docker is installed only for workspaces with `enable_docker` on |
 | Remove `ca-certificates` | Breaking | TLS fails, and a forwarded `ca_bundle` has no trust store to join |
 | Remove `sudo` | Degraded | The agent cannot install packages at runtime |
+| Remove `gpg` while `gpg_agent` is on | Degraded | The public keys are not imported and GPG signing is unavailable |
 | Build for a CPU architecture other than the host's | Fatal | The VM cannot run the image |
 
 **Severity definitions:**

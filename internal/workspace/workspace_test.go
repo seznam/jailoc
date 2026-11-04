@@ -906,12 +906,14 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 			cfg := &config.Config{
 				Defaults: config.Defaults{
 					SSHAuthSock: tt.defaultSSH,
+					GPGAgent:    tt.defaultSSH,
 					GitConfig:   tt.defaultGit,
 				},
 				Workspaces: map[string]config.Workspace{
 					"test": {
 						Paths:       []string{"/tmp"},
 						SSHAuthSock: tt.workspaceSSH,
+						GPGAgent:    tt.workspaceSSH,
 						GitConfig:   tt.workspaceGit,
 					},
 				},
@@ -924,6 +926,10 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 
 			if resolved.SSHAuthSock != tt.expectedSSH {
 				t.Fatalf("SSHAuthSock = %v, want %v", resolved.SSHAuthSock, tt.expectedSSH)
+			}
+			// gpg_agent resolves like ssh_auth_sock: off unless set, workspace wins.
+			if resolved.GPGAgent != tt.expectedSSH {
+				t.Fatalf("GPGAgent = %v, want %v", resolved.GPGAgent, tt.expectedSSH)
 			}
 			if resolved.GitConfig != tt.expectedGit {
 				t.Fatalf("GitConfig = %v, want %v", resolved.GitConfig, tt.expectedGit)

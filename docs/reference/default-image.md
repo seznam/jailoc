@@ -33,6 +33,7 @@ The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of th
 | jq | `jq` (apt) | `jq` |
 | git | `git` (apt) | `git` |
 | openssh-client | `openssh-client` (apt) | `ssh` |
+| gpg | `gpg` (apt) | `gpg` |
 | curl | `curl` (apt) | `curl` |
 | sudo | `sudo` (apt) | `sudo` |
 | unzip | `unzip` (apt) | `unzip` |

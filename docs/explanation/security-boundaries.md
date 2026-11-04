@@ -23,7 +23,7 @@ The hypervisor (KVM on Linux, Hypervisor.framework on macOS) separates the guest
 
 - virtio-fs shares for workspace `paths`, `mounts` and jailoc's internal shares. Read-only shares are enforced by the VMM, so guest root can't remount them writable.
 - One virtio-net interface whose only peer is the workspace's network broker.
-- Unix sockets on the host that the broker forwards: the guest SSH server for jailoc, the host SSH agent with `ssh_auth_sock`, and `host_ports` targets.
+- Unix sockets on the host that the broker forwards: the guest SSH server for jailoc, the host SSH agent with `ssh_auth_sock`, the host gpg-agent extra socket with `gpg_agent`, and `host_ports` targets.
 
 libkrun's virtio-fs server doesn't confine file requests to the shared directories by itself. On Linux, jailoc runs the VMM process under Landlock with access only to the VM runtime, `/dev/kvm` and the null and random devices, the VM's root filesystem, data directory and disks, the unpacked image (read-only) and the declared shares, and refuses to start a VM when the kernel lacks Landlock. Landlock doesn't cover metadata operations such as `stat`, `chmod` or extended attributes. On macOS the VMM process runs without equivalent confinement.
 
@@ -73,6 +73,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | Snapshots, Git configuration, `known_hosts` | Host to guest | Read a copy; nothing writes back | `snapshots`, `git_config`, `ssh_auth_sock` |
 | Secrets | Host to guest | Read every configured value | `secrets` |
 | SSH agent | Guest to host | Ask the host agent to sign while forwarded; keys stay on the host | `ssh_auth_sock` |
+| GPG agent | Guest to host | Ask the host gpg-agent to sign or decrypt with any key it holds while forwarded; the extra socket refuses key export and management; keys stay on the host | `gpg_agent` |
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
 | CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |

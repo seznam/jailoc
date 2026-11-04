@@ -47,6 +47,7 @@ type Resolved struct {
 	Image           string
 	Env             []string
 	SSHAuthSock     bool
+	GPGAgent        bool
 	GitConfig       bool
 	Secrets         []ResolvedSecret
 	CPU             float64
@@ -176,6 +177,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Env:             mergedEnv,
 		Secrets:         mergedSecrets,
 		SSHAuthSock:     boolWithOverride(cfg.Defaults.SSHAuthSock, ws.SSHAuthSock),
+		GPGAgent:        boolWithOverride(cfg.Defaults.GPGAgent, ws.GPGAgent),
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),

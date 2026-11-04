@@ -41,6 +41,7 @@ const (
 # allowed_hosts = ["example.com"]
 # allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
+# gpg_agent = false
 # git_config = true
 # enable_docker = false
 # filtered_dns = false
@@ -77,6 +78,7 @@ paths = []
 # build_context = ""
 # dockerfile = ""
 # ssh_auth_sock = false
+# gpg_agent = false
 # git_config = true
 # enable_docker = false
 # filtered_dns = false
@@ -298,6 +300,7 @@ type Defaults struct {
 	Secrets         Secrets                  `toml:"secrets,omitempty"`
 	Image           string                   `toml:"image,omitempty"`
 	SSHAuthSock     bool                     `toml:"ssh_auth_sock,omitempty"`
+	GPGAgent        bool                     `toml:"gpg_agent,omitempty"`
 	GitConfig       *bool                    `toml:"git_config,omitempty"`
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
@@ -330,6 +333,7 @@ type Workspace struct {
 	Dockerfile      string                   `toml:"dockerfile,omitempty"`
 	Image           string                   `toml:"image,omitempty"`
 	SSHAuthSock     *bool                    `toml:"ssh_auth_sock,omitempty"`
+	GPGAgent        *bool                    `toml:"gpg_agent,omitempty"`
 	GitConfig       *bool                    `toml:"git_config,omitempty"`
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`

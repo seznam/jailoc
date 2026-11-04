@@ -141,8 +141,8 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 		}
 		return fmt.Sprintf("%s  %s  tcp  %s → guest port %d", ts, colInfo.Sprint("IN   "), escapeVisible(e.Host), e.GuestPort)
 	case "service":
-		if e.GuestPort == guest.SSHAgentPort && !f.all {
-			return "" // SSH agent forwarding
+		if (e.GuestPort == guest.SSHAgentPort || e.GuestPort == guest.GPGAgentPort) && !f.all {
+			return "" // SSH and GPG agent forwarding
 		}
 		return fmt.Sprintf("%s  %s  %-4s gateway port %d%s", ts, colInfo.Sprint("HOST "), escapeVisible(e.Network), e.GuestPort, serviceTarget(e))
 	case "service-error":

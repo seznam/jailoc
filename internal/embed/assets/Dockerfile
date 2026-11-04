@@ -32,6 +32,7 @@ ARG JAILOC_CLEAN_CACHES
 # Runtime packages:
 #   curl, ca-certificates  — HTTPS fetches (uv install, package downloads)
 #   git, openssh-client    — repo operations (clone, push over SSH)
+#   gpg                    — GPG signing through the forwarded host agent (gpg_agent)
 #   sudo                   — agent user has passwordless sudo for apt installs
 #   python3                — Python runtime for pyright and user scripts
 #   ripgrep (rg), fd-find, jq — fast search/filter tools used by coding agents
@@ -43,7 +44,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     mv /etc/apt/apt.conf.d/docker-clean /etc/apt/docker-clean \
     && apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates git openssh-client sudo \
+    curl ca-certificates git gpg openssh-client sudo \
     python3 ripgrep fd-find jq unzip xz-utils libatomic1 \
     && mv /etc/apt/docker-clean /etc/apt/apt.conf.d/docker-clean \
     && if [ -n "$JAILOC_CLEAN_CACHES" ]; then apt-get clean && rm -rf /var/lib/apt/lists/*; fi

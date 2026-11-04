@@ -1851,6 +1851,32 @@ paths = ["/data"]
 				if ws.GitConfig != nil {
 					t.Fatalf("expected workspace.git_config = nil, got %v", *ws.GitConfig)
 				}
+				if ws.GPGAgent != nil {
+					t.Fatalf("expected workspace.gpg_agent = nil, got %v", *ws.GPGAgent)
+				}
+				if cfg.Defaults.GPGAgent {
+					t.Fatal("expected defaults.gpg_agent = false by default")
+				}
+			},
+		},
+		{
+			name: "gpg_agent in defaults and workspace",
+			tomlContent: `
+[defaults]
+gpg_agent = true
+
+[workspaces.default]
+paths = ["/data"]
+gpg_agent = false
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if !cfg.Defaults.GPGAgent {
+					t.Fatal("expected defaults.gpg_agent = true")
+				}
+				ws := cfg.Workspaces["default"]
+				if ws.GPGAgent == nil || *ws.GPGAgent {
+					t.Fatal("expected workspace.gpg_agent = false")
+				}
 			},
 		},
 	}
@@ -1879,11 +1905,13 @@ func TestRoundTripSSHGitFields(t *testing.T) {
 	writeFile(t, path, `
 [defaults]
 ssh_auth_sock = true
+gpg_agent = true
 git_config = true
 
 [workspaces.default]
 paths = ["/data"]
 ssh_auth_sock = false
+gpg_agent = false
 git_config = true
 `)
 
@@ -1912,6 +1940,9 @@ git_config = true
 	if !first.Defaults.SSHAuthSock {
 		t.Fatal("expected defaults.ssh_auth_sock = true after round-trip")
 	}
+	if !first.Defaults.GPGAgent {
+		t.Fatal("expected defaults.gpg_agent = true after round-trip")
+	}
 	if first.Defaults.GitConfig == nil || !*first.Defaults.GitConfig {
 		t.Fatal("expected defaults.git_config = true after round-trip")
 	}
@@ -1919,6 +1950,9 @@ git_config = true
 	ws := first.Workspaces["default"]
 	if ws.SSHAuthSock == nil || *ws.SSHAuthSock {
 		t.Fatal("expected workspace.ssh_auth_sock = false after round-trip")
+	}
+	if ws.GPGAgent == nil || *ws.GPGAgent {
+		t.Fatal("expected workspace.gpg_agent = false after round-trip")
 	}
 	if ws.GitConfig == nil || !*ws.GitConfig {
 		t.Fatal("expected workspace.git_config = true after round-trip")

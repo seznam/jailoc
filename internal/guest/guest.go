@@ -45,6 +45,9 @@ const (
 	SSHAgentPort = 7022
 	// SSHAgentSocket is the agent socket sessions see as SSH_AUTH_SOCK.
 	SSHAgentSocket = "/run/ssh-agent.sock"
+	// GPGAgentPort is the gateway port the broker relays to the host gpg
+	// agent's extra socket when the workspace forwards it.
+	GPGAgentPort = 7023
 )
 
 // HostAliases resolve to the broker gateway in /etc/hosts, where host_ports
@@ -117,6 +120,9 @@ type Config struct {
 	// SSHAgent exposes the host SSH agent at SSHAgentSocket, relayed
 	// through the broker gateway.
 	SSHAgent bool `json:"ssh_agent,omitempty"`
+	// GPGAgent exposes the host gpg agent at the agent user's gpg agent
+	// socket, relayed through the broker gateway.
+	GPGAgent bool `json:"gpg_agent,omitempty"`
 	// HostPorts are the broker gateway ports relayed to host services
 	// (host_ports); the guest mirrors each on its loopback.
 	HostPorts []uint16 `json:"host_ports,omitempty"`
@@ -148,4 +154,7 @@ type Docker struct {
 type Secrets struct {
 	Env   []string          `json:"env,omitempty"`
 	Files map[string][]byte `json:"files,omitempty"`
+	// GPGPublicKeys are OpenPGP public keys imported into the agent user's
+	// keyring, so that gpg can sign with the forwarded agent.
+	GPGPublicKeys []byte `json:"gpg_public_keys,omitempty"`
 }

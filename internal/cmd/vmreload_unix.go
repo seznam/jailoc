@@ -67,10 +67,12 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved, purgeCache bool) erro
 	next.Policy = want.Policy
 	next.Forwards = want.Forwards
 	next.SSHAgent = want.SSHAgent
+	next.GPGAgent = want.GPGAgent
 	next.HostServices = want.HostServices
 	g := *running.Guest
 	g.CABundle = want.Guest.CABundle
 	g.SSHAgent = want.Guest.SSHAgent
+	g.GPGAgent = want.Guest.GPGAgent
 	g.HostPorts = want.Guest.HostPorts
 	g.Snapshots = binds
 	next.Guest = &g
@@ -306,10 +308,10 @@ func scanReloadEvent(r io.Reader) (brokerReload, bool) {
 	return brokerReload{}, false
 }
 
-// reloadGuest asks the guest init to apply the CA bundle, SSH agent and snapshots of g
-// and waits for its answer.
+// reloadGuest asks the guest init to apply the CA bundle, SSH and GPG agents,
+// host ports and snapshots of g and waits for its answer.
 func reloadGuest(stateDir string, g guest.Config) error {
-	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots}
+	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, GPGAgent: g.GPGAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode reload request: %w", err)

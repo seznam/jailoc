@@ -128,6 +128,7 @@ Updated live:
 - Network policy: `allowed_hosts`, `allowed_networks`, `filtered_dns`
 - Published `ports`
 - SSH agent: `ssh_auth_sock`, with the socket read again from `$SSH_AUTH_SOCK`
+- GPG agent: `gpg_agent`, with the socket looked up again with `gpgconf` and the public keys imported again
 - `ca_bundle`
 - `snapshots`, including the Git configuration and `known_hosts`: every reload copies the sources again, adds new entries and removes dropped ones
 - `env`, `env_file` and secrets
