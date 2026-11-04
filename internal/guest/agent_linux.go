@@ -61,9 +61,9 @@ func startSocketRelay(logger *slog.Logger, acct account, sock string, port int, 
 	if err != nil {
 		return nil, fmt.Errorf("%s: listen: %w", name, err)
 	}
-	if err := os.Chown(sock, int(acct.uid), int(acct.gid)); err != nil {
+	if err := chown(sock, acct); err != nil {
 		_ = l.Close()
-		return nil, fmt.Errorf("%s: chown socket: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if err := os.Chmod(sock, 0o600); err != nil {
 		_ = l.Close()
