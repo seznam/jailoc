@@ -45,6 +45,6 @@ func TUIPluginJSON() []byte { return tuiPluginJSON }
 // OmOExtensionJS returns the embedded OmO extension.
 func OmOExtensionJS() []byte { return omoExtensionJS }
 
-// StatusLineJS returns the embedded status line script of Claude Code and
-// GitHub Copilot CLI.
+// StatusLineJS returns the embedded status line script of Claude Code,
+// GitHub Copilot CLI and Antigravity CLI.
 func StatusLineJS() []byte { return statusLineJS }

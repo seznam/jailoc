@@ -202,20 +202,20 @@ func writeAgentFiles(ws *workspace.Resolved, cacheDir string) error {
 			"statusline.mjs":       embed.StatusLineJS(),
 			"claude-settings.json": settings,
 		})
-	case agent.CopilotStatusLine:
+	case agent.CopilotStatusLine, agent.AgyStatusLine:
 		return writeTUIPlugin(cacheDir, map[string][]byte{"statusline.mjs": embed.StatusLineJS()})
 	default:
 		return nil
 	}
 }
 
-// statusLineCommand is the status line command of harness (claude or
-// copilot) that runs the jailoc status line script.
+// statusLineCommand is the status line command of harness (claude, copilot
+// or agy) that runs the jailoc status line script.
 func statusLineCommand(harness string) string {
 	return "node " + tuiPluginContainerDir + "/statusline.mjs " + harness
 }
 
-// statusLine is the statusLine setting of harness (claude or copilot).
+// statusLine is the statusLine setting of harness (claude, copilot or agy).
 func statusLine(harness string) map[string]string {
 	return map[string]string{"type": "command", "command": statusLineCommand(harness)}
 }

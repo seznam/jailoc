@@ -9,7 +9,7 @@ The image is a root file system, not a container. jailoc ignores its `ENTRYPOINT
 An image used directly (`image`) or built from a custom base Dockerfile (`[base] dockerfile`) needs:
 
 - a user `agent` with UID 1000 and home directory `/home/agent`;
-- `npm` on `PATH` when jailoc installs the [coding agent](coding-agents.md) on top of a `[base] dockerfile`, or the agent binary (for example `opencode` or `claude`) on `PATH` in an image used directly;
+- `npm` on `PATH` (for Antigravity CLI: `curl`, `tar` and `sha256sum` on a glibc system) when jailoc installs the [coding agent](coding-agents.md) on top of a `[base] dockerfile`, or the agent binary (for example `opencode` or `claude`) on `PATH` in an image used directly;
 - `PATH` including `/home/agent/.local/bin`, and for OpenCode `/home/agent/.opencode/bin`;
 - for Docker inside the VM, `apt-get` (or `nft` on `PATH`) when jailoc adds its Docker layer on top of a `[base] dockerfile`, or `dockerd` and `nftables` in an image used directly (see [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm)).
 

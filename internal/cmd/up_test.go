@@ -395,6 +395,7 @@ func TestWriteAgentFilesIndicators(t *testing.T) {
 	}{
 		{"omo", map[string][]byte{"omo.js": embed.OmOExtensionJS()}},
 		{"copilot", map[string][]byte{"statusline.mjs": embed.StatusLineJS()}},
+		{"agy", map[string][]byte{"statusline.mjs": embed.StatusLineJS()}},
 		{"claude", map[string][]byte{
 			"statusline.mjs":       embed.StatusLineJS(),
 			"claude-settings.json": []byte(`{"statusLine":{"command":"node /etc/jailoc-tui-plugin/statusline.mjs claude","type":"command"}}`),

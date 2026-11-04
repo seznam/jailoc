@@ -1,6 +1,6 @@
 # How jailoc Works
 
-jailoc is a CLI tool that runs coding agents ([OpenCode](https://opencode.ai), Claude Code, GitHub Copilot CLI or OmO, one per workspace) inside per-workspace micro-VMs. Each workspace boots its own libkrun virtual machine with its own kernel, sees only the host directories shared with it, and reaches the network only through a host-side broker that blocks private infrastructure while leaving the public internet open.
+jailoc is a CLI tool that runs coding agents ([OpenCode](https://opencode.ai), Claude Code, GitHub Copilot CLI, OmO or Antigravity CLI, one per workspace) inside per-workspace micro-VMs. Each workspace boots its own libkrun virtual machine with its own kernel, sees only the host directories shared with it, and reaches the network only through a host-side broker that blocks private infrastructure while leaving the public internet open.
 
 The problem it solves is simple to state. An autonomous coding agent running directly on a machine can read any file the user can read, call any network endpoint, and change anything the user can touch. jailoc draws a hardware-virtualization boundary around it. Inside the VM the agent can do what it likes, including becoming root. Outside it, the agent has only what the workspace configuration grants.
 

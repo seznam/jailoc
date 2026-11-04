@@ -1,7 +1,7 @@
-// jailoc status line for Claude Code ("claude") and GitHub Copilot CLI
-// ("copilot"): shows the workspace. For Claude Code, whose --settings
-// replace the user's status line, it chains the status line command of
-// the user's settings and prefixes its first line.
+// jailoc status line for Claude Code ("claude"), GitHub Copilot CLI
+// ("copilot") and Antigravity CLI ("agy"): shows the workspace. For Claude
+// Code, whose --settings replace the user's status line, it chains the
+// status line command of the user's settings and prefixes its first line.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";

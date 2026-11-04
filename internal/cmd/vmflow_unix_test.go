@@ -177,6 +177,7 @@ func TestStatusLabels(t *testing.T) {
 		{"sessions attached", sessionsLabel(2, 1), "2 (1 attached)"},
 		{"agent", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "claude", Package: "@anthropic-ai/claude-code", Version: "2.1.318"}, AgentInstall: true}), "claude (@anthropic-ai/claude-code@2.1.318)"},
 		{"agent args", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "omo", Package: "omo-ai"}, AgentInstall: true, AgentArgs: []string{"--model", "x"}}), "omo (omo-ai@latest), args: --model x"},
+		{"agent release", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "agy", Version: "1.5.0", Release: &agent.Release{Repo: "google-antigravity/antigravity-cli"}}, AgentInstall: true}), "agy (google-antigravity/antigravity-cli@1.5.0)"},
 		{"agent from image", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "opencode", Package: "@opencode/cli"}}), "opencode (installed by the image)"},
 	}
 	for _, tt := range tests {

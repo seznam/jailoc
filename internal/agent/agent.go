@@ -6,6 +6,7 @@ package agent
 import (
 	"maps"
 	"slices"
+	"strings"
 )
 
 // Default is the harness of a workspace that does not set agent.
@@ -39,6 +40,9 @@ const (
 	// CopilotStatusLine: GitHub Copilot CLI runs the status line command
 	// that jailoc adds to its settings.json.
 	CopilotStatusLine
+	// AgyStatusLine: Antigravity CLI runs the status line command that
+	// jailoc adds to its settings.json.
+	AgyStatusLine
 )
 
 // Env returns the environment variable that makes the agent load the
@@ -66,6 +70,47 @@ func (p TUIPlugin) Args() []string {
 	}
 }
 
+// SettingsFile returns the settings file of the agent, relative to its
+// state directory, to which jailoc adds the status line, and the harness
+// argument of the status line script. ok is false when jailoc doesn't
+// edit the agent's settings.
+func (p TUIPlugin) SettingsFile() (file, harness string, ok bool) {
+	switch p {
+	case CopilotStatusLine:
+		return "settings.json", "copilot", true
+	case AgyStatusLine:
+		return "antigravity-cli/settings.json", "agy", true
+	default:
+		return "", "", false
+	}
+}
+
+// Release is a native binary of the agent that the built-in image layer
+// downloads from a GitHub release instead of installing an npm package.
+type Release struct {
+	// Repo is the GitHub repository (owner/name) that publishes the release;
+	// its tags are the agent versions.
+	Repo string
+	// Asset is the name of the release's tar.gz asset, with {arch} for the
+	// architecture: x64 or arm64.
+	Asset string
+	// Binary is the file in the asset that is installed as the agent's
+	// Binary.
+	Binary string
+	// Version is the release SHA256 is for.
+	Version string
+	// SHA256 are the checksums of the assets of Version by architecture.
+	SHA256 map[string]string
+}
+
+// AssetName returns the release asset of arch.
+func (r Release) AssetName(arch string) string {
+	return strings.ReplaceAll(r.Asset, "{arch}", arch)
+}
+
+// ReleaseArchs are the architectures of a Release, as in its asset names.
+var ReleaseArchs = []string{"x64", "arm64"}
+
 // StateDir is a home directory of the agent kept across VM restarts.
 type StateDir struct {
 	// Name is the directory under the workspace's persistent home on the
@@ -87,6 +132,9 @@ type Harness struct {
 	// layer installs.
 	Package string
 	Version string
+	// Release, when set instead of Package, is the native binary of
+	// Version that the built-in image layer installs.
+	Release *Release
 	// Continue is the flag that continues the agent's last conversation.
 	Continue string
 	// Resume is the flag that takes the conversation ID to resume.
@@ -215,6 +263,31 @@ var harnesses = []Harness{
 		Env:       []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
 		State:     []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
 		TUIPlugin: OmOExtension,
+	},
+	{
+		Name:    "agy",
+		Title:   "Antigravity CLI",
+		Binary:  "agy",
+		Version: "1.5.0",
+		Release: &Release{
+			Repo:    "google-antigravity/antigravity-cli",
+			Asset:   "agy_cli_linux_{arch}.tar.gz",
+			Binary:  "antigravity",
+			Version: "1.5.0",
+			SHA256: map[string]string{
+				"x64":   "f65e365a67be49abdaf92f5669c3157bd4b9c569f6b9f448340b00ca261b0f01",
+				"arm64": "87e73a5ab4ecb3a9668660d259dafd13f5443149da0113664d59129a21a62ba4",
+			},
+		},
+		Continue:   "--continue",
+		Resume:     "--conversation",
+		Unattended: []string{"--dangerously-skip-permissions"},
+		Env:        []string{"AGY_CLI_DISABLE_AUTO_UPDATE=1"},
+		// Settings, conversations and the OAuth token, which falls back to
+		// a file without a keyring. Gemini CLI shares ~/.gemini, so it is
+		// not mounted from the host by default.
+		State:     []StateDir{{Name: "antigravity", Path: "/home/agent/.gemini"}},
+		TUIPlugin: AgyStatusLine,
 	},
 }
 

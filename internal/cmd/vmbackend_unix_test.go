@@ -279,6 +279,21 @@ func TestVMShares(t *testing.T) {
 		t.Fatalf("user status line replaced: %s", b)
 	}
 
+	// Antigravity CLI keeps its settings in a subdirectory, which a new
+	// state directory doesn't have yet.
+	ws.Agent, _ = agent.Lookup("agy")
+	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	got = nil
+	agySettings := filepath.Join(data, "home", "antigravity", "antigravity-cli", "settings.json")
+	if b, err := os.ReadFile(agySettings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
+		t.Fatalf("read agy settings: %q %v", b, err)
+	}
+	if line, _ := got["statusLine"].(map[string]any); line["command"] != statusLineCommand("agy") {
+		t.Fatalf("agy settings = %v", got)
+	}
+
 	ws.Mounts = []string{file + ":/opt/file.txt:ro"}
 	if _, err := vmShares(ws); err == nil {
 		t.Fatal("vmShares accepted a file mount")
