@@ -42,6 +42,8 @@ The only reliable mitigation available to end users is **avoiding the trifecta c
 
 jailoc puts each workspace in its own micro-VM and targets two legs of the trifecta.
 
+![The three agent capabilities of the lethal trifecta: the workspace VM narrows private data access, the network broker narrows external communication, and untrusted content is not controlled](img/trifecta.svg)
+
 ### The boundary is the VM
 
 The agent runs as `agent` (UID 1000), but it can use `sudo` from the image and become root inside the guest. That is by design: root in the guest controls the guest kernel and nothing more. Everything the guest can reach on the host passes through a narrow interface that the host enforces: virtio-fs shares, one network interface whose only peer is the broker, and Unix sockets the broker forwards. Read-only shares stay read-only even for guest root, because the VMM enforces them. With `protect_git`, `jailoc-guest` removes privilege escalation so that Git hooks and config in the shares stay read-only too. That protection is enforced by the guest kernel, so it holds against the agent, not against a guest kernel exploit. See [Architecture](architecture.md).

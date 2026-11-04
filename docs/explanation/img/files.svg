@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" font-family="Inter,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+<title id="t">Files: how host directories reach the workspace VM</title>
+<desc id="d">Workspace paths and mounts, jailoc's two internal directories guest/ (read-write: persistent home and control files) and guest-ro/ (read-only: configuration and cache copies, staged snapshots), and the unpacked image each reach the VM as one virtio-fs share. In the guest, paths keep their host path, mounts appear at their guest path, the internal shares are mounted under a root-only directory and bound into place, and the image is the read-only lower layer of an overlay root whose writes stay in VM memory.</desc>
+<defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA6B8"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#425CC7"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#D24E00"/></marker></defs>
+<rect width="1200" height="420" fill="#FFFFFF" stroke="#DCE0E5" rx="8"/>
+<text x="16" y="27" fill="#24292E" font-size="16" font-weight="700">Files · one virtio-fs share per directory</text>
+<text x="1184" y="27" fill="#9AA6B8" font-size="12" font-weight="700" text-anchor="end">your files</text>
+<rect x="1095" y="18" width="9" height="9" rx="2" fill="#9AA6B8"/>
+<text x="1078.0" y="27" fill="#D24E00" font-size="12" font-weight="700" text-anchor="end">jailoc on the host</text>
+<rect x="931" y="18" width="9" height="9" rx="2" fill="#D24E00"/>
+<text x="914.4" y="27" fill="#2E7D32" font-size="12" font-weight="700" text-anchor="end">jailoc in the VM</text>
+<rect x="782" y="18" width="9" height="9" rx="2" fill="#2E7D32"/>
+<rect x="8" y="44" width="1184" height="160" fill="#FFF1E6" rx="6"/>
+<rect x="8" y="44" width="6" height="160" fill="#D24E00" rx="3"/>
+<text x="26" y="61" fill="#D24E00" font-size="12" font-weight="800" letter-spacing="0.08em">HOST</text>
+<text x="1176" y="61" fill="#6E7180" font-size="11.5" text-anchor="end" font-family="JetBrains Mono,Menlo,monospace">guest/ and guest-ro/ live in ~/.cache/jailoc-vm/workspaces/&lt;workspace&gt;/</text>
+<rect x="30" y="84" width="212" height="100" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="30" y="94" width="3" height="80" rx="1.5" fill="#9AA6B8"/>
+<text x="44" y="106" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">paths</text>
+<text x="44" y="124" fill="#6E7180" font-size="12">workspace directories</text>
+<text x="44" y="144" fill="#464C54" font-size="12.5">read-write</text>
+<rect x="262" y="84" width="212" height="100" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="262" y="94" width="3" height="80" rx="1.5" fill="#9AA6B8"/>
+<text x="276" y="106" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">mounts</text>
+<text x="276" y="124" fill="#6E7180" font-size="12">host:guest[:ro]</text>
+<text x="276" y="144" fill="#464C54" font-size="12.5">read-write or read-only</text>
+<rect x="494" y="84" width="212" height="100" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="494" y="94" width="3" height="80" rx="1.5" fill="#D24E00"/>
+<text x="508" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">guest/</text>
+<text x="508" y="124" fill="#6E7180" font-size="12">internal, read-write</text>
+<text x="508" y="144" fill="#464C54" font-size="12.5">persistent home,</text>
+<text x="508" y="163" fill="#464C54" font-size="12.5">control files</text>
+<rect x="726" y="84" width="212" height="100" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="726" y="94" width="3" height="80" rx="1.5" fill="#D24E00"/>
+<text x="740" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">guest-ro/</text>
+<text x="740" y="124" fill="#6E7180" font-size="12">internal, read-only</text>
+<text x="740" y="144" fill="#464C54" font-size="12.5">config and cache copies,</text>
+<text x="740" y="163" fill="#464C54" font-size="12.5">staged snapshots</text>
+<rect x="958" y="84" width="212" height="100" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="958" y="94" width="3" height="80" rx="1.5" fill="#D24E00"/>
+<text x="972" y="106" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">image cache</text>
+<text x="972" y="124" fill="#6E7180" font-size="12">unpacked workspace image</text>
+<text x="972" y="144" fill="#464C54" font-size="12.5">shared read-only</text>
+<line x1="8" y1="224" x2="1192" y2="224" stroke="#425CC7" stroke-width="2" stroke-dasharray="7 5"/>
+<rect x="853" y="214" width="190" height="20" rx="10" fill="#425CC7"/>
+<text x="948" y="228" fill="#FFFFFF" font-size="12" font-weight="700" text-anchor="middle">VM boundary · virtio-fs</text>
+<rect x="8" y="244" width="1184" height="160" fill="#EEF8EC" rx="6"/>
+<rect x="8" y="244" width="6" height="160" fill="#2E7D32" rx="3"/>
+<text x="26" y="261" fill="#2E7D32" font-size="12" font-weight="800" letter-spacing="0.08em">WORKSPACE VM</text>
+<rect x="30" y="284" width="212" height="104" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="294" width="3" height="84" rx="1.5" fill="#2E7D32"/>
+<text x="44" y="306" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">&lt;path&gt;</text>
+<text x="44" y="324" fill="#6E7180" font-size="12">same path as on the host</text>
+<text x="44" y="344" fill="#464C54" font-size="12.5">where the agent works</text>
+<rect x="262" y="284" width="212" height="104" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="262" y="294" width="3" height="84" rx="1.5" fill="#2E7D32"/>
+<text x="276" y="306" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">&lt;guest path&gt;</text>
+<text x="276" y="324" fill="#6E7180" font-size="12">the part after the colon</text>
+<text x="276" y="344" fill="#464C54" font-size="12.5">read-only stays read-only,</text>
+<text x="276" y="363" fill="#464C54" font-size="12.5">even for guest root</text>
+<rect x="494" y="284" width="212" height="104" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="494" y="294" width="3" height="84" rx="1.5" fill="#2E7D32"/>
+<text x="508" y="306" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">…/private/host</text>
+<text x="508" y="324" fill="#6E7180" font-size="12">root-only, bound into place</text>
+<text x="508" y="344" fill="#464C54" font-size="12.5">~/.local/share/&lt;agent&gt;,</text>
+<text x="508" y="363" fill="#464C54" font-size="12.5">~/.cache, …</text>
+<rect x="726" y="284" width="212" height="104" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="726" y="294" width="3" height="84" rx="1.5" fill="#2E7D32"/>
+<text x="740" y="306" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">…/private/host-ro</text>
+<text x="740" y="324" fill="#6E7180" font-size="12">root-only, bound read-only</text>
+<text x="740" y="344" fill="#464C54" font-size="12.5">/etc/jailoc*,</text>
+<text x="740" y="363" fill="#464C54" font-size="12.5">snapshot destinations</text>
+<rect x="958" y="284" width="212" height="104" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="958" y="294" width="3" height="84" rx="1.5" fill="#2E7D32"/>
+<text x="972" y="306" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">/</text>
+<text x="972" y="324" fill="#6E7180" font-size="12">overlay root file system</text>
+<text x="972" y="344" fill="#464C54" font-size="12.5">image as read-only lower,</text>
+<text x="972" y="363" fill="#464C54" font-size="12.5">writes in VM memory</text>
+<path d="M136 186 L136 281" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="144" y="210" fill="#425CC7" font-size="11" font-weight="600">read-write</text>
+<path d="M368 186 L368 281" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="376" y="210" fill="#425CC7" font-size="11" font-weight="600">rw or ro</text>
+<path d="M600 186 L600 281" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="608" y="210" fill="#425CC7" font-size="11" font-weight="600">read-write</text>
+<path d="M832 186 L832 281" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="840" y="210" fill="#425CC7" font-size="11" font-weight="600">read-only</text>
+<path d="M1064 186 L1064 281" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="1072" y="210" fill="#425CC7" font-size="11" font-weight="600">read-only</text>
+</svg>

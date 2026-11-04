@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" font-family="Inter,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+<title id="t">Where workspace VM memory goes</title>
+<desc id="d">Inside the workspace VM, processes, in-memory file systems (the overlay root, /tmp, /var/tmp, /dev/shm, secrets) and the page cache share the VM memory. Idle anonymous pages are compressed into zram swap of half the VM memory. jailoc-guest trims the file cache every minute through memory.reclaim and adjusts OOM scores. Pages the guest frees are reported through virtio-balloon free page reporting, and the VMM returns them to the host. The host reserves nothing up front: a guest page costs host memory only once it is touched.</desc>
+<defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA6B8"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#425CC7"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#D24E00"/></marker></defs>
+<rect width="1200" height="520" fill="#FFFFFF" stroke="#DCE0E5" rx="8"/>
+<text x="16" y="27" fill="#24292E" font-size="16" font-weight="700">VM memory · used, compressed, trimmed, returned</text>
+<text x="1184" y="27" fill="#425CC7" font-size="12" font-weight="700" text-anchor="end">third party</text>
+<rect x="1088" y="18" width="9" height="9" rx="2" fill="#425CC7"/>
+<text x="1070.8" y="27" fill="#8250DF" font-size="12" font-weight="700" text-anchor="end">agent</text>
+<rect x="1018" y="18" width="9" height="9" rx="2" fill="#8250DF"/>
+<text x="1000.8" y="27" fill="#2E7D32" font-size="12" font-weight="700" text-anchor="end">jailoc in the VM</text>
+<rect x="869" y="18" width="9" height="9" rx="2" fill="#2E7D32"/>
+<text x="851.5999999999999" y="27" fill="#D24E00" font-size="12" font-weight="700" text-anchor="end">jailoc on the host</text>
+<rect x="705" y="18" width="9" height="9" rx="2" fill="#D24E00"/>
+<rect x="8" y="44" width="1184" height="270" fill="#EEF8EC" rx="6"/>
+<rect x="8" y="44" width="6" height="270" fill="#2E7D32" rx="3"/>
+<text x="26" y="61" fill="#2E7D32" font-size="12" font-weight="800" letter-spacing="0.08em">WORKSPACE VM</text>
+<rect x="30" y="84" width="270" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="94" width="3" height="70" rx="1.5" fill="#8250DF"/>
+<text x="44" y="106" fill="#8250DF" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">processes</text>
+<text x="44" y="124" fill="#6E7180" font-size="12">agent, builds, tests, tools</text>
+<text x="44" y="144" fill="#464C54" font-size="12.5">killed before the agent on OOM</text>
+<rect x="330" y="84" width="270" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="330" y="94" width="3" height="70" rx="1.5" fill="#2E7D32"/>
+<text x="344" y="106" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">in-memory files</text>
+<text x="344" y="124" fill="#6E7180" font-size="12">overlay root, /tmp (1 GiB),</text>
+<text x="344" y="144" fill="#464C54" font-size="12.5">/var/tmp, /dev/shm, secrets</text>
+<rect x="630" y="84" width="270" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="630" y="94" width="3" height="70" rx="1.5" fill="#2E7D32"/>
+<text x="644" y="106" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">page cache</text>
+<text x="644" y="124" fill="#6E7180" font-size="12">files read from shares and image</text>
+<text x="644" y="144" fill="#464C54" font-size="12.5">no DAX: a copy per guest</text>
+<rect x="930" y="84" width="250" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="930" y="94" width="3" height="70" rx="1.5" fill="#2E7D32"/>
+<text x="944" y="106" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-guest</text>
+<text x="944" y="124" fill="#6E7180" font-size="12">reclaim and OOM scores</text>
+<text x="944" y="144" fill="#464C54" font-size="12.5">sessions -1000, agent -500</text>
+<rect x="30" y="204" width="570" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="214" width="3" height="70" rx="1.5" fill="#2E7D32"/>
+<text x="44" y="226" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">zram swap</text>
+<text x="44" y="244" fill="#6E7180" font-size="12">half of VM memory, zstd, discard</text>
+<text x="44" y="264" fill="#464C54" font-size="12.5">idle anonymous pages compressed in RAM, swappiness 100</text>
+<rect x="630" y="204" width="270" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="630" y="214" width="3" height="70" rx="1.5" fill="#2E7D32"/>
+<text x="644" y="226" fill="#2E7D32" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">free pages</text>
+<text x="644" y="244" fill="#6E7180" font-size="12">freed by the guest kernel</text>
+<text x="644" y="264" fill="#464C54" font-size="12.5">after builds, trims, discards</text>
+<path d="M165 176 L165 200" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="173" y="192" fill="#6E7180" font-size="11">idle pages</text>
+<path d="M465 176 L465 200" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="473" y="192" fill="#6E7180" font-size="11">idle pages</text>
+<path d="M765 176 L765 200" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="773" y="192" fill="#6E7180" font-size="11">trimmed</text>
+<path d="M928 129 L906 129" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="1176" y="222" fill="#6E7180" font-size="11" text-anchor="end">every minute: at most 1/4 of the cache,</text>
+<text x="1176" y="238" fill="#6E7180" font-size="11" text-anchor="end">keep 1/8 of memory, skip under 32 MiB</text>
+<path d="M602 249 L624 249" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+<line x1="8" y1="334" x2="1192" y2="334" stroke="#425CC7" stroke-width="2" stroke-dasharray="7 5"/>
+<rect x="145" y="324" width="370" height="20" rx="10" fill="#425CC7"/>
+<text x="330" y="338" fill="#FFFFFF" font-size="12" font-weight="700" text-anchor="middle">VM boundary · virtio-balloon free page reporting</text>
+<rect x="8" y="354" width="1184" height="150" fill="#FFF1E6" rx="6"/>
+<rect x="8" y="354" width="6" height="150" fill="#D24E00" rx="3"/>
+<text x="26" y="371" fill="#D24E00" font-size="12" font-weight="800" letter-spacing="0.08em">HOST</text>
+<rect x="30" y="394" width="570" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="30" y="404" width="3" height="70" rx="1.5" fill="#D24E00"/>
+<text x="44" y="416" fill="#D24E00" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">memory setting</text>
+<text x="44" y="434" fill="#6E7180" font-size="12">memory, default 4g, at least 512m</text>
+<text x="44" y="454" fill="#464C54" font-size="12.5">reserved by nothing up front: a page costs host memory once touched</text>
+<rect x="630" y="394" width="270" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
+<rect x="630" y="404" width="3" height="70" rx="1.5" fill="#425CC7"/>
+<text x="644" y="416" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">go-microvm-runner</text>
+<text x="644" y="434" fill="#6E7180" font-size="12">libkrun VMM</text>
+<text x="644" y="454" fill="#464C54" font-size="12.5">hands reported pages back</text>
+<rect x="930" y="394" width="250" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5" stroke-dasharray="5 4"/>
+<rect x="930" y="404" width="3" height="70" rx="1.5" fill="#9AA6B8"/>
+<text x="944" y="416" fill="#9AA6B8" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">host memory</text>
+<text x="944" y="434" fill="#6E7180" font-size="12">shared with everything else</text>
+<text x="944" y="454" fill="#464C54" font-size="12.5">gets the pages back</text>
+<path d="M765 296 L765 390" fill="none" stroke="#425CC7" stroke-width="1.8" marker-end="url(#ab)"/>
+<text x="773" y="372" fill="#425CC7" font-size="11" font-weight="600">reported</text>
+<path d="M902 439 L924 439" fill="none" stroke="#9AA6B8" stroke-width="1.6" marker-end="url(#ag)"/>
+</svg>

@@ -25,6 +25,8 @@ Every new TCP connection and UDP flow gets one decision. The broker checks, in o
 | Private and reserved ranges | denied unless covered by `allowed_networks` or a resolved `allowed_hosts` address |
 | Everything else (public addresses) | allowed |
 
+![The network broker checks each new flow from the guest in order: its own addresses, hard-denied ranges, port 53 when filtered DNS is on, and private ranges unless allow-listed are denied with a reset or ICMP; public addresses are allowed through a real host socket. DNS queries to the gateway go through the filtered resolver, which answers NXDOMAIN for blocked zones and for answers naming them.](img/network-policy.svg)
+
 ### IPv4
 
 Private and reserved IPv4 ranges: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10` (CGNAT), `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.88.99.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`.

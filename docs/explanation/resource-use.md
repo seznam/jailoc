@@ -6,6 +6,8 @@ A workspace is a whole VM, so it costs more than a container: its own kernel, it
 
 `memory` sets the size of the VM's RAM (default `4g`, at least `512m`), and `cpu` the number of vCPUs, rounded up to whole CPUs. The host doesn't reserve that memory when the VM starts. Guest pages take host memory only once the guest touches them, so an idle workspace with `memory = "8g"` costs far less than 8 GiB. The work goes into keeping touched-but-unused pages from piling up.
 
+![Inside the VM, idle anonymous pages go to compressed zram swap, the page cache is trimmed every minute, and pages the guest frees are reported over virtio-balloon to the VMM, which hands them back to host memory](img/memory.svg)
+
 ### Returning free pages to the host
 
 Without help, a VM's memory use on the host only grows: pages the guest frees stay allocated to the VM process. jailoc's VMs have a virtio-balloon device with free page reporting. The guest kernel reports pages it has freed, and the VMM hands them back to the host. Memory released inside the VM, for example when a build finishes, is returned to the host instead of staying attached to the VM until it stops.
