@@ -18,5 +18,10 @@
     "solid-js": "*",
     "@opentui/solid": "*"
   },
-  "oc-plugin": ["tui"]
+  "oc-plugin": ["tui"],
+  "overrides": {
+    "babel-plugin-module-resolver": {
+      "glob": "^14.0.3"
+    }
+  }
 }

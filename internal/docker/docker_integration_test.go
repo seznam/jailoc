@@ -12,8 +12,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/image"
-	dockerclient "github.com/docker/docker/client"
+	dockerclient "github.com/moby/moby/client"
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -23,12 +22,12 @@ func skipWithoutDocker(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		t.Skip("Docker client not available: ", err)
 	}
 	defer func() { _ = cli.Close() }()
-	if _, err := cli.Ping(ctx); err != nil {
+	if _, err := cli.Ping(ctx, dockerclient.PingOptions{}); err != nil {
 		t.Skip("Docker daemon not reachable: ", err)
 	}
 }
@@ -103,7 +102,7 @@ func TestBuildEmbeddedImage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		t.Fatalf("create Docker client: %v", err)
 	}
@@ -115,10 +114,10 @@ func TestBuildEmbeddedImage(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		_, _ = cli.ImageRemove(context.Background(), tag, image.RemoveOptions{Force: true})
+		_, _ = cli.ImageRemove(context.Background(), tag, dockerclient.ImageRemoveOptions{Force: true})
 	})
 
-	inspect, _, err := cli.ImageInspectWithRaw(ctx, tag)
+	inspect, err := cli.ImageInspect(ctx, tag)
 	if err != nil {
 		t.Fatalf("inspect built image %q: %v", tag, err)
 	}
@@ -185,12 +184,12 @@ func TestEnsureImageReplacesForeignPlatform(t *testing.T) {
 	if runtime.GOARCH == "amd64" {
 		foreign = "linux/arm64"
 	}
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = cli.Close() }()
-	if _, err := cli.ImageRemove(ctx, ref, image.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+	if _, err := cli.ImageRemove(ctx, ref, dockerclient.ImageRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		t.Fatalf("remove %s: %v", ref, err)
 	}
 	if err := pullImage(ctx, cli, ref, foreign); err != nil {

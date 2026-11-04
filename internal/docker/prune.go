@@ -10,9 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	dockerclient "github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/image"
+	dockerclient "github.com/moby/moby/client"
 )
 
 // ImageLabel marks the images jailoc builds, so PruneImages also finds them
@@ -60,25 +59,25 @@ func haveImage(ctx context.Context, cli dockerclient.APIClient, tag, hash string
 // are jailoc-* ones. It returns the number of images removed; removal
 // failures, e.g. of an image a container uses, are returned joined.
 func PruneImages(ctx context.Context, keep map[string]bool, grace time.Duration) (int, error) {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return 0, fmt.Errorf("create Docker Engine client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
 
 	var images []image.Summary
-	for _, f := range []filters.KeyValuePair{filters.Arg("label", ImageLabel), filters.Arg("reference", "jailoc-*")} {
-		list, err := cli.ImageList(ctx, image.ListOptions{Filters: filters.NewArgs(f)})
+	for _, f := range []dockerclient.Filters{make(dockerclient.Filters).Add("label", ImageLabel), make(dockerclient.Filters).Add("reference", "jailoc-*")} {
+		list, err := cli.ImageList(ctx, dockerclient.ImageListOptions{Filters: f})
 		if err != nil {
 			return 0, fmt.Errorf("list jailoc images: %w", err)
 		}
-		images = append(images, list...)
+		images = append(images, list.Items...)
 	}
 
 	removed := 0
 	var errs []string
 	for _, ref := range pruneCandidates(images, keep, time.Now().Add(-grace)) {
-		if _, err := cli.ImageRemove(ctx, ref, image.RemoveOptions{PruneChildren: true}); err != nil {
+		if _, err := cli.ImageRemove(ctx, ref, dockerclient.ImageRemoveOptions{PruneChildren: true}); err != nil {
 			errs = append(errs, fmt.Sprintf("remove image %s: %v", ref, err))
 			continue
 		}

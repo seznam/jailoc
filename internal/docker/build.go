@@ -10,13 +10,14 @@ import (
 	"os"
 	"regexp"
 
-	"github.com/docker/docker/api/types/build"
-	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/jsonmessage"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	bkclient "github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/util/progress/progressui"
+	"github.com/moby/moby/api/types/build"
+	"github.com/moby/moby/api/types/jsonstream"
+	dockerclient "github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/jsonmessage"
 )
 
 // cleanCachesArg is set to 1 when jailoc builds its own Dockerfiles with the
@@ -32,7 +33,7 @@ var cacheMount = regexp.MustCompile(`--mount=type=cache\S*[ \t]*(\\\r?\n[ \t]*)?
 // and the classic builder otherwise, e.g. for Docker-compatible APIs that do
 // not implement BuildKit.
 func builderVersion(ctx context.Context, cli dockerclient.APIClient) (build.BuilderVersion, error) {
-	ping, err := cli.Ping(ctx)
+	ping, err := cli.Ping(ctx, dockerclient.PingOptions{})
 	if err != nil {
 		return "", fmt.Errorf("ping Docker daemon: %w", err)
 	}
@@ -56,7 +57,7 @@ func forBuilder(version build.BuilderVersion, dockerfile []byte, args map[string
 
 // imageBuild builds buildCtx with the builder version and shows its progress
 // on stderr.
-func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Reader, version build.BuilderVersion, opts build.ImageBuildOptions) error {
+func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Reader, version build.BuilderVersion, opts dockerclient.ImageBuildOptions) error {
 	opts.Version = version
 	if version == build.BuilderBuildKit {
 		// BuildKit resolves base images through a client session, as docker
@@ -106,7 +107,7 @@ func displayBuildKitStream(ctx context.Context, r io.Reader) error {
 		_, err := display.UpdateFrom(context.WithoutCancel(ctx), statuses)
 		displayDone <- err
 	}()
-	streamErr := jsonmessage.DisplayJSONMessagesStream(r, io.Discard, 0, false, func(m jsonmessage.JSONMessage) {
+	streamErr := jsonmessage.DisplayJSONMessagesStream(r, io.Discard, 0, false, func(m jsonstream.Message) {
 		if m.ID != "moby.buildkit.trace" {
 			return
 		}

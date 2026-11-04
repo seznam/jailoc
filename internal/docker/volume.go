@@ -11,11 +11,9 @@ import (
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	dockerclient "github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	dockerclient "github.com/moby/moby/client"
 )
 
 // exportImage is the helper image whose container mounts the volume during
@@ -29,55 +27,54 @@ func VolumeName(ws, key string) string {
 
 // Ping reports whether the Docker daemon selected by the environment answers.
 func Ping(ctx context.Context) error {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return fmt.Errorf("create Docker Engine client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
-	if _, err := cli.Ping(ctx); err != nil {
+	if _, err := cli.Ping(ctx, dockerclient.PingOptions{}); err != nil {
 		return fmt.Errorf("ping Docker daemon: %w", err)
 	}
 	return nil
 }
 
 func RunningComposeContainers(ctx context.Context, workspace string) ([]container.Summary, error) {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("create Docker Engine client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
-	containers, err := cli.ContainerList(ctx, container.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("label", "com.docker.compose.project=jailoc-"+workspace),
-			filters.Arg("status", "running"),
-		),
+	containers, err := cli.ContainerList(ctx, dockerclient.ContainerListOptions{
+		Filters: make(dockerclient.Filters).
+			Add("label", "com.docker.compose.project=jailoc-"+workspace).
+			Add("status", "running"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list workspace %q containers: %w", workspace, err)
 	}
-	return containers, nil
+	return containers.Items, nil
 }
 
 func StopComposeContainers(ctx context.Context, workspace string) error {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return fmt.Errorf("create Docker Engine client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
-	containers, err := cli.ContainerList(ctx, container.ListOptions{
+	containers, err := cli.ContainerList(ctx, dockerclient.ContainerListOptions{
 		All:     true,
-		Filters: filters.NewArgs(filters.Arg("label", "com.docker.compose.project=jailoc-"+workspace)),
+		Filters: make(dockerclient.Filters).Add("label", "com.docker.compose.project=jailoc-"+workspace),
 	})
 	if err != nil {
 		return fmt.Errorf("list workspace %q containers: %w", workspace, err)
 	}
-	for _, current := range containers {
+	for _, current := range containers.Items {
 		if current.State == "running" {
-			if err := cli.ContainerStop(ctx, current.ID, container.StopOptions{}); err != nil {
+			if _, err := cli.ContainerStop(ctx, current.ID, dockerclient.ContainerStopOptions{}); err != nil {
 				return fmt.Errorf("stop workspace %q container %s: %w", workspace, current.ID, err)
 			}
 		}
-		if err := cli.ContainerRemove(ctx, current.ID, container.RemoveOptions{}); err != nil {
+		if _, err := cli.ContainerRemove(ctx, current.ID, dockerclient.ContainerRemoveOptions{}); err != nil {
 			return fmt.Errorf("remove workspace %q container %s: %w", workspace, current.ID, err)
 		}
 	}
@@ -88,13 +85,13 @@ func StopComposeContainers(ctx context.Context, workspace string) error {
 // relative to root that must not exist yet. It reports false when the
 // volume does not exist.
 func ExportVolume(ctx context.Context, volume string, root *os.Root, dst string) (bool, error) {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return false, fmt.Errorf("create Docker Engine client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
 
-	if _, err := cli.VolumeInspect(ctx, volume); err != nil {
+	if _, err := cli.VolumeInspect(ctx, volume, dockerclient.VolumeInspectOptions{}); err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return false, nil
 		}
@@ -104,7 +101,7 @@ func ExportVolume(ctx context.Context, volume string, root *os.Root, dst string)
 		if !cerrdefs.IsNotFound(err) {
 			return false, fmt.Errorf("inspect image %s: %w", exportImage, err)
 		}
-		rc, err := cli.ImagePull(ctx, exportImage, image.PullOptions{})
+		rc, err := cli.ImagePull(ctx, exportImage, dockerclient.ImagePullOptions{})
 		if err != nil {
 			return false, fmt.Errorf("pull %s: %w", exportImage, err)
 		}
@@ -114,22 +111,22 @@ func ExportVolume(ctx context.Context, volume string, root *os.Root, dst string)
 			return false, fmt.Errorf("pull %s: %w", exportImage, err)
 		}
 	}
-	created, err := cli.ContainerCreate(ctx,
-		&container.Config{Image: exportImage, Cmd: []string{"true"}},
-		&container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volume, Target: "/volume", ReadOnly: true}}},
-		nil, nil, "")
+	created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
+		Config:     &container.Config{Image: exportImage, Cmd: []string{"true"}},
+		HostConfig: &container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volume, Target: "/volume", ReadOnly: true}}},
+	})
 	if err != nil {
 		return false, fmt.Errorf("create export container for %s: %w", volume, err)
 	}
 	defer func() {
-		_ = cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.WithoutCancel(ctx), created.ID, dockerclient.ContainerRemoveOptions{Force: true})
 	}()
-	rc, _, err := cli.CopyFromContainer(ctx, created.ID, "/volume")
+	copied, err := cli.CopyFromContainer(ctx, created.ID, dockerclient.CopyFromContainerOptions{SourcePath: "/volume"})
 	if err != nil {
 		return false, fmt.Errorf("read volume %s: %w", volume, err)
 	}
-	defer func() { _ = rc.Close() }()
-	if err := extractTar(rc, root, dst); err != nil {
+	defer func() { _ = copied.Content.Close() }()
+	if err := extractTar(copied.Content, root, dst); err != nil {
 		return false, fmt.Errorf("extract volume %s: %w", volume, err)
 	}
 	return true, nil
