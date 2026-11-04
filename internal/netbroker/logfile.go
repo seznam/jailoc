@@ -42,9 +42,16 @@ func (l *logFile) open() error {
 }
 
 // Write appends p, first rotating the log when p would push it past max.
+// A log left closed by a failed rotation is reopened, so a transient error
+// loses only the events written while it lasts.
 func (l *logFile) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.f == nil {
+		if err := l.open(); err != nil {
+			return 0, err
+		}
+	}
 	if l.size > 0 && l.size+int64(len(p)) > l.max {
 		if err := l.rotate(); err != nil {
 			return 0, err
@@ -59,7 +66,9 @@ func (l *logFile) Write(p []byte) (int, error) {
 }
 
 func (l *logFile) rotate() error {
-	if err := l.f.Close(); err != nil {
+	err := l.f.Close()
+	l.f = nil
+	if err != nil {
 		return fmt.Errorf("close log: %w", err)
 	}
 	if err := os.Rename(l.path, l.path+".1"); err != nil {
@@ -71,7 +80,12 @@ func (l *logFile) rotate() error {
 func (l *logFile) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := l.f.Close(); err != nil {
+	if l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	if err != nil {
 		return fmt.Errorf("close log: %w", err)
 	}
 	return nil
