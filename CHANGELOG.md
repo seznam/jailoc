@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.0](https://github.com/seznam/jailoc/compare/v2.0.0-rc.3...v2.0.0) (2026-11-04)
+
+
+### Miscellaneous
+
+* release 2.0.0 ([#305](https://github.com/seznam/jailoc/issues/305)) ([afc55eb](https://github.com/seznam/jailoc/commit/afc55eb95d8776d3c4ff971942735359b97d2e15))
+
 ## [2.0.0-rc.3](https://github.com/seznam/jailoc/compare/v2.0.0-rc.2...v2.0.0-rc.3) (2026-11-04)
 
 
