@@ -13,7 +13,7 @@ The workspace indicator shows `🔒 jailoc / <name>` in the agent's interface, s
 
 ## Load the indicator
 
-The indicator is bundled with jailoc and needs no configuration. At `jailoc up`, jailoc writes the agent's indicator files to its cache directory and shares them read-only into the VM at `/etc/jailoc-tui-plugin`.
+The indicator is bundled with jailoc and needs no configuration. At `jailoc up`, jailoc writes the agent's indicator files to its cache directory and shares them read-only into the VM at `/etc/jailoc-tui-plugin`. The status line of Claude Code, GitHub Copilot CLI and Antigravity CLI is a Node.js script, so it needs `node` on `PATH`. The jailoc base image has it; a [custom base image](custom-images.md) for Antigravity CLI, a native binary, may not.
 
 - OpenCode 2: `OPENCODE_CLI_CONFIG_CONTENT` lists the plugins of `cli.json` in your OpenCode config directory (or of `tui.json` when there's no `cli.json`) followed by the jailoc plugin. The list replaces the plugins of `cli.json`; its other settings still apply. jailoc reads the file when the VM starts, so run `jailoc restart <name>` after changing the plugins. If the file can't be parsed, jailoc warns and doesn't load its plugin, leaving your configuration as it is.
 - Claude Code: the `--settings` file replaces the status line of your settings. The jailoc status line runs the `statusLine` command of your settings (`.claude/settings.local.json` or `.claude/settings.json` in the project, then `settings.json` in the Claude config directory) and puts the workspace before its first line.
