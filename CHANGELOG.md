@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/seznam/jailoc/compare/v2.0.0...v2.0.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **vm:** restore Linux KVM host fixes from [#283](https://github.com/seznam/jailoc/issues/283) missing in main ([448ebac](https://github.com/seznam/jailoc/commit/448ebacfc8017c8876d54836ed40df93bbf82854))
+
 ## [2.0.0](https://github.com/seznam/jailoc/compare/v2.0.0-rc.3...v2.0.0) (2026-11-04)
 
 
