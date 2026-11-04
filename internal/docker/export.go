@@ -7,15 +7,16 @@ import (
 	"runtime"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/versions"
-	dockerclient "github.com/docker/docker/client"
+	"github.com/containerd/platforms"
+	dockerclient "github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // SaveImage writes the image as a `docker save` tarball to w and returns its
 // image ID. It talks to the daemon selected by the environment (DOCKER_HOST).
 func SaveImage(ctx context.Context, ref string, w io.Writer) (string, error) {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return "", fmt.Errorf("create Docker Engine client: %w", err)
 	}
@@ -39,7 +40,7 @@ func SaveImage(ctx context.Context, ref string, w io.Writer) (string, error) {
 // ImageID returns the ID of an image known to the daemon selected by the
 // environment.
 func ImageID(ctx context.Context, ref string) (string, error) {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return "", fmt.Errorf("create Docker Engine client: %w", err)
 	}
@@ -59,22 +60,22 @@ const minSaveAPIVersion = "1.44"
 // answers, is Docker Engine 25 or later, and builds Linux images for the CPU
 // architecture jailoc runs on, which is the architecture of its VMs.
 func HostArchitecture(ctx context.Context) error {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return fmt.Errorf("create Docker Engine client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
-	info, err := cli.Info(ctx)
+	info, err := cli.Info(ctx, dockerclient.InfoOptions{})
 	if err != nil {
 		return fmt.Errorf("query Docker daemon: %w", err)
 	}
-	if info.OSType != "linux" {
-		return fmt.Errorf("docker daemon runs %s containers, need linux", info.OSType)
+	if info.Info.OSType != "linux" {
+		return fmt.Errorf("docker daemon runs %s containers, need linux", info.Info.OSType)
 	}
-	if want := linuxArch(runtime.GOARCH); info.Architecture != want {
-		return fmt.Errorf("docker daemon architecture is %s, VMs need %s", info.Architecture, want)
+	if want := linuxArch(runtime.GOARCH); info.Info.Architecture != want {
+		return fmt.Errorf("docker daemon architecture is %s, VMs need %s", info.Info.Architecture, want)
 	}
-	v, err := cli.ServerVersion(ctx)
+	v, err := cli.ServerVersion(ctx, dockerclient.ServerVersionOptions{})
 	if err != nil {
 		return fmt.Errorf("query Docker daemon version: %w", err)
 	}
@@ -107,7 +108,7 @@ func linuxArch(goarch string) string {
 // only for another platform, and rejects an image it cannot get for the
 // host platform.
 func EnsureImage(ctx context.Context, ref string) error {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return fmt.Errorf("create Docker Engine client: %w", err)
 	}
@@ -138,7 +139,11 @@ func EnsureImage(ctx context.Context, ref string) error {
 }
 
 func pullImage(ctx context.Context, cli *dockerclient.Client, ref, platform string) error {
-	rc, err := cli.ImagePull(ctx, ref, image.PullOptions{Platform: platform})
+	p, err := platforms.Parse(platform)
+	if err != nil {
+		return fmt.Errorf("parse platform %s: %w", platform, err)
+	}
+	rc, err := cli.ImagePull(ctx, ref, dockerclient.ImagePullOptions{Platforms: []ocispec.Platform{p}})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
@@ -150,6 +155,6 @@ func pullImage(ctx context.Context, cli *dockerclient.Client, ref, platform stri
 }
 
 // imagePlatform returns the os/architecture of an inspected image.
-func imagePlatform(info image.InspectResponse) string {
+func imagePlatform(info dockerclient.ImageInspectResult) string {
 	return info.Os + "/" + info.Architecture
 }

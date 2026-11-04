@@ -10,11 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/docker/docker/api/types/build"
-	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/fatih/color"
 	archive "github.com/moby/go-archive"
+	dockerclient "github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/jsonmessage"
 	"github.com/moby/term"
 
 	"github.com/seznam/jailoc/internal/agent"
@@ -39,7 +38,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 			return "", fmt.Errorf("load dockerfile from %q: %w", source, err)
 		}
 
-		engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+		engineCli, err := dockerclient.New(dockerclient.FromEnv)
 		if err != nil {
 			return "", fmt.Errorf("create Docker Engine client for preset build: %w", err)
 		}
@@ -56,7 +55,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 	}
 
 	const embeddedTag = "jailoc-base:embedded"
-	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	engineCli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return "", fmt.Errorf("create Docker Engine client for embedded build: %w", err)
 	}
@@ -127,7 +126,7 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 	}
 	defer func() { _ = buildCtx.Close() }()
 
-	err = imageBuild(ctx, cli, buildCtx, version, build.ImageBuildOptions{
+	err = imageBuild(ctx, cli, buildCtx, version, dockerclient.ImageBuildOptions{
 		Tags:      []string{tag},
 		BuildArgs: buildArgs,
 		Labels:    labels,
@@ -170,7 +169,7 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	if err != nil {
 		return "", err
 	}
-	err = imageBuild(ctx, cli, buildCtx, version, build.ImageBuildOptions{
+	err = imageBuild(ctx, cli, buildCtx, version, dockerclient.ImageBuildOptions{
 		Tags:      []string{presetTag},
 		BuildArgs: proxyBuildArgs(),
 		Labels:    buildLabels(),
@@ -231,7 +230,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	hashHex := fmt.Sprintf("%x", hash)
 	overlayTag := fmt.Sprintf("jailoc-%s:%s", ws.Name, hashHex[:8])
 
-	engineCli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	engineCli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return "", fmt.Errorf("create Docker Engine client for workspace %q overlay build: %w", ws.Name, err)
 	}
@@ -252,7 +251,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		return "", err
 	}
 	_, _ = color.New(color.FgCyan).Printf("Building workspace overlay image (sending build context to Docker daemon)...\n")
-	err = imageBuild(ctx, engineCli, buildCtx, version, build.ImageBuildOptions{
+	err = imageBuild(ctx, engineCli, buildCtx, version, dockerclient.ImageBuildOptions{
 		Tags:       []string{overlayTag},
 		BuildArgs:  overlayBuildArgs,
 		Labels:     buildLabels(),
@@ -290,7 +289,7 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 	if err := EnsureImage(ctx, base); err != nil {
 		return "", err
 	}
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return "", fmt.Errorf("create Docker Engine client for the %s image layer: %w", label, err)
 	}
@@ -333,7 +332,7 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 
 	buildArgs["BASE"] = &base
 	_, _ = color.New(color.FgCyan).Printf("Installing %s into the image...\n", label)
-	err = imageBuild(ctx, cli, buildCtx, version, build.ImageBuildOptions{
+	err = imageBuild(ctx, cli, buildCtx, version, dockerclient.ImageBuildOptions{
 		Tags:      []string{tag},
 		BuildArgs: buildArgs,
 		Labels:    buildLabels(),
