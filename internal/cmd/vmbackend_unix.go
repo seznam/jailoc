@@ -479,14 +479,14 @@ func vmMemoryMiB(limit string) (uint32, error) {
 	return uint32(mib), nil //nolint:gosec // G115: bounded by the check above
 }
 
-// vmMinDiskSize is the smallest Docker data disk a workspace accepts.
-const vmMinDiskSize = 1 << 30
+// vmMinDockerDiskSize is the smallest Docker data disk a workspace accepts.
+const vmMinDockerDiskSize = 1 << 30
 
-// vmDiskSize parses the disk setting into the size of the sparse Docker
+// vmDockerDiskSize parses the docker_disk setting into the size of the sparse Docker
 // data disk in bytes, rounded up to whole MiB.
-func vmDiskSize(size string) (int64, error) {
+func vmDockerDiskSize(size string) (int64, error) {
 	if size == "" {
-		return 0, errors.New("empty disk size")
+		return 0, errors.New("empty docker_disk")
 	}
 	mult := int64(1)
 	switch unit := strings.ToLower(size[len(size)-1:]); unit {
@@ -500,14 +500,14 @@ func vmDiskSize(size string) (int64, error) {
 	digits := strings.TrimRight(size, "kmgKMG")
 	n, err := strconv.ParseInt(digits, 10, 64)
 	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("invalid disk size %q", size)
+		return 0, fmt.Errorf("invalid docker_disk %q", size)
 	}
 	if n > (math.MaxInt64-(1<<20-1))/mult {
-		return 0, fmt.Errorf("disk size %q is too large", size)
+		return 0, fmt.Errorf("docker_disk %q is too large", size)
 	}
 	bytes := (n*mult + (1<<20 - 1)) &^ (1<<20 - 1)
-	if bytes < vmMinDiskSize {
-		return 0, fmt.Errorf("disk size %q is below the %d GiB minimum", size, vmMinDiskSize>>30)
+	if bytes < vmMinDockerDiskSize {
+		return 0, fmt.Errorf("docker_disk %q is below the %d GiB minimum", size, vmMinDockerDiskSize>>30)
 	}
 	return bytes, nil
 }

@@ -61,7 +61,7 @@ func TestWorkspaceSpecWorkDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ws := &workspace.Resolved{Name: "test", Paths: tt.paths, CPU: 2, Memory: "2G", Disk: "20g"}
+			ws := &workspace.Resolved{Name: "test", Paths: tt.paths, CPU: 2, Memory: "2G", DockerDisk: "20g"}
 			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
@@ -118,13 +118,13 @@ func TestStatusRestartChanges(t *testing.T) {
 	}
 	dockerWS := *ws
 	dockerWS.EnableDocker = true
-	dockerWS.Disk = "40g"
+	dockerWS.DockerDisk = "40g"
 	dockerSpec := matching
 	dockerSpec.Docker = true
-	if got := statusRestartChanges(&dockerWS, dockerSpec); !slices.Equal(got, []string{"disk"}) {
-		t.Errorf("grown disk: got %v, want [disk]", got)
+	if got := statusRestartChanges(&dockerWS, dockerSpec); !slices.Equal(got, []string{"docker_disk"}) {
+		t.Errorf("grown disk: got %v, want [docker_disk]", got)
 	}
-	dockerWS.Disk = "20g"
+	dockerWS.DockerDisk = "20g"
 	if got := statusRestartChanges(&dockerWS, dockerSpec); len(got) != 0 {
 		t.Errorf("default disk against a spec without disk_size: got %v, want no changes", got)
 	}

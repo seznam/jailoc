@@ -2862,27 +2862,27 @@ paths = ["/data"]
 			},
 		},
 		{
-			name: "defaults and workspace disk",
+			name: "defaults and workspace docker_disk",
 			content: `
 [defaults]
-disk = "30g"
+docker_disk = "30g"
 
 [workspaces.big]
 paths = ["/data"]
-disk = "100g"
+docker_disk = "100g"
 
 [workspaces.plain]
 paths = ["/data"]
 `,
 			checkFn: func(t *testing.T, cfg *Config) {
-				if cfg.Defaults.Disk == nil || *cfg.Defaults.Disk != "30g" {
-					t.Errorf("expected Defaults.Disk \"30g\", got %v", cfg.Defaults.Disk)
+				if cfg.Defaults.DockerDisk == nil || *cfg.Defaults.DockerDisk != "30g" {
+					t.Errorf("expected Defaults.DockerDisk \"30g\", got %v", cfg.Defaults.DockerDisk)
 				}
-				if ws := cfg.Workspaces["big"]; ws.Disk == nil || *ws.Disk != "100g" {
-					t.Errorf("expected Workspace.Disk \"100g\", got %v", ws.Disk)
+				if ws := cfg.Workspaces["big"]; ws.DockerDisk == nil || *ws.DockerDisk != "100g" {
+					t.Errorf("expected Workspace.DockerDisk \"100g\", got %v", ws.DockerDisk)
 				}
-				if ws := cfg.Workspaces["plain"]; ws.Disk != nil {
-					t.Errorf("expected Workspace.Disk to be nil, got %q", *ws.Disk)
+				if ws := cfg.Workspaces["plain"]; ws.DockerDisk != nil {
+					t.Errorf("expected Workspace.DockerDisk to be nil, got %q", *ws.DockerDisk)
 				}
 			},
 		},
@@ -3088,26 +3088,26 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 			errSubstrs: []string{"test", "invalid memory format"},
 		},
 		{
-			name: "defaults disk invalid suffix",
+			name: "defaults docker_disk invalid suffix",
 			cfg: &Config{
 				Defaults: Defaults{
-					Disk: ptrString("20gb"),
+					DockerDisk: ptrString("20gb"),
 				},
 				Workspaces: map[string]Workspace{},
 			},
-			errSubstrs: []string{"defaults", "invalid disk format"},
+			errSubstrs: []string{"defaults", "invalid docker_disk format"},
 		},
 		{
-			name: "workspace disk zero",
+			name: "workspace docker_disk zero",
 			cfg: &Config{
 				Workspaces: map[string]Workspace{
 					"test": {
-						Paths: []string{"/data"},
-						Disk:  ptrString("0g"),
+						Paths:      []string{"/data"},
+						DockerDisk: ptrString("0g"),
 					},
 				},
 			},
-			errSubstrs: []string{"test", "invalid disk format"},
+			errSubstrs: []string{"test", "invalid docker_disk format"},
 		},
 	}
 

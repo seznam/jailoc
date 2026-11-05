@@ -51,7 +51,7 @@ func startDocker(logger *slog.Logger, d *Docker, acct account) (*dockerDaemon, e
 	if err := syscall.Mount(d.Disk, dockerDataDir, "ext4", 0, ""); err != nil {
 		return nil, fmt.Errorf("docker: mount %s: %w", d.Disk, err)
 	}
-	// The host grows the disk image when the disk setting is raised; grow the
+	// The host grows the disk image when docker_disk is raised; grow the
 	// mounted file system with it. A failure leaves the old size usable.
 	if out, err := exec.Command("resize2fs", d.Disk).CombinedOutput(); err != nil { //nolint:gosec // G204: fixed command, device from the guest config
 		logger.Warn("docker data disk not grown", "device", d.Disk, "err", err, "output", strings.TrimSpace(string(out)))

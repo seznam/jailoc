@@ -77,7 +77,7 @@ func rotate(t *testing.T, path, data string) {
 	appendFile(t, path, data)
 }
 
-func TestRestartOnlyChangesDisk(t *testing.T) {
+func TestRestartOnlyChangesDockerDisk(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
 	if err != nil {
@@ -91,8 +91,8 @@ func TestRestartOnlyChangesDisk(t *testing.T) {
 		changes       []string
 	}{
 		{"unchanged default", 0, 20 << 30, true, nil},
-		{"grown", 20 << 30, 40 << 30, true, []string{"disk"}},
-		{"grown from a spec without disk_size", 0, 40 << 30, true, []string{"disk"}},
+		{"grown", 20 << 30, 40 << 30, true, []string{"docker_disk"}},
+		{"grown from a spec without disk_size", 0, 40 << 30, true, []string{"docker_disk"}},
 		{"docker off", 20 << 30, 40 << 30, false, nil},
 	}
 	for _, tt := range tests {

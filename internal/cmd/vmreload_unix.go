@@ -165,7 +165,7 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 		out = append(out, "memory")
 	}
 	if running.Docker && want.Docker && cmp.Or(running.DiskSize, int64(vm.DefaultDiskSize)) != cmp.Or(want.DiskSize, int64(vm.DefaultDiskSize)) {
-		out = append(out, "disk")
+		out = append(out, "docker_disk")
 	}
 	if running.Docker != want.Docker {
 		out = append(out, "enable_docker")

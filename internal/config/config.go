@@ -48,7 +48,7 @@ const (
 # ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
 # cpu = 2.0
 # memory = "4g"
-# disk = "20g"  # Docker data disk (enable_docker), can only grow
+# docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
 
 # [defaults.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
@@ -84,7 +84,7 @@ paths = []
 # ca_bundle = true  # omitted: inherit defaults; true/false/string: override
 # cpu = 2.0
 # memory = "4g"
-# disk = "20g"
+# docker_disk = "20g"
 
 # [workspaces.default.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
@@ -299,7 +299,7 @@ type Defaults struct {
 	GitConfig       *bool                    `toml:"git_config,omitempty"`
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
-	Disk            *string                  `toml:"disk,omitempty"`
+	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
 	FilteredDNS     *bool                    `toml:"filtered_dns,omitempty"`
@@ -331,7 +331,7 @@ type Workspace struct {
 	GitConfig       *bool                    `toml:"git_config,omitempty"`
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
-	Disk            *string                  `toml:"disk,omitempty"`
+	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
 	FilteredDNS     *bool                    `toml:"filtered_dns,omitempty"`
@@ -1039,8 +1039,8 @@ func Validate(cfg *Config) error {
 	if cfg.Defaults.Memory != nil && !validMemory.MatchString(*cfg.Defaults.Memory) {
 		return fmt.Errorf("defaults: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", *cfg.Defaults.Memory)
 	}
-	if cfg.Defaults.Disk != nil && !validMemory.MatchString(*cfg.Defaults.Disk) {
-		return fmt.Errorf("defaults: invalid disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", *cfg.Defaults.Disk)
+	if cfg.Defaults.DockerDisk != nil && !validMemory.MatchString(*cfg.Defaults.DockerDisk) {
+		return fmt.Errorf("defaults: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", *cfg.Defaults.DockerDisk)
 	}
 	if err := validateDNS(cfg.Defaults.DNSUpstream, cfg.Defaults.DNSBlockedZones); err != nil {
 		return fmt.Errorf("defaults: %w", err)
@@ -1138,8 +1138,8 @@ func Validate(cfg *Config) error {
 		if ws.Memory != nil && !validMemory.MatchString(*ws.Memory) {
 			return fmt.Errorf("workspace %q: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", name, *ws.Memory)
 		}
-		if ws.Disk != nil && !validMemory.MatchString(*ws.Disk) {
-			return fmt.Errorf("workspace %q: invalid disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", name, *ws.Disk)
+		if ws.DockerDisk != nil && !validMemory.MatchString(*ws.DockerDisk) {
+			return fmt.Errorf("workspace %q: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", name, *ws.DockerDisk)
 		}
 		if err := validateDNS(ws.DNSUpstream, ws.DNSBlockedZones); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)

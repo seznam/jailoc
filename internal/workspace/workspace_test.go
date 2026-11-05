@@ -1163,7 +1163,7 @@ func TestResolveCPUMemory(t *testing.T) {
 	}
 }
 
-func TestResolveDisk(t *testing.T) {
+func TestResolveDockerDisk(t *testing.T) {
 	t.Parallel()
 
 	str := func(v string) *string { return &v }
@@ -1185,9 +1185,9 @@ func TestResolveDisk(t *testing.T) {
 			t.Parallel()
 
 			cfg := &config.Config{
-				Defaults: config.Defaults{Disk: tt.defDisk},
+				Defaults: config.Defaults{DockerDisk: tt.defDisk},
 				Workspaces: map[string]config.Workspace{
-					"test": {Paths: []string{"/data"}, Disk: tt.wsDisk},
+					"test": {Paths: []string{"/data"}, DockerDisk: tt.wsDisk},
 				},
 			}
 
@@ -1195,8 +1195,8 @@ func TestResolveDisk(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve failed: %v", err)
 			}
-			if resolved.Disk != tt.want {
-				t.Errorf("Disk: got %q, want %q", resolved.Disk, tt.want)
+			if resolved.DockerDisk != tt.want {
+				t.Errorf("DockerDisk: got %q, want %q", resolved.DockerDisk, tt.want)
 			}
 		})
 	}

@@ -216,7 +216,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	}
 	if ws.IsolatedBuild {
 		spec.Workspace = ws.Name + "-builder"
-		if spec.DiskSize, err = vmDiskSize(ws.Disk); err != nil {
+		if spec.DiskSize, err = vmDockerDiskSize(ws.DockerDisk); err != nil {
 			return "", err
 		}
 	}
@@ -421,7 +421,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if err != nil {
 		return vm.Spec{}, err
 	}
-	diskSize, err := vmDiskSize(ws.Disk)
+	diskSize, err := vmDockerDiskSize(ws.DockerDisk)
 	if err != nil {
 		return vm.Spec{}, err
 	}
@@ -819,8 +819,8 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	if mem, err := vmMemoryMiB(ws.Memory); err == nil && running.MemoryMiB != mem {
 		out = append(out, "memory")
 	}
-	if size, err := vmDiskSize(ws.Disk); err == nil && running.Docker && ws.EnableDocker && cmp.Or(running.DiskSize, int64(vm.DefaultDiskSize)) != size {
-		out = append(out, "disk")
+	if size, err := vmDockerDiskSize(ws.DockerDisk); err == nil && running.Docker && ws.EnableDocker && cmp.Or(running.DiskSize, int64(vm.DefaultDiskSize)) != size {
+		out = append(out, "docker_disk")
 	}
 	if running.Docker != ws.EnableDocker {
 		out = append(out, "enable_docker")

@@ -482,7 +482,7 @@ func ensureDisk(path string, size int64) error {
 	st, err := os.Stat(path)
 	if err == nil {
 		if st.Size() > size {
-			return fmt.Errorf("data disk %s is %d MiB, larger than the requested %d MiB, and cannot shrink: set disk to at least %dm, or remove the file to start over with an empty disk", path, st.Size()>>20, size>>20, (st.Size()+(1<<20-1))>>20)
+			return fmt.Errorf("data disk %s is %d MiB, larger than the requested %d MiB, and cannot shrink: set docker_disk to at least %dm, or remove the file to start over with an empty disk", path, st.Size()>>20, size>>20, (st.Size()+(1<<20-1))>>20)
 		}
 		if st.Size() < size {
 			if err := os.Truncate(path, size); err != nil {

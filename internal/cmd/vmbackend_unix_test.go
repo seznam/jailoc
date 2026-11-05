@@ -53,7 +53,7 @@ func TestVMMemoryMiB(t *testing.T) {
 	}
 }
 
-func TestVMDiskSize(t *testing.T) {
+func TestVMDockerDiskSize(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		size    string
@@ -74,12 +74,12 @@ func TestVMDiskSize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.size, func(t *testing.T) {
 			t.Parallel()
-			got, err := vmDiskSize(tt.size)
+			got, err := vmDockerDiskSize(tt.size)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("vmDiskSize(%q) error = %v, wantErr %v", tt.size, err, tt.wantErr)
+				t.Fatalf("vmDockerDiskSize(%q) error = %v, wantErr %v", tt.size, err, tt.wantErr)
 			}
 			if !tt.wantErr && got != tt.want {
-				t.Fatalf("vmDiskSize(%q) = %d, want %d", tt.size, got, tt.want)
+				t.Fatalf("vmDockerDiskSize(%q) = %d, want %d", tt.size, got, tt.want)
 			}
 		})
 	}

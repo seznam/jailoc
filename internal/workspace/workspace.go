@@ -50,7 +50,7 @@ type Resolved struct {
 	Secrets         []ResolvedSecret
 	CPU             float64
 	Memory          string
-	Disk            string
+	DockerDisk      string
 	EnableDocker    bool
 	// IsolatedBuild builds the image of a backend "vm" workspace in its own
 	// builder VM instead of the builder shared by all workspaces.
@@ -177,7 +177,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
-		Disk:            stringWithDefault(cfg.Defaults.Disk, ws.Disk, "20g"),
+		DockerDisk:      stringWithDefault(cfg.Defaults.DockerDisk, ws.DockerDisk, "20g"),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, false),
 		IsolatedBuild:   boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
 		ProtectGit:      boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),

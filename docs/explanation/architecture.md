@@ -27,7 +27,7 @@ The VM boots from a small root file system that holds only `jailoc-guest` and it
 3. creates the `agent` user (UID 1000) when the image has none, and its home directory,
 4. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
 5. adds the hostname to `/etc/hosts`,
-6. with `enable_docker`, formats the Docker data disk (`disk`, 20 GiB by default) on first use, mounts it at `/var/lib/docker`, grows its file system when `disk` was raised and starts `dockerd` with the socket owned by the `agent` group,
+6. with `enable_docker`, formats the Docker data disk (`docker_disk`, 20 GiB by default) on first use, mounts it at `/var/lib/docker`, grows its file system when `docker_disk` was raised and starts `dockerd` with the socket owned by the `agent` group,
 7. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
 
 `jailoc-guest` leaves privileges alone by default, so the agent can use `sudo` from the image. Root in the VM is still inside the VM boundary.

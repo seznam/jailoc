@@ -109,11 +109,11 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Memory: %s\n", defaultsMemory)
 
-	defaultsDisk := "(not set, default: 20g)"
-	if cfg.Defaults.Disk != nil {
-		defaultsDisk = *cfg.Defaults.Disk
+	defaultsDockerDisk := "(not set, default: 20g)"
+	if cfg.Defaults.DockerDisk != nil {
+		defaultsDockerDisk = *cfg.Defaults.DockerDisk
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Disk: %s\n", defaultsDisk)
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Docker Disk: %s\n", defaultsDockerDisk)
 
 	_, _ = fmt.Fprintf(os.Stdout, "\n")
 
@@ -207,11 +207,11 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		}
 		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Memory: %s\n", wsMemory)
 
-		wsDisk := "(not set)"
-		if ws.Disk != nil {
-			wsDisk = *ws.Disk
+		wsDockerDisk := "(not set)"
+		if ws.DockerDisk != nil {
+			wsDockerDisk = *ws.DockerDisk
 		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Disk: %s\n", wsDisk)
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Docker Disk: %s\n", wsDockerDisk)
 
 		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}
