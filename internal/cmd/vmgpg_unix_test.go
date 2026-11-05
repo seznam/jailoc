@@ -3,6 +3,9 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -30,5 +33,28 @@ fpr:::::::::CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC3333:
 	}
 	if got := secretKeyFingerprints(nil); len(got) != 0 {
 		t.Fatalf("secretKeyFingerprints(nil) = %v, want none", got)
+	}
+}
+
+func TestGitSigningKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	cfg := filepath.Join(home, ".gitconfig")
+
+	if got := gitSigningKey(context.Background()); got != "" {
+		t.Fatalf("gitSigningKey with no config = %q, want empty", got)
+	}
+	if err := os.WriteFile(cfg, []byte("[user]\n\tsigningKey = DEADBEEF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitSigningKey(context.Background()); got != "DEADBEEF" {
+		t.Fatalf("gitSigningKey = %q, want DEADBEEF", got)
+	}
+	if err := os.WriteFile(cfg, []byte("[gpg]\n\tformat = ssh\n[user]\n\tsigningKey = ~/.ssh/id_ed25519.pub\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitSigningKey(context.Background()); got != "" {
+		t.Fatalf("gitSigningKey with gpg.format=ssh = %q, want empty", got)
 	}
 }

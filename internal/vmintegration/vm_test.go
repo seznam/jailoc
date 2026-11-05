@@ -501,6 +501,47 @@ sudo -n dmesg | grep -q "Killed process $(cat /tmp/oom-child) " && echo child-ki
 		}
 	})
 
+	t.Run("GPG agent forwarding, reload and revocation", func(t *testing.T) {
+		gpgCmd := exec.CommandContext(ctx, "gpg", "--batch", "--passphrase", "", "--quick-generate-key", "VM Test <vmtest@example.com>", "ed25519", "sign", "never")
+		gpgCmd.Env = append(os.Environ(), "HOME="+home)
+		if out, err := gpgCmd.CombinedOutput(); err != nil {
+			t.Fatalf("gpg --quick-generate-key: %v\n%s", err, out)
+		}
+		t.Cleanup(func() {
+			kill := exec.Command("gpgconf", "--kill", "gpg-agent")
+			kill.Env = append(os.Environ(), "HOME="+home)
+			_ = kill.Run()
+		})
+
+		writeConfig(t, fmt.Sprintf("gpg_agent = true\nsnapshots = [%q]", snapshot+":/home/agent/.vmtest-snapshot"))
+		jailoc(ctx, t, agentSock, "reload", workspaceName)
+		if got := mustGuest(ctx, t, "echo gpg-ok | gpg --batch --clearsign | gpg --batch --verify 2>&1"); !strings.Contains(got, "vmtest@example.com") {
+			t.Fatalf("gpg sign/verify = %q", got)
+		}
+
+		// Hold an open connection to the guest GPG socket while reload turns
+		// gpg_agent off; disabling the relay must close the open connection
+		// and remove the socket.
+		mustGuest(ctx, t, `python3 - <<'PY' >/tmp/gpg-revoke.out 2>&1 &
+import socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(15)
+s.connect("/run/user/1000/gnupg/S.gpg-agent")
+assert b"OK" in s.recv(256)
+open("/tmp/gpg-connected", "w").write("1")
+while s.recv(256):
+    pass
+open("/tmp/gpg-closed", "w").write("1")
+PY
+for i in $(seq 1 50); do test -f /tmp/gpg-connected && break; sleep 0.1; done
+test -f /tmp/gpg-connected`)
+
+		writeConfig(t, fmt.Sprintf("snapshots = [%q]", snapshot+":/home/agent/.vmtest-snapshot"))
+		jailoc(ctx, t, agentSock, "reload", workspaceName)
+		mustGuest(ctx, t, `for i in $(seq 1 50); do test -f /tmp/gpg-closed && break; sleep 0.1; done
+test -f /tmp/gpg-closed && test ! -e /run/user/1000/gnupg/S.gpg-agent`)
+	})
+
 	t.Run("Docker", func(t *testing.T) {
 		if got := mustGuest(ctx, t, "docker run --rm alpine:3.20 echo docker-ok"); !strings.HasSuffix(got, "docker-ok") {
 			t.Fatalf("docker run = %q", got)

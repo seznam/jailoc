@@ -100,7 +100,7 @@ The default base image (Ubuntu 24.04) ships with:
 | Runtimes | Node.js, Python 3 |
 | Package managers | npm |
 | Language servers | typescript-language-server, pyright, yaml-language-server, bash-language-server |
-| CLI tools | rg (ripgrep), fdfind, jq, git, openssh-client, curl, sudo |
+| CLI tools | rg (ripgrep), fdfind, jq, git, gpg, openssh-client, curl, sudo |
 
 jailoc installs the workspace's coding agent and, with `enable_docker`, Docker on top of it. Exact versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile). See the [default image reference](https://seznam.github.io/jailoc/reference/default-image/) for the full list of installed tools.
 

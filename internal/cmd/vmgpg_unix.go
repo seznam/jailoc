@@ -73,16 +73,17 @@ func gpgPublicKeys(ctx context.Context) []byte {
 
 // exportGPGPublicKeys exports the public key named by user.signingKey in the
 // global Git configuration, or the public keys of all host secret keys when
-// it is not set or names no GPG key (for example an SSH key).
+// no OpenPGP signing key is set.
 func exportGPGPublicKeys(ctx context.Context) ([]byte, error) {
 	if key := gitSigningKey(ctx); key != "" {
 		out, err := gpgOutput(ctx, "--batch", "--export", "--", key)
 		if err != nil {
 			return nil, err
 		}
-		if len(out) > 0 {
-			return out, nil
+		if len(out) == 0 {
+			return nil, fmt.Errorf("user.signingKey %q is not in the host keyring", key)
 		}
+		return out, nil
 	}
 	list, err := gpgOutput(ctx, "--batch", "--with-colons", "--list-secret-keys")
 	if err != nil {
@@ -95,15 +96,22 @@ func exportGPGPublicKeys(ctx context.Context) ([]byte, error) {
 	return gpgOutput(ctx, append([]string{"--batch", "--export", "--"}, fprs...)...)
 }
 
-// gitSigningKey reads user.signingKey from the global Git configuration. It
-// runs in the home directory, never in a workspace repository the agent
-// controls.
+// gitSigningKey reads user.signingKey from the global Git configuration when
+// gpg.format is unset or openpgp. It runs in the home directory, never in a
+// workspace repository the agent controls.
 func gitSigningKey(ctx context.Context) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	cmd := exec.CommandContext(ctx, "git", "config", "--global", "--includes", "--get", "user.signingKey")
+	if format := gitConfigGlobal(ctx, home, "gpg.format"); format != "" && !strings.EqualFold(format, "openpgp") {
+		return ""
+	}
+	return gitConfigGlobal(ctx, home, "user.signingKey")
+}
+
+func gitConfigGlobal(ctx context.Context, home, key string) string {
+	cmd := exec.CommandContext(ctx, "git", "config", "--global", "--includes", "--get", key) //nolint:gosec // G204: fixed git config query
 	cmd.Dir = home
 	out, err := cmd.Output()
 	if err != nil {
