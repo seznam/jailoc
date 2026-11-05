@@ -195,10 +195,7 @@ func writeSecretCacheIndex(wsName string, idx secretCacheIndex) error {
 			latest = expires
 		}
 	}
-	ttl := latest.Sub(secretCacheTime()) + indexExpiryMargin
-	if ttl <= 0 {
-		ttl = indexRetryTTL
-	}
+	ttl := max(latest.Sub(secretCacheTime())+indexExpiryMargin, expiredIndexTTL)
 	data, err := json.Marshal(idx)
 	if err != nil {
 		return fmt.Errorf("encode secret cache index: %w", err)
