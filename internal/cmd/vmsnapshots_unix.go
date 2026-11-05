@@ -178,7 +178,10 @@ func stageSnapshot(root *os.Root, c snapshot, dst string) error {
 	if c.data == nil {
 		return copyTree(root, c.Host, dst)
 	}
-	out, err := root.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	// The agent must read the file in the guest, where its owner may show as
+	// root. The snapshot directories, created 0700, keep it from other host
+	// users.
+	out, err := root.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}

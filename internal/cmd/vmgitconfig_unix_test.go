@@ -259,6 +259,8 @@ func TestGitConfigSnapshotsCredentials(t *testing.T) {
 		{name: "relative include", config: "[include]\n\tpath = .ssh/id_ed25519\n", warning: "/.ssh/id_ed25519 is in ~/.ssh"},
 		{name: "symbolic link in a credentials directory", config: "[core]\n\texcludesFile = ~/.ssh/deploy\n", links: map[string]string{".ssh/deploy": "private-key"}, warning: "/.ssh/deploy is in ~/.ssh"},
 		{name: "hard link to a credentials file", config: "[core]\n\texcludesFile = ~/git-ignore\n", hard: map[string]string{"git-ignore": ".ssh/id_ed25519"}, warning: "/git-ignore is in ~/.ssh"},
+		{name: "symbolic link to a linked credentials subdirectory", config: "[core]\n\texcludesFile = ~/ignore-link\n", links: map[string]string{".ssh/work": "private-keys", "ignore-link": ".ssh/work/id_ed25519"}, warning: "/ignore-link is in ~/.ssh"},
+		{name: "hard link into a linked credentials subdirectory", config: "[core]\n\texcludesFile = ~/git-ignore\n", links: map[string]string{".ssh/work": "private-keys"}, hard: map[string]string{"git-ignore": "private-keys/id_ed25519"}, warning: "/git-ignore is in ~/.ssh"},
 		{name: "private key as allowed signers", config: "[gpg \"ssh\"]\n\tallowedSignersFile = ~/.ssh/id_ed25519\n", warning: "is not an allowed signers file"},
 	}
 	for _, tt := range tests {
@@ -273,6 +275,7 @@ func TestGitConfigSnapshotsCredentials(t *testing.T) {
 				".aws/credentials":        "[default]\nsecret\n",
 				".ssh/id_ed25519":         private,
 				"private-key":             private,
+				"private-keys/id_ed25519": private,
 			})
 			for link, target := range tt.links {
 				if err := os.Symlink(filepath.Join(home, target), filepath.Join(home, link)); err != nil {
@@ -375,6 +378,35 @@ func TestGitConfigSnapshotsRelocatedXDG(t *testing.T) {
 	src := filepath.Join(home, ".xdg/git/config") + " (generated)"
 	if got[guestHome+"/.config/git/config"] != src || got[guestHome+"/.xdg/git/config"] != src || len(warnings) != 0 {
 		t.Errorf("snapshots = %v, warnings %q, want %s at both guest paths", got, warnings, src)
+	}
+}
+
+func TestGitConfigSnapshotsRelativeIncludeRoots(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	gitConfigFiles(t, base, map[string]string{
+		"private.inc":        "[user]\n\tname = secret\n",
+		"home/git/config":    "[include]\n\tpath = ../../private.inc\n",
+		"xdg/git/config":     "[include]\n\tpath = work.inc\n",
+		"xdg/git/work.inc":   "[user]\n\temail = me@example.com\n",
+		"home/.gitconfig":    "",
+		"home/.config/.keep": "",
+	})
+
+	// With XDG_CONFIG_HOME=$HOME, a relative include must not leave the home
+	// directory even though its guest path stays inside it.
+	got, warnings := gitConfigData(home, home)
+	if _, ok := got[guestHome+"/private.inc"]; ok {
+		t.Errorf("snapshots = %v, want no file from outside the home directory", got)
+	}
+	assertContains(t, warnings, "include.path "+filepath.Join(base, "private.inc")+" is outside the home directory; it is not copied to the VM")
+
+	// A relocated XDG directory outside the home directory keeps its
+	// relative includes.
+	got, warnings = gitConfigData(home, filepath.Join(base, "xdg"))
+	if got[guestHome+"/.config/git/work.inc"] != "[user]\n\temail = me@example.com\n" || warnings != "" {
+		t.Errorf("snapshots = %v, warnings %q, want the XDG include", got, warnings)
 	}
 }
 

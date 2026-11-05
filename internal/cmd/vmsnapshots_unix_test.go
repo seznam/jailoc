@@ -152,6 +152,9 @@ func TestStageSnapshots(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(genDir, "2")); string(got) != "generated" { //nolint:gosec // G304: test file
 		t.Fatalf("staged generated file = %q", got)
 	}
+	if info, err := os.Stat(filepath.Join(genDir, "2")); err != nil || info.Mode().Perm()&0o444 != 0o444 {
+		t.Fatalf("staged generated file must be readable by the guest agent: %v, %v", info, err)
+	}
 	if link, err := os.Readlink(filepath.Join(genDir, "1", "link")); err != nil || link != "sub/hosts.yml" {
 		t.Fatalf("staged link = %q, %v", link, err)
 	}

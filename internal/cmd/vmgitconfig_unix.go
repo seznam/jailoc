@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -75,6 +76,7 @@ type protected struct {
 // gitConfigCopier collects the git_config snapshots.
 type gitConfigCopier struct {
 	home   string
+	xdg    string
 	warn   func(format string, args ...any)
 	out    []snapshot
 	refs   []func()           // references yet to be followed
@@ -104,26 +106,9 @@ func gitConfigSnapshots(home, xdg string, warn func(format string, args ...any))
 	if xdg == "" {
 		xdg = filepath.Join(home, ".config")
 	}
-	c := &gitConfigCopier{home: home, warn: warn, seen: map[[2]string]bool{}, dests: map[string]claim{}}
+	c := &gitConfigCopier{home: home, xdg: xdg, warn: warn, seen: map[[2]string]bool{}, dests: map[string]claim{}}
 	for _, name := range gitCredentialDirs {
-		root, err := filepath.EvalSymlinks(filepath.Join(home, name))
-		if err != nil {
-			continue
-		}
-		if info, err := os.Stat(root); err == nil { //nolint:gosec // G703: home directory path
-			c.dirs = append(c.dirs, protected{dir: name, info: info})
-		}
-		// Recording the files, and the files their links point to, catches
-		// hard links to them elsewhere. Entries that cannot be read are
-		// skipped; the directory check still covers the paths under them.
-		_ = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error { // the walk function never fails
-			if err == nil && !e.IsDir() {
-				if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() { //nolint:gosec // G703: credentials directory entry
-					c.files = append(c.files, protected{dir: name, info: info})
-				}
-			}
-			return nil
-		})
+		c.protect(name)
 	}
 	for _, p := range []string{
 		filepath.Join(home, ".git-credentials"),
@@ -147,6 +132,51 @@ func gitConfigSnapshots(home, xdg string, warn func(format string, args ...any))
 		ref()
 	}
 	return c.out
+}
+
+// maxProtectedEntries bounds the entries protect walks, so a huge credentials
+// directory cannot stall the start of a workspace.
+const maxProtectedEntries = 1 << 16
+
+// protect records the credentials directory name under the home directory,
+// the directories it links to and the files in all of them. Recording the
+// files, and the files their links point to, catches hard links to them
+// elsewhere. Entries that cannot be read are skipped; the directory check
+// still covers the paths under them.
+func (c *gitConfigCopier) protect(name string) {
+	queue := []string{filepath.Join(c.home, name)}
+	entries := 0
+	for len(queue) > 0 && entries < maxProtectedEntries {
+		// WalkDir does not descend into a symbolic link to a directory, so
+		// it walks the resolved path.
+		root, err := filepath.EvalSymlinks(queue[0])
+		queue = queue[1:]
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(root) //nolint:gosec // G703: credentials directory path
+		if err != nil || !info.IsDir() || slices.ContainsFunc(c.dirs, func(d protected) bool { return os.SameFile(d.info, info) }) {
+			continue
+		}
+		c.dirs = append(c.dirs, protected{dir: name, info: info})
+		_ = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error { // the walk function never fails
+			if entries++; entries > maxProtectedEntries {
+				return fs.SkipAll
+			}
+			if err != nil || e.IsDir() {
+				return nil
+			}
+			info, err := os.Stat(p) //nolint:gosec // G703: credentials directory entry
+			switch {
+			case err != nil:
+			case info.IsDir():
+				queue = append(queue, p)
+			case info.Mode().IsRegular():
+				c.files = append(c.files, protected{dir: name, info: info})
+			}
+			return nil
+		})
+	}
 }
 
 // config copies the configuration file src to dest and queues its
@@ -225,12 +255,14 @@ func (c *gitConfigCopier) load(key, src, dest string, public bool) (string, []by
 	}
 	c.seen[visit] = true
 	name := strings.TrimPrefix(key+" "+src, " ")
+	// A relative include carries its dest but must still stay in the home
+	// directory or the directory Git reads its default files from.
+	if !within(src, c.home) && (dest == "" || !within(src, c.xdg)) {
+		c.warn("%s is outside the home directory; it is not copied to the VM", name)
+		return "", nil, false
+	}
 	if dest == "" {
-		rel, err := filepath.Rel(c.home, src)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-			c.warn("%s is outside the home directory; it is not copied to the VM", name)
-			return "", nil, false
-		}
+		rel, _ := filepath.Rel(c.home, src) // within checked that src is in the home directory
 		dest = guestHome + "/" + filepath.ToSlash(rel)
 	}
 	if dest != guestHome && !strings.HasPrefix(dest, guestHome+"/") {
