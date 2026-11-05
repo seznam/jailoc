@@ -374,10 +374,10 @@ func runSecretCommand(ctx context.Context, wsName string, s workspace.ResolvedSe
 	ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
-	env := slices.DeleteFunc(os.Environ(), func(e string) bool {
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(e string) bool {
 		return strings.HasPrefix(e, "JAILOC_WORKSPACE=")
 	})
-	cmd.Env = append(env, "JAILOC_WORKSPACE="+wsName)
+	cmd.Env = append(cmd.Env, "JAILOC_WORKSPACE="+wsName)
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
