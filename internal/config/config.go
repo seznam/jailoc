@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/compose-spec/compose-go/v2/format"
@@ -233,13 +234,14 @@ type Mount struct {
 // lives in decides the destination; exactly one From* field decides the
 // source. FromEnv names the host env var the value is read from, FromFile the
 // absolute host path, FromCommand a command run on the host with /bin/sh -c
-// whose standard output is the value. The tags carry omitempty so a
-// whole-config TOML re-encode never injects empty source keys into a user's
-// config.
+// whose standard output is the value. TTL caches FromCommand output in the
+// host keychain for that duration. The tags carry omitempty so a whole-config
+// TOML re-encode never injects empty source keys into a user's config.
 type Secret struct {
 	FromEnv     string `toml:"from_env,omitempty"`
 	FromFile    string `toml:"from_file,omitempty"`
 	FromCommand string `toml:"from_command,omitempty"`
+	TTL         string `toml:"ttl,omitempty"`
 }
 
 // Secrets is a whole [<scope>.secrets] block. The sub-table a secret lives in
@@ -669,6 +671,15 @@ func validateSecret(name string, secret Secret, dest secretDest, context string)
 	if secret.FromFile != "" {
 		if err := validateSecretFile(secret.FromFile); err != nil {
 			return fmt.Errorf("%s: %s secret %q: %w", context, destLabel, name, err)
+		}
+	}
+	if secret.TTL != "" {
+		if secret.FromCommand == "" {
+			return fmt.Errorf("%s: %s secret %q: \"ttl\" is only valid with \"from_command\"", context, destLabel, name)
+		}
+		d, err := time.ParseDuration(secret.TTL)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("%s: %s secret %q: invalid ttl %q: must be a positive duration such as \"15m\" or \"1h\"", context, destLabel, name, secret.TTL)
 		}
 	}
 	return nil

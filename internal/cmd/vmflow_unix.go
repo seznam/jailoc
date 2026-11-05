@@ -52,7 +52,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if st, err := runningVM(stateDir); err != nil {
 		return err
 	} else if st != nil {
-		return reloadVM(ctx, ws)
+		return reloadVM(ctx, ws, false)
 	}
 
 	// Must run before every generated-file write below.
@@ -129,7 +129,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		}
 		_, _ = color.New(color.FgCyan).Printf("Protecting Git hooks and config of %d repositories; sudo and Docker are disabled\n", repos)
 	}
-	payload, err := secretsPayload(ctx, ws, spec)
+	payload, err := secretsPayload(ctx, ws, spec, false)
 	if err != nil {
 		return err
 	}
@@ -534,7 +534,7 @@ func workspaceCABundle(ws *workspace.Resolved) string {
 // secretsPayload reads the workspace environment and secret values on the
 // host. Env secrets go to the session environment only, file secrets to
 // /run/secrets. Values stay in memory.
-func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec) (guest.Secrets, error) {
+func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec, purgeCache bool) (guest.Secrets, error) {
 	payload := guest.Secrets{Env: append([]string{}, ws.Env...), Files: map[string][]byte{}}
 	if spec.SSHAgent != "" {
 		payload.Env = append(payload.Env, "SSH_AUTH_SOCK="+guest.SSHAgentSocket)
@@ -543,7 +543,7 @@ func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec) (
 		payload.Env = append(payload.Env, "NODE_USE_SYSTEM_CA=1")
 	}
 	for _, s := range ws.Secrets {
-		value, err := readSecret(ctx, s)
+		value, err := readSecret(ctx, ws.Name, s, purgeCache)
 		if err != nil {
 			return guest.Secrets{}, err
 		}
@@ -604,7 +604,7 @@ func ensureSecrets(ctx context.Context, ws *workspace.Resolved) error {
 	if err != nil {
 		return err
 	}
-	payload, err := secretsPayload(ctx, ws, *spec)
+	payload, err := secretsPayload(ctx, ws, *spec, false)
 	if err != nil {
 		return err
 	}
@@ -650,6 +650,7 @@ func downVM(ws *workspace.Resolved, purge bool) error {
 		return err
 	}
 	if purge {
+		purgeWorkspaceSecretCache(ws)
 		if err := vm.RemoveTree(stateDir); err != nil {
 			return fmt.Errorf("delete vm state: %w", err)
 		}

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -83,6 +84,7 @@ type ResolvedSecret struct {
 	FromEnv     string
 	FromFile    string
 	FromCommand string
+	TTL         time.Duration
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -286,10 +288,12 @@ func mergeSecrets(defaults, overrides config.Secrets) []ResolvedSecret {
 // config.validateSecretsBlock rejects that before Resolve runs.
 func collectSecrets(dst map[string]ResolvedSecret, secrets config.Secrets) {
 	for name, secret := range secrets.Env {
-		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand}
+		ttl, _ := time.ParseDuration(secret.TTL)
+		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand, TTL: ttl}
 	}
 	for name, secret := range secrets.File {
-		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand}
+		ttl, _ := time.ParseDuration(secret.TTL)
+		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand, TTL: ttl}
 	}
 }
 

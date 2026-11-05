@@ -84,7 +84,7 @@ func TestSecretsPayload(t *testing.T) {
 		},
 	}
 	spec := vm.Spec{SSHAgent: "/tmp/agent.sock", Guest: &guest.Config{CABundle: "/ca.pem"}}
-	got, err := secretsPayload(context.Background(), ws, spec)
+	got, err := secretsPayload(context.Background(), ws, spec, false)
 	if err != nil {
 		t.Fatalf("secretsPayload: %v", err)
 	}

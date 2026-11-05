@@ -377,6 +377,7 @@ Secrets live under `[defaults.secrets.env.<NAME>]`, `[defaults.secrets.file.<NAM
 | `from_env` | string | Host environment variable to read. Must match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `from_file` | string | Host file to read. Absolute or `~` path. |
 | `from_command` | string | Command run on the host with `/bin/sh -c`; its standard output is the value. Must not be blank. |
+| `ttl` | string | Duration (`time.ParseDuration`, e.g. `"15m"`, `"1h"`) for which `from_command` output is cached in the host system keychain per workspace. Only valid with `from_command`; must be positive. |
 
 Exactly one of `from_env`, `from_file` and `from_command` must be set.
 
@@ -387,7 +388,7 @@ Exactly one of `from_env`, `from_file` and `from_command` must be set.
 
 A name may not appear in both `secrets.env` and `secrets.file` of the same scope.
 
-At `jailoc up`, `jailoc reload` and `jailoc add`, jailoc reads every source on the host: a `from_env` variable must be set and non-empty, a `from_file` path must be a regular file, and a `from_command` must exit with status 0, print something and finish within two minutes. Commands run with the terminal attached. Env secret values lose trailing `\r` and `\n` characters and must not contain line breaks or NUL. Values travel to the guest over SSH; file secrets are written to `/run/secrets` (tmpfs, mode `0400`, owned by the agent) and env secrets go to the session environment only. jailoc never writes them to host disk. `jailoc reload` re-reads and re-pushes secrets and removes files of secrets no longer configured; running sessions keep their old environment. See the [secrets how-to](../how-to/secrets.md).
+At `jailoc up`, `jailoc reload` and `jailoc add`, jailoc reads every source on the host: a `from_env` variable must be set and non-empty, a `from_file` path must be a regular file, and a `from_command` must exit with status 0, print something and finish within two minutes. Commands run with the terminal attached and `JAILOC_WORKSPACE` set to the workspace name. When `ttl` is set on a `from_command` secret, jailoc caches the command output in the host system keychain (macOS login keychain or Linux kernel user keyring) for that duration, keyed by configuration file, workspace, secret destination, secret name and command; `jailoc reload --purge-cache` evicts the cached entries and runs the commands again, and `jailoc down --purge` deletes them. Env secret values lose trailing `\r` and `\n` characters and must not contain line breaks or NUL. Values travel to the guest over SSH; file secrets are written to `/run/secrets` (tmpfs, mode `0400`, owned by the agent) and env secrets go to the session environment only. jailoc never writes them to plain files on host disk. `jailoc reload` re-reads and re-pushes secrets and removes files of secrets no longer configured; running sessions keep their old environment. See the [secrets how-to](../how-to/secrets.md).
 
 ---
 

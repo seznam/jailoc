@@ -3,12 +3,16 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -89,6 +93,9 @@ func secretReference(s workspace.ResolvedSecret) string {
 	case s.FromEnv != "":
 		return fmt.Sprintf("%s (%s from_env %s)", s.Name, destWord, s.FromEnv)
 	case s.FromCommand != "":
+		if s.TTL > 0 {
+			return fmt.Sprintf("%s (%s from_command %q, ttl %s)", s.Name, destWord, s.FromCommand, s.TTL)
+		}
 		return fmt.Sprintf("%s (%s from_command %q)", s.Name, destWord, s.FromCommand)
 	default:
 		return fmt.Sprintf("%s (%s from_file %s)", s.Name, destWord, s.FromFile)
@@ -99,10 +106,86 @@ func secretReference(s workspace.ResolvedSecret) string {
 // user to unlock a password manager.
 const secretCommandTimeout = 2 * time.Minute
 
+type secretKeyring interface {
+	get(account string) ([]byte, error)
+	set(account string, data []byte, ttl time.Duration) error
+	delete(account string) error
+}
+
+var (
+	secretCache     secretKeyring = defaultSecretKeyring
+	secretCacheTime               = time.Now
+)
+
+type cachedSecretEnvelope struct {
+	Value     []byte    `json:"value"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func secretCacheAccount(wsName string, s workspace.ResolvedSecret) string {
+	kind := "file"
+	if s.Kind == workspace.SecretKindEnv {
+		kind = "env"
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte(config.ConfigPath()))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(wsName))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(kind))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(s.Name))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(s.FromCommand))
+	return "jailoc:secret:" + hex.EncodeToString(h.Sum(nil))
+}
+
+func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) {
+	raw, err := secretCache.get(secretCacheAccount(wsName, s))
+	if err != nil {
+		return nil, false
+	}
+	var env cachedSecretEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, false
+	}
+	if !secretCacheTime().Before(env.ExpiresAt) || len(env.Value) == 0 {
+		_ = secretCache.delete(secretCacheAccount(wsName, s))
+		return nil, false
+	}
+	return env.Value, true
+}
+
+func writeCachedSecret(wsName string, s workspace.ResolvedSecret, value []byte) {
+	env := cachedSecretEnvelope{
+		Value:     value,
+		ExpiresAt: secretCacheTime().Add(s.TTL),
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return
+	}
+	_ = secretCache.set(secretCacheAccount(wsName, s), data, s.TTL)
+}
+
+func purgeWorkspaceSecretCache(ws *workspace.Resolved) {
+	if ws == nil {
+		return
+	}
+	for _, s := range ws.Secrets {
+		if s.FromCommand != "" {
+			_ = secretCache.delete(secretCacheAccount(ws.Name, s))
+		}
+	}
+}
+
 // readSecret returns the value of s from its host source. A from_command
-// runs with the terminal attached, so password managers can prompt. Env
-// secret values lose their trailing line break and must fit on one line.
-func readSecret(ctx context.Context, s workspace.ResolvedSecret) ([]byte, error) {
+// runs with the terminal attached and JAILOC_WORKSPACE set to wsName, so
+// password managers can prompt and commands can scope credentials per
+// workspace. When s.TTL > 0 and purgeCache is false, valid cached command
+// outputs in the system keychain are reused. Env secret values lose their
+// trailing line break and must fit on one line.
+func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, purgeCache bool) ([]byte, error) {
 	var value []byte
 	switch {
 	case s.FromEnv != "":
@@ -114,19 +197,32 @@ func readSecret(ctx context.Context, s workspace.ResolvedSecret) ([]byte, error)
 		}
 		value = data
 	default:
-		ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
-		cmd.Stdin = os.Stdin
-		cmd.Stderr = os.Stderr
-		out, err := cmd.Output()
-		if err != nil {
-			return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
+		if s.TTL > 0 {
+			if purgeCache {
+				_ = secretCache.delete(secretCacheAccount(wsName, s))
+			} else if cached, ok := readCachedSecret(wsName, s); ok {
+				value = cached
+			}
 		}
-		if len(out) == 0 {
-			return nil, fmt.Errorf("secret %q: from_command %q printed nothing", s.Name, s.FromCommand)
+		if value == nil {
+			ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
+			cmd.Env = append(os.Environ(), "JAILOC_WORKSPACE="+wsName)
+			cmd.Stdin = os.Stdin
+			cmd.Stderr = os.Stderr
+			out, err := cmd.Output()
+			if err != nil {
+				return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
+			}
+			if len(out) == 0 {
+				return nil, fmt.Errorf("secret %q: from_command %q printed nothing", s.Name, s.FromCommand)
+			}
+			value = out
+			if s.TTL > 0 {
+				writeCachedSecret(wsName, s, out)
+			}
 		}
-		value = out
 	}
 	if s.Kind == workspace.SecretKindEnv {
 		value = bytes.TrimRight(value, "\r\n")

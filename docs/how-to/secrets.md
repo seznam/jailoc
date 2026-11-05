@@ -76,18 +76,29 @@ from_command = "gh auth token"
 
 [workspaces.my-project.secrets.env.OPENAI_API_KEY]
 from_command = "op read op://Private/OpenAI/credential"
+ttl = "1h"
 
 [workspaces.my-project.secrets.file.npmrc]
 from_command = "security find-generic-password -s npmrc -w"
 ```
 
-jailoc runs each command with `/bin/sh -c` at `jailoc up` and `jailoc reload`, before it boots or changes the VM. The command gets your terminal, so a password manager can ask you to unlock it. A command that exits non-zero, prints nothing or runs longer than two minutes stops the operation.
+jailoc runs each command with `/bin/sh -c` and `JAILOC_WORKSPACE` set to the workspace name at `jailoc up` and `jailoc reload`, before it boots or changes the VM. The command gets your terminal, so a password manager can ask you to unlock it. A command that exits non-zero, prints nothing or runs longer than two minutes stops the operation.
 
+Set `ttl` (for example `"15m"` or `"1h"`) to cache the command's output in the host system keychain (the login keychain on macOS, the kernel user keyring on Linux) so restarting or reloading the workspace within that window reuses the value without prompting again.
 ---
 
 ## Set global default secrets
 
-Declare secrets under `[defaults.secrets.env.<NAME>]` or `[defaults.secrets.file.<NAME>]` to give them to every workspace:
+Declare secrets under `[defaults.secrets.env.<NAME>]` or `[defaults.secrets.file.<NAME>]` to give them to every workspace. `from_command` entries run per workspace with `JAILOC_WORKSPACE` set to the target workspace name:
+
+```toml
+[defaults.secrets.env.API_TOKEN]
+from_env = "GLOBAL_API_TOKEN"
+
+[defaults.secrets.env.VAULT_TOKEN]
+from_command = "op read op://Dev/${JAILOC_WORKSPACE}/token"
+ttl = "1h"
+```
 
 ```toml
 [defaults.secrets.env.API_TOKEN]
@@ -106,7 +117,13 @@ Edit the config or the host source, then push the change to the running VM:
 jailoc reload my-project
 ```
 
-jailoc reads every source again, rewrites `/run/secrets` and removes files of secrets that aren't configured any more. New sessions get the updated environment. Processes that read `/run/secrets/<NAME>` see the new value immediately.
+jailoc reads every source again, rewrites `/run/secrets` and removes files of secrets that aren't configured any more. To force `from_command` secrets with a `ttl` to run again before their TTL expires, pass `--purge-cache`:
+
+```bash
+jailoc reload --purge-cache my-project
+```
+
+New sessions get the updated environment. Processes that read `/run/secrets/<NAME>` see the new value immediately.
 
 !!! note
     Running sessions keep the environment they started with. Open a new session with `jailoc --new` to pick up changed environment secrets. See [Sessions](sessions.md).

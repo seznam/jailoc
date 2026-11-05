@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
@@ -435,11 +437,16 @@ func TestReadSecret(t *testing.T) {
 			secret: workspace.ResolvedSecret{Name: "t", Kind: workspace.SecretKindFile, FromFile: pem},
 			want:   "line1\nline2\n",
 		},
+		{
+			name:   "command receives JAILOC_WORKSPACE",
+			secret: workspace.ResolvedSecret{Name: "T", Kind: workspace.SecretKindEnv, FromCommand: `printf '%s\n' "$JAILOC_WORKSPACE"`},
+			want:   "ws",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := readSecret(context.Background(), tt.secret)
+			got, err := readSecret(context.Background(), "ws", tt.secret, false)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("readSecret error = %v, want %q", err, tt.wantErr)
@@ -453,6 +460,124 @@ func TestReadSecret(t *testing.T) {
 				t.Fatalf("readSecret = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+type memorySecretKeyring struct {
+	mu    sync.Mutex
+	items map[string][]byte
+}
+
+func newMemorySecretKeyring() *memorySecretKeyring {
+	return &memorySecretKeyring{items: make(map[string][]byte)}
+}
+
+func (m *memorySecretKeyring) get(account string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.items[account]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return append([]byte(nil), v...), nil
+}
+
+func (m *memorySecretKeyring) set(account string, data []byte, _ time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[account] = append([]byte(nil), data...)
+	return nil
+}
+
+func (m *memorySecretKeyring) delete(account string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.items, account)
+	return nil
+}
+
+func TestReadSecretTTLCacheAndPurge(t *testing.T) {
+	mem := newMemorySecretKeyring()
+	origCache := secretCache
+	origTime := secretCacheTime
+	secretCache = mem
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	secretCacheTime = func() time.Time { return now }
+	t.Cleanup(func() {
+		secretCache = origCache
+		secretCacheTime = origTime
+	})
+
+	counterFile := filepath.Join(t.TempDir(), "count")
+	if err := os.WriteFile(counterFile, []byte("0"), 0o600); err != nil {
+		t.Fatalf("write counter: %v", err)
+	}
+	cmdStr := fmt.Sprintf(`n=$(cat %q); n=$((n+1)); printf '%%d' "$n" > %q; printf 'val-%%s-%%d\n' "$JAILOC_WORKSPACE" "$n"`, counterFile, counterFile)
+	s := workspace.ResolvedSecret{
+		Name:        "TOKEN",
+		Kind:        workspace.SecretKindEnv,
+		FromCommand: cmdStr,
+		TTL:         10 * time.Minute,
+	}
+
+	got1, err := readSecret(context.Background(), "alpha", s, false)
+	if err != nil || string(got1) != "val-alpha-1" {
+		t.Fatalf("first read = %q, %v; want val-alpha-1", got1, err)
+	}
+
+	// Within TTL, cached value is returned without invoking the command again.
+	now = now.Add(5 * time.Minute)
+	got2, err := readSecret(context.Background(), "alpha", s, false)
+	if err != nil || string(got2) != "val-alpha-1" {
+		t.Fatalf("cached read = %q, %v; want val-alpha-1", got2, err)
+	}
+
+	// Another workspace has its own cache key and JAILOC_WORKSPACE value.
+	gotBeta, err := readSecret(context.Background(), "beta", s, false)
+	if err != nil || string(gotBeta) != "val-beta-2" {
+		t.Fatalf("beta read = %q, %v; want val-beta-2", gotBeta, err)
+	}
+
+	// purgeCache=true bypasses and refreshes the cache for alpha.
+	gotPurged, err := readSecret(context.Background(), "alpha", s, true)
+	if err != nil || string(gotPurged) != "val-alpha-3" {
+		t.Fatalf("purged read = %q, %v; want val-alpha-3", gotPurged, err)
+	}
+
+	// After TTL expiry, the command runs again.
+	now = now.Add(11 * time.Minute)
+	gotExpired, err := readSecret(context.Background(), "alpha", s, false)
+	if err != nil || string(gotExpired) != "val-alpha-4" {
+		t.Fatalf("expired read = %q, %v; want val-alpha-4", gotExpired, err)
+	}
+
+	// purgeWorkspaceSecretCache removes the workspace's cached entries.
+	purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha", Secrets: []workspace.ResolvedSecret{s}})
+	gotAfterDownPurge, err := readSecret(context.Background(), "alpha", s, false)
+	if err != nil || string(gotAfterDownPurge) != "val-alpha-5" {
+		t.Fatalf("post-purgeWorkspaceSecretCache read = %q, %v; want val-alpha-5", gotAfterDownPurge, err)
+	}
+}
+
+func TestSecretReferenceShowsTTL(t *testing.T) {
+	t.Parallel()
+	withTTL := workspace.ResolvedSecret{
+		Name:        "NPM_TOKEN",
+		Kind:        workspace.SecretKindEnv,
+		FromCommand: "op read op://dev/npm/token",
+		TTL:         time.Hour,
+	}
+	if got, want := secretReference(withTTL), `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)`; got != want {
+		t.Fatalf("secretReference(withTTL) = %q, want %q", got, want)
+	}
+
+	withoutTTL := workspace.ResolvedSecret{
+		Name:        "NPM_TOKEN",
+		Kind:        workspace.SecretKindEnv,
+		FromCommand: "op read op://dev/npm/token",
+	}
+	if got, want := secretReference(withoutTTL), `NPM_TOKEN (env from_command "op read op://dev/npm/token")`; got != want {
+		t.Fatalf("secretReference(withoutTTL) = %q, want %q", got, want)
 	}
 }
 

@@ -36,7 +36,7 @@ func logsVM(context.Context, *workspace.Resolved, bool, io.Writer) error { retur
 
 func restartVMIfRunning(context.Context, *workspace.Resolved) error { return errVMUnsupported }
 
-func reloadVM(context.Context, *workspace.Resolved) error { return errVMUnsupported }
+func reloadVM(context.Context, *workspace.Resolved, bool) error { return errVMUnsupported }
 
 func workspaceRunning(*workspace.Resolved) (bool, error) { return false, errVMUnsupported }
 
