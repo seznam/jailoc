@@ -275,7 +275,7 @@ func purgeWorkspaceSecretCache(ctx context.Context, ws *workspace.Resolved) erro
 		return nil
 	}
 	err := withSecretCacheLock(ctx, ws.Name, func() error {
-		bumpSecretCacheGeneration(ws.Name)
+		genErr := bumpSecretCacheGeneration(ws.Name)
 		idx, idxErr := readSecretCacheIndex(ws.Name)
 		pending := secretCacheIndex{}
 		for a, exp := range idx {
@@ -286,7 +286,7 @@ func purgeWorkspaceSecretCache(ctx context.Context, ws *workspace.Resolved) erro
 				pending[a] = secretCacheTime().Add(s.TTL)
 			}
 		}
-		errs := []error{idxErr}
+		errs := []error{genErr, idxErr}
 		for a := range pending {
 			if err := secretCache.delete(a); err != nil {
 				errs = append(errs, err)
@@ -331,13 +331,16 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 			return checkSecretValue(s, raw)
 		}
 		var (
-			value []byte
-			hit   bool
-			gen   uint64
+			value  []byte
+			hit    bool
+			gen    uint64
+			genErr error
 		)
 		if err := withSecretCacheLock(ctx, wsName, func() error {
 			if purgeCache {
-				bumpSecretCacheGeneration(wsName)
+				if err := bumpSecretCacheGeneration(wsName); err != nil {
+					return fmt.Errorf("secret %q: %w", s.Name, err)
+				}
 				if err := secretCache.delete(secretCacheAccount(wsName, s)); err != nil {
 					return fmt.Errorf("secret %q: evict cached value: %w", s.Name, err)
 				}
@@ -347,7 +350,7 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 				hit = true
 				return err
 			}
-			gen = secretCacheGeneration(wsName)
+			gen, genErr = secretCacheGeneration(wsName)
 			return nil
 		}); err != nil || hit {
 			return value, err
@@ -360,12 +363,14 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 		if err != nil {
 			return nil, err
 		}
-		_ = withSecretCacheLock(ctx, wsName, func() error {
-			if secretCacheGeneration(wsName) == gen {
-				writeCachedSecretLocked(wsName, s, raw)
-			}
-			return nil
-		})
+		if genErr == nil {
+			_ = withSecretCacheLock(ctx, wsName, func() error {
+				if cur, err := secretCacheGeneration(wsName); err == nil && cur == gen {
+					writeCachedSecretLocked(wsName, s, raw)
+				}
+				return nil
+			})
+		}
 		return value, nil
 	}
 }
