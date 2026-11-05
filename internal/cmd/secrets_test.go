@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -464,49 +465,75 @@ func TestReadSecret(t *testing.T) {
 }
 
 type memorySecretKeyring struct {
-	mu    sync.Mutex
-	items map[string][]byte
+	mu       sync.Mutex
+	items    map[string][]byte
+	expires  map[string]time.Time
+	undelete map[string]bool
 }
 
 func newMemorySecretKeyring() *memorySecretKeyring {
-	return &memorySecretKeyring{items: make(map[string][]byte)}
+	return &memorySecretKeyring{items: map[string][]byte{}, expires: map[string]time.Time{}, undelete: map[string]bool{}}
 }
 
+// get honors the TTL like the kernel keyring does.
 func (m *memorySecretKeyring) get(account string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	v, ok := m.items[account]
-	if !ok {
-		return nil, os.ErrNotExist
+	if exp, set := m.expires[account]; !ok || set && !secretCacheTime().Before(exp) {
+		return nil, errSecretNotCached
 	}
 	return append([]byte(nil), v...), nil
 }
 
-func (m *memorySecretKeyring) set(account string, data []byte, _ time.Duration) error {
+func (m *memorySecretKeyring) set(account string, data []byte, ttl time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.items[account] = append([]byte(nil), data...)
+	delete(m.expires, account)
+	if ttl > 0 {
+		m.expires[account] = secretCacheTime().Add(ttl)
+	}
 	return nil
 }
 
 func (m *memorySecretKeyring) delete(account string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.undelete[account] {
+		return errors.New("keychain is locked")
+	}
 	delete(m.items, account)
 	return nil
 }
 
-func TestReadSecretTTLCacheAndPurge(t *testing.T) {
+// cached reports whether account holds a value, expired or not.
+func (m *memorySecretKeyring) cached(account string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.items[account]
+	return ok
+}
+
+// useMemorySecretCache replaces the keychain and clock for one test and
+// keeps the cache lock files in a temporary home directory.
+func useMemorySecretCache(t *testing.T, now *time.Time) *memorySecretKeyring {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	mem := newMemorySecretKeyring()
-	origCache := secretCache
-	origTime := secretCacheTime
+	origCache, origTime := secretCache, secretCacheTime
 	secretCache = mem
-	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
-	secretCacheTime = func() time.Time { return now }
+	secretCacheTime = func() time.Time { return *now }
 	t.Cleanup(func() {
 		secretCache = origCache
 		secretCacheTime = origTime
 	})
+	return mem
+}
+
+func TestReadSecretTTLCacheAndPurge(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	useMemorySecretCache(t, &now)
 
 	counterFile := filepath.Join(t.TempDir(), "count")
 	if err := os.WriteFile(counterFile, []byte("0"), 0o600); err != nil {
@@ -553,7 +580,9 @@ func TestReadSecretTTLCacheAndPurge(t *testing.T) {
 
 	// purgeWorkspaceSecretCache removes the workspace's cached entries even if
 	// the secret was removed from ws.Secrets (via the workspace index).
-	purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha"})
+	if err := purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha"}); err != nil {
+		t.Fatalf("purgeWorkspaceSecretCache: %v", err)
+	}
 	gotAfterDownPurge, err := readSecret(context.Background(), "alpha", s, false)
 	if err != nil || string(gotAfterDownPurge) != "val-alpha-5" {
 		t.Fatalf("post-purgeWorkspaceSecretCache read = %q, %v; want val-alpha-5", gotAfterDownPurge, err)
@@ -571,6 +600,91 @@ func TestReadSecretTTLCacheAndPurge(t *testing.T) {
 	}
 	if _, ok := readCachedSecret("alpha", badEnv); ok {
 		t.Fatal("multiline env secret output must not be cached")
+	}
+}
+
+func cachedCommandSecret(name string, ttl time.Duration) workspace.ResolvedSecret {
+	return workspace.ResolvedSecret{Name: name, Kind: workspace.SecretKindEnv, FromCommand: "echo " + name, TTL: ttl}
+}
+
+func TestPurgeFindsLongLivedSecretAfterShorterOne(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	mem := useMemorySecretCache(t, &now)
+
+	long, short := cachedCommandSecret("LONG", 72*time.Hour), cachedCommandSecret("SHORT", time.Hour)
+	for _, s := range []workspace.ResolvedSecret{long, short} {
+		if _, err := readSecret(context.Background(), "alpha", s, false); err != nil {
+			t.Fatalf("read %s: %v", s.Name, err)
+		}
+	}
+
+	// LONG is no longer configured and the shorter secret expired long ago.
+	now = now.Add(48 * time.Hour)
+	if err := purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha", Secrets: []workspace.ResolvedSecret{short}}); err != nil {
+		t.Fatalf("purgeWorkspaceSecretCache: %v", err)
+	}
+	if mem.cached(secretCacheAccount("alpha", long)) {
+		t.Fatal("purge left the 72h secret in the keychain")
+	}
+}
+
+func TestPurgeKeepsUndeletedSecretsIndexed(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	mem := useMemorySecretCache(t, &now)
+
+	s := cachedCommandSecret("TOKEN", time.Hour)
+	if _, err := readSecret(context.Background(), "alpha", s, false); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	account := secretCacheAccount("alpha", s)
+	ws := &workspace.Resolved{Name: "alpha"}
+
+	mem.undelete[account] = true
+	err := purgeWorkspaceSecretCache(ws)
+	if err == nil {
+		t.Fatal("purge reported success while the secret is still cached")
+	}
+	assertContains(t, err.Error(), "keychain is locked")
+	if _, err := readSecret(context.Background(), "alpha", s, true); err == nil {
+		t.Fatal("readSecret with purgeCache ignored the failed eviction")
+	}
+
+	// The index still lists the secret, so a later purge removes it.
+	mem.undelete[account] = false
+	if err := purgeWorkspaceSecretCache(ws); err != nil {
+		t.Fatalf("retried purge: %v", err)
+	}
+	if mem.cached(account) || mem.cached(secretCacheIndexAccount("alpha")) {
+		t.Fatal("retried purge left cache entries behind")
+	}
+}
+
+func TestWriteCachedSecretConcurrentIndex(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	mem := useMemorySecretCache(t, &now)
+
+	var wg sync.WaitGroup
+	secrets := make([]workspace.ResolvedSecret, 32)
+	for i := range secrets {
+		secrets[i] = cachedCommandSecret(fmt.Sprintf("S%d", i), time.Hour)
+		wg.Go(func() { writeCachedSecret("alpha", secrets[i], []byte("v")) })
+	}
+	wg.Wait()
+
+	idx, err := readSecretCacheIndex("alpha")
+	if err != nil {
+		t.Fatalf("readSecretCacheIndex: %v", err)
+	}
+	if len(idx) != len(secrets) {
+		t.Fatalf("index lists %d secrets, want %d", len(idx), len(secrets))
+	}
+	if err := purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha"}); err != nil {
+		t.Fatalf("purgeWorkspaceSecretCache: %v", err)
+	}
+	for _, s := range secrets {
+		if mem.cached(secretCacheAccount("alpha", s)) {
+			t.Fatalf("purge left %s cached", s.Name)
+		}
 	}
 }
 

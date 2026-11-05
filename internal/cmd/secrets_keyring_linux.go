@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -16,8 +17,11 @@ var defaultSecretKeyring secretKeyring = linuxSecretKeyring{}
 
 func (linuxSecretKeyring) get(account string) ([]byte, error) {
 	id, err := unix.KeyctlSearch(unix.KEY_SPEC_USER_KEYRING, "user", account, 0)
+	if keyMissing(err) {
+		return nil, errSecretNotCached
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("search keyring: %w", err)
 	}
 	for range 3 {
 		size, err := unix.KeyctlBuffer(unix.KEYCTL_READ, id, nil, 0)
@@ -52,9 +56,16 @@ func (linuxSecretKeyring) set(account string, data []byte, ttl time.Duration) er
 
 func (linuxSecretKeyring) delete(account string) error {
 	id, err := unix.KeyctlSearch(unix.KEY_SPEC_USER_KEYRING, "user", account, 0)
-	if err != nil {
-		return nil
+	if err == nil {
+		_, err = unix.KeyctlInt(unix.KEYCTL_UNLINK, id, unix.KEY_SPEC_USER_KEYRING, 0, 0)
 	}
-	_, _ = unix.KeyctlInt(unix.KEYCTL_UNLINK, id, unix.KEY_SPEC_USER_KEYRING, 0, 0)
+	if err != nil && !keyMissing(err) {
+		return fmt.Errorf("delete keyring entry: %w", err)
+	}
 	return nil
+}
+
+// keyMissing reports whether a keyctl error means the entry is gone.
+func keyMissing(err error) bool {
+	return errors.Is(err, unix.ENOKEY) || errors.Is(err, unix.EKEYEXPIRED) || errors.Is(err, unix.EKEYREVOKED)
 }

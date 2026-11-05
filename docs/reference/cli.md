@@ -95,7 +95,7 @@ Shuts down the workspace VM and its network broker. All agent sessions end. The 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Stop every configured workspace. Combined with `--purge`, purges every workspace. |
-| `--purge` | | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM, any cached `from_command` secrets in the system keychain and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
+| `--purge` | | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM, any cached `from_command` secrets in the system keychain (the command fails if an entry can't be deleted; the next purge retries it) and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
 
 ---
 
@@ -148,7 +148,7 @@ Fails when the workspace is not running.
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Reload every running workspace. Stopped workspaces are skipped. |
-| `--purge-cache` | | Evict cached `from_command` secrets with a `ttl` from the system keychain and run their commands again. |
+| `--purge-cache` | | Evict cached `from_command` secrets with a `ttl` from the system keychain and run their commands again. Fails if an entry can't be deleted; the next purge retries it. |
 
 ---
 

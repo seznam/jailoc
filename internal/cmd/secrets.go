@@ -6,10 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 
@@ -107,6 +107,10 @@ func secretReference(s workspace.ResolvedSecret) string {
 // user to unlock a password manager.
 const secretCommandTimeout = 2 * time.Minute
 
+// errSecretNotCached is returned by secretKeyring.get for a missing entry.
+var errSecretNotCached = errors.New("secret is not cached")
+
+// secretKeyring is the host keychain. delete succeeds for a missing entry.
 type secretKeyring interface {
 	get(account string) ([]byte, error)
 	set(account string, data []byte, ttl time.Duration) error
@@ -149,21 +153,65 @@ func secretCacheIndexAccount(wsName string) string {
 	return "jailoc:index:" + hex.EncodeToString(h.Sum(nil))
 }
 
-func recordSecretCacheAccount(wsName, account string, ttl time.Duration) {
-	idxAccount := secretCacheIndexAccount(wsName)
-	var accounts []string
-	if raw, err := secretCache.get(idxAccount); err == nil {
-		_ = json.Unmarshal(raw, &accounts)
+// secretCacheIndex maps the cached accounts of a workspace to their expiry,
+// so a purge finds secrets whose configuration changed or was removed.
+type secretCacheIndex map[string]time.Time
+
+func readSecretCacheIndex(wsName string) (secretCacheIndex, error) {
+	raw, err := secretCache.get(secretCacheIndexAccount(wsName))
+	if errors.Is(err, errSecretNotCached) {
+		return secretCacheIndex{}, nil
 	}
-	if !slices.Contains(accounts, account) {
-		accounts = append(accounts, account)
-	}
-	data, err := json.Marshal(accounts)
 	if err != nil {
-		return
+		return nil, fmt.Errorf("read secret cache index: %w", err)
 	}
-	// Keep the workspace index alive at least as long as the newly cached secret.
-	_ = secretCache.set(idxAccount, data, max(ttl, 24*time.Hour))
+	idx := secretCacheIndex{}
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		return nil, fmt.Errorf("parse secret cache index: %w", err)
+	}
+	return idx, nil
+}
+
+// writeSecretCacheIndex stores idx until its latest expiry, so it outlives
+// every secret it lists, or deletes it when it is empty.
+func writeSecretCacheIndex(wsName string, idx secretCacheIndex) error {
+	account := secretCacheIndexAccount(wsName)
+	if len(idx) == 0 {
+		return secretCache.delete(account)
+	}
+	var latest time.Time
+	for _, expires := range idx {
+		if expires.After(latest) {
+			latest = expires
+		}
+	}
+	data, err := json.Marshal(idx)
+	if err != nil {
+		return fmt.Errorf("encode secret cache index: %w", err)
+	}
+	return secretCache.set(account, data, latest.Sub(secretCacheTime()))
+}
+
+// recordSecretCacheAccount lists account in the workspace index until
+// expires and drops entries that expired and could be deleted. The caller
+// holds the workspace's secret cache lock.
+func recordSecretCacheAccount(wsName, account string, expires time.Time) error {
+	idx, err := readSecretCacheIndex(wsName)
+	if err != nil {
+		return err
+	}
+	now := secretCacheTime()
+	for a, exp := range idx {
+		// The kernel keyring drops expired entries by itself, the macOS
+		// keychain keeps them until they are deleted.
+		if !now.Before(exp) && secretCache.delete(a) == nil {
+			delete(idx, a)
+		}
+	}
+	if expires.After(idx[account]) {
+		idx[account] = expires
+	}
+	return writeSecretCacheIndex(wsName, idx)
 }
 
 func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) {
@@ -176,46 +224,68 @@ func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) 
 		return nil, false
 	}
 	if !secretCacheTime().Before(env.ExpiresAt) || len(env.Value) == 0 {
+		// A failed delete is harmless: the fresh value replaces the entry.
 		_ = secretCache.delete(secretCacheAccount(wsName, s))
 		return nil, false
 	}
 	return env.Value, true
 }
 
+// writeCachedSecret caches value until s.TTL elapses. The account is listed
+// in the workspace index before it is written, so a purge finds every cached
+// secret. Caching is best effort: on failure the command runs again next
+// time.
 func writeCachedSecret(wsName string, s workspace.ResolvedSecret, value []byte) {
-	env := cachedSecretEnvelope{
-		Value:     value,
-		ExpiresAt: secretCacheTime().Add(s.TTL),
-	}
-	data, err := json.Marshal(env)
+	expires := secretCacheTime().Add(s.TTL)
+	data, err := json.Marshal(cachedSecretEnvelope{Value: value, ExpiresAt: expires})
 	if err != nil {
 		return
 	}
 	account := secretCacheAccount(wsName, s)
-	if err := secretCache.set(account, data, s.TTL); err == nil {
-		recordSecretCacheAccount(wsName, account, s.TTL)
-	}
+	_ = withSecretCacheLock(wsName, func() error {
+		if err := recordSecretCacheAccount(wsName, account, expires); err != nil {
+			return err
+		}
+		return secretCache.set(account, data, s.TTL)
+	})
 }
 
-func purgeWorkspaceSecretCache(ws *workspace.Resolved) {
+// purgeWorkspaceSecretCache deletes the cached secrets listed in the
+// workspace index and those of the configured from_command secrets. Entries
+// that can't be deleted stay in the index, so a later purge retries them.
+func purgeWorkspaceSecretCache(ws *workspace.Resolved) error {
 	if ws == nil {
-		return
+		return nil
 	}
-	idxAccount := secretCacheIndexAccount(ws.Name)
-	if raw, err := secretCache.get(idxAccount); err == nil {
-		var accounts []string
-		if json.Unmarshal(raw, &accounts) == nil {
-			for _, account := range accounts {
-				_ = secretCache.delete(account)
+	err := withSecretCacheLock(ws.Name, func() error {
+		idx, idxErr := readSecretCacheIndex(ws.Name)
+		pending := secretCacheIndex{}
+		for a, exp := range idx {
+			pending[a] = exp
+		}
+		for _, s := range ws.Secrets {
+			if a := secretCacheAccount(ws.Name, s); s.FromCommand != "" && pending[a].IsZero() {
+				pending[a] = secretCacheTime().Add(s.TTL)
 			}
 		}
-	}
-	_ = secretCache.delete(idxAccount)
-	for _, s := range ws.Secrets {
-		if s.FromCommand != "" {
-			_ = secretCache.delete(secretCacheAccount(ws.Name, s))
+		errs := []error{idxErr}
+		for a := range pending {
+			if err := secretCache.delete(a); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			delete(pending, a)
 		}
+		// An unreadable index is kept: rewriting it would lose its entries.
+		if idxErr == nil {
+			errs = append(errs, writeSecretCacheIndex(ws.Name, pending))
+		}
+		return errors.Join(errs...)
+	})
+	if err != nil {
+		return fmt.Errorf("purge cached secrets of workspace %q: %w", ws.Name, err)
 	}
+	return nil
 }
 
 // readSecret returns the value of s from its host source. A from_command
@@ -241,7 +311,9 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 	default:
 		if s.TTL > 0 {
 			if purgeCache {
-				_ = secretCache.delete(secretCacheAccount(wsName, s))
+				if err := secretCache.delete(secretCacheAccount(wsName, s)); err != nil {
+					return nil, fmt.Errorf("secret %q: evict cached value: %w", s.Name, err)
+				}
 			} else if cached, ok := readCachedSecret(wsName, s); ok {
 				value = cached
 			}

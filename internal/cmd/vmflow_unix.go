@@ -536,7 +536,9 @@ func workspaceCABundle(ws *workspace.Resolved) string {
 // /run/secrets. Values stay in memory.
 func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec, purgeCache bool) (guest.Secrets, error) {
 	if purgeCache {
-		purgeWorkspaceSecretCache(ws)
+		if err := purgeWorkspaceSecretCache(ws); err != nil {
+			return guest.Secrets{}, err
+		}
 	}
 	payload := guest.Secrets{Env: append([]string{}, ws.Env...), Files: map[string][]byte{}}
 	if spec.SSHAgent != "" {
@@ -653,12 +655,12 @@ func downVM(ws *workspace.Resolved, purge bool) error {
 		return err
 	}
 	if purge {
-		purgeWorkspaceSecretCache(ws)
+		purgeErr := purgeWorkspaceSecretCache(ws)
 		if err := vm.RemoveTree(stateDir); err != nil {
-			return fmt.Errorf("delete vm state: %w", err)
+			return errors.Join(purgeErr, fmt.Errorf("delete vm state: %w", err))
 		}
 		_, _ = color.New(color.FgGreen).Printf("Workspace %s VM deleted\n", ws.Name)
-		return nil
+		return purgeErr
 	}
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s stopped\n", ws.Name)
 	return nil

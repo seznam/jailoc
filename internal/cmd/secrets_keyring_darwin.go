@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -24,8 +26,11 @@ func (darwinSecretKeyring) get(account string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), darwinKeychainTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "/usr/bin/security", "find-generic-password", "-s", darwinKeychainService, "-a", account, "-w").Output() //nolint:gosec // G204: fixed binary with validated arguments
+	if keychainItemMissing(err) {
+		return nil, errSecretNotCached
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("find keychain item: %w", err)
 	}
 	return hex.DecodeString(strings.TrimSpace(string(out)))
 }
@@ -45,6 +50,16 @@ func (darwinSecretKeyring) set(account string, data []byte, _ time.Duration) err
 func (darwinSecretKeyring) delete(account string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), darwinKeychainTimeout)
 	defer cancel()
-	_ = exec.CommandContext(ctx, "/usr/bin/security", "delete-generic-password", "-s", darwinKeychainService, "-a", account).Run() //nolint:gosec // G204: fixed binary with validated arguments
+	err := exec.CommandContext(ctx, "/usr/bin/security", "delete-generic-password", "-s", darwinKeychainService, "-a", account).Run() //nolint:gosec // G204: fixed binary with validated arguments
+	if err != nil && !keychainItemMissing(err) {
+		return fmt.Errorf("delete keychain item: %w", err)
+	}
 	return nil
+}
+
+// keychainItemMissing reports whether security(1) failed because the item
+// does not exist (errSecItemNotFound, exit status 44).
+func keychainItemMissing(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 44
 }
