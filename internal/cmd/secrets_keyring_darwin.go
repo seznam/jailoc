@@ -44,7 +44,10 @@ func (darwinSecretKeyring) set(account string, data []byte, _ time.Duration) err
 	cmd := exec.CommandContext(ctx, "/usr/bin/security", "-i") //nolint:gosec // G204: fixed binary reading subcommand from stdin
 	cmd.Stdin = strings.NewReader("add-generic-password -U -s " + darwinKeychainService + " -a " + account + " -w " + encoded + "\n")
 	cmd.Stderr = &bytes.Buffer{}
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("add keychain item: %w", err)
+	}
+	return nil
 }
 
 func (darwinSecretKeyring) delete(account string) error {

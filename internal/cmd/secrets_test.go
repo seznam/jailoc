@@ -5,19 +5,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"reflect"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
+	"io"
+	"math"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 )
 
 func TestValidateSecretSources(t *testing.T) {
@@ -469,6 +470,7 @@ type memorySecretKeyring struct {
 	items    map[string][]byte
 	expires  map[string]time.Time
 	undelete map[string]bool
+	roundSec bool
 }
 
 func newMemorySecretKeyring() *memorySecretKeyring {
@@ -492,6 +494,9 @@ func (m *memorySecretKeyring) set(account string, data []byte, ttl time.Duration
 	m.items[account] = append([]byte(nil), data...)
 	delete(m.expires, account)
 	if ttl > 0 {
+		if m.roundSec {
+			ttl = time.Duration(math.Ceil(ttl.Seconds())) * time.Second
+		}
 		m.expires[account] = secretCacheTime().Add(ttl)
 	}
 	return nil
@@ -688,6 +693,65 @@ func TestWriteCachedSecretConcurrentIndex(t *testing.T) {
 	}
 }
 
+func TestWriteCachedSecretDelayedAtLock(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	mem := useMemorySecretCache(t, &now)
+	mem.roundSec = true
+
+	s := cachedCommandSecret("DELAYED", 1500*time.Millisecond)
+	ready := make(chan struct{})
+	done := make(chan struct{})
+	if err := withSecretCacheLock("alpha", func() error {
+		go func() {
+			close(ready)
+			writeCachedSecret("alpha", s, []byte("v"))
+			close(done)
+		}()
+		<-ready
+		time.Sleep(20 * time.Millisecond)
+		// The writer waited 10s on the lock before writing a 1.5s secret.
+		now = now.Add(10 * time.Second)
+		return nil
+	}); err != nil {
+		t.Fatalf("withSecretCacheLock: %v", err)
+	}
+	<-done
+
+	// Advance 1.4s into the 1.5s TTL: both the secret and the index must
+	// still be alive so a purge after config removal deletes the secret.
+	now = now.Add(1400 * time.Millisecond)
+	if err := purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha"}); err != nil {
+		t.Fatalf("purgeWorkspaceSecretCache: %v", err)
+	}
+	if mem.cached(secretCacheAccount("alpha", s)) {
+		t.Fatal("purge missed the delayed secret")
+	}
+}
+
+func TestDefaultSecretKeyringRoundTrip(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("kernel keyring test runs on Linux only")
+	}
+	account := fmt.Sprintf("jailoc:test:%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = defaultSecretKeyring.delete(account) })
+
+	if _, err := defaultSecretKeyring.get(account); !errors.Is(err, errSecretNotCached) {
+		t.Fatalf("get missing = %v, want errSecretNotCached", err)
+	}
+	if err := defaultSecretKeyring.set(account, []byte("secret-val"), 10*time.Second); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	got, err := defaultSecretKeyring.get(account)
+	if err != nil || string(got) != "secret-val" {
+		t.Fatalf("get = %q, %v; want secret-val", got, err)
+	}
+	if err := defaultSecretKeyring.delete(account); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := defaultSecretKeyring.get(account); !errors.Is(err, errSecretNotCached) {
+		t.Fatalf("get after delete = %v, want errSecretNotCached", err)
+	}
+}
 func TestSecretReferenceShowsTTL(t *testing.T) {
 	t.Parallel()
 	withTTL := workspace.ResolvedSecret{

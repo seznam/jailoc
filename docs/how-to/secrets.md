@@ -100,11 +100,6 @@ from_command = "op read op://Dev/${JAILOC_WORKSPACE}/token"
 ttl = "1h"
 ```
 
-```toml
-[defaults.secrets.env.API_TOKEN]
-from_env = "GLOBAL_API_TOKEN"
-```
-
 A workspace secret with the same name replaces the default entry completely.
 
 ---

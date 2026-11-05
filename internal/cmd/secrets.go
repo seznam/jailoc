@@ -172,8 +172,13 @@ func readSecretCacheIndex(wsName string) (secretCacheIndex, error) {
 	return idx, nil
 }
 
-// writeSecretCacheIndex stores idx until its latest expiry, so it outlives
-// every secret it lists, or deletes it when it is empty.
+// indexExpiryMargin keeps the workspace index alive past the kernel keyring's
+// whole-second upward rounding of entry timeouts.
+const indexExpiryMargin = time.Second
+
+// writeSecretCacheIndex stores idx until its latest expiry plus
+// indexExpiryMargin, so it outlives every secret it lists, or deletes it when
+// it is empty.
 func writeSecretCacheIndex(wsName string, idx secretCacheIndex) error {
 	account := secretCacheIndexAccount(wsName)
 	if len(idx) == 0 {
@@ -185,11 +190,15 @@ func writeSecretCacheIndex(wsName string, idx secretCacheIndex) error {
 			latest = expires
 		}
 	}
+	ttl := latest.Sub(secretCacheTime()) + indexExpiryMargin
+	if ttl <= 0 {
+		return secretCache.delete(account)
+	}
 	data, err := json.Marshal(idx)
 	if err != nil {
 		return fmt.Errorf("encode secret cache index: %w", err)
 	}
-	return secretCache.set(account, data, latest.Sub(secretCacheTime()))
+	return secretCache.set(account, data, ttl)
 }
 
 // recordSecretCacheAccount lists account in the workspace index until
@@ -224,8 +233,6 @@ func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) 
 		return nil, false
 	}
 	if !secretCacheTime().Before(env.ExpiresAt) || len(env.Value) == 0 {
-		// A failed delete is harmless: the fresh value replaces the entry.
-		_ = secretCache.delete(secretCacheAccount(wsName, s))
 		return nil, false
 	}
 	return env.Value, true
@@ -236,18 +243,25 @@ func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) 
 // secret. Caching is best effort: on failure the command runs again next
 // time.
 func writeCachedSecret(wsName string, s workspace.ResolvedSecret, value []byte) {
+	_ = withSecretCacheLock(wsName, func() error {
+		writeCachedSecretLocked(wsName, s, value)
+		return nil
+	})
+}
+
+func writeCachedSecretLocked(wsName string, s workspace.ResolvedSecret, value []byte) {
 	expires := secretCacheTime().Add(s.TTL)
 	data, err := json.Marshal(cachedSecretEnvelope{Value: value, ExpiresAt: expires})
 	if err != nil {
 		return
 	}
 	account := secretCacheAccount(wsName, s)
-	_ = withSecretCacheLock(wsName, func() error {
-		if err := recordSecretCacheAccount(wsName, account, expires); err != nil {
-			return err
-		}
-		return secretCache.set(account, data, s.TTL)
-	})
+	if err := recordSecretCacheAccount(wsName, account, expires); err != nil {
+		return
+	}
+	if ttl := expires.Sub(secretCacheTime()); ttl > 0 {
+		_ = secretCache.set(account, data, ttl)
+	}
 }
 
 // purgeWorkspaceSecretCache deletes the cached secrets listed in the
@@ -295,57 +309,72 @@ func purgeWorkspaceSecretCache(ws *workspace.Resolved) error {
 // outputs in the system keychain are reused. Env secret values lose their
 // trailing line break and must fit on one line.
 func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, purgeCache bool) ([]byte, error) {
-	var (
-		value     []byte
-		rawToSave []byte
-	)
 	switch {
 	case s.FromEnv != "":
-		value = []byte(os.Getenv(s.FromEnv))
+		return checkSecretValue(s, []byte(os.Getenv(s.FromEnv)))
 	case s.FromFile != "":
 		data, err := os.ReadFile(s.FromFile)
 		if err != nil {
 			return nil, fmt.Errorf("read secret %q: %w", s.Name, err)
 		}
-		value = data
+		return checkSecretValue(s, data)
 	default:
-		if s.TTL > 0 {
+		if s.TTL <= 0 {
+			raw, err := runSecretCommand(ctx, wsName, s)
+			if err != nil {
+				return nil, err
+			}
+			return checkSecretValue(s, raw)
+		}
+		var value []byte
+		err := withSecretCacheLock(wsName, func() error {
 			if purgeCache {
 				if err := secretCache.delete(secretCacheAccount(wsName, s)); err != nil {
-					return nil, fmt.Errorf("secret %q: evict cached value: %w", s.Name, err)
+					return fmt.Errorf("secret %q: evict cached value: %w", s.Name, err)
 				}
 			} else if cached, ok := readCachedSecret(wsName, s); ok {
-				value = cached
+				var err error
+				value, err = checkSecretValue(s, cached)
+				return err
 			}
-		}
-		if value == nil {
-			ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
-			cmd.Env = append(os.Environ(), "JAILOC_WORKSPACE="+wsName)
-			cmd.Stdin = os.Stdin
-			cmd.Stderr = os.Stderr
-			out, err := cmd.Output()
+			raw, err := runSecretCommand(ctx, wsName, s)
 			if err != nil {
-				return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
+				return err
 			}
-			if len(out) == 0 {
-				return nil, fmt.Errorf("secret %q: from_command %q printed nothing", s.Name, s.FromCommand)
+			value, err = checkSecretValue(s, raw)
+			if err != nil {
+				return err
 			}
-			value = out
-			if s.TTL > 0 {
-				rawToSave = out
-			}
-		}
+			writeCachedSecretLocked(wsName, s, raw)
+			return nil
+		})
+		return value, err
 	}
+}
+
+func runSecretCommand(ctx context.Context, wsName string, s workspace.ResolvedSecret) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
+	cmd.Env = append(os.Environ(), "JAILOC_WORKSPACE="+wsName)
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("secret %q: from_command %q printed nothing", s.Name, s.FromCommand)
+	}
+	return out, nil
+}
+
+func checkSecretValue(s workspace.ResolvedSecret, value []byte) ([]byte, error) {
 	if s.Kind == workspace.SecretKindEnv {
 		value = bytes.TrimRight(value, "\r\n")
 		if bytes.ContainsAny(value, "\r\n\x00") {
 			return nil, fmt.Errorf("env secret %q: value spans several lines or contains NUL; use a file secret", s.Name)
 		}
-	}
-	if rawToSave != nil {
-		writeCachedSecret(wsName, s, rawToSave)
 	}
 	return value, nil
 }

@@ -44,12 +44,17 @@ func (linuxSecretKeyring) get(account string) ([]byte, error) {
 }
 
 func (linuxSecretKeyring) set(account string, data []byte, ttl time.Duration) error {
+	sec := int(math.Ceil(ttl.Seconds()))
+	if sec <= 0 {
+		return nil
+	}
 	id, err := unix.AddKey("user", account, data, unix.KEY_SPEC_USER_KEYRING)
 	if err != nil {
 		return fmt.Errorf("add keyring entry: %w", err)
 	}
-	if sec := int(math.Ceil(ttl.Seconds())); sec > 0 {
-		_, _ = unix.KeyctlInt(unix.KEYCTL_SET_TIMEOUT, id, sec, 0, 0)
+	if _, err := unix.KeyctlInt(unix.KEYCTL_SET_TIMEOUT, id, sec, 0, 0); err != nil {
+		_, _ = unix.KeyctlInt(unix.KEYCTL_UNLINK, id, unix.KEY_SPEC_USER_KEYRING, 0, 0)
+		return fmt.Errorf("set keyring entry timeout: %w", err)
 	}
 	return nil
 }
