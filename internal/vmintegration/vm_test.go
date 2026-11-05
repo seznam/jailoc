@@ -502,17 +502,21 @@ sudo -n dmesg | grep -q "Killed process $(cat /tmp/oom-child) " && echo child-ki
 	})
 
 	t.Run("GPG agent forwarding, reload and revocation", func(t *testing.T) {
+		gnupgHome := filepath.Join(home, ".gnupg")
+		if err := os.MkdirAll(gnupgHome, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GNUPGHOME", gnupgHome)
 		gpgCmd := exec.CommandContext(ctx, "gpg", "--batch", "--passphrase", "", "--quick-generate-key", "VM Test <vmtest@example.com>", "ed25519", "sign", "never")
-		gpgCmd.Env = append(os.Environ(), "HOME="+home)
+		gpgCmd.Env = append(os.Environ(), "HOME="+home, "GNUPGHOME="+gnupgHome)
 		if out, err := gpgCmd.CombinedOutput(); err != nil {
 			t.Fatalf("gpg --quick-generate-key: %v\n%s", err, out)
 		}
 		t.Cleanup(func() {
 			kill := exec.Command("gpgconf", "--kill", "gpg-agent")
-			kill.Env = append(os.Environ(), "HOME="+home)
+			kill.Env = append(os.Environ(), "HOME="+home, "GNUPGHOME="+gnupgHome)
 			_ = kill.Run()
 		})
-
 		writeConfig(t, fmt.Sprintf("gpg_agent = true\nsnapshots = [%q]", snapshot+":/home/agent/.vmtest-snapshot"))
 		jailoc(ctx, t, agentSock, "reload", workspaceName)
 		if got := mustGuest(ctx, t, "echo gpg-ok | gpg --batch --clearsign | gpg --batch --verify 2>&1"); !strings.Contains(got, "vmtest@example.com") {
