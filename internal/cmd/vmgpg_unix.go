@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -47,10 +46,10 @@ func gpgExtraSocket(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("gpgconf --list-dirs agent-extra-socket: %w", err)
 	}
-	// gpgconf percent-escapes special characters such as ':' in paths.
-	sock, err := url.PathUnescape(strings.TrimSpace(string(out)))
-	if err != nil || !strings.HasPrefix(sock, "/") {
-		return "", fmt.Errorf("gpgconf returned an invalid socket path %q", strings.TrimSpace(string(out)))
+	// gpgconf prints the path of a named directory without percent-escaping.
+	sock := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(sock, "/") {
+		return "", fmt.Errorf("gpgconf returned an invalid socket path %q", sock)
 	}
 	return sock, nil
 }
