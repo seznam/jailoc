@@ -455,3 +455,25 @@ func TestGitConfigSnapshotsIncludeLimit(t *testing.T) {
 		t.Errorf("warnings = %q, want %q", warnings, want)
 	}
 }
+
+func TestGitConfigSnapshotsIncompleteCredentialScan(t *testing.T) {
+	prev := maxProtectedEntries
+	maxProtectedEntries = 2
+	t.Cleanup(func() { maxProtectedEntries = prev })
+
+	home := t.TempDir()
+	gitConfigFiles(t, home, map[string]string{
+		".gitconfig":   "[core]\n\texcludesFile = ~/keys/private\n",
+		".ssh/a":       "a\n",
+		".ssh/b":       "b\n",
+		"keys/private": "secret\n",
+	})
+	if err := os.Symlink(filepath.Join(home, "keys"), filepath.Join(home, ".ssh", "zz-linked")); err != nil {
+		t.Fatal(err)
+	}
+	got, warnings := gitConfigData(home, "")
+	if len(got) != 0 {
+		t.Errorf("snapshots = %v, want none when credential scan is incomplete", got)
+	}
+	assertContains(t, warnings, "is not checked because ~/.ssh has more than 2 entries; it is not copied to the VM")
+}

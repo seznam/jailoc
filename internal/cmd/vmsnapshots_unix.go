@@ -96,7 +96,7 @@ func vmSnapshots(ws *workspace.Resolved) ([]snapshot, error) {
 	return slices.DeleteFunc(snapshots, func(s snapshot) bool {
 		_, ok := byDest[s.Container]
 		return ok && !explicit[s.Container] && slices.ContainsFunc(configured, func(c string) bool {
-			return c != s.Container && overlaps(c, s.Container)
+			return strings.HasPrefix(s.Container, c+"/")
 		})
 	}), nil
 }
@@ -183,13 +183,16 @@ func stageSnapshot(root *os.Root, c snapshot, dst string) error {
 	// users.
 	out, err := root.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return fmt.Errorf("create staged file: %w", err)
 	}
 	if _, err := out.Write(c.data); err != nil {
 		_ = out.Close()
-		return err
+		return fmt.Errorf("write staged file: %w", err)
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close staged file: %w", err)
+	}
+	return nil
 }
 
 // snapshotGeneration returns the staging generation that binds come from.

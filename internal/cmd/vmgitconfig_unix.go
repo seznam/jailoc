@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -75,17 +76,18 @@ type protected struct {
 
 // gitConfigCopier collects the git_config snapshots.
 type gitConfigCopier struct {
-	home   string
-	xdg    string
-	warn   func(format string, args ...any)
-	out    []snapshot
-	refs   []func()           // references yet to be followed
-	seen   map[[2]string]bool // host paths with their requested guest paths
-	dests  map[string]claim   // guest paths
-	dirs   []protected        // credentials directories
-	files  []protected        // files in the credentials directories
-	stores []fs.FileInfo      // Git credential stores
-	count  int
+	home       string
+	xdg        string
+	warn       func(format string, args ...any)
+	out        []snapshot
+	refs       []func()           // references yet to be followed
+	seen       map[[2]string]bool // host paths with their requested guest paths
+	dests      map[string]claim   // guest paths
+	dirs       []protected        // credentials directories
+	files      []protected        // files in the credentials directories
+	stores     []fs.FileInfo      // Git credential stores
+	incomplete string             // credentials directory that exceeded maxProtectedEntries
+	count      int
 }
 
 // claim is the host file copied to a guest path.
@@ -136,7 +138,7 @@ func gitConfigSnapshots(home, xdg string, warn func(format string, args ...any))
 
 // maxProtectedEntries bounds the entries protect walks, so a huge credentials
 // directory cannot stall the start of a workspace.
-const maxProtectedEntries = 1 << 16
+var maxProtectedEntries = 1 << 16
 
 // protect records the credentials directory name under the home directory,
 // the directories it links to and the files in all of them. Recording the
@@ -146,7 +148,11 @@ const maxProtectedEntries = 1 << 16
 func (c *gitConfigCopier) protect(name string) {
 	queue := []string{filepath.Join(c.home, name)}
 	entries := 0
-	for len(queue) > 0 && entries < maxProtectedEntries {
+	for len(queue) > 0 {
+		if entries >= maxProtectedEntries {
+			c.incomplete = name
+			return
+		}
 		// WalkDir does not descend into a symbolic link to a directory, so
 		// it walks the resolved path.
 		root, err := filepath.EvalSymlinks(queue[0])
@@ -161,6 +167,7 @@ func (c *gitConfigCopier) protect(name string) {
 		c.dirs = append(c.dirs, protected{dir: name, info: info})
 		_ = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error { // the walk function never fails
 			if entries++; entries > maxProtectedEntries {
+				c.incomplete = name
 				return fs.SkipAll
 			}
 			if err != nil || e.IsDir() {
@@ -333,6 +340,9 @@ func (c *gitConfigCopier) credential(src, resolved string, info fs.FileInfo) (wh
 				break
 			}
 		}
+	}
+	if c.incomplete != "" {
+		return fmt.Sprintf("not checked because ~/%s has more than %d entries", c.incomplete, maxProtectedEntries), false
 	}
 	return "", false
 }
