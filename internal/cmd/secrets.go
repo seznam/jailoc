@@ -173,8 +173,13 @@ func readSecretCacheIndex(wsName string) (secretCacheIndex, error) {
 }
 
 // indexExpiryMargin keeps the workspace index alive past the kernel keyring's
-// whole-second upward rounding of entry timeouts.
-const indexExpiryMargin = time.Second
+// whole-second upward rounding of entry timeouts, and indexRetryTTL keeps a
+// nonempty index whose entries have all expired (because deleting an entry
+// failed) so a later purge retries them.
+const (
+	indexExpiryMargin = time.Second
+	indexRetryTTL     = 24 * time.Hour
+)
 
 // writeSecretCacheIndex stores idx until its latest expiry plus
 // indexExpiryMargin, so it outlives every secret it lists, or deletes it when
@@ -192,7 +197,7 @@ func writeSecretCacheIndex(wsName string, idx secretCacheIndex) error {
 	}
 	ttl := latest.Sub(secretCacheTime()) + indexExpiryMargin
 	if ttl <= 0 {
-		return secretCache.delete(account)
+		ttl = indexRetryTTL
 	}
 	data, err := json.Marshal(idx)
 	if err != nil {
@@ -243,7 +248,7 @@ func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) 
 // secret. Caching is best effort: on failure the command runs again next
 // time.
 func writeCachedSecret(wsName string, s workspace.ResolvedSecret, value []byte) {
-	_ = withSecretCacheLock(wsName, func() error {
+	_ = withSecretCacheLock(context.Background(), wsName, func() error {
 		writeCachedSecretLocked(wsName, s, value)
 		return nil
 	})
@@ -267,11 +272,11 @@ func writeCachedSecretLocked(wsName string, s workspace.ResolvedSecret, value []
 // purgeWorkspaceSecretCache deletes the cached secrets listed in the
 // workspace index and those of the configured from_command secrets. Entries
 // that can't be deleted stay in the index, so a later purge retries them.
-func purgeWorkspaceSecretCache(ws *workspace.Resolved) error {
+func purgeWorkspaceSecretCache(ctx context.Context, ws *workspace.Resolved) error {
 	if ws == nil {
 		return nil
 	}
-	err := withSecretCacheLock(ws.Name, func() error {
+	err := withSecretCacheLock(ctx, ws.Name, func() error {
 		idx, idxErr := readSecretCacheIndex(ws.Name)
 		pending := secretCacheIndex{}
 		for a, exp := range idx {
@@ -327,7 +332,7 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 			return checkSecretValue(s, raw)
 		}
 		var value []byte
-		err := withSecretCacheLock(wsName, func() error {
+		err := withSecretCacheLock(ctx, wsName, func() error {
 			if purgeCache {
 				if err := secretCache.delete(secretCacheAccount(wsName, s)); err != nil {
 					return fmt.Errorf("secret %q: evict cached value: %w", s.Name, err)

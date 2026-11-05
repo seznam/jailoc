@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -585,7 +586,7 @@ func TestReadSecretTTLCacheAndPurge(t *testing.T) {
 
 	// purgeWorkspaceSecretCache removes the workspace's cached entries even if
 	// the secret was removed from ws.Secrets (via the workspace index).
-	if err := purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha"}); err != nil {
+	if err := purgeWorkspaceSecretCache(context.Background(), &workspace.Resolved{Name: "alpha"}); err != nil {
 		t.Fatalf("purgeWorkspaceSecretCache: %v", err)
 	}
 	gotAfterDownPurge, err := readSecret(context.Background(), "alpha", s, false)
@@ -625,7 +626,7 @@ func TestPurgeFindsLongLivedSecretAfterShorterOne(t *testing.T) {
 
 	// LONG is no longer configured and the shorter secret expired long ago.
 	now = now.Add(48 * time.Hour)
-	if err := purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha", Secrets: []workspace.ResolvedSecret{short}}); err != nil {
+	if err := purgeWorkspaceSecretCache(context.Background(), &workspace.Resolved{Name: "alpha", Secrets: []workspace.ResolvedSecret{short}}); err != nil {
 		t.Fatalf("purgeWorkspaceSecretCache: %v", err)
 	}
 	if mem.cached(secretCacheAccount("alpha", long)) {
@@ -644,8 +645,11 @@ func TestPurgeKeepsUndeletedSecretsIndexed(t *testing.T) {
 	account := secretCacheAccount("alpha", s)
 	ws := &workspace.Resolved{Name: "alpha"}
 
+	// Even after the secret's TTL has elapsed, a failed deletion keeps the
+	// nonempty index alive so a later purge still finds the secret.
+	now = now.Add(2 * time.Hour)
 	mem.undelete[account] = true
-	err := purgeWorkspaceSecretCache(ws)
+	err := purgeWorkspaceSecretCache(context.Background(), ws)
 	if err == nil {
 		t.Fatal("purge reported success while the secret is still cached")
 	}
@@ -656,7 +660,7 @@ func TestPurgeKeepsUndeletedSecretsIndexed(t *testing.T) {
 
 	// The index still lists the secret, so a later purge removes it.
 	mem.undelete[account] = false
-	if err := purgeWorkspaceSecretCache(ws); err != nil {
+	if err := purgeWorkspaceSecretCache(context.Background(), ws); err != nil {
 		t.Fatalf("retried purge: %v", err)
 	}
 	if mem.cached(account) || mem.cached(secretCacheIndexAccount("alpha")) {
@@ -683,7 +687,7 @@ func TestWriteCachedSecretConcurrentIndex(t *testing.T) {
 	if len(idx) != len(secrets) {
 		t.Fatalf("index lists %d secrets, want %d", len(idx), len(secrets))
 	}
-	if err := purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha"}); err != nil {
+	if err := purgeWorkspaceSecretCache(context.Background(), &workspace.Resolved{Name: "alpha"}); err != nil {
 		t.Fatalf("purgeWorkspaceSecretCache: %v", err)
 	}
 	for _, s := range secrets {
@@ -701,7 +705,15 @@ func TestWriteCachedSecretDelayedAtLock(t *testing.T) {
 	s := cachedCommandSecret("DELAYED", 1500*time.Millisecond)
 	ready := make(chan struct{})
 	done := make(chan struct{})
-	if err := withSecretCacheLock("alpha", func() error {
+	if err := withSecretCacheLock(context.Background(), "alpha", func() error {
+		// A waiter whose context is canceled while the lock is held returns
+		// promptly instead of blocking indefinitely.
+		cctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := withSecretCacheLock(cctx, "alpha", func() error { return nil }); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled lock wait = %v, want context.Canceled", err)
+		}
+
 		go func() {
 			close(ready)
 			writeCachedSecret("alpha", s, []byte("v"))
@@ -720,7 +732,7 @@ func TestWriteCachedSecretDelayedAtLock(t *testing.T) {
 	// Advance 1.4s into the 1.5s TTL: both the secret and the index must
 	// still be alive so a purge after config removal deletes the secret.
 	now = now.Add(1400 * time.Millisecond)
-	if err := purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha"}); err != nil {
+	if err := purgeWorkspaceSecretCache(context.Background(), &workspace.Resolved{Name: "alpha"}); err != nil {
 		t.Fatalf("purgeWorkspaceSecretCache: %v", err)
 	}
 	if mem.cached(secretCacheAccount("alpha", s)) {
@@ -735,7 +747,9 @@ func TestDefaultSecretKeyringRoundTrip(t *testing.T) {
 	account := fmt.Sprintf("jailoc:test:%d", time.Now().UnixNano())
 	t.Cleanup(func() { _ = defaultSecretKeyring.delete(account) })
 
-	if _, err := defaultSecretKeyring.get(account); !errors.Is(err, errSecretNotCached) {
+	if _, err := defaultSecretKeyring.get(account); errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOSYS) {
+		t.Skipf("kernel keyring is unavailable: %v", err)
+	} else if !errors.Is(err, errSecretNotCached) {
 		t.Fatalf("get missing = %v, want errSecretNotCached", err)
 	}
 	if err := defaultSecretKeyring.set(account, []byte("secret-val"), 10*time.Second); err != nil {

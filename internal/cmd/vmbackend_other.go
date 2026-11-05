@@ -24,7 +24,7 @@ func listSessionsVM(context.Context, *workspace.Resolved) error { return errVMUn
 
 func stopSessionVM(context.Context, *workspace.Resolved, string) error { return errVMUnsupported }
 
-func downVM(*workspace.Resolved, bool) error { return errVMUnsupported }
+func downVM(context.Context, *workspace.Resolved, bool) error { return errVMUnsupported }
 
 func statusVM(context.Context, *workspace.Resolved) error { return errVMUnsupported }
 

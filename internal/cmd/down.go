@@ -28,7 +28,7 @@ func runDownCtx(ctx context.Context, args []string) error {
 		return err
 	}
 	return forEachWorkspace(ctx, wss, func(ws *workspace.Resolved) error {
-		return downVM(ws, downPurge)
+		return downVM(ctx, ws, downPurge)
 	})
 }
 

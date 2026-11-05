@@ -536,7 +536,7 @@ func workspaceCABundle(ws *workspace.Resolved) string {
 // /run/secrets. Values stay in memory.
 func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec, purgeCache bool) (guest.Secrets, error) {
 	if purgeCache {
-		if err := purgeWorkspaceSecretCache(ws); err != nil {
+		if err := purgeWorkspaceSecretCache(ctx, ws); err != nil {
 			return guest.Secrets{}, err
 		}
 	}
@@ -630,7 +630,7 @@ func shellJoin(args []string) string {
 
 // downVM stops the workspace VM; purge also deletes its state, persistent
 // home directories and isolated builder.
-func downVM(ws *workspace.Resolved, purge bool) error {
+func downVM(ctx context.Context, ws *workspace.Resolved, purge bool) error {
 	stateDir := vmStateDir(ws.Name)
 	st, err := runningVM(stateDir)
 	if err != nil {
@@ -655,7 +655,7 @@ func downVM(ws *workspace.Resolved, purge bool) error {
 		return err
 	}
 	if purge {
-		purgeErr := purgeWorkspaceSecretCache(ws)
+		purgeErr := purgeWorkspaceSecretCache(ctx, ws)
 		if err := vm.RemoveTree(stateDir); err != nil {
 			return errors.Join(purgeErr, fmt.Errorf("delete vm state: %w", err))
 		}
@@ -918,7 +918,7 @@ func restartVMIfRunning(ctx context.Context, ws *workspace.Resolved) error {
 	if err := validateSecretSources(ws2); err != nil {
 		return fmt.Errorf("validate secrets for workspace %q: %w", ws2.Name, err)
 	}
-	if err := downVM(ws, false); err != nil {
+	if err := downVM(ctx, ws, false); err != nil {
 		return err
 	}
 	return runUpVM(ctx, cfg, ws2)
