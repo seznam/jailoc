@@ -1163,6 +1163,45 @@ func TestResolveCPUMemory(t *testing.T) {
 	}
 }
 
+func TestResolveDisk(t *testing.T) {
+	t.Parallel()
+
+	str := func(v string) *string { return &v }
+
+	tests := []struct {
+		name    string
+		defDisk *string
+		wsDisk  *string
+		want    string
+	}{
+		{"fallback when both unset", nil, nil, "20g"},
+		{"defaults used when workspace unset", str("40g"), nil, "40g"},
+		{"workspace overrides defaults", str("40g"), str("100g"), "100g"},
+		{"workspace without defaults", nil, str("50g"), "50g"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{Disk: tt.defDisk},
+				Workspaces: map[string]config.Workspace{
+					"test": {Paths: []string{"/data"}, Disk: tt.wsDisk},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "test")
+			if err != nil {
+				t.Fatalf("Resolve failed: %v", err)
+			}
+			if resolved.Disk != tt.want {
+				t.Errorf("Disk: got %q, want %q", resolved.Disk, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveMountsDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

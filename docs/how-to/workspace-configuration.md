@@ -194,7 +194,15 @@ Docker is off by default. Turn it on for a workspace, or for all of them in `[de
 enable_docker = true
 ```
 
-The guest then runs its own Docker daemon. In the images it builds, jailoc adds Docker CE with the `buildx` and `compose` plugins; changing `enable_docker` takes effect after `jailoc restart`, which rebuilds the image. Images, containers and volumes live on a 20 GiB data disk that survives `jailoc down`; `jailoc down --purge` deletes it.
+The guest then runs its own Docker daemon. In the images it builds, jailoc adds Docker CE with the `buildx` and `compose` plugins; changing `enable_docker` takes effect after `jailoc restart`, which rebuilds the image. Images, containers and volumes live on a data disk that survives `jailoc down`; `jailoc down --purge` deletes it. The disk is 20 GiB unless you set `disk`:
+
+```toml
+[workspaces.myproject]
+enable_docker = true
+disk = "100g"
+```
+
+The disk is a sparse file, so it takes host space only for data written to it. Raising `disk` grows the disk and its file system after `jailoc restart`; the disk can't shrink, so to make it smaller, delete it with `jailoc down --purge`. With `isolated_build`, the workspace's builder VM gets a data disk of the same size.
 
 An image used directly (`image`) must contain `dockerd`; otherwise `enable_docker = true` fails `jailoc up`.
 
@@ -222,4 +230,4 @@ After editing the config, apply it without restarting:
 jailoc reload myproject
 ```
 
-Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets apply live. Running sessions keep their old environment. Other changes, such as `paths`, `mounts`, `cpu`, `memory`, `enable_docker`, `protect_git` and the image, need a new VM. `jailoc reload` lists them; apply them with `jailoc restart`, which ends running sessions.
+Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets apply live. Running sessions keep their old environment. Other changes, such as `paths`, `mounts`, `cpu`, `memory`, `disk`, `enable_docker`, `protect_git` and the image, need a new VM. `jailoc reload` lists them; apply them with `jailoc restart`, which ends running sessions.

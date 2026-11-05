@@ -53,6 +53,38 @@ func TestVMMemoryMiB(t *testing.T) {
 	}
 }
 
+func TestVMDiskSize(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		size    string
+		want    int64
+		wantErr bool
+	}{
+		{size: "20g", want: 20 << 30},
+		{size: "100G", want: 100 << 30},
+		{size: "1024m", want: 1 << 30},
+		{size: "1048577k", want: 1<<30 + 1<<20},
+		{size: "1073741824", want: 1 << 30},
+		{size: "1023m", wantErr: true},
+		{size: "", wantErr: true},
+		{size: "0g", wantErr: true},
+		{size: "g", wantErr: true},
+		{size: "9999999999999g", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.size, func(t *testing.T) {
+			t.Parallel()
+			got, err := vmDiskSize(tt.size)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("vmDiskSize(%q) error = %v, wantErr %v", tt.size, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("vmDiskSize(%q) = %d, want %d", tt.size, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestVMPolicy(t *testing.T) {
 	t.Parallel()
 	ws := &workspace.Resolved{

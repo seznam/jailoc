@@ -109,6 +109,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Memory: %s\n", defaultsMemory)
 
+	defaultsDisk := "(not set, default: 20g)"
+	if cfg.Defaults.Disk != nil {
+		defaultsDisk = *cfg.Defaults.Disk
+	}
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Disk: %s\n", defaultsDisk)
+
 	_, _ = fmt.Fprintf(os.Stdout, "\n")
 
 	// Print each workspace
@@ -200,6 +206,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			wsMemory = *ws.Memory
 		}
 		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Memory: %s\n", wsMemory)
+
+		wsDisk := "(not set)"
+		if ws.Disk != nil {
+			wsDisk = *ws.Disk
+		}
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Disk: %s\n", wsDisk)
 
 		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}

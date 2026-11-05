@@ -2862,6 +2862,31 @@ paths = ["/data"]
 			},
 		},
 		{
+			name: "defaults and workspace disk",
+			content: `
+[defaults]
+disk = "30g"
+
+[workspaces.big]
+paths = ["/data"]
+disk = "100g"
+
+[workspaces.plain]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.Disk == nil || *cfg.Defaults.Disk != "30g" {
+					t.Errorf("expected Defaults.Disk \"30g\", got %v", cfg.Defaults.Disk)
+				}
+				if ws := cfg.Workspaces["big"]; ws.Disk == nil || *ws.Disk != "100g" {
+					t.Errorf("expected Workspace.Disk \"100g\", got %v", ws.Disk)
+				}
+				if ws := cfg.Workspaces["plain"]; ws.Disk != nil {
+					t.Errorf("expected Workspace.Disk to be nil, got %q", *ws.Disk)
+				}
+			},
+		},
+		{
 			name: "defaults and workspace independently",
 			content: `
 [defaults]
@@ -3061,6 +3086,28 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 				},
 			},
 			errSubstrs: []string{"test", "invalid memory format"},
+		},
+		{
+			name: "defaults disk invalid suffix",
+			cfg: &Config{
+				Defaults: Defaults{
+					Disk: ptrString("20gb"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid disk format"},
+		},
+		{
+			name: "workspace disk zero",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths: []string{"/data"},
+						Disk:  ptrString("0g"),
+					},
+				},
+			},
+			errSubstrs: []string{"test", "invalid disk format"},
 		},
 	}
 
