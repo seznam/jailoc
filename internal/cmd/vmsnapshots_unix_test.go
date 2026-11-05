@@ -160,6 +160,21 @@ func TestStageSnapshots(t *testing.T) {
 		t.Fatalf("staged link = %q, %v", link, err)
 	}
 
+	// A child snapshot inside a directory snapshot is composed into the
+	// staged directory even when the directory lacked that path.
+	composed, err := stageSnapshots(state, []snapshot{
+		{Mount: config.Mount{Host: dir, Container: "/home/agent/.config/gh", Mode: "ro"}},
+		{Mount: config.Mount{Host: file, Container: "/home/agent/.config/gh/extra/npmrc", Mode: "ro"}},
+	}, "")
+	if err != nil {
+		t.Fatalf("stageSnapshots composed: %v", err)
+	}
+	if len(composed) != 1 || composed[0].Target != "/home/agent/.config/gh" {
+		t.Fatalf("composed binds = %v, want single parent bind", composed)
+	}
+	if got, _ := os.ReadFile(filepath.Join(staged, snapshotGeneration(composed), "0", "extra", "npmrc")); string(got) != "token" { //nolint:gosec // G304: test file
+		t.Fatalf("composed child file = %q, want token", got)
+	}
 	// A reload stages a new generation with the current content and keeps
 	// the one the running guest binds.
 	if err := os.WriteFile(file, []byte("rotated"), 0o600); err != nil {

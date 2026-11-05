@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -167,15 +168,61 @@ func stageSnapshots(stateDir string, snapshots []snapshot, keep string) ([]guest
 		return nil, fmt.Errorf("create staged snapshots: %w", err)
 	}
 	binds := make([]guest.Snapshot, 0, len(snapshots))
+	var staged []string
 	for i, c := range snapshots {
+		if p := slices.IndexFunc(binds, func(b guest.Snapshot) bool {
+			return strings.HasPrefix(c.Container, b.Target+"/")
+		}); p >= 0 {
+			rel := strings.TrimPrefix(c.Container, binds[p].Target+"/")
+			if err := stageChildSnapshot(root, staged[p], rel, c); err != nil {
+				_ = root.RemoveAll(genDir)
+				return nil, fmt.Errorf("snapshot %q: %w", c.Host, err)
+			}
+			continue
+		}
 		dst := path.Join(genDir, strconv.Itoa(i))
 		if err := stageSnapshot(root, c, dst); err != nil {
 			_ = root.RemoveAll(genDir)
 			return nil, fmt.Errorf("snapshot %q: %w", c.Host, err)
 		}
+		staged = append(staged, dst)
 		binds = append(binds, guest.Snapshot{Source: path.Join(guest.SnapshotsDir, gen, strconv.Itoa(i)), Target: c.Container})
 	}
 	return binds, nil
+}
+
+// stageChildSnapshot stages c at rel inside the staged directory parentDst,
+// replacing any entry already there without following symbolic links.
+func stageChildSnapshot(root *os.Root, parentDst, rel string, c snapshot) error {
+	sub, err := root.OpenRoot(parentDst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sub.Close() }()
+	dir := ""
+	for part := range strings.SplitSeq(path.Dir(rel), "/") {
+		if part == "." || part == "" {
+			continue
+		}
+		dir = path.Join(dir, part)
+		info, err := sub.Lstat(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			if err := sub.Mkdir(dir, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s is not a directory", dir)
+		}
+	}
+	if err := sub.RemoveAll(rel); err != nil {
+		return err
+	}
+	return stageSnapshot(sub, c, rel)
 }
 
 // stageSnapshot writes the generated content of c, or copies its source, to
