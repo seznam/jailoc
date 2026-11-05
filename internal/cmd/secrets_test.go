@@ -5,10 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/fatih/color"
-	"github.com/seznam/jailoc/internal/config"
-	"github.com/seznam/jailoc/internal/workspace"
-	"github.com/spf13/cobra"
 	"io"
 	"math"
 	"os"
@@ -20,6 +16,12 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
+
+	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestValidateSecretSources(t *testing.T) {

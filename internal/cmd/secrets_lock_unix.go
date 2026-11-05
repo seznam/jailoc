@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -38,4 +40,18 @@ func withSecretCacheLock(ctx context.Context, wsName string, fn func() error) er
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+}
+
+// secretCacheGeneration returns the workspace's purge generation; commands
+// started before a purge see an older generation and do not repopulate the
+// cache when they finish.
+func secretCacheGeneration(wsName string) uint64 {
+	data, _ := os.ReadFile(vmStateDir(wsName) + ".secret-cache.gen") //nolint:gosec // G304: jailoc-owned state path
+	n, _ := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	return n
+}
+
+func bumpSecretCacheGeneration(wsName string) {
+	next := strconv.FormatUint(secretCacheGeneration(wsName)+1, 10)
+	_ = os.WriteFile(vmStateDir(wsName)+".secret-cache.gen", []byte(next), 0o600) //nolint:gosec // G703: jailoc-owned state path
 }

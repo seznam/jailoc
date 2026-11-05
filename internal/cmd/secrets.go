@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -274,6 +275,7 @@ func purgeWorkspaceSecretCache(ctx context.Context, ws *workspace.Resolved) erro
 		return nil
 	}
 	err := withSecretCacheLock(ctx, ws.Name, func() error {
+		bumpSecretCacheGeneration(ws.Name)
 		idx, idxErr := readSecretCacheIndex(ws.Name)
 		pending := secretCacheIndex{}
 		for a, exp := range idx {
@@ -328,29 +330,43 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 			}
 			return checkSecretValue(s, raw)
 		}
-		var value []byte
-		err := withSecretCacheLock(ctx, wsName, func() error {
+		var (
+			value []byte
+			hit   bool
+			gen   uint64
+		)
+		if err := withSecretCacheLock(ctx, wsName, func() error {
 			if purgeCache {
+				bumpSecretCacheGeneration(wsName)
 				if err := secretCache.delete(secretCacheAccount(wsName, s)); err != nil {
 					return fmt.Errorf("secret %q: evict cached value: %w", s.Name, err)
 				}
 			} else if cached, ok := readCachedSecret(wsName, s); ok {
 				var err error
 				value, err = checkSecretValue(s, cached)
+				hit = true
 				return err
 			}
-			raw, err := runSecretCommand(ctx, wsName, s)
-			if err != nil {
-				return err
+			gen = secretCacheGeneration(wsName)
+			return nil
+		}); err != nil || hit {
+			return value, err
+		}
+		raw, err := runSecretCommand(ctx, wsName, s)
+		if err != nil {
+			return nil, err
+		}
+		value, err = checkSecretValue(s, raw)
+		if err != nil {
+			return nil, err
+		}
+		_ = withSecretCacheLock(ctx, wsName, func() error {
+			if secretCacheGeneration(wsName) == gen {
+				writeCachedSecretLocked(wsName, s, raw)
 			}
-			value, err = checkSecretValue(s, raw)
-			if err != nil {
-				return err
-			}
-			writeCachedSecretLocked(wsName, s, raw)
 			return nil
 		})
-		return value, err
+		return value, nil
 	}
 }
 
@@ -358,7 +374,10 @@ func runSecretCommand(ctx context.Context, wsName string, s workspace.ResolvedSe
 	ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
-	cmd.Env = append(os.Environ(), "JAILOC_WORKSPACE="+wsName)
+	env := slices.DeleteFunc(os.Environ(), func(e string) bool {
+		return strings.HasPrefix(e, "JAILOC_WORKSPACE=")
+	})
+	cmd.Env = append(env, "JAILOC_WORKSPACE="+wsName)
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
