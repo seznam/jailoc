@@ -65,9 +65,10 @@ var gitPathKeys = map[string]bool{
 // files git_config copies only when they are gitPublicFiles.
 var gitCredentialDirs = []string{".ssh", ".gnupg", ".aws"}
 
-// credentialDir is an existing directory of gitCredentialDirs.
-type credentialDir struct {
-	name string
+// protected is an existing directory of gitCredentialDirs or a file in one,
+// with the name of the directory.
+type protected struct {
+	dir  string
 	info fs.FileInfo
 }
 
@@ -78,10 +79,17 @@ type gitConfigCopier struct {
 	out    []snapshot
 	refs   []func()           // references yet to be followed
 	seen   map[[2]string]bool // host paths with their requested guest paths
-	dests  map[string]bool    // guest paths
-	dirs   []credentialDir    // credentials directories
+	dests  map[string]claim   // guest paths
+	dirs   []protected        // credentials directories
+	files  []protected        // files in the credentials directories
 	stores []fs.FileInfo      // Git credential stores
 	count  int
+}
+
+// claim is the host file copied to a guest path.
+type claim struct {
+	src  string
+	info fs.FileInfo
 }
 
 // gitConfigSnapshots returns the snapshots that carry the user's Git
@@ -96,11 +104,26 @@ func gitConfigSnapshots(home, xdg string, warn func(format string, args ...any))
 	if xdg == "" {
 		xdg = filepath.Join(home, ".config")
 	}
-	c := &gitConfigCopier{home: home, warn: warn, seen: map[[2]string]bool{}, dests: map[string]bool{}}
+	c := &gitConfigCopier{home: home, warn: warn, seen: map[[2]string]bool{}, dests: map[string]claim{}}
 	for _, name := range gitCredentialDirs {
-		if info, err := os.Stat(filepath.Join(home, name)); err == nil { //nolint:gosec // G703: home directory path
-			c.dirs = append(c.dirs, credentialDir{name: name, info: info})
+		root, err := filepath.EvalSymlinks(filepath.Join(home, name))
+		if err != nil {
+			continue
 		}
+		if info, err := os.Stat(root); err == nil { //nolint:gosec // G703: home directory path
+			c.dirs = append(c.dirs, protected{dir: name, info: info})
+		}
+		// Recording the files, and the files their links point to, catches
+		// hard links to them elsewhere. Entries that cannot be read are
+		// skipped; the directory check still covers the paths under them.
+		_ = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error { // the walk function never fails
+			if err == nil && !e.IsDir() {
+				if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() { //nolint:gosec // G703: credentials directory entry
+					c.files = append(c.files, protected{dir: name, info: info})
+				}
+			}
+			return nil
+		})
 	}
 	for _, p := range []string{
 		filepath.Join(home, ".git-credentials"),
@@ -130,17 +153,22 @@ func gitConfigSnapshots(home, xdg string, warn func(format string, args ...any))
 // references. key names the variable that references src, empty for the
 // files Git reads by default, which are skipped silently when missing.
 func (c *gitConfigCopier) config(key, src, dest string) {
+	if c.seen[[2]string{src, dest}] {
+		return
+	}
+	// The limit applies before reading, so excess includes cost nothing.
+	if c.count >= maxConfigFiles {
+		if c.count == maxConfigFiles {
+			c.warn("more than %d configuration files are included; %s and later includes are not copied to the VM", maxConfigFiles, src)
+			c.count++
+		}
+		return
+	}
 	dest, data, ok := c.load(key, src, dest, false)
 	if !ok {
 		return
 	}
 	c.count++
-	if c.count > maxConfigFiles {
-		if c.count == maxConfigFiles+1 {
-			c.warn("more than %d configuration files are included; %s and later includes are not copied to the VM", maxConfigFiles, src)
-		}
-		return
-	}
 	c.out = append(c.out, snapshot{Mount: mountOf(src, dest), data: rewriteGitConfig(data, c.home)})
 	for _, e := range parseGitConfig(data) {
 		name := e.section + "." + e.key
@@ -185,9 +213,11 @@ func (c *gitConfigCopier) file(key, src, dest string, public *publicFile) {
 // load claims dest for src and returns dest and the content of src. An empty
 // dest is derived from the location of src under the home directory. src is
 // reported and skipped when it is outside the home directory, missing, not a
-// regular file of at most maxConfigSize bytes, a Git credential store, or in
-// a credentials directory unless public. The checks apply to the file that
-// symbolic links in src resolve to, and the content is read from that file.
+// regular file of at most maxConfigSize bytes, a Git credential store, in a
+// credentials directory unless public, or another file than the one that
+// already claimed dest. The home directory check applies to src as written;
+// the other checks also apply to the file that symbolic links in src resolve
+// to, and the content is read from that file.
 func (c *gitConfigCopier) load(key, src, dest string, public bool) (string, []byte, bool) {
 	visit := [2]string{src, dest}
 	if c.seen[visit] {
@@ -207,9 +237,6 @@ func (c *gitConfigCopier) load(key, src, dest string, public bool) (string, []by
 		c.warn("%s is outside the home directory in the VM; it is not copied", name)
 		return "", nil, false
 	}
-	if c.dests[dest] {
-		return "", nil, false
-	}
 	resolved, err := filepath.EvalSymlinks(src)
 	var info fs.FileInfo
 	if err == nil {
@@ -225,8 +252,14 @@ func (c *gitConfigCopier) load(key, src, dest string, public bool) (string, []by
 		c.warn("%s cannot be resolved (%v); it is not copied to the VM", name, err)
 		return "", nil, false
 	}
-	if where, store := c.credential(resolved, info); where != "" && (store || !public) {
+	if where, store := c.credential(src, resolved, info); where != "" && (store || !public) {
 		c.warn("%s is %s; it is not copied to the VM", name, where)
+		return "", nil, false
+	}
+	if prev, ok := c.dests[dest]; ok {
+		if !os.SameFile(prev.info, info) {
+			c.warn("%s is not copied to the VM: %s already takes its path there", name, prev.src)
+		}
 		return "", nil, false
 	}
 	data, ok := readSame(resolved, info)
@@ -234,32 +267,42 @@ func (c *gitConfigCopier) load(key, src, dest string, public bool) (string, []by
 		c.warn("%s is not a regular file of at most %d bytes; it is not copied to the VM", name, maxConfigSize)
 		return "", nil, false
 	}
-	c.dests[dest] = true
+	c.dests[dest] = claim{src: src, info: info}
 	return dest, data, true
 }
 
-// credential returns why the file resolved, described by info, must not be
-// copied: it is a Git credential store, reported as store, or lies in a
-// credentials directory. Files and directories are compared by identity, so
-// symbolic links, hard links and the letter case of names cannot hide them.
-func (c *gitConfigCopier) credential(resolved string, info fs.FileInfo) (where string, store bool) {
+// credential returns why the file src, which resolves to resolved and is
+// described by info, must not be copied: it is a Git credential store,
+// reported as store, it is or links to a file in a credentials directory, or
+// src or resolved lies in one. Files and directories are compared by
+// identity, so symbolic links, hard links and the letter case of names
+// cannot hide them.
+func (c *gitConfigCopier) credential(src, resolved string, info fs.FileInfo) (where string, store bool) {
 	for _, s := range c.stores {
 		if os.SameFile(s, info) {
 			return "a Git credential store", true
 		}
 	}
-	for d := filepath.Dir(resolved); ; d = filepath.Dir(d) {
-		if di, err := os.Stat(d); err == nil { //nolint:gosec // G703: Git configuration path
-			for _, cd := range c.dirs {
-				if os.SameFile(cd.info, di) {
-					return "in ~/" + cd.name, false
-				}
-			}
-		}
-		if d == filepath.Dir(d) {
-			return "", false
+	for _, f := range c.files {
+		if os.SameFile(f.info, info) {
+			return "in ~/" + f.dir, false
 		}
 	}
+	for _, p := range []string{src, resolved} {
+		for d := filepath.Dir(p); ; d = filepath.Dir(d) {
+			if di, err := os.Stat(d); err == nil { //nolint:gosec // G703: Git configuration path
+				for _, cd := range c.dirs {
+					if os.SameFile(cd.info, di) {
+						return "in ~/" + cd.dir, false
+					}
+				}
+			}
+			if d == filepath.Dir(d) {
+				break
+			}
+		}
+	}
+	return "", false
 }
 
 // readSame reads the regular file path if it is the file info describes and

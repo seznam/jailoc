@@ -36,6 +36,7 @@ func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 		git       bool
 		snapshots []string
 		want      []string
+		plain     string // destination whose copy is not generated
 	}{
 		{name: "git_config becomes snapshots", git: true, want: []string{gitconfig + ":" + guestGitConfig, ignore + ":" + guestIgnore}},
 		{name: "git_config off", git: false},
@@ -43,6 +44,7 @@ func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 		{name: "removal drops git_config", git: true, snapshots: []string{":" + guestGitConfig + ":ro"}, want: []string{ignore + ":" + guestIgnore}},
 		{name: "tilde destination overrides git_config", git: true, snapshots: []string{"/data/team.gitconfig:~/.gitconfig:ro"}, want: []string{"/data/team.gitconfig:" + guestGitConfig, ignore + ":" + guestIgnore}},
 		{name: "directory snapshot replaces defaults inside", git: true, snapshots: []string{"/data/git:~/.config/git:ro"}, want: []string{gitconfig + ":" + guestGitConfig, "/data/git:" + guestHome + "/.config/git"}},
+		{name: "snapshot of the default source copies it unchanged", git: true, snapshots: []string{"~/.gitconfig:~/.gitconfig:ro"}, want: []string{gitconfig + ":" + guestGitConfig, ignore + ":" + guestIgnore}, plain: guestGitConfig},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -56,7 +58,7 @@ func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 					t.Fatalf("snapshot %v is not read-only", m)
 				}
 				pairs = append(pairs, m.Host+":"+m.Container)
-				if generated := m.data != nil; generated != (m.Host == gitconfig || m.Host == ignore) {
+				if generated := m.data != nil; generated != ((m.Host == gitconfig || m.Host == ignore) && m.Container != tt.plain) {
 					t.Fatalf("snapshot %s generated = %v", m.Container, generated)
 				}
 			}

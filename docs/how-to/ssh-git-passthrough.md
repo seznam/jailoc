@@ -47,7 +47,7 @@ Missing files are skipped. jailoc also follows the files these configurations re
 
 In the copies, paths under your home directory are rewritten to `~/...`, and `includeIf "gitdir:~/..."` conditions are rewritten to your host home directory, because workspace paths keep their host location inside the VM.
 
-jailoc prints a warning and copies nothing for a referenced file that is missing, lies outside your home directory, is larger than 1 MiB, or is in `~/.ssh`, `~/.gnupg` or `~/.aws` (except a valid allowed signers file and an SSH public signing key). These checks apply to the file a symlink points to. The Git credential stores `~/.git-credentials` and `git/credentials` are never copied.
+jailoc prints a warning and copies nothing for a referenced file that is missing, lies outside your home directory, is larger than 1 MiB, or is in `~/.ssh`, `~/.gnupg` or `~/.aws` (except a valid allowed signers file and an SSH public signing key). The home directory check uses the path as written, so a symlink in your home directory to a dotfiles checkout works. The credential directory checks apply to both the path and the file a symlink points to, and catch hard links to files in those directories. The Git credential stores `~/.git-credentials` and `git/credentials` are never copied.
 
 !!! note
     SSH commit signing needs the private key, which stays on the host. Point `user.signingKey` at the public key file (for example `~/.ssh/id_ed25519.pub`) and enable `ssh_auth_sock` so `ssh-keygen` signs through the agent.

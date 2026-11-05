@@ -245,6 +245,7 @@ func TestGitConfigSnapshotsCredentials(t *testing.T) {
 		name    string
 		config  string
 		links   map[string]string // link → target, relative to home
+		hard    map[string]string // hard link → target, relative to home
 		xdg     string            // relative to home
 		warning string
 	}{
@@ -256,6 +257,8 @@ func TestGitConfigSnapshotsCredentials(t *testing.T) {
 		{name: "symbolic link to a credentials file", config: "[core]\n\texcludesFile = ~/git-ignore\n", links: map[string]string{"git-ignore": ".aws/credentials"}, warning: "/git-ignore is in ~/.aws"},
 		{name: "symbolic link to a credentials directory", config: "[commit]\n\ttemplate = ~/keys/id_ed25519\n", links: map[string]string{"keys": ".ssh"}, warning: "/keys/id_ed25519 is in ~/.ssh"},
 		{name: "relative include", config: "[include]\n\tpath = .ssh/id_ed25519\n", warning: "/.ssh/id_ed25519 is in ~/.ssh"},
+		{name: "symbolic link in a credentials directory", config: "[core]\n\texcludesFile = ~/.ssh/deploy\n", links: map[string]string{".ssh/deploy": "private-key"}, warning: "/.ssh/deploy is in ~/.ssh"},
+		{name: "hard link to a credentials file", config: "[core]\n\texcludesFile = ~/git-ignore\n", hard: map[string]string{"git-ignore": ".ssh/id_ed25519"}, warning: "/git-ignore is in ~/.ssh"},
 		{name: "private key as allowed signers", config: "[gpg \"ssh\"]\n\tallowedSignersFile = ~/.ssh/id_ed25519\n", warning: "is not an allowed signers file"},
 	}
 	for _, tt := range tests {
@@ -269,9 +272,15 @@ func TestGitConfigSnapshotsCredentials(t *testing.T) {
 				".xdg/git/credentials":    "https://user:secret@example.com\n",
 				".aws/credentials":        "[default]\nsecret\n",
 				".ssh/id_ed25519":         private,
+				"private-key":             private,
 			})
 			for link, target := range tt.links {
 				if err := os.Symlink(filepath.Join(home, target), filepath.Join(home, link)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for link, target := range tt.hard {
+				if err := os.Link(filepath.Join(home, target), filepath.Join(home, link)); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -366,5 +375,51 @@ func TestGitConfigSnapshotsRelocatedXDG(t *testing.T) {
 	src := filepath.Join(home, ".xdg/git/config") + " (generated)"
 	if got[guestHome+"/.config/git/config"] != src || got[guestHome+"/.xdg/git/config"] != src || len(warnings) != 0 {
 		t.Errorf("snapshots = %v, warnings %q, want %s at both guest paths", got, warnings, src)
+	}
+}
+
+func TestGitConfigSnapshotsGuestPathConflict(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	gitConfigFiles(t, home, map[string]string{
+		".gitconfig":         "[include]\n\tpath = ~/.gitconfig\n[core]\n\texcludesFile = ~/.config/git/ignore\n",
+		".xdg/git/ignore":    "*.swp\n",
+		".config/git/ignore": "*.o\n",
+	})
+	got, warnings := gitConfigData(home, filepath.Join(home, ".xdg"))
+	if got[guestHome+"/.config/git/ignore"] != "*.swp\n" || len(got) != 2 {
+		t.Errorf("snapshots = %v, want the XDG ignore file at its default path", got)
+	}
+	assertContains(t, warnings, "core.excludesFile "+filepath.Join(home, ".config/git/ignore")+" is not copied to the VM: "+
+		filepath.Join(home, ".xdg/git/ignore")+" already takes its path there")
+	if strings.Count(warnings, "\n") != 0 {
+		t.Errorf("warnings = %q, want one", warnings)
+	}
+}
+
+func TestGitConfigSnapshotsIncludeLimit(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	var b strings.Builder
+	b.WriteString("[include]\n")
+	files := map[string]string{}
+	for i := range maxConfigFiles - 1 {
+		name := fmt.Sprintf("inc%d", i)
+		files[name] = "[user]\n"
+		b.WriteString("\tpath = ~/" + name + "\n")
+	}
+	// Reading the excess include, a directory, would produce a warning.
+	b.WriteString("\tpath = ~/excess\n")
+	files[".gitconfig"] = b.String()
+	gitConfigFiles(t, home, files)
+	if err := os.Mkdir(filepath.Join(home, "excess"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, warnings := gitConfigData(home, "")
+	if len(got) != maxConfigFiles {
+		t.Errorf("%d snapshots, want %d", len(got), maxConfigFiles)
+	}
+	if want := fmt.Sprintf("more than %d configuration files are included; %s and later includes are not copied to the VM", maxConfigFiles, filepath.Join(home, "excess")); warnings != want {
+		t.Errorf("warnings = %q, want %q", warnings, want)
 	}
 }

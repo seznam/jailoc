@@ -63,6 +63,14 @@ func vmSnapshots(ws *workspace.Resolved) ([]snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workspace %q: merge snapshots: %w", ws.Name, err)
 	}
+	// A configured snapshot replaces the default with the same destination even
+	// when it names the same source.
+	explicit := make(map[string]bool, len(ws.Snapshots))
+	for _, spec := range ws.Snapshots {
+		if m, err := config.ParseMount(spec); err == nil {
+			explicit[filepath.Clean(m.Container)] = true
+		}
+	}
 	snapshots := make([]snapshot, 0, len(merged))
 	var configured []string
 	for _, spec := range merged {
@@ -76,7 +84,7 @@ func vmSnapshots(ws *workspace.Resolved) ([]snapshot, error) {
 		}
 		m.Host = host
 		m.Container = filepath.Clean(m.Container)
-		if d, ok := byDest[m.Container]; ok && d.Host == m.Host {
+		if d, ok := byDest[m.Container]; ok && !explicit[m.Container] {
 			snapshots = append(snapshots, d)
 			continue
 		}
@@ -86,8 +94,8 @@ func vmSnapshots(ws *workspace.Resolved) ([]snapshot, error) {
 	// A configured snapshot of a directory, such as ~/.config/git, replaces
 	// the default snapshots inside it.
 	return slices.DeleteFunc(snapshots, func(s snapshot) bool {
-		d, ok := byDest[s.Container]
-		return ok && d.Host == s.Host && slices.ContainsFunc(configured, func(c string) bool {
+		_, ok := byDest[s.Container]
+		return ok && !explicit[s.Container] && slices.ContainsFunc(configured, func(c string) bool {
 			return c != s.Container && overlaps(c, s.Container)
 		})
 	}), nil
