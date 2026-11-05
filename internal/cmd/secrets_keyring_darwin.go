@@ -34,7 +34,10 @@ func (darwinSecretKeyring) set(account string, data []byte, _ time.Duration) err
 	ctx, cancel := context.WithTimeout(context.Background(), darwinKeychainTimeout)
 	defer cancel()
 	encoded := hex.EncodeToString(data)
-	cmd := exec.CommandContext(ctx, "/usr/bin/security", "add-generic-password", "-U", "-s", darwinKeychainService, "-a", account, "-w", encoded) //nolint:gosec // G204: fixed binary with hex-encoded payload
+	// Pass the command over stdin to `security -i` so the secret payload never
+	// appears in process arguments (argv).
+	cmd := exec.CommandContext(ctx, "/usr/bin/security", "-i") //nolint:gosec // G204: fixed binary reading subcommand from stdin
+	cmd.Stdin = strings.NewReader("add-generic-password -U -s " + darwinKeychainService + " -a " + account + " -w " + encoded + "\n")
 	cmd.Stderr = &bytes.Buffer{}
 	return cmd.Run()
 }

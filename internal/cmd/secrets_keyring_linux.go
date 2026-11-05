@@ -19,16 +19,24 @@ func (linuxSecretKeyring) get(account string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	size, err := unix.KeyctlBuffer(unix.KEYCTL_READ, id, nil, 0)
-	if err != nil || size <= 0 {
-		return nil, fmt.Errorf("read keyring entry size: %w", err)
+	for range 3 {
+		size, err := unix.KeyctlBuffer(unix.KEYCTL_READ, id, nil, 0)
+		if err != nil || size <= 0 {
+			return nil, fmt.Errorf("read keyring entry size: %w", err)
+		}
+		buf := make([]byte, size)
+		n, err := unix.KeyctlBuffer(unix.KEYCTL_READ, id, buf, 0)
+		if err != nil {
+			return nil, fmt.Errorf("read keyring entry: %w", err)
+		}
+		if n < 0 {
+			return nil, fmt.Errorf("invalid keyring entry size %d", n)
+		}
+		if n <= len(buf) {
+			return buf[:n], nil
+		}
 	}
-	buf := make([]byte, size)
-	n, err := unix.KeyctlBuffer(unix.KEYCTL_READ, id, buf, 0)
-	if err != nil {
-		return nil, fmt.Errorf("read keyring entry: %w", err)
-	}
-	return buf[:n], nil
+	return nil, fmt.Errorf("keyring entry %q changed size concurrently", account)
 }
 
 func (linuxSecretKeyring) set(account string, data []byte, ttl time.Duration) error {

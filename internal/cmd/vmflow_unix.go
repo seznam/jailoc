@@ -535,6 +535,9 @@ func workspaceCABundle(ws *workspace.Resolved) string {
 // host. Env secrets go to the session environment only, file secrets to
 // /run/secrets. Values stay in memory.
 func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec, purgeCache bool) (guest.Secrets, error) {
+	if purgeCache {
+		purgeWorkspaceSecretCache(ws)
+	}
 	payload := guest.Secrets{Env: append([]string{}, ws.Env...), Files: map[string][]byte{}}
 	if spec.SSHAgent != "" {
 		payload.Env = append(payload.Env, "SSH_AUTH_SOCK="+guest.SSHAgentSocket)

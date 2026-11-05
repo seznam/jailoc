@@ -551,11 +551,26 @@ func TestReadSecretTTLCacheAndPurge(t *testing.T) {
 		t.Fatalf("expired read = %q, %v; want val-alpha-4", gotExpired, err)
 	}
 
-	// purgeWorkspaceSecretCache removes the workspace's cached entries.
-	purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha", Secrets: []workspace.ResolvedSecret{s}})
+	// purgeWorkspaceSecretCache removes the workspace's cached entries even if
+	// the secret was removed from ws.Secrets (via the workspace index).
+	purgeWorkspaceSecretCache(&workspace.Resolved{Name: "alpha"})
 	gotAfterDownPurge, err := readSecret(context.Background(), "alpha", s, false)
 	if err != nil || string(gotAfterDownPurge) != "val-alpha-5" {
 		t.Fatalf("post-purgeWorkspaceSecretCache read = %q, %v; want val-alpha-5", gotAfterDownPurge, err)
+	}
+
+	// Multiline env secret output is rejected and never cached.
+	badEnv := workspace.ResolvedSecret{
+		Name:        "BAD",
+		Kind:        workspace.SecretKindEnv,
+		FromCommand: "printf 'line1\\nline2\\n'",
+		TTL:         10 * time.Minute,
+	}
+	if _, err := readSecret(context.Background(), "alpha", badEnv, false); err == nil {
+		t.Fatal("expected error for multiline env secret, got nil")
+	}
+	if _, ok := readCachedSecret("alpha", badEnv); ok {
+		t.Fatal("multiline env secret output must not be cached")
 	}
 }
 

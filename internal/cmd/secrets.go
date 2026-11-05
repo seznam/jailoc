@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,6 +141,31 @@ func secretCacheAccount(wsName string, s workspace.ResolvedSecret) string {
 	return "jailoc:secret:" + hex.EncodeToString(h.Sum(nil))
 }
 
+func secretCacheIndexAccount(wsName string) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(config.ConfigPath()))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(wsName))
+	return "jailoc:index:" + hex.EncodeToString(h.Sum(nil))
+}
+
+func recordSecretCacheAccount(wsName, account string, ttl time.Duration) {
+	idxAccount := secretCacheIndexAccount(wsName)
+	var accounts []string
+	if raw, err := secretCache.get(idxAccount); err == nil {
+		_ = json.Unmarshal(raw, &accounts)
+	}
+	if !slices.Contains(accounts, account) {
+		accounts = append(accounts, account)
+	}
+	data, err := json.Marshal(accounts)
+	if err != nil {
+		return
+	}
+	// Keep the workspace index alive at least as long as the newly cached secret.
+	_ = secretCache.set(idxAccount, data, max(ttl, 24*time.Hour))
+}
+
 func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) {
 	raw, err := secretCache.get(secretCacheAccount(wsName, s))
 	if err != nil {
@@ -165,13 +191,26 @@ func writeCachedSecret(wsName string, s workspace.ResolvedSecret, value []byte) 
 	if err != nil {
 		return
 	}
-	_ = secretCache.set(secretCacheAccount(wsName, s), data, s.TTL)
+	account := secretCacheAccount(wsName, s)
+	if err := secretCache.set(account, data, s.TTL); err == nil {
+		recordSecretCacheAccount(wsName, account, s.TTL)
+	}
 }
 
 func purgeWorkspaceSecretCache(ws *workspace.Resolved) {
 	if ws == nil {
 		return
 	}
+	idxAccount := secretCacheIndexAccount(ws.Name)
+	if raw, err := secretCache.get(idxAccount); err == nil {
+		var accounts []string
+		if json.Unmarshal(raw, &accounts) == nil {
+			for _, account := range accounts {
+				_ = secretCache.delete(account)
+			}
+		}
+	}
+	_ = secretCache.delete(idxAccount)
 	for _, s := range ws.Secrets {
 		if s.FromCommand != "" {
 			_ = secretCache.delete(secretCacheAccount(ws.Name, s))
@@ -186,7 +225,10 @@ func purgeWorkspaceSecretCache(ws *workspace.Resolved) {
 // outputs in the system keychain are reused. Env secret values lose their
 // trailing line break and must fit on one line.
 func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, purgeCache bool) ([]byte, error) {
-	var value []byte
+	var (
+		value     []byte
+		rawToSave []byte
+	)
 	switch {
 	case s.FromEnv != "":
 		value = []byte(os.Getenv(s.FromEnv))
@@ -220,7 +262,7 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 			}
 			value = out
 			if s.TTL > 0 {
-				writeCachedSecret(wsName, s, out)
+				rawToSave = out
 			}
 		}
 	}
@@ -229,6 +271,9 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 		if bytes.ContainsAny(value, "\r\n\x00") {
 			return nil, fmt.Errorf("env secret %q: value spans several lines or contains NUL; use a file secret", s.Name)
 		}
+	}
+	if rawToSave != nil {
+		writeCachedSecret(wsName, s, rawToSave)
 	}
 	return value, nil
 }
