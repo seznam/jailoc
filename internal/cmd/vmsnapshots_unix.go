@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"io/fs"
@@ -92,13 +93,18 @@ func vmSnapshots(ws *workspace.Resolved) ([]snapshot, error) {
 		configured = append(configured, m.Container)
 	}
 	// A configured snapshot of a directory, such as ~/.config/git, replaces
-	// the default snapshots inside it.
-	return slices.DeleteFunc(snapshots, func(s snapshot) bool {
+	// the default snapshots inside it, and binds before any explicit child
+	// override inside it.
+	snapshots = slices.DeleteFunc(snapshots, func(s snapshot) bool {
 		_, ok := byDest[s.Container]
 		return ok && !explicit[s.Container] && slices.ContainsFunc(configured, func(c string) bool {
 			return strings.HasPrefix(s.Container, c+"/")
 		})
-	}), nil
+	})
+	slices.SortStableFunc(snapshots, func(a, b snapshot) int {
+		return cmp.Compare(strings.Count(a.Container, "/"), strings.Count(b.Container, "/"))
+	})
+	return snapshots, nil
 }
 
 // checkSnapshots rejects snapshots whose destination overlaps a shared path:

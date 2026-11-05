@@ -44,6 +44,7 @@ func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 		{name: "removal drops git_config", git: true, snapshots: []string{":" + guestGitConfig + ":ro"}, want: []string{ignore + ":" + guestIgnore}},
 		{name: "tilde destination overrides git_config", git: true, snapshots: []string{"/data/team.gitconfig:~/.gitconfig:ro"}, want: []string{"/data/team.gitconfig:" + guestGitConfig, ignore + ":" + guestIgnore}},
 		{name: "directory snapshot replaces defaults inside", git: true, snapshots: []string{"/data/git:~/.config/git:ro"}, want: []string{gitconfig + ":" + guestGitConfig, "/data/git:" + guestHome + "/.config/git"}},
+		{name: "directory snapshot binds before explicit child override", git: true, snapshots: []string{"/data/git:~/.config/git:ro", "/data/ignore:~/.config/git/ignore:ro"}, want: []string{gitconfig + ":" + guestGitConfig, "/data/git:" + guestHome + "/.config/git", "/data/ignore:" + guestIgnore}},
 		{name: "snapshot of the default source copies it unchanged", git: true, snapshots: []string{"~/.gitconfig:~/.gitconfig:ro"}, want: []string{gitconfig + ":" + guestGitConfig, ignore + ":" + guestIgnore}, plain: guestGitConfig},
 	}
 	for _, tt := range tests {
