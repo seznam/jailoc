@@ -4,12 +4,14 @@ package cmd
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"golang.org/x/crypto/ssh"
 
@@ -27,6 +29,24 @@ var gitFileKeys = map[string]string{
 	"core.attributesfile":    "core.attributesFile",
 	"commit.template":        "commit.template",
 	"gpg.allowedsignersfile": "gpg.ssh.allowedSignersFile",
+	"user.signingkey":        "user.signingKey",
+}
+
+// publicFile is a kind of file that holds public data only, which git_config
+// copies even from a credentials directory.
+type publicFile struct {
+	// parse returns the public data in a file of the kind, and reports false
+	// when the file is not of the kind. Only the returned data is copied.
+	parse func(data []byte) ([]byte, bool)
+	// problem is the warning when parse reports false.
+	problem string
+}
+
+// gitPublicFiles are the public files of gitFileKeys. A private key is never
+// copied: signing in the VM goes through the forwarded SSH agent.
+var gitPublicFiles = map[string]*publicFile{
+	"gpg.allowedsignersfile": {allowedSigners, "is not an allowed signers file of SSH public keys; it is not copied to the VM"},
+	"user.signingkey":        {publicKey, "is not an SSH public key; it is not copied to the VM (point it at the public key and enable ssh_auth_sock)"},
 }
 
 // gitPathKeys are the path-valued Git variables whose values under the host
@@ -42,18 +62,26 @@ var gitPathKeys = map[string]bool{
 }
 
 // gitCredentialDirs are the directories under the home directory whose
-// files git_config copies only when they hold public data: the allowed
-// signers file and an SSH public signing key.
-var gitCredentialDirs = map[string]bool{".ssh": true, ".gnupg": true, ".aws": true}
+// files git_config copies only when they are gitPublicFiles.
+var gitCredentialDirs = []string{".ssh", ".gnupg", ".aws"}
+
+// credentialDir is an existing directory of gitCredentialDirs.
+type credentialDir struct {
+	name string
+	info fs.FileInfo
+}
 
 // gitConfigCopier collects the git_config snapshots.
 type gitConfigCopier struct {
-	home  string
-	warn  func(format string, args ...any)
-	out   []snapshot
-	seen  map[string]bool // host paths
-	dests map[string]bool // guest paths
-	count int
+	home   string
+	warn   func(format string, args ...any)
+	out    []snapshot
+	refs   []func()           // references yet to be followed
+	seen   map[[2]string]bool // host paths with their requested guest paths
+	dests  map[string]bool    // guest paths
+	dirs   []credentialDir    // credentials directories
+	stores []fs.FileInfo      // Git credential stores
+	count  int
 }
 
 // gitConfigSnapshots returns the snapshots that carry the user's Git
@@ -62,25 +90,47 @@ type gitConfigCopier struct {
 // empty), plus the files they reference under the home directory, with
 // includes followed. Configuration files are copied with host-home paths
 // rewritten for the guest; see rewriteGitConfig. Referenced files that are
-// missing or outside the home directory are reported through warn.
+// missing, outside the home directory or hold credentials are reported
+// through warn. Every snapshot carries the content jailoc read and checked.
 func gitConfigSnapshots(home, xdg string, warn func(format string, args ...any)) []snapshot {
 	if xdg == "" {
 		xdg = filepath.Join(home, ".config")
 	}
-	c := &gitConfigCopier{home: home, warn: warn, seen: map[string]bool{}, dests: map[string]bool{}}
+	c := &gitConfigCopier{home: home, warn: warn, seen: map[[2]string]bool{}, dests: map[string]bool{}}
+	for _, name := range gitCredentialDirs {
+		if info, err := os.Stat(filepath.Join(home, name)); err == nil { //nolint:gosec // G703: home directory path
+			c.dirs = append(c.dirs, credentialDir{name: name, info: info})
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(home, ".git-credentials"),
+		filepath.Join(xdg, "git", "credentials"),
+		filepath.Join(home, ".config", "git", "credentials"),
+	} {
+		if info, err := os.Stat(p); err == nil { //nolint:gosec // G703: Git credential store path
+			c.stores = append(c.stores, info)
+		}
+	}
+	// The files Git reads by default claim their guest paths before any
+	// reference does.
 	c.config("", filepath.Join(home, ".gitconfig"), guestGitConfig)
 	dir := filepath.Join(xdg, "git")
 	c.config("", filepath.Join(dir, "config"), guestHome+"/.config/git/config")
-	c.file("", filepath.Join(dir, "ignore"), guestHome+"/.config/git/ignore")
-	c.file("", filepath.Join(dir, "attributes"), guestHome+"/.config/git/attributes")
+	c.file("", filepath.Join(dir, "ignore"), guestHome+"/.config/git/ignore", nil)
+	c.file("", filepath.Join(dir, "attributes"), guestHome+"/.config/git/attributes", nil)
+	for len(c.refs) > 0 {
+		ref := c.refs[0]
+		c.refs = c.refs[1:]
+		ref()
+	}
 	return c.out
 }
 
-// config copies the configuration file src to dest and follows its
+// config copies the configuration file src to dest and queues its
 // references. key names the variable that references src, empty for the
 // files Git reads by default, which are skipped silently when missing.
 func (c *gitConfigCopier) config(key, src, dest string) {
-	dest, ok := c.claim(key, src, dest)
+	dest, data, ok := c.load(key, src, dest, false)
 	if !ok {
 		return
 	}
@@ -89,11 +139,6 @@ func (c *gitConfigCopier) config(key, src, dest string) {
 		if c.count == maxConfigFiles+1 {
 			c.warn("more than %d configuration files are included; %s and later includes are not copied to the VM", maxConfigFiles, src)
 		}
-		return
-	}
-	data, ok := readSmall(src, maxConfigSize, false)
-	if !ok {
-		c.warn("%s cannot be read as a configuration file of at most %d bytes; it is not copied to the VM", src, maxConfigSize)
 		return
 	}
 	c.out = append(c.out, snapshot{Mount: mountOf(src, dest), data: rewriteGitConfig(data, c.home)})
@@ -106,102 +151,188 @@ func (c *gitConfigCopier) config(key, src, dest string) {
 				display = "includeIf.path"
 			}
 			if p, ok := c.expand(e.value); ok {
-				c.config(display, p, "")
+				c.refs = append(c.refs, func() { c.config(display, p, "") })
 			} else if e.value != "" && !strings.HasPrefix(e.value, "~") && !strings.HasPrefix(e.value, "%(") {
 				// Git resolves a relative include against the including file.
-				c.config(display, filepath.Join(filepath.Dir(src), e.value), path.Join(path.Dir(dest), filepath.ToSlash(e.value)))
+				p, d := filepath.Join(filepath.Dir(src), e.value), path.Join(path.Dir(dest), filepath.ToSlash(e.value))
+				c.refs = append(c.refs, func() { c.config(display, p, d) })
 			}
 		case gitFileKeys[name] != "":
 			if p, ok := c.expand(e.value); ok {
-				c.file(gitFileKeys[name], p, "")
-			}
-		case name == "user.signingkey":
-			if p, ok := c.expand(e.value); ok {
-				c.signingKey(p)
+				c.refs = append(c.refs, func() { c.file(gitFileKeys[name], p, "", gitPublicFiles[name]) })
 			}
 		}
 	}
 }
 
-// file copies the regular file src to dest. key is as for config.
-func (c *gitConfigCopier) file(key, src, dest string) {
-	dest, ok := c.claim(key, src, dest)
+// file copies the regular file src to dest. key is as for config. public is
+// the kind of public file src must be, nil for any file outside the
+// credentials directories.
+func (c *gitConfigCopier) file(key, src, dest string, public *publicFile) {
+	dest, data, ok := c.load(key, src, dest, public != nil)
 	if !ok {
 		return
 	}
-	if !isRegularFile(src) {
-		c.warn("%s %s is not a regular file; it is not copied to the VM", key, src)
-		return
-	}
-	c.out = append(c.out, snapshot{Mount: mountOf(src, dest)})
-}
-
-// signingKey copies an SSH public key named by user.signingKey. A private key
-// is never copied: signing in the VM goes through the forwarded SSH agent.
-func (c *gitConfigCopier) signingKey(src string) {
-	const key = "user.signingKey"
-	data, ok := readSmall(src, maxPointerSize, false)
-	if !ok {
-		if c.exists(key, src) {
-			c.warn("%s %s is not an SSH public key; it is not copied to the VM (point it at the public key and enable ssh_auth_sock)", key, src)
+	if public != nil {
+		if data, ok = public.parse(data); !ok {
+			c.warn("%s %s %s", key, src, public.problem)
+			return
 		}
-		return
 	}
-	if _, _, _, _, err := ssh.ParseAuthorizedKey(data); err != nil {
-		c.warn("%s %s is not an SSH public key; it is not copied to the VM (point it at the public key and enable ssh_auth_sock)", key, src)
-		return
-	}
-	c.file(key, src, "")
+	c.out = append(c.out, snapshot{Mount: mountOf(src, dest), data: data})
 }
 
-// claim returns the destination of src and reports whether src is yet to be
-// copied. An empty dest is derived from the location of src under the home
-// directory; src outside the home directory, in a credentials directory or
-// missing is reported and skipped.
-func (c *gitConfigCopier) claim(key, src, dest string) (string, bool) {
-	if c.seen[src] {
-		return "", false
+// load claims dest for src and returns dest and the content of src. An empty
+// dest is derived from the location of src under the home directory. src is
+// reported and skipped when it is outside the home directory, missing, not a
+// regular file of at most maxConfigSize bytes, a Git credential store, or in
+// a credentials directory unless public. The checks apply to the file that
+// symbolic links in src resolve to, and the content is read from that file.
+func (c *gitConfigCopier) load(key, src, dest string, public bool) (string, []byte, bool) {
+	visit := [2]string{src, dest}
+	if c.seen[visit] {
+		return "", nil, false
 	}
-	c.seen[src] = true
+	c.seen[visit] = true
+	name := strings.TrimPrefix(key+" "+src, " ")
 	if dest == "" {
 		rel, err := filepath.Rel(c.home, src)
 		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-			c.warn("%s %s is outside the home directory; it is not copied to the VM", key, src)
-			return "", false
-		}
-		first, _, _ := strings.Cut(rel, "/")
-		public := key == "gpg.ssh.allowedSignersFile" || key == "user.signingKey"
-		if gitCredentialDirs[first] && !public {
-			c.warn("%s %s is in ~/%s; it is not copied to the VM", key, src, first)
-			return "", false
+			c.warn("%s is outside the home directory; it is not copied to the VM", name)
+			return "", nil, false
 		}
 		dest = guestHome + "/" + filepath.ToSlash(rel)
 	}
 	if dest != guestHome && !strings.HasPrefix(dest, guestHome+"/") {
-		c.warn("%s %s is outside the home directory in the VM; it is not copied", key, src)
-		return "", false
+		c.warn("%s is outside the home directory in the VM; it is not copied", name)
+		return "", nil, false
 	}
 	if c.dests[dest] {
-		return "", false
+		return "", nil, false
 	}
-	if key == "" {
-		if _, err := os.Stat(src); errors.Is(err, fs.ErrNotExist) { //nolint:gosec // G703: Git configuration path
-			return "", false
+	resolved, err := filepath.EvalSymlinks(src)
+	var info fs.FileInfo
+	if err == nil {
+		info, err = os.Lstat(resolved) //nolint:gosec // G703: path named by the Git configuration
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		if key != "" {
+			c.warn("%s does not exist; it is not copied to the VM", name)
 		}
-	} else if !c.exists(key, src) {
-		return "", false
+		return "", nil, false
+	}
+	if err != nil {
+		c.warn("%s cannot be resolved (%v); it is not copied to the VM", name, err)
+		return "", nil, false
+	}
+	if where, store := c.credential(resolved, info); where != "" && (store || !public) {
+		c.warn("%s is %s; it is not copied to the VM", name, where)
+		return "", nil, false
+	}
+	data, ok := readSame(resolved, info)
+	if !ok {
+		c.warn("%s is not a regular file of at most %d bytes; it is not copied to the VM", name, maxConfigSize)
+		return "", nil, false
 	}
 	c.dests[dest] = true
-	return dest, true
+	return dest, data, true
 }
 
-// exists reports whether src exists, warning when it does not.
-func (c *gitConfigCopier) exists(key, src string) bool {
-	if _, err := os.Stat(src); errors.Is(err, fs.ErrNotExist) { //nolint:gosec // G703: Git configuration path
-		c.warn("%s %s does not exist; it is not copied to the VM", key, src)
-		return false
+// credential returns why the file resolved, described by info, must not be
+// copied: it is a Git credential store, reported as store, or lies in a
+// credentials directory. Files and directories are compared by identity, so
+// symbolic links, hard links and the letter case of names cannot hide them.
+func (c *gitConfigCopier) credential(resolved string, info fs.FileInfo) (where string, store bool) {
+	for _, s := range c.stores {
+		if os.SameFile(s, info) {
+			return "a Git credential store", true
+		}
 	}
-	return true
+	for d := filepath.Dir(resolved); ; d = filepath.Dir(d) {
+		if di, err := os.Stat(d); err == nil { //nolint:gosec // G703: Git configuration path
+			for _, cd := range c.dirs {
+				if os.SameFile(cd.info, di) {
+					return "in ~/" + cd.name, false
+				}
+			}
+		}
+		if d == filepath.Dir(d) {
+			return "", false
+		}
+	}
+}
+
+// readSame reads the regular file path if it is the file info describes and
+// holds at most maxConfigSize bytes. path is opened without following a
+// symbolic link or blocking, and the opened file is compared with info, so
+// a path swapped after the checks cannot supply other content.
+func readSame(path string, info fs.FileInfo) ([]byte, bool) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0) //nolint:gosec // G304: path named by the Git configuration
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = f.Close() }() // read-only
+	opened, err := f.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) || opened.Size() > maxConfigSize {
+		return nil, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigSize+1))
+	if err != nil || int64(len(data)) > maxConfigSize {
+		return nil, false
+	}
+	return data, true
+}
+
+// publicKey returns the first SSH public key in data, serialized on its own,
+// so nothing else in the file reaches the VM.
+func publicKey(data []byte) ([]byte, bool) {
+	key, _, _, _, err := ssh.ParseAuthorizedKey(data)
+	if err != nil {
+		return nil, false
+	}
+	return ssh.MarshalAuthorizedKey(key), true
+}
+
+// allowedSigners returns the lines of an SSH allowed signers file (see
+// ssh-keygen(1)) rebuilt from their principals, options and serialized public
+// keys, without comments. It reports false when the file has no signer or a
+// line that is not blank, a comment or a signer with known options.
+func allowedSigners(data []byte) ([]byte, bool) {
+	var out []byte
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		end := strings.IndexAny(line, " \t")
+		if strings.HasPrefix(line, `"`) {
+			q := strings.IndexByte(line[1:], '"')
+			if q < 0 {
+				return nil, false
+			}
+			end = q + 2
+		}
+		if end <= 0 || end >= len(line) {
+			return nil, false
+		}
+		key, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(line[end:]))
+		if err != nil || len(rest) != 0 {
+			return nil, false
+		}
+		out = append(out, line[:end]...)
+		sep := " "
+		for _, o := range options {
+			if o != "cert-authority" && !strings.HasPrefix(o, "namespaces=") &&
+				!strings.HasPrefix(o, "valid-after=") && !strings.HasPrefix(o, "valid-before=") {
+				return nil, false
+			}
+			out = append(out, sep+o...)
+			sep = ","
+		}
+		out = append(out, ' ')
+		out = append(out, ssh.MarshalAuthorizedKey(key)...)
+	}
+	return out, out != nil
 }
 
 // expand returns the absolute host path of a path value, expanding a leading

@@ -56,7 +56,7 @@ func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 					t.Fatalf("snapshot %v is not read-only", m)
 				}
 				pairs = append(pairs, m.Host+":"+m.Container)
-				if generated := m.data != nil; generated != (m.Container == guestGitConfig && m.Host == gitconfig) {
+				if generated := m.data != nil; generated != (m.Host == gitconfig || m.Host == ignore) {
 					t.Fatalf("snapshot %s generated = %v", m.Container, generated)
 				}
 			}

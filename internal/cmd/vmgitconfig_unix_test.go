@@ -130,7 +130,7 @@ func TestGitConfigSnapshots(t *testing.T) {
 		".config/git/extra.inc":   "[core]\n\tpager = less\n",
 		"work.inc":                "[include]\n\tpath = work.inc\n",
 		".gitignore_global":       "*.o\n",
-		".ssh/allowed_signers":    "me@example.com ssh-ed25519 AAAA\n",
+		".ssh/allowed_signers":    "me@example.com " + sshPublicKey(t),
 		".ssh/id_ed25519.pub":     sshPublicKey(t),
 		".ssh/template":           "subject\n",
 	})
@@ -139,11 +139,11 @@ func TestGitConfigSnapshots(t *testing.T) {
 		guestHome + "/.gitconfig":            filepath.Join(home, ".gitconfig") + " (generated)",
 		guestHome + "/.config/git/extra.inc": filepath.Join(home, ".config/git/extra.inc") + " (generated)",
 		guestHome + "/work.inc":              filepath.Join(home, "work.inc") + " (generated)",
-		guestHome + "/.gitignore_global":     filepath.Join(home, ".gitignore_global"),
-		guestHome + "/.ssh/allowed_signers":  filepath.Join(home, ".ssh/allowed_signers"),
-		guestHome + "/.ssh/id_ed25519.pub":   filepath.Join(home, ".ssh/id_ed25519.pub"),
+		guestHome + "/.gitignore_global":     filepath.Join(home, ".gitignore_global") + " (generated)",
+		guestHome + "/.ssh/allowed_signers":  filepath.Join(home, ".ssh/allowed_signers") + " (generated)",
+		guestHome + "/.ssh/id_ed25519.pub":   filepath.Join(home, ".ssh/id_ed25519.pub") + " (generated)",
 		guestHome + "/.config/git/config":    filepath.Join(home, ".config/git/config") + " (generated)",
-		guestHome + "/.config/git/ignore":    filepath.Join(home, ".config/git/ignore"),
+		guestHome + "/.config/git/ignore":    filepath.Join(home, ".config/git/ignore") + " (generated)",
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("snapshots = %v\nwant %v", got, want)
@@ -215,12 +215,156 @@ func TestGitConfigSnapshotsXDG(t *testing.T) {
 	want := map[string]string{
 		guestHome + "/.config/git/config":     filepath.Join(xdg, "git/config") + " (generated)",
 		guestHome + "/.config/git/local.inc":  filepath.Join(xdg, "git/local.inc") + " (generated)",
-		guestHome + "/.config/git/attributes": filepath.Join(xdg, "git/attributes"),
+		guestHome + "/.config/git/attributes": filepath.Join(xdg, "git/attributes") + " (generated)",
 	}
 	if !maps.Equal(got, want) || len(warnings) != 0 {
 		t.Errorf("snapshots = %v, warnings %q\nwant %v", got, warnings, want)
 	}
 	if got, _ := collectGitConfigSnapshots(t.TempDir(), ""); len(got) != 0 {
 		t.Errorf("empty home: snapshots = %v", slices.Collect(maps.Keys(got)))
+	}
+}
+
+// gitConfigData runs gitConfigSnapshots and returns the staged content by
+// destination and the warnings.
+func gitConfigData(home, xdg string) (map[string]string, string) {
+	var warnings []string
+	out := map[string]string{}
+	for _, s := range gitConfigSnapshots(home, xdg, func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}) {
+		out[s.Container] = string(s.data)
+	}
+	return out, strings.Join(warnings, "\n")
+}
+
+func TestGitConfigSnapshotsCredentials(t *testing.T) {
+	t.Parallel()
+	const private = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----\n"
+	tests := []struct {
+		name    string
+		config  string
+		links   map[string]string // link → target, relative to home
+		xdg     string            // relative to home
+		warning string
+	}{
+		{name: "credential store", config: "[core]\n\texcludesFile = ~/.git-credentials\n", warning: "/.git-credentials is a Git credential store"},
+		{name: "XDG credential store", config: "[core]\n\texcludesFile = ~/.config/git/credentials\n", warning: "/.config/git/credentials is a Git credential store"},
+		{name: "relocated XDG credential store", config: "[core]\n\texcludesFile = ~/.xdg/git/credentials\n", xdg: ".xdg", warning: "/.xdg/git/credentials is a Git credential store"},
+		{name: "default credential store with relocated XDG", config: "[core]\n\texcludesFile = ~/.config/git/credentials\n", xdg: ".xdg", warning: "is a Git credential store"},
+		{name: "public file kind in credential store", config: "[user]\n\tsigningKey = ~/.git-credentials\n", warning: "is a Git credential store"},
+		{name: "symbolic link to a credentials file", config: "[core]\n\texcludesFile = ~/git-ignore\n", links: map[string]string{"git-ignore": ".aws/credentials"}, warning: "/git-ignore is in ~/.aws"},
+		{name: "symbolic link to a credentials directory", config: "[commit]\n\ttemplate = ~/keys/id_ed25519\n", links: map[string]string{"keys": ".ssh"}, warning: "/keys/id_ed25519 is in ~/.ssh"},
+		{name: "relative include", config: "[include]\n\tpath = .ssh/id_ed25519\n", warning: "/.ssh/id_ed25519 is in ~/.ssh"},
+		{name: "private key as allowed signers", config: "[gpg \"ssh\"]\n\tallowedSignersFile = ~/.ssh/id_ed25519\n", warning: "is not an allowed signers file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			home := t.TempDir()
+			gitConfigFiles(t, home, map[string]string{ //nolint:gosec // G101: test fixture
+				".gitconfig":              tt.config,
+				".git-credentials":        "https://user:secret@example.com\n",
+				".config/git/credentials": "https://user:secret@example.com\n",
+				".xdg/git/credentials":    "https://user:secret@example.com\n",
+				".aws/credentials":        "[default]\nsecret\n",
+				".ssh/id_ed25519":         private,
+			})
+			for link, target := range tt.links {
+				if err := os.Symlink(filepath.Join(home, target), filepath.Join(home, link)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			xdg := ""
+			if tt.xdg != "" {
+				xdg = filepath.Join(home, tt.xdg)
+			}
+			got, warnings := gitConfigData(home, xdg)
+			for dest, data := range got {
+				if strings.Contains(data, "secret") {
+					t.Errorf("%s carries a credential: %q", dest, data)
+				}
+			}
+			if len(got) != 1 {
+				t.Errorf("snapshots = %v, want only ~/.gitconfig", slices.Collect(maps.Keys(got)))
+			}
+			assertContains(t, warnings, tt.warning)
+			assertContains(t, warnings, "it is not copied to the VM")
+		})
+	}
+}
+
+func TestGitConfigSnapshotsPublicFiles(t *testing.T) {
+	t.Parallel()
+	key := sshPublicKey(t)
+	other := sshPublicKey(t)
+	keyNoComment := strings.TrimSuffix(key, "\n")
+	tests := []struct {
+		name, file, want string
+	}{
+		{
+			name: "signing key next to a private key",
+			file: "[user]\n\tsigningKey = ~/.ssh/key\n",
+			want: key,
+		},
+		{
+			name: "allowed signers with options and comments",
+			file: "[gpg \"ssh\"]\n\tallowedSignersFile = ~/.ssh/allowed_signers\n",
+			want: "me@example.com namespaces=\"git\",valid-after=\"20240101\" " + key + `"a b@example.com" cert-authority ` + other,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			home := t.TempDir()
+			gitConfigFiles(t, home, map[string]string{
+				".gitconfig": tt.file,
+				".ssh/key":   "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----\n" + keyNoComment + " me@laptop\n",
+				".ssh/allowed_signers": "# team\n\n" +
+					"me@example.com namespaces=\"git\",valid-after=\"20240101\" " + keyNoComment + " laptop\n" +
+					`"a b@example.com" cert-authority ` + other,
+			})
+			got, warnings := gitConfigData(home, "")
+			delete(got, guestGitConfig)
+			if len(got) != 1 || warnings != "" {
+				t.Fatalf("snapshots = %v, warnings %q, want one", got, warnings)
+			}
+			for _, data := range got {
+				if data != tt.want {
+					t.Errorf("data =\n%s\nwant\n%s", data, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestAllowedSignersRejects(t *testing.T) {
+	t.Parallel()
+	key := sshPublicKey(t)
+	for _, in := range []string{
+		"",
+		"# only a comment\n",
+		"me@example.com command=\"sh\" " + key,
+		`"me@example.com ` + key,
+		"me@example.com\n",
+		"me@example.com " + key + "garbage line\n",
+	} {
+		if out, ok := allowedSigners([]byte(in)); ok {
+			t.Errorf("allowedSigners(%q) = %q, want rejected", in, out)
+		}
+	}
+}
+
+func TestGitConfigSnapshotsRelocatedXDG(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	gitConfigFiles(t, home, map[string]string{
+		".gitconfig":      "[includeIf \"gitdir:~/src/\"]\n\tpath = ~/.xdg/git/config\n",
+		".xdg/git/config": "[user]\n\tname = me\n",
+	})
+	got, warnings := collectGitConfigSnapshots(home, filepath.Join(home, ".xdg"))
+	src := filepath.Join(home, ".xdg/git/config") + " (generated)"
+	if got[guestHome+"/.config/git/config"] != src || got[guestHome+"/.xdg/git/config"] != src || len(warnings) != 0 {
+		t.Errorf("snapshots = %v, warnings %q, want %s at both guest paths", got, warnings, src)
 	}
 }
