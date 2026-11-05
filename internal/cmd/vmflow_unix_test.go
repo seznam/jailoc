@@ -162,7 +162,7 @@ func TestStatusLabels(t *testing.T) {
 		{"resources docker", resourcesLabel(vm.Spec{CPUs: 2, MemoryMiB: 4096, Docker: true}), "2 CPUs, 4096 MiB memory, 20 GiB Docker disk"},
 		{"sessions", sessionsLabel(2, 0), "2"},
 		{"sessions attached", sessionsLabel(2, 1), "2 (1 attached)"},
-		{"agent", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "claude", Package: "@anthropic-ai/claude-code", Version: "2.1.312"}, AgentInstall: true}), "claude (@anthropic-ai/claude-code@2.1.312)"},
+		{"agent", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "claude", Package: "@anthropic-ai/claude-code", Version: "2.1.318"}, AgentInstall: true}), "claude (@anthropic-ai/claude-code@2.1.318)"},
 		{"agent args", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "omo", Package: "omo-ai"}, AgentInstall: true, AgentArgs: []string{"--model", "x"}}), "omo (omo-ai@latest), args: --model x"},
 		{"agent from image", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "opencode", Package: "@opencode/cli"}}), "opencode (installed by the image)"},
 	}

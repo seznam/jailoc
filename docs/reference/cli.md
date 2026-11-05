@@ -168,7 +168,7 @@ jailoc status [workspace] [flags]
 ```
 Workspace: myproject
 Backend:   vm
-Agent:     claude (@anthropic-ai/claude-code@2.1.312)
+Agent:     claude (@anthropic-ai/claude-code@2.1.318)
 State:     running (supervisor pid 4242)
 Started:   2026-10-31T09:12:44+01:00 (up 2h5m)
 Resources: 2 CPUs, 4096 MiB memory
