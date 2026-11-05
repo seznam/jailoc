@@ -55,7 +55,7 @@ const (
 #   from_file = "/path/to/secret"  # written to /run/secrets/MY_FILE
 # [defaults.agents.claude]
 #   install = true      # false: the image provides the agent binary
-#   version = "2.1.312" # npm version installed instead of the pinned one
+#   version = "2.1.318" # npm version installed instead of the pinned one
 #   args = []           # appended to every agent start
 #   mounts = [":/home/agent/.agents"]  # merged over the agent's built-in mounts; ":/path" removes one
 #   profile = "work"    # state shared across workspaces, one running VM at a time; false: emptied on every start
