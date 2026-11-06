@@ -46,121 +46,103 @@ No single alternative below meets all five out of the box. Some meet more of the
 
 ### Docker and Podman
 
-A container is a set of namespaces and cgroups on the host kernel. Every syscall the agent makes reaches the host kernel, so a kernel vulnerability, a mounted Docker socket, or a privileged flag is enough to leave it. Giving the agent root and a Docker daemon of its own inside a container needs `--privileged` or Docker-in-Docker, which removes most of what the container isolated.
-
-On macOS and Windows, Docker Desktop and Podman run all containers inside one Linux VM. That VM separates containers from the host OS, but all containers and the daemon share its kernel, and the VM mounts large parts of the host's home directory by default.
-
-Networking is all or nothing: a container on the default bridge reaches the host's LAN, VPN and cloud metadata endpoint, and `--network none` cuts everything. Filtering by destination needs an external proxy or iptables rules.
-
-jailoc uses Docker only to build images, never to run workspaces. Its v1 ran agents in Docker containers; `jailoc migrate` converts such configurations.
+Containers share the host kernel, so a kernel bug, a mounted Docker socket or `--privileged` is enough to escape; giving the agent its own Docker daemon needs exactly that. Networking is all or nothing, with the host's LAN, VPN and cloud metadata reachable by default. On macOS, all containers share one Linux VM that mounts much of the home directory. jailoc uses Docker only to build images; its v1 ran agents in containers.
 
 ### Dev Containers
 
-The [Dev Containers](https://containers.dev) specification describes a development environment in `devcontainer.json`, implemented by VS Code, GitHub Codespaces and other tools. It inherits the container boundary. The specification has no network policy; Anthropic's reference container for Claude Code adds an `init-firewall.sh` script that sets iptables to drop by default and allows a list of IP ranges resolved at startup. The rules run inside the container with `NET_ADMIN`, so anything that gains root in the container can remove them, and a domain that changes addresses after startup is not covered.
+[Dev Containers](https://containers.dev) describe an environment in `devcontainer.json` and inherit the container boundary. Anthropic's Claude Code reference adds an iptables allowlist inside the container, which root in the container can remove and which resolves domains only once at startup.
 
 ### container-use
 
-[container-use](https://github.com/dagger/container-use) gives each agent its own container and Git branch through an MCP server, with commands to watch, enter and merge its work. It addresses parallel agents stepping on each other more than containment, and has no network policy of its own.
+[container-use](https://github.com/dagger/container-use) gives each agent a container and Git branch through MCP. It keeps parallel agents apart, not contained, and has no network policy.
 
 ### systemd-nspawn
 
-`systemd-nspawn` starts a container from a directory or disk image with systemd's namespace setup, without a separate daemon. It shares the host kernel like any container, and its network options are the host's network, none, or a private virtual Ethernet link that the host then has to route and filter.
+`systemd-nspawn` runs a container from a directory or image without a daemon. It shares the host kernel, and a private network link still has to be routed and filtered by the host.
 
 ### Toolbox and Distrobox
 
-[Toolbox](https://containertoolbx.org) and [Distrobox](https://distrobox.it) run another Linux distribution's userland in a container that is integrated with the host on purpose: the home directory, network, devices, display and session bus are shared. They are a way to install tools, not a sandbox, and an agent in one has the same reach as on the host.
+[Toolbox](https://containertoolbx.org) and [Distrobox](https://distrobox.it) share the home directory, network and devices with the host by design. They are for installing tools, not sandboxing.
 
 ## Stronger container runtimes
 
 ### gVisor
 
-[gVisor](https://gvisor.dev) runs a kernel written in Go in userspace (the Sentry), which handles the container's syscalls instead of the host kernel. It is an OCI runtime (`runsc`) for Docker and Kubernetes. The host kernel remains shared, but the Sentry only reaches it through a narrow, seccomp-filtered set of syscalls, which shrinks the attack surface considerably. gVisor runs only on Linux. Its network stack, netstack, runs in the Sentry, but egress policy is left to the host network; it has no destination allowlist.
-
-jailoc's network broker uses the same gVisor network stack as a library, on the host side of the VM. The guest has a real Linux kernel; gVisor terminates its packets and applies policy where the guest cannot reach it. Running the whole workspace under `runsc` would require Linux hosts and a Docker daemon, and would leave Docker-in-Docker and other kernel features with gVisor's compatibility limits.
+[gVisor](https://gvisor.dev) (`runsc`) handles container syscalls in a userspace kernel, leaving only a small, seccomp-filtered surface of the host kernel exposed. It runs only on Linux and has no egress allowlist. jailoc's broker uses gVisor's network stack on the host side of the VM, where the guest cannot reach it.
 
 ### Sysbox
 
-[Sysbox](https://github.com/nestybox/sysbox) is an OCI runtime (`sysbox-runc`) that lets containers run systemd, Docker and Kubernetes inside them without `--privileged`. It maps root in the container to an unprivileged user on the host and virtualises parts of `/proc` and `/sys`. It makes Docker-in-Docker much safer than a privileged container, but the boundary is still the shared host kernel, it runs only on Linux, and networking is ordinary Docker networking.
+[Sysbox](https://github.com/nestybox/sysbox) runs Docker and systemd inside containers without `--privileged` by mapping container root to an unprivileged host user. The host kernel is still shared, it runs only on Linux, and networking is plain Docker.
 
 ### Kata Containers
 
-[Kata Containers](https://katacontainers.io) is an OCI runtime that starts each pod or container in a lightweight VM, using QEMU, Cloud Hypervisor, Firecracker or its built-in Dragonball VMM. It provides a hardware VM boundary with container tooling. It targets Kubernetes and containerd on Linux hosts with KVM, has no macOS host support, and leaves networking to CNI.
+[Kata Containers](https://katacontainers.io) starts each pod in a lightweight VM behind a standard OCI runtime. It targets Kubernetes on Linux with KVM and leaves networking to CNI.
 
 ## Process sandboxes
 
-Process sandboxes restrict the agent's process tree on the host kernel. They start fast and need no image, but the agent sees the host's filesystem layout, tools and kernel, and cannot get root or a Docker daemon of its own.
+Process sandboxes restrict the agent's processes on the host kernel. They start instantly and need no image, but the agent sees the host's files and tools and cannot get root or its own Docker daemon.
 
 ### bubblewrap, firejail and nsjail
 
-[bubblewrap](https://github.com/containers/bubblewrap) builds unprivileged user, mount, PID and network namespaces; it underlies Flatpak and the Linux sandboxes of Claude Code and Codex. [firejail](https://github.com/netblue30/firejail) adds seccomp, capabilities and AppArmor with hundreds of application profiles, and is installed setuid root. [nsjail](https://github.com/google/nsjail) is Google's configurable jail with a seccomp policy language and cgroups. All three run only on Linux and offer the network either fully or not at all, so filtering by destination needs a proxy outside the sandbox.
+[bubblewrap](https://github.com/containers/bubblewrap), [firejail](https://github.com/netblue30/firejail) (setuid root) and [nsjail](https://github.com/google/nsjail) build namespaces and seccomp filters on Linux. Network is either on or off; filtering by destination needs an outside proxy.
 
 ### Landlock
 
-[Landlock](https://docs.kernel.org/userspace-api/landlock.html) is a Linux security module that lets an unprivileged process restrict its own filesystem access and, from ABI 4, the TCP ports it binds and connects to. It filters by port, not by address or domain. jailoc applies Landlock to the VMM process on Linux, so the virtio-fs server can reach only the shared paths (see [Security Boundaries](security-boundaries.md)).
+[Landlock](https://docs.kernel.org/userspace-api/landlock.html) lets an unprivileged Linux process restrict its own file access and TCP ports, not addresses or domains. jailoc applies it to the VMM so virtio-fs reaches only shared paths (see [Security Boundaries](security-boundaries.md)).
 
 ### Seatbelt
 
-Seatbelt is the macOS kernel sandbox behind `sandbox-exec`, configured with profiles in Apple's sandbox profile language. Apple marks `sandbox-exec` deprecated and publishes no documentation for the language, but it ships with macOS and is widely used. Profiles can limit file access and network traffic by address and port; agent sandboxes typically allow only a local proxy port and filter domains in the proxy.
+Seatbelt (`sandbox-exec`) is the macOS kernel sandbox, deprecated and undocumented but widely used. Profiles limit files and IP/port traffic; agent sandboxes usually allow only a local filtering proxy.
 
 ### Built-in agent sandboxes
 
-Several agents ship their own sandbox for the commands they run:
-
-- **Claude Code** runs shell commands under Seatbelt on macOS and bubblewrap on Linux, through the `@anthropic-ai/sandbox-runtime` library. Writes are limited to the working directory, and network traffic goes through a host proxy with a domain allowlist. Claude Code's own file tools, MCP servers and hooks run outside the sandbox.
-- **Codex CLI** uses Seatbelt on macOS and bubblewrap with seccomp on Linux. In its default mode commands can write to the workspace and have no network; a proxy can allow listed domains.
-- **Gemini CLI** can run commands under Seatbelt profiles, in a Docker or Podman container, or under gVisor on Linux.
-
-These sandboxes are integrated with the agent and cost almost nothing to start. They share the host kernel, cover the agent's tool calls rather than the whole agent process, and differ per agent. A domain-allowlist proxy constrains HTTP and TLS traffic well, but a policy expressed as domains says nothing about which addresses those domains resolve to, so private networks are reachable through any allowed name that points to them. jailoc confines the whole agent process and every tool, MCP server and container it starts, with the same policy for each agent it supports. The two approaches combine: an agent's own sandbox can run inside a jailoc workspace.
+Claude Code and Codex CLI run commands under Seatbelt on macOS and bubblewrap on Linux, with a host proxy that allows listed domains; Gemini CLI uses Seatbelt, a container or gVisor. They are cheap and integrated, but share the host kernel, cover tool calls rather than the whole agent (Claude Code's file tools, MCP servers and hooks run outside), and differ per agent. A domain allowlist also says nothing about what a domain resolves to, so private addresses behind an allowed name stay reachable. They can run inside a jailoc workspace.
 
 ### Microsoft MXC
 
-[Microsoft eXecution Container (MXC)](https://github.com/microsoft/mxc) is a common JSON policy format over per-OS backends: process containers, Windows Sandbox and WSL on Windows, bubblewrap or LXC on Linux, Seatbelt on macOS, and an experimental micro-VM backend. Isolation strength depends on the backend; on macOS it is Seatbelt. Its own documentation states that its profiles are not to be treated as security boundaries yet.
+[MXC](https://github.com/microsoft/mxc) is one JSON policy format over per-OS backends: Windows containers and Sandbox, bubblewrap or LXC on Linux, Seatbelt on macOS, and an experimental micro-VM. Its documentation says its profiles are not yet security boundaries.
 
 ## Virtual machine monitors
 
 ### Firecracker, Cloud Hypervisor and QEMU microvm
 
-[Firecracker](https://firecracker-microvm.github.io) and [Cloud Hypervisor](https://www.cloudhypervisor.org) are minimal Rust VMMs on KVM, built for serverless functions and cloud workloads; QEMU's `microvm` machine type trims QEMU in the same direction. They provide the hardware boundary jailoc needs, but they are building blocks: they run on Linux only (Cloud Hypervisor also on Windows with MSHV), and image handling, file sharing, guest init, sessions and network policy are left to the caller. Firecracker in particular has no shared filesystem device, so a checkout has to be copied in as a block device rather than shared.
+[Firecracker](https://firecracker-microvm.github.io), [Cloud Hypervisor](https://www.cloudhypervisor.org) and QEMU's `microvm` provide the VM boundary but run only on Linux (Cloud Hypervisor also on Windows) and leave images, shares, sessions and network policy to the caller. Firecracker has no shared filesystem at all.
 
 ### libkrun
 
-[libkrun](https://github.com/containers/libkrun) is a VMM library with its own guest kernel build (libkrunfw). It runs on KVM and on Hypervisor.framework on macOS, and has virtio-fs for sharing host directories. jailoc runs it through the go-microvm runner. libkrun's network backends hand guest packets to a host process, which is where jailoc's broker sits. The same library powers krunvm, krunkit (a Lima driver) and Podman's krun runtime.
-
-Running on both macOS and Linux with one VMM, with directory sharing and a host-side network hook, is the reason jailoc uses libkrun rather than Firecracker or Cloud Hypervisor (Linux only) or Apple's Virtualization.framework (macOS only).
+[libkrun](https://github.com/containers/libkrun) is a VMM library that runs on both KVM and macOS Hypervisor.framework, shares directories over virtio-fs, and hands guest packets to a host process. That combination is why jailoc uses it, through the go-microvm runner.
 
 ## Virtual machine managers
 
 ### Lima, Colima, OrbStack and Vagrant
 
-[Lima](https://lima-vm.io) runs Linux VMs on macOS and Linux with Virtualization.framework, QEMU or krunkit, and [Colima](https://github.com/abiosoft/colima) builds a Docker host on top of it. [OrbStack](https://orbstack.dev) runs Docker and Linux machines on macOS in one shared VM. [Vagrant](https://www.vagrantup.com) manages VMs from a Vagrantfile on many hypervisors. They are designed for convenience: by default they mount the user's home directory, forward ports to the host and give the VM ordinary NAT access to every network the host can reach. They can be locked down, but a policy that denies private networks has to be built separately, and one VM is typically shared by many projects.
+[Lima](https://lima-vm.io), [Colima](https://github.com/abiosoft/colima), [OrbStack](https://orbstack.dev) and [Vagrant](https://www.vagrantup.com) run general-purpose VMs built for convenience: home directory mounted, ports forwarded, NAT to every network the host reaches, often one VM for all projects. A private-network deny policy has to be built separately.
 
 ### Incus and LXD
 
-[Incus](https://linuxcontainers.org/incus/) and Canonical's [LXD](https://canonical.com/lxd), from which Incus was forked, manage both system containers and full QEMU VMs from the same images and CLI. They have network ACLs that allow or deny traffic by address, port and protocol, so a VM with a private-network deny list can be assembled from their parts. They run on Linux hosts, need a daemon with root privileges, and leave image builds, shares, sessions and the policy itself to be configured per instance.
+[Incus](https://linuxcontainers.org/incus/) and [LXD](https://canonical.com/lxd) manage system containers and VMs on Linux, with network ACLs by address, port and protocol. They need a root daemon, and shares, sessions and policy are configured per instance.
 
 ### Apple container
 
-Apple's [`container`](https://github.com/apple/container) tool runs each Linux container in its own lightweight VM on Virtualization.framework, with OCI images. It provides a per-container kernel on Apple silicon Macs, but has no Linux host support and no egress policy beyond the VM's network.
+Apple's [`container`](https://github.com/apple/container) runs each container in its own VM on Apple silicon Macs. It has no Linux host support and no egress policy.
 
 ## Agent sandboxes built on VMs
 
 ### Docker Sandboxes
 
-[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) run each agent in a micro-VM with its own kernel and its own Docker daemon, using a VMM Docker built for the purpose, through the `sbx` CLI. The workspace is synchronised into the sandbox at the same path. A host-side HTTP and HTTPS proxy applies allow and deny lists per sandbox, and credentials can be injected at that proxy so the sandbox never holds them. It supports many agents and is the closest product to jailoc in shape.
-
-The main differences are in the network model and the shares. Docker Sandboxes filter at the HTTP proxy by domain; jailoc filters every TCP and UDP flow by destination address, denies private and reserved networks regardless of names, filters DNS, and logs each connection with its SNI or HTTP host. jailoc shares host directories over virtio-fs with read-only shares enforced by the VMM, protects Git hooks and config, and builds workspace images from plain Dockerfiles.
+[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`) run each agent in a micro-VM with its own Docker daemon, sync the workspace in, and filter traffic through a host HTTP(S) proxy that can inject credentials. It is the closest product to jailoc. jailoc instead filters every TCP and UDP flow by destination address, denies private networks regardless of names, filters DNS, enforces read-only virtio-fs shares, protects Git hooks and builds images from plain Dockerfiles.
 
 ### microsandbox
 
-[microsandbox](https://github.com/superradcompany/microsandbox) runs OCI images in libkrun micro-VMs, like jailoc, and targets agents and untrusted code through SDKs and an MCP server. Its default network policy is close to jailoc's: public internet allowed, private, host-local, link-local and metadata destinations blocked, with DNS filtering, optional allowlists, and secret substitution at the network layer. It is a programmable sandbox for code an application sends to it, with snapshots and forks; jailoc is a workspace manager for interactive agent sessions against a developer's checkout, with persistent agent state, SSH sessions and per-workspace configuration.
+[microsandbox](https://github.com/superradcompany/microsandbox) also runs OCI images in libkrun VMs, with a similar default policy (public internet allowed, private and metadata destinations blocked, DNS filtering). It is an SDK sandbox for code an application sends it; jailoc manages interactive agent workspaces with persistent state and SSH sessions.
 
 ### Arrakis
 
-[Arrakis](https://github.com/abshkbh/arrakis) is a self-hosted micro-VM sandbox on Cloud Hypervisor with a REST API, a Python SDK, an MCP server and snapshots. It runs on Linux and documents no egress policy.
+[Arrakis](https://github.com/abshkbh/arrakis) is a self-hosted Linux micro-VM sandbox on Cloud Hypervisor with an API and MCP server, and no documented egress policy.
 
 ## Hosted sandboxes
 
-[E2B](https://e2b.dev) runs Firecracker micro-VMs, [Modal](https://modal.com) runs sandboxes under gVisor or in VMs, and [Daytona](https://www.daytona.io) offers container and VM sandboxes; each has network allowlists by IP range or domain. GitHub Codespaces runs Dev Containers in a cloud VM per codespace. Cloud sandboxes keep untrusted code entirely off the developer's machine, which is the strongest separation from the host. In exchange the code, and any credentials the agent needs, are sent to a third party, the sandbox reaches the internet from the provider's network rather than the developer's, and local tools, VPN-only services and the developer's checkout are not directly available.
+[E2B](https://e2b.dev), [Modal](https://modal.com), [Daytona](https://www.daytona.io) and GitHub Codespaces run sandboxes in the cloud, most with IP or domain allowlists. Nothing runs on the developer's machine, but code and credentials go to a third party, and local tools, VPN-only services and the local checkout are out of reach.
 
 ## Why a userspace broker instead of firewall rules
 
