@@ -241,6 +241,8 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
+github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f h1:9hiVElpCmKzsBKQHkBqZ8LGzt82iLfM8egxr4sew+Ys=
+github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f/go.mod h1:8/zr1Tv0+cKpVtGCEB/7YfRXr2TszsMxMXLaT8YuBgU=
 github.com/thejoeejoee/go-microvm v0.0.42-0.20261103225112-32f39314de8e h1:CVINOPBwyFnxDQ304f7bGysa6KmngQA5OBR+mJSbJaA=
 github.com/thejoeejoee/go-microvm v0.0.42-0.20261103225112-32f39314de8e/go.mod h1:qe+JDPzfKtm8PUWJglHBuNqcGw2So6Zs+sqOgnN0z48=
 github.com/tonistiigi/fsutil v0.0.0-20260819142231-83cac42c1c52 h1:SGUsSbltLA7/kcCcWVaw6FtqkwvOCM9Ypq0ZLtsVbUE=

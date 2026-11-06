@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/tailscale/hujson"
 )
 
 // openCode1Installs returns the npm plugins that OpenCode 1 installs before
@@ -171,7 +173,8 @@ func configPlugins(jsonc []byte) (specs []string, ok bool) {
 	var cfg struct {
 		Plugin []json.RawMessage `json:"plugin"`
 	}
-	if err := json.Unmarshal(stripJSONC(jsonc), &cfg); err != nil {
+	b, err := hujson.Standardize(jsonc)
+	if err != nil || json.Unmarshal(b, &cfg) != nil {
 		return nil, false
 	}
 	for _, raw := range cfg.Plugin {
@@ -233,66 +236,4 @@ func registryPlugin(spec string) (pkg, name string, ok bool) {
 		return name + "@latest", name, true
 	}
 	return spec, name, true
-}
-
-// stripJSONC removes the comments and trailing commas of JSONC, leaving
-// strings intact.
-func stripJSONC(b []byte) []byte {
-	out := make([]byte, 0, len(b))
-	for i := 0; i < len(b); i++ {
-		c := b[i]
-		switch {
-		case c == '"':
-			j := i + 1
-			for j < len(b) && b[j] != '"' {
-				if b[j] == '\\' {
-					j++
-				}
-				j++
-			}
-			j = min(j, len(b)-1)
-			out = append(out, b[i:j+1]...)
-			i = j
-		case c == '/' && i+1 < len(b) && b[i+1] == '/':
-			for i < len(b) && b[i] != '\n' {
-				i++
-			}
-			i--
-		case c == '/' && i+1 < len(b) && b[i+1] == '*':
-			end := strings.Index(string(b[i+2:]), "*/")
-			if end < 0 {
-				return out
-			}
-			i += end + 3
-		default:
-			out = append(out, c)
-		}
-	}
-	// Trailing commas: a comma followed by whitespace and a closing bracket.
-	res := make([]byte, 0, len(out))
-	inString := false
-	for i := 0; i < len(out); i++ {
-		c := out[i]
-		switch {
-		case inString:
-			if c == '\\' && i+1 < len(out) {
-				res = append(res, c, out[i+1])
-				i++
-				continue
-			}
-			inString = c != '"'
-		case c == '"':
-			inString = true
-		case c == ',':
-			j := i + 1
-			for j < len(out) && strings.IndexByte(" \t\r\n", out[j]) >= 0 {
-				j++
-			}
-			if j < len(out) && (out[j] == '}' || out[j] == ']') {
-				continue
-			}
-		}
-		res = append(res, c)
-	}
-	return res
 }

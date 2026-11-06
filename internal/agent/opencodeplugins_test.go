@@ -217,33 +217,6 @@ func TestOpenCode1Installs(t *testing.T) {
 	}
 }
 
-func TestStripJSONC(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"plain", `{"a": [1, 2]}`, `{"a": [1, 2]}`},
-		{"line comment", "{\"a\": 1 // one\n}", "{\"a\": 1 \n}"},
-		{"block comment", `{/* x */"a": 1}`, `{"a": 1}`},
-		{"comment markers in strings", `{"a": "//not /* a comment */"}`, `{"a": "//not /* a comment */"}`},
-		{"escaped quote", `{"a": "\"//x", "b": 1}`, `{"a": "\"//x", "b": 1}`},
-		{"trailing commas", "{\"a\": [1, 2,\n], }", "{\"a\": [1, 2\n] }"},
-		{"comma in string", `{"a": ",]"}`, `{"a": ",]"}`},
-		{"unterminated block comment", `{"a": 1 /* x`, `{"a": 1 `},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := string(stripJSONC([]byte(tt.in))); got != tt.want {
-				t.Errorf("stripJSONC(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestInstallsOnlyOpenCode1(t *testing.T) {
 	t.Parallel()
 

@@ -19,6 +19,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/spf13/cobra v1.10.2
 	github.com/stacklok/go-microvm v0.0.44
+	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
 	github.com/vishvananda/netlink v1.3.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
