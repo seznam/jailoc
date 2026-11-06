@@ -64,7 +64,7 @@ By default (`builder = "auto"`), images are built with the host Docker daemon wh
 
 ## Restarts and reloads
 
-A restart costs a VM boot and, after an image change, an export. Much of the configuration doesn't need one: `jailoc reload` applies network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets to the running VM. Changes to `cpu`, `memory`, `docker_disk`, `paths`, `mounts`, `enable_docker`, `protect_git` and the image need a restart.
+A restart costs a VM boot and, after an image change, an export. Much of the configuration doesn't need one: `jailoc reload` applies network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets to the running VM. Changes to `cpu`, `memory`, `docker_disk`, `paths`, `mounts`, `enable_docker`, `protect_git` and the image need a restart.
 
 ## Host processes
 

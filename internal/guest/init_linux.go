@@ -147,7 +147,7 @@ func Init(logger *slog.Logger) error {
 			return err
 		}
 	}
-	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots}); err != nil {
+	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, GPGAgent: cfg.GPGAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots}); err != nil {
 		return err
 	}
 
@@ -642,8 +642,10 @@ func newSSHServer(logger *slog.Logger, cfg *Config, acct account, env []string) 
 }
 
 // WriteSecrets stores the secrets payload read from r: file secrets in
-// SecretsDir and environment entries in EnvFile. It runs as the agent user.
-func WriteSecrets(r io.Reader) error {
+// SecretsDir and environment entries in EnvFile, and imports the forwarded
+// GPG public keys. It runs as the agent user. A failed key import is reported
+// on w and does not fail the delivery.
+func WriteSecrets(r io.Reader, w io.Writer) error {
 	var s Secrets
 	if err := json.NewDecoder(io.LimitReader(r, 16<<20)).Decode(&s); err != nil {
 		return fmt.Errorf("decode secrets: %w", err)
@@ -672,7 +674,28 @@ func WriteSecrets(r io.Reader) error {
 		b.WriteString(kv)
 		b.WriteByte('\n')
 	}
-	return writeAtomic(EnvFile, []byte(b.String()), 0o600)
+	if err := writeAtomic(EnvFile, []byte(b.String()), 0o600); err != nil {
+		return err
+	}
+	if len(s.GPGPublicKeys) > 0 {
+		importGPGKeys(s.GPGPublicKeys, w)
+	}
+	return nil
+}
+
+// importGPGKeys imports the public keys of the host's signing keys, so gpg in
+// the VM can find the keys whose secret parts the forwarded agent holds.
+func importGPGKeys(keys []byte, w io.Writer) {
+	gpg, err := exec.LookPath("gpg")
+	if err != nil {
+		_, _ = fmt.Fprintln(w, "gpg_agent: gpg is not installed in the workspace image; the public keys are not imported")
+		return
+	}
+	cmd := exec.Command(gpg, "--batch", "--quiet", "--no-autostart", "--import") //nolint:gosec // G204: gpg from PATH with fixed arguments
+	cmd.Stdin = strings.NewReader(string(keys))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_, _ = fmt.Fprintf(w, "gpg_agent: import the public keys: %v: %s\n", err, strings.TrimSpace(string(out)))
+	}
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {

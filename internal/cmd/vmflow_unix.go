@@ -460,6 +460,8 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	}
 	agent := vmSSHAgent(ws)
 	g.SSHAgent = agent != ""
+	gpgAgent := vmGPGAgent(ctx, ws)
+	g.GPGAgent = gpgAgent != ""
 	hostServices := vmHostServices(ws)
 	for _, s := range hostServices {
 		g.HostPorts = append(g.HostPorts, s.GuestPort)
@@ -483,6 +485,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Guest:        g,
 		Forwards:     vmForwards(ws.Ports),
 		SSHAgent:     agent,
+		GPGAgent:     gpgAgent,
 		HostServices: hostServices,
 	}
 	if ws.AgentProfile != nil {
@@ -552,6 +555,9 @@ func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec, p
 	if spec.SSHAgent != "" {
 		payload.Env = append(payload.Env, "SSH_AUTH_SOCK="+guest.SSHAgentSocket)
 	}
+	if spec.GPGAgent != "" {
+		payload.GPGPublicKeys = gpgPublicKeys(ctx)
+	}
 	if spec.Guest != nil && spec.Guest.CABundle != "" {
 		payload.Env = append(payload.Env, "NODE_USE_SYSTEM_CA=1")
 	}
@@ -594,7 +600,12 @@ func deliverSecrets(ctx context.Context, stateDir string, payload guest.Secrets)
 	var stderr strings.Builder
 	sess.Stderr = &stderr
 	if err := sess.Run(guest.BinaryPath + " secrets"); err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("%w: %s", err, escapeLines(strings.TrimSpace(stderr.String())))
+	}
+	// The guest writes stderr, so control characters are escaped before
+	// they reach the host terminal.
+	for line := range strings.Lines(strings.TrimSpace(stderr.String())) {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", escapeVisible(strings.TrimSpace(line)))
 	}
 	if err := os.WriteFile(secretsMarker(stateDir), nil, 0o600); err != nil {
 		return fmt.Errorf("record secrets delivery: %w", err)

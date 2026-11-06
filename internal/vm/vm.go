@@ -121,6 +121,8 @@ type Spec struct {
 	Docker bool `json:"docker,omitempty"`
 	// SSHAgent is the host SSH agent socket relayed into a workspace VM.
 	SSHAgent string `json:"ssh_agent,omitempty"`
+	// GPGAgent is the host gpg-agent extra socket relayed into a workspace VM.
+	GPGAgent string `json:"gpg_agent,omitempty"`
 	// HostServices are host loopback ports and unix sockets the broker
 	// relays to a workspace VM's gateway (host_ports).
 	HostServices []HostService `json:"host_services,omitempty"`
@@ -718,6 +720,9 @@ func WriteBrokerRuntime(spec Spec) error {
 	}
 	if spec.Kind == KindWorkspace && spec.SSHAgent != "" {
 		rt.Services = append(rt.Services, service{GuestPort: guest.SSHAgentPort, Path: spec.SSHAgent})
+	}
+	if spec.Kind == KindWorkspace && spec.GPGAgent != "" {
+		rt.Services = append(rt.Services, service{GuestPort: guest.GPGAgentPort, Path: spec.GPGAgent})
 	}
 	if spec.Kind == KindWorkspace {
 		for _, h := range spec.HostServices {

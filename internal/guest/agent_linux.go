@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -20,28 +21,61 @@ import (
 // The returned function stops serving, closes open connections and removes
 // the socket.
 func startAgentRelay(logger *slog.Logger, acct account) (func(), error) {
-	if err := os.Remove(SSHAgentSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("ssh agent: remove stale socket: %w", err)
+	return startSocketRelay(logger, acct, SSHAgentSocket, SSHAgentPort, "ssh agent")
+}
+
+// gpgAgentSocket is the socket gpg run by uid connects to: gpg prefers the
+// socket directory under /run/user/<uid> to ~/.gnupg when the former exists.
+func gpgAgentSocket(uid uint32) string {
+	return "/run/user/" + strconv.FormatUint(uint64(uid), 10) + "/gnupg/S.gpg-agent"
+}
+
+// startGPGAgentRelay serves the agent user's gpg agent socket and relays
+// every connection to the broker gateway, which forwards it to the host gpg
+// agent's extra socket. With the socket in place gpg never starts an agent
+// of its own in the guest.
+func startGPGAgentRelay(logger *slog.Logger, acct account) (func(), error) {
+	sock := gpgAgentSocket(acct.uid)
+	runtimeDir := filepath.Dir(filepath.Dir(sock))
+	if err := os.MkdirAll(filepath.Dir(runtimeDir), 0o755); err != nil { //nolint:gosec // G301: /run/user, like systemd-logind creates it
+		return nil, fmt.Errorf("gpg agent: create %s: %w", filepath.Dir(runtimeDir), err)
 	}
-	l, err := net.Listen("unix", SSHAgentSocket)
+	// gpg uses the directories only when the agent user owns them and
+	// nobody else can enter them.
+	for _, dir := range []string{runtimeDir, filepath.Dir(sock)} {
+		if err := ownedDir(dir, acct, 0o700); err != nil {
+			return nil, fmt.Errorf("gpg agent: %w", err)
+		}
+	}
+	return startSocketRelay(logger, acct, sock, GPGAgentPort, "gpg agent")
+}
+
+// startSocketRelay serves the unix socket sock for the agent user and relays
+// every connection to gateway port port. The returned function stops
+// serving, closes open connections and removes the socket.
+func startSocketRelay(logger *slog.Logger, acct account, sock string, port int, name string) (func(), error) {
+	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%s: remove stale socket: %w", name, err)
+	}
+	l, err := net.Listen("unix", sock)
 	if err != nil {
-		return nil, fmt.Errorf("ssh agent: listen: %w", err)
+		return nil, fmt.Errorf("%s: listen: %w", name, err)
 	}
-	if err := os.Chown(SSHAgentSocket, int(acct.uid), int(acct.gid)); err != nil {
+	if err := chown(sock, acct); err != nil {
 		_ = l.Close()
-		return nil, fmt.Errorf("ssh agent: chown socket: %w", err)
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	if err := os.Chmod(SSHAgentSocket, 0o600); err != nil {
+	if err := os.Chmod(sock, 0o600); err != nil {
 		_ = l.Close()
-		return nil, fmt.Errorf("ssh agent: chmod socket: %w", err)
+		return nil, fmt.Errorf("%s: chmod socket: %w", name, err)
 	}
-	upstream := net.JoinHostPort(topology.GatewayIP, strconv.Itoa(SSHAgentPort))
+	upstream := net.JoinHostPort(topology.GatewayIP, strconv.Itoa(port))
 	ctx, cancel := context.WithCancel(context.Background())
-	go serveRelay(ctx, logger, l, upstream, "ssh agent")
+	go serveRelay(ctx, logger, l, upstream, name)
 	return func() {
 		cancel()
 		_ = l.Close()
-		_ = os.Remove(SSHAgentSocket)
+		_ = os.Remove(sock)
 	}, nil
 }
 

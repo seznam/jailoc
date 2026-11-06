@@ -60,7 +60,7 @@ Guest IPv4 192.168.127.2/24 (gateway .1), IPv6 fd00:127::2/64. All traffic goes 
 - One file per package concern: `docker.go`, `workspace.go`, `config.go`
 - Separate files for distinct concerns within a package (e.g. `fetch.go` for HTTP fetching in `docker/`)
 - All packages under `internal/` — nothing exported
-- Prefer Go SDKs over `exec.Command` shellouts; shellouts are limited to the VM runner, broker process, guest-side tools, and host `/usr/bin/security` on macOS
+- Prefer Go SDKs over `exec.Command` shellouts; shellouts are limited to the VM runner, broker process, guest-side tools, host CLI tools without a Go SDK (`git`, `gpg`, `gpgconf`), and host `/usr/bin/security` on macOS
 - No external dependencies for stdlib-solvable problems (e.g. `net/http` for fetching, not a third-party client)
 
 ### Validation rules

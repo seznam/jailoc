@@ -1,6 +1,6 @@
 # How to pass through SSH and Git config
 
-This guide shows how to give the agent your SSH agent, Git configuration and SSH known hosts inside the workspace VM, for example to clone private repositories, push over SSH or sign commits.
+This guide shows how to give the agent your SSH agent, GPG agent, Git configuration and SSH known hosts inside the workspace VM, for example to clone private repositories, push over SSH or sign commits.
 
 ## Enable SSH agent forwarding
 
@@ -24,6 +24,30 @@ jailoc reload my-project
 
 !!! warning
     `SSH_AUTH_SOCK` is a reserved environment variable. Setting it in `env` or `env_file` fails validation. Use `ssh_auth_sock = true` instead.
+
+---
+
+## Enable GPG agent forwarding
+
+Set `gpg_agent = true` in `[defaults]` or in a workspace:
+
+```toml
+[workspaces.my-project]
+paths = ["~/projects/my-project"]
+gpg_agent = true
+```
+
+jailoc relays the extra socket of the host gpg-agent (`gpgconf --list-dirs agent-extra-socket`) into the VM at `/run/user/<uid>/gnupg/S.gpg-agent`, where `gpg` looks for its agent. If the host agent isn't running, jailoc starts it with `gpgconf --launch gpg-agent`. Secret keys stay on the host, and passphrase prompts appear on the host through its pinentry.
+
+When the VM starts and on every `jailoc reload`, jailoc imports public keys into the VM keyring: the key named by `user.signingKey` in your global Git config, or the public keys of all host secret keys when it is unset. With [Git configuration copying](#copy-your-git-configuration) on, `git commit -S` and `commit.gpgSign = true` sign with your key.
+
+The `gpg` binary must exist in the workspace image. The base image includes it.
+
+!!! warning
+    The forwarded agent signs and decrypts with any key it holds, for as long as forwarding is on. Passphrases cached by the host agent apply to requests from the VM too.
+
+!!! note
+    A `GNUPGHOME` set in `env` makes `gpg` look for its agent socket elsewhere, so the forwarded agent isn't found.
 
 ---
 

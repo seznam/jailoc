@@ -34,7 +34,7 @@ docs/
     custom-images.md               URL Dockerfile presets, local Dockerfiles, build context, isolated builds
     network-access.md              allowed_hosts, allowed_networks, filtered DNS, verifying rules
     secrets.md                     from_env / from_file / from_command secrets, rotation with reload
-    ssh-git-passthrough.md         SSH agent forwarding, Git config and known_hosts snapshots
+    ssh-git-passthrough.md         SSH and GPG agent forwarding, Git config and known_hosts snapshots
     sessions.md                    Start, attach, continue and list agent sessions; logs
     coding-agents.md               Choose the coding agent (agent, agents.<name>), several agents per project
     tui-plugin.md                  Workspace indicator in the agent UI

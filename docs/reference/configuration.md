@@ -92,6 +92,7 @@ Defaults applied to all workspaces.
 | `ports` | (int \| string)[] | `[]` | Guest ports published on host `127.0.0.1`. See [`ports`](#ports). |
 | `host_ports` | (int \| string)[] | `[]` | Host `127.0.0.1` ports or Unix sockets reachable from the guest. See [`host_ports`](#host_ports). |
 | `ssh_auth_sock` | bool | `false` | Relay the host SSH agent (`$SSH_AUTH_SOCK`) into the VM at `/run/ssh-agent.sock` and copy `~/.ssh/known_hosts` into it. |
+| `gpg_agent` | bool | `false` | Relay the host gpg-agent extra socket into the VM at `/run/user/<uid>/gnupg/S.gpg-agent` and import the public key of `user.signingKey`, or of all host secret keys when it is unset, into the VM keyring. Requires `gpg` in the image. |
 | `git_config` | bool | `true` | Copy the host Git configuration read-only into the VM: `~/.gitconfig`, `config`, `ignore` and `attributes` from `$XDG_CONFIG_HOME/git` (default `~/.config/git`), and the files they reference under the home directory. See [`git_config`](#git_config). |
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
@@ -147,7 +148,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `env` | string[] | `[]` | Overrides `[defaults].env` entries with the same key. |
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
-| `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `dns_upstream`, `dns_blocked_zones`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
+| `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `dns_upstream`, `dns_blocked_zones`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
 
 ### Example
 
@@ -336,7 +337,7 @@ Each entry makes a host service reachable from the guest:
 | `"8931:3845"` | 8931 | `127.0.0.1:3845` |
 | `"7100:/tmp/mcp.sock"` | 7100 | Unix socket `/tmp/mcp.sock` (absolute or `~/`) |
 
-Ports are 1 to 65535. A guest port may appear only once per list; a workspace entry replaces a `[defaults]` entry with the same guest port. Guest ports 22, 53, 2375 and 7022 are reserved.
+Ports are 1 to 65535. A guest port may appear only once per list; a workspace entry replaces a `[defaults]` entry with the same guest port. Guest ports 22, 53, 2375, 7022 and 7023 are reserved.
 
 Inside the guest each port is reachable on the gateway `192.168.127.1`, on the names `host.jailoc.internal` and `host.docker.internal`, and on `127.0.0.1` and `[::1]` when nothing in the guest already listens on that port. TCP targets are always host loopback. A Unix socket that does not exist yet produces a warning; connections fail until it exists.
 
@@ -440,7 +441,7 @@ The `opencode1` mount of `~/.omo` serves the OmO plugin (`oh-my-openagent`), whi
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 

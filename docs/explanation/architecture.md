@@ -81,7 +81,7 @@ Secrets never touch the root file system or a share. jailoc reads them on the ho
 
 The VM has exactly one network interface, and its only peer is the workspace's broker on the host. The broker runs a userspace TCP/IP stack (gVisor), serves DHCP, DNS and the host clock (SNTP) on the gateway, and checks every outgoing TCP connection and UDP flow against the workspace policy before it opens a host socket. See [Network Isolation](network-isolation.md).
 
-The broker also carries a few host services: the SSH and Docker sockets for jailoc, the host SSH agent when `ssh_auth_sock` is on (exposed in the guest as `/run/ssh-agent.sock`, keys never enter the VM), `ports`, which publish guest ports on host `127.0.0.1`, and `host_ports`, which relay guest connections on the gateway to host loopback ports or Unix sockets. jailoc-guest mirrors each `host_ports` entry on guest loopback and maps `host.jailoc.internal` and `host.docker.internal` to the gateway in `/etc/hosts`.
+The broker also carries a few host services: the SSH and Docker sockets for jailoc, the host SSH agent when `ssh_auth_sock` is on (exposed in the guest as `/run/ssh-agent.sock`, keys never enter the VM), the host gpg-agent extra socket when `gpg_agent` is on (exposed as `/run/user/<uid>/gnupg/S.gpg-agent`), `ports`, which publish guest ports on host `127.0.0.1`, and `host_ports`, which relay guest connections on the gateway to host loopback ports or Unix sockets. jailoc-guest mirrors each `host_ports` entry on guest loopback and maps `host.jailoc.internal` and `host.docker.internal` to the gateway in `/etc/hosts`.
 
 ## Trade-offs
 

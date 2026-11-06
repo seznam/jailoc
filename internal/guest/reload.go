@@ -9,6 +9,7 @@ type Reload struct {
 	Seq      int64  `json:"seq"`
 	CABundle string `json:"ca_bundle,omitempty"`
 	SSHAgent bool   `json:"ssh_agent,omitempty"`
+	GPGAgent bool   `json:"gpg_agent,omitempty"`
 	// HostPorts are the gateway ports mirrored on the guest loopback.
 	HostPorts []uint16 `json:"host_ports,omitempty"`
 	// Snapshots replace the bound snapshots when they differ from the

@@ -16,14 +16,15 @@ import (
 // workspace bundle can be applied on top of the original.
 const originalCA = "/run/jailoc-system-ca.crt"
 
-// liveState applies Reload requests: the CA bundle, the SSH agent relay, the
-// host port mirrors and the snapshot binds.
+// liveState applies Reload requests: the CA bundle, the SSH and gpg agent
+// relays, the host port mirrors and the snapshot binds.
 type liveState struct {
 	logger    *slog.Logger
 	acct      account
 	seq       int64
 	applied   Reload
 	stopAgent func()
+	stopGPG   func()
 	// hostPorts stop the loopback mirrors of host_ports, by port.
 	hostPorts map[uint16]func()
 	// snapshots are the bound snapshots, in bind order, and mounts the
@@ -53,6 +54,17 @@ func (l *liveState) apply(r Reload) error {
 	case !r.SSHAgent && l.stopAgent != nil:
 		l.stopAgent()
 		l.stopAgent = nil
+	}
+	switch {
+	case r.GPGAgent && l.stopGPG == nil:
+		stop, err := startGPGAgentRelay(l.logger, l.acct)
+		if err != nil {
+			return err
+		}
+		l.stopGPG = stop
+	case !r.GPGAgent && l.stopGPG != nil:
+		l.stopGPG()
+		l.stopGPG = nil
 	}
 	l.setHostPorts(r.HostPorts)
 	l.applied = r
@@ -104,7 +116,7 @@ func (l *liveState) poll() {
 		l.logger.Error("reload", "error", err)
 		done.Error = err.Error()
 	} else {
-		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots))
+		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "gpg_agent", r.GPGAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots))
 	}
 	out, _ := json.Marshal(done)
 	tmp := filepath.Join(ControlDir, ReloadDoneFile+".tmp")
