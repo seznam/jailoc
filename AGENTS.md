@@ -75,7 +75,7 @@ Guest IPv4 192.168.127.2/24 (gateway .1), IPv6 fd00:127::2/64. All traffic goes 
 - `docker.Dockerfile` — Docker layer stages (pinned, checksum-verified Docker CE, buildx, compose); jailoc appends the final stage and builds it on top of the base only for `enable_docker` workspaces
 - `tui-opencode1.js`, `tui-opencode2.js` — built TUI plugin JS for OpenCode 1 and 2 (from `plugin/opencode1.jsx`, `plugin/opencode2.jsx` via the Babel-based Solid transform in `plugin/build.mjs`)
 - `tui-plugin.json` — minimal package.json for the embedded TUI plugin
-- `omo.js` — OmO extension, `statusline.mjs` — Claude Code / Copilot CLI / Antigravity CLI status line script (workspace indicator, not built)
+- `omo.js` — OmO extension, `statusline.mjs` — Claude Code status line script (workspace indicator, not built)
 
 ### TUI plugin rebuild
 When `plugin/opencode1.jsx` or `plugin/opencode2.jsx` changes, rebuild and update the embedded copies:

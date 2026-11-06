@@ -278,6 +278,21 @@ func TestVMShares(t *testing.T) {
 	if b, _ := os.ReadFile(settings); !strings.Contains(string(b), `"mine"`) { //nolint:gosec // G304: test file
 		t.Fatalf("user status line replaced: %s", b)
 	}
+	// The script status line of an older jailoc gives way to the current one.
+	legacy, _ := json.Marshal(map[string]any{"statusLine": map[string]string{"type": "command", "command": scriptStatusLineCommand("copilot")}})
+	if err := os.WriteFile(settings, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	got = nil
+	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
+		t.Fatalf("read copilot settings: %q %v", b, err)
+	}
+	if line, _ := got["statusLine"].(map[string]any); line["command"] != workspaceStatusLineCommand {
+		t.Fatalf("legacy status line kept: %v", got)
+	}
 
 	// Antigravity CLI keeps its settings in a subdirectory, which a new
 	// state directory doesn't have yet.

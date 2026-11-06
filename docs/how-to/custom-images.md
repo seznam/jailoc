@@ -11,7 +11,7 @@ An image used directly (`image`) or built from a custom base Dockerfile (`[base]
 - a user `agent` with UID 1000 and home directory `/home/agent`;
 - `npm` on `PATH` (for Antigravity CLI: `curl`, `tar` and `sha256sum` on a glibc system) when jailoc installs the [coding agent](coding-agents.md) on top of a `[base] dockerfile`, or the agent binary (for example `opencode` or `claude`) on `PATH` in an image used directly;
 - `PATH` including `/home/agent/.local/bin`, and for OpenCode `/home/agent/.opencode/bin`;
-- `node` on `PATH` for the [workspace indicator](tui-plugin.md) of Claude Code, GitHub Copilot CLI and Antigravity CLI. Antigravity CLI is a native binary, so its image may lack Node.js; it then runs without the indicator;
+- `node` on `PATH` for the [workspace indicator](tui-plugin.md) of Claude Code; without it Claude Code runs without the indicator;
 - for Docker inside the VM, `apt-get` (or `nft` on `PATH`) when jailoc adds its Docker layer on top of a `[base] dockerfile`, or `dockerd` and `nftables` in an image used directly (see [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm)).
 
 !!! warning

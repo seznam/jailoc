@@ -111,7 +111,7 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 
 // addStatusLine sets the jailoc status line in the settings file of agent h
 // in its state directory dir inside root, unless the file sets a status
-// line. GitHub Copilot CLI and Antigravity CLI read the status line only
+// line other than the script status line of an older jailoc. GitHub Copilot CLI and Antigravity CLI read the status line only
 // from there. A failure leaves the agent without the indicator, so it is
 // only reported.
 func addStatusLine(root *os.Root, dir string, h agent.Harness) {
@@ -136,8 +136,11 @@ func setDefaultStatusLine(root *os.Root, file, harness string) error {
 			return fmt.Errorf("parse %s: %w", path.Base(file), err)
 		}
 	}
-	if _, ok := settings["statusLine"]; ok {
-		return nil
+	if old, ok := settings["statusLine"]; ok {
+		var line struct{ Command string }
+		if json.Unmarshal(old, &line) != nil || line.Command != scriptStatusLineCommand(harness) {
+			return nil
+		}
 	}
 	line, err := json.Marshal(statusLine(harness))
 	if err != nil {

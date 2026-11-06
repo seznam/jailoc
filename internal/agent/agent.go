@@ -72,7 +72,7 @@ func (p TUIPlugin) Args() []string {
 
 // SettingsFile returns the settings file of the agent, relative to its
 // state directory, to which jailoc adds the status line, and the harness
-// argument of the status line script. ok is false when jailoc doesn't
+// name of its status line command. ok is false when jailoc doesn't
 // edit the agent's settings.
 func (p TUIPlugin) SettingsFile() (file, harness string, ok bool) {
 	switch p {
