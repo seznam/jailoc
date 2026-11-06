@@ -18,31 +18,31 @@ No single alternative below meets all five out of the box. Some meet more of the
 
 ## Overview
 
-✅ meets jailoc's requirement · ⚠️ partly, or only with extra setup · ❌ does not
+✅ meets jailoc's requirement · ⚠️ partly, or only with extra setup · ❌ does not. In the License column: ✅ open source and free · ⚠️ mixed, or paid parts · ❌ proprietary
 
-| Tool | Boundary | Hosts | Egress control | Built for agents |
-|------|----------|-------|----------------|------------------|
-| **jailoc** | ✅ Hardware VM per workspace (libkrun) | macOS (Apple silicon), Linux (KVM) | ✅ Userspace broker on the host: IP policy, private networks denied, filtered DNS | ✅ |
-| Docker / Podman | ❌ Container, shared kernel | Linux; macOS and Windows through one Linux VM | ❌ Network on or off, custom networks | ❌ |
-| Dev Containers | ❌ Container, shared kernel | Wherever Docker runs | ⚠️ None in the spec; optional iptables script | ⚠️ Partly |
-| container-use | ❌ Container per agent branch | Wherever Docker runs | ❌ None | ✅ |
-| systemd-nspawn | ❌ Container, shared kernel | Linux | ❌ Network on, off, or a private veth | ❌ |
-| Toolbox, Distrobox | ❌ None (shares home, network, devices) | Linux | ❌ None | ❌ |
-| gVisor (`runsc`) | ⚠️ Userspace kernel | Linux | ❌ Host networking, no allowlist | ❌ |
-| Sysbox | ❌ Container with user namespace, shared kernel | Linux | ❌ Docker networking | ❌ |
-| Kata Containers | ✅ Hardware VM per pod | Linux (KVM) | ⚠️ CNI / Kubernetes network policy | ❌ |
-| bubblewrap, firejail, nsjail | ❌ Namespaces, seccomp | Linux | ❌ Network on or off | ❌ |
-| Landlock | ❌ Kernel access-control rules | Linux | ⚠️ TCP port rules | ❌ |
-| Seatbelt (`sandbox-exec`) | ❌ Kernel policy (MAC) | macOS | ⚠️ IP and port rules | ❌ |
-| Claude Code, Codex, Gemini CLI sandboxes | ❌ Seatbelt, bubblewrap, or a container | macOS, Linux (Windows for some) | ⚠️ Proxy with a domain allowlist (Claude Code, Codex) | ✅ |
-| Microsoft MXC | ⚠️ Per-OS backend (Seatbelt, bubblewrap, Windows containers, experimental micro-VM) | Windows, Linux, macOS | ⚠️ Policy-defined, backend-dependent | ✅ |
-| Firecracker, Cloud Hypervisor, QEMU `microvm` | ✅ Hardware VM | Linux (Cloud Hypervisor also Windows) | ❌ None; TAP and NAT are left to the user | ❌ |
-| Lima, Colima, OrbStack, Vagrant | ⚠️ General-purpose Linux VM, shared by projects | macOS, Linux | ❌ None beyond the VM's NAT | ❌ |
-| Incus, LXD | ⚠️ System container or full VM | Linux | ⚠️ Network ACLs by address, port and protocol | ❌ |
-| Apple `container` | ✅ Hardware VM per container | macOS (Apple silicon) | ❌ None | ❌ |
-| Docker Sandboxes (`sbx`) | ✅ Hardware VM per sandbox | macOS, Windows, Linux | ✅ HTTP(S) proxy with allow and deny lists | ✅ |
-| microsandbox | ✅ Hardware VM per sandbox (libkrun) | macOS (Apple silicon), Linux (KVM) | ✅ Private networks denied, allowlist, DNS filtering | ✅ |
-| E2B, Modal, Daytona, Codespaces | ✅ Hosted VM or container, off the developer's machine | Remote | ⚠️ IP, CIDR or domain allowlists (varies) | ⚠️ Mostly |
+| Tool | Boundary | Hosts | Egress control | Built for agents | License |
+|------|----------|-------|----------------|------------------|---------|
+| **jailoc** | ✅ Hardware VM per workspace (libkrun) | macOS (Apple silicon), Linux (KVM) | ✅ Userspace broker on the host: IP policy, private networks denied, filtered DNS | ✅ | ✅ MIT |
+| Docker / Podman | ❌ Container, shared kernel | Linux; macOS and Windows through one Linux VM | ❌ Network on or off, custom networks | ❌ | ⚠️ Engine and Podman Apache-2.0; Docker Desktop paid in larger companies |
+| Dev Containers | ❌ Container, shared kernel | Wherever Docker runs | ⚠️ None in the spec; optional iptables script | ⚠️ Partly | ⚠️ Spec and CLI MIT; VS Code extension proprietary |
+| container-use | ❌ Container per agent branch | Wherever Docker runs | ❌ None | ✅ | ✅ Apache-2.0 |
+| systemd-nspawn | ❌ Container, shared kernel | Linux | ❌ Network on, off, or a private veth | ❌ | ✅ LGPL-2.1 |
+| Toolbox, Distrobox | ❌ None (shares home, network, devices) | Linux | ❌ None | ❌ | ✅ Apache-2.0, GPL-3.0 |
+| gVisor (`runsc`) | ⚠️ Userspace kernel | Linux | ❌ Host networking, no allowlist | ❌ | ✅ Apache-2.0 |
+| Sysbox | ❌ Container with user namespace, shared kernel | Linux | ❌ Docker networking | ❌ | ✅ Apache-2.0 |
+| Kata Containers | ✅ Hardware VM per pod | Linux (KVM) | ⚠️ CNI / Kubernetes network policy | ❌ | ✅ Apache-2.0 |
+| bubblewrap, firejail, nsjail | ❌ Namespaces, seccomp | Linux | ❌ Network on or off | ❌ | ✅ LGPL-2.0, GPL-2.0, Apache-2.0 |
+| Landlock | ❌ Kernel access-control rules | Linux | ⚠️ TCP port rules | ❌ | ✅ GPL-2.0 (Linux kernel) |
+| Seatbelt (`sandbox-exec`) | ❌ Kernel policy (MAC) | macOS | ⚠️ IP and port rules | ❌ | ❌ Closed, part of macOS |
+| Claude Code, Codex, Gemini CLI sandboxes | ❌ Seatbelt, bubblewrap, or a container | macOS, Linux (Windows for some) | ⚠️ Proxy with a domain allowlist (Claude Code, Codex) | ✅ | ⚠️ Codex, Gemini CLI and Claude Code's sandbox runtime Apache-2.0; Claude Code proprietary |
+| Microsoft MXC | ⚠️ Per-OS backend (Seatbelt, bubblewrap, Windows containers, experimental micro-VM) | Windows, Linux, macOS | ⚠️ Policy-defined, backend-dependent | ✅ | ✅ MIT |
+| Firecracker, Cloud Hypervisor, QEMU `microvm` | ✅ Hardware VM | Linux (Cloud Hypervisor also Windows) | ❌ None; TAP and NAT are left to the user | ❌ | ✅ Apache-2.0, Apache-2.0/BSD-3, GPL-2.0 |
+| Lima, Colima, OrbStack, Vagrant | ⚠️ General-purpose Linux VM, shared by projects | macOS, Linux | ❌ None beyond the VM's NAT | ❌ | ⚠️ Lima Apache-2.0, Colima MIT; OrbStack proprietary, paid for commercial use; Vagrant BUSL-1.1 |
+| Incus, LXD | ⚠️ System container or full VM | Linux | ⚠️ Network ACLs by address, port and protocol | ❌ | ✅ Apache-2.0, AGPL-3.0 |
+| Apple `container` | ✅ Hardware VM per container | macOS (Apple silicon) | ❌ None | ❌ | ✅ Apache-2.0 |
+| Docker Sandboxes (`sbx`) | ✅ Hardware VM per sandbox | macOS, Windows, Linux | ✅ HTTP(S) proxy with allow and deny lists | ✅ | ❌ Proprietary; free locally, including commercial use; cloud and organization policies paid |
+| microsandbox | ✅ Hardware VM per sandbox (libkrun) | macOS (Apple silicon), Linux (KVM) | ✅ Private networks denied, allowlist, DNS filtering | ✅ | ✅ Apache-2.0 |
+| E2B, Modal, Daytona, Codespaces | ✅ Hosted VM or container, off the developer's machine | Remote | ⚠️ IP, CIDR or domain allowlists (varies) | ⚠️ Mostly | ⚠️ Paid services; E2B (Apache-2.0) and Daytona (AGPL-3.0) can be self-hosted |
 
 ## Containers
 
