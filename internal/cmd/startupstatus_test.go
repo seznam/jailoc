@@ -51,6 +51,14 @@ func TestStartupStatusWrite(t *testing.T) {
 		{name: "leaving the alternate screen", chunks: []string{alt, "\x1b[?1049l", "x", alt}, want: alt + draw + "\x1b[?1049lx" + alt},
 		{name: "reset before switching", chunks: []string{"\x1b[?1049l", alt, "x"}, want: "\x1b[?1049l" + alt + draw + erase + "x"},
 		{name: "passthrough after first frame", chunks: []string{alt, "x", "\x1b[2J", "y"}, want: alt + draw + erase + "x\x1b[2Jy"},
+		{name: "BEL inside a DCS string", chunks: []string{alt, "\x1bP+q\x07x\x1b\\", "y"}, want: alt + draw + "\x1bP+q\x07x\x1b\\" + draw + erase + "y"},
+		{name: "OSC ended by BEL", chunks: []string{alt, "\x1b]11;?\x07", "x"}, want: alt + draw + "\x1b]11;?\x07" + draw + erase + "x"},
+		{name: "DEC cursor save", chunks: []string{alt, "\x1b7\x1b[5;5H", "x"}, want: alt + draw + "\x1b7" + resetAttrs + "\x1b[12;1H\x1b[2K\x1b8" + "\x1b[5;5Hx"},
+		{name: "SCO cursor save", chunks: []string{alt, "\x1b[s\x1b[5;5H", "x"}, want: alt + draw + "\x1b[s" + "\x1b[12;1H\x1b[2K\x1b[u" + "\x1b[5;5Hx"},
+		{name: "cursor save split across chunks", chunks: []string{alt, "\x1b", "7x"}, want: alt + draw + "\x1b" + "7" + resetAttrs + "\x1b[12;1H\x1b[2K\x1b8" + "x"},
+		{name: "cursor save before drawing", chunks: []string{alt + "\x1b7", "x"}, want: alt + "\x1b7x"},
+		{name: "cursor save on the main screen", chunks: []string{"\x1b[s" + alt, "x"}, want: "\x1b[s" + alt + draw + erase + "x"},
+		{name: "CSI s with parameters", chunks: []string{alt, "\x1b[1;80s", "x"}, want: alt + draw + "\x1b[1;80s" + draw + erase + "x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

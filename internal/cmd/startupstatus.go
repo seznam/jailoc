@@ -19,10 +19,12 @@ import (
 // passes through unchanged, so terminal queries the agent sends while it
 // starts still reach the terminal; a spinner, the message and the time
 // elapsed are drawn in the middle of the screen after each chunk and on
-// every tick, until the agent prints visible text, then erased. Spaces do
-// not count as visible: full-screen agents often paint an empty frame of
-// spaces long before the first real one. Agents that never switch to the
-// alternate screen are left alone.
+// every tick, until the agent prints visible text or saves its cursor, then
+// erased. Spaces do not count as visible: full-screen agents often paint an
+// empty frame of spaces long before the first real one. The status line is
+// drawn between a cursor save and restore, so it stops once the agent saves
+// its own cursor on the alternate screen, which drawing would overwrite.
+// Agents that never switch to the alternate screen are left alone.
 type startupStatus struct {
 	w    io.Writer
 	size func() (cols, rows int)
@@ -35,6 +37,7 @@ type startupStatus struct {
 	row     int  // row the status line is drawn on, 0 if not drawn
 	alt     bool // the agent is on the alternate screen
 	state   escState
+	osc     bool   // the current string is an OSC string, which BEL ends
 	params  []byte // parameters of the current CSI sequence
 }
 
@@ -47,6 +50,17 @@ const (
 	escCSI                // ESC [
 	escString             // OSC, DCS, SOS, PM or APC string
 	escStringEnd          // ESC inside a string
+)
+
+// scanEvent is what one byte of agent output means for the status line.
+type scanEvent int
+
+const (
+	scanNone       scanEvent = iota
+	scanVisible              // a printable character outside escape sequences
+	scanAltChanged           // a switch to or from the alternate screen
+	scanSaveDEC              // ESC 7 (DECSC)
+	scanSaveSCO              // CSI s (SCOSC)
 )
 
 // maxCSIParams bounds the bytes kept from one CSI sequence; private mode
@@ -124,19 +138,28 @@ func (s *startupStatus) write(p []byte) error {
 		return err
 	}
 	for i, b := range p {
-		visible, altChanged := s.scan(b)
+		ev := s.scan(b)
 		switch {
-		case altChanged && !s.alt:
+		case ev == scanAltChanged && !s.alt:
 			// The agent left the alternate screen and the status with it.
 			s.pending = false
-		case visible && s.alt && s.row > 0:
+		case ev == scanVisible && s.alt && s.row > 0:
 			s.pending = false
 			_, err := s.w.Write(slices.Concat(p[:i], s.erase(), p[i:]))
 			return err
-		case visible:
+		case ev == scanVisible:
 			// The agent draws on the main screen, or on the alternate
 			// screen before the status line was drawn.
 			s.pending = false
+		case (ev == scanSaveDEC || ev == scanSaveSCO) && s.alt:
+			// Drawing saves and restores the cursor, which would overwrite
+			// the agent's save. Erase right after it, restoring what the
+			// agent saved.
+			s.pending = false
+			if s.row > 0 {
+				_, err := s.w.Write(slices.Concat(p[:i+1], s.eraseAfterSave(ev), p[i+1:]))
+				return err
+			}
 		}
 		if !s.pending {
 			_, err := s.w.Write(p)
@@ -179,6 +202,17 @@ func (s *startupStatus) erase() []byte {
 	return fmt.Appendf(nil, "\x1b7%s\x1b[%d;1H\x1b[2K\x1b8", resetAttrs, s.row)
 }
 
+// eraseAfterSave returns the bytes that erase the status line right after
+// the agent saved its cursor with save, ending in the matching restore so
+// the cursor goes back where the agent saved it. CSI s may save only the
+// position, so its variant leaves the attributes alone.
+func (s *startupStatus) eraseAfterSave(save scanEvent) []byte {
+	if save == scanSaveSCO {
+		return fmt.Appendf(nil, "\x1b[%d;1H\x1b[2K\x1b[u", s.row)
+	}
+	return fmt.Appendf(nil, "%s\x1b[%d;1H\x1b[2K\x1b8", resetAttrs, s.row)
+}
+
 // startupMessage returns the status shown while an agent titled title
 // starts: what it installs first, or starting.
 func startupMessage(starting, title string, st session.Started) string {
@@ -210,25 +244,29 @@ func startupLine(frame rune, msg string, seconds, cols int) string {
 	return prefix + msg + suffix
 }
 
-// scan feeds one byte of agent output through the escape sequence parser.
-// visible reports a printable character outside escape sequences; altChanged
-// reports that the byte switched to or from the alternate screen.
-func (s *startupStatus) scan(b byte) (visible, altChanged bool) {
+// scan feeds one byte of agent output through the escape sequence parser
+// and reports what it means for the status line.
+func (s *startupStatus) scan(b byte) scanEvent {
 	switch s.state {
 	case escGround:
 		if b == 0x1b {
 			s.state = escStart
-			return false, false
+			return scanNone
 		}
-		return b > 0x20 && b != 0x7f, false
+		if b > 0x20 && b != 0x7f {
+			return scanVisible
+		}
 	case escStart:
 		switch {
 		case b == '[':
 			s.state, s.params = escCSI, s.params[:0]
 		case b == ']' || b == 'P' || b == 'X' || b == '^' || b == '_':
-			s.state = escString
+			s.state, s.osc = escString, b == ']'
 		case b >= 0x20 && b <= 0x2f:
 			s.state = escInter
+		case b == '7':
+			s.state = escGround
+			return scanSaveDEC
 		default:
 			s.state = escGround
 		}
@@ -242,15 +280,16 @@ func (s *startupStatus) scan(b byte) (visible, altChanged bool) {
 			s.state = escStart
 		case b >= 0x40 && b <= 0x7e:
 			s.state = escGround
-			return false, s.csiFinal(b)
+			return s.csiFinal(b)
 		case len(s.params) < maxCSIParams:
 			s.params = append(s.params, b)
 		}
 	case escString:
-		switch b {
-		case 0x07:
+		switch {
+		case b == 0x07 && s.osc:
+			// BEL ends only OSC; DCS, SOS, PM and APC end with ST.
 			s.state = escGround
-		case 0x1b:
+		case b == 0x1b:
 			s.state = escStringEnd
 		}
 	case escStringEnd:
@@ -260,26 +299,32 @@ func (s *startupStatus) scan(b byte) (visible, altChanged bool) {
 			s.state = escString
 		}
 	}
-	return false, false
+	return scanNone
 }
 
-// csiFinal handles the final byte of a CSI sequence and reports whether it
-// switched to or from the alternate screen (private modes 47, 1047, 1049).
-func (s *startupStatus) csiFinal(final byte) bool {
+// csiFinal handles the final byte of a CSI sequence: a cursor save, or a
+// switch to or from the alternate screen (private modes 47, 1047, 1049).
+func (s *startupStatus) csiFinal(final byte) scanEvent {
+	if final == 's' && len(s.params) == 0 {
+		return scanSaveSCO
+	}
 	if final != 'h' && final != 'l' {
-		return false
+		return scanNone
 	}
 	modes, ok := strings.CutPrefix(string(s.params), "?")
 	if !ok {
-		return false
+		return scanNone
 	}
 	for mode := range strings.SplitSeq(modes, ";") {
 		if mode == "47" || mode == "1047" || mode == "1049" {
 			on := final == 'h'
 			changed := s.alt != on
 			s.alt = on
-			return changed
+			if changed {
+				return scanAltChanged
+			}
+			return scanNone
 		}
 	}
-	return false
+	return scanNone
 }
