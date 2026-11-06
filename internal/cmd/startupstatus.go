@@ -3,27 +3,37 @@
 package cmd
 
 import (
+	"fmt"
 	"io"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 )
 
 // startupStatus keeps a status line visible while a full-screen agent
 // starts. Such agents switch to the alternate screen long before they draw
 // their first frame, which would leave the terminal blank. Agent output
 // passes through unchanged, so terminal queries the agent sends while it
-// starts still reach the terminal; the status line is redrawn on the first
-// row after each chunk until the agent prints visible text, then erased.
-// Spaces do not count as visible: full-screen agents often paint an empty
-// frame of spaces long before the first real one. Agents that never switch
-// to the alternate screen are left alone.
+// starts still reach the terminal; a spinner, the message and the time
+// elapsed are drawn in the middle of the screen after each chunk and on
+// every tick, until the agent prints visible text, then erased. Spaces do
+// not count as visible: full-screen agents often paint an empty frame of
+// spaces long before the first real one. Agents that never switch to the
+// alternate screen are left alone.
 type startupStatus struct {
-	draw, erase []byte
-	pending     bool // the agent has not drawn anything visible yet
-	drawn       bool // the status line is on the alternate screen
-	alt         bool // the agent is on the alternate screen
-	state       escState
-	params      []byte // parameters of the current CSI sequence
+	w    io.Writer
+	size func() (cols, rows int)
+	now  func() time.Time
+
+	mu      sync.Mutex
+	msg     string
+	started time.Time
+	pending bool // the agent has not drawn anything visible yet
+	row     int  // row the status line is drawn on, 0 if not drawn
+	alt     bool // the agent is on the alternate screen
+	state   escState
+	params  []byte // parameters of the current CSI sequence
 }
 
 type escState int
@@ -41,27 +51,74 @@ const (
 // lists are short, longer sequences are never alternate screen switches.
 const maxCSIParams = 32
 
-// newStartupStatus returns a startupStatus that shows msg, truncated to
-// fit a terminal cols wide. The status is drawn with the cursor and
-// attributes saved and restored around it, so the agent's output is not
-// moved or restyled. Drawing and erasing keep the agent's current colors,
-// so the first row takes the background the agent paints the screen with.
-func newStartupStatus(msg string, cols int) *startupStatus {
-	if r := []rune(msg); cols > 1 && len(r) >= cols {
-		msg = string(r[:cols-2]) + "…"
-	}
-	return &startupStatus{
-		draw:    []byte("\x1b7\x1b[1;1H\x1b[22;23;24;25;27;28;29m\x1b[2K\x1b[2m" + msg + "\x1b8"),
-		erase:   []byte("\x1b7\x1b[1;1H\x1b[2K\x1b8"),
-		pending: true,
+// spinnerFrames are drawn one per spinnerInterval.
+var spinnerFrames = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+const spinnerInterval = 100 * time.Millisecond
+
+// resetAttrs turns off the text attributes that change how the status line
+// looks but keeps the agent's colors, so the status row takes the background
+// the agent paints the screen with.
+const resetAttrs = "\x1b[22;23;24;25;27;28;29m"
+
+// newStartupStatus returns a startupStatus that writes agent output to w
+// and passes it through until start is called. size reports the terminal
+// size the status line is centered in.
+func newStartupStatus(w io.Writer, size func() (cols, rows int)) *startupStatus {
+	return &startupStatus{w: w, size: size, now: time.Now}
+}
+
+// start shows msg until the agent draws on the alternate screen.
+func (s *startupStatus) start(msg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.msg, s.started, s.pending = msg, s.now(), true
+}
+
+// stop stops drawing the status line, leaving the screen to the agent.
+func (s *startupStatus) stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = false
+}
+
+// animate redraws the status line every spinnerInterval until it is no
+// longer needed.
+func (s *startupStatus) animate() {
+	t := time.NewTicker(spinnerInterval)
+	defer t.Stop()
+	for range t.C {
+		if !s.tick() {
+			return
+		}
 	}
 }
 
-// write writes p, agent output, to w and keeps the status line on the
-// alternate screen until the agent draws its first visible character.
-func (s *startupStatus) write(w io.Writer, p []byte) error {
+// tick redraws the status line and reports whether it is still shown.
+func (s *startupStatus) tick() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.pending {
-		_, err := w.Write(p)
+		return false
+	}
+	// Between chunks the agent may be inside an escape sequence; drawing
+	// there would corrupt it.
+	if s.alt && s.state == escGround {
+		if _, err := s.w.Write(s.draw()); err != nil {
+			s.pending = false
+			return false
+		}
+	}
+	return true
+}
+
+// write writes p, agent output, and keeps the status line on the alternate
+// screen until the agent draws its first visible character.
+func (s *startupStatus) write(p []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.pending {
+		_, err := s.w.Write(p)
 		return err
 	}
 	for i, b := range p {
@@ -70,9 +127,9 @@ func (s *startupStatus) write(w io.Writer, p []byte) error {
 		case altChanged && !s.alt:
 			// The agent left the alternate screen and the status with it.
 			s.pending = false
-		case visible && s.alt && s.drawn:
+		case visible && s.alt && s.row > 0:
 			s.pending = false
-			_, err := w.Write(slices.Concat(p[:i], s.erase, p[i:]))
+			_, err := s.w.Write(slices.Concat(p[:i], s.erase(), p[i:]))
 			return err
 		case visible:
 			// The agent draws on the main screen, or on the alternate
@@ -80,17 +137,57 @@ func (s *startupStatus) write(w io.Writer, p []byte) error {
 			s.pending = false
 		}
 		if !s.pending {
-			_, err := w.Write(p)
+			_, err := s.w.Write(p)
 			return err
 		}
 	}
 	// Drawing inside an escape sequence the chunk ends in would corrupt it;
-	// the next chunk draws the status instead.
+	// the next chunk or tick draws the status instead.
 	if s.alt && s.state == escGround {
-		p, s.drawn = slices.Concat(p, s.draw), true
+		p = slices.Concat(p, s.draw())
 	}
-	_, err := w.Write(p)
+	_, err := s.w.Write(p)
 	return err
+}
+
+// draw returns the bytes that draw the status line centered on the screen,
+// with the cursor and attributes saved and restored around it, so the
+// agent's output is not moved or restyled. A line drawn on another row
+// before the terminal was resized is erased.
+func (s *startupStatus) draw() []byte {
+	cols, rows := s.size()
+	elapsed := s.now().Sub(s.started)
+	frame := spinnerFrames[int(elapsed/spinnerInterval)%len(spinnerFrames)]
+	line := startupLine(frame, s.msg, int(elapsed/time.Second), cols)
+	row := max(1, (rows+1)/2)
+	col := max(1, (cols-len([]rune(line)))/2+1)
+
+	var b strings.Builder
+	b.WriteString("\x1b7" + resetAttrs)
+	if s.row > 0 && s.row != row {
+		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K", s.row)
+	}
+	fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K\x1b[%d;%dH\x1b[2m%s\x1b8", row, row, col, line)
+	s.row = row
+	return []byte(b.String())
+}
+
+// erase returns the bytes that erase the status line.
+func (s *startupStatus) erase() []byte {
+	return fmt.Appendf(nil, "\x1b7%s\x1b[%d;1H\x1b[2K\x1b8", resetAttrs, s.row)
+}
+
+// startupLine returns the spinner frame, msg and seconds elapsed as one line,
+// with msg truncated so the line fits a terminal cols wide.
+func startupLine(frame rune, msg string, seconds, cols int) string {
+	prefix, suffix := string(frame)+" ", fmt.Sprintf(" %ds", seconds)
+	if r, avail := []rune(msg), cols-1-len([]rune(prefix))-len(suffix); cols > 0 && len(r) > avail {
+		msg = ""
+		if avail > 1 {
+			msg = string(r[:avail-1]) + "…"
+		}
+	}
+	return prefix + msg + suffix
 }
 
 // scan feeds one byte of agent output through the escape sequence parser.

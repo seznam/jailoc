@@ -4,17 +4,26 @@ package cmd
 
 import (
 	"bytes"
-	"strings"
 	"testing"
+	"time"
 )
+
+// testStatus returns a started startupStatus showing "S" in an 80x24
+// terminal, with a clock the test controls.
+func testStatus(out *bytes.Buffer, now *time.Time, size *[2]int) *startupStatus {
+	s := newStartupStatus(out, func() (int, int) { return size[0], size[1] })
+	s.now = func() time.Time { return *now }
+	s.start("S")
+	return s
+}
 
 func TestStartupStatusWrite(t *testing.T) {
 	t.Parallel()
 
 	const (
 		alt   = "\x1b[?1049h"
-		draw  = "\x1b7\x1b[1;1H\x1b[22;23;24;25;27;28;29m\x1b[2K\x1b[2mS\x1b8"
-		erase = "\x1b7\x1b[1;1H\x1b[2K\x1b8"
+		draw  = "\x1b7" + resetAttrs + "\x1b[12;1H\x1b[2K\x1b[12;38H\x1b[2m⠋ S 0s\x1b8"
+		erase = "\x1b7" + resetAttrs + "\x1b[12;1H\x1b[2K\x1b8"
 	)
 	tests := []struct {
 		name   string
@@ -46,9 +55,10 @@ func TestStartupStatusWrite(t *testing.T) {
 			t.Parallel()
 
 			var out bytes.Buffer
-			s := newStartupStatus("S", 80)
+			now, size := time.Unix(0, 0), [2]int{80, 24}
+			s := testStatus(&out, &now, &size)
 			for _, c := range tt.chunks {
-				if err := s.write(&out, []byte(c)); err != nil {
+				if err := s.write([]byte(c)); err != nil {
 					t.Fatalf("write(%q): %v", c, err)
 				}
 			}
@@ -59,7 +69,75 @@ func TestStartupStatusWrite(t *testing.T) {
 	}
 }
 
-func TestNewStartupStatusTruncates(t *testing.T) {
+func TestStartupStatusPassthroughBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := newStartupStatus(&out, func() (int, int) { return 80, 24 })
+	for _, c := range []string{"\x1b[?1049h", "\x1b[2J"} {
+		if err := s.write([]byte(c)); err != nil {
+			t.Fatalf("write(%q): %v", c, err)
+		}
+	}
+	if s.tick() {
+		t.Error("tick() = true before start, want false")
+	}
+	if got, want := out.String(), "\x1b[?1049h\x1b[2J"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+func TestStartupStatusTick(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	now, size := time.Unix(0, 0), [2]int{80, 24}
+	s := testStatus(&out, &now, &size)
+
+	steps := []struct {
+		name  string
+		do    func()
+		want  string
+		shown bool
+	}{
+		{name: "main screen", do: func() {}, want: "", shown: true},
+		{name: "inside an escape sequence", do: func() { _ = s.write([]byte("\x1b[?1049h\x1b[")); out.Reset() }, want: "", shown: true},
+		{name: "spinner and elapsed time advance", do: func() { _ = s.write([]byte("H")); out.Reset(); now = now.Add(1200 * time.Millisecond) }, want: "\x1b7" + resetAttrs + "\x1b[12;1H\x1b[2K\x1b[12;38H\x1b[2m⠹ S 1s\x1b8", shown: true},
+		{name: "resize erases the old row", do: func() { size = [2]int{40, 10} }, want: "\x1b7" + resetAttrs + "\x1b[12;1H\x1b[2K\x1b[5;1H\x1b[2K\x1b[5;18H\x1b[2m⠹ S 1s\x1b8", shown: true},
+		{name: "after the agent draws", do: func() { _ = s.write([]byte("x")); out.Reset() }, want: "", shown: false},
+	}
+	for _, st := range steps {
+		st.do()
+		if shown := s.tick(); shown != st.shown {
+			t.Errorf("%s: tick() = %v, want %v", st.name, shown, st.shown)
+		}
+		if got := out.String(); got != st.want {
+			t.Errorf("%s: output = %q, want %q", st.name, got, st.want)
+		}
+		out.Reset()
+	}
+}
+
+func TestStartupStatusStop(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	now, size := time.Unix(0, 0), [2]int{80, 24}
+	s := testStatus(&out, &now, &size)
+	if err := s.write([]byte("\x1b[?1049h")); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	s.stop()
+	if s.tick() {
+		t.Error("tick() = true after stop, want false")
+	}
+	if out.Len() != 0 {
+		t.Errorf("output after stop = %q, want none", out.String())
+	}
+}
+
+func TestStartupLine(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -67,17 +145,17 @@ func TestNewStartupStatusTruncates(t *testing.T) {
 		cols int
 		want string
 	}{
-		{name: "fits", cols: 80, want: "Starting OpenCode…"},
-		{name: "too wide", cols: 10, want: "Starting…"},
-		{name: "unknown width", cols: 0, want: "Starting OpenCode…"},
+		{name: "fits", cols: 80, want: "⠋ Starting OpenCode… 12s"},
+		{name: "too wide", cols: 16, want: "⠋ Starting… 12s"},
+		{name: "no room for the message", cols: 8, want: "⠋  12s"},
+		{name: "unknown width", cols: 0, want: "⠋ Starting OpenCode… 12s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			draw := string(newStartupStatus("Starting OpenCode…", tt.cols).draw)
-			if !strings.Contains(draw, "\x1b[2m"+tt.want+"\x1b8") {
-				t.Errorf("draw = %q, want message %q", draw, tt.want)
+			if got := startupLine('⠋', "Starting OpenCode…", 12, tt.cols); got != tt.want {
+				t.Errorf("startupLine() = %q, want %q", got, tt.want)
 			}
 		})
 	}
