@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/guest/session"
 )
 
@@ -19,13 +20,15 @@ const SessionsDir = "/run/jailoc/sessions"
 
 // Session runs the "session" subcommand of jailoc-guest:
 //
-//	session open [--new] [--id ID] [--rows N --cols N] [-C DIR] [-e K=V]... -- CMD...
+//	session open [--new] [--id ID] [--agent NAME] [--rows N --cols N] [-C DIR] [-e K=V]... -- CMD...
 //	session list
 //	session stop ID
 //	session serve ID
 //
 // open attaches stdin and stdout, which carry the session frame protocol,
-// to the session started in DIR (or ID), creating one when none runs.
+// to the session started in DIR (or ID), creating one when none runs. When
+// it creates one, it reports what the harness NAME installs before it
+// starts.
 func Session(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("session: missing subcommand")
@@ -68,6 +71,7 @@ func openSession(self string, args []string, stdin io.Reader, stdout io.Writer) 
 	fs := flag.NewFlagSet("session open", flag.ContinueOnError)
 	newSession := fs.Bool("new", false, "always start a new session")
 	id := fs.String("id", "", "attach to this session")
+	agentName := fs.String("agent", "", "harness of the command")
 	dir := fs.String("C", "", "working directory")
 	rows := fs.Uint("rows", 24, "initial rows")
 	cols := fs.Uint("cols", 80, "initial columns")
@@ -90,6 +94,8 @@ func openSession(self string, args []string, stdin io.Reader, stdout io.Writer) 
 			Name: strings.Join(cmd, " "), Dir: *dir, Argv: argv, Env: os.Environ(),
 			Rows: uint16(min(*rows, 0xffff)), Cols: uint16(min(*cols, 0xffff)), //nolint:gosec // G115: clamped
 		}
+		// Before the agent starts, which may install them.
+		started := startedPayload(*agentName, env, *dir)
 		holder := []string{self, "session", "serve"}
 		var err error
 		created := true
@@ -105,7 +111,7 @@ func openSession(self string, args []string, stdin io.Reader, stdout io.Writer) 
 			return err
 		}
 		if created {
-			if err := session.WriteFrame(stdout, session.Frame{Type: session.FrameStarted}); err != nil {
+			if err := session.WriteFrame(stdout, session.Frame{Type: session.FrameStarted, Payload: started}); err != nil {
 				return err
 			}
 		}
@@ -116,6 +122,28 @@ func openSession(self string, args []string, stdin io.Reader, stdout io.Writer) 
 	}
 	return session.Attach(SessionsDir, *id, stdin, stdout)
 }
+
+// startedPayload returns the payload of FrameStarted for a session of the
+// harness name: what it installs before it starts, or nothing.
+func startedPayload(name string, extraEnv []string, dir string) []byte {
+	h, ok := agent.Lookup(name)
+	if !ok || h.Installs == nil {
+		return nil
+	}
+	installs := h.Installs(programEnv(extraEnv), dir)
+	if len(installs) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(session.Started{Install: installs})
+	if err != nil || len(b) > maxStartedPayload {
+		return nil
+	}
+	return b
+}
+
+// maxStartedPayload bounds the FrameStarted payload: a hint is not worth
+// failing the session over.
+const maxStartedPayload = 16 << 10
 
 type multiFlag []string
 

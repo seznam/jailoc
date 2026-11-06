@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 )
 
@@ -68,6 +69,28 @@ func TestModeTracker(t *testing.T) {
 			}
 			if got := string(tr.Replay()); got != tt.want {
 				t.Fatalf("Replay() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseStarted(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		payload string
+		want    []string
+	}{
+		{"empty from older guests", "", nil},
+		{"installs", `{"install":["a@1","b@latest"]}`, []string{"a@1", "b@latest"}},
+		{"invalid", `{"install":"a"}`, nil},
+		{"unknown fields", `{"other":1}`, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ParseStarted([]byte(tt.payload)).Install; !slices.Equal(got, tt.want) {
+				t.Errorf("ParseStarted(%q).Install = %q, want %q", tt.payload, got, tt.want)
 			}
 		})
 	}

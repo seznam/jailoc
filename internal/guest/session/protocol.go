@@ -14,6 +14,7 @@ package session
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +23,8 @@ import (
 // Frame types. Client to holder: Hello, Data, Resize. Holder to client:
 // Data, Exit, Kicked. Info carries the session ID from the guest's session
 // command to the client before the holder's stream starts; Started follows
-// it when the command started a new session.
+// it when the command started a new session, with an optional JSON Started
+// payload.
 const (
 	FrameInfo    byte = 'I'
 	FrameStarted byte = 'S'
@@ -34,6 +36,22 @@ const (
 )
 
 const maxFrame = 1 << 20
+
+// Started is the payload of FrameStarted.
+type Started struct {
+	// Install are the packages the agent installs before it starts.
+	Install []string `json:"install,omitempty"`
+}
+
+// ParseStarted decodes a FrameStarted payload. An empty or invalid payload,
+// as older guests send, is a Started without details.
+func ParseStarted(p []byte) Started {
+	var s Started
+	if len(p) > 0 && json.Unmarshal(p, &s) != nil {
+		return Started{}
+	}
+	return s
+}
 
 // Frame is one protocol message.
 type Frame struct {

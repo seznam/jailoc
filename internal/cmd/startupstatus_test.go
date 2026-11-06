@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"testing"
 	"time"
+
+	"github.com/seznam/jailoc/internal/guest/session"
 )
 
 // testStatus returns a started startupStatus showing "S" in an 80x24
@@ -156,6 +158,29 @@ func TestStartupLine(t *testing.T) {
 
 			if got := startupLine('⠋', "Starting OpenCode…", 12, tt.cols); got != tt.want {
 				t.Errorf("startupLine() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStartupMessage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		install []string
+		want    string
+	}{
+		{"nothing to install", nil, "Starting OpenCode 1 in workspace w…"},
+		{"one plugin", []string{"oh-my-openagent@5.1.48"}, "Installing oh-my-openagent@5.1.48 for OpenCode 1…"},
+		{"several plugins", []string{"a@1", "b@latest"}, "Installing 2 plugins for OpenCode 1: a@1, b@latest…"},
+		{"control characters", []string{"a\x1b[2J"}, `Installing a\x1b[2J for OpenCode 1…`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := startupMessage("Starting OpenCode 1 in workspace w…", "OpenCode 1", session.Started{Install: tt.install})
+			if got != tt.want {
+				t.Errorf("startupMessage() = %q, want %q", got, tt.want)
 			}
 		})
 	}

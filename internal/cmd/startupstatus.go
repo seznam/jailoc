@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/seznam/jailoc/internal/guest/session"
 )
 
 // startupStatus keeps a status line visible while a full-screen agent
@@ -175,6 +177,24 @@ func (s *startupStatus) draw() []byte {
 // erase returns the bytes that erase the status line.
 func (s *startupStatus) erase() []byte {
 	return fmt.Appendf(nil, "\x1b7%s\x1b[%d;1H\x1b[2K\x1b8", resetAttrs, s.row)
+}
+
+// startupMessage returns the status shown while an agent titled title
+// starts: what it installs first, or starting.
+func startupMessage(starting, title string, st session.Started) string {
+	// The names come from the guest: keep them from controlling the terminal.
+	installs := make([]string, len(st.Install))
+	for i, pkg := range st.Install {
+		installs[i] = escapeVisible(pkg)
+	}
+	switch len(installs) {
+	case 0:
+		return starting
+	case 1:
+		return fmt.Sprintf("Installing %s for %s…", installs[0], title)
+	default:
+		return fmt.Sprintf("Installing %d plugins for %s: %s…", len(installs), title, strings.Join(installs, ", "))
+	}
 }
 
 // startupLine returns the spinner frame, msg and seconds elapsed as one line,
