@@ -14,7 +14,9 @@ import (
 // passes through unchanged, so terminal queries the agent sends while it
 // starts still reach the terminal; the status line is redrawn on the first
 // row after each chunk until the agent prints visible text, then erased.
-// Agents that never switch to the alternate screen are left alone.
+// Spaces do not count as visible: full-screen agents often paint an empty
+// frame of spaces long before the first real one. Agents that never switch
+// to the alternate screen are left alone.
 type startupStatus struct {
 	draw, erase []byte
 	pending     bool // the agent has not drawn anything visible yet
@@ -42,14 +44,15 @@ const maxCSIParams = 32
 // newStartupStatus returns a startupStatus that shows msg, truncated to
 // fit a terminal cols wide. The status is drawn with the cursor and
 // attributes saved and restored around it, so the agent's output is not
-// moved or restyled.
+// moved or restyled. Drawing and erasing keep the agent's current colors,
+// so the first row takes the background the agent paints the screen with.
 func newStartupStatus(msg string, cols int) *startupStatus {
 	if r := []rune(msg); cols > 1 && len(r) >= cols {
 		msg = string(r[:cols-2]) + "…"
 	}
 	return &startupStatus{
-		draw:    []byte("\x1b7\x1b[0m\x1b[1;1H\x1b[2K\x1b[2m" + msg + "\x1b8"),
-		erase:   []byte("\x1b7\x1b[0m\x1b[1;1H\x1b[2K\x1b8"),
+		draw:    []byte("\x1b7\x1b[1;1H\x1b[22;23;24;25;27;28;29m\x1b[2K\x1b[2m" + msg + "\x1b8"),
+		erase:   []byte("\x1b7\x1b[1;1H\x1b[2K\x1b8"),
 		pending: true,
 	}
 }
@@ -81,7 +84,9 @@ func (s *startupStatus) write(w io.Writer, p []byte) error {
 			return err
 		}
 	}
-	if s.alt {
+	// Drawing inside an escape sequence the chunk ends in would corrupt it;
+	// the next chunk draws the status instead.
+	if s.alt && s.state == escGround {
 		p, s.drawn = slices.Concat(p, s.draw), true
 	}
 	_, err := w.Write(p)
@@ -98,7 +103,7 @@ func (s *startupStatus) scan(b byte) (visible, altChanged bool) {
 			s.state = escStart
 			return false, false
 		}
-		return b >= 0x20 && b != 0x7f, false
+		return b > 0x20 && b != 0x7f, false
 	case escStart:
 		switch {
 		case b == '[':
