@@ -92,7 +92,7 @@ Defaults applied to all workspaces.
 | `ports` | (int \| string)[] | `[]` | Guest ports published on host `127.0.0.1`. See [`ports`](#ports). |
 | `host_ports` | (int \| string)[] | `[]` | Host `127.0.0.1` ports or Unix sockets reachable from the guest. See [`host_ports`](#host_ports). |
 | `ssh_auth_sock` | bool | `false` | Relay the host SSH agent (`$SSH_AUTH_SOCK`) into the VM at `/run/ssh-agent.sock` and copy `~/.ssh/known_hosts` into it. |
-| `git_config` | bool | `true` | Copy the host Git configuration (`~/.gitconfig` or `~/.config/git/config`) read-only to `/home/agent/.gitconfig`. |
+| `git_config` | bool | `true` | Copy the host Git configuration read-only into the VM: `~/.gitconfig`, `config`, `ignore` and `attributes` from `$XDG_CONFIG_HOME/git` (default `~/.config/git`), and the files they reference under the home directory. See [`git_config`](#git_config). |
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
@@ -294,7 +294,7 @@ Each path is a separate virtio-fs share. A VM boots with at most 11 shares on li
 Format: `host:container[:mode]`, mode `ro` or `rw` (default `rw`). Mounts are virtio-fs directory shares.
 
 - `host`: absolute or `~` path. Must be a directory; a file mount fails at `jailoc up`. Use [`snapshots`](#snapshots) for files. An empty host (`":/home/agent/.agents"`) removes an inherited mount with that destination.
-- `container`: absolute after `~` expansion. Rejected when equal to or under `/`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. Destinations under `/home/agent/...` are allowed.
+- `container`: absolute, or `~/...`, where `~` stands for the guest home `/home/agent`. Rejected when equal to or under `/`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. Destinations under `/home/agent/...` are allowed.
 
 Host paths equal to or under these entries are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`.
 
@@ -303,6 +303,25 @@ Host paths equal to or under these entries are rejected: `/`, `/boot`, `/dev`, `
 Format: `host:container`, optionally `:ro`; `:rw` is rejected because snapshots are read-only. Host and destination rules are the same as for `mounts`, except that the host may be a file or a directory. An empty host removes an inherited snapshot.
 
 jailoc copies the sources when the VM starts and again on every `jailoc reload`, which also applies added and removed entries. At `jailoc up` and `jailoc reload`, the destination must not equal, contain or lie inside a shared path (workspace `paths`, `mounts` destinations, the persistent home directories), and the source must exist. A symlink given as the source root is resolved; symlinks inside a copied directory are copied unchanged.
+
+### `git_config`
+
+When `true`, jailoc adds read-only snapshots of the host Git configuration at `jailoc up` and `jailoc reload`:
+
+| Host | Guest |
+|---|---|
+| `~/.gitconfig` | `/home/agent/.gitconfig` |
+| `$XDG_CONFIG_HOME/git/config` | `/home/agent/.config/git/config` |
+| `$XDG_CONFIG_HOME/git/ignore` | `/home/agent/.config/git/ignore` |
+| `$XDG_CONFIG_HOME/git/attributes` | `/home/agent/.config/git/attributes` |
+
+`$XDG_CONFIG_HOME` defaults to `~/.config`. Missing files are skipped. Other files in the directory are not copied. The Git credential stores `~/.git-credentials`, `$XDG_CONFIG_HOME/git/credentials` and `~/.config/git/credentials` are never copied, whichever path or link names them.
+
+Files referenced by the copied configuration files are copied to the same path relative to `/home/agent` when they lie under the host home directory: `include.path` and `includeIf.<condition>.path` (followed recursively, relative paths resolved against the including file; the included file must stay under the home directory or `$XDG_CONFIG_HOME`), `core.excludesFile`, `core.attributesFile`, `commit.template`, `gpg.ssh.allowedSignersFile`, and `user.signingKey` when its value is a path. The home directory check uses the path as written, so a symlink under the home directory may point elsewhere, such as a dotfiles checkout or the Nix store. The credential checks apply to both the path as written and the file it resolves to, including hard links to files in `~/.ssh`, `~/.gnupg` and `~/.aws` and in the directories symlinks there point to, and the copy holds the content that was checked. A referenced file that is missing, outside the home directory, not a regular file of at most 1 MiB, a Git credential store, in `~/.ssh`, `~/.gnupg` or `~/.aws`, or whose path in the VM is already taken by a different file is not copied and produces a warning. `gpg.ssh.allowedSignersFile` and `user.signingKey` are exceptions to the directory rule but copy public data only: the `user.signingKey` copy holds the first SSH public key in the file, and the `gpg.ssh.allowedSignersFile` copy holds its signer lines (principals, the `cert-authority`, `namespaces`, `valid-after` and `valid-before` options, and the public key) without comments. A `user.signingKey` file without an SSH public key, or an allowed signers file with any other line, is not copied and produces a warning. At most 256 configuration files are read.
+
+Configuration files are copied with two rewrites: values of the path variables above that lie under the host home directory become `~/...`, and `includeIf "gitdir:~/..."` and `includeIf "gitdir/i:~/..."` conditions use the host home directory, which workspace paths keep inside the VM.
+
+Each copy is a default snapshot: a [`snapshots`](#snapshots) entry with the same destination replaces it, an entry with an empty host removes it, and a directory snapshot that contains its destination replaces it.
 
 ### `ports`
 
@@ -416,7 +435,7 @@ Environment variables merge in this order, later wins per key:
 
 The `opencode1` mount of `~/.omo` serves the OmO plugin (`oh-my-openagent`), which writes its configuration, state and lock files there. It gives every OpenCode 1 workspace write access to the host's `~/.omo`. Make it read-only with `[defaults.agents.opencode1] mounts = ["~/.omo:/home/agent/.omo:ro"]`, or remove it with `mounts = [":/home/agent/.omo"]`; with the mount removed, `~/.omo` lives in the VM root filesystem and is lost on restart.
 
-`snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config` adds a lowest-priority snapshot of `/home/agent/.gitconfig`, which a `snapshots` entry for that destination replaces or, with an empty host, removes.
+`snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config` and `ssh_auth_sock` add lowest-priority snapshots (the [Git configuration files](#git_config), `/home/agent/.ssh/known_hosts`), which a `snapshots` entry for the same destination replaces or, with an empty host, removes.
 
 `ports` merges by host port; the workspace entry wins. `host_ports` merges by guest port; the workspace entry wins.
 

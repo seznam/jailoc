@@ -2070,6 +2070,20 @@ func TestParseMountValid(t *testing.T) {
 			container: "/home/agent/.config/oc",
 			mode:      "ro",
 		},
+		{
+			name:      "tilde container expands to guest home",
+			spec:      "~/.config/oc:~/.config/oc:ro",
+			host:      "~/.config/oc",
+			container: "/home/agent/.config/oc",
+			mode:      "ro",
+		},
+		{
+			name:      "removal tilde container",
+			spec:      ":~/.config/oc",
+			host:      "",
+			container: "/home/agent/.config/oc",
+			mode:      "rw",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2098,6 +2112,7 @@ func TestParseMountInvalid(t *testing.T) {
 		"/a:/b:ro:extra",
 		"/host:relative/path",
 		"relative-host:/container:rw",
+		"/host:~other/path",
 	}
 
 	for _, spec := range invalidSpecs {
@@ -3295,6 +3310,8 @@ func TestCopiesValidation(t *testing.T) {
 		{name: "vm snapshot normalized read-only", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/npmrc:/home/agent/.npmrc"}}, want: []string{"/data/npmrc:/home/agent/.npmrc:ro"}},
 		{name: "explicit ro accepted", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/gh:/home/agent/.config/gh:ro"}}, want: []string{"/data/gh:/home/agent/.config/gh:ro"}},
 		{name: "removal entry", ws: Workspace{Backend: BackendVM, Snapshots: []string{":/home/agent/.gitconfig"}}, want: []string{":/home/agent/.gitconfig:ro"}},
+		{name: "tilde destination is the guest home", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/npmrc:~/.npmrc"}}, want: []string{"/data/npmrc:/home/agent/.npmrc:ro"}},
+		{name: "tilde removal entry", ws: Workspace{Backend: BackendVM, Snapshots: []string{":~/.gitconfig"}}, want: []string{":/home/agent/.gitconfig:ro"}},
 		{name: "rw rejected", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/npmrc:/home/agent/.npmrc:rw"}}, wantError: "snapshots are read-only"},
 		{name: "relative destination rejected", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/npmrc:npmrc"}}, wantError: "must be absolute"},
 		{name: "system destination rejected", ws: Workspace{Backend: BackendVM, Snapshots: []string{"/data/hosts:/etc/hosts"}}, wantError: "is not allowed"},

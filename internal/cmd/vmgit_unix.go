@@ -723,8 +723,12 @@ func expandGitPath(path, base string) string {
 	return filepath.Clean(path)
 }
 
-// gitConfigEntry is one variable of a Git configuration file.
-type gitConfigEntry struct{ section, key, value string }
+// gitConfigEntry is one variable of a Git configuration file, on lines first
+// to last (counted from 0) of the file.
+type gitConfigEntry struct {
+	section, key, value string
+	first, last         int
+}
 
 // parseGitConfig returns the variables of a Git configuration file with
 // lower-case section (without subsection) and key names. It covers the
@@ -735,6 +739,7 @@ func parseGitConfig(data []byte) []gitConfigEntry {
 	section := ""
 	lines := strings.Split(string(data), "\n")
 	for n := 0; n < len(lines); n++ {
+		first := n
 		line := strings.TrimSpace(lines[n])
 		if strings.HasPrefix(line, "[") {
 			end := strings.IndexByte(line, ']')
@@ -769,7 +774,7 @@ func parseGitConfig(data []byte) []gitConfigEntry {
 			value = v
 		}
 		if key != "" {
-			out = append(out, gitConfigEntry{section: section, key: key, value: value})
+			out = append(out, gitConfigEntry{section: section, key: key, value: value, first: first, last: n})
 		}
 	}
 	return out
