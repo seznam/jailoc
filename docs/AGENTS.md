@@ -54,6 +54,7 @@ docs/
     network-isolation.md           Userspace network broker, IPv4/IPv6 policy, filtered DNS
     secrets.md                     Secret delivery over SSH, tmpfs storage in the guest
     resource-use.md                Memory reclaim, zram, image cache, disks, broker limits, log rotation
+    alternatives.md                Comparison with other sandboxes and VMMs, why libkrun and a userspace broker
   blog/
     jailoc-2.md                    v2 release post (outside Diátaxis; temporal language allowed)
 ```

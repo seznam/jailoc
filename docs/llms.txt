@@ -42,6 +42,7 @@ Key facts:
 - [Network Isolation](https://seznam.github.io/jailoc/explanation/network-isolation/): Userspace network broker, IPv4 and IPv6 policy, filtered DNS
 - [Secrets Architecture](https://seznam.github.io/jailoc/explanation/secrets/): Destination and source secret mapping, delivery over SSH, tmpfs storage in the guest
 - [Resource Use](https://seznam.github.io/jailoc/explanation/resource-use/): VM memory reclaim, free page reporting, compressed swap, content-addressed image cache, sparse disks, builder VM lifetime, broker limits, log rotation
+- [Alternatives](https://seznam.github.io/jailoc/explanation/alternatives/): Comparison with containers, gVisor, Kata, process sandboxes, built-in agent sandboxes, MXC, VMMs, VM managers, Docker Sandboxes, microsandbox and hosted sandboxes; why a userspace broker
 
 ## Optional
 
