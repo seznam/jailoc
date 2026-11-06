@@ -473,12 +473,17 @@ func builderOptions(spec Spec) []microvm.Option {
 	)
 }
 
-// ensureDisk creates the sparse data disk, or grows it back to size. libkrun
+// ensureDisk creates the sparse data disk, or grows it to size. libkrun
 // releases built with imago < 0.2.5 truncate the image when a discard or
 // write-zeroes request reaches its end (libkrun/libkrun#949), which mkfs does.
+// A disk larger than size is refused: shrinking it would cut off the file
+// system on it.
 func ensureDisk(path string, size int64) error {
 	st, err := os.Stat(path)
 	if err == nil {
+		if st.Size() > size {
+			return fmt.Errorf("data disk %s is %d MiB, larger than the requested %d MiB, and cannot shrink: set docker_disk to at least %dm, or remove the file to start over with an empty disk", path, st.Size()>>20, size>>20, (st.Size()+(1<<20-1))>>20)
+		}
 		if st.Size() < size {
 			if err := os.Truncate(path, size); err != nil {
 				return fmt.Errorf("grow data disk: %w", err)

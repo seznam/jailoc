@@ -61,7 +61,7 @@ func TestWorkspaceSpecWorkDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ws := &workspace.Resolved{Name: "test", Paths: tt.paths, CPU: 2, Memory: "2G"}
+			ws := &workspace.Resolved{Name: "test", Paths: tt.paths, CPU: 2, Memory: "2G", DockerDisk: "20g"}
 			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
@@ -116,6 +116,18 @@ func TestStatusRestartChanges(t *testing.T) {
 	if got := statusRestartChanges(ws, changed); !slices.Equal(got, want) {
 		t.Errorf("changed spec: got %v, want %v", got, want)
 	}
+	dockerWS := *ws
+	dockerWS.EnableDocker = true
+	dockerWS.DockerDisk = "40g"
+	dockerSpec := matching
+	dockerSpec.Docker = true
+	if got := statusRestartChanges(&dockerWS, dockerSpec); !slices.Equal(got, []string{"docker_disk"}) {
+		t.Errorf("grown disk: got %v, want [docker_disk]", got)
+	}
+	dockerWS.DockerDisk = "20g"
+	if got := statusRestartChanges(&dockerWS, dockerSpec); len(got) != 0 {
+		t.Errorf("default disk against a spec without disk_size: got %v, want no changes", got)
+	}
 	if guestBinary != "" {
 		matching.GuestBinary = "/old/jailoc-guest"
 		if got := statusRestartChanges(ws, matching); !slices.Equal(got, []string{"the upgraded jailoc guest"}) {
@@ -160,6 +172,7 @@ func TestStatusLabels(t *testing.T) {
 		{"uptime hours", formatUptime(26*time.Hour + 3*time.Minute), "26h3m"},
 		{"resources", resourcesLabel(vm.Spec{CPUs: 2, MemoryMiB: 4096}), "2 CPUs, 4096 MiB memory"},
 		{"resources docker", resourcesLabel(vm.Spec{CPUs: 2, MemoryMiB: 4096, Docker: true}), "2 CPUs, 4096 MiB memory, 20 GiB Docker disk"},
+		{"resources docker disk", resourcesLabel(vm.Spec{CPUs: 2, MemoryMiB: 4096, Docker: true, DiskSize: 64 << 30}), "2 CPUs, 4096 MiB memory, 64 GiB Docker disk"},
 		{"sessions", sessionsLabel(2, 0), "2"},
 		{"sessions attached", sessionsLabel(2, 1), "2 (1 attached)"},
 		{"agent", agentLabel(&workspace.Resolved{Agent: agent.Harness{Name: "claude", Package: "@anthropic-ai/claude-code", Version: "2.1.318"}, AgentInstall: true}), "claude (@anthropic-ai/claude-code@2.1.318)"},

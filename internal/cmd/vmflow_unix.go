@@ -216,6 +216,9 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	}
 	if ws.IsolatedBuild {
 		spec.Workspace = ws.Name + "-builder"
+		if spec.DiskSize, err = vmDockerDiskSize(ws.DockerDisk); err != nil {
+			return "", err
+		}
 	}
 	start := time.Now()
 	st, err := startSupervisor(ctx, spec, label)
@@ -418,6 +421,10 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if err != nil {
 		return vm.Spec{}, err
 	}
+	diskSize, err := vmDockerDiskSize(ws.DockerDisk)
+	if err != nil {
+		return vm.Spec{}, err
+	}
 	policy, err := vmPolicy(ctx, ws)
 	if err != nil {
 		return vm.Spec{}, err
@@ -464,6 +471,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Image:        ref,
 		CPUs:         uint32(math.Ceil(ws.CPU)),
 		MemoryMiB:    memMiB,
+		DiskSize:     diskSize,
 		Shares:       shares,
 		Policy:       policy,
 		RunnerPath:   rt.runner,
@@ -810,6 +818,9 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	}
 	if mem, err := vmMemoryMiB(ws.Memory); err == nil && running.MemoryMiB != mem {
 		out = append(out, "memory")
+	}
+	if size, err := vmDockerDiskSize(ws.DockerDisk); err == nil && running.Docker && ws.EnableDocker && cmp.Or(running.DiskSize, int64(vm.DefaultDiskSize)) != size {
+		out = append(out, "docker_disk")
 	}
 	if running.Docker != ws.EnableDocker {
 		out = append(out, "enable_docker")

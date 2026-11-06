@@ -5,7 +5,12 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/guestbin"
+	"github.com/seznam/jailoc/internal/vm"
 )
 
 func TestBrokerReloadEvent(t *testing.T) {
@@ -70,4 +75,32 @@ func rotate(t *testing.T, path, data string) {
 		t.Fatal(err)
 	}
 	appendFile(t, path, data)
+}
+
+func TestRestartOnlyChangesDockerDisk(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
+	if err != nil {
+		guestBinary = ""
+	}
+	base := vm.Spec{Agent: "opencode", Docker: true, GuestBinary: guestBinary, Guest: &guest.Config{}}
+	tests := []struct {
+		name          string
+		running, want int64
+		docker        bool
+		changes       []string
+	}{
+		{"unchanged default", 0, 20 << 30, true, nil},
+		{"grown", 20 << 30, 40 << 30, true, []string{"docker_disk"}},
+		{"grown from a spec without disk_size", 0, 40 << 30, true, []string{"docker_disk"}},
+		{"docker off", 20 << 30, 40 << 30, false, nil},
+	}
+	for _, tt := range tests {
+		running, want := base, base
+		running.DiskSize, want.DiskSize = tt.running, tt.want
+		running.Docker, want.Docker = tt.docker, tt.docker
+		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.changes)
+		}
+	}
 }

@@ -479,6 +479,39 @@ func vmMemoryMiB(limit string) (uint32, error) {
 	return uint32(mib), nil //nolint:gosec // G115: bounded by the check above
 }
 
+// vmMinDockerDiskSize is the smallest Docker data disk a workspace accepts.
+const vmMinDockerDiskSize = 1 << 30
+
+// vmDockerDiskSize parses the docker_disk setting into the size of the sparse Docker
+// data disk in bytes, rounded up to whole MiB.
+func vmDockerDiskSize(size string) (int64, error) {
+	if size == "" {
+		return 0, errors.New("empty docker_disk")
+	}
+	mult := int64(1)
+	switch unit := strings.ToLower(size[len(size)-1:]); unit {
+	case "k":
+		mult = 1 << 10
+	case "m":
+		mult = 1 << 20
+	case "g":
+		mult = 1 << 30
+	}
+	digits := strings.TrimRight(size, "kmgKMG")
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("invalid docker_disk %q", size)
+	}
+	if n > (math.MaxInt64-(1<<20-1))/mult {
+		return 0, fmt.Errorf("docker_disk %q is too large", size)
+	}
+	bytes := (n*mult + (1<<20 - 1)) &^ (1<<20 - 1)
+	if bytes < vmMinDockerDiskSize {
+		return 0, fmt.Errorf("docker_disk %q is below the %d GiB minimum", size, vmMinDockerDiskSize>>30)
+	}
+	return bytes, nil
+}
+
 type vmException struct {
 	CIDR  string `json:"cidr"`
 	Proto string `json:"proto"`

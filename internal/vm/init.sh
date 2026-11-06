@@ -52,6 +52,10 @@ APKCACHE=/var/lib/docker/.jailoc-apk-cache
 mkdir -p "$APKCACHE"
 apk add -q --no-network --cache-dir "$APKCACHE" nftables 2>/dev/null ||
 	apk add -q --cache-dir "$APKCACHE" nftables || log "apk add nftables failed"
+# Grow the file system when docker_disk was raised since the last boot.
+apk add -q --no-network --cache-dir "$APKCACHE" e2fsprogs-extra 2>/dev/null ||
+	apk add -q --cache-dir "$APKCACHE" e2fsprogs-extra || log "apk add e2fsprogs-extra failed"
+resize2fs /dev/vda >/dev/null 2>&1 || log "resize data disk failed"
 
 sysctl -q -w net.ipv4.ip_forward=1
 
