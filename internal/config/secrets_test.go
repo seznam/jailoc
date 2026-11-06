@@ -304,6 +304,37 @@ func TestValidateEnvSourceSecret(t *testing.T) {
 			secret:     Secret{FromEnv: "HOST_VALUE"},
 		},
 		{name: "command source", secretName: "GH_TOKEN", secret: Secret{FromCommand: "gh auth token"}},
+		{name: "command source with ttl", secretName: "GH_TOKEN", secret: Secret{FromCommand: "gh auth token", TTL: "15m"}},
+		{
+			name:        "ttl with from_env",
+			secretName:  "GH_TOKEN",
+			secret:      Secret{FromEnv: "GH_TOKEN", TTL: "15m"},
+			wantSubstrs: []string{"GH_TOKEN", "ttl", "only valid with", "from_command"},
+		},
+		{
+			name:        "ttl with from_file",
+			secretName:  "GH_TOKEN",
+			secret:      Secret{FromFile: "/abs/key", TTL: "15m"},
+			wantSubstrs: []string{"GH_TOKEN", "ttl", "only valid with", "from_command"},
+		},
+		{
+			name:        "invalid ttl duration",
+			secretName:  "GH_TOKEN",
+			secret:      Secret{FromCommand: "gh auth token", TTL: "not-a-duration"},
+			wantSubstrs: []string{"GH_TOKEN", "invalid ttl", "not-a-duration", "positive duration"},
+		},
+		{
+			name:        "zero ttl duration",
+			secretName:  "GH_TOKEN",
+			secret:      Secret{FromCommand: "gh auth token", TTL: "0s"},
+			wantSubstrs: []string{"GH_TOKEN", "invalid ttl", "0s", "positive duration"},
+		},
+		{
+			name:        "negative ttl duration",
+			secretName:  "GH_TOKEN",
+			secret:      Secret{FromCommand: "gh auth token", TTL: "-5m"},
+			wantSubstrs: []string{"GH_TOKEN", "invalid ttl", "-5m", "positive duration"},
+		},
 		{
 			name:        "blank command",
 			secretName:  "GH_TOKEN",

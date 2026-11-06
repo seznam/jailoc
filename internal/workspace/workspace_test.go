@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -1388,6 +1389,19 @@ func TestResolveSecrets(t *testing.T) {
 			want: []workspace.ResolvedSecret{
 				{Name: "kept", Kind: workspace.SecretKindEnv, FromEnv: "KEPT_HOST"},
 				{Name: "replaced", Kind: workspace.SecretKindFile, FromFile: "/etc/new"},
+			},
+		},
+		{
+			name: "command source with ttl survives",
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{
+				"NPM_TOKEN": {FromCommand: "op read op://dev/npm/token", TTL: "1h"},
+			}},
+			wsSecrets: config.Secrets{File: map[string]config.Secret{
+				"kube": {FromCommand: "vault read kube", TTL: "30m"},
+			}},
+			want: []workspace.ResolvedSecret{
+				{Name: "NPM_TOKEN", Kind: workspace.SecretKindEnv, FromCommand: "op read op://dev/npm/token", TTL: time.Hour},
+				{Name: "kube", Kind: workspace.SecretKindFile, FromCommand: "vault read kube", TTL: 30 * time.Minute},
 			},
 		},
 	}

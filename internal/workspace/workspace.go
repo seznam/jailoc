@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -84,6 +85,7 @@ type ResolvedSecret struct {
 	FromEnv     string
 	FromFile    string
 	FromCommand string
+	TTL         time.Duration
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
@@ -284,14 +286,23 @@ func mergeSecrets(defaults, overrides config.Secrets) []ResolvedSecret {
 // collectSecrets folds one scope's secrets into dst, keyed by name. A later
 // call overwrites an earlier one: that is how a workspace entry replaces the
 // default of the same name, including when the two use different destination
-// sub-tables. Within a single scope a name cannot appear in both sub-tables —
-// config.validateSecretsBlock rejects that before Resolve runs.
+// sub-tables. Within a single scope a name cannot appear in both sub-tables
+// and non-empty TTL strings are valid durations — config.validateSecretsBlock
+// enforces both before Resolve runs.
 func collectSecrets(dst map[string]ResolvedSecret, secrets config.Secrets) {
 	for name, secret := range secrets.Env {
-		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand}
+		var ttl time.Duration
+		if secret.TTL != "" {
+			ttl, _ = time.ParseDuration(secret.TTL)
+		}
+		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindEnv, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand, TTL: ttl}
 	}
 	for name, secret := range secrets.File {
-		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand}
+		var ttl time.Duration
+		if secret.TTL != "" {
+			ttl, _ = time.ParseDuration(secret.TTL)
+		}
+		dst[name] = ResolvedSecret{Name: name, Kind: SecretKindFile, FromEnv: secret.FromEnv, FromFile: secret.FromFile, FromCommand: secret.FromCommand, TTL: ttl}
 	}
 }
 

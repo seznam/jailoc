@@ -32,7 +32,7 @@ const reloadTimeout = 15 * time.Second
 // filtered_dns), published ports, host ports, the SSH agent, the CA bundle, snapshots,
 // environment and secrets. Settings that need a new VM are reported, not
 // applied.
-func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
+func reloadVM(ctx context.Context, ws *workspace.Resolved, purgeCache bool) error {
 	stateDir := vmStateDir(ws.Name)
 	st, err := runningVM(stateDir)
 	if err != nil {
@@ -53,7 +53,7 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved) error {
 	if err != nil {
 		return err
 	}
-	payload, err := secretsPayload(ctx, ws, want)
+	payload, err := secretsPayload(ctx, ws, want, purgeCache)
 	if err != nil {
 		return err
 	}
