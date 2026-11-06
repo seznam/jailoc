@@ -68,7 +68,7 @@ Guest IPv4 192.168.127.2/24 (gateway .1), IPv6 fd00:127::2/64. All traffic goes 
 - Forbidden mount prefixes: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`
 - CIDR validation via `net.ParseCIDR`
 - URL fields (e.g. `dockerfile`): validate scheme (`http`/`https`) and non-empty host — reject malformed URLs like `http:///path`
-- Path expansion: `~` → `$HOME` (skip URL fields — they must not be expanded)
+- Path expansion: `~` → `$HOME` on the host, or `/home/agent` in mount/snapshot guest destinations (skip URL fields — they must not be expanded)
 
 ### Embedded assets (`internal/embed/assets/`)
 - `Dockerfile` — embedded fallback base image for the VM rootfs (no entrypoint/CMD; jailoc-guest is the init)

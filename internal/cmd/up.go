@@ -400,27 +400,6 @@ func ensureConfigGitignore(hostDir, content string) error {
 	return nil
 }
 
-var osStat = os.Stat
-
-func resolveGitConfig(enabled bool) string {
-	if !enabled {
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	path := filepath.Join(home, ".gitconfig")
-	if _, err := osStat(path); err == nil {
-		return path
-	}
-	path = filepath.Join(home, ".config", "git", "config")
-	if _, err := osStat(path); err == nil {
-		return path
-	}
-	return ""
-}
-
 func init() {
 	addAllFlag(upCmd, "start all configured workspaces")
 	rootCmd.AddCommand(upCmd)

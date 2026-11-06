@@ -18,20 +18,34 @@ import (
 func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
 	gitconfig := filepath.Join(home, ".gitconfig")
 	if err := os.WriteFile(gitconfig, []byte("[user]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	ignore := filepath.Join(home, ".config", "git", "ignore")
+	if err := os.MkdirAll(filepath.Dir(ignore), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ignore, []byte("*.swp\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guestIgnore := guestHome + "/.config/git/ignore"
 	tests := []struct {
 		name      string
 		git       bool
 		snapshots []string
 		want      []string
+		plain     string // destination whose copy is not generated
 	}{
-		{name: "git_config becomes a snapshot", git: true, want: []string{gitconfig + ":" + guestGitConfig}},
+		{name: "git_config becomes snapshots", git: true, want: []string{gitconfig + ":" + guestGitConfig, ignore + ":" + guestIgnore}},
 		{name: "git_config off", git: false},
-		{name: "snapshot overrides git_config", git: true, snapshots: []string{"/data/team.gitconfig:" + guestGitConfig + ":ro"}, want: []string{"/data/team.gitconfig:" + guestGitConfig}},
-		{name: "removal drops git_config", git: true, snapshots: []string{":" + guestGitConfig + ":ro"}},
+		{name: "snapshot overrides git_config", git: true, snapshots: []string{"/data/team.gitconfig:" + guestGitConfig + ":ro"}, want: []string{"/data/team.gitconfig:" + guestGitConfig, ignore + ":" + guestIgnore}},
+		{name: "removal drops git_config", git: true, snapshots: []string{":" + guestGitConfig + ":ro"}, want: []string{ignore + ":" + guestIgnore}},
+		{name: "tilde destination overrides git_config", git: true, snapshots: []string{"/data/team.gitconfig:~/.gitconfig:ro"}, want: []string{"/data/team.gitconfig:" + guestGitConfig, ignore + ":" + guestIgnore}},
+		{name: "directory snapshot replaces defaults inside", git: true, snapshots: []string{"/data/git:~/.config/git:ro"}, want: []string{gitconfig + ":" + guestGitConfig, "/data/git:" + guestHome + "/.config/git"}},
+		{name: "directory snapshot binds before explicit child override", git: true, snapshots: []string{"/data/git:~/.config/git:ro", "/data/ignore:~/.config/git/ignore:ro"}, want: []string{gitconfig + ":" + guestGitConfig, "/data/git:" + guestHome + "/.config/git", "/data/ignore:" + guestIgnore}},
+		{name: "snapshot of the default source copies it unchanged", git: true, snapshots: []string{"~/.gitconfig:~/.gitconfig:ro"}, want: []string{gitconfig + ":" + guestGitConfig, ignore + ":" + guestIgnore}, plain: guestGitConfig},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -45,6 +59,9 @@ func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 					t.Fatalf("snapshot %v is not read-only", m)
 				}
 				pairs = append(pairs, m.Host+":"+m.Container)
+				if generated := m.data != nil; generated != ((m.Host == gitconfig || m.Host == ignore) && m.Container != tt.plain) {
+					t.Fatalf("snapshot %s generated = %v", m.Container, generated)
+				}
 			}
 			if strings.Join(pairs, ",") != strings.Join(tt.want, ",") {
 				t.Fatalf("snapshots = %v, want %v", pairs, tt.want)
@@ -71,7 +88,7 @@ func TestCheckSnapshots(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.target, func(t *testing.T) {
 			t.Parallel()
-			err := checkSnapshots(ws, []config.Mount{{Host: "/h/x", Container: tt.target, Mode: "ro"}}, shares)
+			err := checkSnapshots(ws, []snapshot{{Mount: config.Mount{Host: "/h/x", Container: tt.target, Mode: "ro"}}}, shares)
 			if tt.wantError == "" && err != nil {
 				t.Fatalf("checkSnapshots: %v", err)
 			}
@@ -106,9 +123,10 @@ func TestStageSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	binds, err := stageSnapshots(state, []config.Mount{
-		{Host: file, Container: "/home/agent/.npmrc", Mode: "ro"},
-		{Host: dir, Container: "/home/agent/.config/gh", Mode: "ro"},
+	binds, err := stageSnapshots(state, []snapshot{
+		{Mount: config.Mount{Host: file, Container: "/home/agent/.npmrc", Mode: "ro"}},
+		{Mount: config.Mount{Host: dir, Container: "/home/agent/.config/gh", Mode: "ro"}},
+		{Mount: config.Mount{Host: file, Container: "/home/agent/.gitconfig", Mode: "ro"}, data: []byte("generated")},
 	}, "")
 	if err != nil {
 		t.Fatalf("stageSnapshots: %v", err)
@@ -120,6 +138,7 @@ func TestStageSnapshots(t *testing.T) {
 	want := []guest.Snapshot{
 		{Source: guest.SnapshotsDir + "/" + gen + "/0", Target: "/home/agent/.npmrc"},
 		{Source: guest.SnapshotsDir + "/" + gen + "/1", Target: "/home/agent/.config/gh"},
+		{Source: guest.SnapshotsDir + "/" + gen + "/2", Target: "/home/agent/.gitconfig"},
 	}
 	if gen == "" || !slices.Equal(binds, want) {
 		t.Fatalf("binds = %v, want %v", binds, want)
@@ -131,16 +150,38 @@ func TestStageSnapshots(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(genDir, "1", "sub", "hosts.yml")); string(got) != "github.com" { //nolint:gosec // G304: test file
 		t.Fatalf("staged nested file = %q", got)
 	}
+	if got, _ := os.ReadFile(filepath.Join(genDir, "2")); string(got) != "generated" { //nolint:gosec // G304: test file
+		t.Fatalf("staged generated file = %q", got)
+	}
+	if info, err := os.Stat(filepath.Join(genDir, "2")); err != nil || info.Mode().Perm()&0o444 != 0o444 {
+		t.Fatalf("staged generated file must be readable by the guest agent: %v, %v", info, err)
+	}
 	if link, err := os.Readlink(filepath.Join(genDir, "1", "link")); err != nil || link != "sub/hosts.yml" {
 		t.Fatalf("staged link = %q, %v", link, err)
 	}
 
+	// A child snapshot inside a directory snapshot is composed into the
+	// staged directory even when the directory lacked that path.
+	composedState := t.TempDir()
+	composed, err := stageSnapshots(composedState, []snapshot{
+		{Mount: config.Mount{Host: dir, Container: "/home/agent/.config/gh", Mode: "ro"}},
+		{Mount: config.Mount{Host: file, Container: "/home/agent/.config/gh/extra/npmrc", Mode: "ro"}},
+	}, "")
+	if err != nil {
+		t.Fatalf("stageSnapshots composed: %v", err)
+	}
+	if len(composed) != 1 || composed[0].Target != "/home/agent/.config/gh" {
+		t.Fatalf("composed binds = %v, want single parent bind", composed)
+	}
+	if got, _ := os.ReadFile(filepath.Join(vm.GuestReadOnlyDir(composedState), snapshotsDir, snapshotGeneration(composed), "0", "extra", "npmrc")); string(got) != "token" { //nolint:gosec // G304: test file
+		t.Fatalf("composed child file = %q, want token", got)
+	}
 	// A reload stages a new generation with the current content and keeps
 	// the one the running guest binds.
 	if err := os.WriteFile(file, []byte("rotated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := stageSnapshots(state, []config.Mount{{Host: file, Container: "/home/agent/.npmrc", Mode: "ro"}}, gen)
+	reloaded, err := stageSnapshots(state, []snapshot{{Mount: config.Mount{Host: file, Container: "/home/agent/.npmrc", Mode: "ro"}}}, gen)
 	if err != nil {
 		t.Fatalf("stageSnapshots reload: %v", err)
 	}
@@ -163,7 +204,7 @@ func TestStageSnapshots(t *testing.T) {
 		t.Fatalf("unused generation survived: %v", err)
 	}
 
-	if _, err := stageSnapshots(state, []config.Mount{{Host: filepath.Join(src, "missing"), Container: "/home/agent/x", Mode: "ro"}}, ""); err == nil {
+	if _, err := stageSnapshots(state, []snapshot{{Mount: config.Mount{Host: filepath.Join(src, "missing"), Container: "/home/agent/x", Mode: "ro"}}}, ""); err == nil {
 		t.Fatal("missing source: want error")
 	}
 	if entries, _ := os.ReadDir(staged); len(entries) != 0 {
@@ -198,7 +239,7 @@ func TestStageSnapshotsDirectorySymlinkRoot(t *testing.T) {
 				t.Fatal(err)
 			}
 			state := t.TempDir()
-			binds, err := stageSnapshots(state, []config.Mount{{Host: linked, Container: "/home/agent/data", Mode: "ro"}}, "")
+			binds, err := stageSnapshots(state, []snapshot{{Mount: config.Mount{Host: linked, Container: "/home/agent/data", Mode: "ro"}}}, "")
 			if err != nil {
 				t.Fatalf("stageSnapshots: %v", err)
 			}
