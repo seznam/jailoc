@@ -17,6 +17,8 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
+
+	"github.com/seznam/jailoc/internal/sntp"
 )
 
 const (
@@ -333,6 +335,34 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 		entry["answers"] = answers
 	}
 	b.record(entry)
+}
+
+// startNTP serves SNTP with the host clock on the gateway. The guest clock
+// does not advance while the host sleeps; jailoc-guest polls this service to
+// catch up.
+func (b *Broker) startNTP(ctx context.Context) error {
+	uc, err := gonet.DialUDP(b.stack, guestAddr(b.cfg.Gateway, sntp.Port), nil, ipv4.ProtocolNumber)
+	if err != nil {
+		return fmt.Errorf("ntp udp listener: %w", err)
+	}
+	go func() {
+		<-ctx.Done()
+		_ = uc.Close()
+	}()
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, peer, err := uc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			received := time.Now()
+			if reply := sntp.Reply(buf[:n], received, time.Now()); reply != nil {
+				_, _ = uc.WriteTo(reply, peer)
+			}
+		}
+	}()
+	return nil
 }
 
 // startDHCP leases the single guest address with the gateway as router and

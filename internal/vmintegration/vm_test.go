@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -301,6 +302,27 @@ func TestWorkspaceVM(t *testing.T) {
 		}
 		if got := mustGuest(ctx, t, "stat -c %u:%g /etc/passwd ~ "+project); got != "0:0\n1000:1000\n1000:1000" {
 			t.Fatalf("guest ownership = %q, want root files, agent home and project", got)
+		}
+	})
+
+	t.Run("guest clock follows the host", func(t *testing.T) {
+		// Set the clock back like a host sleep does; jailoc-guest steps it
+		// back to host time on its next sync.
+		mustGuest(ctx, t, "sudo -n date -s @1000000000 >/dev/null")
+		deadline := time.Now().Add(2 * time.Minute)
+		for {
+			got, err := strconv.ParseInt(mustGuest(ctx, t, "date +%s"), 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			skew := time.Duration(got-time.Now().Unix()) * time.Second
+			if skew.Abs() <= 2*time.Second {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("guest clock is %s off the host", skew)
+			}
+			time.Sleep(5 * time.Second)
 		}
 	})
 

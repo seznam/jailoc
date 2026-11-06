@@ -207,6 +207,9 @@ func (b *Broker) Run(ctx context.Context, l net.Listener) error {
 	if err := b.startDHCP(ctx); err != nil {
 		return err
 	}
+	if err := b.startNTP(ctx); err != nil {
+		return err
+	}
 	for _, f := range b.cfg.Forwards {
 		if _, err := b.startForward(ctx, f); err != nil {
 			return err

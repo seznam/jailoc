@@ -11,7 +11,7 @@ When the broker isn't running the guest has no network at all, and the superviso
 | Guest address | `192.168.127.2/24` | `fd00:127::2/64` |
 | Gateway (broker) | `192.168.127.1` | `fd00:127::1`, default route via `fe80::1` |
 
-The gateway serves DHCP, DNS and the host services configured with `host_ports`. Everything else the guest sends is a new flow the broker has to decide on.
+The gateway serves DHCP, DNS, SNTP with the host clock (UDP port 123, used by `jailoc-guest` to keep the guest clock on host time) and the host services configured with `host_ports`. Everything else the guest sends is a new flow the broker has to decide on.
 
 ## The policy
 
