@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 )
 
@@ -156,6 +157,36 @@ func TestOpenCode1Installs(t *testing.T) {
 				return []string{"XDG_CONFIG_HOME=" + filepath.Join(home, "xc"), "XDG_CACHE_HOME=" + filepath.Join(home, "xd")}
 			},
 			want: []string{"q@1"},
+		},
+		{
+			name: "later global file replaces the plugin list",
+			setup: func(t *testing.T, home, _ string) []string {
+				write(t, filepath.Join(home, ".config", "opencode", "config.json"), `{"plugin": ["old@1"]}`)
+				write(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{"plugin": []}`)
+				write(t, filepath.Join(home, ".config", "opencode", "opencode.jsonc"), `{"model": "x/y"}`)
+				write(t, filepath.Join(home, ".opencode", "opencode.json"), `{"plugin": ["home@1"]}`)
+				return nil
+			},
+			want: []string{"home@1"},
+		},
+		{
+			name: "special files skipped",
+			setup: func(t *testing.T, home, project string) []string {
+				write(t, filepath.Join(project, "opencode.json"), `{"plugin": ["root@1"]}`)
+				global := filepath.Join(home, ".config", "opencode")
+				if err := os.MkdirAll(global, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				// Reading a FIFO without a writer would block forever.
+				if err := syscall.Mkfifo(filepath.Join(global, "opencode.json"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Join(global, "opencode.jsonc"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				return nil
+			},
+			want: []string{"root@1"},
 		},
 		{
 			name: "invalid files skipped",

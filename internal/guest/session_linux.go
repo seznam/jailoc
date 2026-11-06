@@ -94,8 +94,12 @@ func openSession(self string, args []string, stdin io.Reader, stdout io.Writer) 
 			Name: strings.Join(cmd, " "), Dir: *dir, Argv: argv, Env: os.Environ(),
 			Rows: uint16(min(*rows, 0xffff)), Cols: uint16(min(*cols, 0xffff)), //nolint:gosec // G115: clamped
 		}
-		// Before the agent starts, which may install them.
-		started := startedPayload(*agentName, env, *dir)
+		// Before the agent starts, which may install them. Only for a new
+		// session: reattaching must not wait on the agent's configuration.
+		var started []byte
+		if *newSession || !sessionRuns(*dir) {
+			started = startedPayload(*agentName, env, *dir)
+		}
 		holder := []string{self, "session", "serve"}
 		var err error
 		created := true
@@ -139,6 +143,13 @@ func startedPayload(name string, extraEnv []string, dir string) []byte {
 		return nil
 	}
 	return b
+}
+
+// sessionRuns reports whether a session started in dir runs, which
+// [session.Open] then attaches to.
+func sessionRuns(dir string) bool {
+	info, err := session.Find(SessionsDir, dir)
+	return err == nil && info != nil
 }
 
 // maxStartedPayload bounds the FrameStarted payload: a hint is not worth

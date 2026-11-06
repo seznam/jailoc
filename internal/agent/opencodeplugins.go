@@ -2,10 +2,12 @@ package agent
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // openCode1Installs returns the npm plugins that OpenCode 1 installs before
@@ -17,9 +19,10 @@ import (
 // 1.19.5: the global config.json, opencode.json and opencode.jsonc,
 // OPENCODE_CONFIG, opencode.json(c) and .opencode directories from dir up
 // to the git root, ~/.opencode, OPENCODE_CONFIG_DIR and
-// OPENCODE_CONFIG_CONTENT. Later sources override plugins of the same name.
-// Unreadable or invalid files are skipped: the result is a hint, never an
-// error.
+// OPENCODE_CONFIG_CONTENT. A plugin list in a later global file replaces the
+// lists before it; the other sources add to the list, and later sources
+// override plugins of the same name. Unreadable, invalid or special files are
+// skipped: the result is a hint, never an error.
 func openCode1Installs(env []string, dir string) []string {
 	vars := make(map[string]string, len(env))
 	for _, kv := range env {
@@ -36,15 +39,22 @@ func openCode1Installs(env []string, dir string) []string {
 
 	var specs []string
 	addFile := func(path string) {
-		if b, err := os.ReadFile(path); err == nil { //nolint:gosec // G304: OpenCode's own configuration files
-			specs = append(specs, configPlugins(b)...)
+		if b, ok := readConfig(path); ok {
+			list, _ := configPlugins(b)
+			specs = append(specs, list...)
 		}
 	}
 	global := ""
 	if configHome != "" {
 		global = filepath.Join(configHome, "opencode")
 		for _, name := range []string{"config.json", "opencode.json", "opencode.jsonc"} {
-			addFile(filepath.Join(global, name))
+			b, ok := readConfig(filepath.Join(global, name))
+			if !ok {
+				continue
+			}
+			if list, ok := configPlugins(b); ok {
+				specs = list
+			}
 		}
 	}
 	// OpenCode runs in dir, so relative paths in its environment start there.
@@ -91,10 +101,11 @@ func openCode1Installs(env []string, dir string) []string {
 		}
 	}
 	if content := vars["OPENCODE_CONFIG_CONTENT"]; content != "" {
-		specs = append(specs, configPlugins([]byte(content))...)
+		list, _ := configPlugins([]byte(content))
+		specs = append(specs, list...)
 	}
 
-	// The last plugin of a name wins, in the place of the first.
+	// The last plugin of a name wins.
 	type plugin struct{ pkg, name string }
 	var plugins []plugin
 	for _, spec := range specs {
@@ -153,16 +164,16 @@ func projectDirs(dir string) []string {
 	}
 }
 
-// configPlugins returns the plugin specifiers of an OpenCode configuration:
-// strings or [specifier, options] pairs.
-func configPlugins(jsonc []byte) []string {
+// configPlugins returns the plugin specifiers of an OpenCode configuration,
+// strings or [specifier, options] pairs, and whether it sets the plugin
+// field at all.
+func configPlugins(jsonc []byte) (specs []string, ok bool) {
 	var cfg struct {
 		Plugin []json.RawMessage `json:"plugin"`
 	}
 	if err := json.Unmarshal(stripJSONC(jsonc), &cfg); err != nil {
-		return nil
+		return nil, false
 	}
-	var specs []string
 	for _, raw := range cfg.Plugin {
 		var spec string
 		if json.Unmarshal(raw, &spec) != nil {
@@ -173,7 +184,27 @@ func configPlugins(jsonc []byte) []string {
 		}
 		specs = append(specs, spec)
 	}
-	return specs
+	return specs, cfg.Plugin != nil
+}
+
+// maxConfigSize bounds the configuration files read for the hint.
+const maxConfigSize = 1 << 20
+
+// readConfig reads a regular file of at most maxConfigSize bytes. It opens
+// without blocking and skips anything else, so a FIFO or device in a
+// configuration path cannot hold up the session.
+func readConfig(path string) ([]byte, bool) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: OpenCode's own configuration files
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxConfigSize {
+		return nil, false
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigSize))
+	return b, err == nil
 }
 
 // registryPlugin returns the package OpenCode installs for an npm registry
