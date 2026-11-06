@@ -47,7 +47,14 @@ func openCode1Installs(env []string, dir string) []string {
 			addFile(filepath.Join(global, name))
 		}
 	}
-	if f := vars["OPENCODE_CONFIG"]; f != "" {
+	// OpenCode runs in dir, so relative paths in its environment start there.
+	resolve := func(p string) string {
+		if p != "" && !filepath.IsAbs(p) {
+			return filepath.Join(dir, p)
+		}
+		return p
+	}
+	if f := resolve(vars["OPENCODE_CONFIG"]); f != "" {
 		addFile(f)
 	}
 	project := !envTrue(vars["OPENCODE_DISABLE_PROJECT_CONFIG"])
@@ -68,7 +75,7 @@ func openCode1Installs(env []string, dir string) []string {
 	if home != "" {
 		dirs = append(dirs, filepath.Join(home, ".opencode"))
 	}
-	configDir := vars["OPENCODE_CONFIG_DIR"]
+	configDir := resolve(vars["OPENCODE_CONFIG_DIR"])
 	if configDir != "" {
 		dirs = append(dirs, configDir)
 	}

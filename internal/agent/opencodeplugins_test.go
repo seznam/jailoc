@@ -138,6 +138,15 @@ func TestOpenCode1Installs(t *testing.T) {
 			want: []string{"custom@latest", "cfgdir@latest", "content@3"},
 		},
 		{
+			name: "relative environment paths from the working directory",
+			setup: func(t *testing.T, _, project string) []string {
+				write(t, filepath.Join(project, "sub", "custom.json"), `{"plugin": ["custom"]}`)
+				write(t, filepath.Join(project, "cfgdir", "opencode.json"), `{"plugin": ["cfgdir"]}`)
+				return []string{"OPENCODE_CONFIG=custom.json", "OPENCODE_CONFIG_DIR=../cfgdir"}
+			},
+			want: []string{"custom@latest", "cfgdir@latest"},
+		},
+		{
 			name: "xdg directories",
 			setup: func(t *testing.T, home, _ string) []string {
 				write(t, filepath.Join(home, "xc", "opencode", "opencode.json"), `{"plugin": ["p@1", "q@1"]}`)

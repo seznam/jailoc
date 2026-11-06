@@ -158,6 +158,8 @@ func TestStartupLine(t *testing.T) {
 		{name: "fits", cols: 80, want: "⠋ Starting OpenCode… 12s"},
 		{name: "too wide", cols: 16, want: "⠋ Starting… 12s"},
 		{name: "no room for the message", cols: 8, want: "⠋  12s"},
+		{name: "no room for the seconds", cols: 6, want: "⠋"},
+		{name: "no room at all", cols: 1, want: ""},
 		{name: "unknown width", cols: 0, want: "⠋ Starting OpenCode… 12s"},
 	}
 	for _, tt := range tests {

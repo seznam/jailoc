@@ -407,8 +407,11 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 			if interactive {
 				// The terminal is raw: return the carriage explicitly.
 				_, _ = fmt.Fprintf(os.Stdout, "\x1b[2m%s\x1b[0m\r\n", starting)
-				status.start(startupMessage(starting, title, session.ParseStarted(f.Payload)))
-				go status.animate()
+				// The status draws escape sequences, so only into a terminal.
+				if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
+					status.start(startupMessage(starting, title, session.ParseStarted(f.Payload)))
+					go status.animate()
+				}
 			}
 		case session.FrameData:
 			_ = status.write(f.Payload)

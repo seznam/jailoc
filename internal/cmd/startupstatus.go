@@ -232,13 +232,20 @@ func startupMessage(starting, title string, st session.Started) string {
 }
 
 // startupLine returns the spinner frame, msg and seconds elapsed as one line,
-// with msg truncated so the line fits a terminal cols wide.
+// with msg truncated so the line fits a terminal cols wide. When even the
+// spinner and seconds do not fit, it returns the spinner alone, or nothing.
 func startupLine(frame rune, msg string, seconds, cols int) string {
 	prefix, suffix := string(frame)+" ", fmt.Sprintf(" %ds", seconds)
 	if r, avail := []rune(msg), cols-1-len([]rune(prefix))-len(suffix); cols > 0 && len(r) > avail {
-		msg = ""
-		if avail > 1 {
+		switch {
+		case avail < 0 && cols > 1:
+			return string(frame)
+		case avail < 0:
+			return ""
+		case avail > 1:
 			msg = string(r[:avail-1]) + "…"
+		default:
+			msg = ""
 		}
 	}
 	return prefix + msg + suffix
