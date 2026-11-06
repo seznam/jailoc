@@ -314,8 +314,9 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 // relaySession connects the local terminal to the session protocol on
 // in/out until the session ends, the user detaches or another terminal
 // takes the session over. In an interactive terminal it prints starting
-// when the guest reports a newly started session, so the screen is not
-// blank while the agent boots.
+// when the guest reports a newly started session, and keeps it on the
+// alternate screen until the agent draws, so the screen is not blank
+// while the agent boots.
 func relaySession(fd int, interactive bool, detachKeys []byte, starting string, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int) {
 	var writeMu sync.Mutex
 	send := func(f session.Frame) error {
@@ -378,6 +379,7 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting string, 
 		}
 	}()
 
+	var status *startupStatus
 	for {
 		f, err := session.ReadFrame(out)
 		if err != nil {
@@ -395,9 +397,14 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting string, 
 			if interactive {
 				// The terminal is raw: return the carriage explicitly.
 				_, _ = fmt.Fprintf(os.Stdout, "\x1b[2m%s\x1b[0m\r\n", starting)
+				status = newStartupStatus(starting, int(cols))
 			}
 		case session.FrameData:
-			_, _ = os.Stdout.Write(f.Payload)
+			if status != nil {
+				_ = status.write(os.Stdout, f.Payload)
+			} else {
+				_, _ = os.Stdout.Write(f.Payload)
+			}
 		case session.FrameExit:
 			code, _ = session.ParseExit(f.Payload)
 			return id, outcomeExited, code
