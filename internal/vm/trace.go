@@ -67,10 +67,14 @@ func (s *stepSpan) End(...trace.SpanEndOption) {
 		args = append(args, string(kv.Key), kv.Value.AsInterface())
 	}
 	switch {
-	case s.err != nil:
+	case s.failed && s.err != nil:
 		slog.Warn("vm step failed", append(args, "error", s.err)...)
 	case s.failed:
 		slog.Warn("vm step failed", append(args, "error", s.status)...)
+	case s.err != nil:
+		// Advisory failures, e.g. a non-required preflight check, record an
+		// error without an error status: the boot went on.
+		slog.Warn("vm step finished", append(args, "error", s.err)...)
 	case d == 0:
 		return // checks and lookups that take no time are noise
 	default:

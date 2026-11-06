@@ -53,7 +53,14 @@ func TestStepTracerLogsSpans(t *testing.T) {
 			run: func(s trace.Span) {
 				s.SetStatus(codes.Error, "ownership preparation incomplete")
 			},
-			want: []string{`level=WARN`, `error="ownership preparation incomplete"`},
+			want: []string{`level=WARN`, `msg="vm step failed"`, `error="ownership preparation incomplete"`},
+		},
+		{
+			name: "advisory error without error status",
+			run: func(s trace.Span) {
+				s.RecordError(errors.New("process lacks CAP_CHOWN"))
+			},
+			want: []string{`level=WARN`, `msg="vm step finished"`, `error="process lacks CAP_CHOWN"`},
 		},
 		{
 			name:  "instant success is skipped",
