@@ -33,7 +33,7 @@ const (
 # dockerfile = ""
 
 [defaults]
-# agent = "opencode"  # opencode (OpenCode 2), opencode1, opencode2, claude, copilot, omo or an agent defined under agents
+# agent = "opencode"  # opencode (OpenCode 2), opencode1, opencode2, claude, copilot, omo, agy or an agent defined under agents
 # image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
@@ -213,8 +213,8 @@ type AgentSettings struct {
 	// Install adds the built-in image layer that installs the harness;
 	// false leaves it to the workspace image. Unset means true.
 	Install *bool `toml:"install,omitempty"`
-	// Version is the npm version of the harness the image layer installs
-	// instead of the version pinned by jailoc.
+	// Version is the npm or release version of the harness the image layer
+	// installs instead of the version pinned by jailoc.
 	Version string `toml:"version,omitempty"`
 	// Args are appended to every start of the agent. An empty list is kept
 	// when the configuration is written back: it clears the defaults' args,
@@ -1242,7 +1242,7 @@ func validateBackend(backend string) error {
 
 var (
 	agentNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
-	// agentVersionRe matches exact npm versions. Dist-tags such as latest
+	// agentVersionRe matches exact versions. Dist-tags such as latest
 	// are rejected: the image layer is rebuilt only when its Dockerfile,
 	// which holds the version, changes.
 	agentVersionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
@@ -1274,7 +1274,7 @@ func validateAgent(name string, agents, inherited map[string]AgentSettings) erro
 			}
 		}
 		if s.Version != "" && !agentVersionRe.MatchString(s.Version) {
-			return fmt.Errorf("agents.%s: invalid version %q: must be an exact npm version such as 1.2.3", key, s.Version)
+			return fmt.Errorf("agents.%s: invalid version %q: must be an exact version such as 1.2.3", key, s.Version)
 		}
 		if s.Profile != nil {
 			if name, ok := s.Profile.Name(); ok && !agentNameRe.MatchString(name) {

@@ -165,6 +165,38 @@ func TestAgentDockerfile(t *testing.T) {
 	}
 }
 
+func TestAgentDockerfileRelease(t *testing.T) {
+	t.Parallel()
+
+	h := agent.Harness{
+		Binary:  "cli",
+		Version: "2.0.0",
+		Release: &agent.Release{
+			Repo:    "owner/cli",
+			Asset:   "cli_linux_{arch}.tar.gz",
+			Binary:  "native",
+			Version: "2.0.0",
+			SHA256:  map[string]string{"x64": "aaa", "arm64": "bbb"},
+		},
+	}
+	install := "RUN set -eu; \\\n" +
+		"    case \"$(uname -m)\" in \\\n" +
+		"      x86_64) arch=x64 sha=aaa ;; \\\n" +
+		"      aarch64) arch=arm64 sha=bbb ;; \\\n" +
+		"      *) echo \"unsupported architecture $(uname -m)\" >&2; exit 1 ;; \\\n" +
+		"    esac; \\\n" +
+		"    tmp=$(mktemp -d); \\\n" +
+		"    curl -fsSL -o \"$tmp/release.tar.gz\" \"https://github.com/owner/cli/releases/download/2.0.0/cli_linux_${arch}.tar.gz\"; \\\n" +
+		"    echo \"${sha}  $tmp/release.tar.gz\" | sha256sum -c -; \\\n" +
+		"    tar -xzf \"$tmp/release.tar.gz\" -C \"$tmp\" 'native'; \\\n" +
+		"    install -m 0755 \"$tmp/native\" '/usr/local/bin/cli'; \\\n" +
+		"    rm -rf \"$tmp\"\n"
+	want := layerHead + "FROM ${BASE}\nUSER root\n" + install + "USER agent\n"
+	if got := string(agentDockerfile(h, "agent")); got != want {
+		t.Fatalf("agentDockerfile() =\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestForBuilder(t *testing.T) {
 	t.Parallel()
 

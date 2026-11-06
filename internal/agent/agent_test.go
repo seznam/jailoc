@@ -10,7 +10,7 @@ import (
 func TestLookup(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"opencode", "opencode1", "opencode2", "claude", "copilot", "omo"} {
+	for _, name := range []string{"opencode", "opencode1", "opencode2", "claude", "copilot", "omo", "agy"} {
 		h, ok := Lookup(name)
 		if !ok || h.Name != name {
 			t.Fatalf("Lookup(%q) = %+v, %v", name, h, ok)
@@ -39,8 +39,21 @@ func TestHarnessDefinitions(t *testing.T) {
 	stateNames := map[string]string{"cache": "jailoc"}
 	for _, h := range All() {
 		t.Run(h.Name, func(t *testing.T) {
-			if h.Binary == "" || h.Package == "" || h.Version == "" || h.Continue == "" || h.Resume == "" {
+			if h.Binary == "" || h.Version == "" || h.Continue == "" || h.Resume == "" {
 				t.Fatalf("incomplete harness: %+v", h)
+			}
+			if (h.Package == "") == (h.Release == nil) {
+				t.Fatalf("harness %s needs either an npm package or a release", h.Name)
+			}
+			if r := h.Release; r != nil {
+				if r.Repo == "" || r.Binary == "" || !strings.Contains(r.Asset, "{arch}") || r.Version != h.Version {
+					t.Fatalf("incomplete release: %+v", r)
+				}
+				for _, arch := range ReleaseArchs {
+					if len(r.SHA256[arch]) != 64 {
+						t.Fatalf("release checksum of %s = %q", arch, r.SHA256[arch])
+					}
+				}
 			}
 			if strings.HasPrefix(h.Version, "v") {
 				t.Fatalf("version %q must be an npm version without v", h.Version)
@@ -72,6 +85,7 @@ func TestCommand(t *testing.T) {
 	claude, _ := Lookup("claude")
 	omo, _ := Lookup("omo")
 	copilot, _ := Lookup("copilot")
+	agy, _ := Lookup("agy")
 	opencode, _ := Lookup("opencode")
 	opencode1, _ := Lookup("opencode1")
 	tests := []struct {
@@ -92,6 +106,8 @@ func TestCommand(t *testing.T) {
 		{"claude continue", claude, nil, "", true, []string{"claude", "--dangerously-skip-permissions", "--settings", PluginDir + "/claude-settings.json", "--continue"}},
 		{"omo plain", omo, nil, "", false, []string{"omo", "--permission-preset", "full-access", "--extension", PluginDir + "/omo.js"}},
 		{"copilot plain", copilot, nil, "", false, []string{"copilot", "--allow-all"}},
+		{"agy conversation", agy, nil, "c1", false, []string{"agy", "--dangerously-skip-permissions", "--conversation", "c1"}},
+		{"agy continue", agy, nil, "", true, []string{"agy", "--dangerously-skip-permissions", "--continue"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -123,5 +139,27 @@ func TestDefaultMounts(t *testing.T) {
 	got[0] = "changed"
 	if opencode.DefaultMounts()[0] == "changed" {
 		t.Fatal("DefaultMounts shares its backing array")
+	}
+}
+
+func TestSettingsFile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		plugin  TUIPlugin
+		file    string
+		harness string
+		ok      bool
+	}{
+		{CopilotStatusLine, "settings.json", "copilot", true},
+		{AgyStatusLine, "antigravity-cli/settings.json", "agy", true},
+		{ClaudeStatusLine, "", "", false},
+		{NoTUIPlugin, "", "", false},
+	}
+	for _, tt := range tests {
+		file, harness, ok := tt.plugin.SettingsFile()
+		if file != tt.file || harness != tt.harness || ok != tt.ok {
+			t.Fatalf("SettingsFile(%d) = %q, %q, %v; want %q, %q, %v", tt.plugin, file, harness, ok, tt.file, tt.harness, tt.ok)
+		}
 	}
 }

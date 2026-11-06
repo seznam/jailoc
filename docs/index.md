@@ -2,7 +2,7 @@
 
 # jailoc
 
-`jailoc` runs coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO) in sandboxed micro-VMs so they can work autonomously without touching your host system. Each workspace boots its own lightweight VM with network restrictions, letting you control exactly which directories and internal services the agent can reach.
+`jailoc` runs coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO, Antigravity CLI) in sandboxed micro-VMs so they can work autonomously without touching your host system. Each workspace boots its own lightweight VM with network restrictions, letting you control exactly which directories and internal services the agent can reach.
 
 ## Why jailoc
 

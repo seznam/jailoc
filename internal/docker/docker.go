@@ -265,10 +265,17 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	return overlayTag, nil
 }
 
-// BuildAgentImage installs the pinned npm package of harness h on top of base
-// and returns the tag of the result.
+// BuildAgentImage installs the pinned npm package or release binary of
+// harness h on top of base and returns the tag of the result.
 func BuildAgentImage(ctx context.Context, base string, h agent.Harness) (string, error) {
 	label := fmt.Sprintf("%s %s", h.Title, h.Version)
+	if h.Release != nil {
+		r, err := resolveRelease(ctx, githubAPI, *h.Release, h.Version)
+		if err != nil {
+			return "", fmt.Errorf("resolve the %s release: %w", label, err)
+		}
+		h.Release = &r
+	}
 	return buildLayerImage(ctx, base, "jailoc-agent-"+h.Name, label, func(user string) []byte {
 		return agentDockerfile(h, user)
 	})
@@ -388,18 +395,48 @@ func agentDockerfile(h agent.Harness, user string) []byte {
 	if switchUser {
 		b.WriteString("USER root\n")
 	}
-	// npm installs the pinned version without running curl | bash. npm 11
-	// runs install scripts of global packages only when allowed; harnesses
-	// use them to set up their native binaries. The npm cache lives in a
-	// BuildKit cache mount; see forBuilder for the classic builder.
-	fmt.Fprintf(&b, "ARG %s\n", cleanCachesArg)
-	fmt.Fprintf(&b, "RUN --mount=type=cache,target=/root/.npm npm install -g --cache /root/.npm --allow-scripts='%s' '%s@%s' \\\n"+
-		"    && if [ -n \"$%s\" ]; then rm -rf /root/.npm; fi\n", h.Package, h.Package, h.Version, cleanCachesArg)
+	if h.Release != nil {
+		b.WriteString(releaseInstall(h.Binary, *h.Release))
+	} else {
+		// npm installs the pinned version without running curl | bash. npm
+		// 11 runs install scripts of global packages only when allowed;
+		// harnesses use them to set up their native binaries. The npm cache
+		// lives in a BuildKit cache mount; see forBuilder for the classic
+		// builder.
+		fmt.Fprintf(&b, "ARG %s\n", cleanCachesArg)
+		fmt.Fprintf(&b, "RUN --mount=type=cache,target=/root/.npm npm install -g --cache /root/.npm --allow-scripts='%s' '%s@%s' \\\n"+
+			"    && if [ -n \"$%s\" ]; then rm -rf /root/.npm; fi\n", h.Package, h.Package, h.Version, cleanCachesArg)
+	}
 	if switchUser {
 		fmt.Fprintf(&b, "USER %s\n", user)
 	}
 	return []byte(b.String())
 }
+
+// releaseInstall returns the RUN instruction that downloads the asset of r
+// for the build architecture, checks its checksum and installs its binary
+// as /usr/local/bin/binary. The binary belongs to root, so the agent can't
+// replace it.
+func releaseInstall(binary string, r agent.Release) string {
+	var b strings.Builder
+	b.WriteString("RUN set -eu; \\\n    case \"$(uname -m)\" in \\\n")
+	for _, arch := range agent.ReleaseArchs {
+		fmt.Fprintf(&b, "      %s) arch=%s sha=%s ;; \\\n", unameMachine[arch], arch, r.SHA256[arch])
+	}
+	b.WriteString("      *) echo \"unsupported architecture $(uname -m)\" >&2; exit 1 ;; \\\n" +
+		"    esac; \\\n" +
+		"    tmp=$(mktemp -d); \\\n")
+	fmt.Fprintf(&b, "    curl -fsSL -o \"$tmp/release.tar.gz\" \"https://github.com/%s/releases/download/%s/%s\"; \\\n",
+		r.Repo, r.Version, r.AssetName("${arch}"))
+	fmt.Fprintf(&b, "    echo \"${sha}  $tmp/release.tar.gz\" | sha256sum -c -; \\\n"+
+		"    tar -xzf \"$tmp/release.tar.gz\" -C \"$tmp\" '%s'; \\\n"+
+		"    install -m 0755 \"$tmp/%s\" '/usr/local/bin/%s'; \\\n"+
+		"    rm -rf \"$tmp\"\n", r.Binary, r.Binary, binary)
+	return b.String()
+}
+
+// unameMachine is the uname -m output of the architectures of a release.
+var unameMachine = map[string]string{"x64": "x86_64", "arm64": "aarch64"}
 
 // injectBaseArg inserts "ARG BASE\n" after any leading parser directives (# syntax=...,
 // # escape=..., # check=...) so that ${BASE} is substitutable in FROM instructions without

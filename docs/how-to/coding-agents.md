@@ -1,6 +1,6 @@
 # How to choose a coding agent
 
-Each workspace runs one coding agent: OpenCode by default, or Claude Code, GitHub Copilot CLI or OmO. jailoc installs the agent into the workspace image and starts it in unattended mode, because the VM is the security boundary.
+Each workspace runs one coding agent: OpenCode by default, or Claude Code, GitHub Copilot CLI, OmO or Antigravity CLI. jailoc installs the agent into the workspace image and starts it in unattended mode, because the VM is the security boundary.
 
 ## Select the agent
 
@@ -12,7 +12,7 @@ paths = ["~/projects/my-project"]
 agent = "claude"
 ```
 
-Values: `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo`. Set `agent` in `[defaults]` to change it for every workspace.
+Values: `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo`, `agy`. Set `agent` in `[defaults]` to change it for every workspace.
 
 `opencode` is an alias of `opencode2`, OpenCode 2. `opencode1` runs OpenCode 1 (`opencode-ai`). The two keep their sessions apart: OpenCode 2 doesn't see the sessions of OpenCode 1, and switching back and forth doesn't mix their databases. Both read the same `~/.config/opencode`. To keep using OpenCode 1 and its existing sessions:
 
@@ -63,6 +63,8 @@ The agent's state directory (for example `~/.claude` for Claude Code) persists a
 [workspaces.my-project-claude.secrets.env.ANTHROPIC_API_KEY]
 from_command = "security find-generic-password -s anthropic -w"
 ```
+
+Antigravity CLI (`agy`) prints a sign-in URL and reads the code back in the terminal, so the login works over the session without a browser in the VM. With no keyring in the VM, it keeps the token in a file in `~/.gemini`, its state directory.
 
 `jailoc down --purge` deletes the state, including logins.
 
@@ -125,6 +127,8 @@ version = "2.1.400"
 ```
 
 The next `jailoc up` or `jailoc restart` builds the agent layer with that version. Use an exact version: the layer is rebuilt only when the version changes, so `latest` is rejected.
+
+Antigravity CLI is installed from its GitHub release rather than npm. For a version other than the pinned one, jailoc reads the asset checksums from the GitHub API on every `jailoc up` and `jailoc restart`, and the download is checked against them.
 
 ## Define a custom agent
 

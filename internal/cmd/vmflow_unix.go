@@ -743,8 +743,8 @@ func statusVM(ctx context.Context, ws *workspace.Resolved) error {
 	return nil
 }
 
-// agentLabel names the agent of the workspace, the package version jailoc
-// installs and the arguments added to every start.
+// agentLabel names the agent of the workspace, the package or release
+// version jailoc installs and the arguments added to every start.
 func agentLabel(ws *workspace.Resolved) string {
 	label := ws.Agent.Name
 	switch {
@@ -752,6 +752,8 @@ func agentLabel(ws *workspace.Resolved) string {
 		label += " (installed by the image)"
 	case ws.Agent.Package != "":
 		label += " (" + ws.Agent.Package + "@" + cmp.Or(ws.Agent.Version, "latest") + ")"
+	case ws.Agent.Release != nil:
+		label += " (" + ws.Agent.Release.Repo + "@" + ws.Agent.Version + ")"
 	}
 	if len(ws.AgentArgs) > 0 {
 		label += ", args: " + strings.Join(ws.AgentArgs, " ")

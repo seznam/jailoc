@@ -3,7 +3,10 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -329,7 +332,8 @@ func TestWriteAgentFilesIndicators(t *testing.T) {
 		files map[string][]byte
 	}{
 		{"omo", map[string][]byte{"omo.js": embed.OmOExtensionJS()}},
-		{"copilot", map[string][]byte{"statusline.mjs": embed.StatusLineJS()}},
+		{"copilot", nil},
+		{"agy", nil},
 		{"claude", map[string][]byte{
 			"statusline.mjs":       embed.StatusLineJS(),
 			"claude-settings.json": []byte(`{"statusLine":{"command":"node /etc/jailoc-tui-plugin/statusline.mjs claude","type":"command"}}`),
@@ -344,6 +348,9 @@ func TestWriteAgentFilesIndicators(t *testing.T) {
 				t.Fatalf("writeAgentFiles() error = %v", err)
 			}
 			entries, err := os.ReadDir(filepath.Join(dir, "tui-plugin"))
+			if tt.files == nil && errors.Is(err, fs.ErrNotExist) {
+				return
+			}
 			if err != nil || len(entries) != len(tt.files) {
 				t.Fatalf("tui-plugin entries = %v, %v", entries, err)
 			}
@@ -351,6 +358,29 @@ func TestWriteAgentFilesIndicators(t *testing.T) {
 				if got, err := os.ReadFile(filepath.Join(dir, "tui-plugin", name)); err != nil || !bytes.Equal(got, want) { //nolint:gosec // test path
 					t.Fatalf("%s = %s, %v; want %s", name, got, err, want)
 				}
+			}
+		})
+	}
+}
+
+func TestWorkspaceStatusLineCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		env  []string
+		want string
+	}{
+		{[]string{"JAILOC_WORKSPACE=api"}, "\U0001F512 jailoc / api\n"},
+		{[]string{}, "\U0001F512 jailoc / unknown\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+			cmd := exec.Command("/bin/sh", "-c", workspaceStatusLineCommand)
+			cmd.Env = tt.env
+			out, err := cmd.Output()
+			if err != nil || string(out) != tt.want {
+				t.Fatalf("status line = %q, %v; want %q", out, err, tt.want)
 			}
 		})
 	}

@@ -101,25 +101,30 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		if err := root.MkdirAll(rel, 0o700); err != nil {
 			return nil, fmt.Errorf("create %s: %w", rel, err)
 		}
-		if ws.Agent.TUIPlugin == agent.CopilotStatusLine && slices.Contains(ws.Agent.State, d) {
-			addCopilotStatusLine(root, rel)
+		if slices.Contains(ws.Agent.State, d) {
+			addStatusLine(root, rel, ws.Agent)
 		}
 		binds = append(binds, guest.Bind{Source: src(rel), Target: d.Path})
 	}
 	return binds, nil
 }
 
-// addCopilotStatusLine sets the jailoc status line in the settings.json of
-// the GitHub Copilot CLI state directory dir inside root, unless the file
-// sets a status line. Copilot reads the status line only from there. A
-// failure leaves the agent without the indicator, so it is only reported.
-func addCopilotStatusLine(root *os.Root, dir string) {
-	if err := setDefaultStatusLine(root, path.Join(dir, "settings.json")); err != nil {
-		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not add the jailoc status line to the Copilot settings: %v\n", err)
+// addStatusLine sets the jailoc status line in the settings file of agent h
+// in its state directory dir inside root, unless the file sets a status
+// line other than the script status line of an older jailoc. GitHub Copilot CLI and Antigravity CLI read the status line only
+// from there. A failure leaves the agent without the indicator, so it is
+// only reported.
+func addStatusLine(root *os.Root, dir string, h agent.Harness) {
+	file, harness, ok := h.TUIPlugin.SettingsFile()
+	if !ok {
+		return
+	}
+	if err := setDefaultStatusLine(root, path.Join(dir, file), harness); err != nil {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not add the jailoc status line to the %s settings: %v\n", h.Title, err)
 	}
 }
 
-func setDefaultStatusLine(root *os.Root, file string) error {
+func setDefaultStatusLine(root *os.Root, file, harness string) error {
 	settings := map[string]json.RawMessage{}
 	data, err := readRegular(root, file, maxAgentConfig)
 	switch {
@@ -131,16 +136,22 @@ func setDefaultStatusLine(root *os.Root, file string) error {
 			return fmt.Errorf("parse %s: %w", path.Base(file), err)
 		}
 	}
-	if _, ok := settings["statusLine"]; ok {
-		return nil
+	if old, ok := settings["statusLine"]; ok {
+		var line struct{ Command string }
+		if json.Unmarshal(old, &line) != nil || line.Command != scriptStatusLineCommand(harness) {
+			return nil
+		}
 	}
-	line, err := json.Marshal(statusLine("copilot"))
+	line, err := json.Marshal(statusLine(harness))
 	if err != nil {
 		return err
 	}
 	settings["statusLine"] = line
 	data, err = json.MarshalIndent(settings, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := root.MkdirAll(path.Dir(file), 0o700); err != nil {
 		return err
 	}
 	return root.WriteFile(file, append(data, '\n'), 0o600)

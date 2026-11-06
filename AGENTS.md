@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`jailoc` — CLI tool that runs coding agents (OpenCode 1/2, Claude Code, GitHub Copilot CLI, OmO; one per workspace) in sandboxed libkrun micro-VMs. Each workspace gets its own VM with virtio-fs directory shares, a host-side userspace network broker that denies private networks, and SSH-based agent sessions.
+`jailoc` — CLI tool that runs coding agents (OpenCode 1/2, Claude Code, GitHub Copilot CLI, OmO, Antigravity CLI; one per workspace) in sandboxed libkrun micro-VMs. Each workspace gets its own VM with virtio-fs directory shares, a host-side userspace network broker that denies private networks, and SSH-based agent sessions.
 
 **Module**: `github.com/seznam/jailoc`
 **Language**: Go 1.26+
@@ -18,7 +18,7 @@ cmd/jailoc-guest/           VM init + SSH server inside the guest (embedded via 
 cmd/jailoc-netbroker/       Host-side network broker process, one per workspace VM
 internal/
   cmd/                       Cobra CLI: root (attach/new/continue sessions) + add, config, down, list, logs, migrate, reload, restart, sessions, status, up
-  agent/                     Built-in coding agent harnesses (opencode1, opencode2, claude, copilot, omo; opencode = alias of opencode2): npm package, session flags, env, persisted dirs, default mounts
+  agent/                     Built-in coding agent harnesses (opencode1, opencode2, claude, copilot, omo, agy; opencode = alias of opencode2): npm package or GitHub release binary, session flags, env, persisted dirs, default mounts
   config/                    TOML config parsing, validation (rejects v1 settings), mutation (~/.config/jailoc/config.toml), default config content
   workspace/                 Workspace name → resolved paths, allowed hosts/networks, CWD matching
   docker/                    Docker Engine SDK — image resolution/build on the host, v1 volume export for migrate
@@ -75,7 +75,7 @@ Guest IPv4 192.168.127.2/24 (gateway .1), IPv6 fd00:127::2/64. All traffic goes 
 - `docker.Dockerfile` — Docker layer stages (pinned, checksum-verified Docker CE, buildx, compose); jailoc appends the final stage and builds it on top of the base only for `enable_docker` workspaces
 - `tui-opencode1.js`, `tui-opencode2.js` — built TUI plugin JS for OpenCode 1 and 2 (from `plugin/opencode1.jsx`, `plugin/opencode2.jsx` via the Babel-based Solid transform in `plugin/build.mjs`)
 - `tui-plugin.json` — minimal package.json for the embedded TUI plugin
-- `omo.js` — OmO extension, `statusline.mjs` — Claude Code / Copilot CLI status line script (workspace indicator, not built)
+- `omo.js` — OmO extension, `statusline.mjs` — Claude Code status line script (workspace indicator, not built)
 
 ### TUI plugin rebuild
 When `plugin/opencode1.jsx` or `plugin/opencode2.jsx` changes, rebuild and update the embedded copies:

@@ -80,7 +80,7 @@ Defaults applied to all workspaces.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `backend` | string | `"vm"` | Accepted values: `"vm"` or empty. `"docker"` is rejected as a jailoc v1 setting. |
-| `agent` | string | `"opencode"` | Coding agent of the workspaces: `"opencode"`, `"opencode1"`, `"opencode2"`, `"claude"`, `"copilot"`, `"omo"` or a [custom agent](#custom-agents). See [Coding agents](#coding-agents). |
+| `agent` | string | `"opencode"` | Coding agent of the workspaces: `"opencode"`, `"opencode1"`, `"opencode2"`, `"claude"`, `"copilot"`, `"omo"`, `"agy"` or a [custom agent](#custom-agents). See [Coding agents](#coding-agents). |
 | `agents` | table | `{}` | Settings per coding agent and custom agent definitions, keyed by agent name. See [`agents`](#agents). |
 | `image` | string | (none) | Pre-built image used as the base for workspace Dockerfile builds, or used directly when no workspace `dockerfile` is set. |
 | `env` | string[] | `[]` | Environment variables for every session, in `KEY=VALUE` format. |
@@ -167,21 +167,22 @@ dockerfile = "~/projects/my-project/overlay.Dockerfile"
 
 Each workspace runs one coding agent. Sessions start it in unattended mode, because the VM is the security boundary.
 
-| `agent` | Agent | npm package | Session command | Continue (`-c`) | Resume (`-s ID`) | Persistent home directories | Environment |
+| `agent` | Agent | Package | Session command | Continue (`-c`) | Resume (`-s ID`) | Persistent home directories | Environment |
 |---|---|---|---|---|---|---|---|
 | `opencode2` | OpenCode 2 | `@opencode/cli` | `opencode --standalone --auto` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_CLI_CONFIG_CONTENT` |
 | `opencode1` | OpenCode 1 | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
 | `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `DISABLE_AUTOUPDATER=1` |
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
 | `omo` | OmO | `omo-ai` | `omo --permission-preset full-access --extension /etc/jailoc-tui-plugin/omo.js` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
+| `agy` | Antigravity CLI | GitHub release `google-antigravity/antigravity-cli` | `agy --dangerously-skip-permissions` | `--continue` | `--conversation ID` | `~/.gemini` | `AGY_CLI_DISABLE_AUTO_UPDATE=1` |
 
 `opencode` is an alias of `opencode2`: it runs the same harness and shares its persistent home directories, while `agents.opencode` and `agents.opencode2` are separate tables. OpenCode 2 runs with `--standalone`, so each session has its own server and environment instead of sharing a background service.
 
-Every agent shows the workspace name; `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `--settings` and `--extension` load the jailoc indicator, and for `copilot` jailoc adds a `statusLine` to `~/.copilot/settings.json` when it sets none. See [Workspace indicator](../how-to/tui-plugin.md).
+Every agent shows the workspace name; `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `--settings` and `--extension` load the jailoc indicator, and for `copilot` and `agy` jailoc adds a `statusLine` to `~/.copilot/settings.json` and `~/.gemini/antigravity-cli/settings.json` when it sets none. See [Workspace indicator](../how-to/tui-plugin.md).
 
 The package versions are pinned by the jailoc release; `version` in [`agents`](#agents) installs another one. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
 
-jailoc installs the agent with `npm install -g` in a separate layer on top of the base image, before the workspace `dockerfile` overlay, in every image it builds: the [base image](image-resolution.md#step-5-embedded-dockerfile), a `[base] dockerfile`, and `defaults.image` with a workspace `dockerfile`. An image used directly (workspace `image`, or `defaults.image` without a workspace `dockerfile`) must contain the agent binary. Before a session starts, jailoc checks that the binary is on `PATH` in the VM.
+jailoc installs the agent with `npm install -g`, or for `agy` downloads the release asset of the VM's architecture (x64 or arm64, glibc), checks its pinned SHA-256 and installs the binary as root into `/usr/local/bin`, in a separate layer on top of the base image, before the workspace `dockerfile` overlay, in every image it builds: the [base image](image-resolution.md#step-5-embedded-dockerfile), a `[base] dockerfile`, and `defaults.image` with a workspace `dockerfile`. An image used directly (workspace `image`, or `defaults.image` without a workspace `dockerfile`) must contain the agent binary. Before a session starts, jailoc checks that the binary is on `PATH` in the VM.
 
 Changing `agent` or the agent's `profile` of a running workspace takes effect after `jailoc restart`; sessions fail until then.
 
@@ -193,7 +194,7 @@ Settings per agent live in `[defaults.agents.<name>]` and `[workspaces.<ws>.agen
 |---|---|---|---|
 | `from` | string | | Custom agents only: the built-in agent it is derived from. |
 | `install` | bool | `true` | Install the agent in the images jailoc builds. With `false`, the image must provide the binary, for example through the workspace `dockerfile`. |
-| `version` | string | (pinned) | npm version installed instead of the version pinned by jailoc, e.g. `"2.1.400"`. Must be an exact version; dist-tags such as `latest` are rejected. |
+| `version` | string | (pinned) | npm or release version installed instead of the version pinned by jailoc, e.g. `"2.1.400"`. Must be an exact version; dist-tags such as `latest` are rejected. For `agy`, jailoc reads the checksums of another version's assets from the GitHub API. |
 | `args` | string[] | `[]` | Arguments appended to every session command line. A workspace list replaces the `[defaults]` list; `args = []` clears it. |
 | `mounts` | string[] | `[]` | Mounts added while the agent is selected, same syntax and validation as [`mounts`](#workspaces). An empty host (`":/home/agent/.agents"`) removes a mount added by the agent or an earlier table. See [Agent mounts](#agent-mounts). |
 | `profile` | `false` or string | (unset) | Where the agent's persistent home directories live. Unset: per workspace. `false`: per workspace, emptied on every VM start. A name: shared profile `~/.local/share/jailoc/profiles/<name>`. See [Agent profiles](#agent-profiles). |
@@ -255,7 +256,7 @@ mounts = [
 | `false` | per workspace | emptied on every VM start |
 | `"<name>"` | `~/.local/share/jailoc/profiles/<name>/<dir>` | until deleted by hand; `jailoc down --purge` keeps it |
 
-`<dir>` is the name of the harness's state directory (`opencode2-data`, `opencode2-state` for OpenCode 2, `opencode-data`, `opencode-state` for OpenCode 1, `claude`, `copilot`, `omo`), so one profile can hold the state of several harnesses, and two agents of the same harness share it when they name the same profile. `~/.cache` stays per workspace. A mount over a persistent home directory replaces it.
+`<dir>` is the name of the harness's state directory (`opencode2-data`, `opencode2-state` for OpenCode 2, `opencode-data`, `opencode-state` for OpenCode 1, `claude`, `copilot`, `omo`, `antigravity`), so one profile can hold the state of several harnesses, and two agents of the same harness share it when they name the same profile. `~/.cache` stays per workspace. A mount over a persistent home directory replaces it.
 
 A named profile is used by one running workspace at a time: `jailoc up` and `jailoc restart` fail while another workspace using the profile is running.
 
@@ -379,11 +380,11 @@ With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an
 
 ### `agent` and `agents`
 
-`agent` must be `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo` or a custom agent defined in the workspace's or the defaults' `agents`. A key of `agents` that is not a built-in agent is a custom agent: its name must match `^[a-z0-9-]+$` and `from`, set in that table or in the defaults' table of the same name, must be a built-in agent (custom agents cannot be derived from custom agents). `from` is rejected on built-in agents. `version` must be an exact npm version (`1.2.3`, optionally with a `-prerelease` and `+build` suffix). `mounts` follows the rules of `mounts`. `profile` must be `false` or a name matching `^[a-z0-9-]+$`; `true` is rejected.
+`agent` must be `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo`, `agy` or a custom agent defined in the workspace's or the defaults' `agents`. A key of `agents` that is not a built-in agent is a custom agent: its name must match `^[a-z0-9-]+$` and `from`, set in that table or in the defaults' table of the same name, must be a built-in agent (custom agents cannot be derived from custom agents). `from` is rejected on built-in agents. `version` must be an exact version (`1.2.3`, optionally with a `-prerelease` and `+build` suffix). `mounts` follows the rules of `mounts`. `profile` must be `false` or a name matching `^[a-z0-9-]+$`; `true` is rejected.
 
 ### `env`
 
-Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`.
+Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`, `AGY_CLI_DISABLE_AUTO_UPDATE`.
 
 ### `env_file`
 

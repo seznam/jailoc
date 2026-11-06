@@ -68,7 +68,7 @@ With `enable_docker` on, Docker CE, the buildx and compose plugins and `nftables
 
 ### Agent layer (steps 2, 4 and 5)
 
-The workspace's [coding agent](configuration.md#coding-agents) is installed with `npm install -g` of its pinned package in a layer on top of the Docker layer (or the base image when it is skipped), tagged `jailoc-agent-<agent>:<content-hash>`. The base image needs `npm` on `PATH`. The layer is skipped with `agents.<agent>.install = false`. Images used directly (steps 1 and 3) get no agent layer and must contain the agent binary.
+The workspace's [coding agent](configuration.md#coding-agents) is installed with `npm install -g` of its pinned package (Antigravity CLI: its checksum-verified GitHub release binary) in a layer on top of the Docker layer (or the base image when it is skipped), tagged `jailoc-agent-<agent>:<content-hash>`. The base image needs `npm` on `PATH` (Antigravity CLI: `curl`, `tar` and `sha256sum`). The layer is skipped with `agents.<agent>.install = false`. Images used directly (steps 1 and 3) get no agent layer and must contain the agent binary.
 
 ### Workspace overlay (steps 4 and 5)
 

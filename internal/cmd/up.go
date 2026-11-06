@@ -202,20 +202,34 @@ func writeAgentFiles(ws *workspace.Resolved, cacheDir string) error {
 			"statusline.mjs":       embed.StatusLineJS(),
 			"claude-settings.json": settings,
 		})
-	case agent.CopilotStatusLine:
-		return writeTUIPlugin(cacheDir, map[string][]byte{"statusline.mjs": embed.StatusLineJS()})
 	default:
 		return nil
 	}
 }
 
-// statusLineCommand is the status line command of harness (claude or
-// copilot) that runs the jailoc status line script.
-func statusLineCommand(harness string) string {
+// workspaceStatusLineCommand is the status line command of GitHub Copilot
+// CLI and Antigravity CLI: it prints the workspace with the shell, so it
+// needs no Node.js in the image.
+const workspaceStatusLineCommand = `printf '🔒 jailoc / %s\n' "${JAILOC_WORKSPACE:-unknown}"`
+
+// scriptStatusLineCommand is the command that runs the jailoc status line
+// script for harness. Claude Code runs it to chain the user's status line;
+// GitHub Copilot CLI and Antigravity CLI settings may still hold it from
+// an older jailoc.
+func scriptStatusLineCommand(harness string) string {
 	return "node " + tuiPluginContainerDir + "/statusline.mjs " + harness
 }
 
-// statusLine is the statusLine setting of harness (claude or copilot).
+// statusLineCommand is the status line command of harness (claude, copilot
+// or agy).
+func statusLineCommand(harness string) string {
+	if harness == "claude" {
+		return scriptStatusLineCommand(harness)
+	}
+	return workspaceStatusLineCommand
+}
+
+// statusLine is the statusLine setting of harness (claude, copilot or agy).
 func statusLine(harness string) map[string]string {
 	return map[string]string{"type": "command", "command": statusLineCommand(harness)}
 }
