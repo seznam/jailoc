@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -41,7 +42,16 @@ type stepSpan struct {
 func (s *stepSpan) SetAttributes(kv ...attribute.KeyValue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.attrs = append(s.attrs, kv...)
+	for _, n := range kv {
+		i := slices.IndexFunc(s.attrs, func(o attribute.KeyValue) bool { return o.Key == n.Key })
+		if i < 0 {
+			s.attrs = append(s.attrs, n)
+			continue
+		}
+		// go-microvm corrects attributes, e.g. microvm.image.layered flips to
+		// false on a flat-extraction fallback: keep only the last value.
+		s.attrs[i] = n
+	}
 }
 
 func (s *stepSpan) RecordError(err error, _ ...trace.EventOption) {

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -26,11 +27,12 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 
 func TestStepTracerLogsSpans(t *testing.T) {
 	tests := []struct {
-		name  string
-		run   func(trace.Span)
-		sleep bool
-		want  []string
-		empty bool
+		name    string
+		run     func(trace.Span)
+		sleep   bool
+		want    []string
+		notWant []string
+		empty   bool
 	}{
 		{
 			name: "attributes from start and set",
@@ -39,6 +41,16 @@ func TestStepTracerLogsSpans(t *testing.T) {
 			},
 			sleep: true,
 			want:  []string{`level=INFO`, `msg="vm step finished"`, `step=microvm.ImagePull`, `microvm.image_ref=img:1`, `microvm.image.from_cache=true`},
+		},
+		{
+			name: "repeated attribute keeps last value",
+			run: func(s trace.Span) {
+				s.SetAttributes(attribute.Bool("microvm.image.layered", true))
+				s.SetAttributes(attribute.Bool("microvm.image.layered", false))
+			},
+			sleep:   true,
+			want:    []string{`microvm.image.layered=false`},
+			notWant: []string{`microvm.image.layered=true`},
 		},
 		{
 			name: "recorded error",
@@ -70,27 +82,36 @@ func TestStepTracerLogsSpans(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			buf := captureSlog(t)
-			_, span := stepTracer{}.Tracer("test").Start(context.Background(), "microvm.ImagePull",
-				trace.WithAttributes(attribute.String("microvm.image_ref", "img:1")))
-			tt.run(span)
-			if tt.sleep {
-				time.Sleep(2 * time.Millisecond)
-			}
-			span.End()
+			// Fake time in the bubble: only the sleep advances the clock, so
+			// span durations are exact.
+			synctest.Test(t, func(t *testing.T) {
+				buf := captureSlog(t)
+				_, span := stepTracer{}.Tracer("test").Start(context.Background(), "microvm.ImagePull",
+					trace.WithAttributes(attribute.String("microvm.image_ref", "img:1")))
+				tt.run(span)
+				if tt.sleep {
+					time.Sleep(2 * time.Millisecond)
+				}
+				span.End()
 
-			got := buf.String()
-			if tt.empty {
-				if got != "" {
-					t.Fatalf("expected no log output, got %q", got)
+				got := buf.String()
+				if tt.empty {
+					if got != "" {
+						t.Fatalf("expected no log output, got %q", got)
+					}
+					return
 				}
-				return
-			}
-			for _, w := range tt.want {
-				if !strings.Contains(got, w) {
-					t.Errorf("log %q does not contain %q", got, w)
+				for _, w := range tt.want {
+					if !strings.Contains(got, w) {
+						t.Errorf("log %q does not contain %q", got, w)
+					}
 				}
-			}
+				for _, w := range tt.notWant {
+					if strings.Contains(got, w) {
+						t.Errorf("log %q contains %q", got, w)
+					}
+				}
+			})
 		})
 	}
 }
