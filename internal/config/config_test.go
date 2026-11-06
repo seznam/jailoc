@@ -2877,6 +2877,31 @@ paths = ["/data"]
 			},
 		},
 		{
+			name: "defaults and workspace docker_disk",
+			content: `
+[defaults]
+docker_disk = "30g"
+
+[workspaces.big]
+paths = ["/data"]
+docker_disk = "100g"
+
+[workspaces.plain]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.DockerDisk == nil || *cfg.Defaults.DockerDisk != "30g" {
+					t.Errorf("expected Defaults.DockerDisk \"30g\", got %v", cfg.Defaults.DockerDisk)
+				}
+				if ws := cfg.Workspaces["big"]; ws.DockerDisk == nil || *ws.DockerDisk != "100g" {
+					t.Errorf("expected Workspace.DockerDisk \"100g\", got %v", ws.DockerDisk)
+				}
+				if ws := cfg.Workspaces["plain"]; ws.DockerDisk != nil {
+					t.Errorf("expected Workspace.DockerDisk to be nil, got %q", *ws.DockerDisk)
+				}
+			},
+		},
+		{
 			name: "defaults and workspace independently",
 			content: `
 [defaults]
@@ -3076,6 +3101,28 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 				},
 			},
 			errSubstrs: []string{"test", "invalid memory format"},
+		},
+		{
+			name: "defaults docker_disk invalid suffix",
+			cfg: &Config{
+				Defaults: Defaults{
+					DockerDisk: ptrString("20gb"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid docker_disk format"},
+		},
+		{
+			name: "workspace docker_disk zero",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths:      []string{"/data"},
+						DockerDisk: ptrString("0g"),
+					},
+				},
+			},
+			errSubstrs: []string{"test", "invalid docker_disk format"},
 		},
 	}
 

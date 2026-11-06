@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/compose-spec/compose-go/v2/format"
@@ -48,6 +49,7 @@ const (
 # ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
 # cpu = 2.0
 # memory = "4g"
+# docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
 
 # [defaults.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
@@ -55,7 +57,7 @@ const (
 #   from_file = "/path/to/secret"  # written to /run/secrets/MY_FILE
 # [defaults.agents.claude]
 #   install = true      # false: the image provides the agent binary
-#   version = "2.1.312" # npm version installed instead of the pinned one
+#   version = "2.1.318" # npm version installed instead of the pinned one
 #   args = []           # appended to every agent start
 #   mounts = [":/home/agent/.agents"]  # merged over the agent's built-in mounts; ":/path" removes one
 #   profile = "work"    # state shared across workspaces, one running VM at a time; false: emptied on every start
@@ -83,6 +85,7 @@ paths = []
 # ca_bundle = true  # omitted: inherit defaults; true/false/string: override
 # cpu = 2.0
 # memory = "4g"
+# docker_disk = "20g"
 
 # [workspaces.default.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
@@ -233,13 +236,14 @@ type Mount struct {
 // lives in decides the destination; exactly one From* field decides the
 // source. FromEnv names the host env var the value is read from, FromFile the
 // absolute host path, FromCommand a command run on the host with /bin/sh -c
-// whose standard output is the value. The tags carry omitempty so a
-// whole-config TOML re-encode never injects empty source keys into a user's
-// config.
+// whose standard output is the value. TTL caches FromCommand output in the
+// host keychain for that duration. The tags carry omitempty so a whole-config
+// TOML re-encode never injects empty source keys into a user's config.
 type Secret struct {
 	FromEnv     string `toml:"from_env,omitempty"`
 	FromFile    string `toml:"from_file,omitempty"`
 	FromCommand string `toml:"from_command,omitempty"`
+	TTL         string `toml:"ttl,omitempty"`
 }
 
 // Secrets is a whole [<scope>.secrets] block. The sub-table a secret lives in
@@ -297,6 +301,7 @@ type Defaults struct {
 	GitConfig       *bool                    `toml:"git_config,omitempty"`
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
+	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
 	FilteredDNS     *bool                    `toml:"filtered_dns,omitempty"`
@@ -328,6 +333,7 @@ type Workspace struct {
 	GitConfig       *bool                    `toml:"git_config,omitempty"`
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
+	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
 	FilteredDNS     *bool                    `toml:"filtered_dns,omitempty"`
@@ -669,6 +675,15 @@ func validateSecret(name string, secret Secret, dest secretDest, context string)
 	if secret.FromFile != "" {
 		if err := validateSecretFile(secret.FromFile); err != nil {
 			return fmt.Errorf("%s: %s secret %q: %w", context, destLabel, name, err)
+		}
+	}
+	if secret.TTL != "" {
+		if secret.FromCommand == "" {
+			return fmt.Errorf("%s: %s secret %q: \"ttl\" is only valid with \"from_command\"", context, destLabel, name)
+		}
+		d, err := time.ParseDuration(secret.TTL)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("%s: %s secret %q: invalid ttl %q: must be a positive duration such as \"15m\" or \"1h\"", context, destLabel, name, secret.TTL)
 		}
 	}
 	return nil
@@ -1025,6 +1040,9 @@ func Validate(cfg *Config) error {
 	if cfg.Defaults.Memory != nil && !validMemory.MatchString(*cfg.Defaults.Memory) {
 		return fmt.Errorf("defaults: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", *cfg.Defaults.Memory)
 	}
+	if cfg.Defaults.DockerDisk != nil && !validMemory.MatchString(*cfg.Defaults.DockerDisk) {
+		return fmt.Errorf("defaults: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", *cfg.Defaults.DockerDisk)
+	}
 	if err := validateDNS(cfg.Defaults.DNSUpstream, cfg.Defaults.DNSBlockedZones); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
@@ -1116,6 +1134,9 @@ func Validate(cfg *Config) error {
 		}
 		if ws.Memory != nil && !validMemory.MatchString(*ws.Memory) {
 			return fmt.Errorf("workspace %q: invalid memory format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"4g\", \"512m\")", name, *ws.Memory)
+		}
+		if ws.DockerDisk != nil && !validMemory.MatchString(*ws.DockerDisk) {
+			return fmt.Errorf("workspace %q: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", name, *ws.DockerDisk)
 		}
 		if err := validateDNS(ws.DNSUpstream, ws.DNSBlockedZones); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)

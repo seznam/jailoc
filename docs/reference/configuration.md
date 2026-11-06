@@ -95,6 +95,7 @@ Defaults applied to all workspaces.
 | `git_config` | bool | `true` | Copy the host Git configuration read-only into the VM: `~/.gitconfig`, `config`, `ignore` and `attributes` from `$XDG_CONFIG_HOME/git` (default `~/.config/git`), and the files they reference under the home directory. See [`git_config`](#git_config). |
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
+| `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 | `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, `core.hooksPath` and included config files read-only inside the VM for repositories under workspace `paths` and read-write `mounts`, including symlinked workspace roots. Disable `sudo` and Docker there. |
 | `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. |
@@ -146,7 +147,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `env` | string[] | `[]` | Overrides `[defaults].env` entries with the same key. |
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
-| `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `dns_upstream`, `dns_blocked_zones`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
+| `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `dns_upstream`, `dns_blocked_zones`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
 
 ### Example
 
@@ -367,9 +368,9 @@ The bundle is added to the VM's system trust store, which its Docker daemon also
 
 With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an image without `dockerd` fails `jailoc up`. `enable_docker = true` together with `protect_git = true` is rejected, because Docker access is root access inside the VM; `protect_git` alone turns Docker off. In the images jailoc builds, Docker is installed only when `enable_docker` is on; see [Docker layer](image-resolution.md#docker-layer-steps-2-4-and-5).
 
-### `cpu` and `memory`
+### `cpu`, `memory` and `docker_disk`
 
-`cpu` must be a finite number greater than 0. `memory` must match `^[1-9][0-9]*[kmgKMG]?$` (for example `512m`, `4g`) and be at least `512m` at `jailoc up`.
+`cpu` must be a finite number greater than 0. `memory` and `docker_disk` must match `^[1-9][0-9]*[kmgKMG]?$` (for example `512m`, `4g`). At `jailoc up`, `memory` must be at least `512m` and `docker_disk` at least `1g`; `docker_disk` is rounded up to whole MiB. When the existing data disk is larger than `docker_disk`, `jailoc up` fails instead of shrinking it.
 
 ### `image`, `dockerfile`, `build_context`
 
@@ -396,6 +397,7 @@ Secrets live under `[defaults.secrets.env.<NAME>]`, `[defaults.secrets.file.<NAM
 | `from_env` | string | Host environment variable to read. Must match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `from_file` | string | Host file to read. Absolute or `~` path. |
 | `from_command` | string | Command run on the host with `/bin/sh -c`; its standard output is the value. Must not be blank. |
+| `ttl` | string | Duration (`time.ParseDuration`, e.g. `"15m"`, `"1h"`) for which `from_command` output is cached in the host system keychain per workspace. Only valid with `from_command`; must be positive. |
 
 Exactly one of `from_env`, `from_file` and `from_command` must be set.
 
@@ -406,7 +408,7 @@ Exactly one of `from_env`, `from_file` and `from_command` must be set.
 
 A name may not appear in both `secrets.env` and `secrets.file` of the same scope.
 
-At `jailoc up`, `jailoc reload` and `jailoc add`, jailoc reads every source on the host: a `from_env` variable must be set and non-empty, a `from_file` path must be a regular file, and a `from_command` must exit with status 0, print something and finish within two minutes. Commands run with the terminal attached. Env secret values lose trailing `\r` and `\n` characters and must not contain line breaks or NUL. Values travel to the guest over SSH; file secrets are written to `/run/secrets` (tmpfs, mode `0400`, owned by the agent) and env secrets go to the session environment only. jailoc never writes them to host disk. `jailoc reload` re-reads and re-pushes secrets and removes files of secrets no longer configured; running sessions keep their old environment. See the [secrets how-to](../how-to/secrets.md).
+At `jailoc up`, `jailoc reload` and `jailoc add`, jailoc reads every source on the host: a `from_env` variable must be set and non-empty, a `from_file` path must be a regular file, and a `from_command` must exit with status 0, print something and finish within two minutes. Commands run with the terminal attached and `JAILOC_WORKSPACE` set to the workspace name. When `ttl` is set on a `from_command` secret, jailoc caches the command output in the host system keychain (macOS login keychain or Linux kernel user keyring) for that duration, keyed by configuration file, workspace, secret destination, secret name and command; `jailoc reload --purge-cache` evicts the cached entries and runs the commands again, and `jailoc down --purge` deletes them. Both fail when the keychain refuses to delete an entry and keep it recorded, so the next purge retries it. Env secret values lose trailing `\r` and `\n` characters and must not contain line breaks or NUL. Values travel to the guest over SSH; file secrets are written to `/run/secrets` (tmpfs, mode `0400`, owned by the agent) and env secrets go to the session environment only. jailoc never writes them to plain files on host disk. `jailoc reload` re-reads and re-pushes secrets and removes files of secrets no longer configured; running sessions keep their old environment. See the [secrets how-to](../how-to/secrets.md).
 
 ---
 
@@ -438,7 +440,7 @@ The `opencode1` mount of `~/.omo` serves the OmO plugin (`oh-my-openagent`), whi
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 

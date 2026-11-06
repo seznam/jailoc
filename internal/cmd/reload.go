@@ -16,7 +16,8 @@ allowed_hosts, allowed_networks, filtered_dns, ports,
 ssh_auth_sock, ca_bundle, env and secrets. Running sessions keep running.
 Changes that need a new VM are listed; apply them with jailoc restart.
 jailoc up on a running VM workspace does the same.
-With --all, reloads every running workspace.`,
+With --all, reloads every running workspace.
+With --purge-cache, also rotates cached from_command secrets with a ttl.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -34,12 +35,15 @@ With --all, reloads every running workspace.`,
 					return err
 				}
 			}
-			return reloadVM(ctx, ws)
+			return reloadVM(ctx, ws, reloadPurgeCache)
 		})
 	},
 }
 
+var reloadPurgeCache bool
+
 func init() {
+	reloadCmd.Flags().BoolVar(&reloadPurgeCache, "purge-cache", false, "evict cached from_command secrets with a ttl and run them again")
 	addAllFlag(reloadCmd, "reload all running workspaces")
 	rootCmd.AddCommand(reloadCmd)
 }

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -1163,6 +1164,45 @@ func TestResolveCPUMemory(t *testing.T) {
 	}
 }
 
+func TestResolveDockerDisk(t *testing.T) {
+	t.Parallel()
+
+	str := func(v string) *string { return &v }
+
+	tests := []struct {
+		name    string
+		defDisk *string
+		wsDisk  *string
+		want    string
+	}{
+		{"fallback when both unset", nil, nil, "20g"},
+		{"defaults used when workspace unset", str("40g"), nil, "40g"},
+		{"workspace overrides defaults", str("40g"), str("100g"), "100g"},
+		{"workspace without defaults", nil, str("50g"), "50g"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{DockerDisk: tt.defDisk},
+				Workspaces: map[string]config.Workspace{
+					"test": {Paths: []string{"/data"}, DockerDisk: tt.wsDisk},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "test")
+			if err != nil {
+				t.Fatalf("Resolve failed: %v", err)
+			}
+			if resolved.DockerDisk != tt.want {
+				t.Errorf("DockerDisk: got %q, want %q", resolved.DockerDisk, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveMountsDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1349,6 +1389,19 @@ func TestResolveSecrets(t *testing.T) {
 			want: []workspace.ResolvedSecret{
 				{Name: "kept", Kind: workspace.SecretKindEnv, FromEnv: "KEPT_HOST"},
 				{Name: "replaced", Kind: workspace.SecretKindFile, FromFile: "/etc/new"},
+			},
+		},
+		{
+			name: "command source with ttl survives",
+			defaultSecrets: config.Secrets{Env: map[string]config.Secret{
+				"NPM_TOKEN": {FromCommand: "op read op://dev/npm/token", TTL: "1h"},
+			}},
+			wsSecrets: config.Secrets{File: map[string]config.Secret{
+				"kube": {FromCommand: "vault read kube", TTL: "30m"},
+			}},
+			want: []workspace.ResolvedSecret{
+				{Name: "NPM_TOKEN", Kind: workspace.SecretKindEnv, FromCommand: "op read op://dev/npm/token", TTL: time.Hour},
+				{Name: "kube", Kind: workspace.SecretKindFile, FromCommand: "vault read kube", TTL: 30 * time.Minute},
 			},
 		},
 	}

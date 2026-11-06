@@ -95,7 +95,7 @@ Shuts down the workspace VM and its network broker. All agent sessions end. The 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Stop every configured workspace. Combined with `--purge`, purges every workspace. |
-| `--purge` | | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
+| `--purge` | | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM, any cached `from_command` secrets in the system keychain (the command fails if an entry can't be deleted; the next purge retries it) and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
 
 ---
 
@@ -148,6 +148,7 @@ Fails when the workspace is not running.
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Reload every running workspace. Stopped workspaces are skipped. |
+| `--purge-cache` | | Evict cached `from_command` secrets with a `ttl` from the system keychain and run their commands again. Fails if an entry can't be deleted; the next purge retries it. |
 
 ---
 
@@ -168,7 +169,7 @@ jailoc status [workspace] [flags]
 ```
 Workspace: myproject
 Backend:   vm
-Agent:     claude (@anthropic-ai/claude-code@2.1.312)
+Agent:     claude (@anthropic-ai/claude-code@2.1.318)
 State:     running (supervisor pid 4242)
 Started:   2026-10-31T09:12:44+01:00 (up 2h5m)
 Resources: 2 CPUs, 4096 MiB memory
@@ -294,7 +295,7 @@ Print the resolved configuration.
 jailoc config [flags]
 ```
 
-Reads the configuration file, resolves defaults and `~` expansions, and prints the result. Secrets are listed per scope, under `Defaults Secrets:` and under each workspace, as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token")` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
+Reads the configuration file, resolves defaults and `~` expansions, and prints the result. Secrets are listed per scope, under `Defaults Secrets:` and under each workspace, as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
 
 ---
 

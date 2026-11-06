@@ -33,7 +33,7 @@ var restartCmd = &cobra.Command{
 			if err := validateSecretSources(ws); err != nil {
 				return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
 			}
-			if err := downVM(ws, false); err != nil {
+			if err := downVM(ctx, ws, false); err != nil {
 				return err
 			}
 			return runUpVM(ctx, cfg, ws)

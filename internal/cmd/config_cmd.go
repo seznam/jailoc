@@ -109,6 +109,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Memory: %s\n", defaultsMemory)
 
+	defaultsDockerDisk := "(not set, default: 20g)"
+	if cfg.Defaults.DockerDisk != nil {
+		defaultsDockerDisk = *cfg.Defaults.DockerDisk
+	}
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Docker Disk: %s\n", defaultsDockerDisk)
+
 	_, _ = fmt.Fprintf(os.Stdout, "\n")
 
 	// Print each workspace
@@ -200,6 +206,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			wsMemory = *ws.Memory
 		}
 		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Memory: %s\n", wsMemory)
+
+		wsDockerDisk := "(not set)"
+		if ws.DockerDisk != nil {
+			wsDockerDisk = *ws.DockerDisk
+		}
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Docker Disk: %s\n", wsDockerDisk)
 
 		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}
