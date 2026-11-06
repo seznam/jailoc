@@ -105,6 +105,9 @@ func Init(logger *slog.Logger) error {
 	if err := harden.Set("net.ipv4.ip_forward", "1"); err != nil {
 		logger.Warn("enable ip forwarding", "error", err)
 	}
+	// As soon as the network is up: the clock starts from the whole-second RTC
+	// and falls behind whenever the host sleeps.
+	defer startClockSync(logger)()
 	acct, err := ensureAccount(cfg)
 	if err != nil {
 		return err

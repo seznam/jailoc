@@ -23,12 +23,13 @@ Building on the host daemon is fastest, but Dockerfile `RUN` steps then run with
 The VM boots from a small root file system that holds only `jailoc-guest` and its configuration, and the unpacked image in the image cache is shared into the VM read-only. `jailoc-guest` lays an overlay over the two and switches to it, with writes held in VM memory (swappable to compressed RAM), so files written outside the shares and the persistent home count against `memory` and are discarded when the VM stops. `jailoc-guest` prepares the system and then serves SSH:
 
 1. configures the network addresses, the broker as gateway and DNS resolver, and the hostname,
-2. on Linux hosts, switches to idmapped mounts of the root filesystem and the shares, because libkrun's virtio-fs shows the real host owner of every file there: your user's files appear as root's in the root filesystem and as the agent's in the home and shared directories, and files the agent creates belong to your user on the host,
-3. creates the `agent` user (UID 1000) when the image has none, and its home directory,
-4. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
-5. adds the hostname to `/etc/hosts`,
-6. with `enable_docker`, formats the Docker data disk (`docker_disk`, 20 GiB by default) on first use, mounts it at `/var/lib/docker`, grows its file system when `docker_disk` was raised and starts `dockerd` with the socket owned by the `agent` group,
-7. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
+2. sets the clock to host time and keeps it there: every 30 seconds it asks the broker's time service for the host clock and steps the guest clock when it is off by more than half a second, because the guest clock stops while the host sleeps,
+3. on Linux hosts, switches to idmapped mounts of the root filesystem and the shares, because libkrun's virtio-fs shows the real host owner of every file there: your user's files appear as root's in the root filesystem and as the agent's in the home and shared directories, and files the agent creates belong to your user on the host,
+4. creates the `agent` user (UID 1000) when the image has none, and its home directory,
+5. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
+6. adds the hostname to `/etc/hosts`,
+7. with `enable_docker`, formats the Docker data disk (`docker_disk`, 20 GiB by default) on first use, mounts it at `/var/lib/docker`, grows its file system when `docker_disk` was raised and starts `dockerd` with the socket owned by the `agent` group,
+8. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
 
 `jailoc-guest` leaves privileges alone by default, so the agent can use `sudo` from the image. Root in the VM is still inside the VM boundary.
 
@@ -78,7 +79,7 @@ Secrets never touch the root file system or a share. jailoc reads them on the ho
 
 ## Network
 
-The VM has exactly one network interface, and its only peer is the workspace's broker on the host. The broker runs a userspace TCP/IP stack (gVisor), serves DHCP and DNS on the gateway, and checks every outgoing TCP connection and UDP flow against the workspace policy before it opens a host socket. See [Network Isolation](network-isolation.md).
+The VM has exactly one network interface, and its only peer is the workspace's broker on the host. The broker runs a userspace TCP/IP stack (gVisor), serves DHCP, DNS and the host clock (SNTP) on the gateway, and checks every outgoing TCP connection and UDP flow against the workspace policy before it opens a host socket. See [Network Isolation](network-isolation.md).
 
 The broker also carries a few host services: the SSH and Docker sockets for jailoc, the host SSH agent when `ssh_auth_sock` is on (exposed in the guest as `/run/ssh-agent.sock`, keys never enter the VM), `ports`, which publish guest ports on host `127.0.0.1`, and `host_ports`, which relay guest connections on the gateway to host loopback ports or Unix sockets. jailoc-guest mirrors each `host_ports` entry on guest loopback and maps `host.jailoc.internal` and `host.docker.internal` to the gateway in `/etc/hosts`.
 

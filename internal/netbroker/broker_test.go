@@ -27,6 +27,8 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+
+	"github.com/seznam/jailoc/internal/sntp"
 )
 
 type syncBuf struct {
@@ -237,6 +239,20 @@ func TestBrokerEndToEnd(t *testing.T) {
 	t.Run("gateway port other than DNS gets RST", func(t *testing.T) {
 		if err := dial([4]byte{192, 168, 127, 1}, 22); err == nil || !strings.Contains(err.Error(), "refused") {
 			t.Fatalf("dial gateway:22 = %v, want connection refused", err)
+		}
+	})
+	t.Run("NTP on gateway answers with the host clock", func(t *testing.T) {
+		c, err := gonet.DialUDP(g, nil, &tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}), Port: sntp.Port}, ipv4.ProtocolNumber)
+		if err != nil {
+			t.Fatalf("dial ntp: %v", err)
+		}
+		defer func() { _ = c.Close() }()
+		offset, err := sntp.Offset(c, 5*time.Second)
+		if err != nil {
+			t.Fatalf("query ntp: %v", err)
+		}
+		if offset.Abs() > time.Second {
+			t.Fatalf("offset to the host clock = %s, want about 0", offset)
 		}
 	})
 	t.Run("DNS on gateway is forwarded to the upstream", func(t *testing.T) {
