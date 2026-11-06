@@ -1,5 +1,42 @@
 # Changelog
 
+## [2.1.0](https://github.com/seznam/jailoc/compare/v2.0.1...v2.1.0) (2026-11-06)
+
+
+### Features
+
+* **secrets:** add from_command ttl keychain cache and JAILOC_WORKSPACE ([ee5232e](https://github.com/seznam/jailoc/commit/ee5232e720e454f5baaa97062faa83bc7c5b60a4))
+* **secrets:** add from_command ttl keychain cache and JAILOC_WORKSPACE ([feb7278](https://github.com/seznam/jailoc/commit/feb72788b56702d7cd242f01e80f557104050634))
+* **vm:** log attributes and errors of go-microvm boot steps ([95e8ca6](https://github.com/seznam/jailoc/commit/95e8ca692f7f78f867510ca746522dc3abcef190))
+* **vm:** log attributes and errors of go-microvm boot steps ([bda5f2b](https://github.com/seznam/jailoc/commit/bda5f2b0009174c15ca454d5445206ff4c90370c))
+* **vm:** make the Docker data disk size configurable ([bb5068a](https://github.com/seznam/jailoc/commit/bb5068a58c993b2ed115c8178bb028ca601869a5))
+* **vm:** make the Docker data disk size configurable ([c650cd4](https://github.com/seznam/jailoc/commit/c650cd4a7fd4f267eaf9234107655c5871ee22eb))
+
+
+### Bug Fixes
+
+* **agent:** upgrade pinned harness versions to latest in major line ([81ae742](https://github.com/seznam/jailoc/commit/81ae742d35c702bf1f6324403be26ccd5064c000))
+* **agent:** upgrade pinned harness versions to latest in major line ([39a155a](https://github.com/seznam/jailoc/commit/39a155a23cc1eaba41dcf3134bf6fbbd7b414a0e))
+* **deps:** resolve open Dependabot alerts ([b27576a](https://github.com/seznam/jailoc/commit/b27576a01d78b39048d7839e197cf178fc340e85))
+* **secrets:** compute cache deadlines under lock and check keyring timeouts ([315e674](https://github.com/seznam/jailoc/commit/315e674e4b19f4f34dbcb832d38751613af76533))
+* **secrets:** give nonempty cache index at least 24h TTL ([2a6032a](https://github.com/seznam/jailoc/commit/2a6032a15f493fb746ab40fe240a82b07c23ba74))
+* **secrets:** give nonempty cache index at least 24h TTL ([866de7a](https://github.com/seznam/jailoc/commit/866de7afc2d612dc1bc7e000dc41a95c011622aa))
+* **secrets:** grant user keyring permissions, keep expired retry index and honor context in lock ([4c83587](https://github.com/seznam/jailoc/commit/4c835873b017573bb453be49f3cd15c3e73e5c10))
+* **secrets:** harden keychain cache write, read, validation and purge ([ba9cbdc](https://github.com/seznam/jailoc/commit/ba9cbdc02540d2dedb7df068420f40c1e47e67ea))
+* **secrets:** lock cache index, keep longest expiry and report purge failures ([540e162](https://github.com/seznam/jailoc/commit/540e162417210b3d459d4488e480db0ef1c764a5))
+* **secrets:** propagate purge generation read and write errors ([cfeed7a](https://github.com/seznam/jailoc/commit/cfeed7a16fe89cdbe1376eea63dd563bac5a9c59))
+* **secrets:** run from_command outside cache lock with purge generation ([d69d35a](https://github.com/seznam/jailoc/commit/d69d35ab4edef3d64664d33840b4e9c7461d1827))
+* **vm:** keep last value of repeated step attributes and use fake time in tracer test ([48417b0](https://github.com/seznam/jailoc/commit/48417b0d71426444812b4f76a11bbc386cebd6ce))
+* **vm:** keep the guest clock on host time ([34d6466](https://github.com/seznam/jailoc/commit/34d6466d6d5031fa6ac4d1ab5d89cff0d7afa42c))
+* **vm:** keep the guest clock on host time ([d4b2c87](https://github.com/seznam/jailoc/commit/d4b2c87f38eebd91ba9409a8771f5e03fd927072)), closes [#328](https://github.com/seznam/jailoc/issues/328)
+* **vm:** log advisory step errors as warnings, not failures ([bfc2fda](https://github.com/seznam/jailoc/commit/bfc2fdae5131bfa126493ce04cb58664fc2c6758))
+* **vm:** reject workspaces with more shares than libkrun has interrupts ([e5027d9](https://github.com/seznam/jailoc/commit/e5027d90b2ecd6ff445477df77d038b6fc3951e3))
+
+
+### Code Refactoring
+
+* **config:** rename disk to docker_disk ([904f9f5](https://github.com/seznam/jailoc/commit/904f9f51205e33561979ec47613b8c76558eb35f))
+
 ## [2.0.1](https://github.com/seznam/jailoc/compare/v2.0.0...v2.0.1) (2026-11-04)
 
 
