@@ -66,6 +66,7 @@ Background on how jailoc works and why it's designed the way it is.
 - [Architecture](explanation/architecture.md)
 - [Network Isolation](explanation/network-isolation.md)
 - [Secrets](explanation/secrets.md)
+- [Alternatives](explanation/alternatives.md)
 
 ### Blog
 

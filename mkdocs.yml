@@ -92,6 +92,7 @@ nav:
     - Network Isolation: explanation/network-isolation.md
     - Secrets: explanation/secrets.md
     - Resource Use: explanation/resource-use.md
+    - Alternatives: explanation/alternatives.md
   - Blog:
     - "jailoc 2: every agent gets its own computer": blog/jailoc-2.md
   - Development: development.md
