@@ -101,24 +101,25 @@ func TestRestartOnlyChangesDockerDisk(t *testing.T) {
 }
 
 func TestRestartOnlyChangesIPv6(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
-	if err != nil {
-		guestBinary = ""
-	}
+	t.Parallel()
 	for _, tt := range []struct {
+		name          string
+		protocol      int
 		running, want bool
 		changes       []string
 	}{
-		{false, false, nil},
-		{true, true, nil},
-		{false, true, []string{"network.ipv6"}},
-		{true, false, []string{"network.ipv6"}},
+		{"both off", guest.Protocol, false, false, nil},
+		{"both on", guest.Protocol, true, true, nil},
+		{"enable", guest.Protocol, false, true, []string{"network.ipv6"}},
+		{"disable", guest.Protocol, true, false, []string{"network.ipv6"}},
+		// Legacy guests and brokers enable IPv6 whatever the spec says.
+		{"legacy off", 1, false, false, []string{"network.ipv6", "the jailoc guest (jailoc was upgraded)"}},
+		{"legacy on", 1, false, true, []string{"the jailoc guest (jailoc was upgraded)"}},
 	} {
-		running := vm.Spec{Agent: "opencode", GuestBinary: guestBinary, Guest: &guest.Config{IPv6: tt.running}}
-		want := vm.Spec{Agent: "opencode", GuestBinary: guestBinary, Guest: &guest.Config{IPv6: tt.want}}
+		running := vm.Spec{Agent: "opencode", GuestProtocol: tt.protocol, Guest: &guest.Config{IPv6: tt.running}}
+		want := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &guest.Config{IPv6: tt.want}}
 		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
-			t.Errorf("running=%v want=%v: got %v, want %v", tt.running, tt.want, got, tt.changes)
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.changes)
 		}
 	}
 }

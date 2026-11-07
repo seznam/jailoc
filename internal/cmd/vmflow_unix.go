@@ -851,7 +851,7 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	if running.Guest != nil && running.Guest.NoPrivilegeEscalation != ws.ProtectGit {
 		out = append(out, "protect_git")
 	}
-	if running.Guest != nil && running.Guest.IPv6 != ws.IPv6 {
+	if running.Guest != nil && guestIPv6(running) != ws.IPv6 {
 		out = append(out, "network.ipv6")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.

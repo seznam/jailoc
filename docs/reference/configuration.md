@@ -130,7 +130,7 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `ipv6` | bool | `false` | Give the guest IPv6 (`fd00:127::2/64`) and let the broker allow IPv6 destinations by the [IPv6 policy](../explanation/network-isolation.md#ipv6). When off, the guest has IPv4 only and the broker denies every IPv6 flow. Changing it needs `jailoc restart`; `jailoc reload` turns it off at the broker right away. |
+| `ipv6` | bool | `false` | Give the guest IPv6 (`fd00:127::2/64`) and let the broker allow IPv6 destinations by the [IPv6 policy](../explanation/network-isolation.md#ipv6). When off, the guest has IPv4 only and the broker denies every IPv6 flow. Changing it needs `jailoc restart`; `jailoc reload` turns it off at the broker right away, except in a VM started by a jailoc release without this setting: that VM keeps IPv6 until `jailoc restart`. |
 | `filtered_dns` | bool | `false` | Filter DNS answers in the network broker. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
 | `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. |
 | `dns_blocked_zones` | string[] | `[]` | DNS suffixes answered with NXDOMAIN, including all subdomains. |

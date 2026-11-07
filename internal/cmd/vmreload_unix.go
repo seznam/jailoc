@@ -135,9 +135,9 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 		spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
 	}
 	spec.Guest.NoPrivilegeEscalation = ws.ProtectGit
-	if ws.IPv6 && !running.Guest.IPv6 {
-		// The guest has no IPv6 until it restarts, and the running broker
-		// may predate the ipv6 policy field: keep its policy IPv4 only.
+	if ws.IPv6 && (!running.Guest.IPv6 || running.GuestProtocol < 2) {
+		// The guest has no IPv6 until it restarts, or the running broker
+		// predates the ipv6 policy field and rejects it: leave it out.
 		v4 := *ws
 		v4.IPv6 = false
 		if spec.Policy, err = vmPolicy(ctx, &v4); err != nil {
@@ -181,7 +181,7 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if running.Guest.NoPrivilegeEscalation != want.Guest.NoPrivilegeEscalation {
 		out = append(out, "protect_git")
 	}
-	if running.Guest.IPv6 != want.Guest.IPv6 {
+	if guestIPv6(running) != want.Guest.IPv6 {
 		out = append(out, "network.ipv6")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.

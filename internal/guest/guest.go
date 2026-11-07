@@ -17,7 +17,10 @@ package guest
 // lacks or misreads, for example a new session open flag or a new Reload
 // field. Guest-only changes (boot fixes, refactors) keep it; running VMs
 // pick them up at their next restart.
-const Protocol = 1
+//
+// Protocol 2: the guest configures IPv6 only when Config.IPv6 is set, and
+// the broker policy denies IPv6 unless its ipv6 field is set.
+const Protocol = 2
 
 // Paths inside the guest root file system.
 const (

@@ -519,6 +519,13 @@ func guestCompatible(running vm.Spec) bool {
 	return running.GuestProtocol == guest.Protocol
 }
 
+// guestIPv6 reports whether the running VM has guest IPv6. Guests and
+// brokers before guest protocol 2 enable IPv6 regardless of the
+// configuration, and their specs do not record it.
+func guestIPv6(running vm.Spec) bool {
+	return running.GuestProtocol < 2 || (running.Guest != nil && running.Guest.IPv6)
+}
+
 // checkAgentCurrent reports a running workspace VM that was started for
 // another agent than the configured one: its image may lack the agent.
 func checkAgentCurrent(ws *workspace.Resolved) error {
