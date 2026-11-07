@@ -3,6 +3,8 @@ package guest
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -91,6 +93,36 @@ func TestSetTimeZone(t *testing.T) {
 			}
 			if string(got) != tt.wantZone {
 				t.Fatalf("/etc/timezone = %q, want %q", got, tt.wantZone)
+			}
+		})
+	}
+}
+
+// TestSessionEnvTimeZone cannot be parallel: it sets TZ in the process
+// environment that sessionEnv reads.
+func TestSessionEnvTimeZone(t *testing.T) {
+	t.Setenv("TZ", "Etc/UTC")
+	zone := &TimeZone{Name: "Europe/Prague"}
+
+	tests := []struct {
+		name string
+		cfg  *Config
+		want []string
+	}{
+		{name: "unmanaged zone keeps image TZ", cfg: &Config{}, want: []string{"TZ=Etc/UTC"}},
+		{name: "managed zone drops image TZ", cfg: &Config{TimeZone: zone}, want: nil},
+		{name: "configured TZ wins", cfg: &Config{TimeZone: zone, Env: []string{"TZ=Asia/Tokyo"}}, want: []string{"TZ=Asia/Tokyo"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			for _, kv := range sessionEnv(tt.cfg) {
+				if strings.HasPrefix(kv, "TZ=") {
+					got = append(got, kv)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("TZ entries = %q, want %q", got, tt.want)
 			}
 		})
 	}

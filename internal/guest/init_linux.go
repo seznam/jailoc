@@ -599,12 +599,16 @@ func chown(path string, acct account) error {
 
 // sessionEnv is the base environment of every session: the image
 // environment that libkrun passes to init, plus the configured entries.
+// When jailoc manages the time zone, the image's TZ is dropped so sessions
+// follow /etc/localtime; a TZ in the configured entries still wins.
 func sessionEnv(cfg *Config) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		switch {
 		case strings.HasPrefix(name, "KRUN_"), name == "HOME", name == "USER", name == "SHELL", name == "TERM", name == "HOSTNAME":
+			continue
+		case name == "TZ" && cfg.TimeZone != nil:
 			continue
 		}
 		env = append(env, kv)
