@@ -2582,6 +2582,58 @@ func TestValidateMountsForbiddenParentOfHomeEntry(t *testing.T) {
 	}
 }
 
+func TestValidateMountsForbiddenThroughSymlink(t *testing.T) {
+	home := safeHome(t)
+	// ~/.ssh links into a dotfiles directory; ~/creds links to ~/.kube.
+	mustMkdir := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(p, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustSymlink := func(target, link string) {
+		t.Helper()
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(home, "dotfiles", "ssh"))
+	mustMkdir(filepath.Join(home, "dotfiles", "vim"))
+	mustSymlink(filepath.Join(home, "dotfiles", "ssh"), filepath.Join(home, ".ssh"))
+	mustMkdir(filepath.Join(home, ".kube"))
+	mustSymlink(filepath.Join(home, ".kube"), filepath.Join(home, "creds"))
+	mustMkdir(filepath.Join(home, "projects"))
+	mustSymlink(filepath.Join(home, "projects"), filepath.Join(home, "work"))
+
+	tests := []struct {
+		name      string
+		mount     string
+		wantError string
+	}{
+		{name: "symlink to a credential directory", mount: "~/creds:/home/agent/creds:ro", wantError: "because ~/.kube holds credentials"},
+		{name: "directory a credential symlink points into", mount: "~/dotfiles:/home/agent/dotfiles:ro", wantError: "because it contains ~/.ssh, which holds credentials"},
+		{name: "inside the credential symlink target", mount: "~/dotfiles/ssh:/home/agent/ssh:ro", wantError: "because ~/.ssh holds credentials"},
+		{name: "sibling in the dotfiles directory", mount: "~/dotfiles/vim:/home/agent/vim:ro"},
+		{name: "unrelated symlink", mount: "~/work:/home/agent/work:rw"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := Workspace{Backend: BackendVM, Paths: []string{"/data/workspace"}, Mounts: []string{tt.mount}}
+			err := Validate(&Config{Workspaces: map[string]Workspace{"default": ws}})
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("expected validation to pass, got: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) || !strings.Contains(err.Error(), "resolves to") {
+				t.Fatalf("expected error containing %q, got: %v", tt.wantError, err)
+			}
+		})
+	}
+}
+
 func TestValidateMountsAcceptsSafe(t *testing.T) {
 	safeHome(t)
 

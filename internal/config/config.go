@@ -866,6 +866,8 @@ func validateMountHostPath(host string, context string) error {
 		return fmt.Errorf("%s: expand mount host path %q: %w", context, host, err)
 	}
 	cleanHost := filepath.Clean(expandedHost)
+	// A missing path has nothing to resolve: only the literal check applies.
+	realHost, _ := filepath.EvalSymlinks(cleanHost)
 
 	for _, forbidden := range forbiddenMountHostPaths {
 		expandedForbidden, err := ExpandPath(forbidden.path)
@@ -874,26 +876,45 @@ func validateMountHostPath(host string, context string) error {
 		}
 
 		cleanForbidden := filepath.Clean(expandedForbidden)
-		forbiddenPrefix := cleanForbidden + string(os.PathSeparator)
-		if cleanHost == cleanForbidden || strings.HasPrefix(cleanHost, forbiddenPrefix) {
-			if forbidden.hint == "" {
-				return fmt.Errorf("%s: mount host path %q is forbidden", context, cleanHost)
-			}
-			return fmt.Errorf("%s: mount host path %q is forbidden because %s holds credentials; %s", context, cleanHost, forbidden.path, forbidden.hint)
-		}
-
 		// Sharing a parent of a home-directory entry (~/.config, ~/.cache, ~)
 		// would expose it as well. System paths are exempt: every host path
 		// is under /.
-		if strings.HasPrefix(forbidden.path, "~") && strings.HasPrefix(cleanForbidden, cleanHost+string(os.PathSeparator)) {
-			if forbidden.hint == "" {
-				return fmt.Errorf("%s: mount host path %q is forbidden because it contains %s", context, cleanHost, forbidden.path)
+		home := strings.HasPrefix(forbidden.path, "~")
+		shown := fmt.Sprintf("%q", cleanHost)
+		inside, contains := mountOverlap(cleanHost, cleanForbidden, home)
+		// Home entries are also compared after resolving symlinks, so a
+		// symlink to ~/.ssh or a dotfiles directory that ~/.ssh links into is
+		// caught. System paths are not: on macOS /tmp, /var and /etc resolve
+		// into the forbidden /private.
+		if home && !inside && !contains && realHost != "" {
+			if realForbidden, err := filepath.EvalSymlinks(cleanForbidden); err == nil {
+				inside, contains = mountOverlap(realHost, realForbidden, true)
+				shown = fmt.Sprintf("%q (resolves to %q)", cleanHost, realHost)
 			}
-			return fmt.Errorf("%s: mount host path %q is forbidden because it contains %s, which holds credentials; %s", context, cleanHost, forbidden.path, forbidden.hint)
+		}
+
+		switch {
+		case inside && forbidden.hint == "":
+			return fmt.Errorf("%s: mount host path %s is forbidden", context, shown)
+		case inside:
+			return fmt.Errorf("%s: mount host path %s is forbidden because %s holds credentials; %s", context, shown, forbidden.path, forbidden.hint)
+		case contains && forbidden.hint == "":
+			return fmt.Errorf("%s: mount host path %s is forbidden because it contains %s", context, shown, forbidden.path)
+		case contains:
+			return fmt.Errorf("%s: mount host path %s is forbidden because it contains %s, which holds credentials; %s", context, shown, forbidden.path, forbidden.hint)
 		}
 	}
 
 	return nil
+}
+
+// mountOverlap reports whether host equals or lies inside forbidden, and,
+// when parents count, whether host contains forbidden.
+func mountOverlap(host, forbidden string, parents bool) (inside, contains bool) {
+	sep := string(os.PathSeparator)
+	inside = host == forbidden || strings.HasPrefix(host, forbidden+sep)
+	contains = parents && strings.HasPrefix(forbidden, host+sep)
+	return inside, contains
 }
 
 func formatMount(m Mount) string {
