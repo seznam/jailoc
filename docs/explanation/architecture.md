@@ -8,7 +8,7 @@ Each workspace runs in its own libkrun micro-VM. This page describes the process
 
 Every VM is owned by a detached supervisor process (`jailoc vm-supervise`). It starts the workspace's network broker, boots the VM through the go-microvm runner, waits until the guest is ready, and from then on keeps the two together: when either the VM or the broker exits, it stops the other. A workspace never runs without its broker.
 
-The VM runtime (runner, libkrun and the libkrunfw guest kernel) is embedded in release builds of jailoc and unpacked into the cache on first use; builds without it need `runner` and `lib_dir` in the `[vm]` section. jailoc itself is built without cgo. `jailoc-guest` is pure Go and is embedded in jailoc, so it always matches the jailoc version. Upgrading jailoc takes effect in a workspace after `jailoc restart`.
+The VM runtime (runner, libkrun and the libkrunfw guest kernel) is embedded in release builds of jailoc and unpacked into the cache on first use; builds without it need `runner` and `lib_dir` in the `[vm]` section. jailoc itself is built without cgo. `jailoc-guest` is pure Go and is embedded in jailoc, so a newly started VM always runs the guest of the jailoc version that started it. A running VM keeps its guest across jailoc upgrades: jailoc attaches to it as long as the guest speaks the same protocol, and asks for `jailoc restart` only after an upgrade that changed the protocol. Guest fixes of an upgrade take effect at the workspace's next restart.
 
 ## Images
 

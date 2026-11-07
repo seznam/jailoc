@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,7 +24,6 @@ import (
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/guest/session"
-	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 	"golang.org/x/crypto/ssh"
@@ -499,22 +497,26 @@ func vmCommand(ctx context.Context, ws *workspace.Resolved, cmdline []string) ([
 	return stdout.Bytes(), nil
 }
 
-// checkGuestCurrent reports a running workspace VM that was started with a
-// different jailoc-guest than the one embedded in this jailoc, for example
-// after upgrading jailoc: the guest may not support the session protocol.
+// checkGuestCurrent reports a running workspace VM whose jailoc-guest does
+// not speak this jailoc's guest protocol, for example after an upgrade that
+// changed it: the guest may not support the session commands jailoc runs.
+// A guest of another jailoc version with the same protocol keeps working.
 func checkGuestCurrent(name string) error {
 	spec, err := vm.ReadSpec(vmStateDir(name))
 	if err != nil || spec.GuestBinary == "" {
 		return nil //nolint:nilerr // a missing spec is reported by the session itself
 	}
-	current, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
-	if err != nil {
-		return nil //nolint:nilerr // no embedded guest: the runner-side guest is used as is
-	}
-	if filepath.Clean(spec.GuestBinary) == filepath.Clean(current) {
+	if guestCompatible(*spec) {
 		return nil
 	}
-	return fmt.Errorf("workspace %q runs a jailoc-guest from another jailoc version; run `jailoc restart %s` to update it (this ends its running sessions)", name, name)
+	return fmt.Errorf("workspace %q runs a jailoc-guest from a jailoc version with an incompatible guest protocol; run `jailoc restart %s` to update it (this ends its running sessions)", name, name)
+}
+
+// guestCompatible reports whether the jailoc-guest of the running VM speaks
+// this jailoc's guest protocol. Guests of other jailoc versions that do keep
+// working; their own changes apply at the next restart.
+func guestCompatible(running vm.Spec) bool {
+	return running.GuestProtocol == guest.Protocol
 }
 
 // checkAgentCurrent reports a running workspace VM that was started for

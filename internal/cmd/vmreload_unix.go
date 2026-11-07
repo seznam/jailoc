@@ -19,7 +19,6 @@ import (
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/guest"
-	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -140,11 +139,10 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 }
 
 // snapshotsReloadable reports whether the running VM can rebind snapshots:
-// it runs the current jailoc guest, which has the snapshots in its internal
-// share. Otherwise restartOnlyChanges reports the guest difference.
+// its guest speaks the current protocol, which has the snapshots in its
+// internal share. Otherwise restartOnlyChanges reports the guest difference.
 func snapshotsReloadable(running vm.Spec) bool {
-	current, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
-	return err == nil && filepath.Clean(current) == filepath.Clean(running.GuestBinary)
+	return guestCompatible(running)
 }
 
 // restartOnlyChanges names the settings that differ between the running VM
@@ -182,7 +180,7 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if !agentChanged && (!slices.Equal(running.Guest.Env, want.Guest.Env) || running.Guest.WorkDir != want.Guest.WorkDir) {
 		out = append(out, "the working directory")
 	}
-	if current, err := guestbin.Path(filepath.Join(vmRootDir(), "guest")); err == nil && filepath.Clean(current) != filepath.Clean(running.GuestBinary) {
+	if !guestCompatible(running) {
 		out = append(out, "the jailoc guest (jailoc was upgraded)")
 	}
 	return out

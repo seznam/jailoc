@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/seznam/jailoc/internal/guest"
-	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
 )
 
@@ -79,11 +78,7 @@ func rotate(t *testing.T, path, data string) {
 
 func TestRestartOnlyChangesDockerDisk(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
-	if err != nil {
-		guestBinary = ""
-	}
-	base := vm.Spec{Agent: "opencode", Docker: true, GuestBinary: guestBinary, Guest: &guest.Config{}}
+	base := vm.Spec{Agent: "opencode", Docker: true, GuestProtocol: guest.Protocol, Guest: &guest.Config{}}
 	tests := []struct {
 		name          string
 		running, want int64
