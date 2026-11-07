@@ -48,6 +48,7 @@ const (
 # cpu = 2.0
 # memory = "4g"
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
+# timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 
 # [defaults.network]
 # ipv6 = false  # true: give the VM IPv6 connectivity (public destinations only)
@@ -88,6 +89,7 @@ paths = []
 # cpu = 2.0
 # memory = "4g"
 # docker_disk = "20g"
+# timezone = "UTC"
 
 # [workspaces.default.network]
 # ipv6 = false
@@ -117,6 +119,9 @@ const (
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 var validMemory = regexp.MustCompile(`^[1-9][0-9]*[kmgKMG]?$`)
+
+// validTimeZone matches an IANA time zone name such as UTC or Europe/Prague.
+var validTimeZone = regexp.MustCompile(`^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$`)
 
 // secretNameRe excludes dots so a secret name can never be confused with a path
 // segment when it becomes /run/secrets/<name> in the guest.
@@ -343,6 +348,7 @@ type Defaults struct {
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
 	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
+	TimeZone        *string                  `toml:"timezone,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
 	Network         *Network                 `toml:"network,omitempty"`
@@ -378,6 +384,7 @@ type Workspace struct {
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
 	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
+	TimeZone        *string                  `toml:"timezone,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
 	Network         *Network                 `toml:"network,omitempty"`
@@ -1160,6 +1167,9 @@ func Validate(cfg *Config) error {
 	if cfg.Defaults.DockerDisk != nil && !validMemory.MatchString(*cfg.Defaults.DockerDisk) {
 		return fmt.Errorf("defaults: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", *cfg.Defaults.DockerDisk)
 	}
+	if cfg.Defaults.TimeZone != nil && !validTimeZone.MatchString(*cfg.Defaults.TimeZone) {
+		return fmt.Errorf("defaults: invalid timezone %q: must be a time zone name such as \"UTC\" or \"Europe/Prague\"", *cfg.Defaults.TimeZone)
+	}
 	if err := movedToNetwork("[defaults]", cfg.Defaults.LegacyFilteredDNS, cfg.Defaults.LegacyDNSUpstream, cfg.Defaults.LegacyDNSBlockedZones); err != nil {
 		return err
 	}
@@ -1257,6 +1267,9 @@ func Validate(cfg *Config) error {
 		}
 		if ws.DockerDisk != nil && !validMemory.MatchString(*ws.DockerDisk) {
 			return fmt.Errorf("workspace %q: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", name, *ws.DockerDisk)
+		}
+		if ws.TimeZone != nil && !validTimeZone.MatchString(*ws.TimeZone) {
+			return fmt.Errorf("workspace %q: invalid timezone %q: must be a time zone name such as \"UTC\" or \"Europe/Prague\"", name, *ws.TimeZone)
 		}
 		if err := movedToNetwork(fmt.Sprintf("[workspaces.%s]", name), ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones); err != nil {
 			return err

@@ -443,7 +443,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Snapshots: snapshots,
 		Env:       append([]string{"JAILOC=1", "JAILOC_WORKSPACE=" + ws.Name}, ws.Agent.Env...),
 		IPv6:      ws.IPv6,
-		TimeZone:  hostTimeZone(),
+		TimeZone:  workspaceTimeZone(ws.TimeZone),
 	}
 	switch ws.Agent.TUIPlugin {
 	case agent.OpenCode1TUI:

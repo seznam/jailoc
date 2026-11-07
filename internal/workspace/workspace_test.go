@@ -1209,6 +1209,45 @@ func TestResolveDockerDisk(t *testing.T) {
 	}
 }
 
+func TestResolveTimeZone(t *testing.T) {
+	t.Parallel()
+
+	str := func(v string) *string { return &v }
+
+	tests := []struct {
+		name   string
+		defTZ  *string
+		wsTZ   *string
+		wantTZ string
+	}{
+		{"host zone when both unset", nil, nil, ""},
+		{"defaults used when workspace unset", str("UTC"), nil, "UTC"},
+		{"workspace overrides defaults", str("UTC"), str("Europe/Prague"), "Europe/Prague"},
+		{"workspace without defaults", nil, str("Asia/Tokyo"), "Asia/Tokyo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{TimeZone: tt.defTZ},
+				Workspaces: map[string]config.Workspace{
+					"test": {Paths: []string{"/data"}, TimeZone: tt.wsTZ},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "test")
+			if err != nil {
+				t.Fatalf("Resolve failed: %v", err)
+			}
+			if resolved.TimeZone != tt.wantTZ {
+				t.Errorf("TimeZone: got %q, want %q", resolved.TimeZone, tt.wantTZ)
+			}
+		})
+	}
+}
+
 func TestResolveMountsDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

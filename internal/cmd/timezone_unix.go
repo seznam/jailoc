@@ -15,9 +15,14 @@ import (
 // a TZ zone name.
 var hostZoneinfoDirs = []string{"/usr/share/zoneinfo", "/usr/lib/zoneinfo", "/usr/share/lib/zoneinfo", "/etc/zoneinfo"}
 
-// hostTimeZone returns the host's local time zone for the workspace VM, or
-// nil when it cannot be determined; the guest then keeps the image's zone.
-func hostTimeZone() *guest.TimeZone {
+// workspaceTimeZone returns the time zone for the workspace VM: the
+// configured zone name, or the host's local zone when name is empty. It
+// returns nil when the host zone cannot be determined; the guest then keeps
+// the image's zone.
+func workspaceTimeZone(name string) *guest.TimeZone {
+	if name != "" {
+		return lookupTimeZone(name, true, "", "", hostZoneinfoDirs)
+	}
 	tz, set := os.LookupEnv("TZ")
 	return lookupTimeZone(tz, set, "/etc/localtime", "/etc/timezone", hostZoneinfoDirs)
 }

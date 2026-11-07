@@ -24,7 +24,7 @@ The VM boots from a small root file system that holds only `jailoc-guest` and it
 
 1. configures the network addresses, the broker as gateway and DNS resolver, and the hostname,
 2. sets the clock to host time and keeps it there: every 30 seconds it asks the broker's time service for the host clock and steps the guest clock when it is off by more than half a second, because the guest clock stops while the host sleeps,
-3. sets the time zone to the host's: points `/etc/localtime` at the zone in the image's `/usr/share/zoneinfo`, or copies the host's zone data into it when the image lacks that zone, and writes the zone name to `/etc/timezone`,
+3. sets the time zone to the host's, or to `timezone` when set: points `/etc/localtime` at the zone in the image's `/usr/share/zoneinfo`, or copies the host's zone data into it when the image lacks that zone, and writes the zone name to `/etc/timezone`,
 4. on Linux hosts, switches to idmapped mounts of the root filesystem and the shares, because libkrun's virtio-fs shows the real host owner of every file there: your user's files appear as root's in the root filesystem and as the agent's in the home and shared directories, and files the agent creates belong to your user on the host,
 5. creates the `agent` user (UID 1000) when the image has none, and its home directory,
 6. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,

@@ -3154,6 +3154,31 @@ paths = ["/data"]
 			},
 		},
 		{
+			name: "defaults and workspace timezone",
+			content: `
+[defaults]
+timezone = "UTC"
+
+[workspaces.prague]
+paths = ["/data"]
+timezone = "Europe/Prague"
+
+[workspaces.plain]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.TimeZone == nil || *cfg.Defaults.TimeZone != "UTC" {
+					t.Errorf("expected Defaults.TimeZone \"UTC\", got %v", cfg.Defaults.TimeZone)
+				}
+				if ws := cfg.Workspaces["prague"]; ws.TimeZone == nil || *ws.TimeZone != "Europe/Prague" {
+					t.Errorf("expected Workspace.TimeZone \"Europe/Prague\", got %v", ws.TimeZone)
+				}
+				if ws := cfg.Workspaces["plain"]; ws.TimeZone != nil {
+					t.Errorf("expected Workspace.TimeZone to be nil, got %q", *ws.TimeZone)
+				}
+			},
+		},
+		{
 			name: "defaults and workspace independently",
 			content: `
 [defaults]
@@ -3375,6 +3400,58 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 				},
 			},
 			errSubstrs: []string{"test", "invalid docker_disk format"},
+		},
+		{
+			name: "defaults timezone empty",
+			cfg: &Config{
+				Defaults: Defaults{
+					TimeZone: ptrString(""),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid timezone"},
+		},
+		{
+			name: "defaults timezone traversal",
+			cfg: &Config{
+				Defaults: Defaults{
+					TimeZone: ptrString("../etc/passwd"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid timezone"},
+		},
+		{
+			name: "defaults timezone absolute path",
+			cfg: &Config{
+				Defaults: Defaults{
+					TimeZone: ptrString("/usr/share/zoneinfo/UTC"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid timezone"},
+		},
+		{
+			name: "defaults timezone POSIX rule",
+			cfg: &Config{
+				Defaults: Defaults{
+					TimeZone: ptrString("CET-1CEST,M3.5.0,M10.5.0/3"),
+				},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid timezone"},
+		},
+		{
+			name: "workspace timezone with dot component",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {
+						Paths:    []string{"/data"},
+						TimeZone: ptrString("Europe/./Prague"),
+					},
+				},
+			},
+			errSubstrs: []string{"test", "invalid timezone"},
 		},
 	}
 

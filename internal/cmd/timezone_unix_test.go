@@ -173,3 +173,12 @@ func TestLookupTimeZoneAbsoluteTZ(t *testing.T) {
 		t.Fatalf("lookupTimeZone(%q) = %+v, want Europe/Lisbon with data", path, got)
 	}
 }
+
+func TestWorkspaceTimeZoneConfigured(t *testing.T) {
+	t.Parallel()
+
+	got := workspaceTimeZone("Etc/UTC")
+	if got == nil || got.Name != "Etc/UTC" {
+		t.Fatalf("workspaceTimeZone(%q) = %+v, want Etc/UTC", "Etc/UTC", got)
+	}
+}
