@@ -17,7 +17,7 @@ import (
 const originalCA = "/run/jailoc-system-ca.crt"
 
 // liveState applies Reload requests: the CA bundle, the SSH and gpg agent
-// relays, the host port mirrors and the snapshot binds.
+// relays, the host port mirrors, the snapshot binds and the time zone.
 type liveState struct {
 	logger    *slog.Logger
 	acct      account
@@ -67,6 +67,12 @@ func (l *liveState) apply(r Reload) error {
 		l.stopGPG = nil
 	}
 	l.setHostPorts(r.HostPorts)
+	// A wrong zone only shifts displayed times; it does not fail the reload.
+	if r.TimeZone != nil {
+		if err := setTimeZone("/", *r.TimeZone); err != nil {
+			l.logger.Warn("set time zone", "error", err)
+		}
+	}
 	l.applied = r
 	return nil
 }
@@ -116,7 +122,7 @@ func (l *liveState) poll() {
 		l.logger.Error("reload", "error", err)
 		done.Error = err.Error()
 	} else {
-		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "gpg_agent", r.GPGAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots))
+		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "gpg_agent", r.GPGAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots), "time_zone", timeZoneName(r.TimeZone))
 	}
 	out, _ := json.Marshal(done)
 	tmp := filepath.Join(ControlDir, ReloadDoneFile+".tmp")

@@ -27,9 +27,9 @@ const reloadTimeout = 15 * time.Second
 
 // reloadVM applies the current configuration to a running workspace VM
 // without restarting it: network policy (allowed_hosts, allowed_networks,
-// the [network] DNS settings), published ports, host ports, the SSH agent, the CA bundle, snapshots,
-// environment and secrets. Settings that need a new VM are reported, not
-// applied.
+// the [network] DNS settings), published ports, host ports, the SSH agent,
+// the CA bundle, snapshots, the time zone, environment and secrets. Settings
+// that need a new VM are reported, not applied.
 func reloadVM(ctx context.Context, ws *workspace.Resolved, purgeCache bool) error {
 	stateDir := vmStateDir(ws.Name)
 	st, err := runningVM(stateDir)
@@ -74,6 +74,7 @@ func reloadVM(ctx context.Context, ws *workspace.Resolved, purgeCache bool) erro
 	g.GPGAgent = want.Guest.GPGAgent
 	g.HostPorts = want.Guest.HostPorts
 	g.Snapshots = binds
+	g.TimeZone = want.Guest.TimeZone
 	next.Guest = &g
 
 	if err := reloadBroker(next, st.BrokerPID); err != nil {
@@ -327,9 +328,9 @@ func scanReloadEvent(r io.Reader) (brokerReload, bool) {
 }
 
 // reloadGuest asks the guest init to apply the CA bundle, SSH and GPG agents,
-// host ports and snapshots of g and waits for its answer.
+// host ports, snapshots and time zone of g and waits for its answer.
 func reloadGuest(stateDir string, g guest.Config) error {
-	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, GPGAgent: g.GPGAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots}
+	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, GPGAgent: g.GPGAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots, TimeZone: g.TimeZone}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode reload request: %w", err)

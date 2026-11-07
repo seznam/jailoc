@@ -132,6 +132,7 @@ Updated live:
 - `ca_bundle`
 - `snapshots`, including the Git configuration and `known_hosts`: every reload copies the sources again, adds new entries and removes dropped ones
 - `env`, `env_file` and secrets
+- The time zone, set again to the host's current zone
 
 Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets. Files opened before a reload keep their old snapshot content.
 

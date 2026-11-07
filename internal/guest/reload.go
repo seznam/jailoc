@@ -15,6 +15,8 @@ type Reload struct {
 	// Snapshots replace the bound snapshots when they differ from the
 	// current set. The host stages every reload into new sources.
 	Snapshots []Snapshot `json:"snapshots,omitempty"`
+	// TimeZone replaces the guest's local time zone when set.
+	TimeZone *TimeZone `json:"time_zone,omitempty"`
 }
 
 // ReloadDone reports the result of applying the Reload with Seq.

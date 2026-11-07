@@ -24,12 +24,13 @@ The VM boots from a small root file system that holds only `jailoc-guest` and it
 
 1. configures the network addresses, the broker as gateway and DNS resolver, and the hostname,
 2. sets the clock to host time and keeps it there: every 30 seconds it asks the broker's time service for the host clock and steps the guest clock when it is off by more than half a second, because the guest clock stops while the host sleeps,
-3. on Linux hosts, switches to idmapped mounts of the root filesystem and the shares, because libkrun's virtio-fs shows the real host owner of every file there: your user's files appear as root's in the root filesystem and as the agent's in the home and shared directories, and files the agent creates belong to your user on the host,
-4. creates the `agent` user (UID 1000) when the image has none, and its home directory,
-5. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
-6. adds the hostname to `/etc/hosts`,
-7. with `enable_docker`, formats the Docker data disk (`docker_disk`, 20 GiB by default) on first use, mounts it at `/var/lib/docker`, grows its file system when `docker_disk` was raised and starts `dockerd` with the socket owned by the `agent` group,
-8. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
+3. sets the time zone to the host's: points `/etc/localtime` at the zone in the image's `/usr/share/zoneinfo`, or copies the host's zone data into it when the image lacks that zone, and writes the zone name to `/etc/timezone`,
+4. on Linux hosts, switches to idmapped mounts of the root filesystem and the shares, because libkrun's virtio-fs shows the real host owner of every file there: your user's files appear as root's in the root filesystem and as the agent's in the home and shared directories, and files the agent creates belong to your user on the host,
+5. creates the `agent` user (UID 1000) when the image has none, and its home directory,
+6. mounts the shares, binds the snapshots (including the Git configuration) and adds a forwarded CA bundle to the system trust store,
+7. adds the hostname to `/etc/hosts`,
+8. with `enable_docker`, formats the Docker data disk (`docker_disk`, 20 GiB by default) on first use, mounts it at `/var/lib/docker`, grows its file system when `docker_disk` was raised and starts `dockerd` with the socket owned by the `agent` group,
+9. starts an SSH server that accepts only the workspace's key and runs every session as `agent`.
 
 `jailoc-guest` leaves privileges alone by default, so the agent can use `sudo` from the image. Root in the VM is still inside the VM boundary.
 

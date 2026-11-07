@@ -151,7 +151,7 @@ func Init(logger *slog.Logger) error {
 			return err
 		}
 	}
-	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, GPGAgent: cfg.GPGAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots}); err != nil {
+	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, GPGAgent: cfg.GPGAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots, TimeZone: cfg.TimeZone}); err != nil {
 		return err
 	}
 
