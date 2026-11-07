@@ -199,3 +199,44 @@ paths = ["/src/api"]
 		t.Fatalf("empty network table written:\n%s", data)
 	}
 }
+
+func TestPlanMigrationNetworkOnly(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name       string
+		answer     string
+		workspaces []string
+	}{
+		{"current configuration", "", nil},
+		{"jailoc v1 configuration", "y", []string{"web"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := t.TempDir()
+			cfg := &config.Config{
+				Defaults: config.Defaults{LegacyFilteredDNS: new(true)},
+				Workspaces: map[string]config.Workspace{
+					"web": {Paths: []string{"/src/web"}, Mounts: []string{data + ":/data"}},
+				},
+			}
+			p, out := scripted(tt.answer, "", "")
+			m, err := planMigration(cfg, p, os.Stat)
+			if err != nil {
+				t.Fatalf("planMigration: %v\n%s", err, out)
+			}
+			if !slices.Equal(m.workspaces, tt.workspaces) {
+				t.Fatalf("workspaces = %v, want %v\n%s", m.workspaces, tt.workspaces, out)
+			}
+			if !strings.Contains(out.String(), "jailoc v1 (Docker) configuration") {
+				t.Fatalf("no v1 question:\n%s", out)
+			}
+			web := cfg.Workspaces["web"]
+			if tt.workspaces == nil && (!slices.Equal(web.Mounts, []string{data + ":/data"}) || strings.Contains(out.String(), data)) {
+				t.Fatalf("mounts of a current configuration touched: %v\n%s", web.Mounts, out)
+			}
+			if cfg.Defaults.Network.FilteredDNS == nil || !*cfg.Defaults.Network.FilteredDNS || cfg.Defaults.LegacyFilteredDNS != nil {
+				t.Fatalf("filtered_dns not moved: %+v", cfg.Defaults)
+			}
+		})
+	}
+}

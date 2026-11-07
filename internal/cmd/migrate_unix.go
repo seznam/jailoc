@@ -160,10 +160,14 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		names = append(names, name)
 	}
 	slices.Sort(names)
+	docker, err := usesDocker(cfg, names, p)
+	if err != nil {
+		return nil, err
+	}
 	for _, name := range names {
 		// In jailoc v1 an unset backend meant Docker; only an explicit
 		// "vm" marks a workspace that needs no migration.
-		if cmp.Or(cfg.Workspaces[name].Backend, cfg.Defaults.Backend) != config.BackendVM {
+		if docker && cmp.Or(cfg.Workspaces[name].Backend, cfg.Defaults.Backend) != config.BackendVM {
 			m.workspaces = append(m.workspaces, name)
 		}
 	}
@@ -207,6 +211,28 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		}
 	}
 	return m, nil
+}
+
+// usesDocker reports whether workspaces without backend = "vm" are jailoc
+// v1 Docker workspaces. An unset backend is also the VM backend of the
+// current jailoc, so a configuration that only has network settings to move
+// and nothing else of jailoc v1 is a v1 one only when the user says so.
+func usesDocker(cfg *config.Config, names []string, p *prompter) (bool, error) {
+	if len(defaultsIncompatibilities(cfg)) > 0 || cfg.Defaults.Backend == config.BackendDocker {
+		return true, nil
+	}
+	legacy := len(config.LegacyNetwork(cfg.Defaults.LegacyFilteredDNS, cfg.Defaults.LegacyDNSUpstream, cfg.Defaults.LegacyDNSBlockedZones)) > 0
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		if len(workspaceIncompatibilities(&ws)) > 0 || ws.Backend == config.BackendDocker {
+			return true, nil
+		}
+		legacy = legacy || len(config.LegacyNetwork(ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones)) > 0
+	}
+	if !legacy || cfg.Defaults.Backend == config.BackendVM {
+		return true, nil
+	}
+	return p.confirm("The configuration names no backend. Is it a jailoc v1 (Docker) configuration whose workspaces should move to the VM backend?", false)
 }
 
 // moveNetwork moves the network settings of a [defaults] or workspace table
