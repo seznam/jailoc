@@ -2476,7 +2476,7 @@ func TestValidateMountsForbiddenCredentialHint(t *testing.T) {
 		{
 			name: "docker suggests copying config.json in the VM",
 			spec: "~/.docker:/home/agent/.docker:ro",
-			want: []string{`from_file = "~/.docker/config.json"`, "cp /run/secrets/docker-config ~/.docker/config.json"},
+			want: []string{`from_file = "~/.docker/config.json"`, "cp -f /run/secrets/docker-config ~/.docker/config.json"},
 		},
 		{
 			name: "gh suggests a token env secret",

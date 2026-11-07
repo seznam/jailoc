@@ -215,7 +215,7 @@ var forbiddenMountHostPaths = []forbiddenMountHostPath{
 		"  [workspaces.<name>.secrets.env.GH_TOKEN]\n" +
 		"  from_command = \"gh auth token\""},
 	{path: "~/.docker", hint: fileSecretHint("docker-config", "~/.docker/config.json", "") +
-		"\n\nDocker reads config.json from a directory, so copy it in the VM: mkdir -p ~/.docker && cp /run/secrets/docker-config ~/.docker/config.json"},
+		"\n\nDocker reads config.json from a directory, so copy it in the VM after every VM start: mkdir -p ~/.docker && cp -f /run/secrets/docker-config ~/.docker/config.json"},
 	{path: "~/.kube", hint: fileSecretHint("kubeconfig", "~/.kube/config", "KUBECONFIG")},
 	{path: "~/.netrc", hint: fileSecretHint("netrc", "~/.netrc", "NETRC")},
 	{path: "~/.config/jailoc"},

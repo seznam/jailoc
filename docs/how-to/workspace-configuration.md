@@ -125,11 +125,11 @@ For single files, or when the workspace should get a frozen copy instead of the 
 paths = ["~/src/myproject"]
 snapshots = [
   "~/.npmrc:/home/agent/.npmrc",
-  "~/.config/gh:/home/agent/.config/gh",
+  "~/.config/git/ignore:/home/agent/.config/git/ignore",
 ]
 ```
 
-Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original. A symlink given as the snapshot source is resolved; symlinks inside a snapshotted directory are copied as symlinks. A snapshot destination can't overlap a shared path, so it can't point into a workspace path or a `mounts` destination. To pick up host edits, or added and removed entries, run `jailoc reload`.
+Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original. A symlink given as the snapshot source is resolved; symlinks inside a snapshotted directory are copied as symlinks. A snapshot destination can't overlap a shared path, so it can't point into a workspace path or a `mounts` destination. To pick up host edits, or added and removed entries, run `jailoc reload`. Credential directories such as `~/.config/gh` can't be snapshotted; for the GitHub CLI, pass a token as an env secret instead (see [Pass a credential file](secrets.md#pass-a-credential-file)).
 
 ## Publish ports
 
