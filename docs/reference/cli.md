@@ -142,7 +142,7 @@ Changes to the following need a new VM. `jailoc reload` lists them, and [`jailoc
 - `cpu`, `memory`
 - `enable_docker`, `protect_git`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
-- the jailoc guest binary, after a jailoc upgrade
+- the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest
 
 Fails when the workspace is not running.
 
@@ -157,7 +157,7 @@ Fails when the workspace is not running.
 
 Show the agent of the workspace (with the package version jailoc installs and extra `args`) and whether its VM is running.
 
-For a running VM it also shows the uptime, CPUs, memory and Docker disk, where the agent's persistent home directories live (the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`), the number of agent sessions, and whether the VM runs the current configuration: `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `agent`, `profile`, `enable_docker`, `protect_git`, or an upgraded jailoc), `jailoc reload` when the configuration file changed after the VM started or was last reloaded. For a stopped VM it shows when it stopped and the last error. `Data` is the VM state directory on the host.
+For a running VM it also shows the uptime, CPUs, memory and Docker disk, where the agent's persistent home directories live (the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`), the number of agent sessions, and whether the VM runs the current configuration: `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `agent`, `profile`, `enable_docker`, `protect_git`, or a jailoc upgrade that changed the guest protocol), `jailoc reload` when the configuration file changed after the VM started or was last reloaded. For a stopped VM it shows when it stopped and the last error. `Data` is the VM state directory on the host.
 
 ```
 jailoc status [workspace] [flags]

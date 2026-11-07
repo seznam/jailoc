@@ -25,7 +25,6 @@ import (
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
-	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -468,26 +467,27 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		g.HostPorts = append(g.HostPorts, s.GuestPort)
 	}
 	spec := vm.Spec{
-		Kind:         vm.KindWorkspace,
-		Workspace:    ws.Name,
-		StateDir:     vmStateDir(ws.Name),
-		Image:        ref,
-		CPUs:         uint32(math.Ceil(ws.CPU)),
-		MemoryMiB:    memMiB,
-		DiskSize:     diskSize,
-		Shares:       shares,
-		Policy:       policy,
-		RunnerPath:   rt.runner,
-		LibDir:       rt.libDir,
-		ImageCache:   filepath.Join(vmRootDir(), "images"),
-		Broker:       []string{exe, "netbroker"},
-		GuestBinary:  rt.guest,
-		Agent:        ws.Agent.Name,
-		Guest:        g,
-		Forwards:     vmForwards(ws.Ports),
-		SSHAgent:     agent,
-		GPGAgent:     gpgAgent,
-		HostServices: hostServices,
+		Kind:          vm.KindWorkspace,
+		Workspace:     ws.Name,
+		StateDir:      vmStateDir(ws.Name),
+		Image:         ref,
+		CPUs:          uint32(math.Ceil(ws.CPU)),
+		MemoryMiB:     memMiB,
+		DiskSize:      diskSize,
+		Shares:        shares,
+		Policy:        policy,
+		RunnerPath:    rt.runner,
+		LibDir:        rt.libDir,
+		ImageCache:    filepath.Join(vmRootDir(), "images"),
+		Broker:        []string{exe, "netbroker"},
+		GuestBinary:   rt.guest,
+		GuestProtocol: guest.Protocol,
+		Agent:         ws.Agent.Name,
+		Guest:         g,
+		Forwards:      vmForwards(ws.Ports),
+		SSHAgent:      agent,
+		GPGAgent:      gpgAgent,
+		HostServices:  hostServices,
 	}
 	if ws.AgentProfile != nil {
 		spec.Profile, _ = ws.AgentProfile.Name()
@@ -858,7 +858,7 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	if cmp.Or(running.Agent, agent.Default) != ws.Agent.Name {
 		out = append(out, "agent")
 	}
-	if current, err := guestbin.Path(filepath.Join(vmRootDir(), "guest")); err == nil && filepath.Clean(current) != filepath.Clean(running.GuestBinary) {
+	if !guestCompatible(running) {
 		out = append(out, "the upgraded jailoc guest")
 	}
 	return out

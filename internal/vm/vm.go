@@ -105,6 +105,9 @@ type Spec struct {
 	Broker []string `json:"broker"`
 	// GuestBinary is the host path of jailoc-guest (workspace VMs).
 	GuestBinary string `json:"guest_binary,omitempty"`
+	// GuestProtocol is the guest.Protocol of the jailoc that booted the VM;
+	// zero in specs written before jailoc recorded it.
+	GuestProtocol int `json:"guest_protocol,omitempty"`
 	// Agent is the agent harness of a workspace VM; empty in specs written
 	// before jailoc ran other agents than OpenCode.
 	Agent string `json:"agent,omitempty"`

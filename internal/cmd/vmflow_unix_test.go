@@ -5,7 +5,6 @@ package cmd
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
-	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -99,19 +97,15 @@ func TestSecretsPayload(t *testing.T) {
 
 func TestStatusRestartChanges(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
-	if err != nil {
-		guestBinary = ""
-	}
 	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g", ProtectGit: true}
-	matching := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestBinary: guestBinary, Guest: &guest.Config{NoPrivilegeEscalation: true}}
+	matching := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol, Guest: &guest.Config{NoPrivilegeEscalation: true}}
 	if got := statusRestartChanges(ws, matching); len(got) != 0 {
 		t.Errorf("matching spec: got %v, want no changes", got)
 	}
-	if got := statusRestartChanges(ws, vm.Spec{GuestBinary: guestBinary, Guest: &guest.Config{NoPrivilegeEscalation: true}, CPUs: 2, MemoryMiB: 4096}); len(got) != 0 {
+	if got := statusRestartChanges(ws, vm.Spec{GuestProtocol: guest.Protocol, Guest: &guest.Config{NoPrivilegeEscalation: true}, CPUs: 2, MemoryMiB: 4096}); len(got) != 0 {
 		t.Errorf("spec without agent: got %v, want no changes (opencode is the default)", got)
 	}
-	changed := vm.Spec{Agent: "claude", CPUs: 4, MemoryMiB: 2048, Docker: true, Profile: "work", GuestBinary: guestBinary, Guest: &guest.Config{IPv6: true}}
+	changed := vm.Spec{Agent: "claude", CPUs: 4, MemoryMiB: 2048, Docker: true, Profile: "work", GuestProtocol: guest.Protocol, Guest: &guest.Config{IPv6: true}}
 	want := []string{"profile", "cpu", "memory", "enable_docker", "protect_git", "network.ipv6", "agent"}
 	if got := statusRestartChanges(ws, changed); !slices.Equal(got, want) {
 		t.Errorf("changed spec: got %v, want %v", got, want)
@@ -128,22 +122,22 @@ func TestStatusRestartChanges(t *testing.T) {
 	if got := statusRestartChanges(&dockerWS, dockerSpec); len(got) != 0 {
 		t.Errorf("default disk against a spec without disk_size: got %v, want no changes", got)
 	}
-	if guestBinary != "" {
-		matching.GuestBinary = "/old/jailoc-guest"
-		if got := statusRestartChanges(ws, matching); !slices.Equal(got, []string{"the upgraded jailoc guest"}) {
-			t.Errorf("stale guest: got %v", got)
-		}
+	otherBinary := matching
+	otherBinary.GuestBinary = "/other/jailoc-guest"
+	if got := statusRestartChanges(ws, otherBinary); len(got) != 0 {
+		t.Errorf("guest of another version with the same protocol: got %v, want no changes", got)
+	}
+	matching.GuestProtocol = 0
+	// Guests before protocol 2 enable IPv6 whatever the spec says.
+	if got := statusRestartChanges(ws, matching); !slices.Equal(got, []string{"network.ipv6", "the upgraded jailoc guest"}) {
+		t.Errorf("guest with another protocol: got %v", got)
 	}
 }
 
 func TestConfigLabel(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g"}
-	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
-	if err != nil {
-		guestBinary = ""
-	}
-	running := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestBinary: guestBinary}
+	running := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol}
 	if got := configLabel(ws, running, false); got != "up to date" {
 		t.Errorf("unchanged: got %q", got)
 	}

@@ -6,6 +6,19 @@
 // guest root file system before boot. The boot code is Linux only.
 package guest
 
+// Protocol is the version of the contract between jailoc on the host and a
+// running jailoc-guest: the jailoc-guest subcommands and flags the host
+// runs (session, run, secrets), the session frames, the secrets payload and
+// the Reload fields the host expects the guest to apply. The host records it
+// in the VM spec at boot and attaches to a running VM only when it matches,
+// so a jailoc upgrade needs no restart unless it changes the contract.
+//
+// Bump it when the host starts relying on guest behaviour an older guest
+// lacks or misreads, for example a new session open flag or a new Reload
+// field. Guest-only changes (boot fixes, refactors) keep it; running VMs
+// pick them up at their next restart.
+const Protocol = 1
+
 // Paths inside the guest root file system.
 const (
 	// Dir holds the jailoc guest binary and its configuration.
