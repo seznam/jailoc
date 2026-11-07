@@ -259,6 +259,9 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	} else if opts.newAgent || opts.session != "" || opts.cont {
 		cmdline = append(cmdline, "--new")
 	}
+	if opts.attach == "" {
+		cmdline = append(cmdline, "--agent", ws.Agent.Name)
+	}
 	env := terminalEnv()
 	if os.Getenv("TERM") == "" {
 		env = append(env, "TERM=xterm-256color")
@@ -284,7 +287,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	logStep("open agent session", start, "workspace", ws.Name)
 
 	starting := fmt.Sprintf("Starting %s in workspace %s…", ws.Agent.Title, ws.Name)
-	id, outcome, code := relaySession(fd, interactive, opts.detach, starting, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
+	id, outcome, code := relaySession(fd, interactive, opts.detach, starting, ws.Agent.Title, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
 	// The guest command exits only after its input closes.
 	_ = stdin.Close()
 	_ = sess.Wait()
@@ -314,9 +317,11 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 // relaySession connects the local terminal to the session protocol on
 // in/out until the session ends, the user detaches or another terminal
 // takes the session over. In an interactive terminal it prints starting
-// when the guest reports a newly started session, so the screen is not
-// blank while the agent boots.
-func relaySession(fd int, interactive bool, detachKeys []byte, starting string, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int) {
+// when the guest reports a newly started session, and keeps it, or the
+// plugins the agent title installs, with a spinner and the time elapsed on
+// the alternate screen until the agent draws, so the screen is not blank
+// while the agent boots.
+func relaySession(fd int, interactive bool, detachKeys []byte, starting, title string, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int) {
 	var writeMu sync.Mutex
 	send := func(f session.Frame) error {
 		writeMu.Lock()
@@ -378,6 +383,13 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting string, 
 		}
 	}()
 
+	status := newStartupStatus(os.Stdout, func() (cols, rows int) {
+		if w, h, err := term.GetSize(fd); err == nil {
+			return w, h
+		}
+		return 80, 24
+	})
+	defer status.stop()
 	for {
 		f, err := session.ReadFrame(out)
 		if err != nil {
@@ -395,9 +407,14 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting string, 
 			if interactive {
 				// The terminal is raw: return the carriage explicitly.
 				_, _ = fmt.Fprintf(os.Stdout, "\x1b[2m%s\x1b[0m\r\n", starting)
+				// The status draws escape sequences, so only into a terminal.
+				if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
+					status.start(startupMessage(starting, title, session.ParseStarted(f.Payload)))
+					go status.animate()
+				}
 			}
 		case session.FrameData:
-			_, _ = os.Stdout.Write(f.Payload)
+			_ = status.write(f.Payload)
 		case session.FrameExit:
 			code, _ = session.ParseExit(f.Payload)
 			return id, outcomeExited, code

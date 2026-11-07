@@ -156,6 +156,10 @@ type Harness struct {
 	// creates it on the host when the directory is mounted read-only.
 	ConfigDir       string
 	ConfigGitignore string
+	// Installs, when set, returns what the agent installs before its
+	// interface starts, from its environment env and working directory dir:
+	// jailoc shows it while the agent starts.
+	Installs func(env []string, dir string) []string
 }
 
 // sharedMounts are default mounts of every harness.
@@ -197,6 +201,7 @@ var harnesses = []Harness{
 		TUIPlugin:       OpenCode1TUI,
 		ConfigDir:       openCodeConfigDir,
 		ConfigGitignore: openCodeConfigGitignore,
+		Installs:        openCode1Installs,
 	},
 	{
 		Name:     "opencode2",

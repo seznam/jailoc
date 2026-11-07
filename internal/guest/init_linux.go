@@ -724,12 +724,9 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	return nil
 }
 
-// Exec replaces the process with args run in dir, adding the entries of
-// EnvFile and then extraEnv to the environment.
-func Exec(dir string, extraEnv, args []string) error {
-	if len(args) == 0 {
-		return errors.New("run: no command")
-	}
+// programEnv returns the environment of a program run with extraEnv: the
+// process environment, the entries of EnvFile and then extraEnv.
+func programEnv(extraEnv []string) []string {
 	env := os.Environ()
 	if b, err := os.ReadFile(EnvFile); err == nil {
 		for line := range strings.SplitSeq(string(b), "\n") {
@@ -738,7 +735,16 @@ func Exec(dir string, extraEnv, args []string) error {
 			}
 		}
 	}
-	env = lastWins(append(env, extraEnv...))
+	return lastWins(append(env, extraEnv...))
+}
+
+// Exec replaces the process with args run in dir, adding the entries of
+// EnvFile and then extraEnv to the environment.
+func Exec(dir string, extraEnv, args []string) error {
+	if len(args) == 0 {
+		return errors.New("run: no command")
+	}
+	env := programEnv(extraEnv)
 	if dir != "" {
 		if err := os.Chdir(dir); err != nil {
 			return fmt.Errorf("run: %w", err)
