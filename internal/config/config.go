@@ -881,6 +881,16 @@ func validateMountHostPath(host string, context string) error {
 			}
 			return fmt.Errorf("%s: mount host path %q is forbidden because %s holds credentials; %s", context, cleanHost, forbidden.path, forbidden.hint)
 		}
+
+		// Sharing a parent of a home-directory entry (~/.config, ~/.cache, ~)
+		// would expose it as well. System paths are exempt: every host path
+		// is under /.
+		if strings.HasPrefix(forbidden.path, "~") && strings.HasPrefix(cleanForbidden, cleanHost+string(os.PathSeparator)) {
+			if forbidden.hint == "" {
+				return fmt.Errorf("%s: mount host path %q is forbidden because it contains %s", context, cleanHost, forbidden.path)
+			}
+			return fmt.Errorf("%s: mount host path %q is forbidden because it contains %s, which holds credentials; %s", context, cleanHost, forbidden.path, forbidden.hint)
+		}
 	}
 
 	return nil

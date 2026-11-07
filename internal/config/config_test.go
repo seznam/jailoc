@@ -2542,6 +2542,46 @@ func TestValidateMountsForbiddenWithoutHint(t *testing.T) {
 	}
 }
 
+func TestValidateMountsForbiddenParentOfHomeEntry(t *testing.T) {
+	safeHome(t)
+
+	tests := []struct {
+		name      string
+		mount     string
+		snapshot  string
+		wantError string
+	}{
+		{name: "home mount", mount: "~:/home/agent/host:ro", wantError: "because it contains ~/.ssh, which holds credentials"},
+		{name: "config mount", mount: "~/.config:/home/agent/host-config:ro", wantError: "because it contains ~/.config/gcloud"},
+		{name: "cache mount", mount: "~/.cache:/home/agent/host-cache:rw", wantError: "because it contains ~/.cache/jailoc-vm"},
+		{name: "config snapshot", snapshot: "~/.config:/home/agent/host-config", wantError: "because it contains ~/.config/gcloud"},
+		{name: "sibling of a forbidden entry", mount: "~/.config/opencode:/home/agent/.config/opencode:ro"},
+		{name: "sibling cache", mount: "~/.cache/pip:/home/agent/.cache/pip:rw"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := Workspace{Backend: BackendVM, Paths: []string{"/data/workspace"}}
+			if tt.mount != "" {
+				ws.Mounts = []string{tt.mount}
+			}
+			if tt.snapshot != "" {
+				ws.Snapshots = []string{tt.snapshot}
+			}
+			err := Validate(&Config{Workspaces: map[string]Workspace{"default": ws}})
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("expected validation to pass, got: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("expected error containing %q, got: %v", tt.wantError, err)
+			}
+		})
+	}
+}
+
 func TestValidateMountsAcceptsSafe(t *testing.T) {
 	safeHome(t)
 
