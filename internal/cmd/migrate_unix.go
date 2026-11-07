@@ -175,8 +175,12 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 	if err := resolveIncompatibilities(p, "[defaults]", defaultsIncompatibilities(cfg), m); err != nil {
 		return nil, err
 	}
-	if err := carryMounts(p, "[defaults]", &cfg.Defaults.Mounts, &cfg.Defaults.Snapshots, stat, m); err != nil {
-		return nil, err
+	// Default mounts are inherited by workspaces that already use the VM
+	// backend, so they are carried over only when Docker workspaces move.
+	if len(m.workspaces) > 0 {
+		if err := carryMounts(p, "[defaults]", &cfg.Defaults.Mounts, &cfg.Defaults.Snapshots, stat, m); err != nil {
+			return nil, err
+		}
 	}
 	for _, name := range m.workspaces {
 		ws := cfg.Workspaces[name]

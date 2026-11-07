@@ -214,7 +214,7 @@ func TestPlanMigrationNetworkOnly(t *testing.T) {
 			t.Parallel()
 			data := t.TempDir()
 			cfg := &config.Config{
-				Defaults: config.Defaults{LegacyFilteredDNS: new(true)},
+				Defaults: config.Defaults{LegacyFilteredDNS: new(true), Mounts: []string{data + "/defaults:/defaults"}},
 				Workspaces: map[string]config.Workspace{
 					"web": {Paths: []string{"/src/web"}, Mounts: []string{data + ":/data"}},
 				},
@@ -231,8 +231,10 @@ func TestPlanMigrationNetworkOnly(t *testing.T) {
 				t.Fatalf("no v1 question:\n%s", out)
 			}
 			web := cfg.Workspaces["web"]
-			if tt.workspaces == nil && (!slices.Equal(web.Mounts, []string{data + ":/data"}) || strings.Contains(out.String(), data)) {
-				t.Fatalf("mounts of a current configuration touched: %v\n%s", web.Mounts, out)
+			if tt.workspaces == nil && (!slices.Equal(web.Mounts, []string{data + ":/data"}) ||
+				!slices.Equal(cfg.Defaults.Mounts, []string{data + "/defaults:/defaults"}) || cfg.Defaults.Snapshots != nil ||
+				strings.Contains(out.String(), data)) {
+				t.Fatalf("mounts of a current configuration touched: %v %+v\n%s", web.Mounts, cfg.Defaults, out)
 			}
 			if cfg.Defaults.Network.FilteredDNS == nil || !*cfg.Defaults.Network.FilteredDNS || cfg.Defaults.LegacyFilteredDNS != nil {
 				t.Fatalf("filtered_dns not moved: %+v", cfg.Defaults)
