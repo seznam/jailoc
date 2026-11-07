@@ -112,9 +112,16 @@ func projectRoot() (string, error) {
 	}
 }
 
-// writeConfig writes the test configuration; extra is appended to the
-// workspace table.
+// writeConfig writes the test configuration with IPv6 on; extra is
+// appended to the workspace table.
 func writeConfig(t *testing.T, extra string) {
+	t.Helper()
+	writeNetworkConfig(t, extra, true)
+}
+
+// writeNetworkConfig writes the test configuration; extra is appended to the
+// workspace table.
+func writeNetworkConfig(t *testing.T, extra string, ipv6 bool) {
 	t.Helper()
 	cfg := fmt.Sprintf(`[vm]
 runner = %q
@@ -131,7 +138,7 @@ enable_docker = true
 %s
 
 [workspaces.%[7]s.network]
-ipv6 = true
+ipv6 = %[8]t
 filtered_dns = true
 dns_upstream = "1.1.1.1"
 dns_blocked_zones = ["example.org"]
@@ -144,7 +151,7 @@ from_command = "echo cmd-token"
 
 [workspaces.%[7]s.secrets.file.vmtest-file]
 from_command = "printf 'line1\\nline2'"
-`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), workspaceName, project, hostPort, extra, workspaceName)
+`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), workspaceName, project, hostPort, extra, workspaceName, ipv6)
 	dir := filepath.Join(home, ".config", "jailoc")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -624,6 +631,57 @@ env = ["VMTEST_RELOADED=yes"]`, snapshot, extra))
 		// dockerd starts in the background after the VM is up.
 		if got := mustGuest(ctx, t, "for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 0.5; done; docker image ls --format '{{.Repository}}:{{.Tag}}'"); !strings.Contains(got, "alpine:3.20") {
 			t.Fatalf("docker images after restart = %q", got)
+		}
+	})
+
+	t.Run("IPv6 off by default", func(t *testing.T) {
+		writeNetworkConfig(t, fmt.Sprintf(`snapshots = ["%s:/home/agent/.vmtest-snapshot"]`, snapshot), false)
+		jailoc(ctx, t, agentSock, "restart", workspaceName)
+		if got := mustGuest(ctx, t, "cat /proc/sys/net/ipv6/conf/eth0/disable_ipv6"); got != "1" {
+			t.Fatalf("eth0 disable_ipv6 = %q, want 1", got)
+		}
+		if got := mustGuest(ctx, t, "curl -sS -m 20 -o /dev/null -w '%{http_code}' https://example.com"); got != "200" {
+			t.Fatalf("public https over IPv4 = %q", got)
+		}
+		// Guest root restores the IPv6 address and route the guest sets up
+		// when IPv6 is on; the broker still has to refuse the traffic.
+		mustGuest(ctx, t, `sudo -n python3 - <<'PY'
+import errno
+import socket
+import struct
+
+with open("/proc/sys/net/ipv6/conf/eth0/disable_ipv6", "w") as f:
+    f.write("0")
+index = socket.if_nametoindex("eth0")
+
+def attr(kind, data):
+    size = 4 + len(data)
+    return struct.pack("=HH", size, kind) + data + b"\0" * (-size % 4)
+
+def request(kind, body):
+    with socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE) as nl:
+        # NLM_F_REQUEST | NLM_F_ACK | NLM_F_REPLACE | NLM_F_CREATE
+        nl.send(struct.pack("=IHHII", 16 + len(body), kind, 0x1 | 0x4 | 0x100 | 0x400, 1, 0) + body)
+        reply = nl.recv(4096)
+        code = struct.unpack_from("=i", reply, 16)[0]
+        assert code == 0, (kind, code)
+
+# RTM_NEWADDR fd00:127::2/64 with IFA_F_NODAD and IFA_ADDRESS.
+request(20, struct.pack("=BBBBI", socket.AF_INET6, 64, 0x02, 0, index)
+        + attr(1, socket.inet_pton(socket.AF_INET6, "fd00:127::2")))
+# RTM_NEWROUTE default via fe80::1 on eth0 in the main table.
+request(24, struct.pack("=BBBBBBBBI", socket.AF_INET6, 0, 0, 0, 254, 3, 0, 1, 0)
+        + attr(5, socket.inet_pton(socket.AF_INET6, "fe80::1"))
+        + attr(4, struct.pack("=I", index)))
+
+with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as conn:
+    conn.settimeout(5)
+    result = conn.connect_ex(("2606:4700:4700::1111", 443))
+    assert result == errno.ECONNREFUSED, result
+print("ipv6-denied-ok")
+PY`)
+		if traffic := jailoc(ctx, t, agentSock, "traffic", "-n", "-1", "--json"); !strings.Contains(traffic, `"reason":"ipv6-disabled"`) {
+			t.Fatalf("traffic log misses the IPv6 denial:\n%s", tail([]byte(traffic), 4000))
 		}
 	})
 }
