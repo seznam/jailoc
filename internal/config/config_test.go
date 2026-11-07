@@ -2413,6 +2413,17 @@ func TestValidateMountsHostPathValidation(t *testing.T) {
 			spec:      "/private/var/run:/container:ro",
 			wantError: true,
 		},
+		{name: "~/.kube is rejected", spec: "~/.kube:/home/agent/.kube:ro", wantError: true},
+		{name: "~/.kube/config is rejected", spec: "~/.kube/config:/home/agent/.kube/config:ro", wantError: true},
+		{name: "~/.docker is rejected", spec: "~/.docker:/home/agent/.docker:ro", wantError: true},
+		{name: "~/.netrc is rejected", spec: "~/.netrc:/home/agent/.netrc:ro", wantError: true},
+		{name: "~/.config/gcloud is rejected", spec: "~/.config/gcloud:/home/agent/.config/gcloud:ro", wantError: true},
+		{name: "~/.config/gh is rejected", spec: "~/.config/gh:/home/agent/.config/gh:ro", wantError: true},
+		{name: "~/.azure is rejected", spec: "~/.azure:/home/agent/.azure:ro", wantError: true},
+		{name: "~/.config/jailoc is rejected", spec: "~/.config/jailoc:/home/agent/jailoc:ro", wantError: true},
+		{name: "~/.cache/jailoc-vm is rejected", spec: "~/.cache/jailoc-vm/workspaces:/home/agent/ws:ro", wantError: true},
+		{name: "~/.config sibling of a credential dir is allowed", spec: "~/.config/ghostty:/home/agent/.config/ghostty:ro", wantError: false},
+		{name: "~/.netrc-like sibling is allowed", spec: "~/.netrc.d:/container:ro", wantError: false},
 	}
 
 	for _, tt := range tests {
@@ -2441,6 +2452,93 @@ func TestValidateMountsHostPathValidation(t *testing.T) {
 				t.Fatalf("expected validation to pass for mount %q, got: %v", tt.spec, err)
 			}
 		})
+	}
+}
+
+func TestValidateMountsForbiddenCredentialHint(t *testing.T) {
+	safeHome(t)
+
+	tests := []struct {
+		name string
+		spec string
+		want []string
+	}{
+		{
+			name: "kube suggests a file secret and KUBECONFIG",
+			spec: "~/.kube:/home/agent/.kube:ro",
+			want: []string{"holds credentials", "[workspaces.<name>.secrets.file.kubeconfig]", `from_file = "~/.kube/config"`, "KUBECONFIG=/run/secrets/kubeconfig"},
+		},
+		{
+			name: "aws suggests the shared credentials file",
+			spec: "~/.aws/credentials:/home/agent/.aws/credentials:ro",
+			want: []string{"[workspaces.<name>.secrets.file.aws-credentials]", "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials"},
+		},
+		{
+			name: "docker suggests copying config.json in the VM",
+			spec: "~/.docker:/home/agent/.docker:ro",
+			want: []string{`from_file = "~/.docker/config.json"`, "cp /run/secrets/docker-config ~/.docker/config.json"},
+		},
+		{
+			name: "gh suggests a token env secret",
+			spec: "~/.config/gh:/home/agent/.config/gh:ro",
+			want: []string{"[workspaces.<name>.secrets.env.GH_TOKEN]", `from_command = "gh auth token"`},
+		},
+		{
+			name: "ssh suggests agent forwarding",
+			spec: "~/.ssh:/home/agent/.ssh:ro",
+			want: []string{"ssh_auth_sock = true"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Workspaces: map[string]Workspace{"default": {
+				Paths:  []string{"/data/workspace"},
+				Mounts: []string{tt.spec},
+			}}}
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatalf("expected validation to fail for mount %q", tt.spec)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateSnapshotForbiddenCredentialHint(t *testing.T) {
+	safeHome(t)
+
+	cfg := &Config{Workspaces: map[string]Workspace{"default": {
+		Backend:   BackendVM,
+		Paths:     []string{"/data/workspace"},
+		Snapshots: []string{"~/.kube/config:/home/agent/.kube/config"},
+	}}}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation to fail for a ~/.kube snapshot")
+	}
+	if !strings.Contains(err.Error(), "KUBECONFIG=/run/secrets/kubeconfig") {
+		t.Fatalf("expected KUBECONFIG hint, got: %v", err)
+	}
+}
+
+func TestValidateMountsForbiddenWithoutHint(t *testing.T) {
+	safeHome(t)
+
+	cfg := &Config{Workspaces: map[string]Workspace{"default": {
+		Paths:  []string{"/data/workspace"},
+		Mounts: []string{"~/.config/jailoc:/home/agent/jailoc:ro"},
+	}}}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation to fail for ~/.config/jailoc")
+	}
+	if strings.Contains(err.Error(), "holds credentials") {
+		t.Fatalf("expected no credential hint, got: %v", err)
 	}
 }
 

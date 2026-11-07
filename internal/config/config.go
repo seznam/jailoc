@@ -189,19 +189,51 @@ var forbiddenMountContainerPrefixes = []string{
 	"/certs",
 }
 
-var forbiddenMountHostPaths = []string{
-	"/",
-	"/boot",
-	"/dev",
-	"/etc",
-	"/private",
-	"/proc",
-	"/sys",
-	"/run",
-	"/var",
-	"~/.ssh",
-	"~/.gnupg",
-	"~/.aws",
+// forbiddenMountHostPath is a host path that mounts and snapshots must not
+// share, with a hint on how to give the agent what it needs instead.
+type forbiddenMountHostPath struct {
+	path string
+	hint string
+}
+
+var forbiddenMountHostPaths = []forbiddenMountHostPath{
+	{path: "/"},
+	{path: "/boot"},
+	{path: "/dev"},
+	{path: "/etc"},
+	{path: "/private"},
+	{path: "/proc"},
+	{path: "/sys"},
+	{path: "/run"},
+	{path: "/var"},
+	{path: "~/.ssh", hint: "set ssh_auth_sock = true to forward the SSH agent; the keys stay on the host"},
+	{path: "~/.gnupg", hint: "set gpg_agent = true to forward the GPG agent; the keys stay on the host"},
+	{path: "~/.aws", hint: fileSecretHint("aws-credentials", "~/.aws/credentials", "AWS_SHARED_CREDENTIALS_FILE")},
+	{path: "~/.azure", hint: fileSecretHint("<NAME>", "<file the tool needs>", "")},
+	{path: "~/.config/gcloud", hint: fileSecretHint("gcloud-credentials", "~/.config/gcloud/application_default_credentials.json", "GOOGLE_APPLICATION_CREDENTIALS")},
+	{path: "~/.config/gh", hint: "deliver a token as an env secret instead:\n\n" +
+		"  [workspaces.<name>.secrets.env.GH_TOKEN]\n" +
+		"  from_command = \"gh auth token\""},
+	{path: "~/.docker", hint: fileSecretHint("docker-config", "~/.docker/config.json", "") +
+		"\n\nDocker reads config.json from a directory, so copy it in the VM: mkdir -p ~/.docker && cp /run/secrets/docker-config ~/.docker/config.json"},
+	{path: "~/.kube", hint: fileSecretHint("kubeconfig", "~/.kube/config", "KUBECONFIG")},
+	{path: "~/.netrc", hint: fileSecretHint("netrc", "~/.netrc", "NETRC")},
+	{path: "~/.config/jailoc"},
+	{path: "~/.cache/jailoc-vm"},
+}
+
+// fileSecretHint describes the file secret that delivers one credential file
+// instead of mounting its directory, and the env entry that points tools at
+// it when envVar is set.
+func fileSecretHint(name, from, envVar string) string {
+	hint := "deliver only the file the agent needs as a file secret:\n\n" +
+		"  [workspaces.<name>.secrets.file." + name + "]\n" +
+		"  from_file = \"" + from + "\"\n\n" +
+		"The guest reads it from /run/secrets/" + name + " (tmpfs, never written to disk)."
+	if envVar != "" {
+		hint += "\nPoint tools at it with env = [\"" + envVar + "=/run/secrets/" + name + "\"]."
+	}
+	return hint
 }
 
 // AgentSettings is an [<scope>.agents.<name>] table: settings of the agent
@@ -836,15 +868,18 @@ func validateMountHostPath(host string, context string) error {
 	cleanHost := filepath.Clean(expandedHost)
 
 	for _, forbidden := range forbiddenMountHostPaths {
-		expandedForbidden, err := ExpandPath(forbidden)
+		expandedForbidden, err := ExpandPath(forbidden.path)
 		if err != nil {
-			return fmt.Errorf("%s: expand forbidden mount host path %q: %w", context, forbidden, err)
+			return fmt.Errorf("%s: expand forbidden mount host path %q: %w", context, forbidden.path, err)
 		}
 
 		cleanForbidden := filepath.Clean(expandedForbidden)
 		forbiddenPrefix := cleanForbidden + string(os.PathSeparator)
 		if cleanHost == cleanForbidden || strings.HasPrefix(cleanHost, forbiddenPrefix) {
-			return fmt.Errorf("%s: mount host path %q is forbidden", context, cleanHost)
+			if forbidden.hint == "" {
+				return fmt.Errorf("%s: mount host path %q is forbidden", context, cleanHost)
+			}
+			return fmt.Errorf("%s: mount host path %q is forbidden because %s holds credentials; %s", context, cleanHost, forbidden.path, forbidden.hint)
 		}
 	}
 
