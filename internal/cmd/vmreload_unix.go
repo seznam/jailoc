@@ -135,16 +135,24 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 		spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
 	}
 	spec.Guest.NoPrivilegeEscalation = ws.ProtectGit
-	if ws.IPv6 && (!running.Guest.IPv6 || running.GuestProtocol < 2) {
-		// The guest has no IPv6 until it restarts, or the running broker
-		// predates the ipv6 policy field and rejects it: leave it out.
-		v4 := *ws
-		v4.IPv6 = false
-		if spec.Policy, err = vmPolicy(ctx, &v4); err != nil {
+	if ws.IPv6 {
+		if spec.Policy, err = reloadPolicy(ctx, ws, running); err != nil {
 			return vm.Spec{}, nil, err
 		}
 	}
 	return spec, snapshots, nil
+}
+
+// reloadPolicy builds the broker policy for the running VM. IPv6 stays off
+// when the guest booted without it, which only a restart changes, and when
+// the running broker predates the ipv6 policy field and would reject it.
+func reloadPolicy(ctx context.Context, ws *workspace.Resolved, running vm.Spec) ([]byte, error) {
+	if ws.IPv6 && (running.GuestProtocol < 2 || running.Guest == nil || !running.Guest.IPv6) {
+		v4 := *ws
+		v4.IPv6 = false
+		ws = &v4
+	}
+	return vmPolicy(ctx, ws)
 }
 
 // snapshotsReloadable reports whether the running VM can rebind snapshots:

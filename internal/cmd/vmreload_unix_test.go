@@ -3,6 +3,8 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestBrokerReloadEvent(t *testing.T) {
@@ -121,5 +124,43 @@ func TestRestartOnlyChangesIPv6(t *testing.T) {
 		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.changes)
 		}
+	}
+}
+
+func TestReloadPolicyIPv6(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name     string
+		protocol int
+		guest    *guest.Config
+		want     bool
+		ipv6     bool
+	}{
+		{"legacy guest", 1, &guest.Config{}, true, false},
+		{"legacy guest with ipv6 spec", 1, &guest.Config{IPv6: true}, true, false},
+		{"guest booted without ipv6", guest.Protocol, &guest.Config{}, true, false},
+		{"no guest config", guest.Protocol, nil, true, false},
+		{"guest booted with ipv6", guest.Protocol, &guest.Config{IPv6: true}, true, true},
+		{"disable ipv6", guest.Protocol, &guest.Config{IPv6: true}, false, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			running := vm.Spec{GuestProtocol: tt.protocol, Guest: tt.guest}
+			ws := &workspace.Resolved{IPv6: tt.want}
+			data, err := reloadPolicy(context.Background(), ws, running)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var policy map[string]any
+			if err := json.Unmarshal(data, &policy); err != nil {
+				t.Fatal(err)
+			}
+			if got := policy["ipv6"] == true; got != tt.ipv6 {
+				t.Errorf("policy %s: ipv6 = %v, want %v", data, got, tt.ipv6)
+			}
+			if ws.IPv6 != tt.want {
+				t.Error("reloadPolicy changed the workspace")
+			}
+		})
 	}
 }
