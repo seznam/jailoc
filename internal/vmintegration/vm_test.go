@@ -127,11 +127,14 @@ cpu = 2.0
 memory = "3g"
 ports = ["%s:8080"]
 ssh_auth_sock = true
+enable_docker = true
+%s
+
+[workspaces.%[7]s.network]
+ipv6 = true
 filtered_dns = true
 dns_upstream = "1.1.1.1"
 dns_blocked_zones = ["example.org"]
-enable_docker = true
-%s
 
 [workspaces.%[7]s.secrets.env.VMTEST_TOKEN]
 from_env = "VMTEST_HOST_TOKEN"
