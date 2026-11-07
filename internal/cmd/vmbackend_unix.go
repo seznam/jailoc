@@ -552,7 +552,8 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		Exceptions      []vmException `json:"exceptions"`
 		DNSUpstreams    []string      `json:"dns_upstreams,omitempty"`
 		DNSBlockedZones []string      `json:"dns_blocked_zones,omitempty"`
-	}{Exceptions: exceptions}
+		IPv6            bool          `json:"ipv6,omitempty"`
+	}{Exceptions: exceptions, IPv6: ws.IPv6}
 	if ws.FilteredDNS {
 		policy.DNSUpstreams = []string{ws.DNSUpstream}
 		policy.DNSBlockedZones = ws.DNSBlockedZones

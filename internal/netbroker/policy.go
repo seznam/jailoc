@@ -109,6 +109,7 @@ type Policy struct {
 	dnsUpstreams []netip.AddrPort
 	blockedZones []string
 	denyAll      bool
+	ipv6         bool
 	source       string
 }
 
@@ -119,6 +120,9 @@ type policyFile struct {
 	// zones and their subdomains, and denies guest DNS (port 53) to any
 	// other resolver so the filter cannot be bypassed.
 	DNSBlockedZones []string `json:"dns_blocked_zones"`
+	// IPv6 allows guest flows to IPv6 destinations. Without it the guest
+	// network is IPv4 only and every IPv6 flow is denied.
+	IPv6 bool `json:"ipv6"`
 }
 
 // ParsePolicy validates a JSON policy. Unknown fields are rejected so a typo
@@ -130,7 +134,7 @@ func ParsePolicy(data []byte, source string) (*Policy, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("parse policy %s: %w", source, err)
 	}
-	p := &Policy{source: source}
+	p := &Policy{source: source, ipv6: f.IPv6}
 	for _, e := range f.Exceptions {
 		if err := e.compile(); err != nil {
 			return nil, fmt.Errorf("policy %s: %w", source, err)
@@ -220,6 +224,8 @@ func Decide(p *Policy, env Env, proto string, dst netip.AddrPort) Decision {
 		return Decision{Reason: "guest-network"}
 	case env.HostAddrs[a]:
 		return Decision{Reason: "host-address"}
+	case a.Is6() && !p.ipv6:
+		return Decision{Reason: "ipv6-disabled"}
 	case a.Is6():
 		return decideIPv6(p, env, proto, netip.AddrPortFrom(a, dst.Port()))
 	case inAny(a, hardDeniedV4):

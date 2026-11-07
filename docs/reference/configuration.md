@@ -100,9 +100,7 @@ Defaults applied to all workspaces.
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 | `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, `core.hooksPath` and included config files read-only inside the VM for repositories under workspace `paths` and read-write `mounts`, including symlinked workspace roots. Disable `sudo` and Docker there. |
 | `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. |
-| `filtered_dns` | bool | `false` | Filter DNS answers in the network broker. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
-| `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. |
-| `dns_blocked_zones` | string[] | `[]` | DNS suffixes answered with NXDOMAIN, including all subdomains. |
+| `network` | table | `{}` | IPv6 and DNS settings of the network broker. See [`[defaults.network]`](#defaultsnetwork). |
 | `ca_bundle` | bool \| string | `true` | CA bundle added to the VM's system trust store. See [`ca_bundle`](#ca_bundle). |
 | `secrets` | table | `{}` | Secrets for all workspaces. See [`secrets`](#secrets). |
 
@@ -122,6 +120,31 @@ memory = "8g"
 
 [defaults.agents.claude]
 args = ["--model", "sonnet"]
+```
+
+---
+
+## `[defaults.network]`
+
+Network settings of the workspace VM and its network broker. `[workspaces.<name>.network]` takes the same fields; a set workspace field wins.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `ipv6` | bool | `false` | Give the guest IPv6 (`fd00:127::2/64`) and let the broker allow IPv6 destinations by the [IPv6 policy](../explanation/network-isolation.md#ipv6). When off, the guest has IPv4 only and the broker denies every IPv6 flow. Changing it needs `jailoc restart`; `jailoc reload` turns it off at the broker right away. |
+| `filtered_dns` | bool | `false` | Filter DNS answers in the network broker. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
+| `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. |
+| `dns_blocked_zones` | string[] | `[]` | DNS suffixes answered with NXDOMAIN, including all subdomains. |
+
+### Example
+
+```toml
+[defaults.network]
+ipv6 = true
+
+[workspaces.api.network]
+filtered_dns = true
+dns_upstream = "10.20.30.53"
+dns_blocked_zones = ["corp.example.com", "internal"]
 ```
 
 ---
@@ -148,7 +171,8 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `env` | string[] | `[]` | Overrides `[defaults].env` entries with the same key. |
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
-| `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `dns_upstream`, `dns_blocked_zones`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
+| `network` | table | `{}` | Same fields as [`[defaults.network]`](#defaultsnetwork); a set field wins. |
+| `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
 
 ### Example
 
@@ -282,6 +306,10 @@ These settings fail config load with ``<setting> is a jailoc v1 setting; run `ja
 
 Any `backend` value other than `"vm"` and empty is rejected. See [Migrate from jailoc v1](../how-to/migrate-from-v1.md).
 
+### Moved network settings
+
+`filtered_dns`, `dns_upstream` and `dns_blocked_zones` directly in `[defaults]` or a workspace fail config load with ``[defaults]: filtered_dns moved to the [defaults.network] table; run `jailoc migrate` to update the config`` (or the workspace's `network` table). `jailoc migrate` moves them.
+
 ### `paths`
 
 `~` is expanded. An empty list is allowed; empty entries are rejected. Paths equal to or under these prefixes are rejected: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`.
@@ -353,7 +381,7 @@ jailoc warns when an entry targets port 9222 (Chrome DevTools Protocol) or a con
 
 ### Filtered DNS
 
-When `filtered_dns = true`, an effective `dns_upstream` and at least one effective `dns_blocked_zones` entry are required. `dns_upstream` must be a numeric IPv4 address other than unspecified, loopback, link-local or multicast. Each zone must be a DNS name of labels with letters, digits or internal hyphens (63 characters per label, 253 total); a trailing dot is accepted and `"."` is rejected. Queries for names in blocked zones get NXDOMAIN, matched case-insensitively including subdomains, and so do answers that name a blocked zone anywhere, for example through a CNAME. Queries with more or fewer than one question are refused. Direct DNS to port 53 of other servers is blocked.
+When `network.filtered_dns = true`, an effective `dns_upstream` and at least one effective `dns_blocked_zones` entry are required. `dns_upstream` must be a numeric IPv4 address other than unspecified, loopback, link-local or multicast. Each zone must be a DNS name of labels with letters, digits or internal hyphens (63 characters per label, 253 total); a trailing dot is accepted and `"."` is rejected. Queries for names in blocked zones get NXDOMAIN, matched case-insensitively including subdomains, and so do answers that name a blocked zone anywhere, for example through a CNAME. Queries with more or fewer than one question are refused. Direct DNS to port 53 of other servers is blocked.
 
 With filtering on, an effective `allowed_hosts` entry equal to or under an effective blocked zone is rejected at config load.
 
@@ -442,7 +470,7 @@ The `opencode1` mount of `~/.omo` serves the OmO plugin (`oh-my-openagent`), whi
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `filtered_dns`, `ca_bundle`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `dns_upstream` and an omitted `dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 

@@ -44,13 +44,16 @@ const (
 # gpg_agent = false
 # git_config = true
 # enable_docker = false
-# filtered_dns = false
-# dns_upstream = "10.20.30.53"
-# dns_blocked_zones = ["corp.example.com"]
 # ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
 # cpu = 2.0
 # memory = "4g"
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
+
+# [defaults.network]
+# ipv6 = false  # true: give the VM IPv6 connectivity (public destinations only)
+# filtered_dns = false
+# dns_upstream = "10.20.30.53"
+# dns_blocked_zones = ["corp.example.com"]
 
 # [defaults.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
@@ -81,13 +84,16 @@ paths = []
 # gpg_agent = false
 # git_config = true
 # enable_docker = false
-# filtered_dns = false
-# dns_upstream = "10.20.30.53"
-# dns_blocked_zones = ["corp.example.com"]
 # ca_bundle = true  # omitted: inherit defaults; true/false/string: override
 # cpu = 2.0
 # memory = "4g"
 # docker_disk = "20g"
+
+# [workspaces.default.network]
+# ipv6 = false
+# filtered_dns = false
+# dns_upstream = "10.20.30.53"
+# dns_blocked_zones = ["corp.example.com"]
 
 # [workspaces.default.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
@@ -307,14 +313,16 @@ type Defaults struct {
 	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
-	FilteredDNS     *bool                    `toml:"filtered_dns,omitempty"`
-	DNSUpstream     string                   `toml:"dns_upstream,omitempty"`
-	DNSBlockedZones []string                 `toml:"dns_blocked_zones,omitempty"`
-	CABundle        *CABundle                `toml:"ca_bundle,omitempty"`
-	IsolatedBuild   *bool                    `toml:"isolated_build,omitempty"`
-	ProtectGit      *bool                    `toml:"protect_git,omitempty"`
-	Ports           []Port                   `toml:"ports,omitempty"`
-	HostPorts       []HostPort               `toml:"host_ports,omitempty"`
+	Network         Network                  `toml:"network,omitempty"`
+	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
+	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
+	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`
+	LegacyDNSBlockedZones []string   `toml:"dns_blocked_zones,omitempty"`
+	CABundle              *CABundle  `toml:"ca_bundle,omitempty"`
+	IsolatedBuild         *bool      `toml:"isolated_build,omitempty"`
+	ProtectGit            *bool      `toml:"protect_git,omitempty"`
+	Ports                 []Port     `toml:"ports,omitempty"`
+	HostPorts             []HostPort `toml:"host_ports,omitempty"`
 }
 
 type Workspace struct {
@@ -340,14 +348,41 @@ type Workspace struct {
 	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
-	FilteredDNS     *bool                    `toml:"filtered_dns,omitempty"`
-	DNSUpstream     string                   `toml:"dns_upstream,omitempty"`
-	DNSBlockedZones []string                 `toml:"dns_blocked_zones,omitempty"`
-	CABundle        *CABundle                `toml:"ca_bundle,omitempty"`
-	IsolatedBuild   *bool                    `toml:"isolated_build,omitempty"`
-	ProtectGit      *bool                    `toml:"protect_git,omitempty"`
-	Ports           []Port                   `toml:"ports,omitempty"`
-	HostPorts       []HostPort               `toml:"host_ports,omitempty"`
+	Network         Network                  `toml:"network,omitempty"`
+	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
+	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
+	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`
+	LegacyDNSBlockedZones []string   `toml:"dns_blocked_zones,omitempty"`
+	CABundle              *CABundle  `toml:"ca_bundle,omitempty"`
+	IsolatedBuild         *bool      `toml:"isolated_build,omitempty"`
+	ProtectGit            *bool      `toml:"protect_git,omitempty"`
+	Ports                 []Port     `toml:"ports,omitempty"`
+	HostPorts             []HostPort `toml:"host_ports,omitempty"`
+}
+
+// Network is a [<scope>.network] table: the guest network of a workspace.
+// Unset workspace fields inherit the [defaults.network] values.
+type Network struct {
+	// IPv6 gives the guest IPv6 connectivity; unset means IPv4 only.
+	IPv6            *bool    `toml:"ipv6,omitempty"`
+	FilteredDNS     *bool    `toml:"filtered_dns,omitempty"`
+	DNSUpstream     string   `toml:"dns_upstream,omitempty"`
+	DNSBlockedZones []string `toml:"dns_blocked_zones,omitempty"`
+}
+
+// LegacyNetwork lists the network settings set outside the network table.
+func LegacyNetwork(filteredDNS *bool, dnsUpstream string, dnsBlockedZones []string) []string {
+	var out []string
+	if filteredDNS != nil {
+		out = append(out, "filtered_dns")
+	}
+	if dnsUpstream != "" {
+		out = append(out, "dns_upstream")
+	}
+	if dnsBlockedZones != nil {
+		out = append(out, "dns_blocked_zones")
+	}
+	return out
 }
 
 // PathEnv names the environment variable that sets the configuration file.
@@ -1047,7 +1082,10 @@ func Validate(cfg *Config) error {
 	if cfg.Defaults.DockerDisk != nil && !validMemory.MatchString(*cfg.Defaults.DockerDisk) {
 		return fmt.Errorf("defaults: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", *cfg.Defaults.DockerDisk)
 	}
-	if err := validateDNS(cfg.Defaults.DNSUpstream, cfg.Defaults.DNSBlockedZones); err != nil {
+	if err := movedToNetwork("[defaults]", cfg.Defaults.LegacyFilteredDNS, cfg.Defaults.LegacyDNSUpstream, cfg.Defaults.LegacyDNSBlockedZones); err != nil {
+		return err
+	}
+	if err := validateDNS(cfg.Defaults.Network.DNSUpstream, cfg.Defaults.Network.DNSBlockedZones); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
 
@@ -1142,23 +1180,24 @@ func Validate(cfg *Config) error {
 		if ws.DockerDisk != nil && !validMemory.MatchString(*ws.DockerDisk) {
 			return fmt.Errorf("workspace %q: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", name, *ws.DockerDisk)
 		}
-		if err := validateDNS(ws.DNSUpstream, ws.DNSBlockedZones); err != nil {
+		if err := movedToNetwork(fmt.Sprintf("[workspaces.%s]", name), ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones); err != nil {
+			return err
+		}
+		dn, wn := cfg.Defaults.Network, ws.Network
+		if err := validateDNS(wn.DNSUpstream, wn.DNSBlockedZones); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
-		enabled := cfg.Defaults.FilteredDNS != nil && *cfg.Defaults.FilteredDNS
-		if ws.FilteredDNS != nil {
-			enabled = *ws.FilteredDNS
-		}
-		if enabled && ws.DNSUpstream == "" && cfg.Defaults.DNSUpstream == "" {
+		enabled := explicitTrue(dn.FilteredDNS, wn.FilteredDNS)
+		if enabled && wn.DNSUpstream == "" && dn.DNSUpstream == "" {
 			return fmt.Errorf("workspace %q: dns_upstream is required when filtered_dns is enabled", name)
 		}
-		if enabled && len(ws.DNSBlockedZones) == 0 && len(cfg.Defaults.DNSBlockedZones) == 0 {
+		if enabled && len(wn.DNSBlockedZones) == 0 && len(dn.DNSBlockedZones) == 0 {
 			return fmt.Errorf("workspace %q: dns_blocked_zones is required when filtered_dns is enabled", name)
 		}
 		if enabled {
-			zones := ws.DNSBlockedZones
+			zones := wn.DNSBlockedZones
 			if zones == nil {
-				zones = cfg.Defaults.DNSBlockedZones
+				zones = dn.DNSBlockedZones
 			}
 			for _, host := range mergeDedup(cfg.Defaults.AllowedHosts, ws.AllowedHosts) {
 				normalizedHost := strings.TrimSuffix(strings.ToLower(host), ".")
@@ -1334,6 +1373,15 @@ func explicitTrue(defaults, workspace *bool) bool {
 		return *workspace
 	}
 	return defaults != nil && *defaults
+}
+
+// movedToNetwork rejects network settings outside the [<scope>.network] table.
+func movedToNetwork(scope string, filteredDNS *bool, dnsUpstream string, dnsBlockedZones []string) error {
+	if legacy := LegacyNetwork(filteredDNS, dnsUpstream, dnsBlockedZones); len(legacy) > 0 {
+		return fmt.Errorf("%s: %s moved to the %s table; run `jailoc migrate` to update the config",
+			scope, strings.Join(legacy, ", "), strings.TrimSuffix(scope, "]")+".network]")
+	}
+	return nil
 }
 
 var dnsLabelRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$`)

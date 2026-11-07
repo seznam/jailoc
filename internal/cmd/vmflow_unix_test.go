@@ -111,8 +111,8 @@ func TestStatusRestartChanges(t *testing.T) {
 	if got := statusRestartChanges(ws, vm.Spec{GuestBinary: guestBinary, Guest: &guest.Config{NoPrivilegeEscalation: true}, CPUs: 2, MemoryMiB: 4096}); len(got) != 0 {
 		t.Errorf("spec without agent: got %v, want no changes (opencode is the default)", got)
 	}
-	changed := vm.Spec{Agent: "claude", CPUs: 4, MemoryMiB: 2048, Docker: true, Profile: "work", GuestBinary: guestBinary, Guest: &guest.Config{}}
-	want := []string{"profile", "cpu", "memory", "enable_docker", "protect_git", "agent"}
+	changed := vm.Spec{Agent: "claude", CPUs: 4, MemoryMiB: 2048, Docker: true, Profile: "work", GuestBinary: guestBinary, Guest: &guest.Config{IPv6: true}}
+	want := []string{"profile", "cpu", "memory", "enable_docker", "protect_git", "network.ipv6", "agent"}
 	if got := statusRestartChanges(ws, changed); !slices.Equal(got, want) {
 		t.Errorf("changed spec: got %v, want %v", got, want)
 	}

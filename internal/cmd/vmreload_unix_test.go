@@ -104,3 +104,26 @@ func TestRestartOnlyChangesDockerDisk(t *testing.T) {
 		}
 	}
 }
+
+func TestRestartOnlyChangesIPv6(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	guestBinary, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
+	if err != nil {
+		guestBinary = ""
+	}
+	for _, tt := range []struct {
+		running, want bool
+		changes       []string
+	}{
+		{false, false, nil},
+		{true, true, nil},
+		{false, true, []string{"network.ipv6"}},
+		{true, false, []string{"network.ipv6"}},
+	} {
+		running := vm.Spec{Agent: "opencode", GuestBinary: guestBinary, Guest: &guest.Config{IPv6: tt.running}}
+		want := vm.Spec{Agent: "opencode", GuestBinary: guestBinary, Guest: &guest.Config{IPv6: tt.want}}
+		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
+			t.Errorf("running=%v want=%v: got %v, want %v", tt.running, tt.want, got, tt.changes)
+		}
+	}
+}

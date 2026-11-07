@@ -28,7 +28,7 @@ const reloadTimeout = 15 * time.Second
 
 // reloadVM applies the current configuration to a running workspace VM
 // without restarting it: network policy (allowed_hosts, allowed_networks,
-// filtered_dns), published ports, host ports, the SSH agent, the CA bundle, snapshots,
+// the [network] DNS settings), published ports, host ports, the SSH agent, the CA bundle, snapshots,
 // environment and secrets. Settings that need a new VM are reported, not
 // applied.
 func reloadVM(ctx context.Context, ws *workspace.Resolved, purgeCache bool) error {
@@ -136,6 +136,15 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 		spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
 	}
 	spec.Guest.NoPrivilegeEscalation = ws.ProtectGit
+	if ws.IPv6 && !running.Guest.IPv6 {
+		// The guest has no IPv6 until it restarts, and the running broker
+		// may predate the ipv6 policy field: keep its policy IPv4 only.
+		v4 := *ws
+		v4.IPv6 = false
+		if spec.Policy, err = vmPolicy(ctx, &v4); err != nil {
+			return vm.Spec{}, nil, err
+		}
+	}
 	return spec, snapshots, nil
 }
 
@@ -173,6 +182,9 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	}
 	if running.Guest.NoPrivilegeEscalation != want.Guest.NoPrivilegeEscalation {
 		out = append(out, "protect_git")
+	}
+	if running.Guest.IPv6 != want.Guest.IPv6 {
+		out = append(out, "network.ipv6")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
 	agentChanged := cmp.Or(running.Agent, agent.Default) != want.Agent

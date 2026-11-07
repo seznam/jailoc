@@ -132,7 +132,7 @@ func TestFilteredDNSValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &Config{Workspaces: map[string]Workspace{"test": {
-				Paths: []string{"/data/work"}, FilteredDNS: new(true), DNSUpstream: tc.upstream, DNSBlockedZones: tc.zones,
+				Paths: []string{"/data/work"}, Network: Network{FilteredDNS: new(true), DNSUpstream: tc.upstream, DNSBlockedZones: tc.zones},
 			}}}
 			err := Validate(cfg)
 			if tc.wantError == "" && err != nil {
@@ -168,9 +168,9 @@ func TestFilteredDNSAllowedHostConflict(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &Config{
-				Defaults: Defaults{FilteredDNS: new(true), DNSUpstream: "1.1.1.1", DNSBlockedZones: tc.defaultZones, AllowedHosts: tc.defaultHosts},
+				Defaults: Defaults{Network: Network{FilteredDNS: new(true), DNSUpstream: "1.1.1.1", DNSBlockedZones: tc.defaultZones}, AllowedHosts: tc.defaultHosts},
 				Workspaces: map[string]Workspace{"test": {
-					Paths: []string{"/data/work"}, AllowedHosts: tc.workspaceHosts, DNSBlockedZones: tc.workspaceZones, FilteredDNS: tc.workspaceEnabled,
+					Paths: []string{"/data/work"}, AllowedHosts: tc.workspaceHosts, Network: Network{DNSBlockedZones: tc.workspaceZones, FilteredDNS: tc.workspaceEnabled},
 				}},
 			}
 			err := Validate(cfg)
@@ -192,21 +192,49 @@ func TestFilteredDNSAllowedHostConflict(t *testing.T) {
 func TestLoadFilteredDNSTOML(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.toml")
-	writeFile(t, path, `[defaults]
+	writeFile(t, path, `[defaults.network]
 dns_upstream = "10.20.30.53"
 dns_blocked_zones = ["internal"]
 
 [workspaces.test]
 paths = ["/data/work"]
+
+[workspaces.test.network]
 filtered_dns = true
+ipv6 = true
 `)
 	cfg, err := LoadFrom(path)
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if cfg.Workspaces["test"].FilteredDNS == nil || !*cfg.Workspaces["test"].FilteredDNS ||
-		cfg.Defaults.DNSUpstream != "10.20.30.53" || len(cfg.Defaults.DNSBlockedZones) != 1 {
-		t.Fatalf("filtered DNS settings not loaded: defaults=%+v workspace=%+v", cfg.Defaults, cfg.Workspaces["test"])
+	n := cfg.Workspaces["test"].Network
+	if n.FilteredDNS == nil || !*n.FilteredDNS || n.IPv6 == nil || !*n.IPv6 ||
+		cfg.Defaults.Network.DNSUpstream != "10.20.30.53" || len(cfg.Defaults.Network.DNSBlockedZones) != 1 {
+		t.Fatalf("network settings not loaded: defaults=%+v workspace=%+v", cfg.Defaults.Network, n)
+	}
+}
+
+func TestLegacyNetworkSettingsRejected(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		cfg      Config
+		wantText string
+	}{
+		{"defaults filtered_dns", Config{Defaults: Defaults{LegacyFilteredDNS: new(true)}}, "[defaults]: filtered_dns moved to the [defaults.network] table"},
+		{"defaults dns_upstream", Config{Defaults: Defaults{LegacyDNSUpstream: "10.20.30.53"}}, "dns_upstream moved"},
+		{"workspace dns_blocked_zones", Config{Workspaces: map[string]Workspace{"test": {
+			Paths: []string{"/data/work"}, LegacyDNSBlockedZones: []string{"internal"},
+		}}}, "[workspaces.test]: dns_blocked_zones moved to the [workspaces.test.network] table"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := Validate(&tc.cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.wantText) || !strings.Contains(err.Error(), "jailoc migrate") {
+				t.Fatalf("Validate error = %v, want %q", err, tc.wantText)
+			}
+		})
 	}
 }
 
@@ -3285,7 +3313,7 @@ func TestBackendValidation(t *testing.T) {
 		{name: "vm accepts inherited ssh_auth_sock", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM}},
 		{name: "vm accepts ssh_auth_sock override off", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM, SSHAuthSock: new(false)}},
 		{name: "docker workspace overrides vm defaults", defaults: Defaults{Backend: BackendVM, SSHAuthSock: true}, ws: Workspace{Backend: BackendDocker}, wantError: "run `jailoc migrate`"},
-		{name: "vm accepts filtered_dns", ws: Workspace{Backend: BackendVM, FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}},
+		{name: "vm accepts filtered_dns", ws: Workspace{Backend: BackendVM, Network: Network{FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}}},
 		{name: "vm accepts enable_docker", ws: Workspace{Backend: BackendVM, EnableDocker: new(true)}},
 		{name: "vm rejects enable_docker with protect_git", defaults: Defaults{EnableDocker: new(true)}, ws: Workspace{Backend: BackendVM, ProtectGit: new(true)}, wantError: "cannot be combined with protect_git"},
 		{name: "vm accepts enable_docker override off", defaults: Defaults{EnableDocker: new(true)}, ws: Workspace{Backend: BackendVM, EnableDocker: new(false)}},

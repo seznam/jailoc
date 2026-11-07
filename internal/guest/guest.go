@@ -134,6 +134,9 @@ type Config struct {
 	// NoPrivilegeEscalation removes privilege escalation, including sudo,
 	// from sessions, so the agent cannot undo Pins and ReadOnly.
 	NoPrivilegeEscalation bool `json:"no_privilege_escalation,omitempty"`
+	// IPv6 configures the guest IPv6 address and default route; without it
+	// IPv6 is disabled on the guest interface.
+	IPv6 bool `json:"ipv6,omitempty"`
 	// Docker, when set, makes the guest run dockerd with its data on a
 	// block device.
 	Docker *Docker `json:"docker,omitempty"`

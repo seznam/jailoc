@@ -60,7 +60,7 @@ func connectTestBroker(t *testing.T, broker *Broker) *stack.Stack {
 func TestBrokerIPv6RejectsPrivate(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	policy, err := ParsePolicy([]byte(`{}`), "ipv6")
+	policy, err := ParsePolicy([]byte(`{"ipv6":true}`), "ipv6")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestBrokerIPv6Unreachable(t *testing.T) {
 	for _, protocol := range []string{ProtoTCP, ProtoUDP} {
 		t.Run(protocol, func(t *testing.T) {
 			t.Parallel()
-			policy, err := ParsePolicy([]byte(`{}`), "ipv6")
+			policy, err := ParsePolicy([]byte(`{"ipv6":true}`), "ipv6")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,7 +141,7 @@ func TestBrokerIPv6Flows(t *testing.T) {
 		t.Run(protocol, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			policy, err := ParsePolicy([]byte(`{}`), "ipv6")
+			policy, err := ParsePolicy([]byte(`{"ipv6":true}`), "ipv6")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -77,7 +77,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
 | CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |
-| Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `filtered_dns` |
+| Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `network` |
 | SSH session | Host to guest | Accept sessions only from jailoc, which authenticates with a per-workspace key and pins the guest host key generated at each start | fixed |
 
 `host_ports` deserves the most care. A Chrome DevTools port or a container runtime socket gives the guest control of the browser or the host; jailoc warns about both.

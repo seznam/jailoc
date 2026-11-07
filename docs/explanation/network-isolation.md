@@ -11,6 +11,8 @@ When the broker isn't running the guest has no network at all, and the superviso
 | Guest address | `192.168.127.2/24` | `fd00:127::2/64` |
 | Gateway (broker) | `192.168.127.1` | `fd00:127::1`, default route via `fe80::1` |
 
+IPv6 is opt-in with `network.ipv6`. Without it the guest disables IPv6 on its interface and the broker denies every IPv6 destination, so the guest is IPv4 only. The broker check doesn't depend on the guest: guest root re-enabling IPv6 still gets denied.
+
 The gateway serves DHCP, DNS, SNTP with the host clock (UDP port 123, used by `jailoc-guest` to keep the guest clock on host time) and the host services configured with `host_ports`. Everything else the guest sends is a new flow the broker has to decide on.
 
 ## The policy
@@ -20,6 +22,7 @@ Every new TCP connection and UDP flow gets one decision. The broker checks, in o
 | Destination | Decision |
 |-------------|----------|
 | The gateway, the guest's own subnet, any address of a host interface | denied |
+| Any IPv6 address, when `network.ipv6` is off | denied |
 | Hard-denied ranges (below) | denied, no allow list opens them |
 | Port 53 anywhere, when filtered DNS is on | denied |
 | Private and reserved ranges | denied unless covered by `allowed_networks` or a resolved `allowed_hosts` address |
@@ -35,6 +38,8 @@ Hard-denied: `0.0.0.0/8`, loopback `127.0.0.0/8`, multicast `224.0.0.0/4`, `240.
 
 ### IPv6
 
+These rules apply when `network.ipv6` is on.
+
 Hard-denied regardless of allow lists: unspecified `::`, loopback `::1`, IPv4-compatible `::/96`, link-local `fe80::/10`, site-local `fec0::/10`, multicast `ff00::/8`, documentation `2001:db8::/32` and `3fff::/20`, discard `100::/64`, ORCHID `2001:10::/28` and `2001:20::/28`, benchmarking `2001:2::/48`, Teredo `2001::/32`, local-use NAT64 `64:ff9b:1::/48`, and the cloud metadata addresses `fd00:ec2::254` and `fd00:ec2::23`.
 
 IPv6 addresses that carry an IPv4 address (IPv4-mapped `::ffff:0:0/96`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) are judged by the IPv4 rules for the embedded address, so they can't be used to reach a blocked IPv4 range.
@@ -49,7 +54,7 @@ DNS answers never change a decision on their own. A public name that resolves to
 
 ## Filtered DNS
 
-With `filtered_dns`, the broker's resolver forwards queries to the configured upstream and answers NXDOMAIN for names in `dns_blocked_zones` and their subdomains, for both A and AAAA queries. DNS to port 53 on any other address is denied, so the guest can't bypass the filter by choosing its own resolver.
+With `network.filtered_dns`, the broker's resolver forwards queries to the configured upstream and answers NXDOMAIN for names in `dns_blocked_zones` and their subdomains, for both A and AAAA queries. DNS to port 53 on any other address is denied, so the guest can't bypass the filter by choosing its own resolver.
 
 ## Enforcement details
 

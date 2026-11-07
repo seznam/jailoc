@@ -33,13 +33,16 @@ var (
 
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
-	Short: "Migrate a jailoc v1 (Docker) configuration to the VM backend",
-	Long: `Rewrite a jailoc v1 config.toml for the VM backend (backend = "vm").
+	Short: "Migrate an older jailoc configuration to the current format",
+	Long: `Rewrite an older config.toml: a jailoc v1 configuration for the VM backend
+(backend = "vm"), and settings that moved to another table.
 
 For each Docker workspace, migrate asks how to carry over every mount (a live
 directory mount, or a read-only snapshot), removes v1 settings (mode, password_mode,
 expose_port) after confirmation, stops running Docker workspaces, and copies the
 OpenCode data and cache volumes into the VM's persistent home directories.
+It moves filtered_dns, dns_upstream and dns_blocked_zones of [defaults] and
+every workspace into their network table.
 The previous config.toml is kept as a backup; comments in it are not carried
 over.`,
 	Args: cobra.NoArgs,
@@ -183,6 +186,14 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		cfg.Workspaces[name] = ws
 	}
 
+	d := &cfg.Defaults
+	moveNetwork("[defaults]", &d.Network, &d.LegacyFilteredDNS, &d.LegacyDNSUpstream, &d.LegacyDNSBlockedZones, m)
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		moveNetwork(fmt.Sprintf("[workspaces.%s]", name), &ws.Network, &ws.LegacyFilteredDNS, &ws.LegacyDNSUpstream, &ws.LegacyDNSBlockedZones, m)
+		cfg.Workspaces[name] = ws
+	}
+
 	if cfg.Defaults.Backend != config.BackendVM {
 		cfg.Defaults.Backend = config.BackendVM
 		m.changes = append(m.changes, `[defaults]: backend = "vm"`)
@@ -196,6 +207,43 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		}
 	}
 	return m, nil
+}
+
+// moveNetwork moves the network settings of a [defaults] or workspace table
+// into its network table. A value already set in the network table wins.
+func moveNetwork(label string, n *config.Network, filteredDNS **bool, upstream *string, zones *[]string, m *migration) {
+	table := strings.TrimSuffix(label, "]") + ".network]"
+	report := func(setting string, moved bool) {
+		if moved {
+			m.changes = append(m.changes, fmt.Sprintf("%s: move %s to %s", label, setting, table))
+		} else {
+			m.changes = append(m.changes, fmt.Sprintf("%s: remove %s (set in %s)", label, setting, table))
+		}
+	}
+	if *filteredDNS != nil {
+		moved := n.FilteredDNS == nil
+		if moved {
+			n.FilteredDNS = *filteredDNS
+		}
+		*filteredDNS = nil
+		report("filtered_dns", moved)
+	}
+	if *upstream != "" {
+		moved := n.DNSUpstream == ""
+		if moved {
+			n.DNSUpstream = *upstream
+		}
+		*upstream = ""
+		report("dns_upstream", moved)
+	}
+	if *zones != nil {
+		moved := n.DNSBlockedZones == nil
+		if moved {
+			n.DNSBlockedZones = *zones
+		}
+		*zones = nil
+		report("dns_blocked_zones", moved)
+	}
 }
 
 func resolveIncompatibilities(p *prompter, label string, items []incompatibility, m *migration) error {
@@ -327,7 +375,7 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 		return err
 	}
 	if len(m.changes) == 0 {
-		_, _ = color.New(color.FgGreen).Fprintln(p.out, `All workspaces already use backend "vm"; nothing to migrate.`)
+		_, _ = color.New(color.FgGreen).Fprintln(p.out, "The configuration is up to date; nothing to migrate.")
 		return nil
 	}
 	if err := config.ValidateCopy(cfg); err != nil {
@@ -374,7 +422,9 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 		return err
 	}
 	_, _ = color.New(color.FgGreen).Fprintf(p.out, "\nMigrated config.toml (previous version: %s).\n", backup)
-	_, _ = fmt.Fprintln(p.out, "Start a workspace with `jailoc up <workspace>`; the first start builds the image in a VM.")
+	if len(m.workspaces) > 0 {
+		_, _ = fmt.Fprintln(p.out, "Start a workspace with `jailoc up <workspace>`; the first start builds the image in a VM.")
+	}
 	return nil
 }
 
