@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -50,14 +51,32 @@ func lookupTimeZone(tz string, tzSet bool, localtime, timezoneFile string, zonei
 		return &guest.TimeZone{Name: tz}
 	}
 	name := ""
+	fromLink := false
 	if link, err := os.Readlink(localtime); err == nil {
-		name = zoneName(link)
+		name, fromLink = zoneName(link), true
 	} else if data, err := os.ReadFile(timezoneFile); err == nil { //nolint:gosec // G304: fixed system path
 		if n := strings.TrimSpace(string(data)); guest.ValidTimeZoneName(n) {
 			name = n
 		}
 	}
-	return zoneFromFile(localtime, name)
+	zone := zoneFromFile(localtime, name)
+	// /etc/timezone can go stale when localtime is a copy; the guest would
+	// then prefer the wrong name over the right data.
+	if zone != nil && !fromLink && zone.Name != "" && zone.Data != nil && !zoneMatches(zone, zoneinfoDirs) {
+		zone.Name = ""
+	}
+	return zone
+}
+
+// zoneMatches reports whether a zoneinfo directory holds zone.Name with
+// exactly zone.Data.
+func zoneMatches(zone *guest.TimeZone, zoneinfoDirs []string) bool {
+	for _, dir := range zoneinfoDirs {
+		if z := zoneFromFile(filepath.Join(dir, zone.Name), zone.Name); z != nil && bytes.Equal(z.Data, zone.Data) {
+			return true
+		}
+	}
+	return false
 }
 
 // zoneFromFile returns the zone name with the TZif data at path, or nil when

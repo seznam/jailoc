@@ -74,8 +74,26 @@ func TestLookupTimeZone(t *testing.T) {
 			setup: func(t *testing.T, dir string) {
 				writeFile(t, filepath.Join(dir, "localtime"), tzif)
 				writeFile(t, filepath.Join(dir, "timezone"), []byte("Europe/Berlin\n"))
+				writeFile(t, filepath.Join(dir, "zoneinfo", "Europe", "Berlin"), tzif)
 			},
 			wantName: "Europe/Berlin",
+			wantData: true,
+		},
+		{
+			name: "localtime copy with stale timezone file",
+			setup: func(t *testing.T, dir string) {
+				writeFile(t, filepath.Join(dir, "localtime"), tzif)
+				writeFile(t, filepath.Join(dir, "timezone"), []byte("Europe/Berlin\n"))
+				writeFile(t, filepath.Join(dir, "zoneinfo", "Europe", "Berlin"), []byte("TZif2 other zone"))
+			},
+			wantData: true,
+		},
+		{
+			name: "localtime copy with timezone file missing on host",
+			setup: func(t *testing.T, dir string) {
+				writeFile(t, filepath.Join(dir, "localtime"), tzif)
+				writeFile(t, filepath.Join(dir, "timezone"), []byte("Europe/Berlin\n"))
+			},
 			wantData: true,
 		},
 		{

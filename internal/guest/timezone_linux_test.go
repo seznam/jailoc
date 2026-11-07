@@ -101,28 +101,41 @@ func TestSetTimeZone(t *testing.T) {
 // TestSessionEnvTimeZone cannot be parallel: it sets TZ in the process
 // environment that sessionEnv reads.
 func TestSessionEnvTimeZone(t *testing.T) {
-	t.Setenv("TZ", "Etc/UTC")
 	zone := &TimeZone{Name: "Europe/Prague"}
 
 	tests := []struct {
-		name string
-		cfg  *Config
-		want []string
+		name      string
+		imageTZ   string
+		cfg       *Config
+		want      []string
+		wantZone  string
+		needsZone bool
 	}{
-		{name: "unmanaged zone keeps image TZ", cfg: &Config{}, want: []string{"TZ=Etc/UTC"}},
-		{name: "managed zone drops image TZ", cfg: &Config{TimeZone: zone}, want: nil},
-		{name: "configured TZ wins", cfg: &Config{TimeZone: zone, Env: []string{"TZ=Asia/Tokyo"}}, want: []string{"TZ=Asia/Tokyo"}},
+		{name: "image zone becomes managed", imageTZ: ":Etc/UTC", cfg: &Config{}, want: nil, wantZone: "Etc/UTC", needsZone: true},
+		{name: "image zone missing in image kept", imageTZ: "Nowhere/Zone", cfg: &Config{}, want: []string{"TZ=Nowhere/Zone"}},
+		{name: "image POSIX rule kept", imageTZ: "CET-1CEST", cfg: &Config{}, want: []string{"TZ=CET-1CEST"}},
+		{name: "configured zone drops image TZ", imageTZ: "Etc/UTC", cfg: &Config{TimeZone: zone}, want: nil, wantZone: "Europe/Prague"},
+		{name: "configured zone drops image POSIX rule", imageTZ: "CET-1CEST", cfg: &Config{TimeZone: zone}, want: nil, wantZone: "Europe/Prague"},
+		{name: "configured TZ wins", imageTZ: "Etc/UTC", cfg: &Config{TimeZone: zone, Env: []string{"TZ=Asia/Tokyo"}}, want: []string{"TZ=Asia/Tokyo"}, wantZone: "Europe/Prague"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.needsZone && !imageHasZone("/", strings.TrimPrefix(tt.imageTZ, ":")) {
+				t.Skip("no zoneinfo on this host")
+			}
+			t.Setenv("TZ", tt.imageTZ)
+			env, gotZone := sessionEnv(tt.cfg)
 			var got []string
-			for _, kv := range sessionEnv(tt.cfg) {
+			for _, kv := range env {
 				if strings.HasPrefix(kv, "TZ=") {
 					got = append(got, kv)
 				}
 			}
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("TZ entries = %q, want %q", got, tt.want)
+			}
+			if name := timeZoneName(gotZone); name != tt.wantZone {
+				t.Errorf("zone = %q, want %q", name, tt.wantZone)
 			}
 		})
 	}
