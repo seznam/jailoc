@@ -146,6 +146,7 @@ dns_blocked_zones = ["corp.example.com"]
 paths = ["/src/web"]
 filtered_dns = false
 dns_upstream = "10.20.30.54"
+dns_blocked_zones = []
 
 [workspaces.web.network]
 dns_upstream = "10.20.30.55"
@@ -187,6 +188,9 @@ paths = ["/src/api"]
 	}
 	if web.Network.FilteredDNS == nil || *web.Network.FilteredDNS || web.Network.DNSUpstream != "10.20.30.55" {
 		t.Fatalf("web network = %+v", web.Network)
+	}
+	if web.Network.DNSBlockedZones == nil || len(web.Network.DNSBlockedZones) != 0 {
+		t.Fatalf("web dns_blocked_zones = %#v, want the explicitly empty list kept", web.Network.DNSBlockedZones)
 	}
 	if err := config.ValidateCopy(cfg); err != nil {
 		t.Fatalf("migrated config invalid: %v", err)

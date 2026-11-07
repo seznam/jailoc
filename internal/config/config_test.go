@@ -132,7 +132,7 @@ func TestFilteredDNSValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &Config{Workspaces: map[string]Workspace{"test": {
-				Paths: []string{"/data/work"}, Network: Network{FilteredDNS: new(true), DNSUpstream: tc.upstream, DNSBlockedZones: tc.zones},
+				Paths: []string{"/data/work"}, Network: &Network{FilteredDNS: new(true), DNSUpstream: tc.upstream, DNSBlockedZones: tc.zones},
 			}}}
 			err := Validate(cfg)
 			if tc.wantError == "" && err != nil {
@@ -168,9 +168,9 @@ func TestFilteredDNSAllowedHostConflict(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &Config{
-				Defaults: Defaults{Network: Network{FilteredDNS: new(true), DNSUpstream: "1.1.1.1", DNSBlockedZones: tc.defaultZones}, AllowedHosts: tc.defaultHosts},
+				Defaults: Defaults{Network: &Network{FilteredDNS: new(true), DNSUpstream: "1.1.1.1", DNSBlockedZones: tc.defaultZones}, AllowedHosts: tc.defaultHosts},
 				Workspaces: map[string]Workspace{"test": {
-					Paths: []string{"/data/work"}, AllowedHosts: tc.workspaceHosts, Network: Network{DNSBlockedZones: tc.workspaceZones, FilteredDNS: tc.workspaceEnabled},
+					Paths: []string{"/data/work"}, AllowedHosts: tc.workspaceHosts, Network: &Network{DNSBlockedZones: tc.workspaceZones, FilteredDNS: tc.workspaceEnabled},
 				}},
 			}
 			err := Validate(cfg)
@@ -3313,7 +3313,7 @@ func TestBackendValidation(t *testing.T) {
 		{name: "vm accepts inherited ssh_auth_sock", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM}},
 		{name: "vm accepts ssh_auth_sock override off", defaults: Defaults{SSHAuthSock: true}, ws: Workspace{Backend: BackendVM, SSHAuthSock: new(false)}},
 		{name: "docker workspace overrides vm defaults", defaults: Defaults{Backend: BackendVM, SSHAuthSock: true}, ws: Workspace{Backend: BackendDocker}, wantError: "run `jailoc migrate`"},
-		{name: "vm accepts filtered_dns", ws: Workspace{Backend: BackendVM, Network: Network{FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}}},
+		{name: "vm accepts filtered_dns", ws: Workspace{Backend: BackendVM, Network: &Network{FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}}},
 		{name: "vm accepts enable_docker", ws: Workspace{Backend: BackendVM, EnableDocker: new(true)}},
 		{name: "vm rejects enable_docker with protect_git", defaults: Defaults{EnableDocker: new(true)}, ws: Workspace{Backend: BackendVM, ProtectGit: new(true)}, wantError: "cannot be combined with protect_git"},
 		{name: "vm accepts enable_docker override off", defaults: Defaults{EnableDocker: new(true)}, ws: Workspace{Backend: BackendVM, EnableDocker: new(false)}},
@@ -3590,5 +3590,46 @@ install = false
 	}
 	if args := second.Defaults.Agents["claude"].Args; !slices.Equal(args, []string{"--model", "opus"}) {
 		t.Errorf("defaults args = %#v", args)
+	}
+}
+
+func TestEncodeKeepsEmptyDNSBlockedZones(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `[defaults.network]
+dns_blocked_zones = ["internal.example"]
+
+[workspaces.cleared]
+paths = ["/data/cleared"]
+
+[workspaces.cleared.network]
+dns_blocked_zones = []
+
+[workspaces.inherited]
+paths = ["/data/inherited"]
+`)
+	first, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	data, err := Encode(first)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	path2 := filepath.Join(dir, "config2.toml")
+	writeFile(t, path2, string(data))
+	second, err := LoadFrom(path2)
+	if err != nil {
+		t.Fatalf("second LoadFrom: %v", err)
+	}
+	if zones := second.Workspaces["cleared"].Network.DNSBlockedZones; zones == nil || len(zones) != 0 {
+		t.Errorf("cleared dns_blocked_zones = %#v, want an explicitly empty list", zones)
+	}
+	if n := second.Workspaces["inherited"].Network; n != nil {
+		t.Errorf("inherited network = %#v, want no table (inherit defaults)", n)
+	}
+	if zones := second.Defaults.Network.DNSBlockedZones; !slices.Equal(zones, []string{"internal.example"}) {
+		t.Errorf("defaults dns_blocked_zones = %#v", zones)
 	}
 }

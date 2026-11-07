@@ -44,11 +44,11 @@ func TestResolveValidWorkspace(t *testing.T) {
 func TestResolveFilteredDNS(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
-		Defaults: config.Defaults{Network: config.Network{FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}},
+		Defaults: config.Defaults{Network: &config.Network{FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}},
 		Workspaces: map[string]config.Workspace{
 			"inherited": {Paths: []string{"/data/inherited"}},
-			"disabled":  {Paths: []string{"/data/disabled"}, Network: config.Network{FilteredDNS: new(false)}},
-			"custom":    {Paths: []string{"/data/custom"}, Network: config.Network{DNSUpstream: "192.0.2.53", DNSBlockedZones: []string{"corp.example.com"}}},
+			"disabled":  {Paths: []string{"/data/disabled"}, Network: &config.Network{FilteredDNS: new(false)}},
+			"custom":    {Paths: []string{"/data/custom"}, Network: &config.Network{DNSUpstream: "192.0.2.53", DNSBlockedZones: []string{"corp.example.com"}}},
 		},
 	}
 	for name, want := range map[string]struct {
@@ -1765,10 +1765,10 @@ func TestResolveAgentMountsAndProfile(t *testing.T) {
 func TestResolveIPv6(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
-		Defaults: config.Defaults{Network: config.Network{IPv6: new(true)}},
+		Defaults: config.Defaults{Network: &config.Network{IPv6: new(true)}},
 		Workspaces: map[string]config.Workspace{
 			"inherited": {Paths: []string{"/data/inherited"}},
-			"disabled":  {Paths: []string{"/data/disabled"}, Network: config.Network{IPv6: new(false)}},
+			"disabled":  {Paths: []string{"/data/disabled"}, Network: &config.Network{IPv6: new(false)}},
 		},
 	}
 	for name, want := range map[string]bool{"inherited": true, "disabled": false} {

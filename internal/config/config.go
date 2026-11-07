@@ -313,7 +313,7 @@ type Defaults struct {
 	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
-	Network         Network                  `toml:"network,omitempty"`
+	Network         *Network                 `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
 	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`
@@ -348,7 +348,7 @@ type Workspace struct {
 	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
 	ExposePort      *bool                    `toml:"expose_port,omitempty"`
 	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
-	Network         Network                  `toml:"network,omitempty"`
+	Network         *Network                 `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
 	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`
@@ -364,10 +364,22 @@ type Workspace struct {
 // Unset workspace fields inherit the [defaults.network] values.
 type Network struct {
 	// IPv6 gives the guest IPv6 connectivity; unset means IPv4 only.
-	IPv6            *bool    `toml:"ipv6,omitempty"`
-	FilteredDNS     *bool    `toml:"filtered_dns,omitempty"`
-	DNSUpstream     string   `toml:"dns_upstream,omitempty"`
-	DNSBlockedZones []string `toml:"dns_blocked_zones,omitempty"`
+	IPv6        *bool  `toml:"ipv6,omitempty"`
+	FilteredDNS *bool  `toml:"filtered_dns,omitempty"`
+	DNSUpstream string `toml:"dns_upstream,omitempty"`
+	// DNSBlockedZones keeps an empty list when the configuration is written
+	// back: it clears the defaults' zones, which an omitted list inherits.
+	DNSBlockedZones []string `toml:"dns_blocked_zones"`
+}
+
+// Get returns the settings of a network table, or no settings when the table
+// is absent. The table is a pointer so that a table holding only an empty
+// list is still written back.
+func (n *Network) Get() Network {
+	if n == nil {
+		return Network{}
+	}
+	return *n
 }
 
 // LegacyNetwork lists the network settings set outside the network table.
@@ -1085,7 +1097,7 @@ func Validate(cfg *Config) error {
 	if err := movedToNetwork("[defaults]", cfg.Defaults.LegacyFilteredDNS, cfg.Defaults.LegacyDNSUpstream, cfg.Defaults.LegacyDNSBlockedZones); err != nil {
 		return err
 	}
-	if err := validateDNS(cfg.Defaults.Network.DNSUpstream, cfg.Defaults.Network.DNSBlockedZones); err != nil {
+	if err := validateDNS(cfg.Defaults.Network.Get().DNSUpstream, cfg.Defaults.Network.Get().DNSBlockedZones); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
 
@@ -1183,7 +1195,7 @@ func Validate(cfg *Config) error {
 		if err := movedToNetwork(fmt.Sprintf("[workspaces.%s]", name), ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones); err != nil {
 			return err
 		}
-		dn, wn := cfg.Defaults.Network, ws.Network
+		dn, wn := cfg.Defaults.Network.Get(), ws.Network.Get()
 		if err := validateDNS(wn.DNSUpstream, wn.DNSBlockedZones); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}

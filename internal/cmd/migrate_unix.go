@@ -241,13 +241,20 @@ func usesDocker(cfg *config.Config, names []string, p *prompter) (bool, error) {
 
 // moveNetwork moves the network settings of a [defaults] or workspace table
 // into its network table. A value already set in the network table wins.
-func moveNetwork(label string, n *config.Network, filteredDNS **bool, upstream *string, zones *[]string, m *migration) {
-	table := strings.TrimSuffix(label, "]") + ".network]"
+func moveNetwork(label string, table **config.Network, filteredDNS **bool, upstream *string, zones *[]string, m *migration) {
+	if *filteredDNS == nil && *upstream == "" && *zones == nil {
+		return
+	}
+	if *table == nil {
+		*table = &config.Network{}
+	}
+	n := *table
+	name := strings.TrimSuffix(label, "]") + ".network]"
 	report := func(setting string, moved bool) {
 		if moved {
-			m.changes = append(m.changes, fmt.Sprintf("%s: move %s to %s", label, setting, table))
+			m.changes = append(m.changes, fmt.Sprintf("%s: move %s to %s", label, setting, name))
 		} else {
-			m.changes = append(m.changes, fmt.Sprintf("%s: remove %s (set in %s)", label, setting, table))
+			m.changes = append(m.changes, fmt.Sprintf("%s: remove %s (set in %s)", label, setting, name))
 		}
 	}
 	if *filteredDNS != nil {
