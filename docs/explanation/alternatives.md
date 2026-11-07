@@ -26,6 +26,7 @@ No single alternative below meets all five out of the box. Some meet more of the
 | Docker / Podman | ❌ Container, shared kernel | Linux; macOS and Windows through one Linux VM | ❌ Network on or off, custom networks | ❌ | ⚠️ Engine and Podman Apache-2.0; Docker Desktop paid in larger companies |
 | Dev Containers | ❌ Container, shared kernel | Wherever Docker runs | ⚠️ None in the spec; optional iptables script | ⚠️ Partly | ⚠️ Spec and CLI MIT; VS Code extension proprietary |
 | container-use | ❌ Container per agent branch | Wherever Docker runs | ❌ None | ✅ | ✅ Apache-2.0 |
+| agent-sandbox | ❌ Container per workspace, shared kernel | Linux (rootless Docker; Podman untested) | ⚠️ Hostname allowlist in a proxy container; HTTPS on port 443 only; no IP or DNS policy | ✅ | ❌ No license declared |
 | systemd-nspawn | ❌ Container, shared kernel | Linux | ❌ Network on, off, or a private veth | ❌ | ✅ LGPL-2.1 |
 | Toolbox, Distrobox | ❌ None (shares home, network, devices) | Linux | ❌ None | ❌ | ✅ Apache-2.0, GPL-3.0 |
 | gVisor (`runsc`) | ⚠️ Userspace kernel | Linux | ❌ Host networking, no allowlist | ❌ | ✅ Apache-2.0 |
@@ -57,6 +58,12 @@ Containers share the host kernel, so a kernel bug, a mounted Docker socket or `-
 ### container-use
 
 [container-use](https://github.com/dagger/container-use) gives each agent a container and Git branch through MCP. It keeps parallel agents apart, not contained, and has no network policy.
+
+### agent-sandbox
+
+[agent-sandbox](https://github.com/jurca/agent-sandbox) runs Claude Code or Copilot CLI in a container per workspace on Linux, with rootless Docker as the tested engine. Its threat model is accidents and prompt injection, and it leaves kernel and runtime escapes to a VM. The workspace is mounted at its host path. `.git` is read-only, and so are agent and editor configuration directories such as `.claude`, `.vscode` and `.devcontainer`. Dependency directories such as `.venv` and `node_modules` get per-workspace volumes, so the agent cannot plant code that host tools later run. Every change to the project's sandbox configuration needs approval on the host before it takes effect.
+
+Egress has two tiers. The container's only route out is a tinyproxy container that allows HTTPS on port 443 to listed hostnames, model APIs by default. A timed `net` session adds more hosts or opens everything, and shows the hosts it blocked. Requests are checked by name only, so a listed name that resolves to a private address stays reachable. Before anything starts, it refuses `.env` files in the workspace unless they are symlinks into a host directory outside it and ignored by a tracked `.gitignore`. Docker inside the sandbox is not supported, and the agent does not get root. jailoc boots a separate kernel, enforces IP and DNS policy and allows the public internet by default.
 
 ### systemd-nspawn
 
