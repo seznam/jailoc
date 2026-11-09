@@ -1,5 +1,40 @@
 # Changelog
 
+## [2.2.0](https://github.com/seznam/jailoc/compare/v2.1.0...v2.2.0) (2026-11-07)
+
+
+### Features
+
+* **agent:** add Antigravity CLI (agy) harness ([8f09f63](https://github.com/seznam/jailoc/commit/8f09f6335c144920d5f765b4b7f209384f3d1fe6))
+* **agent:** add Antigravity CLI (agy) harness ([8494d31](https://github.com/seznam/jailoc/commit/8494d311ef1e015a040726da7ff8e0970e25ad65)), closes [#314](https://github.com/seznam/jailoc/issues/314)
+* **agent:** print the Copilot and agy status line without Node.js ([07b38d1](https://github.com/seznam/jailoc/commit/07b38d11f4504dffe00037d96f38743d5eae51d9))
+* **cmd:** show agent startup status until the TUI draws ([427742a](https://github.com/seznam/jailoc/commit/427742a644db41aa22ca514690d76552cb22cc62))
+* **cmd:** show OpenCode plugin installs in the startup status ([acf1ed9](https://github.com/seznam/jailoc/commit/acf1ed976e8e87942347d072ba9b385d20252f0c))
+* **vm:** forward the host gpg agent into workspace VMs ([7182416](https://github.com/seznam/jailoc/commit/71824169d8dcc33295fc6c71ec33bbbf51daedb2))
+
+
+### Bug Fixes
+
+* **agent:** skip plugin hint on reattach, bound config reads and replace global plugin lists ([e16f025](https://github.com/seznam/jailoc/commit/e16f025fef07754f40242aa33cce9e0eea4c4873))
+* **cmd:** resolve relative OpenCode config paths and guard narrow or piped status ([f1eaacb](https://github.com/seznam/jailoc/commit/f1eaacb951833d3e8fe1a3f579f1bbc04b39cf89))
+* **cmd:** stop startup status on agent cursor saves and end only OSC on BEL ([ecb0559](https://github.com/seznam/jailoc/commit/ecb055945ae8b8766ff99074b72c3af813cf0875))
+* **git:** copy all Git config files and their references into the VM ([9ebb6a6](https://github.com/seznam/jailoc/commit/9ebb6a664558672600e9ff76d784e0325cab80d5))
+
+
+### Code Refactoring
+
+* **agent:** parse OpenCode JSONC with tailscale/hujson ([c50eb77](https://github.com/seznam/jailoc/commit/c50eb77738f6f0000fcb783a85978b935046edd2))
+
+
+### Documentation
+
+* **explanation:** add comparison with alternative sandboxes ([e8ef61b](https://github.com/seznam/jailoc/commit/e8ef61beb7877fe53f7df9b62d8784a8244c67cf))
+* **explanation:** add comparison with alternative sandboxes ([6e5f77e](https://github.com/seznam/jailoc/commit/6e5f77ee1263b8342670c275b248dc9c8851d39a))
+* **explanation:** add license column to alternatives table ([7b791dc](https://github.com/seznam/jailoc/commit/7b791dc30d8a3eae0eff50805369ae575596c22c))
+* **explanation:** mark comparison table with status emoji ([0574448](https://github.com/seznam/jailoc/commit/0574448a70e844a9a23a9222634037ed0dfb94e3))
+* **explanation:** shorten alternative descriptions ([d1ad8c9](https://github.com/seznam/jailoc/commit/d1ad8c933f0b2b148e5301ea0f93878e1bc538c9))
+* note that the status line indicator needs node on PATH ([81f86bc](https://github.com/seznam/jailoc/commit/81f86bc4e682da14648ff8544fc8e4776cc908a2))
+
 ## [2.1.0](https://github.com/seznam/jailoc/compare/v2.0.1...v2.1.0) (2026-11-06)
 
 
