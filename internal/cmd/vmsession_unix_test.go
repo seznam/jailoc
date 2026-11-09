@@ -5,6 +5,9 @@ package cmd
 import (
 	"bytes"
 	"testing"
+
+	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/vm"
 )
 
 func TestDetachMatcher(t *testing.T) {
@@ -69,6 +72,39 @@ func TestDetachMatcher(t *testing.T) {
 			}
 			if !bytes.Equal(out, []byte(tt.wantOut)) || detach != tt.wantDetach {
 				t.Fatalf("feed(%q) = %q, %v; want %q, %v", tt.chunks, out, detach, tt.wantOut, tt.wantDetach)
+			}
+		})
+	}
+}
+
+func TestCheckGuestCurrent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	write := func(name string, spec vm.Spec) {
+		t.Helper()
+		spec.StateDir = vmStateDir(name)
+		if err := vm.WriteSpec(spec); err != nil {
+			t.Fatalf("write spec: %v", err)
+		}
+	}
+	write("same", vm.Spec{GuestBinary: "/cache/jailoc-guest-old", GuestProtocol: guest.Protocol})
+	write("older", vm.Spec{GuestBinary: "/cache/jailoc-guest-old"})
+	write("nobinary", vm.Spec{})
+
+	tests := []struct {
+		name    string
+		wantErr bool
+	}{
+		{name: "same", wantErr: false},
+		{name: "older", wantErr: true},
+		{name: "nobinary", wantErr: false},
+		{name: "missing", wantErr: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkGuestCurrent(tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("checkGuestCurrent(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
 			}
 		})
 	}
