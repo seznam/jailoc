@@ -60,7 +60,7 @@ On macOS and Linux, install the latest release from the [seznam/homebrew-tap](ht
 brew install --cask seznam/tap/jailoc
 ```
 
-Upgrade with `brew upgrade --cask jailoc`. The tap carries stable releases only; install release candidates from the [GitHub Releases page](https://github.com/seznam/jailoc/releases).
+Upgrade with `brew upgrade --cask jailoc`. The tap carries stable releases only; install release candidates from the [GitHub Releases page](https://github.com/seznam/jailoc/releases). The cask installs both `jailoc` and the `jt` alias on your `PATH`.
 
 !!! note "Unsigned binary"
     jailoc binaries are not signed or notarized by Apple. The cask removes the `com.apple.quarantine` attribute from `jailoc` after installation so that Gatekeeper does not block it.
