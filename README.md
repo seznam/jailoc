@@ -4,6 +4,10 @@
 
 [![CI](https://github.com/seznam/jailoc/actions/workflows/ci.yml/badge.svg)](https://github.com/seznam/jailoc/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/seznam/jailoc)](https://github.com/seznam/jailoc/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/seznam/jailoc/total)](https://github.com/seznam/jailoc/releases)
+[![Homebrew Cask](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fseznam%2Fhomebrew-tap%2Fmaster%2FCasks%2Fjailoc.rb&search=version%20%22(.*)%22&replace=%241&label=homebrew%20cask&color=orange&logo=homebrew)](https://github.com/seznam/homebrew-tap)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/seznam/jailoc)](go.mod)
+[![License](https://img.shields.io/github/license/seznam/jailoc)](LICENSE)
 
 Run coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO, Antigravity CLI) in sandboxed micro-VMs.
 
