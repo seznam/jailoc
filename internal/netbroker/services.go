@@ -125,22 +125,32 @@ func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
 }
 
 // resolve forwards one query to the upstreams in order and returns the first
-// answer, or SERVFAIL when none answers. With blocked zones, a query must
-// carry exactly one question, and an answer that names a blocked zone in any
-// record owner or CNAME target is replaced by NXDOMAIN.
+// answer, or SERVFAIL when none answers. With blocked zones or network rules,
+// a query must carry exactly one question, and an answer that names a blocked
+// or unallowed domain in any record owner or CNAME target is replaced by
+// NXDOMAIN. HTTPS and SVCB queries get NODATA so ECH configurations never
+// reach the guest.
 func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
 	p := b.policy.Load()
-	filtered := p != nil && len(p.blockedZones) > 0
+	filtered := p != nil && (p.rulesMode || len(p.blockedZones) > 0 || len(p.deny) > 0)
+	name, qtype, singleOK := singleQuestion(q)
 	if filtered {
-		name, ok := singleQuestion(q)
-		if !ok {
+		if !singleOK {
 			b.record(map[string]any{"event": "dns", "network": network, "error": "query without exactly one question"})
 			return dnsError(q, 0x01) // FORMERR
 		}
-		if p.blocked(name) {
-			b.record(map[string]any{"event": "dns", "network": network, "name": name, "blocked": true})
+		if blocked, rule := p.blocked(name); blocked {
+			entry := map[string]any{"event": "dns", "network": network, "name": name, "blocked": true}
+			if rule != "" {
+				entry["rule"] = rule
+			}
+			b.record(entry)
 			return nxdomain(q)
 		}
+	}
+	if singleOK && (qtype == dnsTypeSVCB || qtype == dnsTypeHTTPS) {
+		b.record(map[string]any{"event": "dns", "network": network, "name": name, "type": qtype.String(), "answers": []string{}})
+		return dnsError(q, 0x00) // NOERROR / NODATA
 	}
 	var resp []byte
 	lastErr := errNoUpstream
@@ -152,52 +162,58 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
 		}
 		lastErr = err
 	}
-	b.logDNS(network, q, resp, lastErr)
 	if resp == nil {
+		b.logDNS(network, q, nil, lastErr)
 		return servfail(q)
 	}
 	if filtered {
-		name, ok := blockedAnswer(p, resp)
+		blockedName, rule, ok := blockedAnswer(p, resp)
 		if !ok {
+			b.logDNS(network, q, resp, nil)
 			return servfail(q)
 		}
-		if name != "" {
-			b.record(map[string]any{"event": "dns", "network": network, "name": name, "blocked": true})
+		if blockedName != "" {
+			entry := map[string]any{"event": "dns", "network": network, "name": blockedName, "blocked": true}
+			if rule != "" {
+				entry["rule"] = rule
+			}
+			b.record(entry)
 			return nxdomain(q)
 		}
 	}
+	b.logDNS(network, q, resp, nil)
 	return resp
 }
 
-// singleQuestion returns the name of the only question in q. It fails when
-// q does not parse or carries other than one question.
-func singleQuestion(q []byte) (string, bool) {
+// singleQuestion returns the name and type of the only question in q. It fails
+// when q does not parse or carries other than one question.
+func singleQuestion(q []byte) (string, dnsmessage.Type, bool) {
 	var p dnsmessage.Parser
 	if _, err := p.Start(q); err != nil {
-		return "", false
+		return "", 0, false
 	}
 	qs, err := p.AllQuestions()
 	if err != nil || len(qs) != 1 {
-		return "", false
+		return "", 0, false
 	}
-	return qs[0].Name.String(), true
+	return qs[0].Name.String(), qs[0].Type, true
 }
 
-// blockedAnswer returns the first blocked name among the record owners and
-// CNAME targets of resp, or "" when there is none. It fails when resp does
-// not parse.
-func blockedAnswer(pol *Policy, resp []byte) (string, bool) {
+// blockedAnswer returns the first blocked name and rule among the record
+// owners and CNAME targets of resp, or "" when there is none. It fails when
+// resp does not parse.
+func blockedAnswer(pol *Policy, resp []byte) (string, string, bool) {
 	var p dnsmessage.Parser
 	if _, err := p.Start(resp); err != nil {
-		return "", false
+		return "", "", false
 	}
 	qs, err := p.AllQuestions()
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	for _, q := range qs {
-		if pol.blocked(q.Name.String()) {
-			return q.Name.String(), true
+		if blocked, rule := pol.blocked(q.Name.String()); blocked {
+			return q.Name.String(), rule, true
 		}
 	}
 	sections := []struct {
@@ -215,27 +231,27 @@ func blockedAnswer(pol *Policy, resp []byte) (string, bool) {
 				break
 			}
 			if err != nil {
-				return "", false
+				return "", "", false
 			}
-			if pol.blocked(h.Name.String()) {
-				return h.Name.String(), true
+			if blocked, rule := pol.blocked(h.Name.String()); blocked {
+				return h.Name.String(), rule, true
 			}
 			if h.Type != dnsmessage.TypeCNAME {
 				if err := sec.skip(); err != nil {
-					return "", false
+					return "", "", false
 				}
 				continue
 			}
 			c, err := p.CNAMEResource()
 			if err != nil {
-				return "", false
+				return "", "", false
 			}
-			if pol.blocked(c.CNAME.String()) {
-				return c.CNAME.String(), true
+			if blocked, rule := pol.blocked(c.CNAME.String()); blocked {
+				return c.CNAME.String(), rule, true
 			}
 		}
 	}
-	return "", true
+	return "", "", true
 }
 
 func exchange(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error) {
@@ -296,14 +312,16 @@ func dnsError(q []byte, rcode byte) []byte {
 	return r
 }
 
-// logDNS records the question and A/AAAA answers. The mapping is evidence for
-// allowed_hosts review; it never authorizes a destination.
+// logDNS records the question and A/AAAA answers and populates the broker's
+// IP->name cache for allowed answers.
 func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 	entry := map[string]any{"event": "dns", "network": network}
+	var qname string
 	var p dnsmessage.Parser
 	if _, perr := p.Start(q); perr == nil {
 		if qs, perr := p.Question(); perr == nil {
-			entry["name"], entry["type"] = qs.Name.String(), qs.Type.String()
+			qname = qs.Name.String()
+			entry["name"], entry["type"] = qname, qs.Type.String()
 		}
 	}
 	if resp == nil {
@@ -318,14 +336,26 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 				if perr != nil {
 					break
 				}
+				ttl := time.Duration(h.TTL) * time.Second
+				owner := h.Name.String()
 				switch h.Type {
 				case dnsmessage.TypeA:
 					if a, perr := rp.AResource(); perr == nil {
-						answers = append(answers, netip.AddrFrom4(a.A).String())
+						ip := netip.AddrFrom4(a.A)
+						answers = append(answers, ip.String())
+						b.names.record(ip, qname, ttl)
+						if owner != qname {
+							b.names.record(ip, owner, ttl)
+						}
 					}
 				case dnsmessage.TypeAAAA:
 					if a, perr := rp.AAAAResource(); perr == nil {
-						answers = append(answers, netip.AddrFrom16(a.AAAA).String())
+						ip := netip.AddrFrom16(a.AAAA)
+						answers = append(answers, ip.String())
+						b.names.record(ip, qname, ttl)
+						if owner != qname {
+							b.names.record(ip, owner, ttl)
+						}
 					}
 				default:
 					_ = rp.SkipAnswer()

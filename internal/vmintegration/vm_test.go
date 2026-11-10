@@ -139,10 +139,15 @@ enable_docker = true
 
 [workspaces.%[7]s.network]
 ipv6 = %[8]t
-filtered_dns = true
-dns_upstream = "1.1.1.1"
-dns_blocked_zones = ["example.org"]
+dns = "1.1.1.1"
 
+[[workspaces.%[7]s.network.rules]]
+name = "dev-deps"
+allow = ["@dev", "example.com"]
+
+[[workspaces.%[7]s.network.rules]]
+name = "blocked"
+deny = ["example.org", "*.example.org"]
 [workspaces.%[7]s.secrets.env.VMTEST_TOKEN]
 from_env = "VMTEST_HOST_TOKEN"
 

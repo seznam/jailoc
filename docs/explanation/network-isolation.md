@@ -17,16 +17,17 @@ The gateway serves DHCP, DNS, SNTP with the host clock (UDP port 123, used by `j
 
 ## The policy
 
-Every new TCP connection and UDP flow gets one decision. The broker checks, in order:
+Every new TCP connection and UDP flow gets one decision. The broker evaluates rules in order:
 
-| Destination | Decision |
-|-------------|----------|
+| Step | Decision |
+|------|----------|
 | The gateway, the guest's own subnet, any address of a host interface | denied |
 | Any IPv6 address, when `network.ipv6` is off | denied |
-| Hard-denied ranges (below) | denied, no allow list opens them |
-| Port 53 anywhere, when filtered DNS is on | denied |
-| Private and reserved ranges | denied unless covered by `allowed_networks` or a resolved `allowed_hosts` address |
-| Everything else (public addresses) | allowed |
+| Hard-denied ranges (below) | denied, no rule opens them |
+| Direct DNS (port 53) to any address other than the gateway | denied |
+| Any matching `deny` rule | denied (`rule=<name>`) |
+| Any matching `allow` rule (including the implicit `agent` rule) | allowed (`rule=<name>`) |
+| Everything else | denied (`default-deny` or `denied-range`) |
 
 ![The network broker checks each new flow from the guest in order: its own addresses, hard-denied ranges, port 53 when filtered DNS is on, and private ranges unless allow-listed are denied with a reset or ICMP; public addresses are allowed through a real host socket. DNS queries to the gateway go through the filtered resolver, which answers NXDOMAIN for blocked zones and for answers naming them.](img/network-policy.svg)
 
@@ -40,27 +41,25 @@ Hard-denied: `0.0.0.0/8`, loopback `127.0.0.0/8`, multicast `224.0.0.0/4`, `240.
 
 These rules apply when `network.ipv6` is on.
 
-Hard-denied regardless of allow lists: unspecified `::`, loopback `::1`, IPv4-compatible `::/96`, link-local `fe80::/10`, site-local `fec0::/10`, multicast `ff00::/8`, documentation `2001:db8::/32` and `3fff::/20`, discard `100::/64`, ORCHID `2001:10::/28` and `2001:20::/28`, benchmarking `2001:2::/48`, Teredo `2001::/32`, local-use NAT64 `64:ff9b:1::/48`, and the cloud metadata addresses `fd00:ec2::254` and `fd00:ec2::23`.
+Hard-denied regardless of allow rules: unspecified `::`, loopback `::1`, IPv4-compatible `::/96`, link-local `fe80::/10`, site-local `fec0::/10`, multicast `ff00::/8`, documentation `2001:db8::/32` and `3fff::/20`, discard `100::/64`, ORCHID `2001:10::/28` and `2001:20::/28`, benchmarking `2001:2::/48`, Teredo `2001::/32`, local-use NAT64 `64:ff9b:1::/48`, and the cloud metadata addresses `fd00:ec2::254` and `fd00:ec2::23`.
 
 IPv6 addresses that carry an IPv4 address (IPv4-mapped `::ffff:0:0/96`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) are judged by the IPv4 rules for the embedded address, so they can't be used to reach a blocked IPv4 range.
 
-Unique local addresses (`fc00::/7`) count as private: they're reachable only through `allowed_networks` or `allowed_hosts`. Anything outside global unicast `2000::/3` is denied. The rest of `2000::/3` is public and allowed.
+Unique local addresses (`fc00::/7`) count as private: they're reachable only through an explicit IPv6 CIDR rule. Anything outside global unicast `2000::/3` is denied.
 
-## Allow lists
+## Enforcement by name
 
-`allowed_networks` takes IPv4 and IPv6 CIDRs. `allowed_hosts` names are resolved on the host when the VM starts and on `jailoc reload`; each A record becomes a `/32` and each AAAA record a `/128`. A name that doesn't resolve produces a warning and is skipped. Allow lists open private ranges only; they can't open hard-denied ones.
+Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, together with the implicit `agent` rule for the workspace's coding agent, are combined into a single set where `deny` always wins over `allow`. `@list` presets (such as `@dev`) are expanded on the host before the policy reaches the broker.
 
-DNS answers never change a decision on their own. A public name that resolves to a private address is still blocked unless that address is allowed.
+The broker enforces hostname rules at three points:
 
-## Filtered DNS
-
-With `network.filtered_dns`, the broker's resolver forwards queries to the configured upstream and answers NXDOMAIN for names in `dns_blocked_zones` and their subdomains, for both A and AAAA queries. DNS to port 53 on any other address is denied, so the guest can't bypass the filter by choosing its own resolver.
+1. **DNS**: the gateway resolver checks the queried name and every record owner and CNAME target in the upstream answer against the policy. Names that match a `deny` rule or do not match any `allow` rule get NXDOMAIN. `HTTPS` and `SVCB` records are answered with NODATA so Encrypted ClientHello (ECH) configurations do not reach the guest. Allowed `A` and `AAAA` answers populate a per-workspace IP-to-name cache bounded by record TTL. Direct port 53 to any other resolver is denied, and DoT (port 853) and QUIC (UDP port 443) are denied unless a rule explicitly opens those ports.
+2. **Connect time (L4)**: when the guest opens a TCP connection or UDP flow, the broker looks up the destination IP in its DNS cache. A rule matches if the IP is within a rule's CIDR (or `*` for public addresses), or if a cached DNS name for that IP matches a rule's hostname or `*.wildcard` pattern on the matching protocol and port. Unresolved literal IPs only match CIDR or `*` rules, and hostname rules never open private IP ranges.
+3. **TLS SNI and HTTP Host before dialing**: for TCP connections authorized by a hostname rule or on ports with hostname deny rules, the broker completes the guest TCP handshake, reads the TLS ClientHello SNI or HTTP/1 `Host` header, re-evaluates the policy against that name, verifies the name belongs to the destination IP in the DNS cache, and only then dials the upstream host socket. A denied or mismatched SNI resets the connection before any upstream socket is opened, closing the shared-CDN-IP hole.
 
 ## Enforcement details
 
-Denied TCP connections are reset and denied UDP gets ICMP port unreachable, so tools fail fast instead of hanging. Each decision is written to `broker.jsonl` in the workspace's VM state directory, which `jailoc traffic` prints. The broker moves the log to `broker.jsonl.1` when it reaches 16 MiB, so it keeps at most about 32 MiB. It also caps a workspace at 4096 open TCP connections, 1024 UDP flows and 128 DNS queries in flight; connections beyond the cap are refused and logged.
-
-For allowed TCP connections, the broker also records what the first bytes the guest sends identify: the server name and ALPN protocols of a TLS ClientHello, or the method, host and path of an HTTP/1 request (query strings are dropped). It only reads the data as it passes through; it neither changes nor delays it, and encrypted content stays opaque.
+Denied TCP connections are reset and denied UDP gets ICMP port unreachable, so tools fail fast instead of hanging. Each decision is written to `broker.jsonl` in the workspace's VM state directory with the resolved `name` and matching `rule`, which `jailoc traffic` prints. The broker moves the log to `broker.jsonl.1` when it reaches 16 MiB, so it keeps at most about 32 MiB. It also caps a workspace at 4096 open TCP connections, 1024 UDP flows and 128 DNS queries in flight; connections beyond the cap are refused and logged.
 
 An invalid policy at start keeps the VM from starting. If a policy reload fails, the broker switches to a deny-all policy rather than keep the old one.
 

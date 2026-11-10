@@ -184,3 +184,73 @@ func (c *replayConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
 func (c *replayConn) SetDeadline(time.Time) error      { return nil }
 func (c *replayConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *replayConn) SetWriteDeadline(time.Time) error { return nil }
+
+// prefixConn replays buffered bytes before reading from Conn.
+type prefixConn struct {
+	net.Conn
+	buf []byte
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) {
+	if len(c.buf) > 0 {
+		n := copy(p, c.buf)
+		c.buf = c.buf[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *prefixConn) CloseWrite() error {
+	if cw, ok := c.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return c.Close()
+}
+
+// sniffBeforeDial reads the initial bytes from c (up to sniffMax or a short
+// timeout) to identify a TLS ClientHello or HTTP/1 request, returning the
+// wrapped connection that replays those bytes and the identified info (if any).
+func sniffBeforeDial(c net.Conn, timeout time.Duration) (net.Conn, map[string]any, error) {
+	_ = c.SetReadDeadline(time.Now().Add(timeout))
+	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
+	var buf []byte
+	chunk := make([]byte, 4096)
+	for reads := 0; reads < sniffReads && len(buf) < sniffMax; reads++ {
+		n, err := c.Read(chunk[:min(len(chunk), sniffMax-len(buf))])
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+			info, more := identify(buf)
+			if info != nil {
+				return &prefixConn{Conn: c, buf: buf}, info, nil
+			}
+			if !more {
+				return &prefixConn{Conn: c, buf: buf}, nil, nil
+			}
+		}
+		if err != nil {
+			if len(buf) > 0 {
+				return &prefixConn{Conn: c, buf: buf}, nil, nil
+			}
+			return c, nil, err
+		}
+	}
+	return &prefixConn{Conn: c, buf: buf}, nil, nil
+}
+
+// sniffedPeerName extracts the normalized hostname from an l7 info map (TLS
+// SNI or HTTP Host without port).
+func sniffedPeerName(info map[string]any) string {
+	if info == nil {
+		return ""
+	}
+	if sni, _ := info["sni"].(string); sni != "" {
+		return normalizeName(sni)
+	}
+	if host, _ := info["host"].(string); host != "" {
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		return normalizeName(host)
+	}
+	return ""
+}

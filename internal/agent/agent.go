@@ -160,6 +160,9 @@ type Harness struct {
 	// interface starts, from its environment env and working directory dir:
 	// jailoc shows it while the agent starts.
 	Installs func(env []string, dir string) []string
+	// Endpoints are the API and auth hostnames the agent contacts; they
+	// become an implicit allow rule on TCP port 443.
+	Endpoints []string
 }
 
 // sharedMounts are default mounts of every harness.
@@ -183,6 +186,22 @@ const (
 	openCodeConfigGitignore = "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore\n"
 )
 
+// llmEndpoints are the model and auth endpoints shared by multi-provider
+// coding agents (OpenCode and OmO).
+var llmEndpoints = []string{
+	"api.anthropic.com",
+	"api.openai.com",
+	"auth.openai.com",
+	"chatgpt.com",
+	"generativelanguage.googleapis.com",
+	"oauth2.googleapis.com",
+	"api.githubcopilot.com",
+	"*.githubcopilot.com",
+	"openrouter.ai",
+	"opencode.ai",
+	"*.opencode.ai",
+	"models.dev",
+}
 var harnesses = []Harness{
 	{
 		Name:     "opencode1",
@@ -202,6 +221,7 @@ var harnesses = []Harness{
 		ConfigDir:       openCodeConfigDir,
 		ConfigGitignore: openCodeConfigGitignore,
 		Installs:        openCode1Installs,
+		Endpoints:       llmEndpoints,
 	},
 	{
 		Name:     "opencode2",
@@ -226,6 +246,7 @@ var harnesses = []Harness{
 		TUIPlugin:       OpenCode2TUI,
 		ConfigDir:       openCodeConfigDir,
 		ConfigGitignore: openCodeConfigGitignore,
+		Endpoints:       llmEndpoints,
 	},
 	{
 		Name:       "claude",
@@ -241,6 +262,7 @@ var harnesses = []Harness{
 		Env:       []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "DISABLE_AUTOUPDATER=1"},
 		State:     []StateDir{{Name: "claude", Path: "/home/agent/.claude"}},
 		TUIPlugin: ClaudeStatusLine,
+		Endpoints: []string{"api.anthropic.com", "claude.ai", "console.anthropic.com", "platform.claude.com"},
 	},
 	{
 		Name:       "copilot",
@@ -254,6 +276,7 @@ var harnesses = []Harness{
 		Env:        []string{"COPILOT_AUTO_UPDATE=false"},
 		State:      []StateDir{{Name: "copilot", Path: "/home/agent/.copilot"}},
 		TUIPlugin:  CopilotStatusLine,
+		Endpoints:  []string{"api.github.com", "github.com", "api.githubcopilot.com", "*.githubcopilot.com", "copilot-proxy.githubusercontent.com"},
 	},
 	{
 		Name:       "omo",
@@ -268,6 +291,7 @@ var harnesses = []Harness{
 		Env:       []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
 		State:     []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
 		TUIPlugin: OmOExtension,
+		Endpoints: llmEndpoints,
 	},
 	{
 		Name:    "agy",
@@ -293,6 +317,7 @@ var harnesses = []Harness{
 		// not mounted from the host by default.
 		State:     []StateDir{{Name: "antigravity", Path: "/home/agent/.gemini"}},
 		TUIPlugin: AgyStatusLine,
+		Endpoints: []string{"generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"},
 	},
 }
 

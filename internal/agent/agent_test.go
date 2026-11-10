@@ -75,6 +75,9 @@ func TestHarnessDefinitions(t *testing.T) {
 					t.Fatalf("invalid env entry %q", kv)
 				}
 			}
+			if len(h.Endpoints) == 0 {
+				t.Fatal("harness has no endpoints")
+			}
 		})
 	}
 }

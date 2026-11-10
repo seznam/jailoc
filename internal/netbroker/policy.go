@@ -103,9 +103,130 @@ func (e *Exception) matches(proto string, dst netip.AddrPort) bool {
 	return false
 }
 
+// Rule is one allow or deny rule in the broker policy.
+type Rule struct {
+	Name  string   `json:"name,omitempty"`
+	Names []string `json:"names,omitempty"`
+	CIDRs []string `json:"cidrs,omitempty"`
+	Proto string   `json:"proto,omitempty"`
+	Ports []string `json:"ports,omitempty"`
+
+	nameSet  nameSet
+	prefixes []netip.Prefix
+	wildcard bool
+	ranges   []portRange
+}
+
+func (r *Rule) compile(kind string) error {
+	if r.Proto == "" {
+		r.Proto = ProtoTCP
+	}
+	switch r.Proto {
+	case ProtoTCP, ProtoUDP, ProtoAny:
+	default:
+		return fmt.Errorf("%s rule %q: proto %q, want tcp, udp or any", kind, r.Name, r.Proto)
+	}
+	for _, s := range r.Ports {
+		lo, hi, found := strings.Cut(s, "-")
+		if !found {
+			hi = lo
+		}
+		l, err1 := strconv.ParseUint(lo, 10, 16)
+		h, err2 := strconv.ParseUint(hi, 10, 16)
+		if err1 != nil || err2 != nil || l == 0 || l > h {
+			return fmt.Errorf("%s rule %q: invalid port range %q", kind, r.Name, s)
+		}
+		r.ranges = append(r.ranges, portRange{uint16(l), uint16(h)})
+	}
+	for _, c := range r.CIDRs {
+		if c == "*" {
+			r.wildcard = true
+			continue
+		}
+		pfx, err := netip.ParsePrefix(c)
+		if err != nil {
+			if addr, aerr := netip.ParseAddr(c); aerr == nil {
+				bits := 32
+				if addr.Is6() {
+					bits = 128
+				}
+				pfx = netip.PrefixFrom(addr.Unmap(), bits)
+			} else {
+				return fmt.Errorf("%s rule %q: cidr %q: %w", kind, r.Name, c, err)
+			}
+		}
+		r.prefixes = append(r.prefixes, pfx.Masked())
+	}
+	var names []string
+	for _, n := range r.Names {
+		if n == "*" {
+			r.wildcard = true
+			continue
+		}
+		n = normalizeName(n)
+		if n == "" {
+			return fmt.Errorf("%s rule %q: empty name", kind, r.Name)
+		}
+		names = append(names, n)
+	}
+	r.nameSet = newNameSet(names)
+	if !r.wildcard && len(r.prefixes) == 0 && r.nameSet.empty() {
+		return fmt.Errorf("%s rule %q: rule has no names or cidrs", kind, r.Name)
+	}
+	return nil
+}
+
+func (r *Rule) matchesProtoPort(proto string, port uint16) bool {
+	if r.Proto != ProtoAny && r.Proto != proto {
+		return false
+	}
+	if len(r.ranges) == 0 {
+		return true
+	}
+	for _, rng := range r.ranges {
+		if port >= rng.lo && port <= rng.hi {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAddr reports whether r matches dst by CIDR or public wildcard "*".
+func (r *Rule) matchesAddr(proto string, dst netip.AddrPort, isPublic bool) bool {
+	if !r.matchesProtoPort(proto, dst.Port()) {
+		return false
+	}
+	addr := dst.Addr()
+	for _, pfx := range r.prefixes {
+		if pfx.Contains(addr) {
+			return true
+		}
+	}
+	if r.wildcard && isPublic {
+		// Wildcard "*" never opens DoT (853) or QUIC (UDP 443) unless the rule
+		// explicitly lists those ports.
+		if len(r.ranges) == 0 && (dst.Port() == 853 || (proto == ProtoUDP && dst.Port() == 443)) {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// matchesName reports whether r matches name on proto and port.
+func (r *Rule) matchesName(proto string, port uint16, name string) bool {
+	if !r.matchesProtoPort(proto, port) {
+		return false
+	}
+	return r.nameSet.matches(name)
+}
+
 // Policy is an immutable, validated broker policy.
 type Policy struct {
 	exceptions   []Exception
+	allow        []Rule
+	deny         []Rule
+	rulesMode    bool
 	dnsUpstreams []netip.AddrPort
 	blockedZones []string
 	denyAll      bool
@@ -114,6 +235,9 @@ type Policy struct {
 }
 
 type policyFile struct {
+	DNS          string      `json:"dns"`
+	Allow        *[]Rule     `json:"allow"`
+	Deny         *[]Rule     `json:"deny"`
 	Exceptions   []Exception `json:"exceptions"`
 	DNSUpstreams []string    `json:"dns_upstreams"`
 	// DNSBlockedZones makes the gateway resolver answer NXDOMAIN for these
@@ -134,12 +258,35 @@ func ParsePolicy(data []byte, source string) (*Policy, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("parse policy %s: %w", source, err)
 	}
-	p := &Policy{source: source, ipv6: f.IPv6}
+	p := &Policy{source: source, ipv6: f.IPv6, rulesMode: f.Allow != nil || f.Deny != nil || f.DNS != ""}
 	for _, e := range f.Exceptions {
 		if err := e.compile(); err != nil {
 			return nil, fmt.Errorf("policy %s: %w", source, err)
 		}
 		p.exceptions = append(p.exceptions, e)
+	}
+	if f.Allow != nil {
+		for _, r := range *f.Allow {
+			if err := r.compile("allow"); err != nil {
+				return nil, fmt.Errorf("policy %s: %w", source, err)
+			}
+			p.allow = append(p.allow, r)
+		}
+	}
+	if f.Deny != nil {
+		for _, r := range *f.Deny {
+			if err := r.compile("deny"); err != nil {
+				return nil, fmt.Errorf("policy %s: %w", source, err)
+			}
+			p.deny = append(p.deny, r)
+		}
+	}
+	if f.DNS != "" {
+		ap, err := parseAddrPort(f.DNS, 53)
+		if err != nil {
+			return nil, fmt.Errorf("policy %s: dns: %w", source, err)
+		}
+		p.dnsUpstreams = append(p.dnsUpstreams, ap)
 	}
 	for _, s := range f.DNSUpstreams {
 		ap, err := parseAddrPort(s, 53)
@@ -166,14 +313,50 @@ func normalizeName(name string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
 }
 
-// blocked reports whether name is one of the blocked zones or below one.
-func (p *Policy) blocked(name string) bool {
+// blocked reports whether name is blocked by blockedZones or by DNS rules
+// (matching a deny rule, or not allowed when rulesMode is active).
+func (p *Policy) blocked(name string) (bool, string) {
 	if p == nil {
-		return false
+		return false, ""
 	}
 	name = normalizeName(name)
 	for _, z := range p.blockedZones {
 		if name == z || strings.HasSuffix(name, "."+z) {
+			return true, ""
+		}
+	}
+	for i := range p.deny {
+		if p.deny[i].nameSet.matches(name) || p.deny[i].wildcard {
+			return true, p.deny[i].Name
+		}
+	}
+	if !p.rulesMode {
+		return false, ""
+	}
+	for i := range p.allow {
+		r := &p.allow[i]
+		if r.wildcard || len(r.prefixes) > 0 || r.nameSet.matches(name) {
+			return false, r.Name
+		}
+	}
+	return true, ""
+}
+
+// needsNameInspection reports whether a TCP flow to dst on port requires
+// reading the TLS SNI or HTTP Host header before dialing upstream.
+func (p *Policy) needsNameInspection(dst netip.AddrPort, matchedName string) bool {
+	if p == nil || !p.rulesMode {
+		return false
+	}
+	// If the flow was authorized via a DNS-cached name, verify the TLS SNI /
+	// HTTP Host matches the policy and belongs to the resolved IP.
+	if matchedName != "" {
+		return true
+	}
+	// If any deny rule has name patterns on this port, inspect to prevent
+	// bypassing name-based denies via a shared IP or wildcard allow.
+	for i := range p.deny {
+		if !p.deny[i].nameSet.empty() && p.deny[i].matchesProtoPort(ProtoTCP, dst.Port()) {
 			return true
 		}
 	}
@@ -201,12 +384,15 @@ type Env struct {
 	Gateway   netip.Addr
 	Subnet    netip.Prefix
 	HostAddrs map[netip.Addr]bool
+	Names     []string
 }
 
 // Decision is the outcome for one new guest flow.
 type Decision struct {
 	Allow  bool   `json:"allow"`
 	Reason string `json:"reason"`
+	Name   string `json:"name,omitempty"`
+	Rule   string `json:"rule,omitempty"`
 }
 
 // Decide evaluates a new guest flow to dst. Gateway services (DNS, DHCP) are
@@ -230,16 +416,72 @@ func Decide(p *Policy, env Env, proto string, dst netip.AddrPort) Decision {
 		return decideIPv6(p, env, proto, netip.AddrPortFrom(a, dst.Port()))
 	case inAny(a, hardDeniedV4):
 		return Decision{Reason: "hard-deny"}
-	case len(p.blockedZones) > 0 && dst.Port() == 53:
+	case (p.rulesMode || len(p.blockedZones) > 0) && dst.Port() == 53:
 		return Decision{Reason: "dns-filtered"}
 	}
-	if !inAny(a, deniedV4) {
-		return Decision{Allow: true, Reason: "public"}
+	isPublic := !inAny(a, deniedV4)
+	if p.rulesMode {
+		return decideRules(p, env, proto, netip.AddrPortFrom(a, dst.Port()), isPublic, "denied-range")
+	}
+	for i := range p.deny {
+		if d, ok := matchRule(&p.deny[i], env.Names, proto, netip.AddrPortFrom(a, dst.Port()), isPublic, false); ok {
+			return d
+		}
+	}
+	if isPublic {
+		return Decision{Allow: true, Reason: "public", Name: firstName(env.Names)}
 	}
 	for i := range p.exceptions {
 		if p.exceptions[i].matches(proto, netip.AddrPortFrom(a, dst.Port())) {
-			return Decision{Allow: true, Reason: "exception " + p.exceptions[i].CIDR}
+			return Decision{Allow: true, Reason: "exception " + p.exceptions[i].CIDR, Name: firstName(env.Names)}
 		}
 	}
-	return Decision{Reason: "denied-range"}
+	return Decision{Reason: "denied-range", Name: firstName(env.Names)}
+}
+
+func decideRules(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic bool, privateDenyReason string) Decision {
+	for i := range p.deny {
+		if d, ok := matchRule(&p.deny[i], env.Names, proto, dst, isPublic, false); ok {
+			return d
+		}
+	}
+	for i := range p.allow {
+		if d, ok := matchRule(&p.allow[i], env.Names, proto, dst, isPublic, true); ok {
+			return d
+		}
+	}
+	for i := range p.exceptions {
+		if p.exceptions[i].matches(proto, dst) {
+			return Decision{Allow: true, Reason: "exception " + p.exceptions[i].CIDR, Name: firstName(env.Names)}
+		}
+	}
+	if !isPublic {
+		return Decision{Reason: privateDenyReason, Name: firstName(env.Names)}
+	}
+	return Decision{Reason: "default-deny", Name: firstName(env.Names)}
+}
+
+func matchRule(r *Rule, names []string, proto string, dst netip.AddrPort, isPublic, allow bool) (Decision, bool) {
+	reason := "rule"
+	if r.Name != "" {
+		reason = "rule " + r.Name
+	}
+	for _, name := range names {
+		// Name rules only open public addresses unless the rule also matches by CIDR;
+		// deny rules match any address whose name matches.
+		if (!allow || isPublic) && r.matchesName(proto, dst.Port(), name) {
+			return Decision{Allow: allow, Reason: reason, Name: name, Rule: r.Name}, true
+		}
+	}
+	if r.matchesAddr(proto, dst, isPublic) {
+		return Decision{Allow: allow, Reason: reason, Name: firstName(names), Rule: r.Name}, true
+	}
+	return Decision{}, false
+}
+
+func firstName(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }

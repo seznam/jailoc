@@ -132,22 +132,40 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `ipv6` | bool | `false` | Give the guest IPv6 (`fd00:127::2/64`) and let the broker allow IPv6 destinations by the [IPv6 policy](../explanation/network-isolation.md#ipv6). When off, the guest has IPv4 only and the broker denies every IPv6 flow. Changing it needs `jailoc restart`; `jailoc reload` turns it off at the broker right away, except in a VM started by a jailoc release without this setting: that VM keeps IPv6 until `jailoc restart`. |
-| `filtered_dns` | bool | `false` | Filter DNS answers in the network broker. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
-| `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. |
-| `dns_blocked_zones` | string[] | `[]` | DNS suffixes answered with NXDOMAIN, including all subdomains. |
+| `dns` | string | (host resolver) | Routable numeric IPv4 resolver used for permitted DNS queries. |
+| `rules` | table[] | `[]` | Allow and deny egress rules (`[[<scope>.network.rules]]`). Combined across `[defaults]` and the workspace; `deny` always wins over `allow`. |
+
+### `[[<scope>.network.rules]]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allow` | string[] | (none) | Hostnames, `*.wildcard` names, IP addresses, CIDRs, `@dev` preset reference, or `"*"` (public internet). Exactly one of `allow` or `deny` is required. |
+| `deny` | string[] | (none) | Hostnames, `*.wildcard` names, IP addresses, CIDRs, `@dev` preset reference, or `"*"`. Exactly one of `allow` or `deny` is required. |
+| `proto` | string | `"tcp"` | `"tcp"`, `"udp"`, or `"any"`. |
+| `ports` | (int \| string)[] | (all) | Port numbers (`1`–`65535`) or `"a-b"` port ranges. |
+| `name` | string | `""` | Label shown in `jailoc traffic` (`rule=<name>`) and validation errors. |
 
 ### Example
 
 ```toml
 [defaults.network]
 ipv6 = true
+dns = "9.9.9.9"
 
-[workspaces.api.network]
-filtered_dns = true
-dns_upstream = "10.20.30.53"
-dns_blocked_zones = ["corp.example.com", "internal"]
+[[defaults.network.rules]]
+name = "dev-deps"
+allow = ["@dev"]
+
+[[defaults.network.rules]]
+name = "no-paste"
+deny = ["pastebin.com", "gist.github.com", "*.ngrok.io"]
+
+[[workspaces.api.network.rules]]
+name = "db"
+allow = ["10.20.5.10"]
+proto = "tcp"
+ports = [5432]
 ```
-
 ---
 
 ## `[workspaces.<name>]`

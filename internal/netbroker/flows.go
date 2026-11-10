@@ -46,20 +46,43 @@ func (l *flowLimit) release() { l.n.Add(-1) }
 
 // handleTCP runs for every new guest TCP connection that no local listener
 // accepted. The host socket is opened only after the policy allows the real
-// destination; denied or unreachable destinations get a RST.
+// destination; denied or unreachable destinations get a RST. When name rules
+// apply, the broker completes the guest handshake and inspects the TLS SNI or
+// HTTP Host before dialing upstream.
 func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
 	conn := b.connSeq.Add(1)
-	if !b.decide(ProtoTCP, src, dst, conn).Allow {
+	p := b.policy.Load()
+	env := b.env(dst.Addr())
+	d := Decide(p, env, ProtoTCP, dst)
+	if !d.Allow {
+		b.recordFlow(conn, ProtoTCP, src, dst, d)
 		r.Complete(true)
 		return
 	}
 	if !b.tcpFlows.acquire() {
+		b.recordFlow(conn, ProtoTCP, src, dst, d)
 		b.record(map[string]any{"event": "flow-limit", "conn": conn, "proto": ProtoTCP, "dst": dst.String()})
 		r.Complete(true)
 		return
 	}
+	if p.needsNameInspection(dst, d.Name) {
+		var wq waiter.Queue
+		ep, terr := r.CreateEndpoint(&wq)
+		if terr != nil {
+			b.tcpFlows.release()
+			r.Complete(true)
+			return
+		}
+		r.Complete(false)
+		go func() {
+			defer b.tcpFlows.release()
+			b.handleInspectedTCP(conn, src, dst, p, env, d, ep, &wq)
+		}()
+		return
+	}
+	b.recordFlow(conn, ProtoTCP, src, dst, d)
 	out, err := b.dialTCP("tcp", dst.String())
 	if err != nil {
 		b.tcpFlows.release()
@@ -84,6 +107,62 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		defer b.tcpFlows.release()
 		splice(guest, out)
 	}()
+}
+
+const sniffBeforeDialTimeout = 2 * time.Second
+
+func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Policy, env Env, d Decision, ep tcpip.Endpoint, wq *waiter.Queue) {
+	rawConn := gonet.NewTCPConn(wq, ep)
+	replayed, info, _ := sniffBeforeDial(rawConn, sniffBeforeDialTimeout)
+	if peerName := sniffedPeerName(info); peerName != "" {
+		// Check whether the sniffed SNI/Host belongs to the destination IP in
+		// the DNS cache (unless a CIDR or wildcard rule allows the IP directly).
+		inCache := false
+		for _, n := range env.Names {
+			if n == peerName {
+				inCache = true
+				break
+			}
+		}
+		envWithPeer := env
+		envWithPeer.Names = []string{peerName}
+		dPeer := Decide(p, envWithPeer, ProtoTCP, dst)
+		switch {
+		case !dPeer.Allow:
+			d = dPeer
+		case !inCache && dPeer.Name != "":
+			// Matched by name rule, but the guest never resolved this name to dst.Addr().
+			// Check if an address/wildcard rule allows dst without any name.
+			envNoNames := env
+			envNoNames.Names = nil
+			if dAddr := Decide(p, envNoNames, ProtoTCP, dst); dAddr.Allow {
+				d = dAddr
+				d.Name = peerName
+			} else {
+				d = Decision{Allow: false, Reason: "sni-mismatch", Name: peerName}
+			}
+		default:
+			d = dPeer
+		}
+	}
+	b.recordFlow(conn, ProtoTCP, src, dst, d)
+	if info != nil {
+		info["event"], info["conn"], info["dst"] = "l7", conn, dst.String()
+		b.record(info)
+	}
+	if !d.Allow {
+		ep.Abort()
+		_ = rawConn.Close()
+		return
+	}
+	out, err := b.dialTCP("tcp", dst.String())
+	if err != nil {
+		b.record(map[string]any{"event": "dial-error", "proto": ProtoTCP, "dst": dst.String(), "error": err.Error()})
+		ep.Abort()
+		_ = rawConn.Close()
+		return
+	}
+	splice(replayed, out)
 }
 
 // handleUDP runs for every new guest UDP flow. Returning false makes the

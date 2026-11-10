@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -511,56 +510,127 @@ func vmDockerDiskSize(size string) (int64, error) {
 	return bytes, nil
 }
 
-type vmException struct {
-	CIDR  string `json:"cidr"`
-	Proto string `json:"proto"`
+type vmRule struct {
+	Name  string   `json:"name,omitempty"`
+	Names []string `json:"names,omitempty"`
+	CIDRs []string `json:"cidrs,omitempty"`
+	Proto string   `json:"proto,omitempty"`
+	Ports []string `json:"ports,omitempty"`
 }
 
-// vmPolicy turns allowed_networks and allowed_hosts into broker exceptions.
-// Host names are resolved on the host once, when the VM starts.
-func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
-	exceptions := []vmException{}
-	seen := map[string]bool{}
-	add := func(cidr string) {
-		if !seen[cidr] {
-			seen[cidr] = true
-			exceptions = append(exceptions, vmException{CIDR: cidr, Proto: "any"})
+// vmPolicy builds the broker policy JSON from the workspace's resolved network
+// rules and DNS settings. @list references are expanded on the host.
+func vmPolicy(_ context.Context, ws *workspace.Resolved) ([]byte, error) {
+	allow := []vmRule{}
+	deny := []vmRule{}
+
+	rules := ws.NetworkRules
+	if len(rules) == 0 && (len(ws.AllowedNetworks) > 0 || len(ws.AllowedHosts) > 0 || len(ws.DNSBlockedZones) > 0) {
+		if len(ws.AllowedHosts) > 0 {
+			rules = append(rules, config.NetworkRule{Name: "legacy", Allow: ws.AllowedHosts, Proto: config.RuleProtoAny})
 		}
-	}
-	for _, n := range ws.AllowedNetworks {
-		_, ipnet, err := net.ParseCIDR(n)
-		if err != nil {
-			return nil, fmt.Errorf("allowed network %q: %w", n, err)
+		if len(ws.AllowedNetworks) > 0 {
+			rules = append(rules, config.NetworkRule{Name: "legacy", Allow: ws.AllowedNetworks, Proto: config.RuleProtoAny})
 		}
-		add(ipnet.String())
-	}
-	for _, h := range ws.AllowedHosts {
-		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", h)
-		if err != nil {
-			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: cannot resolve allowed host %q: %v\n", h, err)
-			continue
-		}
-		for _, ip := range ips {
-			prefix := "/128"
-			if ip.To4() != nil {
-				prefix = "/32"
+		if len(ws.DNSBlockedZones) > 0 {
+			var blocked []string
+			for _, z := range ws.DNSBlockedZones {
+				z = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(z)), ".")
+				if z != "" {
+					blocked = append(blocked, z, "*."+z)
+				}
 			}
-			add(ip.String() + prefix)
+			if len(blocked) > 0 {
+				rules = append(rules, config.NetworkRule{Name: "legacy", Deny: blocked, Proto: config.RuleProtoAny})
+			}
 		}
 	}
+
+	for _, r := range rules {
+		isAllow := len(r.Allow) > 0
+		targets := r.Allow
+		if !isAllow {
+			targets = r.Deny
+		}
+		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets)
+		if err != nil {
+			return nil, err
+		}
+		if isAllow {
+			allow = append(allow, br)
+		} else {
+			deny = append(deny, br)
+		}
+	}
+
 	policy := struct {
-		Exceptions      []vmException `json:"exceptions"`
-		DNSUpstreams    []string      `json:"dns_upstreams,omitempty"`
-		DNSBlockedZones []string      `json:"dns_blocked_zones,omitempty"`
-		IPv6            bool          `json:"ipv6,omitempty"`
-	}{Exceptions: exceptions, IPv6: ws.IPv6}
-	if ws.FilteredDNS {
-		policy.DNSUpstreams = []string{ws.DNSUpstream}
-		policy.DNSBlockedZones = ws.DNSBlockedZones
+		DNS   string   `json:"dns,omitempty"`
+		Deny  []vmRule `json:"deny"`
+		Allow []vmRule `json:"allow"`
+		IPv6  bool     `json:"ipv6,omitempty"`
+	}{
+		DNS:   ws.DNSUpstream,
+		Deny:  deny,
+		Allow: allow,
+		IPv6:  ws.IPv6,
 	}
 	data, err := json.Marshal(policy)
 	if err != nil {
 		return nil, fmt.Errorf("encode broker policy: %w", err)
 	}
 	return data, nil
+}
+
+func compileVMRule(name, proto string, ports []config.RulePort, targets []string) (vmRule, error) {
+	if proto == "" {
+		proto = config.RuleProtoTCP
+	}
+	var portStrs []string
+	for _, p := range ports {
+		portStrs = append(portStrs, string(p))
+	}
+	out := vmRule{Name: name, Proto: proto, Ports: portStrs}
+	seenNames := map[string]bool{}
+	seenCIDRs := map[string]bool{}
+	addTarget := func(t string) error {
+		kind, norm, err := config.ParseRuleTarget(t)
+		if err != nil {
+			return err
+		}
+		switch kind {
+		case "cidr":
+			if !seenCIDRs[norm] {
+				seenCIDRs[norm] = true
+				out.CIDRs = append(out.CIDRs, norm)
+			}
+		case "wildcard", "name":
+			if !seenNames[norm] {
+				seenNames[norm] = true
+				out.Names = append(out.Names, norm)
+			}
+		}
+		return nil
+	}
+	for _, t := range targets {
+		kind, norm, err := config.ParseRuleTarget(t)
+		if err != nil {
+			return vmRule{}, err
+		}
+		if kind == "list" {
+			entries, ok := config.ExpandList(norm)
+			if !ok {
+				return vmRule{}, fmt.Errorf("unknown list %q", t)
+			}
+			for _, e := range entries {
+				if err := addTarget(e); err != nil {
+					return vmRule{}, err
+				}
+			}
+			continue
+		}
+		if err := addTarget(t); err != nil {
+			return vmRule{}, err
+		}
+	}
+	return out, nil
 }

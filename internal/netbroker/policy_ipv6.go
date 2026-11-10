@@ -53,21 +53,30 @@ func decideIPv6(policy *Policy, env Env, proto string, dst netip.AddrPort) Decis
 	if embedded, ok := embeddedIPv4(address); ok {
 		return Decide(policy, env, proto, netip.AddrPortFrom(embedded, dst.Port()))
 	}
-	if len(policy.blockedZones) > 0 && dst.Port() == 53 {
+	if (policy.rulesMode || len(policy.blockedZones) > 0) && dst.Port() == 53 {
 		return Decision{Reason: "dns-filtered"}
+	}
+	if !address.IsPrivate() && !public6.Contains(address) {
+		return Decision{Reason: "ipv6-reserved"}
+	}
+	isPublic := !address.IsPrivate() && public6.Contains(address)
+	if policy.rulesMode {
+		return decideRules(policy, env, proto, dst, isPublic, "ipv6-private")
+	}
+	for i := range policy.deny {
+		if d, ok := matchRule(&policy.deny[i], env.Names, proto, dst, isPublic, false); ok {
+			return d
+		}
 	}
 	if address.IsPrivate() {
 		for _, exception := range policy.exceptions {
 			if exception.matches(proto, dst) {
-				return Decision{Allow: true, Reason: "exception " + exception.CIDR}
+				return Decision{Allow: true, Reason: "exception " + exception.CIDR, Name: firstName(env.Names)}
 			}
 		}
-		return Decision{Reason: "ipv6-private"}
+		return Decision{Reason: "ipv6-private", Name: firstName(env.Names)}
 	}
-	if !public6.Contains(address) {
-		return Decision{Reason: "ipv6-reserved"}
-	}
-	return Decision{Allow: true, Reason: "public"}
+	return Decision{Allow: true, Reason: "public", Name: firstName(env.Names)}
 }
 
 func embeddedIPv4(address netip.Addr) (netip.Addr, bool) {
