@@ -145,13 +145,13 @@ func Init(logger *slog.Logger) error {
 	}
 	// SSH_AUTH_SOCK and NODE_USE_SYSTEM_CA reach sessions through EnvFile,
 	// which the host rewrites when the settings change on a reload.
-	env := sessionEnv(cfg)
+	env, zone := sessionEnv(cfg)
 	for _, dir := range []string{SecretsDir, filepath.Dir(EnvFile)} {
 		if err := ownedDir(dir, acct, 0o700); err != nil {
 			return err
 		}
 	}
-	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, GPGAgent: cfg.GPGAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots}); err != nil {
+	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, GPGAgent: cfg.GPGAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots, TimeZone: zone}); err != nil {
 		return err
 	}
 
@@ -598,18 +598,32 @@ func chown(path string, acct account) error {
 }
 
 // sessionEnv is the base environment of every session: the image
-// environment that libkrun passes to init, plus the configured entries.
-func sessionEnv(cfg *Config) []string {
+// environment that libkrun passes to init, plus the configured entries. It
+// also returns the zone the guest manages through /etc/localtime: the
+// configured one, or else the image's TZ when it names a zone the image has.
+// The image's TZ is dropped whenever a zone is managed, at boot, so sessions
+// follow /etc/localtime and a reload that changes the zone reaches them; only
+// a TZ the guest cannot manage, such as a POSIX rule, is kept. A TZ in the
+// configured entries still wins.
+func sessionEnv(cfg *Config) ([]string, *TimeZone) {
+	zone := cfg.TimeZone
 	var env []string
 	for _, kv := range os.Environ() {
-		name, _, _ := strings.Cut(kv, "=")
+		name, value, _ := strings.Cut(kv, "=")
 		switch {
 		case strings.HasPrefix(name, "KRUN_"), name == "HOME", name == "USER", name == "SHELL", name == "TERM", name == "HOSTNAME":
+			continue
+		case name == "TZ" && zone == nil:
+			if tz := strings.TrimPrefix(value, ":"); ValidTimeZoneName(tz) && imageHasZone("/", tz) {
+				zone = &TimeZone{Name: tz}
+				continue
+			}
+		case name == "TZ":
 			continue
 		}
 		env = append(env, kv)
 	}
-	return append(env, cfg.Env...)
+	return append(env, cfg.Env...), zone
 }
 
 func newSSHServer(logger *slog.Logger, cfg *Config, acct account, env []string) (*sshd.Server, error) {

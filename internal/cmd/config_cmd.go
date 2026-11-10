@@ -115,6 +115,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Docker Disk: %s\n", defaultsDockerDisk)
 
+	defaultsTimeZone := "(not set, default: host time zone)"
+	if cfg.Defaults.TimeZone != nil {
+		defaultsTimeZone = *cfg.Defaults.TimeZone
+	}
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Time Zone: %s\n", defaultsTimeZone)
+
 	_, _ = fmt.Fprintf(os.Stdout, "\n")
 
 	// Print each workspace
@@ -212,6 +218,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			wsDockerDisk = *ws.DockerDisk
 		}
 		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Docker Disk: %s\n", wsDockerDisk)
+
+		wsTimeZone := "(not set)"
+		if ws.TimeZone != nil {
+			wsTimeZone = *ws.TimeZone
+		}
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Time Zone: %s\n", wsTimeZone)
 
 		_, _ = fmt.Fprintf(os.Stdout, "\n")
 	}

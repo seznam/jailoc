@@ -156,6 +156,9 @@ type Config struct {
 	// Docker, when set, makes the guest run dockerd with its data on a
 	// block device.
 	Docker *Docker `json:"docker,omitempty"`
+	// TimeZone is the host's local time zone, installed as /etc/localtime.
+	// Without it the guest keeps the image's zone.
+	TimeZone *TimeZone `json:"time_zone,omitempty"`
 }
 
 // DockerDisk is the block device of the workspace VM's Docker data disk.

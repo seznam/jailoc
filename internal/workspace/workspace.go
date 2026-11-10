@@ -53,7 +53,9 @@ type Resolved struct {
 	CPU             float64
 	Memory          string
 	DockerDisk      string
-	EnableDocker    bool
+	// TimeZone is the time zone name for the VM; empty means the host's zone.
+	TimeZone     string
+	EnableDocker bool
 	// IsolatedBuild builds the image of a backend "vm" workspace in its own
 	// builder VM instead of the builder shared by all workspaces.
 	IsolatedBuild bool
@@ -184,6 +186,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 		DockerDisk:      stringWithDefault(cfg.Defaults.DockerDisk, ws.DockerDisk, "20g"),
+		TimeZone:        stringWithDefault(cfg.Defaults.TimeZone, ws.TimeZone, ""),
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, false),
 		IsolatedBuild:   boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
 		ProtectGit:      boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),

@@ -97,6 +97,7 @@ Defaults applied to all workspaces.
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
+| `timezone` | string | (host zone) | Time zone of the workspace VM, an IANA name such as `"UTC"` or `"Europe/Prague"`. Omitted: the host's local zone. See [`timezone`](#timezone). |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 | `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, `core.hooksPath` and included config files read-only inside the VM for repositories under workspace `paths` and read-write `mounts`, including symlinked workspace roots. Disable `sudo` and Docker there. |
 | `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. |
@@ -172,7 +173,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
 | `network` | table | `{}` | Same fields as [`[defaults.network]`](#defaultsnetwork); a set field wins. |
-| `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
+| `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
 
 ### Example
 
@@ -402,6 +403,10 @@ With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an
 
 `cpu` must be a finite number greater than 0. `memory` and `docker_disk` must match `^[1-9][0-9]*[kmgKMG]?$` (for example `512m`, `4g`). At `jailoc up`, `memory` must be at least `512m` and `docker_disk` at least `1g`; `docker_disk` is rounded up to whole MiB. When the existing data disk is larger than `docker_disk`, `jailoc up` fails instead of shrinking it.
 
+### `timezone`
+
+`timezone` must match `^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$`; absolute paths and POSIX `TZ` rules are rejected. Without it, the VM takes the host's zone from `TZ` when set, otherwise from `/etc/localtime`. `jailoc-guest` points `/etc/localtime` at the zone in the image's `/usr/share/zoneinfo`, or copies the host's data for that zone when the image lacks it, and writes the name to `/etc/timezone`. A zone that neither the image nor the host has leaves the image's zone in place. [`jailoc reload`](cli.md#jailoc-reload) applies a changed `timezone` to a running VM.
+
 ### `image`, `dockerfile`, `build_context`
 
 `image` cannot be combined with `dockerfile` or `build_context`, and must not be whitespace-only. `dockerfile` accepts absolute paths, `~` paths and `http`/`https` URLs with a non-empty host (`http:///path` is rejected). Relative paths and other schemes are rejected.
@@ -470,7 +475,7 @@ The `opencode1` mount of `~/.omo` serves the OmO plugin (`oh-my-openagent`), whi
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 
