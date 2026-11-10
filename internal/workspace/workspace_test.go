@@ -1841,7 +1841,7 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 				DNS:             "9.9.9.9",
 				DNSBlockedZones: []string{"bad.example."},
 				Rules: []config.NetworkRule{
-					{Name: "dev-deps", Allow: []string{"@dev"}},
+					{Name: "dev-deps", Allow: []string{"github.com", "registry.npmjs.org"}},
 				},
 			},
 		},

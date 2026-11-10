@@ -93,7 +93,7 @@ func TestVMPolicy(t *testing.T) {
 		NetworkRules: []config.NetworkRule{
 			{Name: "no-paste", Deny: []string{"pastebin.com", "*.ngrok.io"}},
 			{Name: "db", Allow: []string{"10.1.0.5/16", "192.168.1.10"}, Proto: "tcp", Ports: []config.RulePort{"5432"}},
-			{Name: "dev-deps", Allow: []string{"@dev"}},
+			{Name: "dev-deps", Allow: []string{"github.com", "registry.npmjs.org"}},
 			{Name: "agent", Allow: []string{"api.anthropic.com"}, Proto: "tcp", Ports: []config.RulePort{"443"}},
 		},
 	}
@@ -122,7 +122,7 @@ func TestVMPolicy(t *testing.T) {
 		t.Fatalf("allow[0] = %+v", got.Allow[0])
 	}
 	if got.Allow[1].Name != "dev-deps" || !slices.Contains(got.Allow[1].Names, "registry.npmjs.org") {
-		t.Fatalf("allow[1] (@dev expanded) = %+v", got.Allow[1])
+		t.Fatalf("allow[1] = %+v", got.Allow[1])
 	}
 	if got.Allow[2].Name != "agent" || !slices.Equal(got.Allow[2].Names, []string{"api.anthropic.com"}) {
 		t.Fatalf("allow[2] = %+v", got.Allow[2])

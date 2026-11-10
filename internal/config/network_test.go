@@ -19,7 +19,7 @@ func TestNetworkRulesValidation(t *testing.T) {
 			name: "valid allow and deny rules",
 			dns:  "9.9.9.9",
 			rules: []NetworkRule{
-				{Name: "dev-deps", Allow: []string{"@dev"}},
+				{Name: "dev-deps", Allow: []string{"github.com", "registry.npmjs.org", "*.githubusercontent.com"}},
 				{Name: "no-paste", Deny: []string{"pastebin.com", "gist.github.com", "*.ngrok.io"}},
 				{Name: "db", Allow: []string{"10.20.5.10"}, Proto: "tcp", Ports: []RulePort{"5432"}},
 				{Name: "internal-dev", Allow: []string{"10.20.0.0/16", "fd42::/48"}, Ports: []RulePort{"9090", "8000-8100"}},
@@ -41,16 +41,6 @@ func TestNetworkRulesValidation(t *testing.T) {
 			name:      "empty allow slice",
 			rules:     []NetworkRule{{Allow: []string{}}},
 			wantError: "network.rules[0]: exactly one",
-		},
-		{
-			name:      "unknown list",
-			rules:     []NetworkRule{{Name: "bad-list", Allow: []string{"@unknown"}}},
-			wantError: `unknown list "@unknown"`,
-		},
-		{
-			name:      "empty list name",
-			rules:     []NetworkRule{{Allow: []string{"@"}}},
-			wantError: "empty @list name",
 		},
 		{
 			name:      "bad cidr",
@@ -124,7 +114,7 @@ dns = "9.9.9.9"
 
 [[defaults.network.rules]]
 name = "dev-deps"
-allow = ["@dev"]
+allow = ["github.com", "registry.npmjs.org"]
 
 [[defaults.network.rules]]
 name = "no-paste"

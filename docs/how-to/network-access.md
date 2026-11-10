@@ -1,6 +1,6 @@
 # How to configure network access
 
-All guest traffic leaves through jailoc's network broker on the host. By default, destinations not matched by an allow rule are denied, except for the configured coding agent's API and authentication endpoints (`rule=agent`). New configurations include the `@dev` preset in `[defaults.network.rules]` for common package registries, GitHub, container registries and OS mirrors. For the model behind it, see [Network isolation](../explanation/network-isolation.md).
+All guest traffic leaves through jailoc's network broker on the host. By default, destinations not matched by an allow rule are denied, except for the configured coding agent's API and authentication endpoints (`rule=agent`). New configurations include a `dev-deps` rule in `[defaults.network.rules]` listing common package registries, GitHub, container registries and OS mirrors directly in `config.toml`. For the model behind it, see [Network isolation](../explanation/network-isolation.md).
 
 ## Allow or deny hostnames
 
@@ -54,9 +54,9 @@ allow = ["*"]
 
 `*` matches any public address on the rule's protocol (excluding DoT port 853 and QUIC UDP port 443 unless listed explicitly in `ports`). It never opens private or reserved ranges.
 
-## Use `@dev` and upstream DNS
+## Configure upstream DNS and default rules
 
-Set an optional upstream DNS resolver with `dns` and use `@dev` for standard developer registries:
+Set an optional upstream DNS resolver with `dns` and shared rules under `[defaults.network]`:
 
 ```toml
 [defaults.network]
@@ -64,9 +64,8 @@ dns = "9.9.9.9"
 
 [[defaults.network.rules]]
 name = "dev-deps"
-allow = ["@dev"]
+allow = ["github.com", "api.github.com", "*.githubusercontent.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "proxy.golang.org", "sum.golang.org"]
 ```
-
 ## See what the agent connects to
 
 ```bash

@@ -54,7 +54,51 @@ const (
 
 [[defaults.network.rules]]
 name = "dev-deps"
-allow = ["@dev"]  # curated list: package registries, GitHub, container registries, OS mirrors
+allow = [
+  # GitHub & GitLab
+  "github.com",
+  "api.github.com",
+  "codeload.github.com",
+  "*.githubusercontent.com",
+  "ghcr.io",
+  "gitlab.com",
+  # Node.js / Bun
+  "registry.npmjs.org",
+  "registry.yarnpkg.com",
+  "nodejs.org",
+  "bun.sh",
+  # Python
+  "pypi.org",
+  "files.pythonhosted.org",
+  "astral.sh",
+  # Go
+  "proxy.golang.org",
+  "sum.golang.org",
+  "storage.googleapis.com",
+  "go.dev",
+  "dl.google.com",
+  # Rust
+  "crates.io",
+  "*.crates.io",
+  "static.rust-lang.org",
+  # Container registries
+  "*.docker.io",
+  "*.docker.com",
+  "quay.io",
+  "gcr.io",
+  "*.gcr.io",
+  "mcr.microsoft.com",
+  "*.data.mcr.microsoft.com",
+  # Linux package mirrors (Ubuntu / Debian / Alpine) and Nix
+  "*.ubuntu.com",
+  "ppa.launchpadcontent.net",
+  "deb.debian.org",
+  "security.debian.org",
+  "dl-cdn.alpinelinux.org",
+  "cache.nixos.org",
+  "channels.nixos.org",
+  "releases.nixos.org",
+]
 
 # [[defaults.network.rules]]
 # name = "no-paste"

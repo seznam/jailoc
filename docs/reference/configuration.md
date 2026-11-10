@@ -139,8 +139,8 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `allow` | string[] | (none) | Hostnames, `*.wildcard` names, IP addresses, CIDRs, `@dev` preset reference, or `"*"` (public internet). Exactly one of `allow` or `deny` is required. |
-| `deny` | string[] | (none) | Hostnames, `*.wildcard` names, IP addresses, CIDRs, `@dev` preset reference, or `"*"`. Exactly one of `allow` or `deny` is required. |
+| `allow` | string[] | (none) | Hostnames, `*.wildcard` names, IP addresses, CIDRs, or `"*"` (public internet). Exactly one of `allow` or `deny` is required. |
+| `deny` | string[] | (none) | Hostnames, `*.wildcard` names, IP addresses, CIDRs, or `"*"`. Exactly one of `allow` or `deny` is required. |
 | `proto` | string | `"tcp"` | `"tcp"`, `"udp"`, or `"any"`. |
 | `ports` | (int \| string)[] | (all) | Port numbers (`1`–`65535`) or `"a-b"` port ranges. |
 | `name` | string | `""` | Label shown in `jailoc traffic` (`rule=<name>`) and validation errors. |
@@ -154,7 +154,7 @@ dns = "9.9.9.9"
 
 [[defaults.network.rules]]
 name = "dev-deps"
-allow = ["@dev"]
+allow = ["github.com", "api.github.com", "*.githubusercontent.com", "registry.npmjs.org"]
 
 [[defaults.network.rules]]
 name = "no-paste"

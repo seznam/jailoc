@@ -143,7 +143,7 @@ dns = "1.1.1.1"
 
 [[workspaces.%[7]s.network.rules]]
 name = "dev-deps"
-allow = ["@dev", "example.com"]
+allow = ["example.com", "*.docker.io", "*.docker.com", "dl-cdn.alpinelinux.org"]
 
 [[workspaces.%[7]s.network.rules]]
 name = "blocked"

@@ -49,7 +49,7 @@ Unique local addresses (`fc00::/7`) count as private: they're reachable only thr
 
 ## Enforcement by name
 
-Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, together with the implicit `agent` rule for the workspace's coding agent, are combined into a single set where `deny` always wins over `allow`. `@list` presets (such as `@dev`) are expanded on the host before the policy reaches the broker.
+Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, together with the implicit `agent` rule for the workspace's coding agent, are combined into a single set where `deny` always wins over `allow`.
 
 The broker enforces hostname rules at three points:
 

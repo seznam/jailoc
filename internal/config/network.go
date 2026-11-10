@@ -59,81 +59,9 @@ type NetworkRule struct {
 	Ports []RulePort `toml:"ports,omitempty"`
 }
 
-// BuiltinLists maps @list names to curated sets of hostnames and wildcard
-// patterns expanded on the host.
-var BuiltinLists = map[string][]string{
-	"dev": {
-		// GitHub & GitLab
-		"github.com",
-		"api.github.com",
-		"codeload.github.com",
-		"objects.githubusercontent.com",
-		"raw.githubusercontent.com",
-		"release-assets.githubusercontent.com",
-		"*.githubusercontent.com",
-		"ghcr.io",
-		"pkg-containers.githubusercontent.com",
-		"gitlab.com",
-		// Node.js / JS / Bun
-		"registry.npmjs.org",
-		"registry.yarnpkg.com",
-		"nodejs.org",
-		"bun.sh",
-		// Python
-		"pypi.org",
-		"files.pythonhosted.org",
-		"astral.sh",
-		// Go
-		"proxy.golang.org",
-		"sum.golang.org",
-		"storage.googleapis.com",
-		"go.dev",
-		"dl.google.com",
-		// Rust
-		"crates.io",
-		"static.crates.io",
-		"index.crates.io",
-		"static.rust-lang.org",
-		// Container registries
-		"registry-1.docker.io",
-		"auth.docker.io",
-		"index.docker.io",
-		"production.cloudflare.docker.com",
-		"*.docker.io",
-		"*.docker.com",
-		"quay.io",
-		"gcr.io",
-		"*.gcr.io",
-		"mcr.microsoft.com",
-		"*.data.mcr.microsoft.com",
-		// Linux package mirrors (Ubuntu / Debian / Alpine)
-		"archive.ubuntu.com",
-		"security.ubuntu.com",
-		"ports.ubuntu.com",
-		"changelogs.ubuntu.com",
-		"ppa.launchpadcontent.net",
-		"deb.debian.org",
-		"security.debian.org",
-		"dl-cdn.alpinelinux.org",
-		// Nix
-		"cache.nixos.org",
-		"channels.nixos.org",
-		"releases.nixos.org",
-	},
-}
-
-// ExpandList returns the entries of a @list reference (with or without the
-// leading "@").
-func ExpandList(ref string) ([]string, bool) {
-	name := strings.TrimPrefix(ref, "@")
-	entries, ok := BuiltinLists[name]
-	return entries, ok
-}
-
 // ParseRuleTarget classifies a target in a network rule's allow or deny list.
 // It returns cidr when the target is an IP address or CIDR prefix, wildcard
-// when it is "*", list when it is a "@list" reference, or hostname when it is
-// a domain name or "*.domain" wildcard.
+// when it is "*", or name when it is a domain name or "*.domain" wildcard.
 func ParseRuleTarget(target string) (kind string, normalized string, err error) {
 	t := strings.TrimSpace(target)
 	if t == "" {
@@ -141,15 +69,6 @@ func ParseRuleTarget(target string) (kind string, normalized string, err error) 
 	}
 	if t == "*" {
 		return "wildcard", "*", nil
-	}
-	if after, ok := strings.CutPrefix(t, "@"); ok {
-		if after == "" {
-			return "", "", fmt.Errorf("empty @list name in %q", target)
-		}
-		if _, ok := BuiltinLists[after]; !ok {
-			return "", "", fmt.Errorf("unknown list %q (known: @dev)", target)
-		}
-		return "list", after, nil
 	}
 	if strings.Contains(t, "/") {
 		pfx, err := netip.ParsePrefix(t)

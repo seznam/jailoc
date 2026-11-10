@@ -592,10 +592,10 @@ func compileVMRule(name, proto string, ports []config.RulePort, targets []string
 	out := vmRule{Name: name, Proto: proto, Ports: portStrs}
 	seenNames := map[string]bool{}
 	seenCIDRs := map[string]bool{}
-	addTarget := func(t string) error {
+	for _, t := range targets {
 		kind, norm, err := config.ParseRuleTarget(t)
 		if err != nil {
-			return err
+			return vmRule{}, err
 		}
 		switch kind {
 		case "cidr":
@@ -608,28 +608,6 @@ func compileVMRule(name, proto string, ports []config.RulePort, targets []string
 				seenNames[norm] = true
 				out.Names = append(out.Names, norm)
 			}
-		}
-		return nil
-	}
-	for _, t := range targets {
-		kind, norm, err := config.ParseRuleTarget(t)
-		if err != nil {
-			return vmRule{}, err
-		}
-		if kind == "list" {
-			entries, ok := config.ExpandList(norm)
-			if !ok {
-				return vmRule{}, fmt.Errorf("unknown list %q", t)
-			}
-			for _, e := range entries {
-				if err := addTarget(e); err != nil {
-					return vmRule{}, err
-				}
-			}
-			continue
-		}
-		if err := addTarget(t); err != nil {
-			return vmRule{}, err
 		}
 	}
 	return out, nil
