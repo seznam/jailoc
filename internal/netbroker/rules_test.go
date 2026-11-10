@@ -373,3 +373,145 @@ func TestDNSCacheAndNameEnforcement(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewFixes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("DNS cache skips nonpositive TTL and caps names per IP", func(t *testing.T) {
+		t.Parallel()
+		c := newDNSCache()
+		now := time.Now()
+		c.now = func() time.Time { return now }
+		ip := netip.MustParseAddr("1.2.3.4")
+
+		c.record(ip, "zero.example", 0)
+		if got := c.lookup(ip); len(got) != 0 {
+			t.Fatalf("TTL 0 cached: %v", got)
+		}
+
+		c.record(ip, "one.example", time.Second)
+		if got := c.lookup(ip); len(got) != 1 {
+			t.Fatalf("TTL 1s not cached: %v", got)
+		}
+		now = now.Add(2 * time.Second)
+		if got := c.lookup(ip); len(got) != 0 {
+			t.Fatalf("TTL 1s retained past expiry: %v", got)
+		}
+
+		for i := range maxDNSCachePerIP + 10 {
+			c.record(ip, "sub"+string(rune('a'+i%26))+string(rune('0'+i/26))+".example", time.Minute)
+		}
+		if got := c.lookup(ip); len(got) != maxDNSCachePerIP {
+			t.Fatalf("names per IP = %d, want capped at %d", len(got), maxDNSCachePerIP)
+		}
+	})
+
+	t.Run("CIDR allow rule does not authorize arbitrary DNS names", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [
+				{"name": "db", "cidrs": ["10.20.5.10/32"], "proto": "tcp", "ports": ["5432"]},
+				{"name": "web", "names": ["allowed.example.com"], "proto": "tcp", "ports": ["443"]}
+			]
+		}`), "cidr-dns")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked, _ := pol.blocked("exfil.evil.example.com"); !blocked {
+			t.Fatal("CIDR rule allowed arbitrary DNS name")
+		}
+		if blocked, _ := pol.blocked("allowed.example.com"); blocked {
+			t.Fatal("allowed hostname was blocked")
+		}
+	})
+
+	t.Run("port-scoped deny does not block DNS when another port is allowed", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"deny": [
+				{"name": "no-http", "names": ["example.com"], "proto": "tcp", "ports": ["80"]}
+			],
+			"allow": [
+				{"name": "https", "names": ["example.com"], "proto": "tcp", "ports": ["443"]}
+			]
+		}`), "scoped-deny")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked, _ := pol.blocked("example.com"); blocked {
+			t.Fatal("port-80 deny blocked DNS for example.com despite port-443 allow")
+		}
+	})
+
+	t.Run("EDNS OPT root owner and HTTPS/SVCB stripping in responses", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [{"name": "web", "names": ["allowed.example.com"], "proto": "tcp", "ports": ["443"]}]
+		}`), "edns")
+		if err != nil {
+			t.Fatal(err)
+		}
+		qname := dnsmessage.MustNewName("allowed.example.com.")
+		msg := dnsmessage.Message{
+			Header:    dnsmessage.Header{ID: 1, Response: true},
+			Questions: []dnsmessage.Question{{Name: qname, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+			Answers: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: qname, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
+					Body:   &dnsmessage.AResource{A: [4]byte{93, 184, 216, 34}},
+				},
+				{
+					Header: dnsmessage.ResourceHeader{Name: qname, Type: dnsTypeHTTPS, Class: dnsmessage.ClassINET, TTL: 60},
+					Body:   &dnsmessage.UnknownResource{Type: dnsTypeHTTPS, Data: []byte{0, 1, 0}},
+				},
+			},
+			Additionals: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("."), Type: dnsmessage.TypeOPT, Class: 4096},
+					Body:   &dnsmessage.OPTResource{},
+				},
+			},
+		}
+		raw, err := msg.Pack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blockedName, _, ok := blockedAnswer(pol, raw); !ok || blockedName != "" {
+			t.Fatalf("blockedAnswer with EDNS OPT = %q, ok=%v; want allowed", blockedName, ok)
+		}
+		stripped := stripHTTPSSVCB(raw)
+		var unpacked dnsmessage.Message
+		if err := unpacked.Unpack(stripped); err != nil {
+			t.Fatal(err)
+		}
+		if len(unpacked.Answers) != 1 || unpacked.Answers[0].Header.Type != dnsmessage.TypeA {
+			t.Fatalf("HTTPS record not stripped: %+v", unpacked.Answers)
+		}
+	})
+
+	t.Run("identifyForPolicy waits for complete HTTP headers", func(t *testing.T) {
+		t.Parallel()
+		partial := []byte("GET / HTTP/1.1\r\nHost: allowed.example")
+		if info, more := identifyForPolicy(partial); info != nil || !more {
+			t.Fatalf("identifyForPolicy(partial) = %v, more=%v; want nil, true", info, more)
+		}
+		complete := []byte("GET / HTTP/1.1\r\nHost: allowed.example.evil.com\r\n\r\n")
+		if info, more := identifyForPolicy(complete); info == nil || more || info["host"] != "allowed.example.evil.com" {
+			t.Fatalf("identifyForPolicy(complete) = %v, more=%v", info, more)
+		}
+	})
+
+	t.Run("mapped IPv4 literal in policy rule", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [{"name": "mapped", "cidrs": ["::ffff:10.20.5.10"], "proto": "tcp", "ports": ["5432"]}]
+		}`), "mapped")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := Decide(pol, Env{}, ProtoTCP, netip.MustParseAddrPort("10.20.5.10:5432"))
+		if !got.Allow || got.Rule != "mapped" {
+			t.Fatalf("Decide mapped = %+v, want allow rule=mapped", got)
+		}
+	})
+}

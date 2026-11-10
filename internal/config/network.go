@@ -78,11 +78,12 @@ func ParseRuleTarget(target string) (kind string, normalized string, err error) 
 		return "cidr", pfx.Masked().String(), nil
 	}
 	if addr, err := netip.ParseAddr(t); err == nil {
+		addr = addr.Unmap()
 		bits := 32
 		if addr.Is6() {
 			bits = 128
 		}
-		return "cidr", netip.PrefixFrom(addr.Unmap(), bits).String(), nil
+		return "cidr", netip.PrefixFrom(addr, bits).String(), nil
 	}
 	name := strings.TrimSuffix(strings.ToLower(t), ".")
 	check := name

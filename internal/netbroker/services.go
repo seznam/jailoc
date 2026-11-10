@@ -181,6 +181,9 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
 			return nxdomain(q)
 		}
 	}
+	if p != nil && (p.rulesMode || len(p.deny) > 0) {
+		resp = stripHTTPSSVCB(resp)
+	}
 	b.logDNS(network, q, resp, nil)
 	return resp
 }
@@ -197,6 +200,39 @@ func singleQuestion(q []byte) (string, dnsmessage.Type, bool) {
 		return "", 0, false
 	}
 	return qs[0].Name.String(), qs[0].Type, true
+}
+
+// stripHTTPSSVCB removes HTTPS and SVCB records from all sections of resp so
+// ECH configurations never reach the guest.
+func stripHTTPSSVCB(resp []byte) []byte {
+	var msg dnsmessage.Message
+	if err := msg.Unpack(resp); err != nil {
+		return resp
+	}
+	keep := func(rs []dnsmessage.Resource) ([]dnsmessage.Resource, bool) {
+		var out []dnsmessage.Resource
+		changed := false
+		for _, r := range rs {
+			if r.Header.Type == dnsTypeSVCB || r.Header.Type == dnsTypeHTTPS {
+				changed = true
+				continue
+			}
+			out = append(out, r)
+		}
+		return out, changed
+	}
+	a, c1 := keep(msg.Answers)
+	ns, c2 := keep(msg.Authorities)
+	add, c3 := keep(msg.Additionals)
+	if !c1 && !c2 && !c3 {
+		return resp
+	}
+	msg.Answers, msg.Authorities, msg.Additionals = a, ns, add
+	packed, err := msg.Pack()
+	if err != nil {
+		return resp
+	}
+	return packed
 }
 
 // blockedAnswer returns the first blocked name and rule among the record
@@ -232,6 +268,12 @@ func blockedAnswer(pol *Policy, resp []byte) (string, string, bool) {
 			}
 			if err != nil {
 				return "", "", false
+			}
+			if h.Type == dnsmessage.TypeOPT {
+				if err := sec.skip(); err != nil {
+					return "", "", false
+				}
+				continue
 			}
 			if blocked, rule := pol.blocked(h.Name.String()); blocked {
 				return h.Name.String(), rule, true

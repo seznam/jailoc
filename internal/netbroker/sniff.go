@@ -209,8 +209,9 @@ func (c *prefixConn) CloseWrite() error {
 
 // sniffBeforeDial reads the initial bytes from c (up to sniffMax or a short
 // timeout) to identify a TLS ClientHello or HTTP/1 request, returning the
-// wrapped connection that replays those bytes and the identified info (if any).
-func sniffBeforeDial(c net.Conn, timeout time.Duration) (net.Conn, map[string]any, error) {
+// wrapped connection that replays those bytes, the identified info (if any),
+// and whether the stream looked like an incomplete TLS/HTTP handshake.
+func sniffBeforeDial(c net.Conn, timeout time.Duration) (net.Conn, map[string]any, bool) {
 	_ = c.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
 	var buf []byte
@@ -219,22 +220,38 @@ func sniffBeforeDial(c net.Conn, timeout time.Duration) (net.Conn, map[string]an
 		n, err := c.Read(chunk[:min(len(chunk), sniffMax-len(buf))])
 		if n > 0 {
 			buf = append(buf, chunk[:n]...)
-			info, more := identify(buf)
+			info, more := identifyForPolicy(buf)
 			if info != nil {
-				return &prefixConn{Conn: c, buf: buf}, info, nil
+				return &prefixConn{Conn: c, buf: buf}, info, false
 			}
 			if !more {
-				return &prefixConn{Conn: c, buf: buf}, nil, nil
+				return &prefixConn{Conn: c, buf: buf}, nil, false
 			}
 		}
 		if err != nil {
-			if len(buf) > 0 {
-				return &prefixConn{Conn: c, buf: buf}, nil, nil
-			}
-			return c, nil, err
+			// If we haven't read anything at all or were waiting for more
+			// TLS/HTTP bytes when the deadline fired, mark it incomplete.
+			return &prefixConn{Conn: c, buf: buf}, nil, true
 		}
 	}
-	return &prefixConn{Conn: c, buf: buf}, nil, nil
+	return &prefixConn{Conn: c, buf: buf}, nil, true
+}
+
+// identifyForPolicy is like identify, but requires the complete HTTP header
+// block (\r\n\r\n) before accepting an HTTP Host so a split Host header line
+// cannot authorize a prefix of the hostname.
+func identifyForPolicy(b []byte) (info map[string]any, more bool) {
+	if len(b) == 0 {
+		return nil, true
+	}
+	if b[0] == 0x16 {
+		return identifyTLS(b)
+	}
+	if !bytes.Contains(b, []byte("\r\n\r\n")) {
+		info, more := identifyHTTP(b)
+		return nil, more || info != nil
+	}
+	return identifyHTTP(b)
 }
 
 // sniffedPeerName extracts the normalized hostname from an l7 info map (TLS

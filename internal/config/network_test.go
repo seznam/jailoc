@@ -159,3 +159,11 @@ func TestDeprecationWarnings(t *testing.T) {
 		t.Fatalf("warnings = %v, want 5 warnings", warnings)
 	}
 }
+
+func TestParseRuleTargetMappedIPv4(t *testing.T) {
+	t.Parallel()
+	kind, norm, err := ParseRuleTarget("::ffff:10.20.5.10")
+	if err != nil || kind != "cidr" || norm != "10.20.5.10/32" {
+		t.Fatalf("ParseRuleTarget(::ffff:10.20.5.10) = %q, %q, %v; want cidr, 10.20.5.10/32, nil", kind, norm, err)
+	}
+}

@@ -113,8 +113,10 @@ const sniffBeforeDialTimeout = 2 * time.Second
 
 func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Policy, env Env, d Decision, ep tcpip.Endpoint, wq *waiter.Queue) {
 	rawConn := gonet.NewTCPConn(wq, ep)
-	replayed, info, _ := sniffBeforeDial(rawConn, sniffBeforeDialTimeout)
-	if peerName := sniffedPeerName(info); peerName != "" {
+	replayed, info, incomplete := sniffBeforeDial(rawConn, sniffBeforeDialTimeout)
+	peerName := sniffedPeerName(info)
+	switch {
+	case peerName != "":
 		// Check whether the sniffed SNI/Host belongs to the destination IP in
 		// the DNS cache (unless a CIDR or wildcard rule allows the IP directly).
 		inCache := false
@@ -143,6 +145,15 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 			}
 		default:
 			d = dPeer
+		}
+	case incomplete || info != nil:
+		// Timed out waiting for TLS ClientHello / HTTP headers, or received
+		// TLS/HTTP without an SNI/Host header: fail closed unless an address
+		// or wildcard rule allows the destination without a hostname.
+		envNoNames := env
+		envNoNames.Names = nil
+		if dAddr := Decide(p, envNoNames, ProtoTCP, dst); !dAddr.Allow {
+			d = Decision{Allow: false, Reason: "sni-required", Name: d.Name}
 		}
 	}
 	b.recordFlow(conn, ProtoTCP, src, dst, d)

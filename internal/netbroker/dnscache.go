@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	minDNSCacheTTL = 60 * time.Second
-	maxDNSCacheTTL = 24 * time.Hour
-	maxDNSCacheIPs = 4096
-	dnsTypeSVCB    = dnsmessage.Type(64)
-	dnsTypeHTTPS   = dnsmessage.Type(65)
+	maxDNSCacheTTL   = 24 * time.Hour
+	maxDNSCacheIPs   = 4096
+	maxDNSCachePerIP = 64
+	dnsTypeSVCB      = dnsmessage.Type(64)
+	dnsTypeHTTPS     = dnsmessage.Type(65)
 )
 
 // nameSet matches domain names against exact and "*.suffix" patterns in O(labels).
@@ -90,7 +90,7 @@ func newDNSCache() *dnsCache {
 
 // record stores addr -> name with ttl.
 func (c *dnsCache) record(addr netip.Addr, name string, ttl time.Duration) {
-	if c == nil || !addr.IsValid() {
+	if c == nil || !addr.IsValid() || ttl <= 0 {
 		return
 	}
 	name = normalizeName(name)
@@ -98,9 +98,7 @@ func (c *dnsCache) record(addr netip.Addr, name string, ttl time.Duration) {
 		return
 	}
 	addr = addr.WithZone("").Unmap()
-	if ttl < minDNSCacheTTL {
-		ttl = minDNSCacheTTL
-	} else if ttl > maxDNSCacheTTL {
+	if ttl > maxDNSCacheTTL {
 		ttl = maxDNSCacheTTL
 	}
 	now := c.now()
@@ -112,12 +110,26 @@ func (c *dnsCache) record(addr netip.Addr, name string, ttl time.Duration) {
 		c.evictExpiredLocked(now)
 	}
 	names := c.entries[addr]
+	if names != nil {
+		for k, e := range names {
+			if now.After(e) {
+				delete(names, k)
+			}
+		}
+		if len(names) == 0 {
+			delete(c.entries, addr)
+			names = nil
+		}
+	}
 	if names == nil {
 		if len(c.entries) >= maxDNSCacheIPs {
 			return
 		}
 		names = make(map[string]time.Time, 1)
 		c.entries[addr] = names
+	}
+	if _, exists := names[name]; !exists && len(names) >= maxDNSCachePerIP {
+		return
 	}
 	if prev, ok := names[name]; !ok || exp.After(prev) {
 		names[name] = exp

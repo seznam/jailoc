@@ -146,11 +146,12 @@ func (r *Rule) compile(kind string) error {
 		pfx, err := netip.ParsePrefix(c)
 		if err != nil {
 			if addr, aerr := netip.ParseAddr(c); aerr == nil {
+				addr = addr.Unmap()
 				bits := 32
 				if addr.Is6() {
 					bits = 128
 				}
-				pfx = netip.PrefixFrom(addr.Unmap(), bits)
+				pfx = netip.PrefixFrom(addr, bits)
 			} else {
 				return fmt.Errorf("%s rule %q: cidr %q: %w", kind, r.Name, c, err)
 			}
@@ -314,7 +315,7 @@ func normalizeName(name string) string {
 }
 
 // blocked reports whether name is blocked by blockedZones or by DNS rules
-// (matching a deny rule, or not allowed when rulesMode is active).
+// (matching a blanket deny rule, or not allowed when rulesMode is active).
 func (p *Policy) blocked(name string) (bool, string) {
 	if p == nil {
 		return false, ""
@@ -326,8 +327,13 @@ func (p *Policy) blocked(name string) (bool, string) {
 		}
 	}
 	for i := range p.deny {
-		if p.deny[i].nameSet.matches(name) || p.deny[i].wildcard {
-			return true, p.deny[i].Name
+		r := &p.deny[i]
+		// Only a blanket deny rule (proto=any and all ports, or proto=tcp with
+		// all ports when no UDP allow rule matches name) blocks DNS resolution
+		// outright; port-scoped denies are enforced at connection time so other
+		// allowed ports on the same host keep working.
+		if (r.nameSet.matches(name) || r.wildcard) && p.deniesAllForName(r, name) {
+			return true, r.Name
 		}
 	}
 	if !p.rulesMode {
@@ -335,11 +341,54 @@ func (p *Policy) blocked(name string) (bool, string) {
 	}
 	for i := range p.allow {
 		r := &p.allow[i]
-		if r.wildcard || len(r.prefixes) > 0 || r.nameSet.matches(name) {
+		if r.wildcard || r.nameSet.matches(name) {
 			return false, r.Name
 		}
 	}
 	return true, ""
+}
+
+// deniesAllForName reports whether deny rule d leaves no allowed proto/port
+// combination for name.
+func (p *Policy) deniesAllForName(d *Rule, name string) bool {
+	if len(d.ranges) == 0 && d.Proto == ProtoAny {
+		return true
+	}
+	for i := range p.allow {
+		a := &p.allow[i]
+		if !a.wildcard && !a.nameSet.matches(name) {
+			continue
+		}
+		if !ruleCovers(&d.Proto, d.ranges, a.Proto, a.ranges) {
+			return false
+		}
+	}
+	return len(d.ranges) == 0
+}
+
+func ruleCovers(denyProto *string, denyRanges []portRange, allowProto string, allowRanges []portRange) bool {
+	if *denyProto != ProtoAny && *denyProto != allowProto {
+		return false
+	}
+	if len(denyRanges) == 0 {
+		return true
+	}
+	if len(allowRanges) == 0 {
+		return false
+	}
+	for _, ar := range allowRanges {
+		covered := false
+		for _, dr := range denyRanges {
+			if dr.lo <= ar.lo && dr.hi >= ar.hi {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return false
+		}
+	}
+	return true
 }
 
 // needsNameInspection reports whether a TCP flow to dst on port requires
