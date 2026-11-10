@@ -195,19 +195,51 @@ var forbiddenMountContainerPrefixes = []string{
 	"/certs",
 }
 
-var forbiddenMountHostPaths = []string{
-	"/",
-	"/boot",
-	"/dev",
-	"/etc",
-	"/private",
-	"/proc",
-	"/sys",
-	"/run",
-	"/var",
-	"~/.ssh",
-	"~/.gnupg",
-	"~/.aws",
+// forbiddenMountHostPath is a host path that mounts and snapshots must not
+// share, with a hint on how to give the agent what it needs instead.
+type forbiddenMountHostPath struct {
+	path string
+	hint string
+}
+
+var forbiddenMountHostPaths = []forbiddenMountHostPath{
+	{path: "/"},
+	{path: "/boot"},
+	{path: "/dev"},
+	{path: "/etc"},
+	{path: "/private"},
+	{path: "/proc"},
+	{path: "/sys"},
+	{path: "/run"},
+	{path: "/var"},
+	{path: "~/.ssh", hint: "set ssh_auth_sock = true to forward the SSH agent; the keys stay on the host"},
+	{path: "~/.gnupg", hint: "set gpg_agent = true to forward the GPG agent; the keys stay on the host"},
+	{path: "~/.aws", hint: fileSecretHint("aws-credentials", "~/.aws/credentials", "AWS_SHARED_CREDENTIALS_FILE")},
+	{path: "~/.azure", hint: fileSecretHint("<NAME>", "<file the tool needs>", "")},
+	{path: "~/.config/gcloud", hint: fileSecretHint("gcloud-credentials", "~/.config/gcloud/application_default_credentials.json", "GOOGLE_APPLICATION_CREDENTIALS")},
+	{path: "~/.config/gh", hint: "deliver a token as an env secret instead:\n\n" +
+		"  [workspaces.<name>.secrets.env.GH_TOKEN]\n" +
+		"  from_command = \"gh auth token\""},
+	{path: "~/.docker", hint: fileSecretHint("docker-config", "~/.docker/config.json", "") +
+		"\n\nDocker reads config.json from a directory, so copy it in the VM after every VM start: mkdir -p ~/.docker && cp -f /run/secrets/docker-config ~/.docker/config.json"},
+	{path: "~/.kube", hint: fileSecretHint("kubeconfig", "~/.kube/config", "KUBECONFIG")},
+	{path: "~/.netrc", hint: fileSecretHint("netrc", "~/.netrc", "NETRC")},
+	{path: "~/.config/jailoc"},
+	{path: "~/.cache/jailoc-vm"},
+}
+
+// fileSecretHint describes the file secret that delivers one credential file
+// instead of mounting its directory, and the env entry that points tools at
+// it when envVar is set.
+func fileSecretHint(name, from, envVar string) string {
+	hint := "deliver only the file the agent needs as a file secret:\n\n" +
+		"  [workspaces.<name>.secrets.file." + name + "]\n" +
+		"  from_file = \"" + from + "\"\n\n" +
+		"The guest reads it from /run/secrets/" + name + " (tmpfs, never written to disk)."
+	if envVar != "" {
+		hint += "\nPoint tools at it with env = [\"" + envVar + "=/run/secrets/" + name + "\"]."
+	}
+	return hint
 }
 
 // AgentSettings is an [<scope>.agents.<name>] table: settings of the agent
@@ -881,21 +913,55 @@ func validateMountHostPath(host string, context string) error {
 		return fmt.Errorf("%s: expand mount host path %q: %w", context, host, err)
 	}
 	cleanHost := filepath.Clean(expandedHost)
+	// A missing path has nothing to resolve: only the literal check applies.
+	realHost, _ := filepath.EvalSymlinks(cleanHost)
 
 	for _, forbidden := range forbiddenMountHostPaths {
-		expandedForbidden, err := ExpandPath(forbidden)
+		expandedForbidden, err := ExpandPath(forbidden.path)
 		if err != nil {
-			return fmt.Errorf("%s: expand forbidden mount host path %q: %w", context, forbidden, err)
+			return fmt.Errorf("%s: expand forbidden mount host path %q: %w", context, forbidden.path, err)
 		}
 
 		cleanForbidden := filepath.Clean(expandedForbidden)
-		forbiddenPrefix := cleanForbidden + string(os.PathSeparator)
-		if cleanHost == cleanForbidden || strings.HasPrefix(cleanHost, forbiddenPrefix) {
-			return fmt.Errorf("%s: mount host path %q is forbidden", context, cleanHost)
+		// Sharing a parent of a home-directory entry (~/.config, ~/.cache, ~)
+		// would expose it as well. System paths are exempt: every host path
+		// is under /.
+		home := strings.HasPrefix(forbidden.path, "~")
+		shown := fmt.Sprintf("%q", cleanHost)
+		inside, contains := mountOverlap(cleanHost, cleanForbidden, home)
+		// Home entries are also compared after resolving symlinks, so a
+		// symlink to ~/.ssh or a dotfiles directory that ~/.ssh links into is
+		// caught. System paths are not: on macOS /tmp, /var and /etc resolve
+		// into the forbidden /private.
+		if home && !inside && !contains && realHost != "" {
+			if realForbidden, err := filepath.EvalSymlinks(cleanForbidden); err == nil {
+				inside, contains = mountOverlap(realHost, realForbidden, true)
+				shown = fmt.Sprintf("%q (resolves to %q)", cleanHost, realHost)
+			}
+		}
+
+		switch {
+		case inside && forbidden.hint == "":
+			return fmt.Errorf("%s: mount host path %s is forbidden", context, shown)
+		case inside:
+			return fmt.Errorf("%s: mount host path %s is forbidden because %s holds credentials; %s", context, shown, forbidden.path, forbidden.hint)
+		case contains && forbidden.hint == "":
+			return fmt.Errorf("%s: mount host path %s is forbidden because it contains %s", context, shown, forbidden.path)
+		case contains:
+			return fmt.Errorf("%s: mount host path %s is forbidden because it contains %s, which holds credentials; %s", context, shown, forbidden.path, forbidden.hint)
 		}
 	}
 
 	return nil
+}
+
+// mountOverlap reports whether host equals or lies inside forbidden, and,
+// when parents count, whether host contains forbidden.
+func mountOverlap(host, forbidden string, parents bool) (inside, contains bool) {
+	sep := string(os.PathSeparator)
+	inside = host == forbidden || strings.HasPrefix(host, forbidden+sep)
+	contains = parents && strings.HasPrefix(forbidden, host+sep)
+	return inside, contains
 }
 
 func formatMount(m Mount) string {

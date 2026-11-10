@@ -51,6 +51,30 @@ Sessions see the value as the `MCP_SERVER_TOKEN` environment variable.
 
 The contents land in `/run/secrets/db_cert`. File secrets aren't exported to the environment.
 
+Credential directories such as `~/.kube`, `~/.docker`, `~/.aws`, `~/.config/gcloud` and `~/.netrc` can't be mounted or snapshotted. Pass the one file a tool needs as a file secret instead, and point the tool at it with `env`:
+
+```toml
+[workspaces.my-project]
+env = ["KUBECONFIG=/run/secrets/kubeconfig"]
+
+[workspaces.my-project.secrets.file.kubeconfig]
+from_file = "~/.kube/config"
+```
+
+| Tool | Secret name | `from_file` | `env` |
+|---|---|---|---|
+| kubectl | `kubeconfig` | `~/.kube/config` | `KUBECONFIG=/run/secrets/kubeconfig` |
+| AWS CLI and SDKs | `aws-credentials` | `~/.aws/credentials` | `AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials` |
+| Google Cloud SDKs | `gcloud-credentials` | `~/.config/gcloud/application_default_credentials.json` | `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcloud-credentials` |
+| Go, Python `requests` | `netrc` | `~/.netrc` | `NETRC=/run/secrets/netrc` |
+
+A kubeconfig that references certificate or key files by path needs those files embedded (`kubectl config view --raw --flatten`) or passed as file secrets too. Docker reads `config.json` from a directory, so copy the secret there inside the VM (`mkdir -p ~/.docker && cp -f /run/secrets/docker-config ~/.docker/config.json`). `~/.docker` is not a persistent home directory, so the copy lives in VM memory and is gone after the VM stops: repeat it after every VM start, and after `jailoc reload` to pick up a rotated secret. For the GitHub CLI, pass a token instead of `~/.config/gh`:
+
+```toml
+[workspaces.my-project.secrets.env.GH_TOKEN]
+from_command = "gh auth token"
+```
+
 ---
 
 ## Load a host file into an environment variable

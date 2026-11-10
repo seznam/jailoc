@@ -2441,6 +2441,17 @@ func TestValidateMountsHostPathValidation(t *testing.T) {
 			spec:      "/private/var/run:/container:ro",
 			wantError: true,
 		},
+		{name: "~/.kube is rejected", spec: "~/.kube:/home/agent/.kube:ro", wantError: true},
+		{name: "~/.kube/config is rejected", spec: "~/.kube/config:/home/agent/.kube/config:ro", wantError: true},
+		{name: "~/.docker is rejected", spec: "~/.docker:/home/agent/.docker:ro", wantError: true},
+		{name: "~/.netrc is rejected", spec: "~/.netrc:/home/agent/.netrc:ro", wantError: true},
+		{name: "~/.config/gcloud is rejected", spec: "~/.config/gcloud:/home/agent/.config/gcloud:ro", wantError: true},
+		{name: "~/.config/gh is rejected", spec: "~/.config/gh:/home/agent/.config/gh:ro", wantError: true},
+		{name: "~/.azure is rejected", spec: "~/.azure:/home/agent/.azure:ro", wantError: true},
+		{name: "~/.config/jailoc is rejected", spec: "~/.config/jailoc:/home/agent/jailoc:ro", wantError: true},
+		{name: "~/.cache/jailoc-vm is rejected", spec: "~/.cache/jailoc-vm/workspaces:/home/agent/ws:ro", wantError: true},
+		{name: "~/.config sibling of a credential dir is allowed", spec: "~/.config/ghostty:/home/agent/.config/ghostty:ro", wantError: false},
+		{name: "~/.netrc-like sibling is allowed", spec: "~/.netrc.d:/container:ro", wantError: false},
 	}
 
 	for _, tt := range tests {
@@ -2467,6 +2478,185 @@ func TestValidateMountsHostPathValidation(t *testing.T) {
 
 			if err != nil {
 				t.Fatalf("expected validation to pass for mount %q, got: %v", tt.spec, err)
+			}
+		})
+	}
+}
+
+func TestValidateMountsForbiddenCredentialHint(t *testing.T) {
+	safeHome(t)
+
+	tests := []struct {
+		name string
+		spec string
+		want []string
+	}{
+		{
+			name: "kube suggests a file secret and KUBECONFIG",
+			spec: "~/.kube:/home/agent/.kube:ro",
+			want: []string{"holds credentials", "[workspaces.<name>.secrets.file.kubeconfig]", `from_file = "~/.kube/config"`, "KUBECONFIG=/run/secrets/kubeconfig"},
+		},
+		{
+			name: "aws suggests the shared credentials file",
+			spec: "~/.aws/credentials:/home/agent/.aws/credentials:ro",
+			want: []string{"[workspaces.<name>.secrets.file.aws-credentials]", "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials"},
+		},
+		{
+			name: "docker suggests copying config.json in the VM",
+			spec: "~/.docker:/home/agent/.docker:ro",
+			want: []string{`from_file = "~/.docker/config.json"`, "cp -f /run/secrets/docker-config ~/.docker/config.json"},
+		},
+		{
+			name: "gh suggests a token env secret",
+			spec: "~/.config/gh:/home/agent/.config/gh:ro",
+			want: []string{"[workspaces.<name>.secrets.env.GH_TOKEN]", `from_command = "gh auth token"`},
+		},
+		{
+			name: "ssh suggests agent forwarding",
+			spec: "~/.ssh:/home/agent/.ssh:ro",
+			want: []string{"ssh_auth_sock = true"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Workspaces: map[string]Workspace{"default": {
+				Paths:  []string{"/data/workspace"},
+				Mounts: []string{tt.spec},
+			}}}
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatalf("expected validation to fail for mount %q", tt.spec)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateSnapshotForbiddenCredentialHint(t *testing.T) {
+	safeHome(t)
+
+	cfg := &Config{Workspaces: map[string]Workspace{"default": {
+		Backend:   BackendVM,
+		Paths:     []string{"/data/workspace"},
+		Snapshots: []string{"~/.kube/config:/home/agent/.kube/config"},
+	}}}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation to fail for a ~/.kube snapshot")
+	}
+	if !strings.Contains(err.Error(), "KUBECONFIG=/run/secrets/kubeconfig") {
+		t.Fatalf("expected KUBECONFIG hint, got: %v", err)
+	}
+}
+
+func TestValidateMountsForbiddenWithoutHint(t *testing.T) {
+	safeHome(t)
+
+	cfg := &Config{Workspaces: map[string]Workspace{"default": {
+		Paths:  []string{"/data/workspace"},
+		Mounts: []string{"~/.config/jailoc:/home/agent/jailoc:ro"},
+	}}}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation to fail for ~/.config/jailoc")
+	}
+	if strings.Contains(err.Error(), "holds credentials") {
+		t.Fatalf("expected no credential hint, got: %v", err)
+	}
+}
+
+func TestValidateMountsForbiddenParentOfHomeEntry(t *testing.T) {
+	safeHome(t)
+
+	tests := []struct {
+		name      string
+		mount     string
+		snapshot  string
+		wantError string
+	}{
+		{name: "home mount", mount: "~:/home/agent/host:ro", wantError: "because it contains ~/.ssh, which holds credentials"},
+		{name: "config mount", mount: "~/.config:/home/agent/host-config:ro", wantError: "because it contains ~/.config/gcloud"},
+		{name: "cache mount", mount: "~/.cache:/home/agent/host-cache:rw", wantError: "because it contains ~/.cache/jailoc-vm"},
+		{name: "config snapshot", snapshot: "~/.config:/home/agent/host-config", wantError: "because it contains ~/.config/gcloud"},
+		{name: "sibling of a forbidden entry", mount: "~/.config/opencode:/home/agent/.config/opencode:ro"},
+		{name: "sibling cache", mount: "~/.cache/pip:/home/agent/.cache/pip:rw"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := Workspace{Backend: BackendVM, Paths: []string{"/data/workspace"}}
+			if tt.mount != "" {
+				ws.Mounts = []string{tt.mount}
+			}
+			if tt.snapshot != "" {
+				ws.Snapshots = []string{tt.snapshot}
+			}
+			err := Validate(&Config{Workspaces: map[string]Workspace{"default": ws}})
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("expected validation to pass, got: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("expected error containing %q, got: %v", tt.wantError, err)
+			}
+		})
+	}
+}
+
+func TestValidateMountsForbiddenThroughSymlink(t *testing.T) {
+	home := safeHome(t)
+	// ~/.ssh links into a dotfiles directory; ~/creds links to ~/.kube.
+	mustMkdir := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(p, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustSymlink := func(target, link string) {
+		t.Helper()
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(home, "dotfiles", "ssh"))
+	mustMkdir(filepath.Join(home, "dotfiles", "vim"))
+	mustSymlink(filepath.Join(home, "dotfiles", "ssh"), filepath.Join(home, ".ssh"))
+	mustMkdir(filepath.Join(home, ".kube"))
+	mustSymlink(filepath.Join(home, ".kube"), filepath.Join(home, "creds"))
+	mustMkdir(filepath.Join(home, "projects"))
+	mustSymlink(filepath.Join(home, "projects"), filepath.Join(home, "work"))
+
+	tests := []struct {
+		name      string
+		mount     string
+		wantError string
+	}{
+		{name: "symlink to a credential directory", mount: "~/creds:/home/agent/creds:ro", wantError: "because ~/.kube holds credentials"},
+		{name: "directory a credential symlink points into", mount: "~/dotfiles:/home/agent/dotfiles:ro", wantError: "because it contains ~/.ssh, which holds credentials"},
+		{name: "inside the credential symlink target", mount: "~/dotfiles/ssh:/home/agent/ssh:ro", wantError: "because ~/.ssh holds credentials"},
+		{name: "sibling in the dotfiles directory", mount: "~/dotfiles/vim:/home/agent/vim:ro"},
+		{name: "unrelated symlink", mount: "~/work:/home/agent/work:rw"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := Workspace{Backend: BackendVM, Paths: []string{"/data/workspace"}, Mounts: []string{tt.mount}}
+			err := Validate(&Config{Workspaces: map[string]Workspace{"default": ws}})
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("expected validation to pass, got: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) || !strings.Contains(err.Error(), "resolves to") {
+				t.Fatalf("expected error containing %q, got: %v", tt.wantError, err)
 			}
 		})
 	}

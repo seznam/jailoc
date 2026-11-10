@@ -114,7 +114,7 @@ mounts = [":/home/agent/.config/ai-instructions"]
     Mounts share directories only. A mount whose host side is a file fails `jailoc up` with `shares directories only; use snapshots`. Use [`snapshots`](#snapshot-files-into-the-workspace) for single files.
 
 !!! note
-    Dangerous host paths are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`. Guest destinations under `/home/agent/...` are allowed; other system directories are rejected. On the guest side, `~` stands for `/home/agent`: `~/.config/ai-instructions` and `/home/agent/.config/ai-instructions` are the same destination.
+    Dangerous host paths are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.config/jailoc`, `~/.cache/jailoc-vm`, and directories that contain one of the home entries, such as `~`, `~/.config` or `~/.cache`. To give the agent one credential from such a directory, use a [file secret](secrets.md#pass-a-credential-file); the error message shows the entry to add. Guest destinations under `/home/agent/...` are allowed; other system directories are rejected. On the guest side, `~` stands for `/home/agent`: `~/.config/ai-instructions` and `/home/agent/.config/ai-instructions` are the same destination.
 
 ## Snapshot files into the workspace
 
@@ -125,11 +125,11 @@ For single files, or when the workspace should get a frozen copy instead of the 
 paths = ["~/src/myproject"]
 snapshots = [
   "~/.npmrc:/home/agent/.npmrc",
-  "~/.config/gh:/home/agent/.config/gh",
+  "~/.config/git/ignore:/home/agent/.config/git/ignore",
 ]
 ```
 
-Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original. A symlink given as the snapshot source is resolved; symlinks inside a snapshotted directory are copied as symlinks. A snapshot destination can't overlap a shared path, so it can't point into a workspace path or a `mounts` destination. To pick up host edits, or added and removed entries, run `jailoc reload`.
+Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original. A symlink given as the snapshot source is resolved; symlinks inside a snapshotted directory are copied as symlinks. A snapshot destination can't overlap a shared path, so it can't point into a workspace path or a `mounts` destination. To pick up host edits, or added and removed entries, run `jailoc reload`. Credential directories such as `~/.config/gh` can't be snapshotted; for the GitHub CLI, pass a token as an env secret instead (see [Pass a credential file](secrets.md#pass-a-credential-file)).
 
 ## Publish ports
 
