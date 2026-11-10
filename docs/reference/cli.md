@@ -7,7 +7,7 @@ jailoc [path] [flags]
 jailoc [command] [flags]
 ```
 
-`jt` is available as a shorter alias for `jailoc` when installed via Homebrew or unpacked from the release archive.
+`jl` is available as a shorter alias for `jailoc` when installed via Homebrew or unpacked from the release archive.
 
 ## Global Flags
 

@@ -13,8 +13,8 @@ before:
     # corresponding source of libkrunfw in build/vm-runtime.
     - scripts/third-party-notices.sh build/vm-runtime/vm-runtime-notices.txt build/THIRD_PARTY_NOTICES
     - test -s build/vm-runtime/vm-runtime-source.tar
-    # Symlink jt -> jailoc for release archives and Homebrew Cask.
-    - sh -c 'mkdir -p build && ln -sf jailoc build/jt'
+    # Symlink jl -> jailoc for release archives and Homebrew Cask.
+    - sh -c 'mkdir -p build && ln -sf jailoc build/jl'
 
 builds:
   - id: jailoc
@@ -47,7 +47,7 @@ archives:
       - README.md
       - src: build/THIRD_PARTY_NOTICES
         strip_parent: true
-      - src: build/jt
+      - src: build/jl
         strip_parent: true
 
 checksum:
@@ -106,7 +106,7 @@ homebrew_casks:
     ids: [jailoc]
     binaries:
       - jailoc
-      - jt
+      - jl
     homepage: https://seznam.github.io/jailoc/
     description: Run coding agents in sandboxed libkrun micro-VMs
     # Tags such as v1.20.0-rc.1 do not update the tap.
