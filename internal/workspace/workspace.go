@@ -64,7 +64,9 @@ type Resolved struct {
 	Ports []config.PortForward
 	// HostPorts are host 127.0.0.1 ports or unix sockets relayed to the
 	// guest on the gateway and guest loopback (backend "vm").
-	HostPorts       []config.HostPortTarget
+	HostPorts []config.HostPortTarget
+	// IPv6 gives the guest IPv6 connectivity (network.ipv6).
+	IPv6            bool
 	FilteredDNS     bool
 	DNSUpstream     string
 	DNSBlockedZones []string
@@ -185,16 +187,17 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, false),
 		IsolatedBuild:   boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
 		ProtectGit:      boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),
-		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.FilteredDNS, ws.FilteredDNS, false),
-		DNSUpstream:     ws.DNSUpstream,
-		DNSBlockedZones: ws.DNSBlockedZones,
+		IPv6:            boolPtrWithDefault(cfg.Defaults.Network.Get().IPv6, ws.Network.Get().IPv6, false),
+		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.Network.Get().FilteredDNS, ws.Network.Get().FilteredDNS, false),
+		DNSUpstream:     ws.Network.Get().DNSUpstream,
+		DNSBlockedZones: ws.Network.Get().DNSBlockedZones,
 		CABundle:        caBundleWithDefault(cfg.Defaults.CABundle, ws.CABundle),
 	}
 	if r.DNSUpstream == "" {
-		r.DNSUpstream = cfg.Defaults.DNSUpstream
+		r.DNSUpstream = cfg.Defaults.Network.Get().DNSUpstream
 	}
 	if r.DNSBlockedZones == nil {
-		r.DNSBlockedZones = cfg.Defaults.DNSBlockedZones
+		r.DNSBlockedZones = cfg.Defaults.Network.Get().DNSBlockedZones
 	}
 	if r.ProtectGit {
 		r.EnableDocker = false

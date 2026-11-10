@@ -132,3 +132,117 @@ func TestRunMigrateWritesBackup(t *testing.T) {
 		t.Fatalf("second run = %v\n%s", err, out)
 	}
 }
+
+func TestRunMigrateMovesNetwork(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := `[defaults]
+backend = "vm"
+filtered_dns = true
+dns_upstream = "10.20.30.53"
+dns_blocked_zones = ["corp.example.com"]
+
+[workspaces.web]
+paths = ["/src/web"]
+filtered_dns = false
+dns_upstream = "10.20.30.54"
+dns_blocked_zones = []
+
+[workspaces.web.network]
+dns_upstream = "10.20.30.55"
+
+[workspaces.api]
+paths = ["/src/api"]
+`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.ReadRaw(path); err != nil {
+		t.Fatal(err)
+	}
+	p, out := scripted("y")
+	if err := runMigrate(context.Background(), path, p); err != nil {
+		t.Fatalf("runMigrate: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"[defaults]: move filtered_dns to [defaults.network]",
+		"[workspaces.web]: move filtered_dns to [workspaces.web.network]",
+		"[workspaces.web]: remove dns_upstream (set in [workspaces.web.network])",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output misses %q:\n%s", want, out)
+		}
+	}
+	cfg, err := config.ReadRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, web := cfg.Defaults, cfg.Workspaces["web"]
+	if len(config.LegacyNetwork(d.LegacyFilteredDNS, d.LegacyDNSUpstream, d.LegacyDNSBlockedZones)) > 0 ||
+		len(config.LegacyNetwork(web.LegacyFilteredDNS, web.LegacyDNSUpstream, web.LegacyDNSBlockedZones)) > 0 {
+		t.Fatalf("legacy settings left: defaults %+v, web %+v", d, web)
+	}
+	if d.Network.FilteredDNS == nil || !*d.Network.FilteredDNS || d.Network.DNSUpstream != "10.20.30.53" ||
+		!slices.Equal(d.Network.DNSBlockedZones, []string{"corp.example.com"}) {
+		t.Fatalf("defaults network = %+v", d.Network)
+	}
+	if web.Network.FilteredDNS == nil || *web.Network.FilteredDNS || web.Network.DNSUpstream != "10.20.30.55" {
+		t.Fatalf("web network = %+v", web.Network)
+	}
+	if web.Network.DNSBlockedZones == nil || len(web.Network.DNSBlockedZones) != 0 {
+		t.Fatalf("web dns_blocked_zones = %#v, want the explicitly empty list kept", web.Network.DNSBlockedZones)
+	}
+	if err := config.ValidateCopy(cfg); err != nil {
+		t.Fatalf("migrated config invalid: %v", err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // G304: test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "[workspaces.api.network]") {
+		t.Fatalf("empty network table written:\n%s", data)
+	}
+}
+
+func TestPlanMigrationNetworkOnly(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name       string
+		answer     string
+		workspaces []string
+	}{
+		{"current configuration", "", nil},
+		{"jailoc v1 configuration", "y", []string{"web"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := t.TempDir()
+			cfg := &config.Config{
+				Defaults: config.Defaults{LegacyFilteredDNS: new(true), Mounts: []string{data + "/defaults:/defaults"}},
+				Workspaces: map[string]config.Workspace{
+					"web": {Paths: []string{"/src/web"}, Mounts: []string{data + ":/data"}},
+				},
+			}
+			p, out := scripted(tt.answer, "", "")
+			m, err := planMigration(cfg, p, os.Stat)
+			if err != nil {
+				t.Fatalf("planMigration: %v\n%s", err, out)
+			}
+			if !slices.Equal(m.workspaces, tt.workspaces) {
+				t.Fatalf("workspaces = %v, want %v\n%s", m.workspaces, tt.workspaces, out)
+			}
+			if !strings.Contains(out.String(), "jailoc v1 (Docker) configuration") {
+				t.Fatalf("no v1 question:\n%s", out)
+			}
+			web := cfg.Workspaces["web"]
+			if tt.workspaces == nil && (!slices.Equal(web.Mounts, []string{data + ":/data"}) ||
+				!slices.Equal(cfg.Defaults.Mounts, []string{data + "/defaults:/defaults"}) || cfg.Defaults.Snapshots != nil ||
+				strings.Contains(out.String(), data)) {
+				t.Fatalf("mounts of a current configuration touched: %v %+v\n%s", web.Mounts, cfg.Defaults, out)
+			}
+			if cfg.Defaults.Network.FilteredDNS == nil || !*cfg.Defaults.Network.FilteredDNS || cfg.Defaults.LegacyFilteredDNS != nil {
+				t.Fatalf("filtered_dns not moved: %+v", cfg.Defaults)
+			}
+		})
+	}
+}

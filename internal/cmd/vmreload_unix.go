@@ -27,7 +27,7 @@ const reloadTimeout = 15 * time.Second
 
 // reloadVM applies the current configuration to a running workspace VM
 // without restarting it: network policy (allowed_hosts, allowed_networks,
-// filtered_dns), published ports, host ports, the SSH agent, the CA bundle, snapshots,
+// the [network] DNS settings), published ports, host ports, the SSH agent, the CA bundle, snapshots,
 // environment and secrets. Settings that need a new VM are reported, not
 // applied.
 func reloadVM(ctx context.Context, ws *workspace.Resolved, purgeCache bool) error {
@@ -135,7 +135,24 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 		spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
 	}
 	spec.Guest.NoPrivilegeEscalation = ws.ProtectGit
+	if ws.IPv6 {
+		if spec.Policy, err = reloadPolicy(ctx, ws, running); err != nil {
+			return vm.Spec{}, nil, err
+		}
+	}
 	return spec, snapshots, nil
+}
+
+// reloadPolicy builds the broker policy for the running VM. IPv6 stays off
+// when the guest booted without it, which only a restart changes, and when
+// the running broker predates the ipv6 policy field and would reject it.
+func reloadPolicy(ctx context.Context, ws *workspace.Resolved, running vm.Spec) ([]byte, error) {
+	if ws.IPv6 && (running.GuestProtocol < 2 || running.Guest == nil || !running.Guest.IPv6) {
+		v4 := *ws
+		v4.IPv6 = false
+		ws = &v4
+	}
+	return vmPolicy(ctx, ws)
 }
 
 // snapshotsReloadable reports whether the running VM can rebind snapshots:
@@ -171,6 +188,9 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	}
 	if running.Guest.NoPrivilegeEscalation != want.Guest.NoPrivilegeEscalation {
 		out = append(out, "protect_git")
+	}
+	if guestIPv6(running) != want.Guest.IPv6 {
+		out = append(out, "network.ipv6")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
 	agentChanged := cmp.Or(running.Agent, agent.Default) != want.Agent

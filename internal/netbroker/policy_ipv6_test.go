@@ -7,7 +7,7 @@ import (
 
 func TestDecideIPv6(t *testing.T) {
 	t.Parallel()
-	policy, err := ParsePolicy([]byte(`{"exceptions":[
+	policy, err := ParsePolicy([]byte(`{"ipv6":true,"exceptions":[
 		{"cidr":"fd42::/48","proto":"tcp","ports":["443"]},
 		{"cidr":"10.42.0.0/16","proto":"any"}]}`), "ipv6")
 	if err != nil {
@@ -74,7 +74,7 @@ func TestDecideIPv6(t *testing.T) {
 
 func TestIPv6AdditionalBounds(t *testing.T) {
 	t.Parallel()
-	policy, err := ParsePolicy([]byte(`{"exceptions":[{"cidr":"::/0","proto":"any"}]}`), "broad")
+	policy, err := ParsePolicy([]byte(`{"ipv6":true,"exceptions":[{"cidr":"::/0","proto":"any"}]}`), "broad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestIPv6AdditionalBounds(t *testing.T) {
 
 func TestIPv6ExceptionsCannotOpenProtectedAddresses(t *testing.T) {
 	t.Parallel()
-	policy, err := ParsePolicy([]byte(`{"exceptions":[{"cidr":"::/0","proto":"any"}]}`), "broad")
+	policy, err := ParsePolicy([]byte(`{"ipv6":true,"exceptions":[{"cidr":"::/0","proto":"any"}]}`), "broad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestIPv6ExceptionsCannotOpenProtectedAddresses(t *testing.T) {
 
 func TestIPv6FilteredDNS(t *testing.T) {
 	t.Parallel()
-	policy, err := ParsePolicy([]byte(`{"dns_upstreams":["1.1.1.1"],"dns_blocked_zones":["internal"],"exceptions":[{"cidr":"::/0","proto":"any"}]}`), "filtered")
+	policy, err := ParsePolicy([]byte(`{"ipv6":true,"dns_upstreams":["1.1.1.1"],"dns_blocked_zones":["internal"],"exceptions":[{"cidr":"::/0","proto":"any"}]}`), "filtered")
 	if err != nil {
 		t.Fatal(err)
 	}

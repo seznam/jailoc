@@ -125,7 +125,7 @@ jailoc reload [workspace] [flags]
 
 Updated live:
 
-- Network policy: `allowed_hosts`, `allowed_networks`, `filtered_dns`
+- Network policy: `allowed_hosts`, `allowed_networks`, `network.filtered_dns`, `network.dns_upstream`, `network.dns_blocked_zones`, and turning `network.ipv6` off (turning it on needs `jailoc restart`)
 - Published `ports`
 - SSH agent: `ssh_auth_sock`, with the socket read again from `$SSH_AUTH_SOCK`
 - GPG agent: `gpg_agent`, with the socket looked up again with `gpgconf` and the public keys imported again
@@ -217,7 +217,7 @@ jailoc logs [workspace] [flags]
 
 ### `jailoc traffic`
 
-Print the network activity of a workspace VM from the network broker's log: allowed and denied connections with the DNS name they were looked up by, the TLS server name and ALPN or the HTTP method, host and path (without query string) of allowed TCP connections, DNS answers, names blocked by `filtered_dns`, failed dials, connections to published ports and connections relayed to `host_ports` with their host target. The log persists after the VM stops.
+Print the network activity of a workspace VM from the network broker's log: allowed and denied connections with the DNS name they were looked up by, the TLS server name and ALPN or the HTTP method, host and path (without query string) of allowed TCP connections, DNS answers, names blocked by `network.filtered_dns`, failed dials, connections to published ports and connections relayed to `host_ports` with their host target. The log persists after the VM stops.
 
 ```
 jailoc traffic [workspace] [flags]
@@ -316,7 +316,7 @@ Without `--workspace`, the workspace is resolved from the path being added (long
 
 ### `jailoc migrate`
 
-Rewrite a jailoc v1 `config.toml` for the VM backend.
+Rewrite an older `config.toml` (jailoc v1, or DNS settings outside the `network` table) for the current format.
 
 ```
 jailoc migrate [flags]
@@ -331,6 +331,7 @@ A workspace counts as a jailoc v1 Docker workspace unless its effective `backend
 
 - Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
 - Lists the jailoc v1 settings `mode`, `password_mode` and `expose_port` per scope and removes them after confirmation. Declining stops the migration.
+- Moves `filtered_dns`, `dns_upstream` and `dns_blocked_zones` of `[defaults]` and of every workspace into its `network` table. A value already set in the table wins and the old one is removed.
 - Asks for every `mounts` entry of `[defaults]` and of each Docker workspace whether it stays a directory share (default for directories), becomes a read-only [snapshot](configuration.md#snapshots) (default for files), or is dropped. Files cannot stay mounts.
 
 For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories, unless a mount covers those paths or VM data already exists there. The volumes are left in place. Without a reachable Docker daemon, these steps are skipped after confirmation.

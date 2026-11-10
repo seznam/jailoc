@@ -105,8 +105,8 @@ func TestStatusRestartChanges(t *testing.T) {
 	if got := statusRestartChanges(ws, vm.Spec{GuestProtocol: guest.Protocol, Guest: &guest.Config{NoPrivilegeEscalation: true}, CPUs: 2, MemoryMiB: 4096}); len(got) != 0 {
 		t.Errorf("spec without agent: got %v, want no changes (opencode is the default)", got)
 	}
-	changed := vm.Spec{Agent: "claude", CPUs: 4, MemoryMiB: 2048, Docker: true, Profile: "work", GuestProtocol: guest.Protocol, Guest: &guest.Config{}}
-	want := []string{"profile", "cpu", "memory", "enable_docker", "protect_git", "agent"}
+	changed := vm.Spec{Agent: "claude", CPUs: 4, MemoryMiB: 2048, Docker: true, Profile: "work", GuestProtocol: guest.Protocol, Guest: &guest.Config{IPv6: true}}
+	want := []string{"profile", "cpu", "memory", "enable_docker", "protect_git", "network.ipv6", "agent"}
 	if got := statusRestartChanges(ws, changed); !slices.Equal(got, want) {
 		t.Errorf("changed spec: got %v, want %v", got, want)
 	}
@@ -128,7 +128,8 @@ func TestStatusRestartChanges(t *testing.T) {
 		t.Errorf("guest of another version with the same protocol: got %v, want no changes", got)
 	}
 	matching.GuestProtocol = 0
-	if got := statusRestartChanges(ws, matching); !slices.Equal(got, []string{"the upgraded jailoc guest"}) {
+	// Guests before protocol 2 enable IPv6 whatever the spec says.
+	if got := statusRestartChanges(ws, matching); !slices.Equal(got, []string{"network.ipv6", "the upgraded jailoc guest"}) {
 		t.Errorf("guest with another protocol: got %v", got)
 	}
 }

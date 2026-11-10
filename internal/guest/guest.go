@@ -17,7 +17,10 @@ package guest
 // lacks or misreads, for example a new session open flag or a new Reload
 // field. Guest-only changes (boot fixes, refactors) keep it; running VMs
 // pick them up at their next restart.
-const Protocol = 1
+//
+// Protocol 2: the guest configures IPv6 only when Config.IPv6 is set, and
+// the broker policy denies IPv6 unless its ipv6 field is set.
+const Protocol = 2
 
 // Paths inside the guest root file system.
 const (
@@ -147,6 +150,9 @@ type Config struct {
 	// NoPrivilegeEscalation removes privilege escalation, including sudo,
 	// from sessions, so the agent cannot undo Pins and ReadOnly.
 	NoPrivilegeEscalation bool `json:"no_privilege_escalation,omitempty"`
+	// IPv6 configures the guest IPv6 address and default route; without it
+	// IPv6 is disabled on the guest interface.
+	IPv6 bool `json:"ipv6,omitempty"`
 	// Docker, when set, makes the guest run dockerd with its data on a
 	// block device.
 	Docker *Docker `json:"docker,omitempty"`

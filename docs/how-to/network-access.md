@@ -46,7 +46,14 @@ Invalid CIDRs are rejected at config load time.
 
 ## Reach private IPv6 services
 
-The guest has IPv6 (`fd00:127::2/64`). Global IPv6 addresses are reachable like public IPv4 ones. Unique local addresses (`fc00::/7`) count as private:
+IPv6 is off by default: the guest has IPv4 only and the broker denies every IPv6 flow. Turn it on per workspace or in `[defaults.network]`:
+
+```toml
+[workspaces.api.network]
+ipv6 = true
+```
+
+Run `jailoc restart api` to apply it. The guest then has IPv6 (`fd00:127::2/64`). Global IPv6 addresses are reachable like public IPv4 ones. Unique local addresses (`fc00::/7`) count as private:
 
 - a ULA service is reachable only when its range is in `allowed_networks`;
 - a name in `allowed_hosts` that resolves to a ULA address opens that single address.
@@ -104,12 +111,14 @@ Send guest DNS through a filtered resolver and reject chosen zones:
 ```toml
 [workspaces.api]
 paths = ["/home/you/projects/api"]
+
+[workspaces.api.network]
 filtered_dns = true
 dns_upstream = "10.20.30.53"
 dns_blocked_zones = ["corp.example.com", "internal"]
 ```
 
-Run `jailoc reload api` to apply it to a running workspace. Names in the blocked zones and their subdomains get NXDOMAIN, for both A and AAAA queries. Other names resolve through `dns_upstream`. DNS (port 53) to any other resolver is blocked. Set the fields under `[defaults]` to cover several workspaces; a workspace can override them, including `filtered_dns = false`.
+Run `jailoc reload api` to apply it to a running workspace. Names in the blocked zones and their subdomains get NXDOMAIN, for both A and AAAA queries. Other names resolve through `dns_upstream`. DNS (port 53) to any other resolver is blocked. Set the fields under `[defaults.network]` to cover several workspaces; a workspace can override them, including `filtered_dns = false`.
 
 Don't put a blocked name or one of its subdomains in `allowed_hosts`. jailoc rejects that combination, including when either side comes from `[defaults]`.
 

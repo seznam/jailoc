@@ -7,7 +7,7 @@ import (
 
 func TestDecide(t *testing.T) {
 	t.Parallel()
-	p, err := ParsePolicy([]byte(`{"exceptions":[
+	p, err := ParsePolicy([]byte(`{"ipv6":true,"exceptions":[
 		{"cidr":"10.99.0.20/32","proto":"tcp","ports":["47801"]},
 		{"cidr":"192.168.50.0/24","proto":"any"},
 		{"cidr":"127.0.0.1/32","proto":"any"},
@@ -15,9 +15,13 @@ func TestDecide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePolicy: %v", err)
 	}
-	filtered, err := ParsePolicy([]byte(`{"dns_upstreams":["10.99.1.53"],"dns_blocked_zones":["internal"]}`), "filtered")
+	filtered, err := ParsePolicy([]byte(`{"ipv6":true,"dns_upstreams":["10.99.1.53"],"dns_blocked_zones":["internal"]}`), "filtered")
 	if err != nil {
 		t.Fatalf("ParsePolicy filtered: %v", err)
+	}
+	v4only, err := ParsePolicy([]byte(`{"exceptions":[{"cidr":"::/0","proto":"any"}]}`), "v4only")
+	if err != nil {
+		t.Fatalf("ParsePolicy v4only: %v", err)
 	}
 	env := Env{
 		Gateway:   netip.MustParseAddr("192.168.127.1"),
@@ -45,6 +49,10 @@ func TestDecide(t *testing.T) {
 		{"gateway", p, ProtoTCP, "192.168.127.1:22", false, "gateway"},
 		{"guest network", p, ProtoTCP, "192.168.127.7:22", false, "guest-network"},
 		{"ipv6", p, ProtoTCP, "[2606:4700:4700::1111]:443", true, "public"},
+		{"ipv6 disabled", v4only, ProtoTCP, "[2606:4700:4700::1111]:443", false, "ipv6-disabled"},
+		{"ipv6 disabled ignores exceptions", v4only, ProtoUDP, "[2001:db8:1::5]:53", false, "ipv6-disabled"},
+		{"ipv6 disabled mapped v4", v4only, ProtoTCP, "[::ffff:1.1.1.1]:443", false, "ipv6-disabled"},
+		{"ipv4 with ipv6 disabled", v4only, ProtoTCP, "1.1.1.1:443", true, "public"},
 		{"mapped v4 evaluated as v4", p, ProtoTCP, "[::ffff:10.1.2.3]:80", false, "denied-range"},
 		{"cgnat", p, ProtoTCP, "100.100.1.1:80", false, "denied-range"},
 		{"broadcast", p, ProtoUDP, "255.255.255.255:67", false, "hard-deny"},

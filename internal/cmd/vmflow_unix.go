@@ -442,6 +442,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		WorkDir:   workDir,
 		Snapshots: snapshots,
 		Env:       append([]string{"JAILOC=1", "JAILOC_WORKSPACE=" + ws.Name}, ws.Agent.Env...),
+		IPv6:      ws.IPv6,
 	}
 	switch ws.Agent.TUIPlugin {
 	case agent.OpenCode1TUI:
@@ -849,6 +850,9 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	}
 	if running.Guest != nil && running.Guest.NoPrivilegeEscalation != ws.ProtectGit {
 		out = append(out, "protect_git")
+	}
+	if running.Guest != nil && guestIPv6(running) != ws.IPv6 {
+		out = append(out, "network.ipv6")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
 	if cmp.Or(running.Agent, agent.Default) != ws.Agent.Name {

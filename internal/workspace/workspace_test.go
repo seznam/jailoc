@@ -44,11 +44,11 @@ func TestResolveValidWorkspace(t *testing.T) {
 func TestResolveFilteredDNS(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
-		Defaults: config.Defaults{FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}},
+		Defaults: config.Defaults{Network: &config.Network{FilteredDNS: new(true), DNSUpstream: "10.20.30.53", DNSBlockedZones: []string{"internal"}}},
 		Workspaces: map[string]config.Workspace{
 			"inherited": {Paths: []string{"/data/inherited"}},
-			"disabled":  {Paths: []string{"/data/disabled"}, FilteredDNS: new(false)},
-			"custom":    {Paths: []string{"/data/custom"}, DNSUpstream: "192.0.2.53", DNSBlockedZones: []string{"corp.example.com"}},
+			"disabled":  {Paths: []string{"/data/disabled"}, Network: &config.Network{FilteredDNS: new(false)}},
+			"custom":    {Paths: []string{"/data/custom"}, Network: &config.Network{DNSUpstream: "192.0.2.53", DNSBlockedZones: []string{"corp.example.com"}}},
 		},
 	}
 	for name, want := range map[string]struct {
@@ -1759,5 +1759,35 @@ func TestResolveAgentMountsAndProfile(t *testing.T) {
 				t.Fatalf("mounts = %#v, want %#v", resolved.Mounts, want)
 			}
 		})
+	}
+}
+
+func TestResolveIPv6(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Defaults: config.Defaults{Network: &config.Network{IPv6: new(true)}},
+		Workspaces: map[string]config.Workspace{
+			"inherited": {Paths: []string{"/data/inherited"}},
+			"disabled":  {Paths: []string{"/data/disabled"}, Network: &config.Network{IPv6: new(false)}},
+		},
+	}
+	for name, want := range map[string]bool{"inherited": true, "disabled": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := workspace.Resolve(cfg, name)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if resolved.IPv6 != want {
+				t.Fatalf("IPv6 = %v, want %v", resolved.IPv6, want)
+			}
+		})
+	}
+	resolved, err := workspace.Resolve(&config.Config{Workspaces: map[string]config.Workspace{"w": {Paths: []string{"/data/w"}}}}, "w")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.IPv6 {
+		t.Fatal("IPv6 enabled by default")
 	}
 }

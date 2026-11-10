@@ -138,6 +138,25 @@ func TestVMPolicyFilteredDNS(t *testing.T) {
 	}
 }
 
+func TestVMPolicyIPv6(t *testing.T) {
+	t.Parallel()
+	for _, enabled := range []bool{false, true} {
+		data, err := vmPolicy(context.Background(), &workspace.Resolved{Name: "w", IPv6: enabled})
+		if err != nil {
+			t.Fatalf("vmPolicy: %v", err)
+		}
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("unmarshal %s: %v", data, err)
+		}
+		v, ok := got["ipv6"]
+		// Leaving the key out when IPv6 is off keeps the policy readable by brokers that predate it.
+		if enabled != ok || (ok && string(v) != "true") {
+			t.Fatalf("ipv6=%v: policy = %s", enabled, data)
+		}
+	}
+}
+
 func TestVMSharesLimit(t *testing.T) {
 	t.Parallel()
 	oc, _ := agent.Lookup("opencode1")

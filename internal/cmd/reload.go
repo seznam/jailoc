@@ -12,7 +12,7 @@ var reloadCmd = &cobra.Command{
 	Use:   "reload [workspace]",
 	Short: "Apply configuration changes to a running VM workspace",
 	Long: `Apply configuration changes to a running workspace without restarting it
-allowed_hosts, allowed_networks, filtered_dns, ports,
+allowed_hosts, allowed_networks, the [network] DNS settings, ports,
 ssh_auth_sock, gpg_agent, ca_bundle, env and secrets. Running sessions keep running.
 Changes that need a new VM are listed; apply them with jailoc restart.
 jailoc up on a running VM workspace does the same.
