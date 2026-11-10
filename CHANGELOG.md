@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.3.0](https://github.com/seznam/jailoc/compare/v2.2.0...v2.3.0) (2026-11-10)
+
+
+### Features
+
+* **config:** reject credential directories as mounts and suggest file secrets ([a84bbed](https://github.com/seznam/jailoc/commit/a84bbed5927af7f07bce3b2655cf188ff90e9e74))
+* **network:** make guest IPv6 opt-in via a [network] table ([6dbde1e](https://github.com/seznam/jailoc/commit/6dbde1ea256399224ed96a6f6fc4529b68a717aa))
+
+
+### Bug Fixes
+
+* **vm:** require restart only on guest protocol change ([d75b6fc](https://github.com/seznam/jailoc/commit/d75b6fc6bf281375057eb5d0bda44c2463aa0b85))
+* **vm:** run workspace VMs in the host time zone ([f7dfd52](https://github.com/seznam/jailoc/commit/f7dfd52f8d10987f40cbbaefea764e57949eb388))
+
+
+### Documentation
+
+* **explanation:** compare agent-sandbox and note host-executed workspace files ([c6fe98f](https://github.com/seznam/jailoc/commit/c6fe98fdf2c7d99e7985710ff8101dba2fd87703))
+
 ## [2.2.0](https://github.com/seznam/jailoc/compare/v2.1.0...v2.2.0) (2026-11-07)
 
 
