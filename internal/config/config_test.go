@@ -2554,19 +2554,55 @@ func TestValidateSnapshotForbiddenCredentialHint(t *testing.T) {
 	}
 }
 
-func TestValidateMountsForbiddenWithoutHint(t *testing.T) {
+func TestValidateMountsForbiddenNonCredentialReason(t *testing.T) {
 	safeHome(t)
 
-	cfg := &Config{Workspaces: map[string]Workspace{"default": {
-		Paths:  []string{"/data/workspace"},
-		Mounts: []string{"~/.config/jailoc:/home/agent/jailoc:ro"},
-	}}}
-	err := Validate(cfg)
-	if err == nil {
-		t.Fatal("expected validation to fail for ~/.config/jailoc")
+	tests := []struct {
+		name string
+		spec string
+		want []string
+	}{
+		{
+			name: "jailoc config subdirectory explains protected parent and alternatives",
+			spec: "~/.config/jailoc/claude:/home/agent/.claude:rw",
+			want: []string{"because ~/.config/jailoc holds the jailoc configuration", "outside ~/.config/jailoc", "set profile on the agent"},
+		},
+		{
+			name: "jailoc VM cache explains protected parent",
+			spec: "~/.cache/jailoc-vm/workspaces:/home/agent/ws:ro",
+			want: []string{"because ~/.cache/jailoc-vm holds jailoc VM state and keys", "outside ~/.cache/jailoc-vm"},
+		},
+		{
+			name: "system directory explains protected system path",
+			spec: "/etc/ssl:/home/agent/ssl:ro",
+			want: []string{"because /etc is a host system directory"},
+		},
+		{
+			name: "root filesystem explains host root",
+			spec: "/:/home/agent/host:ro",
+			want: []string{"because / is the host root filesystem"},
+		},
 	}
-	if strings.Contains(err.Error(), "holds credentials") {
-		t.Fatalf("expected no credential hint, got: %v", err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Workspaces: map[string]Workspace{"default": {
+				Paths:  []string{"/data/workspace"},
+				Mounts: []string{tt.spec},
+			}}}
+			err := Validate(cfg)
+			if err == nil {
+				t.Fatalf("expected validation to fail for mount %q", tt.spec)
+			}
+			if strings.Contains(err.Error(), "holds credentials") {
+				t.Fatalf("expected no credential reason, got: %v", err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+		})
 	}
 }
 
