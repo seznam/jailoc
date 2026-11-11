@@ -414,7 +414,7 @@ func pruneImageCache(current string) {
 // pruneRuntimeCache removes unpacked VM runtimes and extracted guest binaries
 // unused for seven days that no workspace or builder spec references.
 func pruneRuntimeCache(rt vmRuntimeFiles) {
-	keep := []string{rt.runner, rt.guest}
+	keep := append([]string{rt.runner, rt.guest}, filepath.SplitList(rt.libDir)...)
 	specs, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", vm.SpecFile("")))
 	more, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", "builder", vm.SpecFile("")))
 	specs = append(append(specs, more...), filepath.Join(vmRootDir(), "builder", vm.SpecFile("")))
@@ -427,7 +427,7 @@ func pruneRuntimeCache(rt vmRuntimeFiles) {
 			}
 			continue
 		}
-		keep = append(keep, spec.RunnerPath, spec.GuestBinary)
+		keep = append(append(keep, spec.RunnerPath, spec.GuestBinary), filepath.SplitList(spec.LibDir)...)
 	}
 	for _, sub := range []string{"runtime", "guest"} {
 		if _, err := vm.PruneCacheDirs(filepath.Join(vmRootDir(), sub), keep); err != nil {
