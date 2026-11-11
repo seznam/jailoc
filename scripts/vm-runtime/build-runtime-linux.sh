@@ -67,13 +67,13 @@ rev=$(git -C "$src" rev-parse --short HEAD)
 repo=$(git -C "$src" remote get-url origin)
 
 mkdir -p "$work/$runtime_name" "$work/$firmware_name"
-install -m 0755 "$src/bin/go-microvm-runner" "$work/$runtime_name/go-microvm-runner"
+install -m 0755 "$src/bin/go-microvm-runner" "$work/$runtime_name/jailoc-vm-runner"
 install -m 0444 "$src/bin/libkrun.so.1" "$work/$runtime_name/libkrun.so.1"
 install -m 0444 "$src/LICENSE" "$work/$runtime_name/LICENSE"
 patches=$(cd "$(dirname "$0")/libkrun-patches" && ls -- *.patch | cut -c1-4 | paste -sd, -)
 echo "$rev libkrun-$libkrun+jailoc-patches-$patches" > "$work/$runtime_name/VERSION"
 cat > "$work/$runtime_name/NOTICE" <<EOF
-go-microvm-runner is built from go-microvm $rev ($repo) and
+jailoc-vm-runner is built from go-microvm $rev ($repo) and
 libkrun.so.1 from libkrun $libkrun (https://github.com/libkrun/libkrun).
 Both are licensed under the Apache License 2.0, see LICENSE.
 
@@ -105,7 +105,7 @@ EOF
 # The runner finds libkrun through LD_LIBRARY_PATH, which jailoc sets to the
 # unpacked runtime and firmware directories; it must not need anything else
 # outside the system libraries.
-missing=$(LD_LIBRARY_PATH="$work/$runtime_name:$work/$firmware_name" ldd "$work/$runtime_name/go-microvm-runner" | grep 'not found' || true)
+missing=$(LD_LIBRARY_PATH="$work/$runtime_name:$work/$firmware_name" ldd "$work/$runtime_name/jailoc-vm-runner" | grep 'not found' || true)
 if [ -n "$missing" ]; then
   echo "runner has unresolved libraries:" >&2
   echo "$missing" >&2

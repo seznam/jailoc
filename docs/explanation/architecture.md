@@ -2,11 +2,11 @@
 
 Each workspace runs in its own libkrun micro-VM. This page describes the processes on the host, what happens inside the guest, how files and the network reach the VM, and how images are built.
 
-![jailoc architecture: host processes (jailoc CLI, vm-supervise, jailoc-netbroker, go-microvm-runner with libkrun) with the image cache, and the workspace VM (libkrunfw kernel, jailoc-guest as PID 1, the coding agent and its processes), separated by the VM boundary that only virtio devices cross](img/architecture.svg)
+![jailoc architecture: host processes (jailoc CLI, vm-supervise, jailoc-netbroker, jailoc-vm-runner with libkrun) with the image cache, and the workspace VM (libkrunfw kernel, jailoc-guest as PID 1, the coding agent and its processes), separated by the VM boundary that only virtio devices cross](img/architecture.svg)
 
 ## Host processes
 
-Every VM is owned by a detached supervisor process (`jailoc vm-supervise`). It starts the workspace's network broker, boots the VM through the go-microvm runner, waits until the guest is ready, and from then on keeps the two together: when either the VM or the broker exits, it stops the other. A workspace never runs without its broker.
+Every VM is owned by a detached supervisor process (`jailoc vm-supervise`). It starts the workspace's network broker, boots the VM through `jailoc-vm-runner`, waits until the guest is ready, and from then on keeps the two together: when either the VM or the broker exits, it stops the other. A workspace never runs without its broker.
 
 The VM runtime (runner, libkrun and the libkrunfw guest kernel) is embedded in release builds of jailoc and unpacked into the cache on first use; builds without it need `runner` and `lib_dir` in the `[vm]` section. jailoc itself is built without cgo. `jailoc-guest` is pure Go and is embedded in jailoc, so a newly started VM always runs the guest of the jailoc version that started it. A running VM keeps its guest across jailoc upgrades: jailoc attaches to it as long as the guest speaks the same protocol, and asks for `jailoc restart` only after an upgrade that changed the protocol. Guest fixes of an upgrade take effect at the workspace's next restart.
 

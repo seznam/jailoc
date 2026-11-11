@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="664" viewBox="0 0 1200 664" font-family="Inter,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
 <title id="t">jailoc architecture</title>
-<desc id="d">Host processes (jailoc CLI, vm-supervise, netbroker, go-microvm-runner with libkrun) with the image cache, and the workspace VM (guest kernel, jailoc-guest as PID 1, the coding agent, its processes and file systems), separated by the VM boundary that only virtio devices cross.</desc>
+<desc id="d">Host processes (jailoc CLI, vm-supervise, netbroker, jailoc-vm-runner with libkrun) with the image cache, and the workspace VM (guest kernel, jailoc-guest as PID 1, the coding agent, its processes and file systems), separated by the VM boundary that only virtio devices cross.</desc>
 <defs><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9AA6B8"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#425CC7"/></marker></defs>
 <rect width="1200" height="664" fill="#FFFFFF" stroke="#DCE0E5" rx="8"/>
 <text x="16" y="27" fill="#24292E" font-size="16" font-weight="700">jailoc — one workspace</text>
@@ -45,7 +45,7 @@
 <text x="44" y="268" fill="#464C54" font-size="12.5">unpacked once, shared by workspaces</text>
 <rect x="540" y="208" width="310" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
 <rect x="540" y="218" width="3" height="70" rx="1.5" fill="#425CC7"/>
-<text x="554" y="230" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">go-microvm-runner</text>
+<text x="554" y="230" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-vm-runner</text>
 <text x="554" y="248" fill="#6E7180" font-size="12">libkrun VMM · Landlock on Linux</text>
 <rect x="554" y="266" width="80.60000000000001" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
 <text x="594.3" y="280" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">virtio-fs</text>

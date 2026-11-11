@@ -8,13 +8,13 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 `jailoc up` runs these steps in order:
 
-![jailoc up on the host: load the config, resolve the workspace, unpack the VM runtime, build and export the image, then start the supervisor, network broker and go-microvm-runner. The runner boots the guest kernel with jailoc-guest as init, which mounts the shares and starts SSH; jailoc then delivers secrets and environment over SSH and the coding agent runs in sessions.](img/startup.svg)
+![jailoc up on the host: load the config, resolve the workspace, unpack the VM runtime, build and export the image, then start the supervisor, network broker and jailoc-vm-runner. The runner boots the guest kernel with jailoc-guest as init, which mounts the shares and starts SSH; jailoc then delivers secrets and environment over SSH and the coding agent runs in sessions.](img/startup.svg)
 
 **1. Config loading.** jailoc reads `~/.config/jailoc/config.toml`, writing a default one on first run, and validates it.
 
 **2. Workspace resolution.** The workspace name becomes a resolved description: shared paths and mounts, snapshots, allowed hosts and networks, secrets, CPU and memory.
 
-**3. Runtime check.** On first use jailoc unpacks the VM runtime embedded in its binary (the go-microvm runner, libkrun and the libkrunfw guest kernel) into its cache. Supported hosts are Apple Silicon Macs (Hypervisor.framework) and Linux on amd64 or, experimentally, arm64 (KVM).
+**3. Runtime check.** On first use jailoc unpacks the VM runtime embedded in its binary (`jailoc-vm-runner`, libkrun and the libkrunfw guest kernel) into its cache. Supported hosts are Apple Silicon Macs (Hypervisor.framework) and Linux on amd64 or, experimentally, arm64 (KVM).
 
 **4. Image build and export.** The workspace image is built with Docker, either on the host daemon or inside a builder VM, then exported and unpacked into a local image cache. See [Image Resolution](../reference/image-resolution.md).
 

@@ -17,7 +17,7 @@ import (
 )
 
 // RunnerBinary is the file name of the VM runner inside a runtime bundle.
-const RunnerBinary = "go-microvm-runner"
+const RunnerBinary = "jailoc-vm-runner"
 
 const (
 	maxArtifactSize  = 256 << 20
