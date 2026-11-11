@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -42,6 +43,17 @@ func extract(cacheDir string, data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	dir := filepath.Join(cacheDir, hex.EncodeToString(sum[:])[:16])
 	path := filepath.Join(dir, FileName)
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		return "", fmt.Errorf("create guest binary cache: %w", err)
+	}
+	lock, err := os.Open(cacheDir) //nolint:gosec // G304: jailoc-owned cache directory
+	if err != nil {
+		return "", fmt.Errorf("open guest binary cache: %w", err)
+	}
+	defer func() { _ = lock.Close() }()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // G115: file descriptors fit in int
+		return "", fmt.Errorf("lock guest binary cache: %w", err)
+	}
 	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) { //nolint:gosec // G304: path inside jailoc's cache directory
 		now := time.Now()
 		_ = os.Chtimes(dir, now, now)

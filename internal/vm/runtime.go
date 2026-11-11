@@ -68,16 +68,21 @@ func unpackRuntime(cacheDir string, rt, fw []byte, progress io.Writer) (string, 
 	dir := filepath.Join(cacheDir, hex.EncodeToString(key[:])[:16])
 	runner := filepath.Join(dir, "runtime", RunnerBinary)
 	libDir := filepath.Join(dir, "runtime") + string(os.PathListSeparator) + filepath.Join(dir, "firmware")
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+		return "", "", fmt.Errorf("create runtime cache: %w", err)
+	}
+	unlock, err := lockDir(cacheDir)
+	if err != nil {
+		return "", "", err
+	}
+	defer unlock()
+
 	if b, err := os.ReadFile(filepath.Join(dir, runtimeCompleted)); err == nil && string(b) == stamp { //nolint:gosec // G304: path inside the jailoc cache directory
 		if _, err := os.Stat(runner); err == nil {
 			now := time.Now()
 			_ = os.Chtimes(dir, now, now)
 			return runner, libDir, nil
 		}
-	}
-
-	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
-		return "", "", fmt.Errorf("create runtime cache: %w", err)
 	}
 	tmp, err := os.MkdirTemp(cacheDir, ".unpack-")
 	if err != nil {

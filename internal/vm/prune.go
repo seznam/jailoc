@@ -112,10 +112,16 @@ func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 // and that have not been used for seven days. Hidden staging directories are
 // ignored.
 func PruneCacheDirs(cacheDir string, keepPaths []string) (int, error) {
-	entries, err := os.ReadDir(cacheDir)
+	unlock, err := lockDir(cacheDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
 	}
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+
+	entries, err := os.ReadDir(cacheDir)
 	if err != nil {
 		return 0, fmt.Errorf("read cache directory %s: %w", cacheDir, err)
 	}
@@ -196,6 +202,20 @@ func lockCache(cacheDir string) (func(), error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // G115: file descriptors fit in int
 		_ = f.Close()
 		return nil, fmt.Errorf("lock image cache: %w", err)
+	}
+	return func() { _ = f.Close() }, nil
+}
+
+// lockDir acquires an exclusive flock on dir itself so callers serialize
+// without creating lock files inside dir.
+func lockDir(dir string) (func(), error) {
+	f, err := os.Open(dir) //nolint:gosec // G304: jailoc-owned cache directory
+	if err != nil {
+		return nil, fmt.Errorf("open cache directory %s: %w", dir, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // G115: file descriptors fit in int
+		_ = f.Close()
+		return nil, fmt.Errorf("lock cache directory %s: %w", dir, err)
 	}
 	return func() { _ = f.Close() }, nil
 }
