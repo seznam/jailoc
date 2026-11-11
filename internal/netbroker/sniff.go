@@ -473,12 +473,8 @@ func (c *enforceConn) inspect(data []byte) bool {
 			return false
 		}
 		bodyLen, chunked, upgraded, ok := parseHTTPFraming(string(block[:idx]))
-		if !ok {
+		if !ok || upgraded {
 			return false
-		}
-		if upgraded {
-			c.doneTLS, c.buf = true, nil
-			return true
 		}
 		c.bodyBytes = bodyLen
 		c.chunked = chunked

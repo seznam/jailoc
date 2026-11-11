@@ -277,7 +277,7 @@ func blockedAnswer(pol *Policy, resp []byte) (string, string, bool) {
 				continue
 			}
 			if sec.checkOwner {
-				if blocked, rule := pol.blocked(h.Name.String()); blocked {
+				if denied, rule := pol.denied(h.Name.String()); denied {
 					return h.Name.String(), rule, true
 				}
 			}
@@ -291,7 +291,7 @@ func blockedAnswer(pol *Policy, resp []byte) (string, string, bool) {
 			if err != nil {
 				return "", "", false
 			}
-			if blocked, rule := pol.blocked(c.CNAME.String()); blocked {
+			if denied, rule := pol.denied(c.CNAME.String()); denied {
 				return c.CNAME.String(), rule, true
 			}
 		}
@@ -361,6 +361,7 @@ func dnsError(q []byte, rcode byte) []byte {
 // IP->name cache for allowed answers.
 func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 	entry := map[string]any{"event": "dns", "network": network}
+	pol := b.policy.Load()
 	var qname string
 	var p dnsmessage.Parser
 	if _, perr := p.Start(q); perr == nil {
@@ -413,7 +414,9 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 							}
 							b.names.record(ip, qname, qTTL)
 							if owner != qname {
-								b.names.record(ip, owner, ttl)
+								if blocked, _ := pol.blocked(owner); !blocked {
+									b.names.record(ip, owner, ttl)
+								}
 							}
 						}
 					case dnsmessage.TypeAAAA:
@@ -426,7 +429,9 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 							}
 							b.names.record(ip, qname, qTTL)
 							if owner != qname {
-								b.names.record(ip, owner, ttl)
+								if blocked, _ := pol.blocked(owner); !blocked {
+									b.names.record(ip, owner, ttl)
+								}
 							}
 						}
 					default:

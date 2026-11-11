@@ -684,7 +684,7 @@ func TestReviewFixes(t *testing.T) {
 		}
 	})
 
-	t.Run("enforceConn tracks HTTP body framing and blocks pipelined denied Host", func(t *testing.T) {
+	t.Run("enforceConn tracks HTTP body framing and blocks pipelined denied Host or Upgrade", func(t *testing.T) {
 		t.Parallel()
 		ec := &enforceConn{
 			check: func(name string, bad bool) bool {
@@ -706,6 +706,61 @@ func TestReviewFixes(t *testing.T) {
 		pipelined := []byte("POST /a HTTP/1.1\r\nHost: allowed.example.com\r\nContent-Length: 2\r\n\r\nx GET http://denied.example.com/ HTTP/1.1\r\nHost: allowed.example.com\r\n\r\n")
 		if ec.inspect(pipelined) {
 			t.Fatal("pipelined conflicting absolute-URI request after POST body was allowed")
+		}
+		// Unvalidated Upgrade header is rejected so subsequent pipelined requests cannot bypass Host checks.
+		ecUpgrade := &enforceConn{
+			check: func(name string, bad bool) bool {
+				return !bad && name == "allowed.example.com"
+			},
+			abort: func() {},
+		}
+		if ecUpgrade.inspect([]byte("GET / HTTP/1.1\r\nHost: allowed.example.com\r\nUpgrade: websocket\r\n\r\n")) {
+			t.Fatal("unvalidated HTTP Upgrade was accepted")
+		}
+	})
+
+	t.Run("allowed DNS query with unlisted CDN CNAME resolves while denied CNAME is blocked", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"deny":  [{"name": "bad", "names": ["*.bad.cdn.net"], "proto": "any"}],
+			"allow": [{"name": "docker", "names": ["*.docker.io"], "proto": "tcp"}]
+		}`), "cname-cdn")
+		if err != nil {
+			t.Fatal(err)
+		}
+		qname := dnsmessage.MustNewName("auth.docker.io.")
+		cdn := dnsmessage.MustNewName("auth.docker.io.cdn.cloudflare.net.")
+		okResp, _ := (&dnsmessage.Message{
+			Header:    dnsmessage.Header{Response: true},
+			Questions: []dnsmessage.Question{{Name: qname, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+			Answers: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: qname, Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET, TTL: 60},
+					Body:   &dnsmessage.CNAMEResource{CNAME: cdn},
+				},
+				{
+					Header: dnsmessage.ResourceHeader{Name: cdn, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
+					Body:   &dnsmessage.AResource{A: [4]byte{104, 16, 1, 1}},
+				},
+			},
+		}).Pack()
+		if blocked, _, ok := blockedAnswer(pol, okResp); !ok || blocked != "" {
+			t.Fatalf("blockedAnswer(cloudflare CNAME) = %q, ok=%v; want allowed", blocked, ok)
+		}
+
+		badCDN := dnsmessage.MustNewName("x.bad.cdn.net.")
+		badResp, _ := (&dnsmessage.Message{
+			Header:    dnsmessage.Header{Response: true},
+			Questions: []dnsmessage.Question{{Name: qname, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+			Answers: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: qname, Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET, TTL: 60},
+					Body:   &dnsmessage.CNAMEResource{CNAME: badCDN},
+				},
+			},
+		}).Pack()
+		if blocked, rule, ok := blockedAnswer(pol, badResp); !ok || blocked == "" || rule != "bad" {
+			t.Fatalf("blockedAnswer(denied CNAME) = %q, rule=%q, ok=%v; want blocked by rule bad", blocked, rule, ok)
 		}
 	})
 

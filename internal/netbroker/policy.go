@@ -317,9 +317,9 @@ func normalizeName(name string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
 }
 
-// blocked reports whether name is blocked by blockedZones or by DNS rules
-// (matching a blanket deny rule, or not allowed when rulesMode is active).
-func (p *Policy) blocked(name string) (bool, string) {
+// denied reports whether name is explicitly blocked by blockedZones or a
+// blanket deny rule.
+func (p *Policy) denied(name string) (bool, string) {
 	if p == nil {
 		return false, ""
 	}
@@ -339,9 +339,22 @@ func (p *Policy) blocked(name string) (bool, string) {
 			return true, r.Name
 		}
 	}
+	return false, ""
+}
+
+// blocked reports whether name is blocked by blockedZones or by DNS rules
+// (matching a blanket deny rule, or not allowed when rulesMode is active).
+func (p *Policy) blocked(name string) (bool, string) {
+	if p == nil {
+		return false, ""
+	}
+	if denied, rule := p.denied(name); denied {
+		return true, rule
+	}
 	if !p.rulesMode {
 		return false, ""
 	}
+	name = normalizeName(name)
 	for i := range p.allow {
 		r := &p.allow[i]
 		if r.wildcard || r.nameSet.matches(name) {
