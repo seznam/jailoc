@@ -207,10 +207,10 @@ func (c *prefixConn) CloseWrite() error {
 	return c.Close()
 }
 
-// sniffBeforeDial reads the initial bytes from c (up to sniffMax or a short
-// timeout) to identify a TLS ClientHello or HTTP/1 request, returning the
-// wrapped connection that replays those bytes, the identified info (if any),
-// and whether the stream looked like an incomplete TLS/HTTP handshake.
+// sniffBeforeDial reads the initial bytes from c (up to sniffMax or timeout)
+// to identify a TLS ClientHello or HTTP/1 request, returning the wrapped
+// connection that replays those bytes, the identified info (if any), and
+// whether the client began a TLS/HTTP stream that did not complete.
 func sniffBeforeDial(c net.Conn, timeout time.Duration) (net.Conn, map[string]any, bool) {
 	_ = c.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
@@ -229,45 +229,149 @@ func sniffBeforeDial(c net.Conn, timeout time.Duration) (net.Conn, map[string]an
 			}
 		}
 		if err != nil {
-			// If we haven't read anything at all or were waiting for more
-			// TLS/HTTP bytes when the deadline fired, mark it incomplete.
-			return &prefixConn{Conn: c, buf: buf}, nil, true
+			// If the client sent partial TLS/HTTP bytes before the deadline,
+			// mark it incomplete; if 0 bytes were sent (e.g. a server-first
+			// protocol), incomplete is false and the caller decides based on port.
+			return &prefixConn{Conn: c, buf: buf}, nil, len(buf) > 0
 		}
 	}
-	return &prefixConn{Conn: c, buf: buf}, nil, true
+	return &prefixConn{Conn: c, buf: buf}, nil, len(buf) > 0
 }
 
-// identifyForPolicy is like identify, but requires the complete HTTP header
-// block (\r\n\r\n) before accepting an HTTP Host so a split Host header line
-// cannot authorize a prefix of the hostname.
+// identifyForPolicy parses a TLS ClientHello (including across multiple TLS
+// records) or a complete HTTP/1 request header block (\r\n\r\n) with strict
+// authority checking.
 func identifyForPolicy(b []byte) (info map[string]any, more bool) {
 	if len(b) == 0 {
 		return nil, true
 	}
 	if b[0] == 0x16 {
-		return identifyTLS(b)
+		if len(b) < 5 {
+			return nil, true
+		}
+		if b[1] != 3 {
+			return nil, false
+		}
+		info, _ := identifyTLS(b)
+		if info != nil {
+			return info, false
+		}
+		// Keep reading fragmented TLS records until ClientHello is complete or
+		// sniffMax is reached.
+		return nil, true
 	}
-	if !bytes.Contains(b, []byte("\r\n\r\n")) {
-		info, more := identifyHTTP(b)
-		return nil, more || info != nil
-	}
-	return identifyHTTP(b)
+	return identifyHTTPForPolicy(b)
 }
 
-// sniffedPeerName extracts the normalized hostname from an l7 info map (TLS
-// SNI or HTTP Host without port).
-func sniffedPeerName(info map[string]any) string {
-	if info == nil {
-		return ""
+func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
+	s := string(b)
+	method, rest, found := strings.Cut(s, " ")
+	if !found {
+		return nil, len(s) < 32 && isHTTPToken(s)
 	}
-	if sni, _ := info["sni"].(string); sni != "" {
-		return normalizeName(sni)
+	if !isHTTPToken(method) {
+		return nil, false
 	}
-	if host, _ := info["host"].(string); host != "" {
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+	head, _, complete := strings.Cut(s, "\r\n\r\n")
+	if !complete {
+		lineEnd := strings.Index(rest, "\r\n")
+		if lineEnd >= 0 {
+			parts := strings.Fields(rest[:lineEnd])
+			if len(parts) < 2 || !strings.HasPrefix(parts[1], "HTTP/") {
+				return nil, false
+			}
 		}
-		return normalizeName(host)
+		return nil, true
+	}
+	lines := strings.Split(head, "\r\n")
+	parts := strings.Fields(lines[0])
+	if len(parts) != 3 || !strings.HasPrefix(parts[2], "HTTP/") {
+		return nil, false
+	}
+	target := parts[1]
+	targetHost := extractTargetAuthority(method, target)
+	var hostHeader string
+	hostCount := 0
+	for _, l := range lines[1:] {
+		if k, v, ok := strings.Cut(l, ":"); ok && strings.EqualFold(strings.TrimSpace(k), "host") {
+			hostCount++
+			hostHeader = normalizeAuthority(strings.TrimSpace(v))
+		}
+	}
+	info := map[string]any{"proto": "http", "method": method, "path": stripQuery(target)}
+	if hostCount > 1 || (hostCount == 1 && hostHeader == "") {
+		info["bad_authority"] = true
+		return info, false
+	}
+	if targetHost != "" && hostHeader != "" && targetHost != hostHeader {
+		info["bad_authority"] = true
+		return info, false
+	}
+	effective := hostHeader
+	if effective == "" {
+		effective = targetHost
+	}
+	if effective != "" {
+		info["host"] = effective
+	}
+	return info, false
+}
+
+func isHTTPToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isAlpha := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+		isDigit := c >= '0' && c <= '9'
+		isTchar := strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
+		if !isAlpha && !isDigit && !isTchar {
+			return false
+		}
+	}
+	return true
+}
+
+func extractTargetAuthority(method, target string) string {
+	if method == "CONNECT" {
+		return normalizeAuthority(target)
+	}
+	if rest, ok := strings.CutPrefix(strings.ToLower(target), "http://"); ok {
+		auth, _, _ := strings.Cut(rest, "/")
+		return normalizeAuthority(auth)
+	}
+	if rest, ok := strings.CutPrefix(strings.ToLower(target), "https://"); ok {
+		auth, _, _ := strings.Cut(rest, "/")
+		return normalizeAuthority(auth)
 	}
 	return ""
+}
+
+func normalizeAuthority(auth string) string {
+	if auth == "" || strings.ContainsAny(auth, " \t/@\\") {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(auth); err == nil {
+		return normalizeName(h)
+	}
+	return normalizeName(auth)
+}
+
+// sniffedPeerNameStrict extracts the normalized hostname from an l7 info map
+// and reports whether an HTTP request had a malformed or conflicting authority.
+func sniffedPeerNameStrict(info map[string]any) (string, bool) {
+	if info == nil {
+		return "", false
+	}
+	if bad, _ := info["bad_authority"].(bool); bad {
+		return "", true
+	}
+	if sni, _ := info["sni"].(string); sni != "" {
+		return normalizeName(sni), false
+	}
+	if host, _ := info["host"].(string); host != "" {
+		return normalizeAuthority(host), false
+	}
+	return "", false
 }

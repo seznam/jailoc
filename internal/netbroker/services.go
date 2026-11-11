@@ -253,12 +253,13 @@ func blockedAnswer(pol *Policy, resp []byte) (string, string, bool) {
 		}
 	}
 	sections := []struct {
-		header func() (dnsmessage.ResourceHeader, error)
-		skip   func() error
+		header     func() (dnsmessage.ResourceHeader, error)
+		skip       func() error
+		checkOwner bool
 	}{
-		{p.AnswerHeader, p.SkipAnswer},
-		{p.AuthorityHeader, p.SkipAuthority},
-		{p.AdditionalHeader, p.SkipAdditional},
+		{p.AnswerHeader, p.SkipAnswer, true},
+		{p.AuthorityHeader, p.SkipAuthority, false},
+		{p.AdditionalHeader, p.SkipAdditional, true},
 	}
 	for _, sec := range sections {
 		for {
@@ -275,8 +276,10 @@ func blockedAnswer(pol *Policy, resp []byte) (string, string, bool) {
 				}
 				continue
 			}
-			if blocked, rule := pol.blocked(h.Name.String()); blocked {
-				return h.Name.String(), rule, true
+			if sec.checkOwner {
+				if blocked, rule := pol.blocked(h.Name.String()); blocked {
+					return h.Name.String(), rule, true
+				}
 			}
 			if h.Type != dnsmessage.TypeCNAME {
 				if err := sec.skip(); err != nil {
@@ -373,6 +376,8 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 		var rp dnsmessage.Parser
 		if _, perr := rp.Start(resp); perr == nil {
 			_ = rp.SkipAllQuestions()
+			minCNAME := time.Duration(0)
+			hasCNAME := false
 			for {
 				h, perr := rp.AnswerHeader()
 				if perr != nil {
@@ -381,11 +386,21 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 				ttl := time.Duration(h.TTL) * time.Second
 				owner := h.Name.String()
 				switch h.Type {
+				case dnsmessage.TypeCNAME:
+					if !hasCNAME || ttl < minCNAME {
+						minCNAME = ttl
+						hasCNAME = true
+					}
+					_ = rp.SkipAnswer()
 				case dnsmessage.TypeA:
 					if a, perr := rp.AResource(); perr == nil {
 						ip := netip.AddrFrom4(a.A)
 						answers = append(answers, ip.String())
-						b.names.record(ip, qname, ttl)
+						qTTL := ttl
+						if hasCNAME && minCNAME < qTTL {
+							qTTL = minCNAME
+						}
+						b.names.record(ip, qname, qTTL)
 						if owner != qname {
 							b.names.record(ip, owner, ttl)
 						}
@@ -394,7 +409,11 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 					if a, perr := rp.AAAAResource(); perr == nil {
 						ip := netip.AddrFrom16(a.AAAA)
 						answers = append(answers, ip.String())
-						b.names.record(ip, qname, ttl)
+						qTTL := ttl
+						if hasCNAME && minCNAME < qTTL {
+							qTTL = minCNAME
+						}
+						b.names.record(ip, qname, qTTL)
 						if owner != qname {
 							b.names.record(ip, owner, ttl)
 						}

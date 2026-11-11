@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -520,17 +522,17 @@ type vmRule struct {
 
 // vmPolicy builds the broker policy JSON from the workspace's resolved network
 // rules and DNS settings. @list references are expanded on the host.
-func vmPolicy(_ context.Context, ws *workspace.Resolved) ([]byte, error) {
+func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 	allow := []vmRule{}
 	deny := []vmRule{}
 
-	rules := ws.NetworkRules
+	rules := slices.Clone(ws.NetworkRules)
 	if len(rules) == 0 && (len(ws.AllowedNetworks) > 0 || len(ws.AllowedHosts) > 0 || len(ws.DNSBlockedZones) > 0) {
 		if len(ws.AllowedHosts) > 0 {
-			rules = append(rules, config.NetworkRule{Name: "legacy", Allow: ws.AllowedHosts, Proto: config.RuleProtoAny})
+			rules = append(rules, config.NetworkRule{Name: "legacy", Allow: slices.Clone(ws.AllowedHosts), Proto: config.RuleProtoAny})
 		}
 		if len(ws.AllowedNetworks) > 0 {
-			rules = append(rules, config.NetworkRule{Name: "legacy", Allow: ws.AllowedNetworks, Proto: config.RuleProtoAny})
+			rules = append(rules, config.NetworkRule{Name: "legacy", Allow: slices.Clone(ws.AllowedNetworks), Proto: config.RuleProtoAny})
 		}
 		if len(ws.DNSBlockedZones) > 0 {
 			var blocked []string
@@ -546,11 +548,36 @@ func vmPolicy(_ context.Context, ws *workspace.Resolved) ([]byte, error) {
 		}
 	}
 
+	// Legacy allowed_hosts could resolve to private/ULA addresses, which
+	// hostname rules alone do not open. Resolve them on the host into CIDRs
+	// on the legacy rule so migrated configs keep private-host access.
+	var resolvedLegacyCIDRs []string
+	for _, h := range ws.AllowedHosts {
+		if net.ParseIP(h) != nil || strings.Contains(h, "/") {
+			continue
+		}
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", h)
+		if err != nil {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: cannot resolve allowed host %q: %v\n", h, err)
+			continue
+		}
+		for _, ip := range ips {
+			prefix := "/128"
+			if ip.To4() != nil {
+				prefix = "/32"
+			}
+			resolvedLegacyCIDRs = append(resolvedLegacyCIDRs, ip.String()+prefix)
+		}
+	}
+
 	for _, r := range rules {
 		isAllow := len(r.Allow) > 0
 		targets := r.Allow
 		if !isAllow {
 			targets = r.Deny
+		} else if r.Name == "legacy" && len(resolvedLegacyCIDRs) > 0 {
+			targets = append(slices.Clone(targets), resolvedLegacyCIDRs...)
+			resolvedLegacyCIDRs = nil
 		}
 		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets)
 		if err != nil {
@@ -587,7 +614,11 @@ func compileVMRule(name, proto string, ports []config.RulePort, targets []string
 	}
 	var portStrs []string
 	for _, p := range ports {
-		portStrs = append(portStrs, string(p))
+		canon, err := config.CanonicalRulePort(p)
+		if err != nil {
+			return vmRule{}, err
+		}
+		portStrs = append(portStrs, canon)
 	}
 	out := vmRule{Name: name, Proto: proto, Ports: portStrs}
 	seenNames := map[string]bool{}

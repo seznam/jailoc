@@ -412,6 +412,17 @@ func (p *Policy) needsNameInspection(dst netip.AddrPort, matchedName string) boo
 	return false
 }
 
+// isHTTPOrTLSPort reports whether port is a standard HTTP or TLS port where the
+// client always speaks first with a TLS ClientHello or HTTP request.
+func isHTTPOrTLSPort(port uint16) bool {
+	switch port {
+	case 80, 443, 8080, 8443:
+		return true
+	default:
+		return false
+	}
+}
+
 // DenyAll is the fail-closed policy installed when a reload fails.
 func DenyAll(reason string) *Policy {
 	return &Policy{denyAll: true, source: reason}

@@ -514,4 +514,112 @@ func TestReviewFixes(t *testing.T) {
 			t.Fatalf("Decide mapped = %+v, want allow rule=mapped", got)
 		}
 	})
+
+	t.Run("SOA authority owner in parent zone is not blocked", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [{"name": "web", "names": ["allowed.example.com"], "proto": "tcp", "ports": ["443"]}]
+		}`), "soa")
+		if err != nil {
+			t.Fatal(err)
+		}
+		qname := dnsmessage.MustNewName("allowed.example.com.")
+		zone := dnsmessage.MustNewName("example.com.")
+		msg := dnsmessage.Message{
+			Header:    dnsmessage.Header{ID: 1, Response: true},
+			Questions: []dnsmessage.Question{{Name: qname, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET}},
+			Authorities: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: zone, Type: dnsmessage.TypeSOA, Class: dnsmessage.ClassINET, TTL: 60},
+					Body: &dnsmessage.SOAResource{
+						NS:     dnsmessage.MustNewName("ns1.example.com."),
+						MBox:   dnsmessage.MustNewName("hostmaster.example.com."),
+						Serial: 1,
+					},
+				},
+			},
+		}
+		raw, err := msg.Pack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blockedName, _, ok := blockedAnswer(pol, raw); !ok || blockedName != "" {
+			t.Fatalf("blockedAnswer with SOA authority = %q, ok=%v; want allowed", blockedName, ok)
+		}
+	})
+
+	t.Run("CNAME chain bounds query-name TTL to minimum CNAME TTL", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [{"name": "web", "names": ["alias.example.com", "target.example.com"], "proto": "tcp", "ports": ["443"]}]
+		}`), "cname-ttl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := New(Config{
+			Subnet:  netip.MustParsePrefix("192.168.127.0/24"),
+			Gateway: netip.MustParseAddr("192.168.127.1"),
+			GuestIP: netip.MustParseAddr("192.168.127.2"),
+		}, pol)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now()
+		b.names.now = func() time.Time { return now }
+
+		alias := dnsmessage.MustNewName("alias.example.com.")
+		target := dnsmessage.MustNewName("target.example.com.")
+		q, _ := (&dnsmessage.Message{
+			Questions: []dnsmessage.Question{{Name: alias, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		}).Pack()
+		resp, _ := (&dnsmessage.Message{
+			Header:    dnsmessage.Header{Response: true},
+			Questions: []dnsmessage.Question{{Name: alias, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+			Answers: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: alias, Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET, TTL: 2},
+					Body:   &dnsmessage.CNAMEResource{CNAME: target},
+				},
+				{
+					Header: dnsmessage.ResourceHeader{Name: target, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 3600},
+					Body:   &dnsmessage.AResource{A: [4]byte{93, 184, 216, 34}},
+				},
+			},
+		}).Pack()
+		b.logDNS("udp", q, resp, nil)
+		ip := netip.MustParseAddr("93.184.216.34")
+		now = now.Add(5 * time.Second)
+		got := b.names.lookup(ip)
+		if slices.Contains(got, "alias.example.com") {
+			t.Fatalf("alias remained cached past CNAME TTL: %v", got)
+		}
+		if !slices.Contains(got, "target.example.com") {
+			t.Fatalf("target should retain its own TTL: %v", got)
+		}
+	})
+
+	t.Run("strict HTTP parser handles extension methods and conflicting authorities", func(t *testing.T) {
+		t.Parallel()
+		propfind := []byte("PROPFIND /dav HTTP/1.1\r\nHost: files.example.com:8080\r\n\r\n")
+		info, more := identifyForPolicy(propfind)
+		if more || info == nil {
+			t.Fatalf("PROPFIND not identified: info=%v more=%v", info, more)
+		}
+		if name, bad := sniffedPeerNameStrict(info); bad || name != "files.example.com" {
+			t.Fatalf("sniffedPeerNameStrict(PROPFIND) = %q, bad=%v", name, bad)
+		}
+
+		conflict := []byte("GET http://denied.example.com/path HTTP/1.1\r\nHost: allowed.example.com\r\n\r\n")
+		info2, _ := identifyForPolicy(conflict)
+		if _, bad := sniffedPeerNameStrict(info2); !bad {
+			t.Fatalf("expected bad authority for conflicting absolute URI and Host header: %v", info2)
+		}
+
+		dupHost := []byte("GET / HTTP/1.1\r\nHost: allowed.example.com\r\nHost: denied.example.com\r\n\r\n")
+		info3, _ := identifyForPolicy(dupHost)
+		if _, bad := sniffedPeerNameStrict(info3); !bad {
+			t.Fatalf("expected bad authority for duplicate Host headers: %v", info3)
+		}
+	})
+
 }

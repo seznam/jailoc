@@ -92,7 +92,7 @@ func TestVMPolicy(t *testing.T) {
 		DNSUpstream: "9.9.9.9",
 		NetworkRules: []config.NetworkRule{
 			{Name: "no-paste", Deny: []string{"pastebin.com", "*.ngrok.io"}},
-			{Name: "db", Allow: []string{"10.1.0.5/16", "192.168.1.10"}, Proto: "tcp", Ports: []config.RulePort{"5432"}},
+			{Name: "db", Allow: []string{"10.1.0.5/16", "192.168.1.10"}, Proto: "tcp", Ports: []config.RulePort{" 5432 ", "8000 - 8100"}},
 			{Name: "dev-deps", Allow: []string{"github.com", "registry.npmjs.org"}},
 			{Name: "agent", Allow: []string{"api.anthropic.com"}, Proto: "tcp", Ports: []config.RulePort{"443"}},
 		},
@@ -118,7 +118,7 @@ func TestVMPolicy(t *testing.T) {
 	if len(got.Allow) != 3 {
 		t.Fatalf("allow = %+v, want 3 rules", got.Allow)
 	}
-	if !slices.Equal(got.Allow[0].CIDRs, []string{"10.1.0.0/16", "192.168.1.10/32"}) || !slices.Equal(got.Allow[0].Ports, []string{"5432"}) {
+	if !slices.Equal(got.Allow[0].CIDRs, []string{"10.1.0.0/16", "192.168.1.10/32"}) || !slices.Equal(got.Allow[0].Ports, []string{"5432", "8000-8100"}) {
 		t.Fatalf("allow[0] = %+v", got.Allow[0])
 	}
 	if got.Allow[1].Name != "dev-deps" || !slices.Contains(got.Allow[1].Names, "registry.npmjs.org") {
@@ -135,7 +135,7 @@ func TestVMPolicyLegacyFallback(t *testing.T) {
 		Name:            "w",
 		DNSUpstream:     "10.0.0.53",
 		AllowedNetworks: []string{"10.1.0.0/16", "fd00::/8"},
-		AllowedHosts:    []string{"api.example.com", "192.168.1.10"},
+		AllowedHosts:    []string{"192.168.1.10", "fd12::7"},
 		DNSBlockedZones: []string{"corp.example"},
 	}
 	data, err := vmPolicy(context.Background(), ws)
@@ -153,7 +153,7 @@ func TestVMPolicyLegacyFallback(t *testing.T) {
 	if got.DNS != "10.0.0.53" || len(got.Deny) != 1 || !slices.Equal(got.Deny[0].Names, []string{"corp.example", "*.corp.example"}) {
 		t.Fatalf("legacy policy deny/dns = %s", data)
 	}
-	if len(got.Allow) != 2 || !slices.Equal(got.Allow[0].Names, []string{"api.example.com"}) || !slices.Equal(got.Allow[0].CIDRs, []string{"192.168.1.10/32"}) {
+	if len(got.Allow) != 2 || !slices.Equal(got.Allow[0].CIDRs, []string{"192.168.1.10/32", "fd12::7/128"}) {
 		t.Fatalf("legacy policy allow = %+v", got.Allow)
 	}
 }

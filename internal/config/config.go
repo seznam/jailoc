@@ -1331,36 +1331,13 @@ func Validate(cfg *Config) error {
 		if err := movedToNetwork(fmt.Sprintf("[workspaces.%s]", name), ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones); err != nil {
 			return err
 		}
-		dn, wn := cfg.Defaults.Network.Get(), ws.Network.Get()
+		wn := ws.Network.Get()
 		if err := validateDNS(cmp.Or(wn.DNS, wn.DNSUpstream), wn.DNSBlockedZones); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if err := validateNetworkRules(wn.Rules, wsContext); err != nil {
 			return err
 		}
-		enabled := explicitTrue(dn.FilteredDNS, wn.FilteredDNS)
-		if enabled && wn.DNSUpstream == "" && dn.DNSUpstream == "" {
-			return fmt.Errorf("workspace %q: dns_upstream is required when filtered_dns is enabled", name)
-		}
-		if enabled && len(wn.DNSBlockedZones) == 0 && len(dn.DNSBlockedZones) == 0 {
-			return fmt.Errorf("workspace %q: dns_blocked_zones is required when filtered_dns is enabled", name)
-		}
-		if enabled {
-			zones := wn.DNSBlockedZones
-			if zones == nil {
-				zones = dn.DNSBlockedZones
-			}
-			for _, host := range mergeDedup(cfg.Defaults.AllowedHosts, ws.AllowedHosts) {
-				normalizedHost := strings.TrimSuffix(strings.ToLower(host), ".")
-				for _, zone := range zones {
-					normalizedZone := strings.TrimSuffix(strings.ToLower(zone), ".")
-					if normalizedHost == normalizedZone || strings.HasSuffix(normalizedHost, "."+normalizedZone) {
-						return fmt.Errorf("workspace %q: allowed_hosts entry %q conflicts with dns_blocked_zones entry %q", name, host, zone)
-					}
-				}
-			}
-		}
-
 		if ws.ExposePort != nil {
 			return fmt.Errorf("workspace %q: %w", name, v1Setting("expose_port"))
 		}
@@ -1586,36 +1563,6 @@ func AddPath(workspace, path string) error {
 	}
 
 	return nil
-}
-
-// mergeDedup combines two string slices into one, removing duplicates.
-// Order is preserved: items from `a` appear first, followed by items from `b` that weren't in `a`.
-func mergeDedup(a, b []string) []string {
-	if len(a) == 0 {
-		return b
-	}
-	if len(b) == 0 {
-		return a
-	}
-
-	seen := make(map[string]bool)
-	result := make([]string, 0, len(a)+len(b))
-
-	for _, item := range a {
-		if !seen[item] {
-			seen[item] = true
-			result = append(result, item)
-		}
-	}
-
-	for _, item := range b {
-		if !seen[item] {
-			seen[item] = true
-			result = append(result, item)
-		}
-	}
-
-	return result
 }
 
 func ExpandPath(path string) (string, error) {

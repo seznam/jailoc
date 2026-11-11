@@ -113,9 +113,15 @@ const sniffBeforeDialTimeout = 2 * time.Second
 
 func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Policy, env Env, d Decision, ep tcpip.Endpoint, wq *waiter.Queue) {
 	rawConn := gonet.NewTCPConn(wq, ep)
-	replayed, info, incomplete := sniffBeforeDial(rawConn, sniffBeforeDialTimeout)
-	peerName := sniffedPeerName(info)
+	timeout := 200 * time.Millisecond
+	if isHTTPOrTLSPort(dst.Port()) {
+		timeout = sniffBeforeDialTimeout
+	}
+	replayed, info, incomplete := sniffBeforeDial(rawConn, timeout)
+	peerName, badAuthority := sniffedPeerNameStrict(info)
 	switch {
+	case badAuthority:
+		d = Decision{Allow: false, Reason: "sni-mismatch", Name: d.Name}
 	case peerName != "":
 		// Check whether the sniffed SNI/Host belongs to the destination IP in
 		// the DNS cache (unless a CIDR or wildcard rule allows the IP directly).
@@ -146,10 +152,13 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		default:
 			d = dPeer
 		}
-	case incomplete || info != nil:
-		// Timed out waiting for TLS ClientHello / HTTP headers, or received
-		// TLS/HTTP without an SNI/Host header: fail closed unless an address
-		// or wildcard rule allows the destination without a hostname.
+	case incomplete || info != nil || isHTTPOrTLSPort(dst.Port()):
+		// Timed out waiting for TLS ClientHello / HTTP headers on an HTTP/TLS
+		// port (or after partial TLS/HTTP bytes), or received TLS/HTTP without
+		// an SNI/Host header: fail closed unless an address or wildcard rule
+		// allows the destination without a hostname. On non-HTTP/TLS ports
+		// where the client sent 0 bytes (server-first protocols like SSH or
+		// SMTP), L4 DNS-cache authorization stands.
 		envNoNames := env
 		envNoNames.Names = nil
 		if dAddr := Decide(p, envNoNames, ProtoTCP, dst); !dAddr.Allow {

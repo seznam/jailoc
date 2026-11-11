@@ -34,19 +34,30 @@ func (p *RulePort) UnmarshalTOML(v any) error {
 // MarshalText writes the entry as a string.
 func (p RulePort) MarshalText() ([]byte, error) { return []byte(p), nil }
 
-// ValidateRulePort checks a port number or "A-B" port range in 1-65535.
-func ValidateRulePort(p RulePort) error {
+// CanonicalRulePort validates and returns the canonical "PORT" or "LO-HI"
+// string for p.
+func CanonicalRulePort(p RulePort) (string, error) {
 	s := strings.TrimSpace(string(p))
 	lo, hi, found := strings.Cut(s, "-")
 	if !found {
-		hi = lo
+		n, err := parsePortNumber(lo)
+		if err != nil {
+			return "", fmt.Errorf("invalid port %q: want a port number 1-65535 or \"A-B\" range", string(p))
+		}
+		return strconv.Itoa(n), nil
 	}
 	l, err1 := parsePortNumber(lo)
 	h, err2 := parsePortNumber(hi)
 	if err1 != nil || err2 != nil || l > h {
-		return fmt.Errorf("invalid port %q: want a port number 1-65535 or \"A-B\" range", string(p))
+		return "", fmt.Errorf("invalid port %q: want a port number 1-65535 or \"A-B\" range", string(p))
 	}
-	return nil
+	return strconv.Itoa(l) + "-" + strconv.Itoa(h), nil
+}
+
+// ValidateRulePort checks a port number or "A-B" port range in 1-65535.
+func ValidateRulePort(p RulePort) error {
+	_, err := CanonicalRulePort(p)
+	return err
 }
 
 // NetworkRule is one [[<scope>.network.rules]] entry. Exactly one of Allow
