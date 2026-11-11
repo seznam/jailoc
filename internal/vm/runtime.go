@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // RunnerBinary is the file name of the VM runner inside a runtime bundle.
@@ -68,7 +69,11 @@ func unpackRuntime(cacheDir string, rt, fw []byte, progress io.Writer) (string, 
 	runner := filepath.Join(dir, "runtime", RunnerBinary)
 	libDir := filepath.Join(dir, "runtime") + string(os.PathListSeparator) + filepath.Join(dir, "firmware")
 	if b, err := os.ReadFile(filepath.Join(dir, runtimeCompleted)); err == nil && string(b) == stamp { //nolint:gosec // G304: path inside the jailoc cache directory
-		return runner, libDir, nil
+		if _, err := os.Stat(runner); err == nil {
+			now := time.Now()
+			_ = os.Chtimes(dir, now, now)
+			return runner, libDir, nil
+		}
 	}
 
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
@@ -102,7 +107,9 @@ func unpackRuntime(cacheDir string, rt, fw []byte, progress io.Writer) (string, 
 	if err := os.Rename(tmp, dir); err != nil {
 		// A concurrent jailoc may have installed the same runtime first.
 		if b, rerr := os.ReadFile(filepath.Join(dir, runtimeCompleted)); rerr == nil && string(b) == stamp { //nolint:gosec // G304: path inside the jailoc cache directory
-			return runner, libDir, nil
+			if _, rerr := os.Stat(runner); rerr == nil {
+				return runner, libDir, nil
+			}
 		}
 		return "", "", fmt.Errorf("install VM runtime: %w", err)
 	}

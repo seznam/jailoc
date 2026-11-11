@@ -17,8 +17,9 @@ import (
 // process may have unpacked an image it has not recorded in a spec yet, and a
 // VM supervisor may be pulling its base image right now.
 const (
-	pruneGrace       = time.Hour
-	layerUnusedLimit = 14 * 24 * time.Hour
+	pruneGrace         = time.Hour
+	runtimeUnusedLimit = 7 * 24 * time.Hour
+	layerUnusedLimit   = 14 * 24 * time.Hour
 )
 
 // PruneResult reports what PruneImages removed.
@@ -104,6 +105,56 @@ func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 		return res, fmt.Errorf("remove unused image layers: %w", err)
 	}
 	return res, nil
+}
+
+// PruneCacheDirs removes subdirectories of cacheDir (such as unpacked VM
+// runtimes or extracted guest binaries) that no path in keepPaths lies under
+// and that have not been used for seven days. Hidden staging directories are
+// ignored.
+func PruneCacheDirs(cacheDir string, keepPaths []string) (int, error) {
+	entries, err := os.ReadDir(cacheDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read cache directory %s: %w", cacheDir, err)
+	}
+	cutoff := time.Now().Add(-runtimeUnusedLimit)
+	removed := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || strings.HasPrefix(name, ".") {
+			continue
+		}
+		dir := filepath.Join(cacheDir, name)
+		if pathWithinAny(dir, keepPaths) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := RemoveTree(dir); err != nil {
+			return removed, fmt.Errorf("remove unused cache entry %s: %w", name, err)
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+func pathWithinAny(dir string, paths []string) bool {
+	cleanDir := filepath.Clean(dir)
+	prefix := cleanDir + string(filepath.Separator)
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		clean := filepath.Clean(p)
+		if clean == cleanDir || strings.HasPrefix(clean, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseRef reads an image cache reference file: "ref\tdigest", or a bare

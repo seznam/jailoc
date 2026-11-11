@@ -103,6 +103,21 @@ func TestUnpackRuntimeOnce(t *testing.T) {
 		t.Fatalf("second call: runner %q, progress %q; want the cached runtime", again, progress.String())
 	}
 
+	// Removing the runner binary forces a re-unpack even when .complete matches.
+	if err := os.Remove(runner); err != nil {
+		t.Fatal(err)
+	}
+	repaired, _, err := unpackRuntime(cache, rt, fw, &progress)
+	if err != nil {
+		t.Fatalf("repair unpackRuntime: %v", err)
+	}
+	if repaired != runner || !strings.Contains(progress.String(), "Unpacking VM runtime") {
+		t.Fatalf("repair call: runner %q, progress %q; want re-unpacked runtime", repaired, progress.String())
+	}
+	if _, err := os.Stat(runner); err != nil {
+		t.Fatalf("stat repaired runner: %v", err)
+	}
+
 	other := makeTarball(t, append(goodFirmware[:1:1], tarEntry{name: "fw/VERSION", body: "v2", mode: 0o644}))
 	runner2, _, err := unpackRuntime(cache, rt, other, io.Discard)
 	if err != nil {

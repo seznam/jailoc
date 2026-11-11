@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // FileName is the file name of the extracted guest binary.
@@ -42,6 +43,8 @@ func extract(cacheDir string, data []byte) (string, error) {
 	dir := filepath.Join(cacheDir, hex.EncodeToString(sum[:])[:16])
 	path := filepath.Join(dir, FileName)
 	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) { //nolint:gosec // G304: path inside jailoc's cache directory
+		now := time.Now()
+		_ = os.Chtimes(dir, now, now)
 		return path, nil
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {

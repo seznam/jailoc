@@ -131,3 +131,44 @@ func TestRemoveTree(t *testing.T) {
 		t.Fatalf("Lstat after RemoveTree = %v, want not exist", err)
 	}
 }
+
+func TestPruneCacheDirs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	past := time.Now().Add(-8 * 24 * time.Hour)
+	recent := time.Now().Add(-2 * 24 * time.Hour)
+	addDir := func(name string, mtime time.Time) string {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Join(p, "runtime"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "runtime", RunnerBinary), []byte("x"), 0o755); err != nil { //nolint:gosec // G306: executable test fixture
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	staleUnused := addDir("1111111111111111", past)
+	staleKept := addDir("2222222222222222", past)
+	recentUnused := addDir("3333333333333333", recent)
+	staging := addDir(".unpack-1234", past)
+
+	removed, err := PruneCacheDirs(dir, []string{filepath.Join(staleKept, "runtime", "go-microvm-runner")})
+	if err != nil {
+		t.Fatalf("PruneCacheDirs: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if _, err := os.Stat(staleUnused); !os.IsNotExist(err) {
+		t.Errorf("staleUnused still exists (err %v)", err)
+	}
+	for _, p := range []string{staleKept, recentUnused, staging} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was removed: %v", p, err)
+		}
+	}
+}
