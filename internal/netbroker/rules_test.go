@@ -1,6 +1,7 @@
 package netbroker
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -683,23 +684,46 @@ func TestReviewFixes(t *testing.T) {
 		}
 	})
 
-	t.Run("enforceConn blocks pipelined HTTP request with denied Host", func(t *testing.T) {
+	t.Run("enforceConn tracks HTTP body framing and blocks pipelined denied Host", func(t *testing.T) {
 		t.Parallel()
-		aborted := false
 		ec := &enforceConn{
 			check: func(name string, bad bool) bool {
 				return !bad && name == "allowed.example.com"
 			},
-			abort: func() { aborted = true },
+			abort: func() {},
 		}
-		req1 := []byte("GET /one HTTP/1.1\r\nHost: allowed.example.com\r\n\r\n")
-		if !ec.inspect(req1) || aborted {
-			t.Fatal("first allowed HTTP request was rejected")
+		// Large upload (> 16 KiB) without \r\n\r\n in body succeeds.
+		bigBody := bytes.Repeat([]byte("A"), 32<<10)
+		reqBig := append([]byte("POST /upload HTTP/1.1\r\nHost: allowed.example.com\r\nContent-Length: 32768\r\n\r\n"), bigBody[:100]...)
+		if !ec.inspect(reqBig) {
+			t.Fatal("initial chunk of large POST rejected")
 		}
-		req2 := []byte("GET /two HTTP/1.1\r\nHost: denied.example.com\r\n\r\n")
-		if ec.inspect(req2) {
-			t.Fatal("second pipelined HTTP request with denied Host was allowed")
+		if !ec.inspect(bigBody[100:]) {
+			t.Fatal("remaining 32 KiB body of POST rejected")
+		}
+		// After the 2-byte body ("x "), a pipelined absolute-form request with
+		// conflicting authority is detected at its exact boundary.
+		pipelined := []byte("POST /a HTTP/1.1\r\nHost: allowed.example.com\r\nContent-Length: 2\r\n\r\nx GET http://denied.example.com/ HTTP/1.1\r\nHost: allowed.example.com\r\n\r\n")
+		if ec.inspect(pipelined) {
+			t.Fatal("pipelined conflicting absolute-URI request after POST body was allowed")
 		}
 	})
 
+	t.Run("wildcard allow does not require SNI inspection when DNS name is cached", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [{"name": "internet", "names": ["*"], "proto": "tcp"}]
+		}`), "wildcard-only")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := netip.MustParseAddrPort("93.184.216.34:443")
+		d := Decide(pol, Env{Names: []string{"cached.example.com"}}, ProtoTCP, dst)
+		if !d.Allow || d.byName {
+			t.Fatalf("Decide wildcard = %+v, want Allow=true byName=false", d)
+		}
+		if pol.needsNameInspection(dst, d.byName) {
+			t.Fatal("needsNameInspection returned true for wildcard rule with no hostname deny rules")
+		}
+	})
 }

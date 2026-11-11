@@ -67,7 +67,7 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true)
 		return
 	}
-	if p.needsNameInspection(dst, d.Name) {
+	if p.needsNameInspection(dst, d.byName) {
 		var wq waiter.Queue
 		ep, terr := r.CreateEndpoint(&wq)
 		if terr != nil {
@@ -138,7 +138,7 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		switch {
 		case !dPeer.Allow:
 			d = dPeer
-		case !inCache && dPeer.Name != "":
+		case !inCache && dPeer.byName:
 			// Matched by name rule, but the guest never resolved this name to dst.Addr().
 			// Check if an address/wildcard rule allows dst without any name.
 			envNoNames := env
@@ -181,6 +181,9 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	// short deadline on a non-standard port, keep enforcing hostname policy on
 	// the stream so neither a delayed TLS/HTTP handshake nor a pipelined/keep-alive
 	// second HTTP request can switch to a denied or mismatched Host/SNI.
+	// Wrapping replayed directly causes the first splice Read to feed the
+	// buffered bytes through enforceConn.inspect once, setting up HTTP body
+	// framing (Content-Length / chunked) before subsequent reads from rawConn.
 	stream := replayed
 	if peerName == "" || info["proto"] == "http" {
 		stream = &enforceConn{
@@ -215,7 +218,7 @@ func (b *Broker) allowPeerName(p *Policy, env Env, dst netip.AddrPort, peerName 
 	if !dPeer.Allow {
 		return false
 	}
-	if !inCache && dPeer.Name != "" {
+	if !inCache && dPeer.byName {
 		envNoNames := env
 		envNoNames.Names = nil
 		return Decide(p, envNoNames, ProtoTCP, dst).Allow

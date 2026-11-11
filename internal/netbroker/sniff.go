@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -378,17 +379,21 @@ func sniffedPeerNameStrict(info map[string]any) (string, bool) {
 
 // enforceConn wraps a spliced guest connection to enforce hostname policy on
 // delayed TLS/HTTP handshakes (after a server-first greeting) and on subsequent
-// HTTP requests on keep-alive/pipelined HTTP connections.
+// HTTP requests on keep-alive/pipelined HTTP connections, tracking HTTP body
+// framing (Content-Length, chunked Transfer-Encoding, and protocol upgrades).
 type enforceConn struct {
 	net.Conn
 	check func(peerName string, badAuthority bool) bool
 	abort func()
 
-	mu      sync.Mutex
-	buf     []byte
-	reads   int
-	doneTLS bool
-	inHTTP  bool
+	mu        sync.Mutex
+	buf       []byte
+	reads     int
+	doneTLS   bool
+	inHTTP    bool
+	bodyBytes int64
+	chunked   bool
+	chunkRem  int64 // -1 when reading chunk size line; >= 0 when reading chunk data + \r\n
 }
 
 func (c *enforceConn) Read(p []byte) (int, error) {
@@ -420,18 +425,27 @@ func (c *enforceConn) inspect(data []byte) bool {
 		if info != nil {
 			c.doneTLS, c.buf = true, nil
 			name, bad := sniffedPeerNameStrict(info)
-			if name == "" || !c.check(name, bad) {
+			return name != "" && c.check(name, bad)
+		}
+		return more && len(c.buf) <= sniffMax
+	}
+	for len(c.buf) > 0 {
+		if c.bodyBytes > 0 {
+			take := min(int64(len(c.buf)), c.bodyBytes)
+			c.buf = c.buf[take:]
+			c.bodyBytes -= take
+			continue
+		}
+		if c.chunked {
+			done, ok := c.consumeChunked()
+			if !ok {
 				return false
 			}
-			return true
+			if !done {
+				return true
+			}
+			continue
 		}
-		if !more || len(c.buf) > sniffMax {
-			return false
-		}
-		return true
-	}
-	// Check every HTTP request header block that appears in the stream.
-	for {
 		idx := bytes.Index(c.buf, []byte("\r\n\r\n"))
 		if idx < 0 {
 			if !c.inHTTP {
@@ -442,45 +456,126 @@ func (c *enforceConn) inspect(data []byte) bool {
 					return true
 				}
 			}
-			if len(c.buf) > sniffMax {
-				return false
-			}
-			return true
+			return len(c.buf) <= sniffMax
 		}
 		block := c.buf[:idx+4]
 		info, _ := identifyHTTPForPolicy(block)
-		if info != nil {
-			c.inHTTP = true
-			name, bad := sniffedPeerNameStrict(info)
-			if name == "" || !c.check(name, bad) {
-				return false
+		if info == nil {
+			if !c.inHTTP {
+				c.doneTLS, c.buf = true, nil
+				return true
 			}
-			// If this request has a body (Content-Length or Transfer-Encoding) or
-			// upgrades, disallow further pipelined requests unless they start cleanly.
-			c.buf = c.buf[idx+4:]
-			continue
+			return false
 		}
-		if !c.inHTTP {
+		c.inHTTP = true
+		name, bad := sniffedPeerNameStrict(info)
+		if name == "" || !c.check(name, bad) {
+			return false
+		}
+		bodyLen, chunked, upgraded, ok := parseHTTPFraming(string(block[:idx]))
+		if !ok {
+			return false
+		}
+		if upgraded {
 			c.doneTLS, c.buf = true, nil
 			return true
 		}
-		// In an HTTP stream, if residual body bytes precede the next request line,
-		// scan for any embedded HTTP request line with a Host header.
-		if !c.checkEmbeddedHTTPHosts(c.buf) {
-			return false
+		c.bodyBytes = bodyLen
+		c.chunked = chunked
+		if chunked {
+			c.chunkRem = -1
 		}
 		c.buf = c.buf[idx+4:]
 	}
+	return true
 }
 
-func (c *enforceConn) checkEmbeddedHTTPHosts(b []byte) bool {
-	for _, line := range bytes.Split(b, []byte("\r\n")) {
-		if k, v, ok := strings.Cut(string(line), ":"); ok && strings.EqualFold(strings.TrimSpace(k), "host") {
-			host := normalizeAuthority(strings.TrimSpace(v))
-			if host == "" || !c.check(host, false) {
-				return false
+func (c *enforceConn) consumeChunked() (done, ok bool) {
+	for len(c.buf) > 0 {
+		if c.chunkRem >= 0 {
+			take := min(int64(len(c.buf)), c.chunkRem)
+			c.buf = c.buf[take:]
+			c.chunkRem -= take
+			if c.chunkRem > 0 {
+				return false, true
 			}
+			if len(c.buf) < 2 {
+				return false, true
+			}
+			if c.buf[0] != '\r' || c.buf[1] != '\n' {
+				return false, false
+			}
+			c.buf = c.buf[2:]
+			c.chunkRem = -1
+			continue
+		}
+		lineEnd := bytes.Index(c.buf, []byte("\r\n"))
+		if lineEnd < 0 {
+			return false, len(c.buf) <= 1024
+		}
+		line := string(c.buf[:lineEnd])
+		sizeStr, _, _ := strings.Cut(line, ";")
+		sz, err := strconv.ParseInt(strings.TrimSpace(sizeStr), 16, 64)
+		if err != nil || sz < 0 {
+			return false, false
+		}
+		c.buf = c.buf[lineEnd+2:]
+		if sz == 0 {
+			// Consume trailer headers ending in \r\n.
+			if bytes.HasPrefix(c.buf, []byte("\r\n")) {
+				c.buf = c.buf[2:]
+				c.chunked = false
+				return true, true
+			}
+			trEnd := bytes.Index(c.buf, []byte("\r\n\r\n"))
+			if trEnd < 0 {
+				// Put back "0\r\n" until trailers arrive.
+				c.buf = append([]byte("0\r\n"), c.buf...)
+				return false, len(c.buf) <= sniffMax
+			}
+			c.buf = c.buf[trEnd+4:]
+			c.chunked = false
+			return true, true
+		}
+		c.chunkRem = sz
+	}
+	return false, true
+}
+
+func parseHTTPFraming(head string) (contentLen int64, chunked, upgraded, ok bool) {
+	lines := strings.Split(head, "\r\n")
+	parts := strings.Fields(lines[0])
+	if len(parts) == 3 && parts[0] == "CONNECT" {
+		return 0, false, true, true
+	}
+	hasCL := false
+	for _, l := range lines[1:] {
+		k, v, found := strings.Cut(l, ":")
+		if !found {
+			continue
+		}
+		k = strings.ToLower(strings.TrimSpace(k))
+		v = strings.TrimSpace(v)
+		switch k {
+		case "content-length":
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 || (hasCL && n != contentLen) {
+				return 0, false, false, false
+			}
+			contentLen, hasCL = n, true
+		case "transfer-encoding":
+			if strings.Contains(strings.ToLower(v), "chunked") {
+				chunked = true
+			} else {
+				return 0, false, false, false
+			}
+		case "upgrade":
+			upgraded = true
 		}
 	}
-	return true
+	if hasCL && chunked {
+		// Reject CL + TE smuggling ambiguity.
+		return 0, false, false, false
+	}
+	return contentLen, chunked, upgraded, true
 }

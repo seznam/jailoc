@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -549,8 +550,9 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 	}
 
 	// Legacy allowed_hosts could resolve to private/ULA addresses, which
-	// hostname rules alone do not open. Resolve them on the host into CIDRs
-	// on the legacy rule so migrated configs keep private-host access.
+	// hostname rules alone do not open. Resolve them on the host and emit
+	// only non-public addresses as CIDRs so public hosts stay governed by
+	// hostname rules and SNI inspection.
 	var resolvedLegacyCIDRs []string
 	for _, h := range ws.AllowedHosts {
 		if net.ParseIP(h) != nil || strings.Contains(h, "/") {
@@ -562,14 +564,21 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 			continue
 		}
 		for _, ip := range ips {
+			addr, ok := netip.AddrFromSlice(ip)
+			if !ok {
+				continue
+			}
+			addr = addr.Unmap()
+			if isPublicLegacyAddr(addr) {
+				continue
+			}
 			prefix := "/128"
-			if ip.To4() != nil {
+			if addr.Is4() {
 				prefix = "/32"
 			}
-			resolvedLegacyCIDRs = append(resolvedLegacyCIDRs, ip.String()+prefix)
+			resolvedLegacyCIDRs = append(resolvedLegacyCIDRs, addr.String()+prefix)
 		}
 	}
-
 	for _, r := range rules {
 		isAllow := len(r.Allow) > 0
 		targets := r.Allow
@@ -610,6 +619,36 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		return nil, fmt.Errorf("encode broker policy: %w", err)
 	}
 	return data, nil
+}
+
+var legacyPrivateV4 = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
+func isPublicLegacyAddr(addr netip.Addr) bool {
+	if addr.Is4() {
+		for _, pfx := range legacyPrivateV4 {
+			if pfx.Contains(addr) {
+				return false
+			}
+		}
+		return true
+	}
+	return !addr.IsPrivate() && netip.MustParsePrefix("2000::/3").Contains(addr)
 }
 
 func compileVMRule(name, proto string, ports []config.RulePort, targets []string) (vmRule, error) {

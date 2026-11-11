@@ -396,13 +396,13 @@ func ruleCovers(denyProto *string, denyRanges []portRange, allowProto string, al
 
 // needsNameInspection reports whether a TCP flow to dst on port requires
 // reading the TLS SNI or HTTP Host header before dialing upstream.
-func (p *Policy) needsNameInspection(dst netip.AddrPort, matchedName string) bool {
+func (p *Policy) needsNameInspection(dst netip.AddrPort, byName bool) bool {
 	if p == nil || !p.rulesMode {
 		return false
 	}
 	// If the flow was authorized via a DNS-cached name, verify the TLS SNI /
 	// HTTP Host matches the policy and belongs to the resolved IP.
-	if matchedName != "" {
+	if byName {
 		return true
 	}
 	// If any deny rule has name patterns on this port, inspect to prevent
@@ -456,6 +456,7 @@ type Decision struct {
 	Reason string `json:"reason"`
 	Name   string `json:"name,omitempty"`
 	Rule   string `json:"rule,omitempty"`
+	byName bool
 }
 
 // Decide evaluates a new guest flow to dst. Gateway services (DNS, DHCP) are
@@ -533,7 +534,7 @@ func matchRule(r *Rule, names []string, proto string, dst netip.AddrPort, isPubl
 		// Name rules only open public addresses unless the rule also matches by CIDR;
 		// deny rules match any address whose name matches.
 		if (!allow || isPublic) && r.matchesName(proto, dst.Port(), name) {
-			return Decision{Allow: allow, Reason: reason, Name: name, Rule: r.Name}, true
+			return Decision{Allow: allow, Reason: reason, Name: name, Rule: r.Name, byName: true}, true
 		}
 	}
 	if r.matchesAddr(proto, dst, isPublic) {
