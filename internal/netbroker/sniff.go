@@ -375,3 +375,112 @@ func sniffedPeerNameStrict(info map[string]any) (string, bool) {
 	}
 	return "", false
 }
+
+// enforceConn wraps a spliced guest connection to enforce hostname policy on
+// delayed TLS/HTTP handshakes (after a server-first greeting) and on subsequent
+// HTTP requests on keep-alive/pipelined HTTP connections.
+type enforceConn struct {
+	net.Conn
+	check func(peerName string, badAuthority bool) bool
+	abort func()
+
+	mu      sync.Mutex
+	buf     []byte
+	reads   int
+	doneTLS bool
+	inHTTP  bool
+}
+
+func (c *enforceConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 && !c.inspect(p[:n]) {
+		c.abort()
+		return 0, errors.New("policy denied stream")
+	}
+	return n, err
+}
+
+func (c *enforceConn) CloseWrite() error {
+	if cw, ok := c.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return c.Close()
+}
+
+func (c *enforceConn) inspect(data []byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.doneTLS {
+		return true
+	}
+	c.reads++
+	c.buf = append(c.buf, data...)
+	if !c.inHTTP && len(c.buf) > 0 && c.buf[0] == 0x16 {
+		info, more := identifyForPolicy(c.buf)
+		if info != nil {
+			c.doneTLS, c.buf = true, nil
+			name, bad := sniffedPeerNameStrict(info)
+			if name == "" || !c.check(name, bad) {
+				return false
+			}
+			return true
+		}
+		if !more || len(c.buf) > sniffMax {
+			return false
+		}
+		return true
+	}
+	// Check every HTTP request header block that appears in the stream.
+	for {
+		idx := bytes.Index(c.buf, []byte("\r\n\r\n"))
+		if idx < 0 {
+			if !c.inHTTP {
+				_, more := identifyHTTPForPolicy(c.buf)
+				if !more {
+					// Not TLS and not HTTP (e.g. SSH or SMTP binary/text protocol).
+					c.doneTLS, c.buf = true, nil
+					return true
+				}
+			}
+			if len(c.buf) > sniffMax {
+				return false
+			}
+			return true
+		}
+		block := c.buf[:idx+4]
+		info, _ := identifyHTTPForPolicy(block)
+		if info != nil {
+			c.inHTTP = true
+			name, bad := sniffedPeerNameStrict(info)
+			if name == "" || !c.check(name, bad) {
+				return false
+			}
+			// If this request has a body (Content-Length or Transfer-Encoding) or
+			// upgrades, disallow further pipelined requests unless they start cleanly.
+			c.buf = c.buf[idx+4:]
+			continue
+		}
+		if !c.inHTTP {
+			c.doneTLS, c.buf = true, nil
+			return true
+		}
+		// In an HTTP stream, if residual body bytes precede the next request line,
+		// scan for any embedded HTTP request line with a Host header.
+		if !c.checkEmbeddedHTTPHosts(c.buf) {
+			return false
+		}
+		c.buf = c.buf[idx+4:]
+	}
+}
+
+func (c *enforceConn) checkEmbeddedHTTPHosts(b []byte) bool {
+	for _, line := range bytes.Split(b, []byte("\r\n")) {
+		if k, v, ok := strings.Cut(string(line), ":"); ok && strings.EqualFold(strings.TrimSpace(k), "host") {
+			host := normalizeAuthority(strings.TrimSpace(v))
+			if host == "" || !c.check(host, false) {
+				return false
+			}
+		}
+	}
+	return true
+}

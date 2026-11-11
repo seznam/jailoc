@@ -622,4 +622,84 @@ func TestReviewFixes(t *testing.T) {
 		}
 	})
 
+	t.Run("CNAME chain bounds query-name TTL even when A precedes CNAME", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [{"name": "web", "names": ["alias.example.com", "target.example.com"], "proto": "tcp", "ports": ["443"]}]
+		}`), "cname-ttl-reordered")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := New(Config{
+			Subnet:  netip.MustParsePrefix("192.168.127.0/24"),
+			Gateway: netip.MustParseAddr("192.168.127.1"),
+			GuestIP: netip.MustParseAddr("192.168.127.2"),
+		}, pol)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now()
+		b.names.now = func() time.Time { return now }
+
+		alias := dnsmessage.MustNewName("alias.example.com.")
+		target := dnsmessage.MustNewName("target.example.com.")
+		q, _ := (&dnsmessage.Message{
+			Questions: []dnsmessage.Question{{Name: alias, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		}).Pack()
+		resp, _ := (&dnsmessage.Message{
+			Header:    dnsmessage.Header{Response: true},
+			Questions: []dnsmessage.Question{{Name: alias, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+			Answers: []dnsmessage.Resource{
+				{
+					Header: dnsmessage.ResourceHeader{Name: target, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 3600},
+					Body:   &dnsmessage.AResource{A: [4]byte{93, 184, 216, 34}},
+				},
+				{
+					Header: dnsmessage.ResourceHeader{Name: alias, Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET, TTL: 2},
+					Body:   &dnsmessage.CNAMEResource{CNAME: target},
+				},
+			},
+		}).Pack()
+		b.logDNS("udp", q, resp, nil)
+		ip := netip.MustParseAddr("93.184.216.34")
+		now = now.Add(5 * time.Second)
+		got := b.names.lookup(ip)
+		if slices.Contains(got, "alias.example.com") {
+			t.Fatalf("alias remained cached past CNAME TTL when A preceded CNAME: %v", got)
+		}
+	})
+
+	t.Run("mapped IPv4 CIDR prefix normalized to IPv4", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [{"name": "mapped-cidr", "cidrs": ["::ffff:10.20.5.0/120"], "proto": "tcp", "ports": ["5432"]}]
+		}`), "mapped-cidr")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := Decide(pol, Env{}, ProtoTCP, netip.MustParseAddrPort("10.20.5.42:5432"))
+		if !got.Allow || got.Rule != "mapped-cidr" {
+			t.Fatalf("Decide mapped CIDR = %+v, want allow rule=mapped-cidr", got)
+		}
+	})
+
+	t.Run("enforceConn blocks pipelined HTTP request with denied Host", func(t *testing.T) {
+		t.Parallel()
+		aborted := false
+		ec := &enforceConn{
+			check: func(name string, bad bool) bool {
+				return !bad && name == "allowed.example.com"
+			},
+			abort: func() { aborted = true },
+		}
+		req1 := []byte("GET /one HTTP/1.1\r\nHost: allowed.example.com\r\n\r\n")
+		if !ec.inspect(req1) || aborted {
+			t.Fatal("first allowed HTTP request was rejected")
+		}
+		req2 := []byte("GET /two HTTP/1.1\r\nHost: denied.example.com\r\n\r\n")
+		if ec.inspect(req2) {
+			t.Fatal("second pipelined HTTP request with denied Host was allowed")
+		}
+	})
+
 }

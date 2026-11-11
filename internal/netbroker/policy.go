@@ -156,6 +156,9 @@ func (r *Rule) compile(kind string) error {
 				return fmt.Errorf("%s rule %q: cidr %q: %w", kind, r.Name, c, err)
 			}
 		}
+		if pfx.Addr().Is4In6() && pfx.Bits() >= 96 {
+			pfx = netip.PrefixFrom(pfx.Addr().Unmap(), pfx.Bits()-96)
+		}
 		r.prefixes = append(r.prefixes, pfx.Masked())
 	}
 	var names []string

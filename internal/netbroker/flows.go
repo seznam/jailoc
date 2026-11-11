@@ -155,15 +155,10 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	case incomplete || info != nil || isHTTPOrTLSPort(dst.Port()):
 		// Timed out waiting for TLS ClientHello / HTTP headers on an HTTP/TLS
 		// port (or after partial TLS/HTTP bytes), or received TLS/HTTP without
-		// an SNI/Host header: fail closed unless an address or wildcard rule
-		// allows the destination without a hostname. On non-HTTP/TLS ports
-		// where the client sent 0 bytes (server-first protocols like SSH or
-		// SMTP), L4 DNS-cache authorization stands.
-		envNoNames := env
-		envNoNames.Names = nil
-		if dAddr := Decide(p, envNoNames, ProtoTCP, dst); !dAddr.Allow {
-			d = Decision{Allow: false, Reason: "sni-required", Name: d.Name}
-		}
+		// an SNI/Host header: fail closed even when a wildcard or CIDR rule
+		// matched at L4, so a guest cannot wait out the 2s deadline and then
+		// send a denied SNI/Host over an unchecked splice.
+		d = Decision{Allow: false, Reason: "sni-required", Name: d.Name}
 	}
 	b.recordFlow(conn, ProtoTCP, src, dst, d)
 	if info != nil {
@@ -182,7 +177,50 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		_ = rawConn.Close()
 		return
 	}
-	splice(replayed, out)
+	// If the connection is plain HTTP, or if the client sent 0 bytes before the
+	// short deadline on a non-standard port, keep enforcing hostname policy on
+	// the stream so neither a delayed TLS/HTTP handshake nor a pipelined/keep-alive
+	// second HTTP request can switch to a denied or mismatched Host/SNI.
+	stream := replayed
+	if peerName == "" || info["proto"] == "http" {
+		stream = &enforceConn{
+			Conn: replayed,
+			check: func(name string, bad bool) bool {
+				if bad {
+					return false
+				}
+				return b.allowPeerName(p, env, dst, name)
+			},
+			abort: func() {
+				ep.Abort()
+				_ = rawConn.Close()
+				_ = out.Close()
+			},
+		}
+	}
+	splice(stream, out)
+}
+
+func (b *Broker) allowPeerName(p *Policy, env Env, dst netip.AddrPort, peerName string) bool {
+	inCache := false
+	for _, n := range env.Names {
+		if n == peerName {
+			inCache = true
+			break
+		}
+	}
+	envWithPeer := env
+	envWithPeer.Names = []string{peerName}
+	dPeer := Decide(p, envWithPeer, ProtoTCP, dst)
+	if !dPeer.Allow {
+		return false
+	}
+	if !inCache && dPeer.Name != "" {
+		envNoNames := env
+		envNoNames.Names = nil
+		return Decide(p, envNoNames, ProtoTCP, dst).Allow
+	}
+	return true
 }
 
 // handleUDP runs for every new guest UDP flow. Returning false makes the

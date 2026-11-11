@@ -86,6 +86,9 @@ func ParseRuleTarget(target string) (kind string, normalized string, err error) 
 		if err != nil {
 			return "", "", fmt.Errorf("invalid CIDR %q: %w", target, err)
 		}
+		if pfx.Addr().Is4In6() && pfx.Bits() >= 96 {
+			pfx = netip.PrefixFrom(pfx.Addr().Unmap(), pfx.Bits()-96)
+		}
 		return "cidr", pfx.Masked().String(), nil
 	}
 	if addr, err := netip.ParseAddr(t); err == nil {

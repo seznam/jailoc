@@ -20,7 +20,8 @@ package guest
 //
 // Protocol 2: the guest configures IPv6 only when Config.IPv6 is set, and
 // the broker policy denies IPv6 unless its ipv6 field is set.
-const Protocol = 2
+// Protocol 3: the broker policy uses dns, allow and deny rules.
+const Protocol = 3
 
 // Paths inside the guest root file system.
 const (

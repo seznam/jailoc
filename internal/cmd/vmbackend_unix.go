@@ -575,9 +575,6 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		targets := r.Allow
 		if !isAllow {
 			targets = r.Deny
-		} else if r.Name == "legacy" && len(resolvedLegacyCIDRs) > 0 {
-			targets = append(slices.Clone(targets), resolvedLegacyCIDRs...)
-			resolvedLegacyCIDRs = nil
 		}
 		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets)
 		if err != nil {
@@ -588,6 +585,13 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		} else {
 			deny = append(deny, br)
 		}
+	}
+	if len(resolvedLegacyCIDRs) > 0 {
+		br, err := compileVMRule("legacy", config.RuleProtoAny, nil, resolvedLegacyCIDRs)
+		if err != nil {
+			return nil, err
+		}
+		allow = append(allow, br)
 	}
 
 	policy := struct {

@@ -164,3 +164,12 @@ func TestReloadPolicyIPv6(t *testing.T) {
 		})
 	}
 }
+
+func TestReloadPolicyRejectsOlderBrokerForRules(t *testing.T) {
+	t.Parallel()
+	running := vm.Spec{GuestProtocol: 2, Guest: &guest.Config{}}
+	ws := &workspace.Resolved{Name: "api", DNSUpstream: "9.9.9.9"}
+	if _, err := reloadPolicy(context.Background(), ws, running); err == nil {
+		t.Fatal("reloadPolicy accepted rules policy for protocol 2 broker")
+	}
+}

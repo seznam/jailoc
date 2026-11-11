@@ -383,43 +383,55 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 				if perr != nil {
 					break
 				}
-				ttl := time.Duration(h.TTL) * time.Second
-				owner := h.Name.String()
-				switch h.Type {
-				case dnsmessage.TypeCNAME:
+				if h.Type == dnsmessage.TypeCNAME {
+					ttl := time.Duration(h.TTL) * time.Second
 					if !hasCNAME || ttl < minCNAME {
 						minCNAME = ttl
 						hasCNAME = true
 					}
-					_ = rp.SkipAnswer()
-				case dnsmessage.TypeA:
-					if a, perr := rp.AResource(); perr == nil {
-						ip := netip.AddrFrom4(a.A)
-						answers = append(answers, ip.String())
-						qTTL := ttl
-						if hasCNAME && minCNAME < qTTL {
-							qTTL = minCNAME
-						}
-						b.names.record(ip, qname, qTTL)
-						if owner != qname {
-							b.names.record(ip, owner, ttl)
-						}
+				}
+				_ = rp.SkipAnswer()
+			}
+			var rp2 dnsmessage.Parser
+			if _, perr := rp2.Start(resp); perr == nil {
+				_ = rp2.SkipAllQuestions()
+				for {
+					h, perr := rp2.AnswerHeader()
+					if perr != nil {
+						break
 					}
-				case dnsmessage.TypeAAAA:
-					if a, perr := rp.AAAAResource(); perr == nil {
-						ip := netip.AddrFrom16(a.AAAA)
-						answers = append(answers, ip.String())
-						qTTL := ttl
-						if hasCNAME && minCNAME < qTTL {
-							qTTL = minCNAME
+					ttl := time.Duration(h.TTL) * time.Second
+					owner := h.Name.String()
+					switch h.Type {
+					case dnsmessage.TypeA:
+						if a, perr := rp2.AResource(); perr == nil {
+							ip := netip.AddrFrom4(a.A)
+							answers = append(answers, ip.String())
+							qTTL := ttl
+							if hasCNAME && minCNAME < qTTL {
+								qTTL = minCNAME
+							}
+							b.names.record(ip, qname, qTTL)
+							if owner != qname {
+								b.names.record(ip, owner, ttl)
+							}
 						}
-						b.names.record(ip, qname, qTTL)
-						if owner != qname {
-							b.names.record(ip, owner, ttl)
+					case dnsmessage.TypeAAAA:
+						if a, perr := rp2.AAAAResource(); perr == nil {
+							ip := netip.AddrFrom16(a.AAAA)
+							answers = append(answers, ip.String())
+							qTTL := ttl
+							if hasCNAME && minCNAME < qTTL {
+								qTTL = minCNAME
+							}
+							b.names.record(ip, qname, qTTL)
+							if owner != qname {
+								b.names.record(ip, owner, ttl)
+							}
 						}
+					default:
+						_ = rp2.SkipAnswer()
 					}
-				default:
-					_ = rp.SkipAnswer()
 				}
 			}
 		}
