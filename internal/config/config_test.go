@@ -77,6 +77,53 @@ build_context = "/tmp/context"
 	}
 }
 
+func TestLoadUnknownKeys(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `
+typo_top = 1
+
+[network.dns]
+upstream = "9.9.9.9"
+
+[defaults]
+ca_bundle = true
+
+[[defaults.network.rules]]
+allow = ["example.com"]
+ports = [443, "8000-8100"]
+colour = "red"
+
+[workspaces.default]
+paths = ["/data"]
+host_ports = [9222]
+pathz = ["/x"]
+
+[workspaces.default.agents.opencode]
+profile = false
+`)
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	want := []string{"typo_top", "network.dns", "defaults.network.rules.colour", "workspaces.default.pathz"}
+	if got := cfg.UnknownKeys(); !slices.Equal(got, want) {
+		t.Fatalf("UnknownKeys() = %q, want %q", got, want)
+	}
+
+	defaultPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := createDefaultAt(defaultPath); err != nil {
+		t.Fatal(err)
+	}
+	def, err := ReadRaw(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := def.UnknownKeys(); len(got) > 0 {
+		t.Fatalf("default config UnknownKeys() = %q, want none", got)
+	}
+}
+
 func TestLoadMinimalConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

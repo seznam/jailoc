@@ -606,6 +606,9 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 	for _, c := range m.changes {
 		_, _ = fmt.Fprintf(p.out, "  %s\n", c)
 	}
+	for _, k := range cfg.UnknownKeys() {
+		_, _ = color.New(color.FgYellow).Fprintf(p.out, "  remove unknown setting %q\n", k)
+	}
 	if migrateDryRun {
 		data, err := config.Encode(cfg)
 		if err != nil {

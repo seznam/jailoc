@@ -21,6 +21,7 @@ import (
 	"github.com/seznam/jailoc/internal/embed"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
+	"github.com/tailscale/hujson"
 )
 
 var upCmd = &cobra.Command{
@@ -38,7 +39,7 @@ func runUp(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	printDeprecationWarnings(cfg)
+	printConfigWarnings(cfg)
 
 	wss, err := targetWorkspaces(cfg, args)
 	if err != nil {
@@ -417,8 +418,13 @@ func configuredTUIPlugins(ws *workspace.Resolved, guestDir string) ([]json.RawMe
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", f.name, err)
 		}
+		// OpenCode accepts JSONC (comments, trailing commas) in these files.
+		std, err := hujson.Standardize(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", hostPath, err)
+		}
 		var cfg map[string]json.RawMessage
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		if err := json.Unmarshal(std, &cfg); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", hostPath, err)
 		}
 		var plugins []json.RawMessage

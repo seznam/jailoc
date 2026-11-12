@@ -357,6 +357,16 @@ type Config struct {
 	VM           VMConfig             `toml:"vm,omitempty"`
 	Defaults     Defaults             `toml:"defaults,omitempty"`
 	Workspaces   map[string]Workspace `toml:"workspaces"`
+
+	// unknown holds the keys of the file jailoc does not know; they are
+	// ignored.
+	unknown []string
+}
+
+// UnknownKeys returns the keys in the configuration file that jailoc does not
+// know and ignores, without the keys nested under them.
+func (c *Config) UnknownKeys() []string {
+	return c.unknown
 }
 
 // VMConfig locates the host runtime of the vm backend. Empty fields use
@@ -605,15 +615,32 @@ func loadFrom(path string, defaultPath bool) (*Config, error) {
 
 func decode(path string) (*Config, error) {
 	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	md, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("parse TOML %q: %w", path, err)
 	}
+	cfg.unknown = unknownKeys(md.Undecoded())
 
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = map[string]Workspace{}
 	}
 
 	return &cfg, nil
+}
+
+// unknownKeys returns the keys of undecoded that no other undecoded key
+// contains.
+func unknownKeys(undecoded []toml.Key) []string {
+	var out []string
+	for _, k := range undecoded {
+		nested := slices.ContainsFunc(undecoded, func(p toml.Key) bool {
+			return len(p) < len(k) && slices.Equal(p, k[:len(p)])
+		})
+		if !nested {
+			out = append(out, k.String())
+		}
+	}
+	return out
 }
 
 // ReadRaw decodes path without validation or path expansion, for tools

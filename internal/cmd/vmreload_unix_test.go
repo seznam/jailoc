@@ -128,6 +128,27 @@ func TestRestartOnlyChangesIPv6(t *testing.T) {
 	}
 }
 
+func TestRestartOnlyChangesSession(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name                string
+		runningEnv, wantEnv []string
+		runningDir, wantDir string
+		changes             []string
+	}{
+		{"unchanged", []string{"A=1"}, []string{"A=1"}, "/w", "/w", nil},
+		{"env", []string{"A=1"}, []string{"A=2"}, "/w", "/w", []string{"TUI plugins"}},
+		{"working directory", nil, nil, "/w", "/x", []string{"the working directory"}},
+		{"both", nil, []string{"A=1"}, "/w", "/x", []string{"TUI plugins", "the working directory"}},
+	} {
+		running := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &guest.Config{Env: tt.runningEnv, WorkDir: tt.runningDir}}
+		want := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &guest.Config{Env: tt.wantEnv, WorkDir: tt.wantDir}}
+		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.changes)
+		}
+	}
+}
+
 func TestReloadPolicyIPv6(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
