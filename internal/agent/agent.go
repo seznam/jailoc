@@ -284,9 +284,11 @@ var harnesses = []Harness{
 		State: []StateDir{{Name: "claude", Path: "/home/agent/.claude"}},
 		ConfigFiles: []ConfigFile{
 			{Path: ".claude/CLAUDE.md"},
+			{Path: ".claude/RTK.md"},
 			{Path: ".claude/settings.json"},
 			{Path: ".claude/agents"},
 			{Path: ".claude/commands"},
+			{Path: ".claude/hooks"},
 			{Path: ".claude/skills"},
 			{Path: ".claude/output-styles"},
 		},
@@ -310,6 +312,7 @@ var harnesses = []Harness{
 		ConfigFiles: []ConfigFile{
 			{Path: ".copilot/copilot-instructions.md"},
 			{Path: ".copilot/agents"},
+			{Path: ".copilot/hooks"},
 			{Path: ".copilot/skills"},
 			{Path: ".copilot/mcp-config.json"},
 		},

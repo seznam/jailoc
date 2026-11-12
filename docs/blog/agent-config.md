@@ -24,8 +24,8 @@ With `import_agent_config = true`, jailoc copies these host paths to the same pa
 |---|---|
 | `opencode`, `opencode2` | `~/.config/opencode`, without `node_modules` |
 | `opencode1` | `~/.config/opencode`, without `node_modules`; `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
-| `claude` | `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, `~/.claude/agents`, `~/.claude/commands`, `~/.claude/skills`, `~/.claude/output-styles` |
-| `copilot` | `~/.copilot/copilot-instructions.md`, `~/.copilot/agents`, `~/.copilot/skills`, `~/.copilot/mcp-config.json` |
+| `claude` | `~/.claude/CLAUDE.md`, `~/.claude/RTK.md`, `~/.claude/settings.json`, `~/.claude/agents`, `~/.claude/commands`, `~/.claude/hooks`, `~/.claude/skills`, `~/.claude/output-styles` |
+| `copilot` | `~/.copilot/copilot-instructions.md`, `~/.copilot/agents`, `~/.copilot/hooks`, `~/.copilot/skills`, `~/.copilot/mcp-config.json` |
 | `agy` | `~/.gemini/GEMINI.md` |
 | `omo` | `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
 
