@@ -35,6 +35,22 @@ var upCmd = &cobra.Command{
 }
 
 func runUp(ctx context.Context, args []string) error {
+	if !allFlag {
+		if cwd, err := os.Getwd(); err == nil {
+			seed := ""
+			if len(args) == 1 {
+				seed = args[0]
+			}
+			res, err := maybeOfferFirstTimeSetup(ctx, cwd, seed)
+			if err != nil {
+				return err
+			}
+			if res.name != "" {
+				args = []string{res.name}
+			}
+		}
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
