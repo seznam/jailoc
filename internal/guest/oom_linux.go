@@ -42,7 +42,7 @@ func startOOMGuard(logger *slog.Logger) (stop func(), err error) {
 		_ = unix.Close(fd)
 		return nil, fmt.Errorf("oom guard: subscribe to proc events: %w", err)
 	}
-	g := &oomGuard{logger: logger, init: os.Getpid(), agents: map[int]bool{}}
+	g := &oomGuard{logger: logger, init: os.Getpid(), agents: map[int]bool{}, readAdj: readOOMAdj, writeAdj: writeOOMAdj}
 	// Exempts init and resets the processes it started before subscribing.
 	g.rescan()
 	var once sync.Once
@@ -75,6 +75,10 @@ type oomGuard struct {
 	logger *slog.Logger
 	init   int          // PID of jailoc-guest init
 	agents map[int]bool // thread group IDs of session programs
+	// readAdj and writeAdj access /proc/<pid>/oom_score_adj; tests
+	// replace them.
+	readAdj  func(pid int) (int, error)
+	writeAdj func(pid, adj int) error
 }
 
 func (g *oomGuard) handle(ev procEvent) {
@@ -99,6 +103,13 @@ func (g *oomGuard) handle(ev procEvent) {
 		case ev.childTGID == ev.tgid: // a new thread
 		case g.agents[ev.tgid], ev.tgid == g.init:
 			g.set(ev.childTGID, oomAdjChild)
+		default:
+			// A process that forked before the guard reset it passed init's
+			// exemption on. Session processes regain it on exec, which is
+			// handled after this fork.
+			if adj, err := g.readAdj(ev.childTGID); err == nil && adj == oomAdjGuest {
+				g.set(ev.childTGID, oomAdjChild)
+			}
 		}
 	case procEventExit:
 		if ev.pid == ev.tgid {
@@ -132,10 +143,29 @@ func (g *oomGuard) rescan() {
 
 // set writes the oom_score_adj of pid. A process that exited is skipped.
 func (g *oomGuard) set(pid, adj int) {
-	err := os.WriteFile("/proc/"+strconv.Itoa(pid)+"/oom_score_adj", []byte(strconv.Itoa(adj)), 0)
+	err := g.writeAdj(pid, adj)
 	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ESRCH) {
 		g.logger.Warn("oom guard: set oom_score_adj", "pid", pid, "error", err)
 	}
+}
+
+func readOOMAdj(pid int) (int, error) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/oom_score_adj")
+	if err != nil {
+		return 0, fmt.Errorf("read oom_score_adj of %d: %w", pid, err)
+	}
+	adj, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("parse oom_score_adj of %d: %w", pid, err)
+	}
+	return adj, nil
+}
+
+func writeOOMAdj(pid, adj int) error {
+	if err := os.WriteFile("/proc/"+strconv.Itoa(pid)+"/oom_score_adj", []byte(strconv.Itoa(adj)), 0); err != nil {
+		return fmt.Errorf("write oom_score_adj of %d: %w", pid, err)
+	}
+	return nil
 }
 
 // readProcInfo reads the parent, executable, command line and
