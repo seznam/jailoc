@@ -94,7 +94,7 @@ Defaults applied to all workspaces.
 | `ssh_auth_sock` | bool | `false` | Relay the host SSH agent (`$SSH_AUTH_SOCK`) into the VM at `/run/ssh-agent.sock` and copy `~/.ssh/known_hosts` into it. |
 | `gpg_agent` | bool | `false` | Relay the host gpg-agent extra socket into the VM at `/run/user/<uid>/gnupg/S.gpg-agent` and import the public key of `user.signingKey`, or of all host secret keys when it is unset, into the VM keyring. Requires `gpg` in the image. |
 | `git_config` | bool | `true` | Copy the host Git configuration read-only into the VM: `~/.gitconfig`, `config`, `ignore` and `attributes` from `$XDG_CONFIG_HOME/git` (default `~/.config/git`), and the files they reference under the home directory. See [`git_config`](#git_config). |
-| `agent_config` | bool | `true` | Copy the coding agent's host configuration read-only into the VM, such as `~/.claude/CLAUDE.md` or `~/.config/opencode`. See [`agent_config`](#agent_config). |
+| `import_agent_config` | bool | `true` | Copy the coding agent's host configuration read-only into the VM, such as `~/.claude/CLAUDE.md` or `~/.config/opencode`. See [`import_agent_config`](#import_agent_config). |
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
@@ -211,7 +211,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
 | `network` | table | `{}` | Same fields as [`[defaults.network]`](#defaultsnetwork); a set field wins. |
-| `ssh_auth_sock`, `gpg_agent`, `git_config`, `agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
+| `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
 
 ### Example
 
@@ -306,7 +306,7 @@ from = "opencode"
 mounts = ["~/.config/opencode-legacy:/home/agent/.config/opencode"]
 ```
 
-A mount at the destination of an [`agent_config`](#agent_config) copy replaces the copy.
+A mount at the destination of an [`import_agent_config`](#import_agent_config) copy replaces the copy.
 
 ### Agent profiles
 
@@ -390,7 +390,7 @@ Configuration files are copied with two rewrites: values of the path variables a
 
 Each copy is a default snapshot: a [`snapshots`](#snapshots) entry with the same destination replaces it, an entry with an empty host removes it, and a directory snapshot that contains its destination replaces it.
 
-### `agent_config`
+### `import_agent_config`
 
 When `true`, jailoc adds read-only snapshots of the selected agent's host configuration at `jailoc up` and `jailoc reload`:
 
@@ -519,15 +519,15 @@ Environment variables merge in this order, later wins per key:
 |---|---|---|---|
 | all | `/home/agent/.agents` | `~/.agents` | `ro` |
 
-The agent's configuration is copied instead of mounted; see [`agent_config`](#agent_config). The OmO plugin (`oh-my-openagent`) of `opencode1` writes its configuration, state and lock files to `~/.omo`, which is a persistent home directory of the workspace. To share the host's `~/.omo` instead, mount it: `[defaults.agents.opencode1] mounts = ["~/.omo:/home/agent/.omo:rw"]`.
+The agent's configuration is copied instead of mounted; see [`import_agent_config`](#import_agent_config). The OmO plugin (`oh-my-openagent`) of `opencode1` writes its configuration, state and lock files to `~/.omo`, which is a persistent home directory of the workspace. To share the host's `~/.omo` instead, mount it: `[defaults.agents.opencode1] mounts = ["~/.omo:/home/agent/.omo:rw"]`.
 
-`snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config`, `agent_config` and `ssh_auth_sock` add lowest-priority snapshots (the [Git configuration files](#git_config), the [agent configuration](#agent_config), `/home/agent/.ssh/known_hosts`), which a `snapshots` entry for the same destination replaces or, with an empty host, removes.
+`snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config`, `import_agent_config` and `ssh_auth_sock` add lowest-priority snapshots (the [Git configuration files](#git_config), the [agent configuration](#import_agent_config), `/home/agent/.ssh/known_hosts`), which a `snapshots` entry for the same destination replaces or, with an empty host, removes.
 
 `ports` merges by host port; the workspace entry wins. `host_ports` merges by guest port; the workspace entry wins.
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 

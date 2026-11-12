@@ -43,7 +43,7 @@ const (
 # ssh_auth_sock = false
 # gpg_agent = false
 # git_config = true
-# agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
+# import_agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
 # enable_docker = false
 # ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
 # cpu = 2.0
@@ -133,7 +133,7 @@ paths = []
 # ssh_auth_sock = false
 # gpg_agent = false
 # git_config = true
-# agent_config = true
+# import_agent_config = true
 # enable_docker = false
 # ca_bundle = true  # omitted: inherit defaults; true/false/string: override
 # cpu = 2.0
@@ -382,28 +382,28 @@ type BaseConfig struct {
 }
 
 type Defaults struct {
-	Backend         string                   `toml:"backend,omitempty"`
-	Agent           string                   `toml:"agent,omitempty"`
-	Agents          map[string]AgentSettings `toml:"agents,omitempty"`
-	Env             []string                 `toml:"env,omitempty"`
-	EnvFile         []string                 `toml:"env_file,omitempty"`
-	Mounts          []string                 `toml:"mounts,omitempty"`
-	Snapshots       []string                 `toml:"snapshots,omitempty"`
-	AllowedHosts    []string                 `toml:"allowed_hosts,omitempty"`
-	AllowedNetworks []string                 `toml:"allowed_networks,omitempty"`
-	Secrets         Secrets                  `toml:"secrets,omitempty"`
-	Image           string                   `toml:"image,omitempty"`
-	SSHAuthSock     bool                     `toml:"ssh_auth_sock,omitempty"`
-	GPGAgent        bool                     `toml:"gpg_agent,omitempty"`
-	GitConfig       *bool                    `toml:"git_config,omitempty"`
-	AgentConfig     *bool                    `toml:"agent_config,omitempty"`
-	CPU             *float64                 `toml:"cpu,omitempty"`
-	Memory          *string                  `toml:"memory,omitempty"`
-	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
-	TimeZone        *string                  `toml:"timezone,omitempty"`
-	ExposePort      *bool                    `toml:"expose_port,omitempty"`
-	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
-	Network         *Network                 `toml:"network,omitempty"`
+	Backend           string                   `toml:"backend,omitempty"`
+	Agent             string                   `toml:"agent,omitempty"`
+	Agents            map[string]AgentSettings `toml:"agents,omitempty"`
+	Env               []string                 `toml:"env,omitempty"`
+	EnvFile           []string                 `toml:"env_file,omitempty"`
+	Mounts            []string                 `toml:"mounts,omitempty"`
+	Snapshots         []string                 `toml:"snapshots,omitempty"`
+	AllowedHosts      []string                 `toml:"allowed_hosts,omitempty"`
+	AllowedNetworks   []string                 `toml:"allowed_networks,omitempty"`
+	Secrets           Secrets                  `toml:"secrets,omitempty"`
+	Image             string                   `toml:"image,omitempty"`
+	SSHAuthSock       bool                     `toml:"ssh_auth_sock,omitempty"`
+	GPGAgent          bool                     `toml:"gpg_agent,omitempty"`
+	GitConfig         *bool                    `toml:"git_config,omitempty"`
+	ImportAgentConfig *bool                    `toml:"import_agent_config,omitempty"`
+	CPU               *float64                 `toml:"cpu,omitempty"`
+	Memory            *string                  `toml:"memory,omitempty"`
+	DockerDisk        *string                  `toml:"docker_disk,omitempty"`
+	TimeZone          *string                  `toml:"timezone,omitempty"`
+	ExposePort        *bool                    `toml:"expose_port,omitempty"`
+	EnableDocker      *bool                    `toml:"enable_docker,omitempty"`
+	Network           *Network                 `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
 	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`
@@ -416,31 +416,31 @@ type Defaults struct {
 }
 
 type Workspace struct {
-	Backend         string                   `toml:"backend,omitempty"`
-	Agent           string                   `toml:"agent,omitempty"`
-	Agents          map[string]AgentSettings `toml:"agents,omitempty"`
-	Paths           []string                 `toml:"paths,omitempty"`
-	Mounts          []string                 `toml:"mounts,omitempty"`
-	Snapshots       []string                 `toml:"snapshots,omitempty"`
-	AllowedHosts    []string                 `toml:"allowed_hosts,omitempty"`
-	AllowedNetworks []string                 `toml:"allowed_networks,omitempty"`
-	Env             []string                 `toml:"env,omitempty"`
-	EnvFile         []string                 `toml:"env_file,omitempty"`
-	Secrets         Secrets                  `toml:"secrets,omitempty"`
-	BuildContext    string                   `toml:"build_context,omitempty"`
-	Dockerfile      string                   `toml:"dockerfile,omitempty"`
-	Image           string                   `toml:"image,omitempty"`
-	SSHAuthSock     *bool                    `toml:"ssh_auth_sock,omitempty"`
-	GPGAgent        *bool                    `toml:"gpg_agent,omitempty"`
-	GitConfig       *bool                    `toml:"git_config,omitempty"`
-	AgentConfig     *bool                    `toml:"agent_config,omitempty"`
-	CPU             *float64                 `toml:"cpu,omitempty"`
-	Memory          *string                  `toml:"memory,omitempty"`
-	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
-	TimeZone        *string                  `toml:"timezone,omitempty"`
-	ExposePort      *bool                    `toml:"expose_port,omitempty"`
-	EnableDocker    *bool                    `toml:"enable_docker,omitempty"`
-	Network         *Network                 `toml:"network,omitempty"`
+	Backend           string                   `toml:"backend,omitempty"`
+	Agent             string                   `toml:"agent,omitempty"`
+	Agents            map[string]AgentSettings `toml:"agents,omitempty"`
+	Paths             []string                 `toml:"paths,omitempty"`
+	Mounts            []string                 `toml:"mounts,omitempty"`
+	Snapshots         []string                 `toml:"snapshots,omitempty"`
+	AllowedHosts      []string                 `toml:"allowed_hosts,omitempty"`
+	AllowedNetworks   []string                 `toml:"allowed_networks,omitempty"`
+	Env               []string                 `toml:"env,omitempty"`
+	EnvFile           []string                 `toml:"env_file,omitempty"`
+	Secrets           Secrets                  `toml:"secrets,omitempty"`
+	BuildContext      string                   `toml:"build_context,omitempty"`
+	Dockerfile        string                   `toml:"dockerfile,omitempty"`
+	Image             string                   `toml:"image,omitempty"`
+	SSHAuthSock       *bool                    `toml:"ssh_auth_sock,omitempty"`
+	GPGAgent          *bool                    `toml:"gpg_agent,omitempty"`
+	GitConfig         *bool                    `toml:"git_config,omitempty"`
+	ImportAgentConfig *bool                    `toml:"import_agent_config,omitempty"`
+	CPU               *float64                 `toml:"cpu,omitempty"`
+	Memory            *string                  `toml:"memory,omitempty"`
+	DockerDisk        *string                  `toml:"docker_disk,omitempty"`
+	TimeZone          *string                  `toml:"timezone,omitempty"`
+	ExposePort        *bool                    `toml:"expose_port,omitempty"`
+	EnableDocker      *bool                    `toml:"enable_docker,omitempty"`
+	Network           *Network                 `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
 	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`

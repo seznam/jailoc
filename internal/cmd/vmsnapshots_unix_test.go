@@ -93,14 +93,14 @@ func TestVMSnapshotsAgentConfig(t *testing.T) {
 		want      []string
 	}{
 		{name: "existing files become snapshots", want: []string{claudeMD + ":" + guestMD, skills + ":" + guestSkills}},
-		{name: "agent_config off", off: true},
+		{name: "import_agent_config off", off: true},
 		{name: "removal drops one file", snapshots: []string{":~/.claude/CLAUDE.md"}, want: []string{skills + ":" + guestSkills}},
 		{name: "snapshot overrides a file", snapshots: []string{"/data/team.md:" + guestMD + ":ro"}, want: []string{"/data/team.md:" + guestMD, skills + ":" + guestSkills}},
 		{name: "shared state directory skips them", shares: []vm.Share{{HostPath: "/p/claude", GuestPath: guestHome + "/.claude"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := vmSnapshots(&workspace.Resolved{Name: "w", Agent: h, AgentConfig: !tt.off, Snapshots: tt.snapshots}, tt.shares)
+			got, err := vmSnapshots(&workspace.Resolved{Name: "w", Agent: h, ImportAgentConfig: !tt.off, Snapshots: tt.snapshots}, tt.shares)
 			if err != nil {
 				t.Fatalf("vmSnapshots: %v", err)
 			}

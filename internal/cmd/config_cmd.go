@@ -74,7 +74,7 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  SSH Agent: %t\n", ws.SSHAuthSock)
 	_, _ = cyan.Fprintf(os.Stdout, "  GPG Agent: %t\n", ws.GPGAgent)
 	_, _ = cyan.Fprintf(os.Stdout, "  Git Config: %t\n", ws.GitConfig)
-	_, _ = cyan.Fprintf(os.Stdout, "  Agent Config: %t\n", ws.AgentConfig)
+	_, _ = cyan.Fprintf(os.Stdout, "  Import Agent Config: %t\n", ws.ImportAgentConfig)
 	_, _ = cyan.Fprintf(os.Stdout, "  CA Bundle: %s\n", caBundleLabel(ws.CABundle))
 	_, _ = cyan.Fprintf(os.Stdout, "  Enable Docker: %t\n", ws.EnableDocker)
 	_, _ = cyan.Fprintf(os.Stdout, "  Protect Git: %t\n", ws.ProtectGit)

@@ -905,18 +905,18 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 
 			cfg := &config.Config{
 				Defaults: config.Defaults{
-					SSHAuthSock: tt.defaultSSH,
-					GPGAgent:    tt.defaultSSH,
-					GitConfig:   tt.defaultGit,
-					AgentConfig: tt.defaultGit,
+					SSHAuthSock:       tt.defaultSSH,
+					GPGAgent:          tt.defaultSSH,
+					GitConfig:         tt.defaultGit,
+					ImportAgentConfig: tt.defaultGit,
 				},
 				Workspaces: map[string]config.Workspace{
 					"test": {
-						Paths:       []string{"/tmp"},
-						SSHAuthSock: tt.workspaceSSH,
-						GPGAgent:    tt.workspaceSSH,
-						GitConfig:   tt.workspaceGit,
-						AgentConfig: tt.workspaceGit,
+						Paths:             []string{"/tmp"},
+						SSHAuthSock:       tt.workspaceSSH,
+						GPGAgent:          tt.workspaceSSH,
+						GitConfig:         tt.workspaceGit,
+						ImportAgentConfig: tt.workspaceGit,
 					},
 				},
 			}
@@ -936,9 +936,9 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 			if resolved.GitConfig != tt.expectedGit {
 				t.Fatalf("GitConfig = %v, want %v", resolved.GitConfig, tt.expectedGit)
 			}
-			// agent_config resolves like git_config: on unless set, workspace wins.
-			if resolved.AgentConfig != tt.expectedGit {
-				t.Fatalf("AgentConfig = %v, want %v", resolved.AgentConfig, tt.expectedGit)
+			// import_agent_config resolves like git_config: on unless set, workspace wins.
+			if resolved.ImportAgentConfig != tt.expectedGit {
+				t.Fatalf("ImportAgentConfig = %v, want %v", resolved.ImportAgentConfig, tt.expectedGit)
 			}
 		})
 	}

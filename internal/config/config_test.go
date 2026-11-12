@@ -1942,21 +1942,21 @@ paths = ["/data"]
 			},
 		},
 		{
-			name: "agent_config in defaults and workspace",
+			name: "import_agent_config in defaults and workspace",
 			tomlContent: `
 [defaults]
-agent_config = false
+import_agent_config = false
 
 [workspaces.default]
 paths = ["/data"]
-agent_config = true
+import_agent_config = true
 `,
 			checkFn: func(t *testing.T, cfg *Config) {
-				if cfg.Defaults.AgentConfig == nil || *cfg.Defaults.AgentConfig {
-					t.Fatal("expected defaults.agent_config = false")
+				if cfg.Defaults.ImportAgentConfig == nil || *cfg.Defaults.ImportAgentConfig {
+					t.Fatal("expected defaults.import_agent_config = false")
 				}
-				if ws := cfg.Workspaces["default"]; ws.AgentConfig == nil || !*ws.AgentConfig {
-					t.Fatal("expected workspace.agent_config = true")
+				if ws := cfg.Workspaces["default"]; ws.ImportAgentConfig == nil || !*ws.ImportAgentConfig {
+					t.Fatal("expected workspace.import_agent_config = true")
 				}
 			},
 		},

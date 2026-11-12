@@ -65,7 +65,7 @@ func TestSyncDirStaysInsideRoot(t *testing.T) {
 	}
 }
 
-// Mount points the guest created for agent_config snapshots are removed
+// Mount points the guest created for import_agent_config snapshots are removed
 // before a start; agent files with content are kept.
 func TestRemoveConfigMountPoints(t *testing.T) {
 	t.Parallel()

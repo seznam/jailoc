@@ -161,7 +161,7 @@ type Harness struct {
 	// mounts.
 	Mounts []string
 	// ConfigFiles are the agent's host configuration files that jailoc
-	// copies read-only into the guest (agent_config).
+	// copies read-only into the guest (import_agent_config).
 	ConfigFiles []ConfigFile
 	// TUIPlugin is how the agent loads the jailoc TUI plugin.
 	TUIPlugin TUIPlugin

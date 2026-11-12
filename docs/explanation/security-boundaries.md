@@ -70,7 +70,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 |---------|-----------|-------------------------------|---------------|
 | Workspace `paths`, `rw` mounts | Both | Read, change and delete the files on the host | `paths`, `mounts` |
 | `ro` mounts | Host to guest | Read the files | `mounts` |
-| Snapshots, Git and agent configuration, `known_hosts` | Host to guest | Read a copy; nothing writes back | `snapshots`, `git_config`, `agent_config`, `ssh_auth_sock` |
+| Snapshots, Git and agent configuration, `known_hosts` | Host to guest | Read a copy; nothing writes back | `snapshots`, `git_config`, `import_agent_config`, `ssh_auth_sock` |
 | Secrets | Host to guest | Read every configured value | `secrets` |
 | SSH agent | Guest to host | Ask the host agent to sign while forwarded; keys stay on the host | `ssh_auth_sock` |
 | GPG agent | Guest to host | Ask the host gpg-agent to sign or decrypt with any key it holds while forwarded; the extra socket refuses key export and management; keys stay on the host | `gpg_agent` |

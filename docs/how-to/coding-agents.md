@@ -103,14 +103,14 @@ jailoc copies the agent's configuration from the host into the VM read-only when
 
 OpenCode doesn't install plugins into the read-only copy, and `node_modules` isn't copied. Plugins listed in `plugin` install into `~/.cache`; install the packages a local plugin imports in the image.
 
-Leave out one copy with an empty-host snapshot, or all of them with `agent_config`:
+Leave out one copy with an empty-host snapshot, or all of them with `import_agent_config`:
 
 ```toml
 [defaults]
 snapshots = [":/home/agent/.claude/settings.json"]
 
 [workspaces.scratch]
-agent_config = false
+import_agent_config = false
 ```
 
 To let the agent change the host configuration, mount it read-write; the mount replaces the copy. Every workspace using the mount, and the host, then run what the agent writes there:
@@ -120,7 +120,7 @@ To let the agent change the host configuration, mount it read-write; the mount r
 mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 ```
 
-See [`agent_config`](../reference/configuration.md#agent_config).
+See [`import_agent_config`](../reference/configuration.md#import_agent_config).
 
 ## Pass extra arguments
 

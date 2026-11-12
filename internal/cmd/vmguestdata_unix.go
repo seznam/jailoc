@@ -117,7 +117,7 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 
 // removeConfigMountPoints removes the empty files and directories the guest
 // created in state directory d, at dir inside root, as mount points of
-// agent_config snapshots. A snapshot that no longer applies, such as one
+// import_agent_config snapshots. A snapshot that no longer applies, such as one
 // turned off or one whose host file is gone, would otherwise leave the agent
 // an empty settings file. The guest creates them again for the snapshots it
 // binds.

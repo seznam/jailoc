@@ -46,7 +46,7 @@ type snapshot struct {
 
 // vmSnapshots returns the workspace snapshots: the Git configuration
 // (git_config, see gitConfigSnapshots), known_hosts (ssh_auth_sock) and the
-// agent configuration (agent_config, see agentConfigSnapshots) as default
+// agent configuration (import_agent_config, see agentConfigSnapshots) as default
 // snapshots, overridden by configured snapshots.
 func vmSnapshots(ws *workspace.Resolved, shares []vm.Share) ([]snapshot, error) {
 	var defaults []snapshot
@@ -61,7 +61,7 @@ func vmSnapshots(ws *workspace.Resolved, shares []vm.Share) ([]snapshot, error) 
 			defaults = append(defaults, snapshot{Mount: mountOf(src, guestKnownHosts)})
 		}
 	}
-	if ws.AgentConfig && homeErr == nil {
+	if ws.ImportAgentConfig && homeErr == nil {
 		defaults = append(defaults, agentConfigSnapshots(ws.Agent, home, shares)...)
 	}
 	specs := make([]string, 0, len(defaults))
@@ -138,7 +138,7 @@ func overlaps(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
-// agentConfigSnapshots returns the agent_config snapshots of the harness: its
+// agentConfigSnapshots returns the import_agent_config snapshots of the harness: its
 // host configuration files that exist. A file whose destination overlaps a
 // share, such as a mounted or profile state directory, is left out: the agent
 // reads it from the share. The copy of the agent's configuration directory
