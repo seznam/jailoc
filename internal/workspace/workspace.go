@@ -36,23 +36,24 @@ type Resolved struct {
 	AgentArgs []string
 	// AgentProfile is where Agent keeps its state: nil per workspace, see
 	// config.Profile otherwise.
-	AgentProfile    *config.Profile
-	Mounts          []string
-	Snapshots       []string // read-only snapshots (host:container:ro)
-	Port            int
-	AllowedHosts    []string
-	AllowedNetworks []string
-	BuildContext    string
-	Dockerfile      string
-	Image           string
-	Env             []string
-	SSHAuthSock     bool
-	GPGAgent        bool
-	GitConfig       bool
-	Secrets         []ResolvedSecret
-	CPU             float64
-	Memory          string
-	DockerDisk      string
+	AgentProfile      *config.Profile
+	Mounts            []string
+	Snapshots         []string // read-only snapshots (host:container:ro)
+	Port              int
+	AllowedHosts      []string
+	AllowedNetworks   []string
+	BuildContext      string
+	Dockerfile        string
+	Image             string
+	Env               []string
+	SSHAuthSock       bool
+	GPGAgent          bool
+	GitConfig         bool
+	ImportAgentConfig bool
+	Secrets           []ResolvedSecret
+	CPU               float64
+	Memory            string
+	DockerDisk        string
 	// TimeZone is the time zone name for the VM; empty means the host's zone.
 	TimeZone     string
 	EnableDocker bool
@@ -168,36 +169,37 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	mergedSecrets := mergeSecrets(cfg.Defaults.Secrets, ws.Secrets)
 
 	r := &Resolved{
-		Name:            name,
-		Paths:           paths,
-		Agent:           h,
-		AgentInstall:    settings.Install == nil || *settings.Install,
-		AgentArgs:       settings.Args,
-		AgentProfile:    settings.Profile,
-		Mounts:          mergedMounts,
-		Port:            PortForWorkspace(cfg, name),
-		AllowedHosts:    ws.AllowedHosts,
-		AllowedNetworks: ws.AllowedNetworks,
-		BuildContext:    buildContext,
-		Dockerfile:      ws.Dockerfile,
-		Image:           ws.Image,
-		Env:             mergedEnv,
-		Secrets:         mergedSecrets,
-		SSHAuthSock:     boolWithOverride(cfg.Defaults.SSHAuthSock, ws.SSHAuthSock),
-		GPGAgent:        boolWithOverride(cfg.Defaults.GPGAgent, ws.GPGAgent),
-		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
-		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
-		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
-		DockerDisk:      stringWithDefault(cfg.Defaults.DockerDisk, ws.DockerDisk, "20g"),
-		TimeZone:        stringWithDefault(cfg.Defaults.TimeZone, ws.TimeZone, ""),
-		EnableDocker:    boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, false),
-		IsolatedBuild:   boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
-		ProtectGit:      boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),
-		IPv6:            boolPtrWithDefault(cfg.Defaults.Network.Get().IPv6, ws.Network.Get().IPv6, false),
-		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.Network.Get().FilteredDNS, ws.Network.Get().FilteredDNS, false),
-		DNSUpstream:     cmp.Or(ws.Network.Get().DNS, ws.Network.Get().DNSUpstream, cfg.Defaults.Network.Get().DNS, cfg.Defaults.Network.Get().DNSUpstream),
-		DNSBlockedZones: ws.Network.Get().DNSBlockedZones,
-		CABundle:        caBundleWithDefault(cfg.Defaults.CABundle, ws.CABundle),
+		Name:              name,
+		Paths:             paths,
+		Agent:             h,
+		AgentInstall:      settings.Install == nil || *settings.Install,
+		AgentArgs:         settings.Args,
+		AgentProfile:      settings.Profile,
+		Mounts:            mergedMounts,
+		Port:              PortForWorkspace(cfg, name),
+		AllowedHosts:      ws.AllowedHosts,
+		AllowedNetworks:   ws.AllowedNetworks,
+		BuildContext:      buildContext,
+		Dockerfile:        ws.Dockerfile,
+		Image:             ws.Image,
+		Env:               mergedEnv,
+		Secrets:           mergedSecrets,
+		SSHAuthSock:       boolWithOverride(cfg.Defaults.SSHAuthSock, ws.SSHAuthSock),
+		GPGAgent:          boolWithOverride(cfg.Defaults.GPGAgent, ws.GPGAgent),
+		GitConfig:         boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
+		ImportAgentConfig: boolPtrWithDefault(cfg.Defaults.ImportAgentConfig, ws.ImportAgentConfig, true),
+		CPU:               floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
+		Memory:            stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
+		DockerDisk:        stringWithDefault(cfg.Defaults.DockerDisk, ws.DockerDisk, "20g"),
+		TimeZone:          stringWithDefault(cfg.Defaults.TimeZone, ws.TimeZone, ""),
+		EnableDocker:      boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, false),
+		IsolatedBuild:     boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
+		ProtectGit:        boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),
+		IPv6:              boolPtrWithDefault(cfg.Defaults.Network.Get().IPv6, ws.Network.Get().IPv6, false),
+		FilteredDNS:       boolPtrWithDefault(cfg.Defaults.Network.Get().FilteredDNS, ws.Network.Get().FilteredDNS, false),
+		DNSUpstream:       cmp.Or(ws.Network.Get().DNS, ws.Network.Get().DNSUpstream, cfg.Defaults.Network.Get().DNS, cfg.Defaults.Network.Get().DNSUpstream),
+		DNSBlockedZones:   ws.Network.Get().DNSBlockedZones,
+		CABundle:          caBundleWithDefault(cfg.Defaults.CABundle, ws.CABundle),
 	}
 	if r.DNSBlockedZones == nil {
 		r.DNSBlockedZones = cfg.Defaults.Network.Get().DNSBlockedZones
@@ -210,7 +212,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
 	r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
 	r.NetworkRules = resolveNetworkRules(cfg, ws, r.AllowedHosts, r.AllowedNetworks, r.DNSBlockedZones, h)
-	snapshots, err := config.MergeMounts(cfg.Defaults.Snapshots, ws.Snapshots)
+	snapshots, err := config.MergeSnapshots(cfg.Defaults.Snapshots, ws.Snapshots)
 	if err != nil {
 		return nil, fmt.Errorf("merge snapshots for workspace %s: %w", name, err)
 	}

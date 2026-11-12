@@ -1942,6 +1942,25 @@ paths = ["/data"]
 			},
 		},
 		{
+			name: "import_agent_config in defaults and workspace",
+			tomlContent: `
+[defaults]
+import_agent_config = false
+
+[workspaces.default]
+paths = ["/data"]
+import_agent_config = true
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.ImportAgentConfig == nil || *cfg.Defaults.ImportAgentConfig {
+					t.Fatal("expected defaults.import_agent_config = false")
+				}
+				if ws := cfg.Workspaces["default"]; ws.ImportAgentConfig == nil || !*ws.ImportAgentConfig {
+					t.Fatal("expected workspace.import_agent_config = true")
+				}
+			},
+		},
+		{
 			name: "defaults git_config nil when omitted",
 			tomlContent: `
 [workspaces.default]

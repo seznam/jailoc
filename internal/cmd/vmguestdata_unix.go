@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/fatih/color"
 
@@ -101,12 +102,57 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		if err := root.MkdirAll(rel, 0o700); err != nil {
 			return nil, fmt.Errorf("create %s: %w", rel, err)
 		}
+		if start {
+			if err := removeConfigMountPoints(root, rel, d, ws.Agent); err != nil {
+				return nil, fmt.Errorf("workspace %q: %w", ws.Name, err)
+			}
+		}
 		if slices.Contains(ws.Agent.State, d) {
 			addStatusLine(root, rel, ws.Agent)
 		}
 		binds = append(binds, guest.Bind{Source: src(rel), Target: d.Path})
 	}
 	return binds, nil
+}
+
+// removeConfigMountPoints removes the empty files and directories the guest
+// created in state directory d, at dir inside root, as mount points of
+// import_agent_config snapshots. A snapshot that no longer applies, such as one
+// turned off or one whose host file is gone, would otherwise leave the agent
+// an empty settings file. The guest creates them again for the snapshots it
+// binds.
+func removeConfigMountPoints(root *os.Root, dir string, d agent.StateDir, h agent.Harness) error {
+	for _, cf := range h.ConfigFiles {
+		inner, ok := strings.CutPrefix(guestHome+"/"+cf.Path, d.Path+"/")
+		if !ok {
+			continue
+		}
+		p := path.Join(dir, inner)
+		info, err := root.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", p, err)
+		}
+		switch {
+		case info.Mode().IsRegular() && info.Size() == 0:
+		case info.IsDir():
+			entries, err := fs.ReadDir(root.FS(), p)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", p, err)
+			}
+			if len(entries) > 0 {
+				continue
+			}
+		default:
+			continue
+		}
+		if err := root.Remove(p); err != nil {
+			return fmt.Errorf("remove mount point %s: %w", p, err)
+		}
+	}
+	return nil
 }
 
 // addStatusLine sets the jailoc status line in the settings file of agent h

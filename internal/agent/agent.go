@@ -120,6 +120,17 @@ type StateDir struct {
 	Path string
 }
 
+// ConfigFile is a configuration file or directory of the agent under the
+// home directory, copied read-only from the host home to the same place in
+// the guest home.
+type ConfigFile struct {
+	// Path is relative to the home directory.
+	Path string
+	// Exclude are entries of the directory, relative to it, left out of
+	// the copy.
+	Exclude []string
+}
+
 // Harness describes a built-in coding agent.
 type Harness struct {
 	// Name is the value of agent in the configuration.
@@ -149,11 +160,14 @@ type Harness struct {
 	// Mounts are the default mounts added before [defaults] and workspace
 	// mounts.
 	Mounts []string
+	// ConfigFiles are the agent's host configuration files that jailoc
+	// copies read-only into the guest (import_agent_config).
+	ConfigFiles []ConfigFile
 	// TUIPlugin is how the agent loads the jailoc TUI plugin.
 	TUIPlugin TUIPlugin
 	// ConfigDir is the guest path of the agent's configuration directory and
 	// ConfigGitignore the .gitignore the agent writes there on startup. jailoc
-	// creates it on the host when the directory is mounted read-only.
+	// adds it to a read-only copy or mount of the directory.
 	ConfigDir       string
 	ConfigGitignore string
 	// Installs, when set, returns what the agent installs before its
@@ -168,15 +182,18 @@ type Harness struct {
 // sharedMounts are default mounts of every harness.
 var sharedMounts = []string{"~/.agents:/home/agent/.agents:ro"}
 
-// OpenCode 1 and 2 share the configuration directory.
-var openCodeMounts = []string{
-	"~/.config/opencode:/home/agent/.config/opencode:rw",
-	"~/.opencode:/home/agent/.opencode:rw",
+// omoConfig are the user configuration files OmO and the OmO OpenCode 1 plugin
+// read from ~/.omo.
+var omoConfig = []ConfigFile{
+	{Path: ".omo/omo.jsonc"},
+	{Path: ".omo/omo.json"},
 }
 
-// OpenCode 1 commonly runs with the OmO (oh-my-openagent) plugin, which expects
-// ~/.omo to be writable for migration locks, configuration and state.
-var openCode1Mounts = append(slices.Clone(openCodeMounts), "~/.omo:/home/agent/.omo:rw")
+// openCodeConfig is the configuration OpenCode 1 and 2 share. node_modules
+// holds packages OpenCode installed for the host's platform.
+var openCodeConfig = []ConfigFile{{Path: ".config/opencode", Exclude: []string{"node_modules"}}}
+
+var openCode1Config = append(slices.Clone(openCodeConfig), omoConfig...)
 
 const (
 	openCodeConfigDir = "/home/agent/.config/opencode"
@@ -215,8 +232,12 @@ var harnesses = []Harness{
 		State: []StateDir{
 			{Name: "opencode-data", Path: "/home/agent/.local/share/opencode"},
 			{Name: "opencode-state", Path: "/home/agent/.local/state/opencode"},
+			// OpenCode 1 commonly runs with the OmO (oh-my-openagent)
+			// plugin, which writes migration locks, configuration and
+			// state to ~/.omo.
+			{Name: "opencode1-omo", Path: "/home/agent/.omo"},
 		},
-		Mounts:          openCode1Mounts,
+		ConfigFiles:     openCode1Config,
 		TUIPlugin:       OpenCode1TUI,
 		ConfigDir:       openCodeConfigDir,
 		ConfigGitignore: openCodeConfigGitignore,
@@ -242,7 +263,7 @@ var harnesses = []Harness{
 			{Name: "opencode2-data", Path: "/home/agent/.local/share/opencode"},
 			{Name: "opencode2-state", Path: "/home/agent/.local/state/opencode"},
 		},
-		Mounts:          openCodeMounts,
+		ConfigFiles:     openCodeConfig,
 		TUIPlugin:       OpenCode2TUI,
 		ConfigDir:       openCodeConfigDir,
 		ConfigGitignore: openCodeConfigGitignore,
@@ -259,8 +280,18 @@ var harnesses = []Harness{
 		Unattended: []string{"--dangerously-skip-permissions"},
 		// CLAUDE_CONFIG_DIR also moves ~/.claude.json into the persistent
 		// directory.
-		Env:       []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "DISABLE_AUTOUPDATER=1"},
-		State:     []StateDir{{Name: "claude", Path: "/home/agent/.claude"}},
+		Env:   []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "DISABLE_AUTOUPDATER=1"},
+		State: []StateDir{{Name: "claude", Path: "/home/agent/.claude"}},
+		ConfigFiles: []ConfigFile{
+			{Path: ".claude/CLAUDE.md"},
+			{Path: ".claude/RTK.md"},
+			{Path: ".claude/settings.json"},
+			{Path: ".claude/agents"},
+			{Path: ".claude/commands"},
+			{Path: ".claude/hooks"},
+			{Path: ".claude/skills"},
+			{Path: ".claude/output-styles"},
+		},
 		TUIPlugin: ClaudeStatusLine,
 		Endpoints: []string{"api.anthropic.com", "claude.ai", "console.anthropic.com", "platform.claude.com"},
 	},
@@ -275,8 +306,18 @@ var harnesses = []Harness{
 		Unattended: []string{"--allow-all"},
 		Env:        []string{"COPILOT_AUTO_UPDATE=false"},
 		State:      []StateDir{{Name: "copilot", Path: "/home/agent/.copilot"}},
-		TUIPlugin:  CopilotStatusLine,
-		Endpoints:  []string{"api.github.com", "github.com", "api.githubcopilot.com", "*.githubcopilot.com", "copilot-proxy.githubusercontent.com"},
+		// Not config.json or settings.json: Copilot CLI writes its login
+		// and preferences there, and jailoc adds the status line to
+		// settings.json.
+		ConfigFiles: []ConfigFile{
+			{Path: ".copilot/copilot-instructions.md"},
+			{Path: ".copilot/agents"},
+			{Path: ".copilot/hooks"},
+			{Path: ".copilot/skills"},
+			{Path: ".copilot/mcp-config.json"},
+		},
+		TUIPlugin: CopilotStatusLine,
+		Endpoints: []string{"api.github.com", "github.com", "api.githubcopilot.com", "*.githubcopilot.com", "copilot-proxy.githubusercontent.com"},
 	},
 	{
 		Name:       "omo",
@@ -288,10 +329,11 @@ var harnesses = []Harness{
 		Resume:     "--session",
 		Unattended: []string{"--permission-preset", "full-access"},
 		// The image runs Node.js; OMO_RUNTIME=node silences the Bun notice.
-		Env:       []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
-		State:     []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
-		TUIPlugin: OmOExtension,
-		Endpoints: llmEndpoints,
+		Env:         []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
+		State:       []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
+		ConfigFiles: omoConfig,
+		TUIPlugin:   OmOExtension,
+		Endpoints:   llmEndpoints,
 	},
 	{
 		Name:    "agy",
@@ -313,11 +355,12 @@ var harnesses = []Harness{
 		Unattended: []string{"--dangerously-skip-permissions"},
 		Env:        []string{"AGY_CLI_DISABLE_AUTO_UPDATE=1"},
 		// Settings, conversations and the OAuth token, which falls back to
-		// a file without a keyring. Gemini CLI shares ~/.gemini, so it is
-		// not mounted from the host by default.
-		State:     []StateDir{{Name: "antigravity", Path: "/home/agent/.gemini"}},
-		TUIPlugin: AgyStatusLine,
-		Endpoints: []string{"generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"},
+		// a file without a keyring. Gemini CLI shares ~/.gemini, so only
+		// the global instructions are copied from the host.
+		State:       []StateDir{{Name: "antigravity", Path: "/home/agent/.gemini"}},
+		ConfigFiles: []ConfigFile{{Path: ".gemini/GEMINI.md"}},
+		TUIPlugin:   AgyStatusLine,
+		Endpoints:   []string{"generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"},
 	},
 }
 

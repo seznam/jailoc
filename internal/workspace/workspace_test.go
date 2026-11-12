@@ -905,16 +905,18 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 
 			cfg := &config.Config{
 				Defaults: config.Defaults{
-					SSHAuthSock: tt.defaultSSH,
-					GPGAgent:    tt.defaultSSH,
-					GitConfig:   tt.defaultGit,
+					SSHAuthSock:       tt.defaultSSH,
+					GPGAgent:          tt.defaultSSH,
+					GitConfig:         tt.defaultGit,
+					ImportAgentConfig: tt.defaultGit,
 				},
 				Workspaces: map[string]config.Workspace{
 					"test": {
-						Paths:       []string{"/tmp"},
-						SSHAuthSock: tt.workspaceSSH,
-						GPGAgent:    tt.workspaceSSH,
-						GitConfig:   tt.workspaceGit,
+						Paths:             []string{"/tmp"},
+						SSHAuthSock:       tt.workspaceSSH,
+						GPGAgent:          tt.workspaceSSH,
+						GitConfig:         tt.workspaceGit,
+						ImportAgentConfig: tt.workspaceGit,
 					},
 				},
 			}
@@ -933,6 +935,10 @@ func TestResolveSSHGitFieldsWorkspaceOverride(t *testing.T) {
 			}
 			if resolved.GitConfig != tt.expectedGit {
 				t.Fatalf("GitConfig = %v, want %v", resolved.GitConfig, tt.expectedGit)
+			}
+			// import_agent_config resolves like git_config: on unless set, workspace wins.
+			if resolved.ImportAgentConfig != tt.expectedGit {
+				t.Fatalf("ImportAgentConfig = %v, want %v", resolved.ImportAgentConfig, tt.expectedGit)
 			}
 		})
 	}
@@ -1264,8 +1270,6 @@ func TestResolveMountsDefault(t *testing.T) {
 	}
 
 	want := []string{
-		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
-		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
 
@@ -1293,9 +1297,8 @@ func TestResolveMountsOverride(t *testing.T) {
 	}
 
 	want := []string{
-		filepath.Join(home, "custom-opencode") + ":/home/agent/.config/opencode:rw",
-		filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
 		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
+		filepath.Join(home, "custom-opencode") + ":/home/agent/.config/opencode:rw",
 	}
 
 	if !reflect.DeepEqual(resolved.Mounts, want) {
@@ -1311,7 +1314,7 @@ func TestResolveMountsRemoval(t *testing.T) {
 		Workspaces: map[string]config.Workspace{
 			"default": {
 				Paths:  []string{"/tmp"},
-				Mounts: []string{":/home/agent/.opencode"},
+				Mounts: []string{"~/.config/opencode:/home/agent/.config/opencode:rw", ":/home/agent/.agents"},
 			},
 		},
 	}
@@ -1323,7 +1326,6 @@ func TestResolveMountsRemoval(t *testing.T) {
 
 	want := []string{
 		filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
-		filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
 	}
 
 	if !reflect.DeepEqual(resolved.Mounts, want) {
@@ -1589,9 +1591,9 @@ func TestResolveCopies(t *testing.T) {
 	}{
 		{name: "inherits defaults", want: []string{"/data/npmrc:/home/agent/.npmrc:ro", "/data/gh:/home/agent/.config/gh:ro"}},
 		{
-			name:      "workspace overrides and removes",
+			name:      "workspace overrides and keeps removals for built-in snapshots",
 			snapshots: []string{"/data/other-npmrc:/home/agent/.npmrc:ro", ":/home/agent/.config/gh:ro", "/data/tool:/opt-tool/cfg:ro"},
-			want:      []string{"/data/other-npmrc:/home/agent/.npmrc:ro", "/data/tool:/opt-tool/cfg:ro"},
+			want:      []string{"/data/other-npmrc:/home/agent/.npmrc:ro", ":/home/agent/.config/gh:ro", "/data/tool:/opt-tool/cfg:ro"},
 		},
 	}
 	for _, tt := range tests {
@@ -1708,11 +1710,7 @@ func TestResolveAgent(t *testing.T) {
 	}{
 		{"inherit", "claude", true, []string{"--model", "opus"}, claude.Version, []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
 		{"override", "copilot", false, []string{}, "", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
-		{"opencode", "opencode", true, nil, "", []string{
-			filepath.Join(home, ".config", "opencode") + ":/home/agent/.config/opencode:rw",
-			filepath.Join(home, ".opencode") + ":/home/agent/.opencode:rw",
-			filepath.Join(home, ".agents") + ":/home/agent/.agents:ro",
-		}},
+		{"opencode", "opencode", true, nil, "", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
 		{"derived", "claude-opus", false, []string{"--model", "opus"}, "2.1.400", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
 		{"derived-defaults", "omo-ci", true, []string{"--print"}, "5.2.0", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},
 		{"version", "omo", true, nil, "5.3.0", []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}},

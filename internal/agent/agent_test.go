@@ -131,13 +131,8 @@ func TestDefaultMounts(t *testing.T) {
 		t.Fatalf("claude mounts = %q", got)
 	}
 	got := opencode.DefaultMounts()
-	if !slices.Contains(got, "~/.config/opencode:/home/agent/.config/opencode:rw") || !slices.Contains(got, "~/.agents:/home/agent/.agents:ro") {
+	if !slices.Equal(got, []string{"~/.agents:/home/agent/.agents:ro"}) {
 		t.Fatalf("opencode mounts = %q", got)
-	}
-	opencode1, _ := Lookup("opencode1")
-	got1 := opencode1.DefaultMounts()
-	if !slices.Contains(got1, "~/.omo:/home/agent/.omo:rw") {
-		t.Fatalf("opencode1 mounts = %q, want ~/.omo mount", got1)
 	}
 	got[0] = "changed"
 	if opencode.DefaultMounts()[0] == "changed" {

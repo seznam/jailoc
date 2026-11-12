@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/seznam/jailoc/internal/agent"
 )
 
 // The guest can replace anything in the guest data directory; syncing must
@@ -60,5 +62,37 @@ func TestSyncDirStaysInsideRoot(t *testing.T) {
 	}
 	if err := syncDir(root, "missing", filepath.Join(dir, "nope")); err != nil {
 		t.Fatalf("syncDir of a missing source: %v", err)
+	}
+}
+
+// Mount points the guest created for import_agent_config snapshots are removed
+// before a start; agent files with content are kept.
+func TestRemoveConfigMountPoints(t *testing.T) {
+	t.Parallel()
+	h, _ := agent.Lookup("claude")
+	data := t.TempDir()
+	state := filepath.Join(data, "claude")
+	for _, d := range []string{filepath.Join(state, "agents"), filepath.Join(state, "skills", "x"), filepath.Join(state, "projects")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, content := range map[string]string{"settings.json": "", "CLAUDE.md": "# notes", ".claude.json": ""} {
+		if err := os.WriteFile(filepath.Join(state, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := os.OpenRoot(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := removeConfigMountPoints(root, "claude", h.State[0], h); err != nil {
+		t.Fatalf("removeConfigMountPoints: %v", err)
+	}
+	for name, want := range map[string]bool{"settings.json": false, "agents": false, "CLAUDE.md": true, "skills": true, "projects": true, ".claude.json": true} {
+		if _, err := os.Lstat(filepath.Join(state, name)); (err == nil) != want {
+			t.Errorf("%s exists = %v, want %v", name, err == nil, want)
+		}
 	}
 }

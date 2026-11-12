@@ -41,7 +41,7 @@ Each workspace has its own VM, broker, SSH key, state directory and persistent h
 |--------------|--------|
 | A `paths` or `mounts` directory used by several workspaces | Every workspace with the share can read and change it |
 | A named agent profile | Logins, hooks, plugins and MCP settings carry across workspaces |
-| A read-write agent configuration mount, such as OpenCode's default `~/.config/opencode` | The agent can plant configuration that runs in every workspace using the mount, and on the host |
+| A read-write agent configuration mount, such as `~/.config/opencode` mounted with `:rw` | The agent can plant configuration that runs in every workspace using the mount, and on the host |
 | The shared builder VM | One build cache for every workspace that builds there; use `isolated_build` to separate it |
 
 Workspaces that share a profile, a writable configuration mount or a directory share one trust level.
@@ -70,7 +70,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 |---------|-----------|-------------------------------|---------------|
 | Workspace `paths`, `rw` mounts | Both | Read, change and delete the files on the host | `paths`, `mounts` |
 | `ro` mounts | Host to guest | Read the files | `mounts` |
-| Snapshots, Git configuration, `known_hosts` | Host to guest | Read a copy; nothing writes back | `snapshots`, `git_config`, `ssh_auth_sock` |
+| Snapshots, Git and agent configuration, `known_hosts` | Host to guest | Read a copy; nothing writes back | `snapshots`, `git_config`, `import_agent_config`, `ssh_auth_sock` |
 | Secrets | Host to guest | Read every configured value | `secrets` |
 | SSH agent | Guest to host | Ask the host agent to sign while forwarded; keys stay on the host | `ssh_auth_sock` |
 | GPG agent | Guest to host | Ask the host gpg-agent to sign or decrypt with any key it holds while forwarded; the extra socket refuses key export and management; keys stay on the host | `gpg_agent` |

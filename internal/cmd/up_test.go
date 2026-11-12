@@ -230,61 +230,100 @@ func TestEnsureConfigGitignore(t *testing.T) {
 }
 
 func TestCLIConfigContent(t *testing.T) {
-	t.Parallel()
-
 	oc2, _ := agent.Lookup("opencode2")
 	tests := []struct {
-		name    string
-		files   map[string]string
-		mount   bool
-		want    string
-		wantErr string
+		name      string
+		files     map[string]string
+		mount     bool
+		imported  bool
+		snapshots []string
+		want      string
+		wantErr   string
 	}{
-		{"config dir not mounted", nil, false, `{"plugins":["file:///etc/jailoc-tui-plugin"]}`, ""},
-		{"no plugin config", nil, true, `{"plugins":["file:///etc/jailoc-tui-plugin"]}`, ""},
+		{name: "config dir not mounted", want: `{"plugins":["file:///etc/jailoc-tui-plugin"]}`},
+		{name: "no plugin config", mount: true, want: `{"plugins":["file:///etc/jailoc-tui-plugin"]}`},
 		{
-			"cli.json plugins kept",
-			map[string]string{"cli.json": `{"theme":"x","plugins":["npm-plugin",["opts-plugin",{"a":1}],"./local","/abs"]}`},
-			true,
-			`{"plugins":["npm-plugin",["opts-plugin",{"a":1}],"/home/agent/.config/opencode/local","/abs","file:///etc/jailoc-tui-plugin"]}`,
-			"",
+			name:  "cli.json plugins kept",
+			files: map[string]string{"cli.json": `{"theme":"x","plugins":["npm-plugin",["opts-plugin",{"a":1}],"./local","/abs"]}`},
+			mount: true,
+			want:  `{"plugins":["npm-plugin",["opts-plugin",{"a":1}],"/home/agent/.config/opencode/local","/abs","file:///etc/jailoc-tui-plugin"]}`,
 		},
 		{
-			"cli.json wins over tui.json",
-			map[string]string{"cli.json": `{"plugins":["v2"]}`, "tui.json": `{"plugin":["v1"]}`},
-			true,
-			`{"plugins":["v2","file:///etc/jailoc-tui-plugin"]}`,
-			"",
+			name:     "default snapshot plugins kept",
+			files:    map[string]string{"cli.json": `{"plugins":["npm-plugin","./local"]}`},
+			imported: true,
+			want:     `{"plugins":["npm-plugin","/home/agent/.config/opencode/local","file:///etc/jailoc-tui-plugin"]}`,
 		},
 		{
-			"tui.json plugins migrated",
-			map[string]string{"tui.json": `{"plugin":["v1"]}`},
-			true,
-			`{"plugins":["v1","file:///etc/jailoc-tui-plugin"]}`,
-			"",
+			name:      "default snapshot removed",
+			files:     map[string]string{"cli.json": `{"plugins":["npm-plugin"]}`},
+			imported:  true,
+			snapshots: []string{":/home/agent/.config/opencode:ro"},
+			want:      `{"plugins":["file:///etc/jailoc-tui-plugin"]}`,
 		},
 		{
-			"jailoc plugin not duplicated",
-			map[string]string{"cli.json": `{"plugins":["file:///etc/jailoc-tui-plugin"]}`},
-			true,
-			`{"plugins":["file:///etc/jailoc-tui-plugin"]}`,
-			"",
+			name:      "snapshot override wins over default snapshot",
+			files:     map[string]string{"cli.json": `{"plugins":["default-plugin"]}`, "override/cli.json": `{"plugins":["override-plugin"]}`},
+			imported:  true,
+			snapshots: []string{"$DIR/override:/home/agent/.config/opencode:ro"},
+			want:      `{"plugins":["override-plugin","file:///etc/jailoc-tui-plugin"]}`,
 		},
-		{"invalid cli.json", map[string]string{"cli.json": `{"plugins":`}, true, "", "parse "},
-		{"invalid plugins", map[string]string{"cli.json": `{"plugins":"x"}`}, true, "", "plugins"},
+		{
+			name:      "file snapshot override wins over default snapshot",
+			files:     map[string]string{"cli.json": `{"plugins":["default-plugin"]}`, "override-cli.json": `{"plugins":["file-override-plugin"]}`},
+			imported:  true,
+			snapshots: []string{"$DIR/override-cli.json:/home/agent/.config/opencode/cli.json:ro"},
+			want:      `{"plugins":["file-override-plugin","file:///etc/jailoc-tui-plugin"]}`,
+		},
+		{
+			name:  "cli.json wins over tui.json",
+			files: map[string]string{"cli.json": `{"plugins":["v2"]}`, "tui.json": `{"plugin":["v1"]}`},
+			mount: true,
+			want:  `{"plugins":["v2","file:///etc/jailoc-tui-plugin"]}`,
+		},
+		{
+			name:  "tui.json plugins migrated",
+			files: map[string]string{"tui.json": `{"plugin":["v1"]}`},
+			mount: true,
+			want:  `{"plugins":["v1","file:///etc/jailoc-tui-plugin"]}`,
+		},
+		{
+			name:  "jailoc plugin not duplicated",
+			files: map[string]string{"cli.json": `{"plugins":["file:///etc/jailoc-tui-plugin"]}`},
+			mount: true,
+			want:  `{"plugins":["file:///etc/jailoc-tui-plugin"]}`,
+		},
+		{name: "invalid cli.json", files: map[string]string{"cli.json": `{"plugins":`}, mount: true, wantErr: "parse "},
+		{name: "invalid plugins", files: map[string]string{"cli.json": `{"plugins":"x"}`}, mount: true, wantErr: "plugins"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			dir := filepath.Join(home, ".config", "opencode")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
 			for name, content := range tt.files {
-				if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+				p := filepath.Join(dir, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			ws := &workspace.Resolved{Agent: oc2}
+			ws := &workspace.Resolved{Agent: oc2, ImportAgentConfig: tt.imported}
 			if tt.mount {
 				ws.Mounts = []string{dir + ":/home/agent/.config/opencode:ro"}
+			}
+			for _, s := range tt.snapshots {
+				ws.Snapshots = append(ws.Snapshots, filepath.FromSlash(os.Expand(s, func(k string) string {
+					if k == "DIR" {
+						return dir
+					}
+					return ""
+				})))
 			}
 			got, err := cliConfigContent(ws)
 			if tt.wantErr != "" {

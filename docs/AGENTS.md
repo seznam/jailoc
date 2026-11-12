@@ -56,6 +56,7 @@ docs/
     resource-use.md                Memory reclaim, zram, image cache, disks, broker limits, log rotation
     alternatives.md                Comparison with other sandboxes and VMMs, why libkrun and a userspace broker
   blog/
+    agent-config.md                v2.4 read-only agent config snapshots post (outside Diátaxis; temporal language allowed)
     network-rules.md               v2.4 network rules & setups post (outside Diátaxis; temporal language allowed)
     jailoc-2.md                    v2 release post (outside Diátaxis; temporal language allowed)
 ```

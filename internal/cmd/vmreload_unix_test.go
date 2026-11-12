@@ -10,6 +10,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -171,5 +172,38 @@ func TestReloadPolicyRejectsOlderBrokerForRules(t *testing.T) {
 	ws := &workspace.Resolved{Name: "api", DNSUpstream: "9.9.9.9"}
 	if _, err := reloadPolicy(context.Background(), ws, running); err == nil {
 		t.Fatal("reloadPolicy accepted rules policy for protocol 2 broker")
+	}
+}
+
+func TestReloadSpecRunningSharesExcludeSnapshots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeMD), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claudeMD, []byte("# rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	claude, _ := agent.Lookup("claude")
+	ws := &workspace.Resolved{
+		Name:              "w",
+		Agent:             claude,
+		ImportAgentConfig: true,
+		CPU:               2,
+		Memory:            "2g",
+		DockerDisk:        "20g",
+	}
+	running := vm.Spec{
+		GuestProtocol: guest.Protocol,
+		Guest:         &guest.Config{},
+		Shares:        []vm.Share{{HostPath: "/p/claude", GuestPath: guestHome + "/.claude"}},
+	}
+	_, snapshots, err := reloadSpec(context.Background(), ws, running)
+	if err != nil {
+		t.Fatalf("reloadSpec() error = %v", err)
+	}
+	if len(snapshots) != 0 {
+		t.Fatalf("snapshots = %v, want empty when running share covers ~/.claude", snapshots)
 	}
 }

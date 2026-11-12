@@ -260,6 +260,7 @@ func TestVMShares(t *testing.T) {
 		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/home/opencode-state", Target: guestOpenCodeState},
+		{Source: guest.HostDir + "/home/opencode1-omo", Target: "/home/agent/.omo"},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
@@ -372,10 +373,11 @@ func TestVMAgentProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("vmShares: %v", err)
 	}
-	profileState := filepath.Join(home, ".local", "share", "jailoc", "profiles", "work", "opencode-state")
+	profileDir := filepath.Join(home, ".local", "share", "jailoc", "profiles", "work")
 	want := []vm.Share{
 		{HostPath: filepath.Join(home, "data"), GuestPath: dataDir},
-		{HostPath: profileState, GuestPath: stateDir},
+		{HostPath: filepath.Join(profileDir, "opencode-state"), GuestPath: stateDir},
+		{HostPath: filepath.Join(profileDir, "opencode1-omo"), GuestPath: oc.State[2].Path},
 	}
 	if !slices.Equal(shares, want) {
 		t.Fatalf("shares =\n%+v\nwant\n%+v", shares, want)
@@ -409,6 +411,7 @@ func TestVMAgentProfile(t *testing.T) {
 		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/ephemeral/opencode-data", Target: dataDir},
 		{Source: guest.HostDir + "/ephemeral/opencode-state", Target: stateDir},
+		{Source: guest.HostDir + "/ephemeral/opencode1-omo", Target: oc.State[2].Path},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
