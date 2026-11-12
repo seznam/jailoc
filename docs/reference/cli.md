@@ -293,14 +293,17 @@ Prints each session's ID, state (`attached` or `detached`), start time, director
 
 ### `jailoc config`
 
-Print the resolved configuration.
+Print the resolved configuration of a workspace.
 
 ```
-jailoc config [flags]
+jailoc config [workspace] [flags]
 ```
 
-Reads the configuration file, resolves defaults and `~` expansions, and prints the result. Secrets are listed per scope, under `Defaults Secrets:` and under each workspace, as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--all` | `-A` | Show the resolved configuration of every configured workspace. |
 
+Reads the configuration file, resolves `[defaults]`, agent settings and `~` expansions for the selected workspace (from the argument, `--workspace`, or the current working directory), and prints the effective workspace configuration together with its `Computed Paths` (`Config File`, `Workspace Config Dir`, `Workspace Cache Dir`, `VM State Dir`, and `Profile Dir`). Secrets are listed under `Secrets:` as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
 ---
 
 ### `jailoc add`

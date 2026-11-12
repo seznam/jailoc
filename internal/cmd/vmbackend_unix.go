@@ -55,16 +55,6 @@ func init() {
 	rootCmd.AddCommand(vmSuperviseCmd)
 }
 
-func vmRootDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "jailoc-vm")
-	}
-	return filepath.Join(home, ".cache", "jailoc-vm")
-}
-
-func vmStateDir(name string) string { return filepath.Join(vmRootDir(), "workspaces", name) }
-
 func setDockerHost(socket string) (func(), error) {
 	orig, set := os.LookupEnv("DOCKER_HOST")
 	if err := os.Setenv("DOCKER_HOST", "unix://"+socket); err != nil {
