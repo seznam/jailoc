@@ -154,7 +154,8 @@ type progressImage struct {
 	v1.Image
 	uncached map[v1.Hash]bool
 	total    int
-	done     atomic.Int32
+	mu       sync.Mutex
+	done     int
 	progress func(ImportProgress)
 }
 
@@ -184,7 +185,7 @@ func imageWithProgress(img v1.Image, lc *image.LayerCache, progress func(ImportP
 		total:    total,
 		progress: progress,
 	}
-	p.report(0)
+	p.reportInitial()
 	return p, nil
 }
 
@@ -205,9 +206,18 @@ func (p *progressImage) Layers() ([]v1.Layer, error) {
 	return layers, nil
 }
 
-func (p *progressImage) report(done int32) {
+func (p *progressImage) reportInitial() {
 	if p.progress != nil {
-		p.progress(ImportProgress{Phase: PhaseExtract, Layers: int(done), Total: p.total})
+		p.progress(ImportProgress{Phase: PhaseExtract, Layers: 0, Total: p.total})
+	}
+}
+
+func (p *progressImage) layerDone() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.done++
+	if p.progress != nil {
+		p.progress(ImportProgress{Phase: PhaseExtract, Layers: p.done, Total: p.total})
 	}
 }
 
@@ -223,7 +233,7 @@ func (l *progressLayer) Uncompressed() (io.ReadCloser, error) {
 		return nil, err
 	}
 	return &progressReadCloser{ReadCloser: r, done: func() {
-		l.once.Do(func() { l.image.report(l.image.done.Add(1)) })
+		l.once.Do(l.image.layerDone)
 	}}, nil
 }
 

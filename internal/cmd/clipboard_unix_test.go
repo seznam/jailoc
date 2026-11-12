@@ -26,8 +26,8 @@ func TestOSC52Bridge(t *testing.T) {
 		},
 		{
 			name:     "ST terminator",
-			chunks:   []string{"\x1b]52;p;d29ybGQ=\x1b\\"},
-			wantOut:  "\x1b]52;p;d29ybGQ=\x1b\\",
+			chunks:   []string{"\x1b]52;c;d29ybGQ=\x1b\\"},
+			wantOut:  "\x1b]52;c;d29ybGQ=\x1b\\",
 			wantCopy: []string{"world"},
 		},
 		{
@@ -49,10 +49,10 @@ func TestOSC52Bridge(t *testing.T) {
 			wantCopy: []string{"empty"},
 		},
 		{
-			name:     "multiple selection parameters",
+			name:     "selection parameters",
 			chunks:   []string{"\x1b]52;c;Yw==\x07\x1b]52;p;cA==\x07\x1b]52;pc;cGM=\x07"},
 			wantOut:  "\x1b]52;c;Yw==\x07\x1b]52;p;cA==\x07\x1b]52;pc;cGM=\x07",
-			wantCopy: []string{"c", "p", "pc"},
+			wantCopy: []string{"c", "pc"},
 		},
 		{
 			name:    "clipboard query",

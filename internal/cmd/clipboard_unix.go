@@ -80,9 +80,11 @@ func (b *osc52Bridge) scan(value byte) {
 	const rawPrefix = "\x1b]52;"
 	const tmuxPrefix = "\x1bPtmux;"
 
-	b.recent = append(b.recent, value)
-	if len(b.recent) > len(tmuxPrefix) {
-		b.recent = b.recent[len(b.recent)-len(tmuxPrefix):]
+	if len(b.recent) == len(tmuxPrefix) {
+		copy(b.recent, b.recent[1:])
+		b.recent[len(b.recent)-1] = value
+	} else {
+		b.recent = append(b.recent, value)
 	}
 	if bytes.HasSuffix(b.recent, []byte(rawPrefix)) {
 		b.state = osc52Raw
@@ -141,6 +143,10 @@ func decodeOSC52(sequence []byte) ([]byte, bool) {
 	}
 	separator := bytes.IndexByte(body, ';')
 	if separator < 0 {
+		return nil, false
+	}
+	selection := body[:separator]
+	if len(selection) > 0 && bytes.IndexByte(selection, 'c') < 0 {
 		return nil, false
 	}
 	payload := body[separator+1:]
