@@ -42,7 +42,7 @@ func startOOMGuard(logger *slog.Logger) (stop func(), err error) {
 		_ = unix.Close(fd)
 		return nil, fmt.Errorf("oom guard: subscribe to proc events: %w", err)
 	}
-	g := &oomGuard{logger: logger, init: os.Getpid(), agents: map[int]bool{}, readAdj: readOOMAdj, writeAdj: writeOOMAdj}
+	g := &oomGuard{logger: logger, init: os.Getpid(), agents: map[int]bool{}, readProc: readProcInfo, writeAdj: writeOOMAdj}
 	// Exempts init and resets the processes it started before subscribing.
 	g.rescan()
 	var once sync.Once
@@ -75,9 +75,9 @@ type oomGuard struct {
 	logger *slog.Logger
 	init   int          // PID of jailoc-guest init
 	agents map[int]bool // thread group IDs of session programs
-	// readAdj and writeAdj access /proc/<pid>/oom_score_adj; tests
-	// replace them.
-	readAdj  func(pid int) (int, error)
+	// readProc reads /proc/<pid> and writeAdj writes its oom_score_adj;
+	// tests replace them.
+	readProc func(pid int) (procInfo, error)
 	writeAdj func(pid, adj int) error
 }
 
@@ -102,13 +102,18 @@ func (g *oomGuard) handle(ev procEvent) {
 		switch {
 		case ev.childPID != ev.childTGID:
 			// A new thread, reported with its process's parent as tgid.
-		case g.agents[ev.tgid], ev.tgid == g.init:
+		case g.agents[ev.tgid]:
 			g.set(ev.childTGID, oomAdjChild)
 		default:
-			// A process that forked before the guard reset it passed init's
-			// exemption on. Session processes regain it on exec, which is
-			// handled after this fork.
-			if adj, err := g.readAdj(ev.childTGID); err == nil && adj == oomAdjGuest {
+			// A child of init, or of a process that forked before the guard
+			// reset it, holds init's exemption. A child that runs a session
+			// process already keeps it: a rescan after dropped events may
+			// have restored it before this fork is handled.
+			p, err := g.readProc(ev.childTGID)
+			if err != nil || isGuestSession(p) {
+				break
+			}
+			if ev.tgid == g.init || p.adj == oomAdjGuest {
 				g.set(ev.childTGID, oomAdjChild)
 			}
 		}
@@ -148,18 +153,6 @@ func (g *oomGuard) set(pid, adj int) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ESRCH) {
 		g.logger.Warn("oom guard: set oom_score_adj", "pid", pid, "error", err)
 	}
-}
-
-func readOOMAdj(pid int) (int, error) {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/oom_score_adj")
-	if err != nil {
-		return 0, fmt.Errorf("read oom_score_adj of %d: %w", pid, err)
-	}
-	adj, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0, fmt.Errorf("parse oom_score_adj of %d: %w", pid, err)
-	}
-	return adj, nil
 }
 
 func writeOOMAdj(pid, adj int) error {
