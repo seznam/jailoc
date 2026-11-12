@@ -387,6 +387,12 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 		}
 		return 80, 24
 	})
+	var clipboard *osc52Bridge
+	if interactive {
+		clipQueue := newHostClipboardQueue(copyToHostClipboard)
+		defer clipQueue.close()
+		clipboard = newOSC52Bridge(clipQueue.enqueue, os.Getenv("TMUX") != "")
+	}
 	defer status.stop()
 	for {
 		f, err := session.ReadFrame(out)
@@ -412,7 +418,11 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 				}
 			}
 		case session.FrameData:
-			_ = status.write(f.Payload)
+			payload := f.Payload
+			if clipboard != nil {
+				payload = clipboard.feed(payload)
+			}
+			_ = status.write(payload)
 		case session.FrameExit:
 			code, _ = session.ParseExit(f.Payload)
 			return id, outcomeExited, code

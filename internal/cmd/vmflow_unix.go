@@ -16,10 +16,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -278,11 +280,24 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	}
 	ref := vm.RootFSRef(id)
 	start = time.Now()
+	progressDisplay := newImportProgressDisplay(
+		os.Stderr,
+		term.IsTerminal(int(os.Stderr.Fd())), //nolint:gosec // G115: file descriptors fit in int
+		func() int {
+			width, _, err := term.GetSize(int(os.Stderr.Fd())) //nolint:gosec // G115: file descriptors fit in int
+			if err != nil {
+				return 0
+			}
+			return width
+		},
+	)
 	err = vm.ImportImage(ctx, filepath.Join(vmRootDir(), "images"), ref, func(w io.Writer) error {
 		_, _ = color.New(color.FgCyan).Printf("Unpacking image %s for the workspace VM...\n", finalImage)
+		progressDisplay.start()
 		_, err := docker.SaveImage(ctx, finalImage, w)
 		return err
-	})
+	}, progressDisplay.update)
+	progressDisplay.stop()
 	if err != nil {
 		return "", err
 	}
@@ -292,6 +307,145 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	pruneDockerImages(ctx, lock, ws.Name, chain)
 	logStep("prune images", start)
 	return ref, nil
+}
+
+type importProgressDisplay struct {
+	w           io.Writer
+	interactive bool
+	width       func() int
+	now         func() time.Time
+
+	mu       sync.Mutex
+	progress vm.ImportProgress
+	started  time.Time
+	running  bool
+	frame    int
+	stopOnce sync.Once
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+}
+
+func newImportProgressDisplay(w io.Writer, interactive bool, width func() int) *importProgressDisplay {
+	return &importProgressDisplay{
+		w:           w,
+		interactive: interactive,
+		width:       width,
+		now:         time.Now,
+		started:     time.Now(),
+		stopCh:      make(chan struct{}),
+		doneCh:      make(chan struct{}),
+	}
+}
+
+func (d *importProgressDisplay) start() {
+	if !d.interactive {
+		return
+	}
+	d.mu.Lock()
+	d.started = d.now()
+	d.running = true
+	d.mu.Unlock()
+	go d.animate()
+}
+
+func (d *importProgressDisplay) animate() {
+	ticker := time.NewTicker(spinnerInterval)
+	defer ticker.Stop()
+	defer close(d.doneCh)
+	for {
+		select {
+		case <-ticker.C:
+			d.redraw()
+		case <-d.stopCh:
+			return
+		}
+	}
+}
+
+func (d *importProgressDisplay) update(progress vm.ImportProgress) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.progress = progress
+}
+
+func (d *importProgressDisplay) redraw() {
+	if !d.interactive {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	frame := spinnerFrames[d.frame%len(spinnerFrames)]
+	d.frame++
+	seconds := int(d.now().Sub(d.started) / time.Second)
+	line := truncateImportProgress(formatImportProgress(frame, d.progress, seconds), d.width())
+	_, _ = fmt.Fprint(d.w, "\r\x1b[2K", line)
+}
+
+func (d *importProgressDisplay) stop() {
+	if !d.interactive {
+		return
+	}
+	d.mu.Lock()
+	running := d.running
+	d.mu.Unlock()
+	if !running {
+		return
+	}
+	d.stopOnce.Do(func() { close(d.stopCh) })
+	<-d.doneCh
+	d.erase()
+}
+
+func (d *importProgressDisplay) erase() {
+	if d.interactive {
+		_, _ = io.WriteString(d.w, "\r\x1b[2K")
+	}
+}
+
+func formatImportProgress(frame rune, p vm.ImportProgress, seconds int) string {
+	switch p.Phase {
+	case vm.PhaseExtract:
+		if p.Total > 0 {
+			return fmt.Sprintf("  %c Extracting image layers (%d/%d)… %ds", frame, p.Layers, p.Total, seconds)
+		}
+		return fmt.Sprintf("  %c Composing root filesystem… %ds", frame, seconds)
+	default:
+		if p.Bytes > 0 {
+			return fmt.Sprintf("  %c Exporting image from Docker (%s)… %ds", frame, formatBytes(p.Bytes), seconds)
+		}
+		return fmt.Sprintf("  %c Exporting image from Docker… %ds", frame, seconds)
+	}
+}
+
+func formatBytes(bytes int64) string {
+	const (
+		kib = int64(1 << 10)
+		mib = int64(1 << 20)
+		gib = int64(1 << 30)
+	)
+	switch {
+	case bytes < kib:
+		return "< 1 KiB"
+	case bytes < mib:
+		return fmt.Sprintf("%d KiB", bytes/kib)
+	case bytes < gib:
+		return fmt.Sprintf("%d MiB", bytes/mib)
+	case bytes%gib == 0:
+		return fmt.Sprintf("%d GiB", bytes/gib)
+	default:
+		return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(gib))
+	}
+}
+
+func truncateImportProgress(line string, width int) string {
+	runes := []rune(line)
+	if width <= 0 || len(runes) <= width {
+		return line
+	}
+	if width == 1 {
+		return "…"
+	}
+	return string(runes[:width-1]) + "…"
 }
 
 // lockDockerImages returns the host-wide lock on the Docker images jailoc

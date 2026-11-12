@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -73,7 +74,7 @@ func TestImportImageSkipsCachedLayers(t *testing.T) {
 	cacheDir := t.TempDir()
 	ref := RootFSRef("sha256:1111")
 
-	if err := ImportImage(context.Background(), cacheDir, ref, save); err != nil {
+	if err := ImportImage(context.Background(), cacheDir, ref, save, nil); err != nil {
 		t.Fatalf("ImportImage: %v", err)
 	}
 	if image.NewCache(cacheDir).LookupRef(ref) == nil {
@@ -110,6 +111,144 @@ func TestImportImageSkipsCachedLayers(t *testing.T) {
 	}
 }
 
+func TestImportImageReportsProgress(t *testing.T) {
+	t.Parallel()
+	img, err := random.Image(1024, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := saveTarball(t, img)
+	save := func(w io.Writer) error {
+		_, err := w.Write(saved)
+		return err
+	}
+	cacheDir := t.TempDir()
+
+	var mu sync.Mutex
+	progress := []ImportProgress{}
+	report := func(p ImportProgress) {
+		mu.Lock()
+		defer mu.Unlock()
+		progress = append(progress, p)
+	}
+	if err := ImportImage(
+		context.Background(),
+		cacheDir,
+		RootFSRef("sha256:progress-new"),
+		save,
+		report,
+	); err != nil {
+		t.Fatalf("ImportImage: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var finalSave, finalExtract ImportProgress
+	for _, p := range progress {
+		switch p.Phase {
+		case PhaseSave:
+			finalSave = p
+		case PhaseExtract:
+			finalExtract = p
+		}
+	}
+	if finalSave.Bytes != int64(len(saved)) {
+		t.Errorf("final save bytes = %d, want %d", finalSave.Bytes, len(saved))
+	}
+	if finalExtract.Total != 2 || finalExtract.Layers != finalExtract.Total {
+		t.Errorf("final extract progress = %+v, want 2/2 layers", finalExtract)
+	}
+}
+
+func TestImportImageReportsNoUncachedLayers(t *testing.T) {
+	t.Parallel()
+	img, err := random.Image(1024, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := saveTarball(t, img)
+	save := func(w io.Writer) error {
+		_, err := w.Write(saved)
+		return err
+	}
+	cacheDir := t.TempDir()
+	if err := ImportImage(context.Background(), cacheDir, RootFSRef("sha256:cached-source"), save, nil); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+
+	var mu sync.Mutex
+	progress := []ImportProgress{}
+	if err := ImportImage(
+		context.Background(),
+		cacheDir,
+		RootFSRef("sha256:cached-destination"),
+		save,
+		func(p ImportProgress) {
+			mu.Lock()
+			defer mu.Unlock()
+			progress = append(progress, p)
+		},
+	); err != nil {
+		t.Fatalf("ImportImage: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var extracts []ImportProgress
+	for _, p := range progress {
+		if p.Phase == PhaseExtract {
+			extracts = append(extracts, p)
+		}
+	}
+	if len(extracts) != 1 || extracts[0].Layers != 0 || extracts[0].Total != 0 {
+		t.Errorf("extract progress = %+v, want one 0/0 event", extracts)
+	}
+}
+func TestImageWithProgressOutOfOrderWorkers(t *testing.T) {
+	t.Parallel()
+	base, err := random.Image(512, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	var events []ImportProgress
+	wrapped, err := imageWithProgress(base, cacheDir, image.NewCache(cacheDir).LayerCache(), func(p ImportProgress) {
+		events = append(events, p)
+	})
+	if err != nil {
+		t.Fatalf("imageWithProgress: %v", err)
+	}
+	layers, err := wrapped.Layers()
+	if err != nil {
+		t.Fatalf("Layers: %v", err)
+	}
+	// Start and close the higher-index worker (layer 1) before layer 0.
+	for _, idx := range []int{1, 0} {
+		rc, err := layers[idx].Uncompressed()
+		if err != nil {
+			t.Fatalf("layer %d Uncompressed: %v", idx, err)
+		}
+		if _, err := io.Copy(io.Discard, rc); err != nil {
+			t.Fatalf("layer %d read: %v", idx, err)
+		}
+		if err := rc.Close(); err != nil {
+			t.Fatalf("layer %d Close: %v", idx, err)
+		}
+	}
+	want := []ImportProgress{
+		{Phase: PhaseExtract, Layers: 0, Total: 2},
+		{Phase: PhaseExtract, Layers: 1, Total: 2},
+		{Phase: PhaseExtract, Layers: 2, Total: 2},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("events = %+v, want %+v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Errorf("events[%d] = %+v, want %+v", i, events[i], want[i])
+		}
+	}
+}
+
 func TestImportImageRejectsLegacyTarball(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
@@ -126,7 +265,7 @@ func TestImportImageRejectsLegacyTarball(t *testing.T) {
 	err := ImportImage(context.Background(), t.TempDir(), RootFSRef("sha256:2222"), func(w io.Writer) error {
 		_, err := w.Write(buf.Bytes())
 		return err
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("ImportImage accepted a tarball without an OCI layout")
 	}
@@ -142,7 +281,7 @@ func TestImportImageReportsUnpackError(t *testing.T) {
 	err := ImportImage(context.Background(), t.TempDir(), RootFSRef("sha256:3333"), func(w io.Writer) error {
 		_, err := w.Write(bytes.Repeat([]byte("not a tar archive "), 1<<16))
 		return err
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("ImportImage accepted a corrupt tarball")
 	}
@@ -163,7 +302,7 @@ func TestImportImageStopsWhenCancelled(t *testing.T) {
 	err = ImportImage(ctx, t.TempDir(), RootFSRef("sha256:4444"), func(w io.Writer) error {
 		_, err := w.Write(saved)
 		return err
-	})
+	}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("ImportImage after cancel = %v, want context.Canceled", err)
 	}
