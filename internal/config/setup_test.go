@@ -92,9 +92,6 @@ func TestRenderFirstTime(t *testing.T) {
 			Memory:        "8g",
 			AllowInternet: false,
 			ExtraHosts:    []string{"gitlab.example.com", "10.20.0.0/16"},
-			SecretsEnv: map[string]Secret{
-				"GH_TOKEN": {FromCommand: "gh auth token"},
-			},
 			WorkspaceName: "default",
 			WorkspacePath: "/data/my-app",
 		}
@@ -134,9 +131,6 @@ func TestRenderFirstTime(t *testing.T) {
 		}
 		if cfg.Defaults.Memory == nil || *cfg.Defaults.Memory != "8g" {
 			t.Errorf("Defaults.Memory = %v, want 8g", cfg.Defaults.Memory)
-		}
-		if got := cfg.Defaults.Secrets.Env["GH_TOKEN"].FromCommand; got != "gh auth token" {
-			t.Errorf("GH_TOKEN FromCommand = %q, want 'gh auth token'", got)
 		}
 		rules := cfg.Defaults.Network.Get().Rules
 		if len(rules) != 2 || rules[1].Name != "custom" {

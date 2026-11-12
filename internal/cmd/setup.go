@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -35,8 +34,8 @@ var setupCmd = &cobra.Command{
 
 When run for the first time (no config.toml or still unmodified defaults),
 setup walks through global defaults (coding agent, Git/SSH/GPG forwarding,
-network policy, Docker in the VM, CPU/memory limits, and common secrets) and
-configures the initial workspace.
+network policy, Docker in the VM, CPU/memory limits) and configures the
+initial workspace.
 
 When run with an existing customized config.toml, setup adds or updates a
 workspace interactively.`,
@@ -80,19 +79,9 @@ func init() {
 }
 
 type wizardPrompter struct {
-	in       *bufio.Reader
-	out      io.Writer
-	yes      bool
-	lookPath func(string) (string, error)
-}
-
-func (p *wizardPrompter) hasHostBinary(name string) bool {
-	fn := p.lookPath
-	if fn == nil {
-		fn = exec.LookPath
-	}
-	_, err := fn(name)
-	return err == nil
+	in  *bufio.Reader
+	out io.Writer
+	yes bool
 }
 
 func (p *wizardPrompter) choose(question string, options []string, def int) (int, error) {
@@ -268,38 +257,6 @@ func runFirstTimeSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 		return "", false, err
 	}
 
-	secretsEnv := map[string]config.Secret{}
-	if p.hasHostBinary("gh") {
-		useGH, err := p.confirm("Pass GitHub CLI token into the VM as GH_TOKEN (from `gh auth token`)?", false)
-		if err != nil {
-			return "", false, err
-		}
-		if useGH {
-			secretsEnv["GH_TOKEN"] = config.Secret{FromCommand: "gh auth token"}
-		}
-	}
-	var defaultsEnv []string
-	if p.hasHostBinary("ssh") {
-		useGL, err := p.confirm("Mint a short-lived GitLab token per workspace over SSH as GITLAB_TOKEN?", false)
-		if err != nil {
-			return "", false, err
-		}
-		if useGL {
-			glHost, err := p.input("GitLab host", "gitlab.com", validateGitLabHost)
-			if err != nil {
-				return "", false, err
-			}
-			glHost = strings.ToLower(strings.TrimSpace(glHost))
-			secretsEnv["GITLAB_TOKEN"] = config.Secret{FromCommand: gitlabTokenCommand(glHost), TTL: "24h"}
-			if glHost != "gitlab.com" {
-				defaultsEnv = append(defaultsEnv, "GITLAB_HOST="+glHost)
-				if !allowInternet && !slices.Contains(extraHosts, glHost) {
-					extraHosts = append(extraHosts, glHost)
-				}
-			}
-		}
-	}
-
 	defWSName := "default"
 	if workspaceExplicit && workspaceFlag != "" {
 		defWSName = workspaceFlag
@@ -328,8 +285,6 @@ func runFirstTimeSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 		Memory:        memVal,
 		AllowInternet: allowInternet,
 		ExtraHosts:    extraHosts,
-		SecretsEnv:    secretsEnv,
-		Env:           defaultsEnv,
 		WorkspaceName: wsName,
 		WorkspacePath: resolvedWSPath,
 	}
@@ -507,21 +462,6 @@ func maybeOfferFirstTimeSetup(ctx context.Context, targetDir string) error {
 	}
 	if !workspaceExplicit && wsName != "" {
 		workspaceFlag = wsName
-	}
-	return nil
-}
-
-// gitlabTokenCommand mints a personal access token named after the workspace
-// over SSH. GitLab tokens expire at midnight UTC on their expiry date, so a
-// 2-day lifetime keeps every token valid longer than its 24h cache.
-func gitlabTokenCommand(host string) string {
-	return "ssh git@" + host + " personal_access_token jailoc-${JAILOC_WORKSPACE} api 2 | awk '/^Token:/ {print $2}'"
-}
-
-func validateGitLabHost(s string) error {
-	kind, normalized, err := config.ParseRuleTarget(s)
-	if err != nil || kind != "name" || strings.HasPrefix(normalized, "*.") {
-		return fmt.Errorf("GitLab host must be a hostname such as gitlab.com, got %q", s)
 	}
 	return nil
 }

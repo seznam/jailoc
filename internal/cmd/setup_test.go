@@ -6,7 +6,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -151,104 +150,4 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		assertContains(t, out.String(), "dry run, nothing written")
 	})
 
-	t.Run("gh and GitLab SSH prompts run only when binary is accessible on host", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		projDir := cwd
-
-		cfgNone := filepath.Join(dir, "none.toml")
-		var outNone bytes.Buffer
-		wNone := &wizardPrompter{
-			in:       bufio.NewReader(strings.NewReader("")),
-			out:      &outNone,
-			yes:      true,
-			lookPath: func(string) (string, error) { return "", os.ErrNotExist },
-		}
-		if _, _, err := runSetup(context.Background(), cfgNone, projDir, wNone, false); err != nil {
-			t.Fatalf("runSetup (none) failed: %v", err)
-		}
-		if strings.Contains(outNone.String(), "GH_TOKEN") || strings.Contains(outNone.String(), "GITLAB_TOKEN") {
-			t.Errorf("expected no GH_TOKEN/GITLAB_TOKEN prompt when binaries are absent, got:\n%s", outNone.String())
-		}
-
-		cfgBoth := filepath.Join(dir, "both.toml")
-		inputBoth := strings.Join([]string{
-			"opencode",
-			"yes",
-			"no",
-			"no",
-			"dev-deps",
-			"",
-			"no",
-			"2",
-			"4g",
-			"yes",
-			"yes",
-			"gitlab.example.com",
-			"default",
-			projDir,
-			"yes",
-			"no",
-		}, "\n") + "\n"
-		var outBoth bytes.Buffer
-		wBoth := &wizardPrompter{
-			in:       bufio.NewReader(strings.NewReader(inputBoth)),
-			out:      &outBoth,
-			yes:      false,
-			lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		}
-		if _, _, err := runSetup(context.Background(), cfgBoth, projDir, wBoth, false); err != nil {
-			t.Fatalf("runSetup (both) failed: %v", err)
-		}
-		assertContains(t, outBoth.String(), "GH_TOKEN")
-		assertContains(t, outBoth.String(), "GITLAB_TOKEN")
-
-		loaded, err := config.LoadFrom(cfgBoth)
-		if err != nil {
-			t.Fatalf("LoadFrom(both): %v", err)
-		}
-		if loaded.Defaults.Secrets.Env["GH_TOKEN"].FromCommand == "" {
-			t.Error("expected GH_TOKEN secret to be configured")
-		}
-		gl := loaded.Defaults.Secrets.Env["GITLAB_TOKEN"]
-		if gl.FromCommand != gitlabTokenCommand("gitlab.example.com") || gl.TTL != "24h" {
-			t.Errorf("GITLAB_TOKEN secret = %+v, want SSH mint command for gitlab.example.com with ttl 24h", gl)
-		}
-		if !slices.Contains(loaded.Defaults.Env, "GITLAB_HOST=gitlab.example.com") {
-			t.Errorf("defaults env = %v, want GITLAB_HOST=gitlab.example.com", loaded.Defaults.Env)
-		}
-		allowed := false
-		for _, r := range loaded.Defaults.Network.Get().Rules {
-			if slices.Contains(r.Allow, "gitlab.example.com") {
-				allowed = true
-			}
-		}
-		if !allowed {
-			t.Errorf("expected gitlab.example.com in the default network rules, got %+v", loaded.Defaults.Network.Get().Rules)
-		}
-	})
-}
-
-func TestValidateGitLabHost(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		host    string
-		wantErr bool
-	}{
-		{"gitlab.com", false},
-		{"gitlab.example.com", false},
-		{"*.gitlab.com", true},
-		{"10.0.0.1", true},
-		{"", true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.host, func(t *testing.T) {
-			t.Parallel()
-			if err := validateGitLabHost(tc.host); (err != nil) != tc.wantErr {
-				t.Errorf("validateGitLabHost(%q) error = %v, wantErr %v", tc.host, err, tc.wantErr)
-			}
-		})
-	}
 }

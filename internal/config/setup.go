@@ -69,8 +69,6 @@ type FirstTimeOptions struct {
 	Memory        string
 	AllowInternet bool
 	ExtraHosts    []string
-	SecretsEnv    map[string]Secret
-	Env           []string
 	WorkspaceName string
 	WorkspacePath string
 }
@@ -156,35 +154,6 @@ func RenderFirstTime(opts FirstTimeOptions) ([]byte, error) {
 		})
 		if err := doc.Set([]string{"defaults", "network", "rules"}, rules); err != nil {
 			return nil, fmt.Errorf("set defaults.network.rules: %w", err)
-		}
-	}
-
-	if len(opts.Env) > 0 {
-		if err := doc.Set([]string{"defaults", "env"}, opts.Env); err != nil {
-			return nil, fmt.Errorf("set defaults.env: %w", err)
-		}
-	}
-
-	if len(opts.SecretsEnv) > 0 {
-		envSecrets := make(map[string]any, len(opts.SecretsEnv))
-		for k, s := range opts.SecretsEnv {
-			entry := map[string]any{}
-			if s.FromEnv != "" {
-				entry["from_env"] = s.FromEnv
-			}
-			if s.FromFile != "" {
-				entry["from_file"] = s.FromFile
-			}
-			if s.FromCommand != "" {
-				entry["from_command"] = s.FromCommand
-			}
-			if s.TTL != "" {
-				entry["ttl"] = s.TTL
-			}
-			envSecrets[k] = entry
-		}
-		if err := doc.Set([]string{"defaults", "secrets", "env"}, envSecrets); err != nil {
-			return nil, fmt.Errorf("set defaults.secrets.env: %w", err)
 		}
 	}
 
