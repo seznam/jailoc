@@ -238,6 +238,8 @@ func Execute(version, commit, date string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	stopOnCancel := context.AfterFunc(ctx, stop)
+	defer stopOnCancel()
 	rootCmd.SetContext(ctx)
 
 	// Fire non-blocking update check only when stderr is a terminal —

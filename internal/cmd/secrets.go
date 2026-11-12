@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -106,21 +107,26 @@ func secretReference(s workspace.ResolvedSecret) string {
 
 // secretCommandTimeout bounds a from_command run, which may wait for the
 // user to unlock a password manager.
-const secretCommandTimeout = 2 * time.Minute
+const (
+	secretCommandTimeout       = 2 * time.Minute
+	secretCommandWaitDelay     = 200 * time.Millisecond
+	defaultSecretCommandNotice = 2 * time.Second
+)
 
 // errSecretNotCached is returned by secretKeyring.get for a missing entry.
 var errSecretNotCached = errors.New("secret is not cached")
 
 // secretKeyring is the host keychain. delete succeeds for a missing entry.
 type secretKeyring interface {
-	get(account string) ([]byte, error)
-	set(account string, data []byte, ttl time.Duration) error
-	delete(account string) error
+	get(ctx context.Context, account string) ([]byte, error)
+	set(ctx context.Context, account string, data []byte, ttl time.Duration) error
+	delete(ctx context.Context, account string) error
 }
 
 var (
-	secretCache     secretKeyring = defaultSecretKeyring
-	secretCacheTime               = time.Now
+	secretCache         secretKeyring = defaultSecretKeyring
+	secretCacheTime                   = time.Now
+	secretCommandNotice               = defaultSecretCommandNotice
 )
 
 type cachedSecretEnvelope struct {
@@ -158,8 +164,8 @@ func secretCacheIndexAccount(wsName string) string {
 // so a purge finds secrets whose configuration changed or was removed.
 type secretCacheIndex map[string]time.Time
 
-func readSecretCacheIndex(wsName string) (secretCacheIndex, error) {
-	raw, err := secretCache.get(secretCacheIndexAccount(wsName))
+func readSecretCacheIndex(ctx context.Context, wsName string) (secretCacheIndex, error) {
+	raw, err := secretCache.get(ctx, secretCacheIndexAccount(wsName))
 	if errors.Is(err, errSecretNotCached) {
 		return secretCacheIndex{}, nil
 	}
@@ -185,10 +191,10 @@ const (
 // writeSecretCacheIndex stores idx until its latest expiry plus
 // indexExpiryMargin, so it outlives every secret it lists, or deletes it when
 // it is empty.
-func writeSecretCacheIndex(wsName string, idx secretCacheIndex) error {
+func writeSecretCacheIndex(ctx context.Context, wsName string, idx secretCacheIndex) error {
 	account := secretCacheIndexAccount(wsName)
 	if len(idx) == 0 {
-		return secretCache.delete(account)
+		return secretCache.delete(ctx, account)
 	}
 	var latest time.Time
 	for _, expires := range idx {
@@ -201,14 +207,14 @@ func writeSecretCacheIndex(wsName string, idx secretCacheIndex) error {
 	if err != nil {
 		return fmt.Errorf("encode secret cache index: %w", err)
 	}
-	return secretCache.set(account, data, ttl)
+	return secretCache.set(ctx, account, data, ttl)
 }
 
 // recordSecretCacheAccount lists account in the workspace index until
 // expires and drops entries that expired and could be deleted. The caller
 // holds the workspace's secret cache lock.
-func recordSecretCacheAccount(wsName, account string, expires time.Time) error {
-	idx, err := readSecretCacheIndex(wsName)
+func recordSecretCacheAccount(ctx context.Context, wsName, account string, expires time.Time) error {
+	idx, err := readSecretCacheIndex(ctx, wsName)
 	if err != nil {
 		return err
 	}
@@ -216,18 +222,18 @@ func recordSecretCacheAccount(wsName, account string, expires time.Time) error {
 	for a, exp := range idx {
 		// The kernel keyring drops expired entries by itself, the macOS
 		// keychain keeps them until they are deleted.
-		if !now.Before(exp) && secretCache.delete(a) == nil {
+		if !now.Before(exp) && secretCache.delete(ctx, a) == nil {
 			delete(idx, a)
 		}
 	}
 	if expires.After(idx[account]) {
 		idx[account] = expires
 	}
-	return writeSecretCacheIndex(wsName, idx)
+	return writeSecretCacheIndex(ctx, wsName, idx)
 }
 
-func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) {
-	raw, err := secretCache.get(secretCacheAccount(wsName, s))
+func readCachedSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret) ([]byte, bool) {
+	raw, err := secretCache.get(ctx, secretCacheAccount(wsName, s))
 	if err != nil {
 		return nil, false
 	}
@@ -246,24 +252,25 @@ func readCachedSecret(wsName string, s workspace.ResolvedSecret) ([]byte, bool) 
 // secret. Caching is best effort: on failure the command runs again next
 // time.
 func writeCachedSecret(wsName string, s workspace.ResolvedSecret, value []byte) {
-	_ = withSecretCacheLock(context.Background(), wsName, func() error {
-		writeCachedSecretLocked(wsName, s, value)
+	ctx := context.Background()
+	_ = withSecretCacheLock(ctx, wsName, func() error {
+		writeCachedSecretLocked(ctx, wsName, s, value)
 		return nil
 	})
 }
 
-func writeCachedSecretLocked(wsName string, s workspace.ResolvedSecret, value []byte) {
+func writeCachedSecretLocked(ctx context.Context, wsName string, s workspace.ResolvedSecret, value []byte) {
 	expires := secretCacheTime().Add(s.TTL)
 	data, err := json.Marshal(cachedSecretEnvelope{Value: value, ExpiresAt: expires})
 	if err != nil {
 		return
 	}
 	account := secretCacheAccount(wsName, s)
-	if err := recordSecretCacheAccount(wsName, account, expires); err != nil {
+	if err := recordSecretCacheAccount(ctx, wsName, account, expires); err != nil {
 		return
 	}
 	if ttl := expires.Sub(secretCacheTime()); ttl > 0 {
-		_ = secretCache.set(account, data, ttl)
+		_ = secretCache.set(ctx, account, data, ttl)
 	}
 }
 
@@ -276,7 +283,7 @@ func purgeWorkspaceSecretCache(ctx context.Context, ws *workspace.Resolved) erro
 	}
 	err := withSecretCacheLock(ctx, ws.Name, func() error {
 		genErr := bumpSecretCacheGeneration(ws.Name)
-		idx, idxErr := readSecretCacheIndex(ws.Name)
+		idx, idxErr := readSecretCacheIndex(ctx, ws.Name)
 		pending := secretCacheIndex{}
 		for a, exp := range idx {
 			pending[a] = exp
@@ -288,7 +295,7 @@ func purgeWorkspaceSecretCache(ctx context.Context, ws *workspace.Resolved) erro
 		}
 		errs := []error{genErr, idxErr}
 		for a := range pending {
-			if err := secretCache.delete(a); err != nil {
+			if err := secretCache.delete(ctx, a); err != nil {
 				errs = append(errs, err)
 				continue
 			}
@@ -296,7 +303,7 @@ func purgeWorkspaceSecretCache(ctx context.Context, ws *workspace.Resolved) erro
 		}
 		// An unreadable index is kept: rewriting it would lose its entries.
 		if idxErr == nil {
-			errs = append(errs, writeSecretCacheIndex(ws.Name, pending))
+			errs = append(errs, writeSecretCacheIndex(ctx, ws.Name, pending))
 		}
 		return errors.Join(errs...)
 	})
@@ -341,10 +348,10 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 				if err := bumpSecretCacheGeneration(wsName); err != nil {
 					return fmt.Errorf("secret %q: %w", s.Name, err)
 				}
-				if err := secretCache.delete(secretCacheAccount(wsName, s)); err != nil {
+				if err := secretCache.delete(ctx, secretCacheAccount(wsName, s)); err != nil {
 					return fmt.Errorf("secret %q: evict cached value: %w", s.Name, err)
 				}
-			} else if cached, ok := readCachedSecret(wsName, s); ok {
+			} else if cached, ok := readCachedSecret(ctx, wsName, s); ok {
 				var err error
 				value, err = checkSecretValue(s, cached)
 				hit = true
@@ -366,7 +373,7 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 		if genErr == nil {
 			_ = withSecretCacheLock(ctx, wsName, func() error {
 				if cur, err := secretCacheGeneration(wsName); err == nil && cur == gen {
-					writeCachedSecretLocked(wsName, s, raw)
+					writeCachedSecretLocked(ctx, wsName, s, raw)
 				}
 				return nil
 			})
@@ -378,7 +385,16 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 func runSecretCommand(ctx context.Context, wsName string, s workspace.ResolvedSecret) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
 	defer cancel()
+	if secretCommandNotice > 0 {
+		timer := time.AfterFunc(secretCommandNotice, func() {
+			if ctx.Err() == nil {
+				_, _ = color.New(color.FgCyan).Fprintf(os.Stderr, "Waiting for secret %s from_command (workspace %s)...\n", escapeVisible(s.Name), wsName)
+			}
+		})
+		defer timer.Stop()
+	}
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
+	cmd.WaitDelay = secretCommandWaitDelay
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(e string) bool {
 		return strings.HasPrefix(e, "JAILOC_WORKSPACE=")
 	})

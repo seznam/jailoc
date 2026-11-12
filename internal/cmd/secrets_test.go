@@ -481,7 +481,7 @@ func newMemorySecretKeyring() *memorySecretKeyring {
 }
 
 // get honors the TTL like the kernel keyring does.
-func (m *memorySecretKeyring) get(account string) ([]byte, error) {
+func (m *memorySecretKeyring) get(_ context.Context, account string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	v, ok := m.items[account]
@@ -491,7 +491,7 @@ func (m *memorySecretKeyring) get(account string) ([]byte, error) {
 	return append([]byte(nil), v...), nil
 }
 
-func (m *memorySecretKeyring) set(account string, data []byte, ttl time.Duration) error {
+func (m *memorySecretKeyring) set(_ context.Context, account string, data []byte, ttl time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.items[account] = append([]byte(nil), data...)
@@ -505,7 +505,7 @@ func (m *memorySecretKeyring) set(account string, data []byte, ttl time.Duration
 	return nil
 }
 
-func (m *memorySecretKeyring) delete(account string) error {
+func (m *memorySecretKeyring) delete(_ context.Context, account string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.undelete[account] {
@@ -606,7 +606,7 @@ func TestReadSecretTTLCacheAndPurge(t *testing.T) {
 	if _, err := readSecret(context.Background(), "alpha", badEnv, false); err == nil {
 		t.Fatal("expected error for multiline env secret, got nil")
 	}
-	if _, ok := readCachedSecret("alpha", badEnv); ok {
+	if _, ok := readCachedSecret(context.Background(), "alpha", badEnv); ok {
 		t.Fatal("multiline env secret output must not be cached")
 	}
 }
@@ -682,7 +682,7 @@ func TestWriteCachedSecretConcurrentIndex(t *testing.T) {
 	}
 	wg.Wait()
 
-	idx, err := readSecretCacheIndex("alpha")
+	idx, err := readSecretCacheIndex(context.Background(), "alpha")
 	if err != nil {
 		t.Fatalf("readSecretCacheIndex: %v", err)
 	}
@@ -746,27 +746,70 @@ func TestDefaultSecretKeyringRoundTrip(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("kernel keyring test runs on Linux only")
 	}
+	ctx := context.Background()
 	account := fmt.Sprintf("jailoc:test:%d", time.Now().UnixNano())
-	t.Cleanup(func() { _ = defaultSecretKeyring.delete(account) })
+	t.Cleanup(func() { _ = defaultSecretKeyring.delete(ctx, account) })
 
-	if _, err := defaultSecretKeyring.get(account); errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOSYS) {
+	if _, err := defaultSecretKeyring.get(ctx, account); errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOSYS) {
 		t.Skipf("kernel keyring is unavailable: %v", err)
 	} else if !errors.Is(err, errSecretNotCached) {
 		t.Fatalf("get missing = %v, want errSecretNotCached", err)
 	}
-	if err := defaultSecretKeyring.set(account, []byte("secret-val"), 10*time.Second); err != nil {
+	if err := defaultSecretKeyring.set(ctx, account, []byte("secret-val"), 10*time.Second); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	got, err := defaultSecretKeyring.get(account)
+	got, err := defaultSecretKeyring.get(ctx, account)
 	if err != nil || string(got) != "secret-val" {
 		t.Fatalf("get = %q, %v; want secret-val", got, err)
 	}
-	if err := defaultSecretKeyring.delete(account); err != nil {
+	if err := defaultSecretKeyring.delete(ctx, account); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := defaultSecretKeyring.get(account); !errors.Is(err, errSecretNotCached) {
+	if _, err := defaultSecretKeyring.get(ctx, account); !errors.Is(err, errSecretNotCached) {
 		t.Fatalf("get after delete = %v, want errSecretNotCached", err)
 	}
+}
+
+func TestRunSecretCommandCancelClosesHeldStdoutPipe(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	// A background child inherits stdout and outlives the shell when ctx is
+	// canceled; WaitDelay ensures runSecretCommand still returns promptly.
+	s := workspace.ResolvedSecret{
+		Name:        "HANGING",
+		Kind:        workspace.SecretKindEnv,
+		FromCommand: "sleep 30 & wait",
+	}
+	start := time.Now()
+	_, err := runSecretCommand(ctx, "ws", s)
+	if err == nil {
+		t.Fatal("expected error from canceled command, got nil")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("runSecretCommand took %s after cancellation, want < 5s", elapsed)
+	}
+}
+
+func TestRunSecretCommandSlowNotice(t *testing.T) {
+	origNotice := secretCommandNotice
+	secretCommandNotice = 20 * time.Millisecond
+	t.Cleanup(func() { secretCommandNotice = origNotice })
+
+	s := workspace.ResolvedSecret{
+		Name:        "SLOW_SECRET",
+		Kind:        workspace.SecretKindEnv,
+		FromCommand: "sleep 0.08; printf 'tok\\n'",
+	}
+	var got []byte
+	var err error
+	stderr := captureStderr(t, func() {
+		got, err = readSecret(context.Background(), "alpha", s, false)
+	})
+	if err != nil || string(got) != "tok" {
+		t.Fatalf("readSecret = %q, %v; want tok", got, err)
+	}
+	assertContains(t, stderr, "Waiting for secret SLOW_SECRET from_command (workspace alpha)...")
 }
 func TestSecretReferenceShowsTTL(t *testing.T) {
 	t.Parallel()
@@ -815,6 +858,41 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = w
 	t.Cleanup(func() {
 		os.Stdout = origStdout
+		color.NoColor = origNoColor
+	})
+
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	out := <-done
+	if err := r.Close(); err != nil {
+		t.Fatalf("close pipe reader: %v", err)
+	}
+	return out
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	origNoColor := color.NoColor
+	color.NoColor = true
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = origStderr
 		color.NoColor = origNoColor
 	})
 
