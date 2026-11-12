@@ -336,7 +336,7 @@ jailoc wizard [path] [flags]
 
 `jailoc setup` operates in two modes depending on the state of `config.toml`:
 
-- **First-time onboarding** (when `config.toml` does not exist or still matches the unmodified default template): asks for `[defaults]` settings (`agent`, `git_config`, `ssh_auth_sock`, `gpg_agent`, network egress policy `dev-deps` vs `internet` plus optional extra hostnames/CIDRs, `enable_docker`, `cpu`, `memory`, and `GH_TOKEN` secret passthrough when `gh` is on `PATH`) and configures the initial workspace for `path` (default: the current working directory).
+- **First-time onboarding** (when `config.toml` does not exist or still matches the unmodified default template): asks for `[defaults]` settings (`agent`, `git_config`, `ssh_auth_sock`, `gpg_agent`, network egress policy `dev-deps` vs `internet` plus optional extra hostnames/CIDRs, `enable_docker`, `cpu`, `memory`, and `GH_TOKEN` / `GITLAB_TOKEN` secret passthrough only when `gh` or `glab` is found on the host `PATH`) and configures the initial workspace for `path` (default: the current working directory).
 - **Add-workspace mode** (when a customized `config.toml` already exists): asks for a workspace name (default: sanitized basename of `path` or `--workspace`), workspace directory path, optional agent override, Docker inside the VM, and workspace network rules, then patches `[workspaces.<name>]` while preserving existing comments in `config.toml`.
 
 When standard input and standard output are terminals and `config.toml` is missing or unmodified default, running `jailoc` or `jailoc up` offers to run `jailoc setup` first.

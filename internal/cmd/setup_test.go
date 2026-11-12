@@ -149,4 +149,68 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 		assertContains(t, out.String(), "dry run, nothing written")
 	})
+
+	t.Run("gh and glab prompts run only when binary is accessible on host", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		projDir := cwd
+
+		cfgNone := filepath.Join(dir, "none.toml")
+		var outNone bytes.Buffer
+		wNone := &wizardPrompter{
+			in:       bufio.NewReader(strings.NewReader("")),
+			out:      &outNone,
+			yes:      true,
+			lookPath: func(string) (string, error) { return "", os.ErrNotExist },
+		}
+		if _, _, err := runSetup(context.Background(), cfgNone, projDir, wNone, false); err != nil {
+			t.Fatalf("runSetup (none) failed: %v", err)
+		}
+		if strings.Contains(outNone.String(), "GH_TOKEN") || strings.Contains(outNone.String(), "GITLAB_TOKEN") {
+			t.Errorf("expected no GH_TOKEN/GITLAB_TOKEN prompt when binaries are absent, got:\n%s", outNone.String())
+		}
+
+		cfgBoth := filepath.Join(dir, "both.toml")
+		inputBoth := strings.Join([]string{
+			"opencode",
+			"yes",
+			"no",
+			"no",
+			"dev-deps",
+			"",
+			"no",
+			"2",
+			"4g",
+			"yes",
+			"yes",
+			"default",
+			projDir,
+			"yes",
+			"no",
+		}, "\n") + "\n"
+		var outBoth bytes.Buffer
+		wBoth := &wizardPrompter{
+			in:       bufio.NewReader(strings.NewReader(inputBoth)),
+			out:      &outBoth,
+			yes:      false,
+			lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		}
+		if _, _, err := runSetup(context.Background(), cfgBoth, projDir, wBoth, false); err != nil {
+			t.Fatalf("runSetup (both) failed: %v", err)
+		}
+		assertContains(t, outBoth.String(), "GH_TOKEN")
+		assertContains(t, outBoth.String(), "GITLAB_TOKEN")
+
+		loaded, err := config.LoadFrom(cfgBoth)
+		if err != nil {
+			t.Fatalf("LoadFrom(both): %v", err)
+		}
+		if loaded.Defaults.Secrets.Env["GH_TOKEN"].FromCommand == "" {
+			t.Error("expected GH_TOKEN secret to be configured")
+		}
+		if loaded.Defaults.Secrets.Env["GITLAB_TOKEN"].FromCommand == "" {
+			t.Error("expected GITLAB_TOKEN secret to be configured")
+		}
+	})
 }

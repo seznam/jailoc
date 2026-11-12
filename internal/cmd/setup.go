@@ -80,9 +80,19 @@ func init() {
 }
 
 type wizardPrompter struct {
-	in  *bufio.Reader
-	out io.Writer
-	yes bool
+	in       *bufio.Reader
+	out      io.Writer
+	yes      bool
+	lookPath func(string) (string, error)
+}
+
+func (p *wizardPrompter) hasHostBinary(name string) bool {
+	fn := p.lookPath
+	if fn == nil {
+		fn = exec.LookPath
+	}
+	_, err := fn(name)
+	return err == nil
 }
 
 func (p *wizardPrompter) choose(question string, options []string, def int) (int, error) {
@@ -259,13 +269,24 @@ func runFirstTimeSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 	}
 
 	secretsEnv := map[string]config.Secret{}
-	if _, lookErr := exec.LookPath("gh"); lookErr == nil {
+	if p.hasHostBinary("gh") {
 		useGH, err := p.confirm("Pass GitHub CLI token into the VM as GH_TOKEN (from `gh auth token`)?", false)
 		if err != nil {
 			return "", false, err
 		}
 		if useGH {
 			secretsEnv["GH_TOKEN"] = config.Secret{FromCommand: "gh auth token"}
+		}
+	}
+	if p.hasHostBinary("glab") {
+		useGL, err := p.confirm("Pass GitLab CLI token into the VM as GITLAB_TOKEN (from `glab auth status -t`)?", false)
+		if err != nil {
+			return "", false, err
+		}
+		if useGL {
+			secretsEnv["GITLAB_TOKEN"] = config.Secret{
+				FromCommand: `glab config get token 2>/dev/null`,
+			}
 		}
 	}
 
