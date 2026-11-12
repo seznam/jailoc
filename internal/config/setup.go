@@ -235,14 +235,18 @@ func RenderWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
 			if err := doc.Set(append(wsKey, "agent"), opts.Agent); err != nil {
 				return nil, fmt.Errorf("set workspace %q agent: %w", opts.Name, err)
 			}
+		} else {
+			doc.Delete(append(wsKey, "agent"))
 		}
 		if opts.EnableDocker != nil {
 			if err := doc.Set(append(wsKey, "enable_docker"), *opts.EnableDocker); err != nil {
 				return nil, fmt.Errorf("set workspace %q enable_docker: %w", opts.Name, err)
 			}
+		} else {
+			doc.Delete(append(wsKey, "enable_docker"))
 		}
+		doc.Delete(append(wsKey, "network", "rules"))
 		if opts.AllowInternet || len(opts.ExtraHosts) > 0 {
-			doc.Delete(append(wsKey, "network", "rules"))
 			var rules []map[string]any
 			if opts.AllowInternet {
 				rules = append(rules, map[string]any{

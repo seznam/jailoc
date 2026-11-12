@@ -337,9 +337,11 @@ jailoc wizard [path] [flags]
 `jailoc setup` operates in two modes depending on the state of `config.toml`:
 
 - **First-time onboarding** (when `config.toml` does not exist or still matches the unmodified default template): asks for `[defaults]` settings (`agent`, `git_config`, `ssh_auth_sock`, `gpg_agent`, network egress policy `dev-deps` vs `internet` plus optional extra hostnames/CIDRs, `enable_docker`, `cpu` and `memory`) and configures the initial workspace for `path` (default: the current working directory).
-- **Add-workspace mode** (when a customized `config.toml` already exists): asks for a workspace name (default: sanitized basename of `path` or `--workspace`), workspace directory path, optional agent override, Docker inside the VM, and workspace network rules, then patches `[workspaces.<name>]` while preserving existing comments in `config.toml`.
+- **Add-workspace mode** (when a customized `config.toml` already exists): asks for a workspace name (default: sanitized basename of `path` or `--workspace`), workspace directory path, optional agent override, Docker inside the VM, and workspace network rules, then patches `[workspaces.<name>]` while preserving existing comments in `config.toml`. Answering `inherit` removes the workspace's own `agent`, `enable_docker` or `network.rules`.
 
-When standard input and standard output are terminals and `config.toml` is missing or unmodified default, running `jailoc` or `jailoc up` offers to run `jailoc setup` first.
+A workspace directory of `/` or the home directory needs explicit confirmation; with `--yes` it is refused.
+
+When standard input and standard output are terminals and `config.toml` is missing or unmodified default, running `jailoc` or `jailoc up` offers to run `jailoc setup` first. `jailoc up <workspace>` uses `<workspace>` as the default workspace name, and the command then starts the workspace the wizard created.
 
 ---
 

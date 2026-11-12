@@ -35,10 +35,17 @@ var upCmd = &cobra.Command{
 
 func runUp(ctx context.Context, args []string) error {
 	if !allFlag {
-		cwd, err := os.Getwd()
-		if err == nil {
-			if err := maybeOfferFirstTimeSetup(ctx, cwd); err != nil {
+		if cwd, err := os.Getwd(); err == nil {
+			seed := ""
+			if len(args) == 1 {
+				seed = args[0]
+			}
+			name, err := maybeOfferFirstTimeSetup(ctx, cwd, seed)
+			if err != nil {
 				return err
+			}
+			if name != "" {
+				args = []string{name}
 			}
 		}
 	}

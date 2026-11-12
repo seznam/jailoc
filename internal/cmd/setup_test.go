@@ -4,13 +4,48 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/seznam/jailoc/internal/config"
 )
+
+func answers(lines ...string) *bufio.Reader {
+	return bufio.NewReader(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+}
+
+type signalWriter struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	needle string
+	hit    chan struct{}
+	once   sync.Once
+}
+
+func (w *signalWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buf.Write(b)
+	if strings.Contains(w.buf.String(), w.needle) {
+		w.once.Do(func() { close(w.hit) })
+	}
+	return n, err
+}
+
+func writeCustomConfig(t *testing.T) string {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[defaults]\nagent = \"omo\"\n\n[workspaces.default]\npaths = [\"/data/default\"]\n"), 0o600); err != nil {
+		t.Fatalf("write initial config: %v", err)
+	}
+	return cfgPath
+}
 
 func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 	t.Parallel()
@@ -23,25 +58,18 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 	t.Run("first-time setup with --yes writes valid customized config", func(t *testing.T) {
 		t.Parallel()
 
-		dir := t.TempDir()
-		cfgPath := filepath.Join(dir, "config.toml")
-		projDir := cwd
-
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
 		var out bytes.Buffer
-		w := &wizardPrompter{
-			in:  bufio.NewReader(strings.NewReader("")),
-			out: &out,
-			yes: true,
-		}
+		w := &wizardPrompter{in: answers(), out: &out, yes: true}
 
-		wsName, startNow, err := runSetup(context.Background(), cfgPath, projDir, w, false)
+		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true})
 		if err != nil {
 			t.Fatalf("runSetup failed: %v", err)
 		}
-		if wsName != "default" {
-			t.Errorf("wsName = %q, want default", wsName)
+		if res.name != "default" || res.dir != cwd {
+			t.Errorf("result = %+v, want name default and dir %s", res, cwd)
 		}
-		if startNow {
+		if res.startNow {
 			t.Error("expected startNow = false when --yes is set")
 		}
 
@@ -58,49 +86,50 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 			t.Fatalf("LoadFrom: %v", err)
 		}
 		ws := cfg.Workspaces["default"]
-		if len(ws.Paths) != 1 || ws.Paths[0] != projDir {
-			t.Errorf("default workspace paths = %v, want [%s]", ws.Paths, projDir)
+		if len(ws.Paths) != 1 || ws.Paths[0] != cwd {
+			t.Errorf("default workspace paths = %v, want [%s]", ws.Paths, cwd)
+		}
+	})
+
+	t.Run("first-time setup seeds the workspace name from the caller", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		var out bytes.Buffer
+		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+
+		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, defaultName: "project"})
+		if err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		if res.name != "project" {
+			t.Errorf("res.name = %q, want project", res.name)
+		}
+		cfg, err := config.LoadFrom(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadFrom: %v", err)
+		}
+		if ws, ok := cfg.Workspaces["project"]; !ok || len(ws.Paths) != 1 || ws.Paths[0] != cwd {
+			t.Errorf("workspace project = %+v (exists %v), want paths [%s]", ws, ok, cwd)
 		}
 	})
 
 	t.Run("second run on customized config enters workspace setup mode", func(t *testing.T) {
 		t.Parallel()
 
-		dir := t.TempDir()
-		cfgPath := filepath.Join(dir, "config.toml")
-		if err := os.WriteFile(cfgPath, []byte("[defaults]\nagent = \"omo\"\n\n[workspaces.default]\npaths = [\"/data/default\"]\n"), 0o600); err != nil {
-			t.Fatalf("write initial config: %v", err)
-		}
-
-		projDir := cwd
-
-		input := strings.Join([]string{
-			"agrologo",
-			projDir,
-			"claude",
-			"yes",
-			"custom",
-			"gitlab.seznam.net, 10.10.0.0/16",
-			"yes",
-			"no",
-		}, "\n") + "\n"
-
+		cfgPath := writeCustomConfig(t)
 		var out bytes.Buffer
 		w := &wizardPrompter{
-			in:  bufio.NewReader(strings.NewReader(input)),
+			in:  answers("agrologo", cwd, "claude", "yes", "custom", "gitlab.seznam.net, 10.10.0.0/16", "yes", "no"),
 			out: &out,
-			yes: false,
 		}
 
-		wsName, startNow, err := runSetup(context.Background(), cfgPath, projDir, w, false)
+		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true})
 		if err != nil {
 			t.Fatalf("runSetup workspace mode failed: %v", err)
 		}
-		if wsName != "agrologo" {
-			t.Errorf("wsName = %q, want agrologo", wsName)
-		}
-		if startNow {
-			t.Error("expected startNow = false")
+		if res.name != "agrologo" || res.startNow {
+			t.Errorf("result = %+v, want name agrologo and startNow false", res)
 		}
 
 		cfg, err := config.LoadFrom(cfgPath)
@@ -117,8 +146,8 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		if ws.EnableDocker == nil || !*ws.EnableDocker {
 			t.Errorf("expected ws.EnableDocker = true, got %v", ws.EnableDocker)
 		}
-		if len(ws.Paths) != 1 || ws.Paths[0] != projDir {
-			t.Errorf("ws.Paths = %v, want [%s]", ws.Paths, projDir)
+		if len(ws.Paths) != 1 || ws.Paths[0] != cwd {
+			t.Errorf("ws.Paths = %v, want [%s]", ws.Paths, cwd)
 		}
 		rules := ws.Network.Get().Rules
 		if len(rules) != 1 || len(rules[0].Allow) != 2 {
@@ -126,22 +155,129 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 	})
 
+	t.Run("result carries the directory chosen in the wizard", func(t *testing.T) {
+		t.Parallel()
+
+		chosen := filepath.Dir(cwd)
+		cfgPath := writeCustomConfig(t)
+		var out bytes.Buffer
+		w := &wizardPrompter{
+			in:  answers("other", chosen, "inherit", "inherit", "inherit", "yes", "yes"),
+			out: &out,
+		}
+
+		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true})
+		if err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		if res.dir != chosen || !res.startNow {
+			t.Errorf("result = %+v, want dir %s and startNow true", res, chosen)
+		}
+	})
+
+	t.Run("start question is skipped when the caller starts the workspace", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := writeCustomConfig(t)
+		var out bytes.Buffer
+		w := &wizardPrompter{
+			in:  answers("embedded", cwd, "inherit", "inherit", "inherit", "yes"),
+			out: &out,
+		}
+
+		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd})
+		if err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		if res.name != "embedded" || res.startNow {
+			t.Errorf("result = %+v, want name embedded and startNow false", res)
+		}
+		if strings.Contains(out.String(), "Start workspace") {
+			t.Errorf("expected no start question, got:\n%s", out.String())
+		}
+	})
+
+	t.Run("broad path is refused with --yes", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		var out bytes.Buffer
+		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+
+		_, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: "/"})
+		if err == nil {
+			t.Fatal("expected an error for a broad workspace path with --yes")
+		}
+		assertContains(t, err.Error(), "very broad path")
+		if _, statErr := os.Stat(cfgPath); !os.IsNotExist(statErr) {
+			t.Errorf("expected %s not to be written", cfgPath)
+		}
+	})
+
+	t.Run("declined broad path asks for another directory", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := writeCustomConfig(t)
+		var out bytes.Buffer
+		w := &wizardPrompter{
+			in:  answers("narrow", "/", "no", cwd, "inherit", "inherit", "inherit", "yes"),
+			out: &out,
+		}
+
+		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: "/"})
+		if err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		assertContains(t, out.String(), "very broad path")
+		if res.dir != cwd {
+			t.Errorf("res.dir = %q, want %q", res.dir, cwd)
+		}
+	})
+
+	t.Run("cancel while waiting for an answer stops without writing", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		out := &signalWriter{needle: "Default coding agent", hit: make(chan struct{})}
+		w := &wizardPrompter{in: bufio.NewReader(pr), out: out}
+		errc := make(chan error, 1)
+		go func() {
+			_, err := runSetup(ctx, w, setupOptions{configPath: cfgPath, targetDir: cwd})
+			errc <- err
+		}()
+
+		select {
+		case <-out.hit:
+		case <-time.After(10 * time.Second):
+			t.Fatal("wizard never asked the first question")
+		}
+		cancel()
+		select {
+		case err := <-errc:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("runSetup error = %v, want context.Canceled", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("wizard did not stop after cancellation")
+		}
+		if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
+			t.Errorf("expected %s not to be written", cfgPath)
+		}
+	})
+
 	t.Run("dry-run prints config without writing file", func(t *testing.T) {
 		t.Parallel()
 
-		dir := t.TempDir()
-		cfgPath := filepath.Join(dir, "config.toml")
-		projDir := cwd
-
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
 		var out bytes.Buffer
-		w := &wizardPrompter{
-			in:  bufio.NewReader(strings.NewReader("")),
-			out: &out,
-			yes: true,
-		}
+		w := &wizardPrompter{in: answers(), out: &out, yes: true}
 
-		_, _, err := runSetup(context.Background(), cfgPath, projDir, w, true)
-		if err != nil {
+		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, dryRun: true}); err != nil {
 			t.Fatalf("runSetup dry-run failed: %v", err)
 		}
 		if _, statErr := os.Stat(cfgPath); !os.IsNotExist(statErr) {
@@ -149,5 +285,4 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 		assertContains(t, out.String(), "dry run, nothing written")
 	})
-
 }

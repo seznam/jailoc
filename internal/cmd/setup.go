@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/agent"
@@ -49,25 +50,30 @@ workspace interactively.`,
 		if err != nil {
 			return fmt.Errorf("resolve target directory: %w", err)
 		}
-		w := &wizardPrompter{in: bufio.NewReader(os.Stdin), out: os.Stdout, yes: setupYes}
-		wsName, startNow, err := runSetup(cmd.Context(), config.ConfigPath(), targetDir, w, setupDryRun)
-		if err != nil || !startNow || setupDryRun {
+		ctx := cmd.Context()
+		res, err := runSetup(ctx, newStdinPrompter(setupYes), setupOptions{
+			configPath: config.ConfigPath(),
+			targetDir:  targetDir,
+			dryRun:     setupDryRun,
+			askStart:   true,
+		})
+		if err != nil || !res.startNow {
 			return err
 		}
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("load config after setup: %w", err)
 		}
-		ws, err := workspace.Resolve(cfg, wsName)
+		ws, err := workspace.Resolve(cfg, res.name)
 		if err != nil {
-			return fmt.Errorf("resolve workspace %q: %w", wsName, err)
+			return fmt.Errorf("resolve workspace %q: %w", res.name, err)
 		}
 		detachKeys, err := config.ParseDetachKeys(cmp.Or(detachKeysFlag, cfg.DetachKeys, config.DefaultDetachKeys))
 		if err != nil {
 			return err
 		}
-		return runSessionVM(cmd.Context(), cfg, ws, vmSessionOptions{
-			dir: targetDir, detach: detachKeys,
+		return runSessionVM(ctx, cfg, ws, vmSessionOptions{
+			dir: res.dir, detach: detachKeys,
 		})
 	},
 }
@@ -78,10 +84,63 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 }
 
+type setupOptions struct {
+	configPath string
+	targetDir  string
+	// defaultName seeds the workspace name question; empty falls back to
+	// --workspace, then to the mode's own default.
+	defaultName string
+	dryRun      bool
+	// askStart asks whether to start the workspace after saving. Callers
+	// that start a workspace themselves leave it off.
+	askStart bool
+}
+
+type setupResult struct {
+	name     string
+	dir      string
+	startNow bool
+}
+
 type wizardPrompter struct {
+	ctx context.Context
 	in  *bufio.Reader
 	out io.Writer
 	yes bool
+	// interrupt sets a read deadline on the input to unblock a pending read
+	// when ctx is cancelled; nil leaves the read running.
+	interrupt func(time.Time) error
+}
+
+func newStdinPrompter(yes bool) *wizardPrompter {
+	return &wizardPrompter{
+		in:        bufio.NewReader(os.Stdin),
+		out:       os.Stdout,
+		yes:       yes,
+		interrupt: os.Stdin.SetReadDeadline,
+	}
+}
+
+func (p *wizardPrompter) readLine() (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := p.in.ReadString('\n')
+		ch <- result{line, err}
+	}()
+	select {
+	case <-p.ctx.Done():
+		if p.interrupt != nil && p.interrupt(time.Now()) == nil {
+			<-ch
+			_ = p.interrupt(time.Time{})
+		}
+		return "", p.ctx.Err()
+	case r := <-ch:
+		return r.line, r.err
+	}
 }
 
 func (p *wizardPrompter) choose(question string, options []string, def int) (int, error) {
@@ -94,12 +153,18 @@ func (p *wizardPrompter) choose(question string, options []string, def int) (int
 	}
 	prompt := fmt.Sprintf("%s [%s] ", question, strings.Join(labels, "/"))
 	for {
+		if err := p.ctx.Err(); err != nil {
+			return 0, err
+		}
 		_, _ = fmt.Fprint(p.out, prompt)
 		if p.yes {
 			_, _ = fmt.Fprintln(p.out, options[def])
 			return def, nil
 		}
-		line, err := p.in.ReadString('\n')
+		line, err := p.readLine()
+		if p.ctx.Err() != nil {
+			return 0, p.ctx.Err()
+		}
 		answer := strings.ToLower(strings.TrimSpace(line))
 		if answer == "" && err != nil {
 			return 0, fmt.Errorf("read answer: %w", err)
@@ -133,6 +198,9 @@ func (p *wizardPrompter) input(question, def string, validate func(string) error
 		prompt = fmt.Sprintf("%s [%s]: ", question, def)
 	}
 	for {
+		if err := p.ctx.Err(); err != nil {
+			return "", err
+		}
 		_, _ = fmt.Fprint(p.out, prompt)
 		if p.yes {
 			_, _ = fmt.Fprintln(p.out, def)
@@ -143,7 +211,10 @@ func (p *wizardPrompter) input(question, def string, validate func(string) error
 			}
 			return def, nil
 		}
-		line, err := p.in.ReadString('\n')
+		line, err := p.readLine()
+		if p.ctx.Err() != nil {
+			return "", p.ctx.Err()
+		}
 		answer := strings.TrimSpace(line)
 		if answer == "" && err != nil {
 			return "", fmt.Errorf("read input: %w", err)
@@ -158,6 +229,37 @@ func (p *wizardPrompter) input(question, def string, validate func(string) error
 			}
 		}
 		return answer, nil
+	}
+}
+
+// workspaceDir asks for the workspace directory and, like `jailoc add`,
+// confirms a path that shares the whole home directory or filesystem. With
+// --yes such a path is refused instead of confirmed.
+func (p *wizardPrompter) workspaceDir(question, def string) (string, error) {
+	for {
+		answer, err := p.input(question, def, validateWorkspaceDir)
+		if err != nil {
+			return "", err
+		}
+		dir, err := normalizeSetupDir(answer)
+		if err != nil {
+			return "", err
+		}
+		if !isBroadPath(dir) {
+			return dir, nil
+		}
+		if p.yes {
+			return "", fmt.Errorf("%q is a very broad path; run setup interactively or pass a narrower directory", dir)
+		}
+		_, _ = color.New(color.FgYellow).Fprintf(p.out, "WARNING: %q is a very broad path — this will share your entire directory tree with the VM.\n", dir)
+		ok, err := p.confirm("Are you sure?", false)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return dir, nil
+		}
+		def = ""
 	}
 }
 
@@ -184,51 +286,62 @@ func detectPreferredAgent() string {
 	return agent.Default
 }
 
-func runSetup(ctx context.Context, configPath, targetDir string, p *wizardPrompter, dryRun bool) (string, bool, error) {
+func runSetup(ctx context.Context, p *wizardPrompter, opts setupOptions) (setupResult, error) {
+	p.ctx = ctx
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
-	isDefault, err := config.IsDefaultFile(configPath)
+	isDefault, err := config.IsDefaultFile(opts.configPath)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 	if isDefault {
-		return runFirstTimeSetup(configPath, targetDir, p, dryRun)
+		return runFirstTimeSetup(p, opts)
 	}
-	return runWorkspaceSetup(configPath, targetDir, p, dryRun)
+	return runWorkspaceSetup(p, opts)
 }
 
-func runFirstTimeSetup(configPath, targetDir string, p *wizardPrompter, dryRun bool) (string, bool, error) {
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(p.out, "Welcome to jailoc! Let's configure %s.\n\n", configPath)
+func seededWorkspaceName(opts setupOptions, fallback string) string {
+	if opts.defaultName != "" {
+		return opts.defaultName
+	}
+	if workspaceExplicit && workspaceFlag != "" {
+		return workspaceFlag
+	}
+	return fallback
+}
+
+func runFirstTimeSetup(p *wizardPrompter, opts setupOptions) (setupResult, error) {
+	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(p.out, "Welcome to jailoc! Let's configure %s.\n\n", opts.configPath)
 
 	agentOptions := []string{"opencode", "omo", "claude", "copilot", "agy", "opencode1"}
 	defAgent := detectPreferredAgent()
 	defAgentIdx := max(slices.Index(agentOptions, defAgent), 0)
 	agentIdx, err := p.choose("Default coding agent", agentOptions, defAgentIdx)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 	chosenAgent := agentOptions[agentIdx]
 
 	gitCfg, err := p.confirm("Copy host Git configuration into the VM (git_config)?", true)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
 	sshDef := os.Getenv("SSH_AUTH_SOCK") != ""
 	sshAuth, err := p.confirm("Forward host SSH agent into the VM (ssh_auth_sock)?", sshDef)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
 	gpgAgent, err := p.confirm("Forward host GPG agent into the VM (gpg_agent)?", false)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
 	netIdx, err := p.choose("Default network egress policy", []string{"dev-deps", "internet"}, 0)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 	allowInternet := netIdx == 1
 
@@ -236,46 +349,38 @@ func runFirstTimeSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 	if !allowInternet {
 		hostsInput, err := p.input("Extra allowed hostnames or CIDRs (comma-separated, optional)", "", validateHostsCSV)
 		if err != nil {
-			return "", false, err
+			return setupResult{}, err
 		}
 		extraHosts = splitCSV(hostsInput)
 	}
 
 	enableDocker, err := p.confirm("Enable Docker inside the VM by default (enable_docker)?", false)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
 	cpuStr, err := p.input("Default VM CPUs", "2", validatePositiveFloat)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 	cpuVal, _ := strconv.ParseFloat(cpuStr, 64)
 
 	memVal, err := p.input("Default VM memory", "4g", config.ValidateMemoryFormat)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
-	defWSName := "default"
-	if workspaceExplicit && workspaceFlag != "" {
-		defWSName = workspaceFlag
-	}
-	wsName, err := p.input("Initial workspace name", defWSName, config.ValidateWorkspaceName)
+	wsName, err := p.input("Initial workspace name", seededWorkspaceName(opts, "default"), config.ValidateWorkspaceName)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
-	wsPath, err := p.input("Initial workspace directory path", targetDir, validateWorkspaceDir)
+	wsDir, err := p.workspaceDir("Initial workspace directory path", opts.targetDir)
 	if err != nil {
-		return "", false, err
-	}
-	resolvedWSPath, err := normalizeSetupDir(wsPath)
-	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
-	opts := config.FirstTimeOptions{
+	rendered, err := config.RenderFirstTime(config.FirstTimeOptions{
 		Agent:         chosenAgent,
 		GitConfig:     gitCfg,
 		SSHAuthSock:   sshAuth,
@@ -286,61 +391,33 @@ func runFirstTimeSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 		AllowInternet: allowInternet,
 		ExtraHosts:    extraHosts,
 		WorkspaceName: wsName,
-		WorkspacePath: resolvedWSPath,
-	}
-
-	rendered, err := config.RenderFirstTime(opts)
+		WorkspacePath: wsDir,
+	})
 	if err != nil {
-		return "", false, fmt.Errorf("build configuration: %w", err)
+		return setupResult{}, fmt.Errorf("build configuration: %w", err)
 	}
 
-	if dryRun {
-		_, _ = fmt.Fprintf(p.out, "\nGenerated config.toml (dry run, nothing written):\n\n%s", rendered)
-		return wsName, false, nil
-	}
-
-	ok, err := p.confirm(fmt.Sprintf("\nWrite configuration to %s?", configPath), true)
-	if err != nil || !ok {
-		if err == nil {
-			_, _ = fmt.Fprintln(p.out, "Nothing changed.")
-		}
-		return "", false, err
-	}
-
-	if err := config.WriteBytes(configPath, rendered); err != nil {
-		return "", false, err
-	}
-	_, _ = color.New(color.FgGreen).Fprintf(p.out, "Wrote %s (workspace %q -> %s)\n", configPath, wsName, resolvedWSPath)
-
-	if p.yes {
-		return wsName, false, nil
-	}
-	startNow, err := p.confirm(fmt.Sprintf("Start workspace %q now?", wsName), false)
-	if err != nil {
-		return wsName, false, err
-	}
-	return wsName, startNow, nil
+	return saveSetup(p, opts, rendered, setupResult{name: wsName, dir: wsDir},
+		fmt.Sprintf("\nWrite configuration to %s?", opts.configPath),
+		fmt.Sprintf("Wrote %s (workspace %q -> %s)\n", opts.configPath, wsName, wsDir))
 }
 
-func runWorkspaceSetup(configPath, targetDir string, p *wizardPrompter, dryRun bool) (string, bool, error) {
-	cfg, err := config.LoadFrom(configPath)
+func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error) {
+	cfg, err := config.LoadFrom(opts.configPath)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
-	raw, err := os.ReadFile(configPath) //nolint:gosec // G304: configPath is the jailoc config file
+	raw, err := os.ReadFile(opts.configPath) //nolint:gosec // G304: configPath is the jailoc config file
 	if err != nil {
-		return "", false, fmt.Errorf("read config %q: %w", configPath, err)
+		return setupResult{}, fmt.Errorf("read config %q: %w", opts.configPath, err)
 	}
 
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(p.out, "Existing configuration found at %s. Let's configure a workspace.\n\n", configPath)
+	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(p.out, "Existing configuration found at %s. Let's configure a workspace.\n\n", opts.configPath)
 
-	defName := config.SanitizeWorkspaceName(filepath.Base(targetDir))
-	if workspaceExplicit && workspaceFlag != "" {
-		defName = workspaceFlag
-	}
+	defName := seededWorkspaceName(opts, config.SanitizeWorkspaceName(filepath.Base(opts.targetDir)))
 	wsName, err := p.input("Workspace name", defName, config.ValidateWorkspaceName)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
 	if existing, exists := cfg.Workspaces[wsName]; exists && len(existing.Paths) > 0 {
@@ -349,23 +426,19 @@ func runWorkspaceSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 			if err == nil {
 				_, _ = fmt.Fprintln(p.out, "Nothing changed.")
 			}
-			return "", false, err
+			return setupResult{}, err
 		}
 	}
 
-	wsPath, err := p.input("Workspace directory path", targetDir, validateWorkspaceDir)
+	wsDir, err := p.workspaceDir("Workspace directory path", opts.targetDir)
 	if err != nil {
-		return "", false, err
-	}
-	resolvedWSPath, err := normalizeSetupDir(wsPath)
-	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 
 	agentOptions := []string{"inherit", "opencode", "omo", "claude", "copilot", "agy", "opencode1"}
 	agentIdx, err := p.choose("Workspace coding agent", agentOptions, 0)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 	wsAgent := ""
 	if agentIdx > 0 {
@@ -374,7 +447,7 @@ func runWorkspaceSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 
 	dockerIdx, err := p.choose("Enable Docker in this workspace", []string{"inherit", "yes", "no"}, 0)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 	var enableDocker *bool
 	switch dockerIdx {
@@ -388,82 +461,95 @@ func runWorkspaceSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 
 	netIdx, err := p.choose("Workspace network policy", []string{"inherit", "internet", "custom"}, 0)
 	if err != nil {
-		return "", false, err
+		return setupResult{}, err
 	}
 	allowInternet := netIdx == 1
 	var extraHosts []string
 	if netIdx == 2 {
 		hostsInput, err := p.input("Allowed hostnames or CIDRs for this workspace (comma-separated)", "", validateHostsCSV)
 		if err != nil {
-			return "", false, err
+			return setupResult{}, err
 		}
 		extraHosts = splitCSV(hostsInput)
 	}
 
-	opts := config.WorkspaceOptions{
+	rendered, err := config.RenderWorkspace(raw, config.WorkspaceOptions{
 		Name:          wsName,
-		Paths:         []string{resolvedWSPath},
+		Paths:         []string{wsDir},
 		Agent:         wsAgent,
 		EnableDocker:  enableDocker,
 		AllowInternet: allowInternet,
 		ExtraHosts:    extraHosts,
-	}
-
-	rendered, err := config.RenderWorkspace(raw, opts)
+	})
 	if err != nil {
-		return "", false, fmt.Errorf("update configuration: %w", err)
+		return setupResult{}, fmt.Errorf("update configuration: %w", err)
 	}
 
-	if dryRun {
-		_, _ = fmt.Fprintf(p.out, "\nUpdated config.toml (dry run, nothing written):\n\n%s", rendered)
-		return wsName, false, nil
+	return saveSetup(p, opts, rendered, setupResult{name: wsName, dir: wsDir},
+		fmt.Sprintf("\nSave workspace %q to %s?", wsName, opts.configPath),
+		fmt.Sprintf("Saved workspace %q (%s) in %s\n", wsName, wsDir, opts.configPath))
+}
+
+func saveSetup(p *wizardPrompter, opts setupOptions, rendered []byte, res setupResult, question, saved string) (setupResult, error) {
+	if opts.dryRun {
+		_, _ = fmt.Fprintf(p.out, "\nconfig.toml (dry run, nothing written):\n\n%s", rendered)
+		return setupResult{}, nil
 	}
 
-	ok, err := p.confirm(fmt.Sprintf("\nSave workspace %q to %s?", wsName, configPath), true)
+	ok, err := p.confirm(question, true)
 	if err != nil || !ok {
 		if err == nil {
 			_, _ = fmt.Fprintln(p.out, "Nothing changed.")
 		}
-		return "", false, err
+		return setupResult{}, err
+	}
+	if err := p.ctx.Err(); err != nil {
+		return setupResult{}, err
 	}
 
-	if err := config.WriteBytes(configPath, rendered); err != nil {
-		return "", false, err
+	if err := config.WriteBytes(opts.configPath, rendered); err != nil {
+		return setupResult{}, err
 	}
-	_, _ = color.New(color.FgGreen).Fprintf(p.out, "Saved workspace %q (%s) in %s\n", wsName, resolvedWSPath, configPath)
+	_, _ = color.New(color.FgGreen).Fprint(p.out, saved)
 
-	if p.yes {
-		return wsName, false, nil
+	if !opts.askStart || p.yes {
+		return res, nil
 	}
-	startNow, err := p.confirm(fmt.Sprintf("Start workspace %q now?", wsName), false)
+	res.startNow, err = p.confirm(fmt.Sprintf("Start workspace %q now?", res.name), false)
 	if err != nil {
-		return wsName, false, err
+		return setupResult{}, err
 	}
-	return wsName, startNow, nil
+	return res, nil
 }
 
-func maybeOfferFirstTimeSetup(ctx context.Context, targetDir string) error {
+// maybeOfferFirstTimeSetup offers the setup wizard to a command that is about
+// to start a workspace, when the configuration is missing or still the
+// default. seedName seeds the workspace name. It returns the name of the
+// workspace the wizard created, or "" when it did not run.
+func maybeOfferFirstTimeSetup(ctx context.Context, targetDir, seedName string) (string, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: Fd fits int on 64-bit platforms
-		return nil
+		return "", nil
 	}
 	configPath := config.ConfigPath()
 	isDefault, err := config.IsDefaultFile(configPath)
 	if err != nil || !isDefault {
-		return nil
+		return "", nil
 	}
-	w := &wizardPrompter{in: bufio.NewReader(os.Stdin), out: os.Stdout}
-	runWizard, err := w.confirm("No customized jailoc configuration found. Run `jailoc setup` wizard now?", true)
+	p := newStdinPrompter(false)
+	p.ctx = ctx
+	runWizard, err := p.confirm("No customized jailoc configuration found. Run `jailoc setup` wizard now?", true)
 	if err != nil || !runWizard {
-		return err
+		return "", err
 	}
-	wsName, _, err := runFirstTimeSetup(configPath, targetDir, w, false)
+	res, err := runSetup(ctx, p, setupOptions{
+		configPath:  configPath,
+		targetDir:   targetDir,
+		defaultName: seedName,
+	})
 	if err != nil {
-		return err
+		return "", err
 	}
-	if !workspaceExplicit && wsName != "" {
-		workspaceFlag = wsName
-	}
-	return nil
+	return res.name, nil
 }
 
 func validatePositiveFloat(s string) error {

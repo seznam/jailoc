@@ -237,3 +237,47 @@ paths = ["/data/default"]
 		t.Errorf("unexpected workspace network rules: %+v", rules)
 	}
 }
+
+func TestRenderWorkspaceInheritClearsOverrides(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`[workspaces.szn]
+paths = ["/data/old"]
+agent = "claude"
+enable_docker = true
+
+[workspaces.szn.network]
+dns = "9.9.9.9"
+
+[[workspaces.szn.network.rules]]
+name = "internet"
+allow = ["*"]
+`)
+
+	out, err := RenderWorkspace(raw, WorkspaceOptions{Name: "szn", Paths: []string{"/data/szn"}})
+	if err != nil {
+		t.Fatalf("RenderWorkspace failed: %v", err)
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := WriteBytes(cfgPath, out); err != nil {
+		t.Fatalf("WriteBytes: %v", err)
+	}
+	cfg, err := LoadFrom(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v\n%s", err, out)
+	}
+	ws := cfg.Workspaces["szn"]
+	if ws.Agent != "" || ws.EnableDocker != nil {
+		t.Errorf("inherited agent/enable_docker kept overrides: agent=%q enable_docker=%v", ws.Agent, ws.EnableDocker)
+	}
+	if rules := ws.Network.Get().Rules; len(rules) != 0 {
+		t.Errorf("inherited network kept rules: %+v", rules)
+	}
+	if got := ws.Network.Get().DNS; got != "9.9.9.9" {
+		t.Errorf("network.dns = %q, want unrelated setting kept", got)
+	}
+	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/szn" {
+		t.Errorf("paths = %v, want [/data/szn]", ws.Paths)
+	}
+}
