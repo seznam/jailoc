@@ -22,10 +22,15 @@ type darwinSecretKeyring struct{}
 
 var defaultSecretKeyring secretKeyring = darwinSecretKeyring{}
 
-func (darwinSecretKeyring) get(account string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), darwinKeychainTimeout)
+func (darwinSecretKeyring) get(ctx context.Context, account string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, darwinKeychainTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "/usr/bin/security", "find-generic-password", "-s", darwinKeychainService, "-a", account, "-w").Output() //nolint:gosec // G204: fixed binary with validated arguments
+	cmd := exec.CommandContext(ctx, "/usr/bin/security", "find-generic-password", "-s", darwinKeychainService, "-a", account, "-w") //nolint:gosec // G204: fixed binary with validated arguments
+	cmd.WaitDelay = secretCommandWaitDelay
+	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		err = nil
+	}
 	if keychainItemMissing(err) {
 		return nil, errSecretNotCached
 	}
@@ -35,25 +40,31 @@ func (darwinSecretKeyring) get(account string) ([]byte, error) {
 	return hex.DecodeString(strings.TrimSpace(string(out)))
 }
 
-func (darwinSecretKeyring) set(account string, data []byte, _ time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), darwinKeychainTimeout)
+func (darwinSecretKeyring) set(ctx context.Context, account string, data []byte, _ time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, darwinKeychainTimeout)
 	defer cancel()
 	encoded := hex.EncodeToString(data)
 	// Pass the command over stdin to `security -i` so the secret payload never
 	// appears in process arguments (argv).
 	cmd := exec.CommandContext(ctx, "/usr/bin/security", "-i") //nolint:gosec // G204: fixed binary reading subcommand from stdin
+	cmd.WaitDelay = secretCommandWaitDelay
 	cmd.Stdin = strings.NewReader("add-generic-password -U -s " + darwinKeychainService + " -a " + account + " -w " + encoded + "\n")
 	cmd.Stderr = &bytes.Buffer{}
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Run(); err != nil && (!errors.Is(err, exec.ErrWaitDelay) || ctx.Err() != nil) {
 		return fmt.Errorf("add keychain item: %w", err)
 	}
 	return nil
 }
 
-func (darwinSecretKeyring) delete(account string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), darwinKeychainTimeout)
+func (darwinSecretKeyring) delete(ctx context.Context, account string) error {
+	ctx, cancel := context.WithTimeout(ctx, darwinKeychainTimeout)
 	defer cancel()
-	err := exec.CommandContext(ctx, "/usr/bin/security", "delete-generic-password", "-s", darwinKeychainService, "-a", account).Run() //nolint:gosec // G204: fixed binary with validated arguments
+	cmd := exec.CommandContext(ctx, "/usr/bin/security", "delete-generic-password", "-s", darwinKeychainService, "-a", account) //nolint:gosec // G204: fixed binary with validated arguments
+	cmd.WaitDelay = secretCommandWaitDelay
+	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		err = nil
+	}
 	if err != nil && !keychainItemMissing(err) {
 		return fmt.Errorf("delete keychain item: %w", err)
 	}

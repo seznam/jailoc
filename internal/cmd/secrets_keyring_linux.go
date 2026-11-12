@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -15,7 +16,7 @@ type linuxSecretKeyring struct{}
 
 var defaultSecretKeyring secretKeyring = linuxSecretKeyring{}
 
-func (linuxSecretKeyring) get(account string) ([]byte, error) {
+func (linuxSecretKeyring) get(_ context.Context, account string) ([]byte, error) {
 	id, err := unix.KeyctlSearch(unix.KEY_SPEC_USER_KEYRING, "user", account, 0)
 	if keyMissing(err) {
 		return nil, errSecretNotCached
@@ -48,7 +49,7 @@ func (linuxSecretKeyring) get(account string) ([]byte, error) {
 // user keyring is not linked into the process's session keyring.
 const userKeyPermissions = 0x3f3f0000
 
-func (linuxSecretKeyring) set(account string, data []byte, ttl time.Duration) error {
+func (linuxSecretKeyring) set(_ context.Context, account string, data []byte, ttl time.Duration) error {
 	sec := int(math.Ceil(ttl.Seconds()))
 	if sec <= 0 {
 		return nil
@@ -72,7 +73,7 @@ func (linuxSecretKeyring) set(account string, data []byte, ttl time.Duration) er
 	return nil
 }
 
-func (linuxSecretKeyring) delete(account string) error {
+func (linuxSecretKeyring) delete(_ context.Context, account string) error {
 	id, err := unix.KeyctlSearch(unix.KEY_SPEC_USER_KEYRING, "user", account, 0)
 	if err == nil {
 		_, err = unix.KeyctlInt(unix.KEYCTL_UNLINK, id, unix.KEY_SPEC_USER_KEYRING, 0, 0)
