@@ -83,6 +83,8 @@ func TestWakeListener(t *testing.T) {
 	var buf [1]byte
 	if _, err := client.Read(buf[:]); err == nil {
 		t.Fatal("client connection still open after wakeListener.Close")
+	} else if e, ok := err.(net.Error); ok && e.Timeout() {
+		t.Fatal("client connection timed out instead of closing after wakeListener.Close")
 	}
 	_ = serverConn.Close()
 }
