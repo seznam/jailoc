@@ -173,7 +173,7 @@ paths = ["/src/inherited"]
 	if _, err := config.ReadRaw(path); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("y")
+	p, out := scripted("", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}

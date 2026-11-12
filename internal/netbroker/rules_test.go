@@ -781,4 +781,23 @@ func TestReviewFixes(t *testing.T) {
 			t.Fatal("needsNameInspection returned true for wildcard rule with no hostname deny rules")
 		}
 	})
+
+	t.Run("CIDR allow rule takes precedence over earlier hostname rule so IP-literal connections do not require SNI", func(t *testing.T) {
+		t.Parallel()
+		pol, err := ParsePolicy([]byte(`{
+			"allow": [
+				{"name": "host", "names": ["db.internal.example.com"], "proto": "tcp"
+},
+				{"name": "cidr", "cidrs": ["10.20.5.10/32"], "proto": "tcp"}
+			]
+		}`), "cidr-and-host")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := netip.MustParseAddrPort("10.20.5.10:443")
+		d := Decide(pol, Env{Names: []string{"db.internal.example.com"}}, ProtoTCP, dst)
+		if !d.Allow || d.byName || d.Rule != "cidr" {
+			t.Fatalf("Decide = %+v, want Allow=true byName=false Rule=cidr", d)
+		}
+	})
 }

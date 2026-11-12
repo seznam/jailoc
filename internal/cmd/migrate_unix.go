@@ -199,33 +199,38 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 	hadNetworkRules := hasAnyNetworkRules(cfg)
 	d := &cfg.Defaults
 	defaultZones, defaultZonesSrc := effectiveBlockedZones(d.Network, d.LegacyDNSBlockedZones, "[defaults]")
-	wsOverridesZones := false
+	var overridingWorkspaces []string
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
 		if ws.Network.Get().DNSBlockedZones != nil || ws.LegacyDNSBlockedZones != nil {
-			wsOverridesZones = true
-			break
+			overridingWorkspaces = append(overridingWorkspaces, name)
 		}
 	}
-
-	moveNetwork("[defaults]", &d.Network, &d.AllowedHosts, &d.AllowedNetworks, &d.LegacyFilteredDNS, &d.LegacyDNSUpstream, &d.LegacyDNSBlockedZones, !wsOverridesZones, nil, m)
-	if wsOverridesZones && defaultZones != nil {
-		if len(blockedZonesToDeny(defaultZones)) > 0 {
-			m.changes = append(m.changes, fmt.Sprintf("%s: move dns_blocked_zones to inheriting workspaces", defaultZonesSrc))
-		} else {
-			m.changes = append(m.changes, fmt.Sprintf("%s: remove dns_blocked_zones", defaultZonesSrc))
+	moveDefaultZonesToWorkspaces := false
+	if len(overridingWorkspaces) > 0 && len(blockedZonesToDeny(defaultZones)) > 0 {
+		_, _ = fmt.Fprintf(p.out, "\n%s has dns_blocked_zones, and workspace(s) %s override dns_blocked_zones.\n", defaultZonesSrc, strings.Join(overridingWorkspaces, ", "))
+		_, _ = fmt.Fprintln(p.out, "  workspaces: move default blocked-zones deny rules only into existing inheriting workspaces (preserves workspace overrides)")
+		_, _ = fmt.Fprintln(p.out, "  defaults: keep blocked-zones deny rule in [[defaults.network.rules]] (applies to all workspaces, including future ones)")
+		i, err := p.choose("Where should default dns_blocked_zones move?", []string{"workspaces", "defaults"}, 0)
+		if err != nil {
+			return nil, err
 		}
+		moveDefaultZonesToWorkspaces = i == 0
+	}
+
+	moveNetwork("[defaults]", &d.Network, &d.AllowedHosts, &d.AllowedNetworks, &d.LegacyFilteredDNS, &d.LegacyDNSUpstream, &d.LegacyDNSBlockedZones, !moveDefaultZonesToWorkspaces, nil, m)
+	if moveDefaultZonesToWorkspaces && defaultZones != nil {
+		m.changes = append(m.changes, fmt.Sprintf("%s: move dns_blocked_zones to inheriting workspaces", defaultZonesSrc))
 	}
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
 		var inherited []string
-		if wsOverridesZones {
+		if moveDefaultZonesToWorkspaces {
 			inherited = defaultZones
 		}
 		moveNetwork(fmt.Sprintf("[workspaces.%s]", name), &ws.Network, &ws.AllowedHosts, &ws.AllowedNetworks, &ws.LegacyFilteredDNS, &ws.LegacyDNSUpstream, &ws.LegacyDNSBlockedZones, true, inherited, m)
 		cfg.Workspaces[name] = ws
 	}
-
 	if cfg.Defaults.Backend != config.BackendVM {
 		cfg.Defaults.Backend = config.BackendVM
 		m.changes = append(m.changes, `[defaults]: backend = "vm"`)

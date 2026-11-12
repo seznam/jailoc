@@ -79,7 +79,7 @@ A hostname allowlist that only resolves names at VM boot breaks on CDNs that rot
 
 Because `jailoc-netbroker` terminates every guest connection in userspace on the host before opening a real socket, it checks hostname rules at three points:
 
-1. **Gateway DNS**: the guest's only DNS server is the broker gateway (`192.168.127.1`). Direct traffic to port 53 of any other IP is denied, and DoT (TCP 853) and QUIC (UDP 443) are blocked unless a rule explicitly lists those ports. When the guest queries a domain, the broker checks the question and every record owner and CNAME target in the upstream response. Denied or unallowed names return `NXDOMAIN`; `HTTPS` and `SVCB` records return `NODATA` so Encrypted ClientHello (ECH) is disabled. Allowed `A` and `AAAA` answers are recorded in a per-workspace IP-to-name cache bounded by the DNS TTL (including the minimum TTL across any CNAME chain).
+1. **Gateway DNS**: the guest's only DNS server is the broker gateway (`192.168.127.1`). Direct traffic to port 53 of any other IP is denied, and a wildcard `allow = ["*"]` rule excludes DoT (TCP 853) and QUIC (UDP 443) unless `ports` explicitly lists them. When the guest queries a domain, the broker checks the question and every record owner and CNAME target in the upstream response. Denied or unallowed names return `NXDOMAIN`; `HTTPS` and `SVCB` records return `NODATA` so Encrypted ClientHello (ECH) is disabled. Allowed `A` and `AAAA` answers are recorded in a per-workspace IP-to-name cache bounded by the DNS TTL (including the minimum TTL across any CNAME chain).
 2. **Connect time (L4)**: when the guest opens a TCP connection or UDP flow, the broker checks hard-denied ranges (loopback, link-local, cloud metadata `169.254.169.254`, host interface addresses), then evaluates `deny` rules, then `allow` rules. A hostname rule matches only if the destination IP is currently mapped to that hostname in the workspace's DNS cache. Hard-coded IPs that were never resolved through DNS only match IP/CIDR or `"*"` rules.
 3. **TLS SNI and HTTP `Host` before dialing**: when a TCP connection is authorized by a hostname rule (or when a `deny` rule has hostname patterns on that port), the broker completes the TCP handshake with the guest in memory, reads the TLS ClientHello SNI or HTTP/1 `Host` header, checks that the name is allowed by the policy **and** was resolved to that destination IP in the DNS cache, and only then dials the upstream server. For plain HTTP connections, the broker keeps inspecting pipelined or keep-alive requests on the stream so a second request cannot switch to a denied `Host`.
 
@@ -158,7 +158,7 @@ proto = "any"
 
 What happens when the agent connects to `gitlab.corp.example.com` (say `10.20.30.40`):
 
-1. The guest queries `gitlab.corp.example.com` via the gateway DNS. The `corp` rule matches the name, so the broker forwards the query to your host's resolver (including VPN split-DNS) and caches `10.20.30.40 -> gitlab.corp.example.com` for the record's TTL.
+1. The guest queries `gitlab.corp.example.com` via the gateway DNS. The `corp` rule matches the name, so the broker forwards the query to `[<scope>.network] dns` (or the nameservers in `/etc/resolv.conf` when `dns` is unset; on macOS with scoped VPN resolvers that do not appear in `/etc/resolv.conf`, set `dns` to your internal VPN resolver IP) and caches `10.20.30.40 -> gitlab.corp.example.com` for the record's TTL.
 2. When the guest connects to `10.20.30.40:443` (HTTPS) or `10.20.30.40:22` (SSH), the broker sees that `10.20.30.40` was resolved from `gitlab.corp.example.com`, which matches `rule=corp`.
 3. Every other host on `10.0.0.0/8` that wasn't resolved through an allowed hostname remains blocked as `denied-range`.
 
@@ -192,7 +192,7 @@ proto = "any"
 
 ## Migrating an existing `config.toml`
 
-If your configuration still uses `allowed_hosts`, `allowed_networks`, `filtered_dns`, `dns_upstream`, or `dns_blocked_zones`, jailoc 2.4 continues to honor them in memory and prints a deprecation warning. Run `jailoc migrate` to rewrite `config.toml` automatically:
+If your configuration still uses `allowed_hosts`, `allowed_networks`, or `[*.network]` `dns_upstream` and `dns_blocked_zones`, jailoc 2.4 continues to honor them in memory and prints a deprecation warning (`[*.network] filtered_dns` is ignored with a warning because DNS filtering is always on, and top-level `filtered_dns`, `dns_upstream`, and `dns_blocked_zones` outside `[*.network]` require migration). Run `jailoc migrate` to rewrite `config.toml` automatically:
 
 ```bash
 jailoc migrate --dry-run    # preview the rewritten config.toml
