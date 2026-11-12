@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/fatih/color"
@@ -51,7 +52,7 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  Profile: %s\n", resolvedProfileLabel(ws))
 	printStringList("  Paths", ws.Paths, "    ")
 	printStringList("  Mounts", ws.Mounts, "    ")
-	printStringList("  Snapshots", ws.Snapshots, "    ")
+	printStringList("  Snapshots", slices.DeleteFunc(slices.Clone(ws.Snapshots), func(s string) bool { return strings.HasPrefix(s, ":") }), "    ")
 	_, _ = cyan.Fprintf(os.Stdout, "  Image: %s\n", resolvedImageLabel(cfg, ws))
 	_, _ = cyan.Fprintf(os.Stdout, "  Dockerfile: %s\n", cmp.Or(ws.Dockerfile, "(none)"))
 	_, _ = cyan.Fprintf(os.Stdout, "  Build Context: %s\n", cmp.Or(ws.BuildContext, "(none)"))

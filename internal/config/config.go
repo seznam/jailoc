@@ -1035,6 +1035,17 @@ func formatMount(m Mount) string {
 }
 
 func MergeMounts(layers ...[]string) ([]string, error) {
+	return mergeMounts(false, layers...)
+}
+
+// MergeSnapshots merges snapshot layers like MergeMounts, but keeps removal
+// entries (empty host path) so they can remove built-in default snapshots
+// when the VM snapshots are assembled.
+func MergeSnapshots(layers ...[]string) ([]string, error) {
+	return mergeMounts(true, layers...)
+}
+
+func mergeMounts(keepRemovals bool, layers ...[]string) ([]string, error) {
 	if len(layers) == 0 {
 		return nil, nil
 	}
@@ -1065,7 +1076,14 @@ func MergeMounts(layers ...[]string) ([]string, error) {
 			}
 
 			if m.Host == "" {
-				delete(byContainer, m.Container)
+				if keepRemovals {
+					byContainer[m.Container] = Mount{
+						Container: m.Container,
+						Mode:      "ro",
+					}
+				} else {
+					delete(byContainer, m.Container)
+				}
 				continue
 			}
 

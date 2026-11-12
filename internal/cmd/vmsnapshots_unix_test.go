@@ -82,7 +82,6 @@ func TestVMSnapshotsAgentConfig(t *testing.T) {
 	if err := os.WriteFile(claudeMD, []byte("# rules\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	h, _ := agent.Lookup("claude")
 	guestMD := guestHome + "/.claude/CLAUDE.md"
 	guestSkills := guestHome + "/.claude/skills"
 	tests := []struct {
@@ -100,7 +99,22 @@ func TestVMSnapshotsAgentConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := vmSnapshots(&workspace.Resolved{Name: "w", Agent: h, ImportAgentConfig: !tt.off, Snapshots: tt.snapshots}, tt.shares)
+			enabled := !tt.off
+			gitOff := false
+			ws, err := workspace.Resolve(&config.Config{
+				Defaults: config.Defaults{GitConfig: &gitOff},
+				Workspaces: map[string]config.Workspace{
+					"w": {
+						Agent:             "claude",
+						ImportAgentConfig: &enabled,
+						Snapshots:         tt.snapshots,
+					},
+				},
+			}, "w")
+			if err != nil {
+				t.Fatalf("workspace.Resolve: %v", err)
+			}
+			got, err := vmSnapshots(ws, tt.shares)
 			if err != nil {
 				t.Fatalf("vmSnapshots: %v", err)
 			}

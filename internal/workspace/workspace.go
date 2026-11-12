@@ -212,7 +212,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
 	r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
 	r.NetworkRules = resolveNetworkRules(cfg, ws, r.AllowedHosts, r.AllowedNetworks, r.DNSBlockedZones, h)
-	snapshots, err := config.MergeMounts(cfg.Defaults.Snapshots, ws.Snapshots)
+	snapshots, err := config.MergeSnapshots(cfg.Defaults.Snapshots, ws.Snapshots)
 	if err != nil {
 		return nil, fmt.Errorf("merge snapshots for workspace %s: %w", name, err)
 	}

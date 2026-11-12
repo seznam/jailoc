@@ -324,9 +324,9 @@ func writeTUIPlugin(baseDir string, files map[string][]byte) error {
 func cliConfigContent(ws *workspace.Resolved) (string, error) {
 	h := ws.Agent
 	var plugins []json.RawMessage
-	if hostDir, ok := configHostDir(ws, h.ConfigDir); ok {
+	if h.ConfigDir != "" {
 		var err error
-		plugins, err = configuredTUIPlugins(hostDir, h.ConfigDir)
+		plugins, err = configuredTUIPlugins(ws, h.ConfigDir)
 		if err != nil {
 			return "", err
 		}
@@ -345,14 +345,12 @@ func cliConfigContent(ws *workspace.Resolved) (string, error) {
 	return string(data), nil
 }
 
-// configHostDir returns the host directory that backs the guest configuration
-// directory guestDir via a mount or snapshot.
-func configHostDir(ws *workspace.Resolved, guestDir string) (string, bool) {
-	if guestDir == "" {
-		return "", false
-	}
-	if hostDir, ok := config.MountHostPath(ws.Mounts, guestDir); ok {
-		return hostDir, true
+// configHostPath returns the host file that backs guestDir/name via a mount or
+// snapshot, including file-level snapshot overrides.
+func configHostPath(ws *workspace.Resolved, guestDir, name string) (string, bool) {
+	target := path.Join(guestDir, name)
+	if hostPath, ok := config.MountHostPath(ws.Mounts, target); ok {
+		return hostPath, true
 	}
 	var defaults []string
 	if ws.ImportAgentConfig && !mountOverlaps(ws.Mounts, guestDir) && !snapshotCoversParent(ws.Snapshots, guestDir) {
@@ -368,7 +366,7 @@ func configHostDir(ws *workspace.Resolved, guestDir string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return config.MountHostPath(merged, guestDir)
+	return config.MountHostPath(merged, target)
 }
 
 func mountOverlaps(specs []string, target string) bool {
@@ -402,21 +400,17 @@ func snapshotCoversParent(specs []string, target string) bool {
 // the workspace can write.
 const maxAgentConfig = 1 << 20
 
-// configuredTUIPlugins returns the TUI plugins configured in hostDir, the
-// host directory of the guest config directory guestDir.
+// configuredTUIPlugins returns the TUI plugins configured in the host files
+// backing guestDir/cli.json or guestDir/tui.json.
 // The directory may be mounted read-write into the workspace, so the files
-// read through an os.Root, must be regular and are bounded in size.
-func configuredTUIPlugins(hostDir, guestDir string) ([]json.RawMessage, error) {
-	root, err := os.OpenRoot(hostDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", hostDir, err)
-	}
-	defer func() { _ = root.Close() }()
+// are read through an os.Root, must be regular and are bounded in size.
+func configuredTUIPlugins(ws *workspace.Resolved, guestDir string) ([]json.RawMessage, error) {
 	for _, f := range []struct{ name, key string }{{"cli.json", "plugins"}, {"tui.json", "plugin"}} {
-		data, err := readRegular(root, f.name, maxAgentConfig)
+		hostPath, ok := configHostPath(ws, guestDir, f.name)
+		if !ok {
+			continue
+		}
+		data, err := readConfigFile(hostPath)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -425,12 +419,12 @@ func configuredTUIPlugins(hostDir, guestDir string) ([]json.RawMessage, error) {
 		}
 		var cfg map[string]json.RawMessage
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", filepath.Join(hostDir, f.name), err)
+			return nil, fmt.Errorf("parse %s: %w", hostPath, err)
 		}
 		var plugins []json.RawMessage
 		if raw, ok := cfg[f.key]; ok {
 			if err := json.Unmarshal(raw, &plugins); err != nil {
-				return nil, fmt.Errorf("parse %s %s: %w", filepath.Join(hostDir, f.name), f.key, err)
+				return nil, fmt.Errorf("parse %s %s: %w", hostPath, f.key, err)
 			}
 		}
 		for i, p := range plugins {
@@ -445,6 +439,15 @@ func configuredTUIPlugins(hostDir, guestDir string) ([]json.RawMessage, error) {
 		return plugins, nil
 	}
 	return nil, nil
+}
+
+func readConfigFile(hostPath string) ([]byte, error) {
+	root, err := os.OpenRoot(filepath.Dir(hostPath))
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", filepath.Dir(hostPath), err)
+	}
+	defer func() { _ = root.Close() }()
+	return readRegular(root, filepath.Base(hostPath), maxAgentConfig)
 }
 
 // ensureConfigGitignore creates hostDir/.gitignore with content unless it

@@ -1591,9 +1591,9 @@ func TestResolveCopies(t *testing.T) {
 	}{
 		{name: "inherits defaults", want: []string{"/data/npmrc:/home/agent/.npmrc:ro", "/data/gh:/home/agent/.config/gh:ro"}},
 		{
-			name:      "workspace overrides and removes",
+			name:      "workspace overrides and keeps removals for built-in snapshots",
 			snapshots: []string{"/data/other-npmrc:/home/agent/.npmrc:ro", ":/home/agent/.config/gh:ro", "/data/tool:/opt-tool/cfg:ro"},
-			want:      []string{"/data/other-npmrc:/home/agent/.npmrc:ro", "/data/tool:/opt-tool/cfg:ro"},
+			want:      []string{"/data/other-npmrc:/home/agent/.npmrc:ro", ":/home/agent/.config/gh:ro", "/data/tool:/opt-tool/cfg:ro"},
 		},
 	}
 	for _, tt := range tests {

@@ -269,6 +269,13 @@ func TestCLIConfigContent(t *testing.T) {
 			want:      `{"plugins":["override-plugin","file:///etc/jailoc-tui-plugin"]}`,
 		},
 		{
+			name:      "file snapshot override wins over default snapshot",
+			files:     map[string]string{"cli.json": `{"plugins":["default-plugin"]}`, "override-cli.json": `{"plugins":["file-override-plugin"]}`},
+			imported:  true,
+			snapshots: []string{"$DIR/override-cli.json:/home/agent/.config/opencode/cli.json:ro"},
+			want:      `{"plugins":["file-override-plugin","file:///etc/jailoc-tui-plugin"]}`,
+		},
+		{
 			name:  "cli.json wins over tui.json",
 			files: map[string]string{"cli.json": `{"plugins":["v2"]}`, "tui.json": `{"plugin":["v1"]}`},
 			mount: true,
