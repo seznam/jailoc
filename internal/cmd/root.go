@@ -56,12 +56,15 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("resolve target path: %w", err)
 		}
 
-		name, err := maybeOfferFirstTimeSetup(ctx, targetPath, "")
+		res, err := maybeOfferFirstTimeSetup(ctx, targetPath, "")
 		if err != nil {
 			return err
 		}
-		if name != "" {
-			workspaceFlag = name
+		if res.name != "" {
+			workspaceFlag = res.name
+		}
+		if res.dir != "" {
+			targetPath = res.dir
 		}
 
 		cfg, err := config.Load()

@@ -40,12 +40,12 @@ func runUp(ctx context.Context, args []string) error {
 			if len(args) == 1 {
 				seed = args[0]
 			}
-			name, err := maybeOfferFirstTimeSetup(ctx, cwd, seed)
+			res, err := maybeOfferFirstTimeSetup(ctx, cwd, seed)
 			if err != nil {
 				return err
 			}
-			if name != "" {
-				args = []string{name}
+			if res.name != "" {
+				args = []string{res.name}
 			}
 		}
 	}

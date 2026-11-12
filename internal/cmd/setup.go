@@ -72,6 +72,9 @@ workspace interactively.`,
 		if err != nil {
 			return err
 		}
+		if err := runUpVM(ctx, cfg, ws); err != nil {
+			return err
+		}
 		return runSessionVM(ctx, cfg, ws, vmSessionOptions{
 			dir: res.dir, detach: detachKeys,
 		})
@@ -524,32 +527,28 @@ func saveSetup(p *wizardPrompter, opts setupOptions, rendered []byte, res setupR
 
 // maybeOfferFirstTimeSetup offers the setup wizard to a command that is about
 // to start a workspace, when the configuration is missing or still the
-// default. seedName seeds the workspace name. It returns the name of the
-// workspace the wizard created, or "" when it did not run.
-func maybeOfferFirstTimeSetup(ctx context.Context, targetDir, seedName string) (string, error) {
+// default. seedName seeds the workspace name. It returns the workspace name
+// and directory the wizard configured, or zero values when it did not run.
+func maybeOfferFirstTimeSetup(ctx context.Context, targetDir, seedName string) (setupResult, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: Fd fits int on 64-bit platforms
-		return "", nil
+		return setupResult{}, nil
 	}
 	configPath := config.ConfigPath()
 	isDefault, err := config.IsDefaultFile(configPath)
 	if err != nil || !isDefault {
-		return "", nil
+		return setupResult{}, nil
 	}
 	p := newStdinPrompter(false)
 	p.ctx = ctx
 	runWizard, err := p.confirm("No customized jailoc configuration found. Run `jailoc setup` wizard now?", true)
 	if err != nil || !runWizard {
-		return "", err
+		return setupResult{}, err
 	}
-	res, err := runSetup(ctx, p, setupOptions{
+	return runSetup(ctx, p, setupOptions{
 		configPath:  configPath,
 		targetDir:   targetDir,
 		defaultName: seedName,
 	})
-	if err != nil {
-		return "", err
-	}
-	return res.name, nil
 }
 
 func validatePositiveFloat(s string) error {
