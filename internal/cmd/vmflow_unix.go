@@ -92,6 +92,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
+	pruneRuntimeCache(rt)
 	logStep("prepare VM runtime", start)
 	start = time.Now()
 	ref, err := buildWorkspaceImage(ctx, cfg, ws, rt)
@@ -407,6 +408,31 @@ func pruneImageCache(current string) {
 	}
 	if res.Images > 0 || res.Layers > 0 {
 		_, _ = color.New(color.FgCyan).Printf("Removed %d unused workspace image(s) and %d unused layer(s) from the VM image cache\n", res.Images, res.Layers)
+	}
+}
+
+// pruneRuntimeCache removes unpacked VM runtimes and extracted guest binaries
+// unused for seven days that no workspace or builder spec references.
+func pruneRuntimeCache(rt vmRuntimeFiles) {
+	keep := append([]string{rt.runner, rt.guest}, filepath.SplitList(rt.libDir)...)
+	specs, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", vm.SpecFile("")))
+	more, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", "builder", vm.SpecFile("")))
+	specs = append(append(specs, more...), filepath.Join(vmRootDir(), "builder", vm.SpecFile("")))
+	for _, path := range specs {
+		spec, err := vm.ReadSpec(filepath.Dir(path))
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: prune VM runtime cache skipped: cannot read %s: %v\n", path, err)
+				return
+			}
+			continue
+		}
+		keep = append(append(keep, spec.RunnerPath, spec.GuestBinary), filepath.SplitList(spec.LibDir)...)
+	}
+	for _, sub := range []string{"runtime", "guest"} {
+		if _, err := vm.PruneCacheDirs(filepath.Join(vmRootDir(), sub), keep); err != nil {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: prune VM %s cache: %v\n", sub, err)
+		}
 	}
 }
 

@@ -50,7 +50,7 @@ report, one row per check.
 
    ```toml
    [vm]
-   runner = "<real home>/.cache/jailoc-vm/runtime/<hash>/runtime/go-microvm-runner"
+   runner = "<real home>/.cache/jailoc-vm/runtime/<hash>/runtime/jailoc-vm-runner"
    lib_dir = "<real home>/.cache/jailoc-vm/runtime/<hash>/runtime:<real home>/.cache/jailoc-vm/runtime/<hash>/firmware"
    ```
 

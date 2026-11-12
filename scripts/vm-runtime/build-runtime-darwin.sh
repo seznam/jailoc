@@ -102,14 +102,14 @@ ln -s libkrun.1.dylib "$work/lib/libkrun.dylib"
 # the Homebrew directories go-microvm's cgo flags name.
 (cd "$src" && CGO_LDFLAGS="-L$work/lib" task build-dev-darwin)
 mkdir "$work/$name"
-cp "$src/bin/go-microvm-runner" "$work/$name/go-microvm-runner"
+cp "$src/bin/go-microvm-runner" "$work/$name/jailoc-vm-runner"
 cp "$work/lib/libkrun.1.dylib" "$work/$name/libkrun.1.dylib"
 codesign --force -s - "$work/$name/libkrun.1.dylib"
-if otool -L "$work/$name/go-microvm-runner" "$work/$name/libkrun.1.dylib" | grep -Eq '/opt/homebrew|/usr/local'; then
+if otool -L "$work/$name/jailoc-vm-runner" "$work/$name/libkrun.1.dylib" | grep -Eq '/opt/homebrew|/usr/local'; then
   echo "runtime links Homebrew libraries" >&2
   exit 1
 fi
-otool -L "$work/$name/go-microvm-runner" | grep -q '@loader_path/libkrun.1.dylib' ||
+otool -L "$work/$name/jailoc-vm-runner" | grep -q '@loader_path/libkrun.1.dylib' ||
   { echo "runner does not load libkrun from its own directory" >&2; exit 1; }
 rev=$(git -C "$src" rev-parse --short HEAD)
 repo=$(git -C "$src" remote get-url origin)
@@ -117,7 +117,7 @@ install -m 0444 "$src/LICENSE" "$work/$name/LICENSE"
 patches=$(cd "$here/libkrun-patches" && ls -- *.patch | cut -c1-4 | paste -sd, -)
 echo "$rev libkrun-$libkrun+jailoc-patches-$patches" > "$work/$name/VERSION"
 cat > "$work/$name/NOTICE" <<EOF
-go-microvm-runner is built from go-microvm $rev ($repo) and
+jailoc-vm-runner is built from go-microvm $rev ($repo) and
 libkrun.1.dylib from libkrun $libkrun (https://github.com/libkrun/libkrun).
 Both are licensed under the Apache License 2.0, see LICENSE.
 

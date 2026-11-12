@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Print the licenses and notices of everything in the VM runtime that release
 # builds of jailoc embed: libkrunfw, libkrun with the Rust crates built into it,
-# the musl libc in libkrun's guest init, and go-microvm-runner with the Go
+# the musl libc in libkrun's guest init, and jailoc-vm-runner with the Go
 # modules built into it. GoReleaser appends the result to THIRD_PARTY_NOTICES.
 #
 # Usage: build-runtime-notices.sh GO_MICROVM_CHECKOUT OUT_DIR
@@ -76,9 +76,9 @@ with the GCC Runtime Library Exception.
 EOF
 	file "musl (COPYRIGHT)" "$here/licenses/musl-COPYRIGHT"
 
-	section "VM runtime: go-microvm-runner (go-microvm $rev)"
+	section "VM runtime: jailoc-vm-runner (go-microvm $rev)"
 	cat <<EOF
-go-microvm-runner is built from go-microvm
+jailoc-vm-runner is built from go-microvm
 ($(git -C "$src" remote get-url origin)), licensed under the Apache
 License 2.0. The Go modules built into it and their licenses follow.
 

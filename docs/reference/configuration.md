@@ -42,7 +42,7 @@ Host runtime of the workspace VMs. All fields are optional.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `runner` | string | (embedded) | Path to a `go-microvm-runner` binary. When empty, jailoc unpacks the VM runtime (runner, `libkrun`, `libkrunfw`) embedded in release builds for darwin/arm64, linux/amd64 and linux/arm64 into `~/.cache/jailoc-vm/runtime/` on first use. Builds without an embedded runtime (other platforms, builds from source) require `runner` and `lib_dir`. Must be absolute; supports `~` expansion. |
+| `runner` | string | (embedded) | Path to a `jailoc-vm-runner` (or `go-microvm-runner`) binary. When empty, jailoc unpacks the VM runtime (`jailoc-vm-runner`, `libkrun`, `libkrunfw`) embedded in release builds for darwin/arm64, linux/amd64 and linux/arm64 into `~/.cache/jailoc-vm/runtime/` on first use. Builds without an embedded runtime (other platforms, builds from source) require `runner` and `lib_dir`. Must be absolute; supports `~` expansion. |
 | `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Ignored when `runner` is empty. When empty with a configured `runner`, jailoc uses `/opt/homebrew/lib` on macOS if it exists, otherwise the system library path. Must be absolute; supports `~` expansion. |
 | `builder` | string | `"auto"` | Where workspace images are built: `"auto"` uses the host Docker daemon when it answers and runs Linux on the host's CPU architecture, otherwise the shared builder VM; `"docker"` requires the host daemon; `"vm"` always uses the shared builder VM. A workspace with `isolated_build = true` always uses its own builder VM. |
 

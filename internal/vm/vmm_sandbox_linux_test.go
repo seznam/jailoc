@@ -36,11 +36,11 @@ func TestConfinedRunnerAccess(t *testing.T) {
 		}
 	}
 	for path, data := range map[string]string{
-		filepath.Join(dirs["ro"], "file"):                   "ro",
-		filepath.Join(dirs["home"], "key"):                  "secret",
-		filepath.Join(dirs["runtime"], "go-microvm-runner"): "runner",
-		filepath.Join(dirs["runtime"], "other-file"):        "other",
-		filepath.Join(base, "state/docker.img"):             "",
+		filepath.Join(dirs["ro"], "file"):            "ro",
+		filepath.Join(dirs["home"], "key"):           "secret",
+		filepath.Join(dirs["runtime"], RunnerBinary): "runner",
+		filepath.Join(dirs["runtime"], "other-file"): "other",
+		filepath.Join(base, "state/docker.img"):      "",
 	} {
 		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 			t.Fatal(err)
@@ -67,7 +67,7 @@ func TestConfinedRunnerAccess(t *testing.T) {
 
 	cfg := runner.Config{
 		RootPath:   dirs["state/microvm/rootfs"],
-		RunnerPath: filepath.Join(dirs["runtime"], "go-microvm-runner"),
+		RunnerPath: filepath.Join(dirs["runtime"], RunnerBinary),
 		LibDir:     dirs["lib"],
 		NetSocket:  filepath.Join(base, "state", "nic.sock"),
 		VirtioFS: []runner.VirtioFSMount{

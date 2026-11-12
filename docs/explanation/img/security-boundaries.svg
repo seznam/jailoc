@@ -37,7 +37,7 @@
 <text x="934" y="144" fill="#464C54" font-size="12.5">private ranges denied by default</text>
 <rect x="600" y="200" width="280" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
 <rect x="600" y="210" width="3" height="70" rx="1.5" fill="#425CC7"/>
-<text x="614" y="222" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">go-microvm-runner</text>
+<text x="614" y="222" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-vm-runner</text>
 <text x="614" y="240" fill="#6E7180" font-size="12">libkrun VMM · Landlock on Linux</text>
 <rect x="614" y="258" width="73" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
 <text x="650.5" y="272" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">virtio-fs</text>

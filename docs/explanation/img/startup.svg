@@ -56,7 +56,7 @@
 <text x="378" y="200" fill="#6E7180" font-size="11">secret sources</text>
 <rect x="729" y="214" width="447" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
 <rect x="729" y="224" width="3" height="70" rx="1.5" fill="#425CC7"/>
-<text x="743" y="236" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">go-microvm-runner</text>
+<text x="743" y="236" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-vm-runner</text>
 <text x="743" y="254" fill="#6E7180" font-size="12">libkrun VMM, one process per workspace</text>
 <rect x="743" y="260" width="79" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
 <text x="782.5" y="274" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">virtio-fs</text>

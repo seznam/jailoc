@@ -56,7 +56,7 @@ The builder VM and workspaces with `enable_docker` have a data disk, 20 GiB unle
 
 ### VM runtime
 
-Release builds embed the VMM runtime and kernel firmware. They are unpacked into the cache once, into a directory named after their checksum, and shared by every workspace and by later runs of the same jailoc build.
+Release builds embed the VMM runtime and kernel firmware. They are unpacked into the cache once, into a directory named after their checksum, and shared by every workspace and by later runs of the same jailoc build. Unpacked runtimes and guest binaries that no workspace or builder VM references and that have not been used for seven days are removed on `jailoc up`.
 
 ## Builds
 
