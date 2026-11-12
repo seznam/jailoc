@@ -58,9 +58,9 @@ func (b *osc52Bridge) feed(input []byte) []byte {
 			if b.capture(value) {
 				if decoded, ok := decodeOSC52(b.sequence); ok {
 					b.copyFn(decoded)
-				}
-				if b.tmux && !b.overflow {
-					output = append(output, tmuxPassthrough(b.sequence)...)
+					if b.tmux {
+						output = append(output, tmuxPassthrough(b.sequence)...)
+					}
 				}
 				b.reset()
 			}
@@ -100,6 +100,10 @@ func (b *osc52Bridge) scan(value byte) {
 }
 
 func (b *osc52Bridge) capture(value byte) bool {
+	if value == '\x18' || value == '\x1a' {
+		b.reset()
+		return false
+	}
 	previousWasEscape := b.escape
 	b.escape = value == '\x1b'
 	if b.escape {

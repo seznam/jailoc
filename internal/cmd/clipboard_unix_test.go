@@ -88,6 +88,12 @@ func TestOSC52Bridge(t *testing.T) {
 			wantOut:  "\x1bPtmux;\x1b\x1b]52;c;c3Q=\x1b\x1b\\\x1b\\",
 			wantCopy: []string{"st"},
 		},
+		{
+			name:     "cancelled DCS recovers for next OSC 52",
+			chunks:   []string{"\x1bPtmux;partial\x18\x1b]52;c;Y2Fu\x07"},
+			wantOut:  "\x1bPtmux;partial\x18\x1b]52;c;Y2Fu\x07",
+			wantCopy: []string{"can"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -128,6 +134,11 @@ func TestOSC52BridgeTMUXPassthrough(t *testing.T) {
 	got = string(bridge.feed([]byte(wrapped)))
 	if got != wrapped {
 		t.Fatalf("already wrapped feed() = %q, want unchanged %q", got, wrapped)
+	}
+	query := "\x1b]52;c;?\x07"
+	got = string(bridge.feed([]byte(query)))
+	if got != query {
+		t.Fatalf("query feed() = %q, want unchanged %q", got, query)
 	}
 }
 

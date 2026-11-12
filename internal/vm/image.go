@@ -152,10 +152,12 @@ func (r *progressReader) report(bytes int64) {
 
 type progressImage struct {
 	v1.Image
-	uncached map[v1.Hash]bool
-	total    int
+	lc       *image.LayerCache
+	diffIDs  []v1.Hash
 	mu       sync.Mutex
+	adjusted bool
 	done     int
+	total    int
 	progress func(ImportProgress)
 }
 
@@ -172,17 +174,16 @@ func imageWithProgress(img v1.Image, lc *image.LayerCache, progress func(ImportP
 		return nil, fmt.Errorf("image has %d layers but %d DiffIDs", len(layers), len(cfg.RootFS.DiffIDs))
 	}
 	uncached := make(map[v1.Hash]bool, len(layers))
-	total := 0
 	for _, diffID := range cfg.RootFS.DiffIDs {
 		if !lc.Has(diffID) {
 			uncached[diffID] = true
-			total++
 		}
 	}
 	p := &progressImage{
 		Image:    img,
-		uncached: uncached,
-		total:    total,
+		lc:       lc,
+		diffIDs:  cfg.RootFS.DiffIDs,
+		total:    len(uncached),
 		progress: progress,
 	}
 	p.reportInitial()
@@ -194,14 +195,8 @@ func (p *progressImage) Layers() ([]v1.Layer, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := p.ConfigFile()
-	if err != nil {
-		return nil, err
-	}
 	for i, layer := range layers {
-		if p.uncached[cfg.RootFS.DiffIDs[i]] {
-			layers[i] = &progressLayer{Layer: layer, image: p}
-		}
+		layers[i] = &progressLayer{Layer: layer, index: i, image: p}
 	}
 	return layers, nil
 }
@@ -212,10 +207,34 @@ func (p *progressImage) reportInitial() {
 	}
 }
 
+func (p *progressImage) adjustStart(index int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.adjusted {
+		return
+	}
+	p.adjusted = true
+	uncached := make(map[v1.Hash]bool, len(p.diffIDs)-index)
+	for _, diffID := range p.diffIDs[index:] {
+		if !p.lc.Has(diffID) {
+			uncached[diffID] = true
+		}
+	}
+	if len(uncached) < p.total {
+		p.total = len(uncached)
+		if p.progress != nil {
+			p.progress(ImportProgress{Phase: PhaseExtract, Layers: p.done, Total: p.total})
+		}
+	}
+}
+
 func (p *progressImage) layerDone() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.done++
+	if p.done > p.total {
+		p.total = p.done
+	}
 	if p.progress != nil {
 		p.progress(ImportProgress{Phase: PhaseExtract, Layers: p.done, Total: p.total})
 	}
@@ -223,11 +242,13 @@ func (p *progressImage) layerDone() {
 
 type progressLayer struct {
 	v1.Layer
+	index int
 	image *progressImage
 	once  sync.Once
 }
 
 func (l *progressLayer) Uncompressed() (io.ReadCloser, error) {
+	l.image.adjustStart(l.index)
 	r, err := l.Layer.Uncompressed()
 	if err != nil {
 		return nil, err
