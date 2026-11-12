@@ -211,7 +211,7 @@ func stopSupervisor(stateDir string) error {
 	}
 	deadline := time.Now().Add(vmStopTimeout)
 	for processAlive(st.PID) && time.Now().Before(deadline) {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	if processAlive(st.PID) {
 		_ = syscall.Kill(st.PID, syscall.SIGKILL)

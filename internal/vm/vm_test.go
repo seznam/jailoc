@@ -1,10 +1,12 @@
 package vm
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEnsureDisk(t *testing.T) {
@@ -36,5 +38,44 @@ func TestEnsureDisk(t *testing.T) {
 	}
 	if got := size(); got != 3<<30 {
 		t.Fatalf("size after refused shrink = %d, want %d", got, int64(3<<30))
+	}
+}
+
+func TestWriteControlNudgesSSHSocket(t *testing.T) {
+	t.Parallel()
+	stateDir, err := os.MkdirTemp("/tmp", "jlv-") // short path: unix socket paths are limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+	if err := resetControl(stateDir); err != nil {
+		t.Fatalf("resetControl: %v", err)
+	}
+	ln, err := net.Listen("unix", SSHSocket(stateDir))
+	if err != nil {
+		t.Fatalf("listen ssh socket: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	nudged := make(chan struct{}, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			_ = c.Close()
+			nudged <- struct{}{}
+		}
+	}()
+
+	if err := WriteControl(stateDir, "shutdown", []byte("now")); err != nil {
+		t.Fatalf("WriteControl: %v", err)
+	}
+	select {
+	case <-nudged:
+	case <-time.After(time.Second):
+		t.Fatal("WriteControl did not nudge SSH socket")
+	}
+	got, err := ReadControl(stateDir, "shutdown")
+	if err != nil || string(got) != "now" {
+		t.Fatalf("ReadControl = %q, %v; want %q", got, err, "now")
 	}
 }

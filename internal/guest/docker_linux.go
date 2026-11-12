@@ -93,7 +93,7 @@ func (d *dockerDaemon) stop(logger *slog.Logger) {
 		if err := syscall.Kill(d.pid, 0); errors.Is(err, syscall.ESRCH) {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	syscall.Sync()
 	if err := syscall.Unmount(dockerDataDir, 0); err != nil {

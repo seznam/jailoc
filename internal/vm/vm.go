@@ -356,7 +356,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	}
 	logf("%s ready after %s", spec.Kind, step())
 
-	out := brokerproc.Supervise(ctx, bp, vmHandle{vm: vm, stateDir: spec.StateDir}, 500*time.Millisecond, stopGrace)
+	out := brokerproc.Supervise(ctx, bp, vmHandle{vm: vm, stateDir: spec.StateDir, nicDown: bp.NICDown()}, 500*time.Millisecond, stopGrace)
 	logf("supervise %s", out.Reason)
 	if out.Reason == "shutdown" {
 		return nil
@@ -614,7 +614,8 @@ const (
 
 func controlDir(stateDir string) string { return filepath.Join(GuestDataDir(stateDir), ControlName) }
 
-// WriteControl writes name into the control directory atomically.
+// WriteControl writes name into the control directory atomically and nudges
+// the guest SSH listener so jailoc-guest wakes from its control loop at once.
 func WriteControl(stateDir, name string, data []byte) error {
 	root, err := OpenGuestData(stateDir)
 	if err != nil {
@@ -627,6 +628,9 @@ func WriteControl(stateDir, name string, data []byte) error {
 	}
 	if err := root.Rename(tmp, path.Join(ControlName, name)); err != nil {
 		return fmt.Errorf("write %s: %w", name, err)
+	}
+	if c, err := net.DialTimeout("unix", SSHSocket(stateDir), 50*time.Millisecond); err == nil {
+		_ = c.Close()
 	}
 	return nil
 }
@@ -758,6 +762,7 @@ func writeFileAtomic(path string, data []byte) error {
 type vmHandle struct {
 	vm       *microvm.VM
 	stateDir string
+	nicDown  <-chan struct{}
 }
 
 func (h vmHandle) Alive() bool {
@@ -772,12 +777,16 @@ func (h vmHandle) Stop(ctx context.Context) error {
 	if h.Alive() {
 		if err := WriteControl(h.stateDir, "shutdown", nil); err == nil {
 			wait, cancel := context.WithTimeout(ctx, guestShutdownWait)
+			tick := time.NewTicker(10 * time.Millisecond)
 			for h.Alive() && wait.Err() == nil {
 				select {
 				case <-wait.Done():
-				case <-time.After(200 * time.Millisecond):
+				case <-h.nicDown:
+					h.nicDown = nil
+				case <-tick.C:
 				}
 			}
+			tick.Stop()
 			cancel()
 		}
 	}
