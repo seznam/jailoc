@@ -38,7 +38,7 @@ jailoc
 
 Here's what happens on first run:
 
-1. **Config creation**: jailoc writes a default config to `~/.config/jailoc/config.toml` if it doesn't exist yet.
+1. **First-time setup**: if `~/.config/jailoc/config.toml` doesn't exist or still matches the unmodified default template, jailoc offers to run the interactive `jailoc setup` wizard (`jailoc wizard`) to choose your coding agent, Git/SSH/GPG forwarding, network policy, and initial workspace path. You can also run `jailoc setup` directly at any time to add another workspace.
 2. **Workspace prompt**: if the current directory isn't part of any configured workspace, jailoc asks whether to add it. Confirm, and the workspace is saved to your config.
 3. **Runtime unpacking**: jailoc unpacks the VM runtime embedded in its binary into `~/.cache/jailoc-vm/runtime/`. This happens once.
 4. **Image build**: jailoc builds the workspace image, with host Docker or in a builder VM, and unpacks it into a VM root filesystem.
