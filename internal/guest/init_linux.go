@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -194,10 +195,11 @@ func Init(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", SSHPort))
+	rawLn, err := net.Listen("tcp", fmt.Sprintf(":%d", SSHPort))
 	if err != nil {
 		return fmt.Errorf("listen on port %d: %w", SSHPort, err)
 	}
+	ln := newWakeListener(rawLn)
 	go func() {
 		if err := srv.Serve(ln); err != nil {
 			logger.Error("ssh server", "error", err)
@@ -207,6 +209,8 @@ func Init(logger *slog.Logger) error {
 	defer stopReaper()
 	logger.Info("jailoc guest ready", "user", acct.name, "workdir", cfg.WorkDir)
 
+	ticker := time.NewTicker(shutdownPoll)
+	defer ticker.Stop()
 	for {
 		live.poll()
 		if _, err := os.Stat(filepath.Join(ControlDir, "shutdown")); err == nil {
@@ -216,7 +220,10 @@ func Init(logger *slog.Logger) error {
 			syscall.Sync()
 			return nil
 		}
-		time.Sleep(shutdownPoll)
+		select {
+		case <-ln.wake:
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -657,6 +664,71 @@ func newSSHServer(logger *slog.Logger, cfg *Config, acct account, env []string) 
 		return nil, fmt.Errorf("create ssh server: %w", err)
 	}
 	return srv, nil
+}
+
+// wakeListener wraps the SSH listener so a host connection (including the
+// control nudge from WriteControl) wakes the control loop immediately, and
+// Close closes active connections so srv.Close does not block on open sessions.
+type wakeListener struct {
+	net.Listener
+	wake   chan struct{}
+	mu     sync.Mutex
+	closed bool
+	conns  map[net.Conn]struct{}
+}
+
+func newWakeListener(ln net.Listener) *wakeListener {
+	return &wakeListener{
+		Listener: ln,
+		wake:     make(chan struct{}, 1),
+		conns:    map[net.Conn]struct{}{},
+	}
+}
+
+func (l *wakeListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = c.Close()
+		return nil, net.ErrClosed
+	}
+	l.conns[c] = struct{}{}
+	l.mu.Unlock()
+	select {
+	case l.wake <- struct{}{}:
+	default:
+	}
+	return &trackedConn{Conn: c, release: func() {
+		l.mu.Lock()
+		delete(l.conns, c)
+		l.mu.Unlock()
+	}}, nil
+}
+
+func (l *wakeListener) Close() error {
+	err := l.Listener.Close()
+	l.mu.Lock()
+	l.closed = true
+	for c := range l.conns {
+		_ = c.Close()
+	}
+	l.mu.Unlock()
+	return err
+}
+
+type trackedConn struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+func (c *trackedConn) Close() error {
+	c.once.Do(c.release)
+	return c.Conn.Close()
 }
 
 // WriteSecrets stores the secrets payload read from r: file secrets in

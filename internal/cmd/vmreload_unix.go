@@ -279,7 +279,7 @@ func reloadBroker(spec vm.Spec, pid int) error {
 			}
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	return fmt.Errorf("broker did not confirm the reload within %s", reloadTimeout)
 }
@@ -347,7 +347,7 @@ func reloadGuest(stateDir string, g guest.Config) error {
 			}
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	return fmt.Errorf("the guest did not confirm the reload within %s; it may run a jailoc-guest from another jailoc version (`jailoc restart` updates it)", reloadTimeout)
 }
