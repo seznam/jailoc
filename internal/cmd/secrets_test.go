@@ -209,6 +209,8 @@ paths = ["/data/bare"]
 		t.Fatalf("write config: %v", err)
 	}
 
+	t.Cleanup(func() { allFlag, workspaceFlag, workspaceExplicit = false, "default", false })
+	allFlag = true
 	out := captureStdout(t, func() {
 		cmd := &cobra.Command{}
 		cmd.SetContext(context.Background())
@@ -264,18 +266,17 @@ from_file = "/a/file"
 
 [workspaces.alpha.secrets.file.e-file]
 from_env = "HOST_A"
-
-[workspaces.empty]
-paths = []
 `
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-
+	t.Cleanup(func() { allFlag, workspaceFlag, workspaceExplicit = false, "default", false })
+	allFlag = false
+	workspaceFlag, workspaceExplicit = "default", false
 	out := captureStdout(t, func() {
 		cmd := &cobra.Command{}
 		cmd.SetContext(context.Background())
-		if err := runConfig(cmd, nil); err != nil {
+		if err := runConfig(cmd, []string{"alpha"}); err != nil {
 			t.Fatalf("runConfig() = %v", err)
 		}
 	})
@@ -288,11 +289,6 @@ paths = []
 		"    - e-file (file from_env HOST_A)\n" +
 		"    - z-file (file from_file /z/file)\n"
 	assertContains(t, out, want)
-	_, emptySection, ok := strings.Cut(out, "Workspace: empty")
-	if !ok {
-		t.Fatalf("workspace empty section missing from output:\n%s", out)
-	}
-	assertContains(t, emptySection, "  Secrets:\n    (none)\n")
 	for _, secretValue := range []string{"secret-value-a", "secret-value-z"} {
 		if strings.Contains(out, secretValue) {
 			t.Fatalf("jailoc config output leaked secret value %q:\n%s", secretValue, out)
@@ -300,13 +296,12 @@ paths = []
 	}
 }
 
-// TestConfigShowsDefaultsSecrets is not parallel: it uses t.Setenv to point
+// TestConfigMergesDefaultsSecrets is not parallel: it uses t.Setenv to point
 // config.Load at a scratch HOME.
 //
-// A secret declared only under [defaults.secrets] applies to every workspace,
-// so jailoc config must surface it. The per-workspace sections print the raw
-// workspace scope and therefore never mention it.
-func TestConfigShowsDefaultsSecrets(t *testing.T) {
+// A secret declared under [defaults.secrets] is merged into the resolved
+// workspace configuration, so jailoc config surfaces it in the workspace's Secrets.
+func TestConfigMergesDefaultsSecrets(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("HOST_GLOBAL", "global-secret-value")
@@ -327,47 +322,26 @@ paths = ["/data/alpha"]
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-
+	t.Cleanup(func() { allFlag, workspaceFlag, workspaceExplicit = false, "default", false })
+	allFlag = false
+	workspaceFlag, workspaceExplicit = "default", false
 	out := captureStdout(t, func() {
 		cmd := &cobra.Command{}
 		cmd.SetContext(context.Background())
-		if err := runConfig(cmd, nil); err != nil {
+		if err := runConfig(cmd, []string{"alpha"}); err != nil {
 			t.Fatalf("runConfig() = %v", err)
 		}
 	})
 
-	assertContains(t, out, "Defaults Secrets:\n"+
-		"  - GLOBAL_TOKEN (env from_env HOST_GLOBAL)\n"+
-		"  - global-cert (file from_file /etc/ssl/global.pem)\n")
-
+	assertContains(t, out, "  Secrets:\n"+
+		"    - GLOBAL_TOKEN (env from_env HOST_GLOBAL)\n"+
+		"    - global-cert (file from_file /etc/ssl/global.pem)\n")
+	if strings.Contains(out, "Defaults ") {
+		t.Fatalf("jailoc config output must not print raw Defaults section:\n%s", out)
+	}
 	if strings.Contains(out, "global-secret-value") {
 		t.Fatalf("jailoc config output leaked the default secret value:\n%s", out)
 	}
-}
-
-// TestConfigDefaultsSecretsEmpty is not parallel: it uses t.Setenv to point
-// config.Load at a scratch HOME.
-func TestConfigDefaultsSecretsEmpty(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	configDir := filepath.Join(home, ".config", "jailoc")
-	if err := os.MkdirAll(configDir, 0o750); err != nil {
-		t.Fatalf("create config dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[workspaces.alpha]\npaths = [\"/data/alpha\"]\n"), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	out := captureStdout(t, func() {
-		cmd := &cobra.Command{}
-		cmd.SetContext(context.Background())
-		if err := runConfig(cmd, nil); err != nil {
-			t.Fatalf("runConfig() = %v", err)
-		}
-	})
-
-	assertContains(t, out, "Defaults Secrets:\n  (none)\n")
 }
 
 // TestPrintSecretsOrderMatchesResolvedOrder locks jailoc config to the single

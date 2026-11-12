@@ -14,24 +14,6 @@ import (
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
-// profilesDir holds the named agent profiles shared by workspaces.
-func profilesDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "jailoc-profiles")
-	}
-	return filepath.Join(home, ".local", "share", "jailoc", "profiles")
-}
-
-// workspaceProfile is the named profile of the workspace's agent, or "".
-func workspaceProfile(ws *workspace.Resolved) string {
-	if ws.AgentProfile == nil {
-		return ""
-	}
-	name, _ := ws.AgentProfile.Name()
-	return name
-}
-
 // claimProfile records the workspace as the user of its named profile. A
 // profile serves one running VM at a time: virtio-fs gives each VM its own
 // page cache and file locks, so two VMs would corrupt the agent's state. A

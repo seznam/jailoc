@@ -1,243 +1,213 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
 	"os"
-	"sort"
+	"path/filepath"
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
 var configCmd = &cobra.Command{
-	Use:   "config",
-	Short: "Show or edit jailoc configuration",
+	Use:   "config [workspace]",
+	Short: "Show resolved configuration for a workspace",
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runConfig,
 }
 
 func runConfig(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	printDeprecationWarnings(cfg)
 
-	// Sort workspace names alphabetically
-	names := make([]string, 0, len(cfg.Workspaces))
-	for name := range cfg.Workspaces {
-		names = append(names, name)
+	wss, err := targetWorkspaces(cfg, args)
+	if err != nil {
+		return err
 	}
-	sort.Strings(names)
+	first := true
+	return forEachWorkspace(cmd.Context(), wss, func(ws *workspace.Resolved) error {
+		if !first {
+			_, _ = fmt.Fprintln(os.Stdout)
+		}
+		first = false
+		printWorkspaceConfig(cfg, ws)
+		return nil
+	})
+}
 
-	// Print global settings
-	mode := cfg.Mode
-	if mode == "" {
-		mode = "(auto-detect)"
+func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
+	cyanBold := color.New(color.FgCyan, color.Bold)
+	cyan := color.New(color.FgCyan)
+
+	_, _ = cyanBold.Fprintf(os.Stdout, "Workspace: %s\n", ws.Name)
+	_, _ = cyan.Fprintf(os.Stdout, "  Agent: %s\n", agentLabel(ws))
+	_, _ = cyan.Fprintf(os.Stdout, "  Profile: %s\n", resolvedProfileLabel(ws))
+	printStringList("  Paths", ws.Paths, "    ")
+	printStringList("  Mounts", ws.Mounts, "    ")
+	printStringList("  Snapshots", ws.Snapshots, "    ")
+	_, _ = cyan.Fprintf(os.Stdout, "  Image: %s\n", resolvedImageLabel(cfg, ws))
+	_, _ = cyan.Fprintf(os.Stdout, "  Dockerfile: %s\n", cmp.Or(ws.Dockerfile, "(none)"))
+	_, _ = cyan.Fprintf(os.Stdout, "  Build Context: %s\n", cmp.Or(ws.BuildContext, "(none)"))
+	printStringList("  Env", ws.Env, "    ")
+	_, _ = cyan.Fprintf(os.Stdout, "  Secrets:\n")
+	printResolvedSecrets(ws.Secrets, "    ")
+	_, _ = cyan.Fprintf(os.Stdout, "  Network:\n")
+	_, _ = cyan.Fprintf(os.Stdout, "    IPv6: %t\n", ws.IPv6)
+	_, _ = cyan.Fprintf(os.Stdout, "    DNS: %s\n", cmp.Or(ws.DNSUpstream, "(default)"))
+	_, _ = cyan.Fprintf(os.Stdout, "    Rules:\n")
+	printNetworkRules(ws.NetworkRules, "      ")
+	_, _ = cyan.Fprintf(os.Stdout, "  Ports:\n")
+	printPortForwards(ws.Ports, "    ")
+	_, _ = cyan.Fprintf(os.Stdout, "  Host Ports:\n")
+	printHostPortTargets(ws.HostPorts, "    ")
+	_, _ = cyan.Fprintf(os.Stdout, "  CPU: %g\n", ws.CPU)
+	_, _ = cyan.Fprintf(os.Stdout, "  Memory: %s\n", ws.Memory)
+	_, _ = cyan.Fprintf(os.Stdout, "  Docker Disk: %s\n", ws.DockerDisk)
+	_, _ = cyan.Fprintf(os.Stdout, "  Time Zone: %s\n", cmp.Or(ws.TimeZone, "(host time zone)"))
+	_, _ = cyan.Fprintf(os.Stdout, "  SSH Agent: %t\n", ws.SSHAuthSock)
+	_, _ = cyan.Fprintf(os.Stdout, "  GPG Agent: %t\n", ws.GPGAgent)
+	_, _ = cyan.Fprintf(os.Stdout, "  Git Config: %t\n", ws.GitConfig)
+	_, _ = cyan.Fprintf(os.Stdout, "  CA Bundle: %s\n", caBundleLabel(ws.CABundle))
+	_, _ = cyan.Fprintf(os.Stdout, "  Enable Docker: %t\n", ws.EnableDocker)
+	_, _ = cyan.Fprintf(os.Stdout, "  Protect Git: %t\n", ws.ProtectGit)
+	_, _ = cyan.Fprintf(os.Stdout, "  Isolated Build: %t\n", ws.IsolatedBuild)
+	_, _ = cyan.Fprintf(os.Stdout, "  Computed Paths:\n")
+	_, _ = cyan.Fprintf(os.Stdout, "    Config File: %s\n", config.ConfigPath())
+	_, _ = cyan.Fprintf(os.Stdout, "    Workspace Config Dir: %s\n", filepath.Join(config.ConfigDir(), "workspaces", ws.Name))
+	_, _ = cyan.Fprintf(os.Stdout, "    Workspace Cache Dir: %s\n", workspaceCacheDir(ws.Name))
+	_, _ = cyan.Fprintf(os.Stdout, "    VM State Dir: %s\n", vmStateDir(ws.Name))
+	_, _ = cyan.Fprintf(os.Stdout, "    Profile Dir: %s\n", computedProfileDir(ws))
+}
+
+// agentLabel names the agent of the workspace, the package or release
+// version jailoc installs and the arguments added to every start.
+func agentLabel(ws *workspace.Resolved) string {
+	label := ws.Agent.Name
+	switch {
+	case !ws.AgentInstall:
+		label += " (installed by the image)"
+	case ws.Agent.Package != "":
+		label += " (" + ws.Agent.Package + "@" + cmp.Or(ws.Agent.Version, "latest") + ")"
+	case ws.Agent.Release != nil:
+		label += " (" + ws.Agent.Release.Repo + "@" + ws.Agent.Version + ")"
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Mode: %s\n", mode)
-
-	baseDockerfile := cfg.Base.Dockerfile
-	if baseDockerfile == "" {
-		baseDockerfile = "(embedded)"
+	if len(ws.AgentArgs) > 0 {
+		label += ", args: " + strings.Join(ws.AgentArgs, " ")
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Base Dockerfile: %s\n", baseDockerfile)
+	return label
+}
 
-	defaultsImage := cfg.Defaults.Image
-	if defaultsImage == "" {
-		defaultsImage = "(not set)"
+func resolvedProfileLabel(ws *workspace.Resolved) string {
+	if name := workspaceProfile(ws); name != "" {
+		return name
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Image: %s\n", defaultsImage)
-
-	defaultsAgent := cfg.Defaults.Agent
-	if defaultsAgent == "" {
-		defaultsAgent = "(not set, default: " + agent.Default + ")"
+	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
+		return "none (ephemeral)"
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Agent: %s\n", defaultsAgent)
+	return "workspace"
+}
 
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Allowed Hosts:\n")
-	if len(cfg.Defaults.AllowedHosts) == 0 {
-		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (none)\n")
-	} else {
-		for _, host := range cfg.Defaults.AllowedHosts {
-			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", host)
-		}
+func resolvedImageLabel(cfg *config.Config, ws *workspace.Resolved) string {
+	if ws.Image != "" {
+		return ws.Image
 	}
-
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Allowed Networks:\n")
-	if len(cfg.Defaults.AllowedNetworks) == 0 {
-		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (none)\n")
-	} else {
-		for _, network := range cfg.Defaults.AllowedNetworks {
-			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", network)
-		}
+	if cfg.Defaults.Image != "" {
+		return cfg.Defaults.Image
 	}
-
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Network Rules:\n")
-	printNetworkRules(cfg.Defaults.Network.Get().Rules, "  ")
-
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Env:\n")
-	if len(cfg.Defaults.Env) == 0 {
-		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (none)\n")
-	} else {
-		for _, env := range cfg.Defaults.Env {
-			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", env)
-		}
+	if cfg.Base.Dockerfile != "" {
+		return "(base dockerfile: " + cfg.Base.Dockerfile + ")"
 	}
+	return "(embedded base)"
+}
 
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Env Files:\n")
-	if len(cfg.Defaults.EnvFile) == 0 {
-		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (none)\n")
-	} else {
-		for _, f := range cfg.Defaults.EnvFile {
-			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", f)
-		}
+func caBundleLabel(b config.CABundle) string {
+	if path, ok := b.Path(); ok {
+		return path
 	}
-
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Secrets:\n")
-	printSecrets(cfg.Defaults.Secrets, "  ")
-
-	defaultsCPU := "(not set, default: 2.0)"
-	if cfg.Defaults.CPU != nil {
-		defaultsCPU = fmt.Sprintf("%g", *cfg.Defaults.CPU)
+	if b.Automatic() {
+		return "auto"
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults CPU: %s\n", defaultsCPU)
+	return "false"
+}
 
-	defaultsMemory := "(not set, default: 4g)"
-	if cfg.Defaults.Memory != nil {
-		defaultsMemory = *cfg.Defaults.Memory
+func computedProfileDir(ws *workspace.Resolved) string {
+	if name := workspaceProfile(ws); name != "" {
+		return filepath.Join(profilesDir(), name)
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Memory: %s\n", defaultsMemory)
-
-	defaultsDockerDisk := "(not set, default: 20g)"
-	if cfg.Defaults.DockerDisk != nil {
-		defaultsDockerDisk = *cfg.Defaults.DockerDisk
+	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
+		return filepath.Join(vmStateDir(ws.Name), "guest", "ephemeral") + " (ephemeral)"
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Docker Disk: %s\n", defaultsDockerDisk)
+	return filepath.Join(vmStateDir(ws.Name), "guest", "home")
+}
 
-	defaultsTimeZone := "(not set, default: host time zone)"
-	if cfg.Defaults.TimeZone != nil {
-		defaultsTimeZone = *cfg.Defaults.TimeZone
+func vmRootDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "jailoc-vm")
 	}
-	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "Defaults Time Zone: %s\n", defaultsTimeZone)
+	return filepath.Join(home, ".cache", "jailoc-vm")
+}
 
-	_, _ = fmt.Fprintf(os.Stdout, "\n")
+func vmStateDir(name string) string { return filepath.Join(vmRootDir(), "workspaces", name) }
 
-	// Print each workspace
-	for _, name := range names {
-		ws := cfg.Workspaces[name]
-
-		_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Workspace: %s\n", name)
-
-		wsAgent := ws.Agent
-		if wsAgent == "" {
-			wsAgent = "(not set)"
-		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Agent: %s\n", wsAgent)
-
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Paths:\n")
-		if len(ws.Paths) == 0 {
-			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
-		} else {
-			for _, path := range ws.Paths {
-				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", path)
-			}
-		}
-
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Allowed Hosts:\n")
-		if len(ws.AllowedHosts) == 0 {
-			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
-		} else {
-			for _, host := range ws.AllowedHosts {
-				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", host)
-			}
-		}
-
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Allowed Networks:\n")
-		if len(ws.AllowedNetworks) == 0 {
-			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
-		} else {
-			for _, network := range ws.AllowedNetworks {
-				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", network)
-			}
-		}
-
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Network Rules:\n")
-		printNetworkRules(ws.Network.Get().Rules, "    ")
-
-		buildContext := ws.BuildContext
-		if buildContext == "" {
-			buildContext = "(none)"
-		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Build Context: %s\n", buildContext)
-
-		wsImage := ws.Image
-		if wsImage == "" {
-			wsImage = "(not set)"
-		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Image: %s\n", wsImage)
-
-		wsDockerfile := ws.Dockerfile
-		if wsDockerfile == "" {
-			wsDockerfile = "(not set)"
-		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Dockerfile: %s\n", wsDockerfile)
-
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Env:\n")
-		if len(ws.Env) == 0 {
-			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
-		} else {
-			for _, env := range ws.Env {
-				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", env)
-			}
-		}
-
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Env Files:\n")
-		if len(ws.EnvFile) == 0 {
-			_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "    (none)\n")
-		} else {
-			for _, f := range ws.EnvFile {
-				_, _ = fmt.Fprintf(os.Stdout, "    - %s\n", f)
-			}
-		}
-
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Secrets:\n")
-		printSecrets(ws.Secrets, "    ")
-
-		wsCPU := "(not set)"
-		if ws.CPU != nil {
-			wsCPU = fmt.Sprintf("%g", *ws.CPU)
-		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  CPU: %s\n", wsCPU)
-
-		wsMemory := "(not set)"
-		if ws.Memory != nil {
-			wsMemory = *ws.Memory
-		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Memory: %s\n", wsMemory)
-
-		wsDockerDisk := "(not set)"
-		if ws.DockerDisk != nil {
-			wsDockerDisk = *ws.DockerDisk
-		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Docker Disk: %s\n", wsDockerDisk)
-
-		wsTimeZone := "(not set)"
-		if ws.TimeZone != nil {
-			wsTimeZone = *ws.TimeZone
-		}
-		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Time Zone: %s\n", wsTimeZone)
-
-		_, _ = fmt.Fprintf(os.Stdout, "\n")
+// profilesDir holds the named agent profiles shared by workspaces.
+func profilesDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "jailoc-profiles")
 	}
+	return filepath.Join(home, ".local", "share", "jailoc", "profiles")
+}
 
-	_ = ctx // silence unused variable warning
-	return nil
+// workspaceProfile is the named profile of the workspace's agent, or "".
+func workspaceProfile(ws *workspace.Resolved) string {
+	if ws.AgentProfile == nil {
+		return ""
+	}
+	name, _ := ws.AgentProfile.Name()
+	return name
+}
+
+func printStringList(header string, items []string, indent string) {
+	_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "%s:\n", header)
+	if len(items) == 0 {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
+		return
+	}
+	for _, item := range items {
+		_, _ = fmt.Fprintf(os.Stdout, "%s- %s\n", indent, item)
+	}
+}
+
+func printPortForwards(ports []config.PortForward, indent string) {
+	if len(ports) == 0 {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
+		return
+	}
+	for _, p := range ports {
+		_, _ = fmt.Fprintf(os.Stdout, "%s- 127.0.0.1:%d -> %d\n", indent, p.Host, p.Guest)
+	}
+}
+
+func printHostPortTargets(ports []config.HostPortTarget, indent string) {
+	if len(ports) == 0 {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
+		return
+	}
+	for _, p := range ports {
+		target := fmt.Sprintf("127.0.0.1:%d", p.HostPort)
+		if p.Socket != "" {
+			target = p.Socket
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "%s- %d -> %s\n", indent, p.Guest, target)
+	}
 }
 
 func printDeprecationWarnings(cfg *config.Config) {
@@ -282,7 +252,10 @@ func printNetworkRules(rules []config.NetworkRule, indent string) {
 // Ordering comes from workspace.FlattenSecrets, the single definition of
 // secret order.
 func printSecrets(secrets config.Secrets, indent string) {
-	resolved := workspace.FlattenSecrets(secrets)
+	printResolvedSecrets(workspace.FlattenSecrets(secrets), indent)
+}
+
+func printResolvedSecrets(resolved []workspace.ResolvedSecret, indent string) {
 	if len(resolved) == 0 {
 		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
 		return
@@ -293,5 +266,6 @@ func printSecrets(secrets config.Secrets, indent string) {
 }
 
 func init() {
+	addAllFlag(configCmd, "show the resolved configuration of all configured workspaces")
 	rootCmd.AddCommand(configCmd)
 }
