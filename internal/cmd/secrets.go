@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -394,16 +395,30 @@ func runSecretCommand(ctx context.Context, wsName string, s workspace.ResolvedSe
 		defer timer.Stop()
 	}
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", s.FromCommand) //nolint:gosec // G204: the user's own configured command
-	cmd.WaitDelay = secretCommandWaitDelay
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(e string) bool {
 		return strings.HasPrefix(e, "JAILOC_WORKSPACE=")
 	})
 	cmd.Env = append(cmd.Env, "JAILOC_WORKSPACE="+wsName)
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
+	}
+	closeOnCancel := context.AfterFunc(ctx, func() {
+		time.Sleep(secretCommandWaitDelay)
+		_ = stdout.Close()
+	})
+	defer closeOnCancel()
+	out, readErr := io.ReadAll(stdout)
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, readErr)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("secret %q: from_command %q printed nothing", s.Name, s.FromCommand)

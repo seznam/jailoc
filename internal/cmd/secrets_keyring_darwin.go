@@ -28,6 +28,9 @@ func (darwinSecretKeyring) get(ctx context.Context, account string) ([]byte, err
 	cmd := exec.CommandContext(ctx, "/usr/bin/security", "find-generic-password", "-s", darwinKeychainService, "-a", account, "-w") //nolint:gosec // G204: fixed binary with validated arguments
 	cmd.WaitDelay = secretCommandWaitDelay
 	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		err = nil
+	}
 	if keychainItemMissing(err) {
 		return nil, errSecretNotCached
 	}
@@ -47,7 +50,7 @@ func (darwinSecretKeyring) set(ctx context.Context, account string, data []byte,
 	cmd.WaitDelay = secretCommandWaitDelay
 	cmd.Stdin = strings.NewReader("add-generic-password -U -s " + darwinKeychainService + " -a " + account + " -w " + encoded + "\n")
 	cmd.Stderr = &bytes.Buffer{}
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Run(); err != nil && (!errors.Is(err, exec.ErrWaitDelay) || ctx.Err() != nil) {
 		return fmt.Errorf("add keychain item: %w", err)
 	}
 	return nil
@@ -59,6 +62,9 @@ func (darwinSecretKeyring) delete(ctx context.Context, account string) error {
 	cmd := exec.CommandContext(ctx, "/usr/bin/security", "delete-generic-password", "-s", darwinKeychainService, "-a", account) //nolint:gosec // G204: fixed binary with validated arguments
 	cmd.WaitDelay = secretCommandWaitDelay
 	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		err = nil
+	}
 	if err != nil && !keychainItemMissing(err) {
 		return fmt.Errorf("delete keychain item: %w", err)
 	}

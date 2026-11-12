@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -48,9 +47,7 @@ var vmSuperviseCmd = &cobra.Command{
 			return fmt.Errorf("read vm spec: %w", err)
 		}
 		spec.Log = os.Stderr
-		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
-		defer stop()
-		return vm.Run(ctx, *spec)
+		return vm.Run(cmd.Context(), *spec)
 	},
 }
 

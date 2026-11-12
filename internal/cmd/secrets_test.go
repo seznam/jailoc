@@ -772,14 +772,24 @@ func TestDefaultSecretKeyringRoundTrip(t *testing.T) {
 
 func TestRunSecretCommandCancelClosesHeldStdoutPipe(t *testing.T) {
 	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	t.Cleanup(func() {
+		if data, err := os.ReadFile(pidFile); err == nil { //nolint:gosec // test path
+			var pid int
+			if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err == nil && pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	// A background child inherits stdout and outlives the shell when ctx is
-	// canceled; WaitDelay ensures runSecretCommand still returns promptly.
+	// A background child inherits stdout (while redirecting stderr so the test
+	// runner's stderr pipe is not held) and outlives the shell when ctx is
+	// canceled; runSecretCommand closes the pipe after secretCommandWaitDelay.
 	s := workspace.ResolvedSecret{
 		Name:        "HANGING",
 		Kind:        workspace.SecretKindEnv,
-		FromCommand: "sleep 30 & wait",
+		FromCommand: fmt.Sprintf("sleep 30 2>/dev/null & printf '%%d' $! > %q; wait", pidFile),
 	}
 	start := time.Now()
 	_, err := runSecretCommand(ctx, "ws", s)
@@ -788,6 +798,30 @@ func TestRunSecretCommandCancelClosesHeldStdoutPipe(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("runSecretCommand took %s after cancellation, want < 5s", elapsed)
+	}
+}
+
+func TestRunSecretCommandUncanceledWithBackgroundHelper(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "helper.pid")
+	t.Cleanup(func() {
+		if data, err := os.ReadFile(pidFile); err == nil { //nolint:gosec // test path
+			var pid int
+			if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err == nil && pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	// An uncanceled command that spawns a background helper inheriting stdout
+	// longer than secretCommandWaitDelay still succeeds once the helper exits.
+	s := workspace.ResolvedSecret{
+		Name:        "TOKEN",
+		Kind:        workspace.SecretKindEnv,
+		FromCommand: fmt.Sprintf("printf 'tok\\n'; sleep 0.4 2>/dev/null & printf '%%d' $! > %q", pidFile),
+	}
+	got, err := readSecret(context.Background(), "ws", s, false)
+	if err != nil || string(got) != "tok" {
+		t.Fatalf("readSecret = %q, %v; want tok", got, err)
 	}
 }
 
