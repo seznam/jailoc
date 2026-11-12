@@ -106,8 +106,8 @@ func TestDecideRules(t *testing.T) {
 			proto: ProtoTCP, dst: "10.20.5.10:5433", allow: false, reason: "denied-range",
 		},
 		{
-			name: "name rule does not open private ip", policy: pol, names: []string{"registry.npmjs.org"},
-			proto: ProtoTCP, dst: "10.20.5.11:443", allow: false, reason: "denied-range",
+			name: "name rule opens private ip when dns cached", policy: pol, names: []string{"registry.npmjs.org"},
+			proto: ProtoTCP, dst: "10.20.5.11:443", allow: true, reason: "rule dev-deps", rule: "dev-deps",
 		},
 		{
 			name: "udp allowed by rule", policy: pol, names: []string{"time.example.com"},
@@ -122,7 +122,7 @@ func TestDecideRules(t *testing.T) {
 			proto: ProtoTCP, dst: "1.1.1.1:443", allow: true, reason: "rule internet", rule: "internet",
 		},
 		{
-			name: "wildcard does not open private ip", policy: wildcardPol,
+			name: "wildcard does not open private ip even when dns cached", policy: wildcardPol, names: []string{"internal.example.com"},
 			proto: ProtoTCP, dst: "10.0.0.1:443", allow: false, reason: "denied-range",
 		},
 		{

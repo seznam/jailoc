@@ -25,7 +25,7 @@ The broker enforces hostname rules at DNS resolution, at connection time (using 
 
 ## Allow a private IP or CIDR range
 
-Name rules only match public IP addresses. To open a private or reserved address or subnet, add an IP or CIDR rule:
+To open a private or reserved address or subnet directly by IP (without DNS resolution), add an IP or CIDR rule:
 
 ```toml
 [[workspaces.api.network.rules]]

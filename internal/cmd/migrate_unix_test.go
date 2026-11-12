@@ -150,10 +150,11 @@ allowed_hosts = ["gitlab.example.com", "gitlab.example.com"]
 allowed_networks = ["192.168.1.0/24"]
 filtered_dns = false
 dns_upstream = "10.20.30.54"
-dns_blocked_zones = []
+dns_blocked_zones = ["old.example.com"]
 
 [workspaces.web.network]
 dns_upstream = "10.20.30.55"
+dns_blocked_zones = []
 
 [workspaces.api]
 paths = ["/src/api"]
@@ -162,6 +163,9 @@ paths = ["/src/api"]
 filtered_dns = true
 dns_upstream = "10.20.30.56"
 dns_blocked_zones = ["internal.example.com"]
+
+[workspaces.inherited]
+paths = ["/src/inherited"]
 `
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -178,13 +182,14 @@ dns_blocked_zones = ["internal.example.com"]
 		"[defaults]: move dns_upstream to [defaults.network] dns",
 		"[defaults]: move allowed_hosts to [[defaults.network.rules]]",
 		"[defaults]: move allowed_networks to [[defaults.network.rules]]",
-		"[defaults]: move dns_blocked_zones to [[defaults.network.rules]]",
+		"[defaults]: move dns_blocked_zones to inheriting workspaces",
 		"[workspaces.web]: remove filtered_dns (DNS filtering is always on)",
 		"[workspaces.web.network]: move dns_upstream to dns",
 		"[workspaces.web]: remove dns_upstream (set in [workspaces.web.network])",
 		"[workspaces.web]: move allowed_hosts to [[workspaces.web.network.rules]]",
 		"[workspaces.web]: move allowed_networks to [[workspaces.web.network.rules]]",
-		"[workspaces.web]: remove dns_blocked_zones",
+		"[workspaces.web.network]: remove dns_blocked_zones",
+		"[workspaces.web]: remove dns_blocked_zones (set in [workspaces.web.network])",
 		"[workspaces.api.network]: remove filtered_dns (DNS filtering is always on)",
 		"[workspaces.api.network]: move dns_upstream to dns",
 		"[workspaces.api.network]: move dns_blocked_zones to [[workspaces.api.network.rules]]",
@@ -200,7 +205,7 @@ dns_blocked_zones = ["internal.example.com"]
 	if warnings := config.DeprecationWarnings(cfg); len(warnings) > 0 {
 		t.Fatalf("DeprecationWarnings after migrate = %v, want none", warnings)
 	}
-	d, web, api := cfg.Defaults, cfg.Workspaces["web"], cfg.Workspaces["api"]
+	d, web, api, inherited := cfg.Defaults, cfg.Workspaces["web"], cfg.Workspaces["api"], cfg.Workspaces["inherited"]
 	if d.Network.DNS != "10.20.30.53" || d.Network.DNSUpstream != "" || d.Network.FilteredDNS != nil || d.Network.DNSBlockedZones != nil {
 		t.Fatalf("defaults network = %+v", d.Network)
 	}
@@ -208,7 +213,6 @@ dns_blocked_zones = ["internal.example.com"]
 		{Name: "internet", Allow: []string{"*"}, Proto: config.RuleProtoAny},
 		{Name: "allowed-hosts", Allow: []string{"context7.com"}, Proto: config.RuleProtoAny},
 		{Name: "allowed-networks", Allow: []string{"10.0.0.0/8"}, Proto: config.RuleProtoAny},
-		{Name: "blocked-zones", Deny: []string{"corp.example.com", "*.corp.example.com"}, Proto: config.RuleProtoAny},
 	}
 	if len(d.Network.Rules) != len(wantDefaultRules) {
 		t.Fatalf("defaults rules = %+v, want %+v", d.Network.Rules, wantDefaultRules)
@@ -227,6 +231,9 @@ dns_blocked_zones = ["internal.example.com"]
 	}
 	if api.Network.DNS != "10.20.30.56" || len(api.Network.Rules) != 1 || !slices.Equal(api.Network.Rules[0].Deny, []string{"internal.example.com", "*.internal.example.com"}) {
 		t.Fatalf("api network = %+v", api.Network)
+	}
+	if inherited.Network == nil || len(inherited.Network.Rules) != 1 || !slices.Equal(inherited.Network.Rules[0].Deny, []string{"corp.example.com", "*.corp.example.com"}) {
+		t.Fatalf("inherited network = %+v, want default blocked-zones deny rule", inherited.Network)
 	}
 	if err := config.ValidateCopy(cfg); err != nil {
 		t.Fatalf("migrated config invalid: %v", err)

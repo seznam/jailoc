@@ -544,9 +544,7 @@ func matchRule(r *Rule, names []string, proto string, dst netip.AddrPort, isPubl
 		reason = "rule " + r.Name
 	}
 	for _, name := range names {
-		// Name rules only open public addresses unless the rule also matches by CIDR;
-		// deny rules match any address whose name matches.
-		if (!allow || isPublic) && r.matchesName(proto, dst.Port(), name) {
+		if r.matchesName(proto, dst.Port(), name) {
 			return Decision{Allow: allow, Reason: reason, Name: name, Rule: r.Name, byName: true}, true
 		}
 	}

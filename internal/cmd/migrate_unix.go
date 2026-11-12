@@ -198,10 +198,31 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 
 	hadNetworkRules := hasAnyNetworkRules(cfg)
 	d := &cfg.Defaults
-	moveNetwork("[defaults]", &d.Network, &d.AllowedHosts, &d.AllowedNetworks, &d.LegacyFilteredDNS, &d.LegacyDNSUpstream, &d.LegacyDNSBlockedZones, m)
+	defaultZones, defaultZonesSrc := effectiveBlockedZones(d.Network, d.LegacyDNSBlockedZones, "[defaults]")
+	wsOverridesZones := false
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
-		moveNetwork(fmt.Sprintf("[workspaces.%s]", name), &ws.Network, &ws.AllowedHosts, &ws.AllowedNetworks, &ws.LegacyFilteredDNS, &ws.LegacyDNSUpstream, &ws.LegacyDNSBlockedZones, m)
+		if ws.Network.Get().DNSBlockedZones != nil || ws.LegacyDNSBlockedZones != nil {
+			wsOverridesZones = true
+			break
+		}
+	}
+
+	moveNetwork("[defaults]", &d.Network, &d.AllowedHosts, &d.AllowedNetworks, &d.LegacyFilteredDNS, &d.LegacyDNSUpstream, &d.LegacyDNSBlockedZones, !wsOverridesZones, nil, m)
+	if wsOverridesZones && defaultZones != nil {
+		if len(blockedZonesToDeny(defaultZones)) > 0 {
+			m.changes = append(m.changes, fmt.Sprintf("%s: move dns_blocked_zones to inheriting workspaces", defaultZonesSrc))
+		} else {
+			m.changes = append(m.changes, fmt.Sprintf("%s: remove dns_blocked_zones", defaultZonesSrc))
+		}
+	}
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		var inherited []string
+		if wsOverridesZones {
+			inherited = defaultZones
+		}
+		moveNetwork(fmt.Sprintf("[workspaces.%s]", name), &ws.Network, &ws.AllowedHosts, &ws.AllowedNetworks, &ws.LegacyFilteredDNS, &ws.LegacyDNSUpstream, &ws.LegacyDNSBlockedZones, true, inherited, m)
 		cfg.Workspaces[name] = ws
 	}
 
@@ -282,10 +303,20 @@ func hasDeprecatedWorkspaceNetwork(ws *config.Workspace) bool {
 		n.FilteredDNS != nil || n.DNSUpstream != "" || n.DNSBlockedZones != nil
 }
 
+func effectiveBlockedZones(table *config.Network, legacyZones []string, label string) ([]string, string) {
+	if table != nil && table.DNSBlockedZones != nil {
+		return table.DNSBlockedZones, strings.TrimSuffix(label, "]") + ".network]"
+	}
+	if legacyZones != nil {
+		return legacyZones, label
+	}
+	return nil, ""
+}
+
 // moveNetwork rewrites legacy and deprecated network settings of a [defaults]
 // or workspace table into its network table and [[*.network.rules]]. A value
 // already set in the new field wins.
-func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetworks *[]string, legacyFilteredDNS **bool, legacyUpstream *string, legacyZones *[]string, m *migration) {
+func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetworks *[]string, legacyFilteredDNS **bool, legacyUpstream *string, legacyZones *[]string, emitZones bool, inheritedZones []string, m *migration) {
 	netName := strings.TrimSuffix(label, "]") + ".network]"
 	rulesName := "[" + strings.TrimSuffix(label, "]") + ".network.rules]]"
 	ensureTable := func() *config.Network {
@@ -349,6 +380,9 @@ func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetw
 	}
 
 	moveZones := func(srcLabel string, zones []string) {
+		if !emitZones {
+			return
+		}
 		deny := blockedZonesToDeny(zones)
 		if len(deny) > 0 {
 			n := ensureTable()
@@ -362,15 +396,31 @@ func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetw
 			m.changes = append(m.changes, fmt.Sprintf("%s: remove dns_blocked_zones", srcLabel))
 		}
 	}
+	hasOwnZones := false
 	if *table != nil && (*table).DNSBlockedZones != nil {
+		hasOwnZones = true
 		zones := (*table).DNSBlockedZones
 		(*table).DNSBlockedZones = nil
 		moveZones(netName, zones)
-	}
-	if *legacyZones != nil {
+		if *legacyZones != nil {
+			*legacyZones = nil
+			m.changes = append(m.changes, fmt.Sprintf("%s: remove dns_blocked_zones (set in %s)", label, netName))
+		}
+	} else if *legacyZones != nil {
+		hasOwnZones = true
 		zones := *legacyZones
 		*legacyZones = nil
 		moveZones(label, zones)
+	}
+	if !hasOwnZones && len(inheritedZones) > 0 {
+		if deny := blockedZonesToDeny(inheritedZones); len(deny) > 0 {
+			n := ensureTable()
+			n.Rules = append(n.Rules, config.NetworkRule{
+				Name:  "blocked-zones",
+				Deny:  deny,
+				Proto: config.RuleProtoAny,
+			})
+		}
 	}
 	if *table != nil {
 		n := *table
