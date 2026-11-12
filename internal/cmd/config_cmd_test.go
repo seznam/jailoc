@@ -14,7 +14,11 @@ func TestConfigResolvedWorkspaceAndComputedPaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	projectDir := "/Users/josef.kolar/szn/jailoc"
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	projectDir := filepath.Dir(origWD)
 	configDir := filepath.Join(home, ".config", "jailoc")
 	if err := os.MkdirAll(configDir, 0o750); err != nil {
 		t.Fatalf("create config dir: %v", err)
@@ -49,15 +53,7 @@ protect_git = true
 	if err := os.WriteFile(configFile, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	origWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir("/Users/josef.kolar/szn/jailoc/internal"); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
 	t.Cleanup(func() {
-		_ = os.Chdir(origWD)
 		allFlag, workspaceFlag, workspaceExplicit = false, "default", false
 	})
 	allFlag = false
