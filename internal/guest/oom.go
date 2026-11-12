@@ -1,19 +1,26 @@
 package guest
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // oom_score_adj values the guest gives processes. The kernel's OOM killer
 // adds adj/1000 of the guest memory to a process's usage when it picks a
 // victim, so the agent is chosen only when it uses half of the memory more
 // than the next candidate, and the processes it starts are chosen first.
 const (
-	// oomAdjGuest exempts jailoc-guest session processes: holders and
-	// attached clients, so a session can be reattached after an OOM kill.
+	// oomAdjGuest exempts jailoc-guest init and session processes: holders
+	// and attached clients, so a session can be reattached after an OOM kill.
+	// libkrun's init.krun, which runs jailoc-guest init as its child, powers
+	// the VM off when init dies.
 	oomAdjGuest = -1000
 	// oomAdjAgent is the session program, the coding agent.
 	oomAdjAgent = -500
-	// oomAdjChild resets processes the agent starts, which inherit the
-	// agent's value on fork.
+	// oomAdjChild resets processes init and the agent start, which inherit
+	// their parent's value on fork.
 	oomAdjChild = 0
 )
 
@@ -111,10 +118,14 @@ func classify(p, parent procInfo) oomRole {
 }
 
 // rescanPlan recomputes the agents and the oom_score_adj writes from a
-// snapshot of all processes, for when the guard missed events. Descendants
-// of agents that still hold the agent's value are reset.
-func rescanPlan(procs map[int]procInfo) (agents map[int]bool, writes map[int]int) {
+// snapshot of all processes, for when the guard missed events. init is the
+// PID of jailoc-guest init. Processes that still hold a value inherited
+// from an agent or init are reset (see inheritedAdj).
+func rescanPlan(procs map[int]procInfo, init int) (agents map[int]bool, writes map[int]int) {
 	agents, writes = map[int]bool{}, map[int]int{}
+	if procs[init].adj != oomAdjGuest {
+		writes[init] = oomAdjGuest
+	}
 	for pid, p := range procs {
 		switch classify(p, procs[p.ppid]) {
 		case roleGuest:
@@ -129,17 +140,65 @@ func rescanPlan(procs map[int]procInfo) (agents map[int]bool, writes map[int]int
 		}
 	}
 	for pid, p := range procs {
-		if agents[pid] || p.adj != oomAdjAgent {
+		if agents[pid] || pid == init || (p.adj != oomAdjAgent && p.adj != oomAdjGuest) {
 			continue
 		}
-		// The depth limit guards against a ppid cycle in an inconsistent
-		// snapshot.
-		for anc, depth := p.ppid, 0; anc > 1 && depth < 64; anc, depth = procs[anc].ppid, depth+1 {
-			if agents[anc] {
-				writes[pid] = oomAdjChild
-				break
-			}
+		if p.adj == oomAdjGuest && isGuestSession(p) {
+			continue
+		}
+		if inheritedAdj(procs, agents, init, p) {
+			writes[pid] = oomAdjChild
 		}
 	}
 	return agents, writes
+}
+
+// inheritedAdj reports whether p holds an agent's or init's value it
+// inherited on fork. The nearest agent, session process or init among its
+// ancestors decides; reaching PID 1 without one means p outlived the
+// process it inherited the value from and was reparented. The depth limit
+// guards against a ppid cycle in an inconsistent snapshot.
+func inheritedAdj(procs map[int]procInfo, agents map[int]bool, init int, p procInfo) bool {
+	for anc, depth := p.ppid, 0; anc > 0 && depth < 64; anc, depth = procs[anc].ppid, depth+1 {
+		switch {
+		case agents[anc]:
+			return p.adj == oomAdjAgent
+		case anc == init:
+			return p.adj == oomAdjGuest
+		case isGuestSession(procs[anc]):
+			return false
+		case anc == 1:
+			return true
+		}
+	}
+	return false
+}
+
+// oomKill is a kernel OOM kill report.
+type oomKill struct {
+	pid        int
+	comm       string
+	anonRSSKiB int
+	adj        int
+}
+
+var oomKillRe = regexp.MustCompile(`Killed process (\d+) \((.*)\) total-vm:.*anon-rss:(\d+)kB.*oom_score_adj:(-?\d+)`)
+
+// parseOOMKill returns the OOM kill reported by a /dev/kmsg record:
+// "prio,seq,usec,flags;message", optionally followed by continuation lines.
+func parseOOMKill(record string) (oomKill, bool) {
+	_, msg, ok := strings.Cut(record, ";")
+	if !ok {
+		return oomKill{}, false
+	}
+	msg, _, _ = strings.Cut(msg, "\n")
+	m := oomKillRe.FindStringSubmatch(msg)
+	if m == nil {
+		return oomKill{}, false
+	}
+	// The pattern only matches digits.
+	pid, _ := strconv.Atoi(m[1])
+	rss, _ := strconv.Atoi(m[3])
+	adj, _ := strconv.Atoi(m[4])
+	return oomKill{pid: pid, comm: m[2], anonRSSKiB: rss, adj: adj}, true
 }

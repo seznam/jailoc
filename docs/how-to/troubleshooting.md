@@ -17,7 +17,7 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 | File | Content |
 |------|---------|
 | `supervisor.log` | VM supervisor output: broker and VM start, readiness with the time each took, shutdown reason |
-| `microvm/console.log` | Guest console: boot and SSH connections |
+| `microvm/console.log` | Guest console: boot, SSH connections and processes the kernel killed when the VM ran out of memory |
 | `broker.jsonl`, `broker.jsonl.1` | Network broker decisions, one JSON object per line, rotated at 16 MiB; read them with `jailoc traffic` |
 | `guest/control/exec.jsonl` | Processes started in the guest and their exits; read it with `jailoc strace` |
 | `guest/` | The internal share the guest can write: control files and persistent home directories (`guest/home`) |
@@ -108,6 +108,21 @@ Common causes:
 - a stale VM left over from a crash.
 
 Clear a stale VM with `jailoc down <workspace>` and start again.
+
+## Processes die or the VM stops when memory runs out
+
+**Symptom:** builds, tests or a language server die without an error of their own, or `jailoc logs` reports `vm stopped: workspace vm stopped: nic-disconnected` while the VM was busy.
+
+**Debugging:** the guest copies each kernel OOM kill to the console log:
+
+```bash
+jailoc logs <workspace> | grep 'out of memory'
+jailoc strace -n 200 | grep SIGKILL   # processes that ended with SIGKILL
+```
+
+A line such as `msg="out of memory: kernel killed a process" pid=271 process=gopls anon_rss_mib=1536 oom_score_adj=0` names the victim and its memory use. See [Memory pressure](../explanation/architecture.md#memory-pressure) for the order in which the kernel picks victims.
+
+**Fix:** give the workspace more memory with `memory` in its config (see [Configuration reference](../reference/configuration.md)), or run fewer memory-hungry jobs at once, for example `go test -p 1` or a lower `GOMAXPROCS`.
 
 ## A mount fails at start
 
