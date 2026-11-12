@@ -138,13 +138,53 @@ func caBundleLabel(b config.CABundle) string {
 }
 
 func computedProfileDir(ws *workspace.Resolved) string {
-	if name := workspaceProfile(ws); name != "" {
-		return filepath.Join(profilesDir(), name)
+	overrides := map[string]string{}
+	for _, p := range ws.Paths {
+		overrides[filepath.Clean(p)] = filepath.Clean(p)
 	}
-	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
-		return filepath.Join(vmStateDir(ws.Name), "guest", "ephemeral") + " (ephemeral)"
+	for _, spec := range ws.Mounts {
+		m, err := config.ParseMount(spec)
+		if err != nil || m.Host == "" {
+			continue
+		}
+		host := m.Host
+		if expanded, err := config.ExpandPath(host); err == nil {
+			host = expanded
+		}
+		overrides[filepath.Clean(m.Container)] = filepath.Clean(host)
 	}
-	return filepath.Join(vmStateDir(ws.Name), "guest", "home")
+	name := workspaceProfile(ws)
+	ephemeral := ws.AgentProfile != nil && ws.AgentProfile.Ephemeral()
+	fallback := filepath.Join(vmStateDir(ws.Name), "guest", "home")
+	if name != "" {
+		fallback = filepath.Join(profilesDir(), name)
+	} else if ephemeral {
+		fallback = filepath.Join(vmStateDir(ws.Name), "guest", "ephemeral") + " (ephemeral)"
+	}
+	if len(ws.Agent.State) == 0 {
+		return fallback
+	}
+	sources := make([]string, 0, len(ws.Agent.State))
+	anyOverridden := false
+	for _, d := range ws.Agent.State {
+		if host, ok := overrides[filepath.Clean(d.Path)]; ok {
+			anyOverridden = true
+			sources = append(sources, host)
+			continue
+		}
+		switch {
+		case name != "":
+			sources = append(sources, filepath.Join(profilesDir(), name, d.Name))
+		case ephemeral:
+			sources = append(sources, filepath.Join(vmStateDir(ws.Name), "guest", "ephemeral", d.Name)+" (ephemeral)")
+		default:
+			sources = append(sources, filepath.Join(vmStateDir(ws.Name), "guest", "home", d.Name))
+		}
+	}
+	if !anyOverridden {
+		return fallback
+	}
+	return strings.Join(sources, ", ")
 }
 
 func vmRootDir() string {

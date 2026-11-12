@@ -110,6 +110,20 @@ paths = []
 agent = "claude"
 [workspaces.ws-ephemeral.agents.claude]
 profile = false
+
+[workspaces.ws-claude-mounted]
+paths = []
+agent = "claude"
+mounts = ["/srv/claude:/home/agent/.claude"]
+[workspaces.ws-claude-mounted.agents.claude]
+profile = false
+
+[workspaces.ws-opencode-partial]
+paths = []
+agent = "opencode1"
+mounts = ["~/custom-data:/home/agent/.local/share/opencode"]
+[workspaces.ws-opencode-partial.agents.opencode1]
+profile = "work"
 `
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -138,4 +152,29 @@ profile = false
 	})
 	assertContains(t, outEphemeral, "  Profile: none (ephemeral)\n")
 	assertContains(t, outEphemeral, "    Profile Dir: "+filepath.Join(home, ".cache", "jailoc-vm", "workspaces", "ws-ephemeral", "guest", "ephemeral")+" (ephemeral)\n")
+
+	outMounted := captureStdout(t, func() {
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		if err := runConfig(cmd, []string{"ws-claude-mounted"}); err != nil {
+			t.Fatalf("runConfig(ws-claude-mounted) = %v", err)
+		}
+	})
+	assertContains(t, outMounted, "    Profile Dir: /srv/claude\n")
+	if strings.Contains(outMounted, "Profile Dir: /srv/claude (ephemeral)") {
+		t.Fatalf("mounted state must not be labeled ephemeral:\n%s", outMounted)
+	}
+
+	outPartial := captureStdout(t, func() {
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		if err := runConfig(cmd, []string{"ws-opencode-partial"}); err != nil {
+			t.Fatalf("runConfig(ws-opencode-partial) = %v", err)
+		}
+	})
+	wantPartial := filepath.Join(home, "custom-data") + ", " + filepath.Join(home, ".local", "share", "jailoc", "profiles", "work", "opencode-state")
+	assertContains(t, outPartial, "    Profile Dir: "+wantPartial+"\n")
+	if _, err := os.Stat(filepath.Join(home, "custom-data")); !os.IsNotExist(err) {
+		t.Fatalf("config inspection must not create mount directories on disk: err=%v", err)
+	}
 }
