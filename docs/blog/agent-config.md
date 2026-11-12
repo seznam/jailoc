@@ -22,11 +22,12 @@ With `import_agent_config = true`, jailoc copies these host paths to the same pa
 
 | `agent` | Copied from the host |
 |---|---|
-| `opencode`, `opencode1`, `opencode2` | `~/.config/opencode`, without `node_modules` |
+| `opencode`, `opencode2` | `~/.config/opencode`, without `node_modules` |
+| `opencode1` | `~/.config/opencode`, without `node_modules`; `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
 | `claude` | `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, `~/.claude/agents`, `~/.claude/commands`, `~/.claude/skills`, `~/.claude/output-styles` |
 | `copilot` | `~/.copilot/copilot-instructions.md`, `~/.copilot/agents`, `~/.copilot/skills`, `~/.copilot/mcp-config.json` |
 | `agy` | `~/.gemini/GEMINI.md` |
-| `omo` | none |
+| `omo` | `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
 
 The OpenCode copy gets the `.gitignore` OpenCode would write itself, unless the host directory already has one. For Copilot, jailoc deliberately skips `config.json` and `settings.json`. That's where Copilot keeps logins and preferences, and where jailoc writes its status line, so they stay in the workspace.
 
@@ -35,7 +36,7 @@ Two mounts changed alongside:
 - `~/.agents` is still mounted read-only at `/home/agent/.agents` for every agent.
 - `~/.opencode` is no longer mounted at all.
 
-OpenCode 1's `~/.omo` needed its own answer. The OmO (`oh-my-openagent`) plugin writes locks, config and state there, so a read-only copy would break it. It's now a per-workspace persistent state directory (`opencode1-omo`) instead of a read-write host mount. If you really want the old shared host directory back, mount it explicitly:
+OpenCode 1's `~/.omo` needed its own answer. The OmO (`oh-my-openagent`) plugin writes locks, journals and state there, so mounting the whole directory read-only would break it, while leaving it out entirely would drop your `~/.omo/omo.jsonc`. `~/.omo` is now a per-workspace persistent state directory (`opencode1-omo`), and `import_agent_config` snapshots `~/.omo/omo.jsonc` and `~/.omo/omo.json` read-only on top of it (just as it does for the `omo` harness). If you want the old shared read-write host directory back, mount it explicitly:
 
 ```toml
 [defaults.agents.opencode1]

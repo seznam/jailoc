@@ -396,15 +396,16 @@ When `true`, jailoc adds read-only snapshots of the selected agent's host config
 
 | Agent | Host, copied to the same path under `/home/agent` |
 |---|---|
-| `opencode`, `opencode1`, `opencode2` | `~/.config/opencode`, without `node_modules` |
+| `opencode`, `opencode2` | `~/.config/opencode`, without `node_modules` |
+| `opencode1` | `~/.config/opencode`, without `node_modules`; `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
 | `claude` | `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, `~/.claude/agents`, `~/.claude/commands`, `~/.claude/skills`, `~/.claude/output-styles` |
 | `copilot` | `~/.copilot/copilot-instructions.md`, `~/.copilot/agents`, `~/.copilot/skills`, `~/.copilot/mcp-config.json` |
 | `agy` | `~/.gemini/GEMINI.md` |
-| `omo` | none |
+| `omo` | `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
 
 Missing sources are skipped. Logins, sessions and the agents' own `config.json` and `settings.json` of `copilot` stay in the persistent state directory. The OpenCode copy gets the `.gitignore` OpenCode would write (unless the host directory has one), and OpenCode doesn't install the dependencies of local plugins in the read-only directory: plugins listed in `plugin` still install into `~/.cache`, but a local plugin that imports a package needs it installed in the image.
 
-The copies inside a persistent state directory (`~/.claude`, `~/.copilot`, `~/.gemini`) hide what is there in the VM: a skill the agent installs into `~/.claude/skills` is not visible while that directory is copied. When the snapshot is dropped, the empty mount points it left in the state directory are removed at the next start.
+The copies inside a persistent state directory (`~/.claude`, `~/.copilot`, `~/.omo`, `~/.gemini`) hide what is there in the VM: a skill the agent installs into `~/.claude/skills` is not visible while that directory is copied. When the snapshot is dropped, the empty mount points it left in the state directory are removed at the next start.
 
 Each copy is a default snapshot like the [Git configuration](#git_config): a [`snapshots`](#snapshots) entry with the same destination replaces it, an entry with an empty host removes it (`snapshots = [":/home/agent/.claude/settings.json"]`), and a directory snapshot that contains its destination replaces it. A copy whose destination equals, contains or lies inside a shared path, such as a mount of `~/.claude` or a [named profile](#agent-profiles) state directory, is skipped.
 

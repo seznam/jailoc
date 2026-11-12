@@ -99,7 +99,7 @@ An entry with an empty host, such as `":/home/agent/.agents"`, removes a built-i
 
 ## Use your host agent configuration
 
-jailoc copies the agent's configuration from the host into the VM read-only when the VM starts and on `jailoc reload`: `~/.config/opencode` for OpenCode, `CLAUDE.md`, `settings.json`, agents, commands, skills and output styles from `~/.claude` for Claude Code, instructions, agents, skills and MCP servers from `~/.copilot` for GitHub Copilot CLI, and `~/.gemini/GEMINI.md` for Antigravity CLI. An agent in the VM can't change what runs on the host or in other workspaces. Change the configuration on the host, then run `jailoc reload <name>`.
+jailoc copies the agent's configuration from the host into the VM read-only when the VM starts and on `jailoc reload`: `~/.config/opencode` for OpenCode (plus `omo.jsonc` and `omo.json` from `~/.omo` for OpenCode 1), `CLAUDE.md`, `settings.json`, agents, commands, skills and output styles from `~/.claude` for Claude Code, instructions, agents, skills and MCP servers from `~/.copilot` for GitHub Copilot CLI, `omo.jsonc` and `omo.json` from `~/.omo` for OmO, and `~/.gemini/GEMINI.md` for Antigravity CLI. An agent in the VM can't change what runs on the host or in other workspaces. Change the configuration on the host, then run `jailoc reload <name>`.
 
 OpenCode doesn't install plugins into the read-only copy, and `node_modules` isn't copied. Plugins listed in `plugin` install into `~/.cache`; install the packages a local plugin imports in the image.
 

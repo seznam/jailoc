@@ -182,9 +182,18 @@ type Harness struct {
 // sharedMounts are default mounts of every harness.
 var sharedMounts = []string{"~/.agents:/home/agent/.agents:ro"}
 
+// omoConfig are the user configuration files OmO and the OmO OpenCode 1 plugin
+// read from ~/.omo.
+var omoConfig = []ConfigFile{
+	{Path: ".omo/omo.jsonc"},
+	{Path: ".omo/omo.json"},
+}
+
 // openCodeConfig is the configuration OpenCode 1 and 2 share. node_modules
 // holds packages OpenCode installed for the host's platform.
 var openCodeConfig = []ConfigFile{{Path: ".config/opencode", Exclude: []string{"node_modules"}}}
+
+var openCode1Config = append(slices.Clone(openCodeConfig), omoConfig...)
 
 const (
 	openCodeConfigDir = "/home/agent/.config/opencode"
@@ -228,7 +237,7 @@ var harnesses = []Harness{
 			// state to ~/.omo.
 			{Name: "opencode1-omo", Path: "/home/agent/.omo"},
 		},
-		ConfigFiles:     openCodeConfig,
+		ConfigFiles:     openCode1Config,
 		TUIPlugin:       OpenCode1TUI,
 		ConfigDir:       openCodeConfigDir,
 		ConfigGitignore: openCodeConfigGitignore,
@@ -317,10 +326,11 @@ var harnesses = []Harness{
 		Resume:     "--session",
 		Unattended: []string{"--permission-preset", "full-access"},
 		// The image runs Node.js; OMO_RUNTIME=node silences the Bun notice.
-		Env:       []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
-		State:     []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
-		TUIPlugin: OmOExtension,
-		Endpoints: llmEndpoints,
+		Env:         []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
+		State:       []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
+		ConfigFiles: omoConfig,
+		TUIPlugin:   OmOExtension,
+		Endpoints:   llmEndpoints,
 	},
 	{
 		Name:    "agy",
