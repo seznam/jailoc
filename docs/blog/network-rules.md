@@ -52,7 +52,26 @@ Targets in `allow` and `deny` can be:
 | IP or CIDR | `"10.20.5.10"`, `"10.20.0.0/16"`, `"fd12:3456::/48"` | Direct IP connections and resolved hosts in that range |
 | Public wildcard | `"*"` | Any **public** IPv4/IPv6 address (never private, CGNAT, or ULA ranges) |
 
-On top of your rules, jailoc automatically appends an implicit `agent` rule on TCP port 443 for the workspace's coding agent (`api.anthropic.com` for Claude Code, `api.githubcopilot.com` for Copilot, `opencode.ai` for OpenCode, etc.), so the agent can always talk to its model provider.
+## Implicit rules and built-in broker behavior
+
+On top of the rules you write in `config.toml`, jailoc applies a small set of implicit rules so the VM and its coding agent work out of the box without weakening inspection:
+
+1. **`rule=agent` (TCP port `443`)**: appended automatically for the workspace's coding agent (or the `from` harness of a custom agent) so it can authenticate and call its model APIs even with an empty `network.rules` list. A `deny` rule still overrides `rule=agent` if you want to block a specific provider:
+
+| `agent` | Implicit `rule=agent` hostnames (`tcp/443`) |
+|---|---|
+| `opencode`, `opencode1`, `opencode2`, `omo` | `api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `oauth2.googleapis.com`, `api.githubcopilot.com`, `*.githubcopilot.com`, `openrouter.ai`, `opencode.ai`, `*.opencode.ai`, `models.dev` |
+| `claude` | `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `platform.claude.com` |
+| `copilot` | `api.github.com`, `github.com`, `api.githubcopilot.com`, `*.githubcopilot.com`, `copilot-proxy.githubusercontent.com` |
+| `agy` | `generativelanguage.googleapis.com`, `cloudcode-pa.googleapis.com`, `oauth2.googleapis.com`, `accounts.google.com` |
+
+2. **Gateway services (`192.168.127.1`)**: the broker itself serves DHCP, DNS (TCP/UDP `53`), SNTP clock synchronization (UDP `123`), SSH/GPG agent relays (`ssh_auth_sock`, `gpg_agent`), and any configured `host_ports` on the gateway. All other traffic to the gateway, guest subnet (`192.168.127.0/24`, `fd00:127::/64`), host interface IPs, and hard-denied ranges (loopback, link-local, multicast, cloud metadata `169.254.169.254` / `fd00:ec2::254`) is unconditionally denied.
+3. **DNS and SNI bypass prevention**:
+    - Direct DNS (port `53`) to any IP other than the gateway is denied (`reason=dns-filtered`).
+    - DNS `HTTPS` and `SVCB` records are answered with `NODATA` so Encrypted ClientHello (ECH) cannot hide the TLS SNI from the broker.
+    - A wildcard rule (`allow = ["*"]`) without explicit `ports` automatically excludes TCP port `853` (DNS over TLS) and UDP port `443` (QUIC/HTTP/3), forcing HTTP clients to fall back to TCP port `443` where TLS SNI is inspected.
+4. **`dev-deps` in newly created configs**: when jailoc creates `~/.config/jailoc/config.toml` for the first time, it writes an explicit `[[defaults.network.rules]]` block named `dev-deps` into the file (covering GitHub, GitLab.com, npm, Yarn, Node.js, Bun, PyPI, Astral, Go proxy, crates.io, Rustup, Docker Hub/GHCR/Quay/GCR/MCR, Ubuntu/Debian/Alpine mirrors, and Nix caches). Because it lives right in `config.toml`, you can edit or delete it like any other rule.
+5. **`rule=legacy`**: if your config still has deprecated `allowed_hosts`, `allowed_networks`, or `dns_blocked_zones`, jailoc translates them in memory into `rule=legacy` entries until you run `jailoc migrate`.
 
 ## How the broker enforces hostname rules
 
