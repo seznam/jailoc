@@ -293,7 +293,12 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		if err != nil {
 			t.Skipf("cannot get home dir: %v", err)
 		}
-		link := filepath.Join(t.TempDir(), "home-link")
+		tmpDir, err := os.MkdirTemp(cwd, ".test-symlink-*")
+		if err != nil {
+			t.Fatalf("mkdir temp in cwd: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+		link := filepath.Join(tmpDir, "home-link")
 		if err := os.Symlink(home, link); err != nil {
 			t.Fatalf("create symlink: %v", err)
 		}
