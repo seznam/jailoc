@@ -100,7 +100,8 @@ func (g *oomGuard) handle(ev procEvent) {
 		}
 	case procEventFork:
 		switch {
-		case ev.childTGID == ev.tgid: // a new thread
+		case ev.childPID != ev.childTGID:
+			// A new thread, reported with its process's parent as tgid.
 		case g.agents[ev.tgid], ev.tgid == g.init:
 			g.set(ev.childTGID, oomAdjChild)
 		default:
