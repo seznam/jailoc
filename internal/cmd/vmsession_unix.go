@@ -389,7 +389,9 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 	})
 	var clipboard *osc52Bridge
 	if interactive {
-		clipboard = newOSC52Bridge(queueHostClipboard, os.Getenv("TMUX") != "")
+		clipQueue := newHostClipboardQueue(copyToHostClipboard)
+		defer clipQueue.close()
+		clipboard = newOSC52Bridge(clipQueue.enqueue, os.Getenv("TMUX") != "")
 	}
 	defer status.stop()
 	for {

@@ -184,3 +184,28 @@ func TestOSC52BridgeCopiesDecodedBytes(t *testing.T) {
 		t.Fatalf("copied = %v, want %v", got, want)
 	}
 }
+
+func TestHostClipboardQueueDrainsOnClose(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var copied []string
+	q := newHostClipboardQueue(func(data []byte) {
+		if len(copied) == 0 {
+			close(started)
+			<-release
+		}
+		copied = append(copied, string(data))
+	})
+	q.enqueue([]byte("first"))
+	<-started
+	q.enqueue([]byte("stale"))
+	q.enqueue([]byte("latest"))
+	close(release)
+	q.close()
+
+	if got, want := strings.Join(copied, "|"), "first|latest"; got != want {
+		t.Fatalf("copied = %q, want %q", got, want)
+	}
+}

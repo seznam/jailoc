@@ -3,6 +3,7 @@ package vm
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -102,7 +103,7 @@ func ImportImage(
 	if err != nil {
 		return err
 	}
-	img, err = imageWithProgress(img, cache.LayerCache(), progress)
+	img, err = imageWithProgress(img, cacheDir, cache.LayerCache(), progress)
 	if err != nil {
 		return err
 	}
@@ -152,16 +153,14 @@ func (r *progressReader) report(bytes int64) {
 
 type progressImage struct {
 	v1.Image
-	lc       *image.LayerCache
-	diffIDs  []v1.Hash
+	uncached map[v1.Hash]bool
 	mu       sync.Mutex
-	adjusted bool
 	done     int
 	total    int
 	progress func(ImportProgress)
 }
 
-func imageWithProgress(img v1.Image, lc *image.LayerCache, progress func(ImportProgress)) (v1.Image, error) {
+func imageWithProgress(img v1.Image, cacheDir string, lc *image.LayerCache, progress func(ImportProgress)) (v1.Image, error) {
 	layers, err := img.Layers()
 	if err != nil {
 		return nil, fmt.Errorf("read image layers: %w", err)
@@ -173,16 +172,16 @@ func imageWithProgress(img v1.Image, lc *image.LayerCache, progress func(ImportP
 	if len(layers) != len(cfg.RootFS.DiffIDs) {
 		return nil, fmt.Errorf("image has %d layers but %d DiffIDs", len(layers), len(cfg.RootFS.DiffIDs))
 	}
-	uncached := make(map[v1.Hash]bool, len(layers))
-	for _, diffID := range cfg.RootFS.DiffIDs {
+	start := composeBaseStart(cacheDir, cfg.RootFS.DiffIDs)
+	uncached := make(map[v1.Hash]bool, len(layers)-start)
+	for _, diffID := range cfg.RootFS.DiffIDs[start:] {
 		if !lc.Has(diffID) {
 			uncached[diffID] = true
 		}
 	}
 	p := &progressImage{
 		Image:    img,
-		lc:       lc,
-		diffIDs:  cfg.RootFS.DiffIDs,
+		uncached: uncached,
 		total:    len(uncached),
 		progress: progress,
 	}
@@ -190,13 +189,86 @@ func imageWithProgress(img v1.Image, lc *image.LayerCache, progress func(ImportP
 	return p, nil
 }
 
+// composeBaseStart returns the number of leading layers that go-microvm's
+// cache composition can clone from an existing snapshot or cached rootfs on
+// darwin hosts.
+func composeBaseStart(cacheDir string, diffIDs []v1.Hash) int {
+	if runtime.GOOS != "darwin" || cacheDir == "" || len(diffIDs) == 0 {
+		return 0
+	}
+	chain := chainIDs(diffIDs)
+	best := 0
+	for i := len(chain) - 1; i >= 0; i-- {
+		dir := filepath.Join(cacheDir, "snapshots", strings.Replace(chain[i], ":", "-", 1))
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			best = i + 1
+			break
+		}
+	}
+	chainsDir := filepath.Join(cacheDir, "chains")
+	entries, err := os.ReadDir(chainsDir)
+	if err != nil {
+		return best
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, "sha256-") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(chainsDir, name)) //nolint:gosec // G304: file inside jailoc's image cache
+		if err != nil {
+			continue
+		}
+		var recorded []v1.Hash
+		sc := bufio.NewScanner(bytes.NewReader(data))
+		for sc.Scan() {
+			h, err := v1.NewHash(strings.TrimSpace(sc.Text()))
+			if err != nil {
+				recorded = nil
+				break
+			}
+			recorded = append(recorded, h)
+		}
+		ids := chainIDs(recorded)
+		k := len(ids)
+		if k <= best || k > len(chain) || ids[k-1] != chain[k-1] {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(cacheDir, name)); err == nil && info.IsDir() {
+			best = k
+		}
+	}
+	return best
+}
+
+func chainIDs(diffIDs []v1.Hash) []string {
+	ids := make([]string, len(diffIDs))
+	prev := ""
+	for i, d := range diffIDs {
+		if i == 0 {
+			prev = d.String()
+		} else {
+			sum := sha256.Sum256([]byte(prev + " " + d.String()))
+			prev = "sha256:" + hex.EncodeToString(sum[:])
+		}
+		ids[i] = prev
+	}
+	return ids
+}
+
 func (p *progressImage) Layers() ([]v1.Layer, error) {
 	layers, err := p.Image.Layers()
 	if err != nil {
 		return nil, err
 	}
+	cfg, err := p.ConfigFile()
+	if err != nil {
+		return nil, err
+	}
 	for i, layer := range layers {
-		layers[i] = &progressLayer{Layer: layer, index: i, image: p}
+		if p.uncached[cfg.RootFS.DiffIDs[i]] {
+			layers[i] = &progressLayer{Layer: layer, image: p}
+		}
 	}
 	return layers, nil
 }
@@ -204,27 +276,6 @@ func (p *progressImage) Layers() ([]v1.Layer, error) {
 func (p *progressImage) reportInitial() {
 	if p.progress != nil {
 		p.progress(ImportProgress{Phase: PhaseExtract, Layers: 0, Total: p.total})
-	}
-}
-
-func (p *progressImage) adjustStart(index int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.adjusted {
-		return
-	}
-	p.adjusted = true
-	uncached := make(map[v1.Hash]bool, len(p.diffIDs)-index)
-	for _, diffID := range p.diffIDs[index:] {
-		if !p.lc.Has(diffID) {
-			uncached[diffID] = true
-		}
-	}
-	if len(uncached) < p.total {
-		p.total = len(uncached)
-		if p.progress != nil {
-			p.progress(ImportProgress{Phase: PhaseExtract, Layers: p.done, Total: p.total})
-		}
 	}
 }
 
@@ -242,13 +293,11 @@ func (p *progressImage) layerDone() {
 
 type progressLayer struct {
 	v1.Layer
-	index int
 	image *progressImage
 	once  sync.Once
 }
 
 func (l *progressLayer) Uncompressed() (io.ReadCloser, error) {
-	l.image.adjustStart(l.index)
 	r, err := l.Layer.Uncompressed()
 	if err != nil {
 		return nil, err

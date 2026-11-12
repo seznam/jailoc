@@ -203,6 +203,51 @@ func TestImportImageReportsNoUncachedLayers(t *testing.T) {
 		t.Errorf("extract progress = %+v, want one 0/0 event", extracts)
 	}
 }
+func TestImageWithProgressOutOfOrderWorkers(t *testing.T) {
+	t.Parallel()
+	base, err := random.Image(512, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	var events []ImportProgress
+	wrapped, err := imageWithProgress(base, cacheDir, image.NewCache(cacheDir).LayerCache(), func(p ImportProgress) {
+		events = append(events, p)
+	})
+	if err != nil {
+		t.Fatalf("imageWithProgress: %v", err)
+	}
+	layers, err := wrapped.Layers()
+	if err != nil {
+		t.Fatalf("Layers: %v", err)
+	}
+	// Start and close the higher-index worker (layer 1) before layer 0.
+	for _, idx := range []int{1, 0} {
+		rc, err := layers[idx].Uncompressed()
+		if err != nil {
+			t.Fatalf("layer %d Uncompressed: %v", idx, err)
+		}
+		if _, err := io.Copy(io.Discard, rc); err != nil {
+			t.Fatalf("layer %d read: %v", idx, err)
+		}
+		if err := rc.Close(); err != nil {
+			t.Fatalf("layer %d Close: %v", idx, err)
+		}
+	}
+	want := []ImportProgress{
+		{Phase: PhaseExtract, Layers: 0, Total: 2},
+		{Phase: PhaseExtract, Layers: 1, Total: 2},
+		{Phase: PhaseExtract, Layers: 2, Total: 2},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("events = %+v, want %+v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Errorf("events[%d] = %+v, want %+v", i, events[i], want[i])
+		}
+	}
+}
 
 func TestImportImageRejectsLegacyTarball(t *testing.T) {
 	t.Parallel()

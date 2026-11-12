@@ -15,11 +15,6 @@ import (
 
 const maxOSC52Len = 2 << 20
 
-var (
-	hostClipboardOnce  sync.Once
-	hostClipboardQueue chan []byte
-)
-
 type osc52State uint8
 
 const (
@@ -197,29 +192,70 @@ func tmuxPassthrough(sequence []byte) []byte {
 	return append(output, '\x1b', '\\')
 }
 
-func queueHostClipboard(data []byte) {
-	hostClipboardOnce.Do(func() {
-		hostClipboardQueue = make(chan []byte, 1)
+type hostClipboardQueue struct {
+	mu      sync.Mutex
+	closed  bool
+	ch      chan []byte
+	done    chan struct{}
+	started bool
+	copyFn  func([]byte)
+}
+
+func newHostClipboardQueue(copyFn func([]byte)) *hostClipboardQueue {
+	return &hostClipboardQueue{
+		ch:     make(chan []byte, 1),
+		done:   make(chan struct{}),
+		copyFn: copyFn,
+	}
+}
+
+func (q *hostClipboardQueue) enqueue(data []byte) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	if !q.started {
+		q.started = true
 		go func() {
-			for value := range hostClipboardQueue {
-				copyToHostClipboard(value)
+			defer close(q.done)
+			for value := range q.ch {
+				q.copyFn(value)
 			}
 		}()
-	})
-
+	}
 	value := append([]byte(nil), data...)
 	select {
-	case hostClipboardQueue <- value:
+	case q.ch <- value:
 		return
 	default:
 	}
 	select {
-	case <-hostClipboardQueue:
+	case <-q.ch:
 	default:
 	}
 	select {
-	case hostClipboardQueue <- value:
+	case q.ch <- value:
 	default:
+	}
+}
+
+func (q *hostClipboardQueue) close() {
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return
+	}
+	q.closed = true
+	started := q.started
+	close(q.ch)
+	q.mu.Unlock()
+	if !started {
+		return
+	}
+	select {
+	case <-q.done:
+	case <-time.After(2 * time.Second):
 	}
 }
 
