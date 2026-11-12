@@ -203,36 +203,37 @@ var forbiddenMountContainerPrefixes = []string{
 }
 
 // forbiddenMountHostPath is a host path that mounts and snapshots must not
-// share, with a hint on how to give the agent what it needs instead.
+// share, with why it is protected and a hint on what to do instead.
 type forbiddenMountHostPath struct {
-	path string
-	hint string
+	path   string
+	reason string
+	hint   string
 }
 
 var forbiddenMountHostPaths = []forbiddenMountHostPath{
-	{path: "/"},
-	{path: "/boot"},
-	{path: "/dev"},
-	{path: "/etc"},
-	{path: "/private"},
-	{path: "/proc"},
-	{path: "/sys"},
-	{path: "/run"},
-	{path: "/var"},
-	{path: "~/.ssh", hint: "set ssh_auth_sock = true to forward the SSH agent; the keys stay on the host"},
-	{path: "~/.gnupg", hint: "set gpg_agent = true to forward the GPG agent; the keys stay on the host"},
-	{path: "~/.aws", hint: fileSecretHint("aws-credentials", "~/.aws/credentials", "AWS_SHARED_CREDENTIALS_FILE")},
-	{path: "~/.azure", hint: fileSecretHint("<NAME>", "<file the tool needs>", "")},
-	{path: "~/.config/gcloud", hint: fileSecretHint("gcloud-credentials", "~/.config/gcloud/application_default_credentials.json", "GOOGLE_APPLICATION_CREDENTIALS")},
-	{path: "~/.config/gh", hint: "deliver a token as an env secret instead:\n\n" +
+	{path: "/", reason: "is the host root filesystem"},
+	{path: "/boot", reason: "is a host system directory"},
+	{path: "/dev", reason: "is a host system directory"},
+	{path: "/etc", reason: "is a host system directory"},
+	{path: "/private", reason: "is a host system directory"},
+	{path: "/proc", reason: "is a host system directory"},
+	{path: "/sys", reason: "is a host system directory"},
+	{path: "/run", reason: "is a host system directory"},
+	{path: "/var", reason: "is a host system directory"},
+	{path: "~/.ssh", reason: "holds credentials", hint: "set ssh_auth_sock = true to forward the SSH agent; the keys stay on the host"},
+	{path: "~/.gnupg", reason: "holds credentials", hint: "set gpg_agent = true to forward the GPG agent; the keys stay on the host"},
+	{path: "~/.aws", reason: "holds credentials", hint: fileSecretHint("aws-credentials", "~/.aws/credentials", "AWS_SHARED_CREDENTIALS_FILE")},
+	{path: "~/.azure", reason: "holds credentials", hint: fileSecretHint("<NAME>", "<file the tool needs>", "")},
+	{path: "~/.config/gcloud", reason: "holds credentials", hint: fileSecretHint("gcloud-credentials", "~/.config/gcloud/application_default_credentials.json", "GOOGLE_APPLICATION_CREDENTIALS")},
+	{path: "~/.config/gh", reason: "holds credentials", hint: "deliver a token as an env secret instead:\n\n" +
 		"  [workspaces.<name>.secrets.env.GH_TOKEN]\n" +
 		"  from_command = \"gh auth token\""},
-	{path: "~/.docker", hint: fileSecretHint("docker-config", "~/.docker/config.json", "") +
+	{path: "~/.docker", reason: "holds credentials", hint: fileSecretHint("docker-config", "~/.docker/config.json", "") +
 		"\n\nDocker reads config.json from a directory, so copy it in the VM after every VM start: mkdir -p ~/.docker && cp -f /run/secrets/docker-config ~/.docker/config.json"},
-	{path: "~/.kube", hint: fileSecretHint("kubeconfig", "~/.kube/config", "KUBECONFIG")},
-	{path: "~/.netrc", hint: fileSecretHint("netrc", "~/.netrc", "NETRC")},
-	{path: "~/.config/jailoc"},
-	{path: "~/.cache/jailoc-vm"},
+	{path: "~/.kube", reason: "holds credentials", hint: fileSecretHint("kubeconfig", "~/.kube/config", "KUBECONFIG")},
+	{path: "~/.netrc", reason: "holds credentials", hint: fileSecretHint("netrc", "~/.netrc", "NETRC")},
+	{path: "~/.config/jailoc", reason: "holds the jailoc configuration", hint: "keep directories shared with a workspace outside ~/.config/jailoc (for example ~/.config/<name>), or set profile on the agent to share its state across workspaces"},
+	{path: "~/.cache/jailoc-vm", reason: "holds jailoc VM state and keys", hint: "keep directories shared with a workspace outside ~/.cache/jailoc-vm"},
 }
 
 // fileSecretHint describes the file secret that delivers one credential file
@@ -949,16 +950,19 @@ func validateMountHostPath(host string, context string) error {
 			}
 		}
 
+		var why string
 		switch {
-		case inside && forbidden.hint == "":
-			return fmt.Errorf("%s: mount host path %s is forbidden", context, shown)
 		case inside:
-			return fmt.Errorf("%s: mount host path %s is forbidden because %s holds credentials; %s", context, shown, forbidden.path, forbidden.hint)
-		case contains && forbidden.hint == "":
-			return fmt.Errorf("%s: mount host path %s is forbidden because it contains %s", context, shown, forbidden.path)
+			why = fmt.Sprintf("%s %s", forbidden.path, forbidden.reason)
 		case contains:
-			return fmt.Errorf("%s: mount host path %s is forbidden because it contains %s, which holds credentials; %s", context, shown, forbidden.path, forbidden.hint)
+			why = fmt.Sprintf("it contains %s, which %s", forbidden.path, forbidden.reason)
+		default:
+			continue
 		}
+		if forbidden.hint != "" {
+			why += "; " + forbidden.hint
+		}
+		return fmt.Errorf("%s: mount host path %s is forbidden because %s", context, shown, why)
 	}
 
 	return nil
