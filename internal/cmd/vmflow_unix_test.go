@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -15,6 +16,87 @@ import (
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
+
+func TestFormatImportProgress(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		p    vm.ImportProgress
+		want string
+	}{
+		{name: "save starting", p: vm.ImportProgress{Phase: vm.PhaseSave}, want: "  ⠋ Exporting image from Docker… 3s"},
+		{name: "save bytes", p: vm.ImportProgress{Phase: vm.PhaseSave, Bytes: 128 << 20}, want: "  ⠋ Exporting image from Docker (128 MiB)… 3s"},
+		{name: "extract layers", p: vm.ImportProgress{Phase: vm.PhaseExtract, Layers: 2, Total: 5}, want: "  ⠋ Extracting image layers (2/5)… 3s"},
+		{name: "compose", p: vm.ImportProgress{Phase: vm.PhaseExtract}, want: "  ⠋ Composing root filesystem… 3s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatImportProgress('⠋', tt.p, 3); got != tt.want {
+				t.Errorf("formatImportProgress = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		bytes int64
+		want  string
+	}{
+		{name: "less than kibibyte", bytes: 511, want: "< 1 KiB"},
+		{name: "kibibytes", bytes: 512 << 10, want: "512 KiB"},
+		{name: "less than mebibyte", bytes: (1 << 20) - 1, want: "1023 KiB"},
+		{name: "mebibytes", bytes: 128 << 20, want: "128 MiB"},
+		{name: "gibibytes", bytes: 3 << 29, want: "1.5 GiB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatBytes(tt.bytes); got != tt.want {
+				t.Errorf("formatBytes(%d) = %q, want %q", tt.bytes, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestImportProgressDisplayWritesOnlyForTerminal(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		interactive bool
+		want        string
+	}{
+		{name: "non-terminal"},
+		{name: "terminal", interactive: true, want: "\r\x1b[2K  ⠋ Extracting image layers (1/2)… 0s\r\x1b[2K"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			display := newImportProgressDisplay(&out, tt.interactive, func() int { return 80 })
+			display.update(vm.ImportProgress{Phase: vm.PhaseExtract, Layers: 1, Total: 2})
+			display.redraw()
+			display.erase()
+			if got := out.String(); got != tt.want {
+				t.Errorf("display output = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestImportProgressDisplayTruncatesToTerminalWidth(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	display := newImportProgressDisplay(&out, true, func() int { return 12 })
+	display.update(vm.ImportProgress{Phase: vm.PhaseSave, Bytes: 128 << 20})
+	display.redraw()
+	if got, want := out.String(), "\r\x1b[2K  ⠋ Exporti…"; got != want {
+		t.Errorf("display output = %q, want %q", got, want)
+	}
+}
 
 func TestUseHostDocker(t *testing.T) {
 	t.Parallel()

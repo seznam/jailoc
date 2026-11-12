@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
@@ -25,6 +27,23 @@ import (
 // rootfsRepo names workspace images in the image cache. The tag is the
 // image ID, so a reference always denotes the same content.
 const rootfsRepo = "jailoc.local/rootfs"
+
+// ImportPhase is the current phase of [ImportImage].
+type ImportPhase int
+
+const (
+	// PhaseSave reads the `docker save` tarball and keeps uncached layer blobs.
+	PhaseSave ImportPhase = iota
+	// PhaseExtract unpacks new layers and composes the root filesystem.
+	PhaseExtract
+)
+
+// ImportProgress reports how far [ImportImage] has progressed.
+type ImportProgress struct {
+	Phase         ImportPhase
+	Bytes         int64 // tarball bytes read so far (PhaseSave)
+	Layers, Total int   // new layers unpacked and total new layers (PhaseExtract)
+}
 
 // RootFSRef is the image-cache reference of a built workspace image.
 func RootFSRef(imageID string) string {
@@ -36,7 +55,12 @@ func RootFSRef(imageID string) string {
 // tarball in OCI layout (Docker Engine 25 or later). Layer blobs whose
 // content is already in the layer cache are dropped while the tarball is
 // read, so only new layers are kept on disk until they are unpacked.
-func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer) error) error {
+func ImportImage(
+	ctx context.Context,
+	cacheDir, ref string,
+	save func(io.Writer) error,
+	progress func(ImportProgress),
+) error {
 	unlock, err := lockCache(cacheDir)
 	if err != nil {
 		return err
@@ -60,7 +84,9 @@ func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer)
 		pw.CloseWithError(err)
 		saveErr <- err
 	}()
-	unpackErr := unpackLayout(ctx, pr, dir, cache.LayerCache())
+	reader := newProgressReader(pr, progress)
+	unpackErr := unpackLayout(ctx, reader, dir, cache.LayerCache())
+	reader.reportFinal()
 	// Unblock save if unpacking stopped early; its error is then only the
 	// consequence of the unpack error.
 	_ = pr.CloseWithError(errors.New("image tarball reader closed"))
@@ -76,11 +102,140 @@ func ImportImage(ctx context.Context, cacheDir, ref string, save func(io.Writer)
 	if err != nil {
 		return err
 	}
+	img, err = imageWithProgress(img, cache.LayerCache(), progress)
+	if err != nil {
+		return err
+	}
 	rfs, err := image.PullWithFetcher(ctx, ref, cache, staticFetcher{img: img})
 	if err != nil {
 		return fmt.Errorf("unpack workspace image: %w", err)
 	}
 	return normalizeOwnership(rfs.Path)
+}
+
+const progressByteInterval = 1 << 20
+
+type progressReader struct {
+	r        io.Reader
+	progress func(ImportProgress)
+	bytes    atomic.Int64
+	reported int64
+}
+
+func newProgressReader(r io.Reader, progress func(ImportProgress)) *progressReader {
+	reader := &progressReader{r: r, progress: progress}
+	reader.report(0)
+	return reader
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	bytes := r.bytes.Add(int64(n))
+	if bytes-r.reported >= progressByteInterval {
+		r.report(bytes)
+	}
+	return n, err
+}
+
+func (r *progressReader) reportFinal() {
+	if bytes := r.bytes.Load(); bytes != r.reported {
+		r.report(bytes)
+	}
+}
+
+func (r *progressReader) report(bytes int64) {
+	r.reported = bytes
+	if r.progress != nil {
+		r.progress(ImportProgress{Phase: PhaseSave, Bytes: bytes})
+	}
+}
+
+type progressImage struct {
+	v1.Image
+	uncached map[v1.Hash]bool
+	total    int
+	done     atomic.Int32
+	progress func(ImportProgress)
+}
+
+func imageWithProgress(img v1.Image, lc *image.LayerCache, progress func(ImportProgress)) (v1.Image, error) {
+	layers, err := img.Layers()
+	if err != nil {
+		return nil, fmt.Errorf("read image layers: %w", err)
+	}
+	cfg, err := img.ConfigFile()
+	if err != nil {
+		return nil, fmt.Errorf("read image config: %w", err)
+	}
+	if len(layers) != len(cfg.RootFS.DiffIDs) {
+		return nil, fmt.Errorf("image has %d layers but %d DiffIDs", len(layers), len(cfg.RootFS.DiffIDs))
+	}
+	uncached := make(map[v1.Hash]bool, len(layers))
+	total := 0
+	for _, diffID := range cfg.RootFS.DiffIDs {
+		if !lc.Has(diffID) {
+			uncached[diffID] = true
+			total++
+		}
+	}
+	p := &progressImage{
+		Image:    img,
+		uncached: uncached,
+		total:    total,
+		progress: progress,
+	}
+	p.report(0)
+	return p, nil
+}
+
+func (p *progressImage) Layers() ([]v1.Layer, error) {
+	layers, err := p.Image.Layers()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := p.ConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	for i, layer := range layers {
+		if p.uncached[cfg.RootFS.DiffIDs[i]] {
+			layers[i] = &progressLayer{Layer: layer, image: p}
+		}
+	}
+	return layers, nil
+}
+
+func (p *progressImage) report(done int32) {
+	if p.progress != nil {
+		p.progress(ImportProgress{Phase: PhaseExtract, Layers: int(done), Total: p.total})
+	}
+}
+
+type progressLayer struct {
+	v1.Layer
+	image *progressImage
+	once  sync.Once
+}
+
+func (l *progressLayer) Uncompressed() (io.ReadCloser, error) {
+	r, err := l.Layer.Uncompressed()
+	if err != nil {
+		return nil, err
+	}
+	return &progressReadCloser{ReadCloser: r, done: func() {
+		l.once.Do(func() { l.image.report(l.image.done.Add(1)) })
+	}}, nil
+}
+
+type progressReadCloser struct {
+	io.ReadCloser
+	done func()
+}
+
+func (r *progressReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.done()
+	return err
 }
 
 // unpackLayout writes the OCI layout files of a `docker save` tarball to dir,
