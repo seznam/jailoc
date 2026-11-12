@@ -118,11 +118,12 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
-	snapshots, err := vmSnapshots(ws, shares)
+	allShares := slices.Concat(shares, running.Shares)
+	snapshots, err := vmSnapshots(ws, allShares)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
-	if err := checkSnapshots(ws, snapshots, shares); err != nil {
+	if err := checkSnapshots(ws, snapshots, allShares); err != nil {
 		return vm.Spec{}, nil, err
 	}
 	rt := vmRuntimeFiles{runner: running.RunnerPath, libDir: running.LibDir, guest: running.GuestBinary}

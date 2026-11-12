@@ -324,7 +324,7 @@ func writeTUIPlugin(baseDir string, files map[string][]byte) error {
 func cliConfigContent(ws *workspace.Resolved) (string, error) {
 	h := ws.Agent
 	var plugins []json.RawMessage
-	if hostDir, ok := config.MountHostPath(ws.Mounts, h.ConfigDir); ok {
+	if hostDir, ok := configHostDir(ws, h.ConfigDir); ok {
 		var err error
 		plugins, err = configuredTUIPlugins(hostDir, h.ConfigDir)
 		if err != nil {
@@ -345,13 +345,66 @@ func cliConfigContent(ws *workspace.Resolved) (string, error) {
 	return string(data), nil
 }
 
+// configHostDir returns the host directory that backs the guest configuration
+// directory guestDir via a mount or snapshot.
+func configHostDir(ws *workspace.Resolved, guestDir string) (string, bool) {
+	if guestDir == "" {
+		return "", false
+	}
+	if hostDir, ok := config.MountHostPath(ws.Mounts, guestDir); ok {
+		return hostDir, true
+	}
+	var defaults []string
+	if ws.ImportAgentConfig && !mountOverlaps(ws.Mounts, guestDir) && !snapshotCoversParent(ws.Snapshots, guestDir) {
+		if home, err := os.UserHomeDir(); err == nil {
+			for _, cf := range ws.Agent.ConfigFiles {
+				if "/home/agent/"+cf.Path == guestDir {
+					defaults = append(defaults, filepath.Join(home, filepath.FromSlash(cf.Path))+":"+guestDir+":ro")
+				}
+			}
+		}
+	}
+	merged, err := config.MergeMounts(defaults, ws.Snapshots)
+	if err != nil {
+		return "", false
+	}
+	return config.MountHostPath(merged, guestDir)
+}
+
+func mountOverlaps(specs []string, target string) bool {
+	for _, spec := range specs {
+		m, err := config.ParseMount(spec)
+		if err != nil || m.Host == "" {
+			continue
+		}
+		c := filepath.Clean(m.Container)
+		if c == target || strings.HasPrefix(target, c+"/") || strings.HasPrefix(c, target+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func snapshotCoversParent(specs []string, target string) bool {
+	for _, spec := range specs {
+		m, err := config.ParseMount(spec)
+		if err != nil || m.Host == "" {
+			continue
+		}
+		if strings.HasPrefix(target, filepath.Clean(m.Container)+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // maxAgentConfig bounds the agent config files jailoc reads from directories
 // the workspace can write.
 const maxAgentConfig = 1 << 20
 
 // configuredTUIPlugins returns the TUI plugins configured in hostDir, the
 // host directory of the guest config directory guestDir.
-// The directory is mounted read-write into the workspace, so the files are
+// The directory may be mounted read-write into the workspace, so the files
 // read through an os.Root, must be regular and are bounded in size.
 func configuredTUIPlugins(hostDir, guestDir string) ([]json.RawMessage, error) {
 	root, err := os.OpenRoot(hostDir)
