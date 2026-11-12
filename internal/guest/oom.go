@@ -119,9 +119,8 @@ func classify(p, parent procInfo) oomRole {
 
 // rescanPlan recomputes the agents and the oom_score_adj writes from a
 // snapshot of all processes, for when the guard missed events. init is the
-// PID of jailoc-guest init. Descendants of agents that still hold the
-// agent's value and descendants of init outside a session that still hold
-// init's value are reset.
+// PID of jailoc-guest init. Processes that still hold a value inherited
+// from an agent or init are reset (see inheritedAdj).
 func rescanPlan(procs map[int]procInfo, init int) (agents map[int]bool, writes map[int]int) {
 	agents, writes = map[int]bool{}, map[int]int{}
 	if procs[init].adj != oomAdjGuest {
@@ -147,28 +146,32 @@ func rescanPlan(procs map[int]procInfo, init int) (agents map[int]bool, writes m
 		if p.adj == oomAdjGuest && isGuestSession(p) {
 			continue
 		}
-		// The nearest agent, session process or init decides whether p
-		// inherited its value. The depth limit guards against a ppid cycle
-		// in an inconsistent snapshot.
-		for anc, depth := p.ppid, 0; anc > 0 && depth < 64; anc, depth = procs[anc].ppid, depth+1 {
-			if agents[anc] {
-				if p.adj == oomAdjAgent {
-					writes[pid] = oomAdjChild
-				}
-				break
-			}
-			if isGuestSession(procs[anc]) {
-				break
-			}
-			if anc == init {
-				if p.adj == oomAdjGuest {
-					writes[pid] = oomAdjChild
-				}
-				break
-			}
+		if inheritedAdj(procs, agents, init, p) {
+			writes[pid] = oomAdjChild
 		}
 	}
 	return agents, writes
+}
+
+// inheritedAdj reports whether p holds an agent's or init's value it
+// inherited on fork. The nearest agent, session process or init among its
+// ancestors decides; reaching PID 1 without one means p outlived the
+// process it inherited the value from and was reparented. The depth limit
+// guards against a ppid cycle in an inconsistent snapshot.
+func inheritedAdj(procs map[int]procInfo, agents map[int]bool, init int, p procInfo) bool {
+	for anc, depth := p.ppid, 0; anc > 0 && depth < 64; anc, depth = procs[anc].ppid, depth+1 {
+		switch {
+		case agents[anc]:
+			return p.adj == oomAdjAgent
+		case anc == init:
+			return p.adj == oomAdjGuest
+		case isGuestSession(procs[anc]):
+			return false
+		case anc == 1:
+			return true
+		}
+	}
+	return false
 }
 
 // oomKill is a kernel OOM kill report.

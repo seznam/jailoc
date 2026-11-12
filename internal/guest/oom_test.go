@@ -73,8 +73,11 @@ func TestClassify(t *testing.T) {
 
 func TestRescanPlan(t *testing.T) {
 	t.Parallel()
+	// PID 1 is libkrun's init.krun, which runs jailoc-guest init (2) and
+	// adopts orphans, including session holders.
 	procs := map[int]procInfo{
-		1:  {exe: BinaryPath},
+		1:  {exe: "/init.krun"},
+		2:  {ppid: 1, exe: BinaryPath},
 		20: {ppid: 1, exe: BinaryPath, argv: []string{BinaryPath, "session", "serve", "a"}, adj: oomAdjGuest},
 		21: {ppid: 20, exe: "/usr/bin/node", argv: []string{"opencode"}, adj: oomAdjAgent},
 		22: {ppid: 21, exe: "/usr/bin/make", adj: oomAdjAgent},                              // missed fork
@@ -82,17 +85,23 @@ func TestRescanPlan(t *testing.T) {
 		24: {ppid: 21, exe: "/usr/bin/go", adj: oomAdjChild},                                // already reset
 		30: {ppid: 1, exe: BinaryPath, argv: []string{BinaryPath, "session", "serve", "b"}}, // missed exec
 		31: {ppid: 30, exe: "/usr/bin/node", argv: []string{"claude"}},
-		40: {ppid: 1, exe: "/usr/bin/dockerd", adj: oomAdjAgent},    // not in a session
-		50: {ppid: 1, exe: "/bin/sh", adj: oomAdjGuest},             // init's missed fork
+		40: {ppid: 1, exe: "/usr/bin/gopls", adj: oomAdjAgent},      // outlived its agent
+		50: {ppid: 2, exe: "/bin/sh", adj: oomAdjGuest},             // init's missed fork
 		51: {ppid: 50, exe: "/usr/bin/git", adj: oomAdjGuest},       // its child
-		52: {ppid: 1, exe: "/usr/bin/containerd", adj: oomAdjChild}, // already reset
+		52: {ppid: 2, exe: "/usr/bin/dockerd", adj: oomAdjChild},    // already reset
+		53: {ppid: 1, exe: "/usr/bin/containerd", adj: oomAdjGuest}, // outlived init's child
+		54: {ppid: 53, exe: "/usr/bin/runc", adj: oomAdjGuest},      // its child
 		60: {ppid: 21, exe: "/usr/bin/sudo", adj: oomAdjGuest},      // lowered in a session
+		70: {ppid: 1, exe: BinaryPath, argv: []string{BinaryPath, "session", "open"}, adj: oomAdjGuest},
 	}
-	agents, writes := rescanPlan(procs, 1)
+	agents, writes := rescanPlan(procs, 2)
 	if want := map[int]bool{21: true, 31: true}; !maps.Equal(agents, want) {
 		t.Errorf("agents = %v, want %v", agents, want)
 	}
-	want := map[int]int{1: oomAdjGuest, 22: oomAdjChild, 23: oomAdjChild, 30: oomAdjGuest, 31: oomAdjAgent, 50: oomAdjChild, 51: oomAdjChild}
+	want := map[int]int{
+		2: oomAdjGuest, 22: oomAdjChild, 23: oomAdjChild, 30: oomAdjGuest, 31: oomAdjAgent,
+		40: oomAdjChild, 50: oomAdjChild, 51: oomAdjChild, 53: oomAdjChild, 54: oomAdjChild,
+	}
 	if !maps.Equal(writes, want) {
 		t.Errorf("writes = %v, want %v", writes, want)
 	}
