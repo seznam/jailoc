@@ -594,7 +594,7 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 	if err != nil {
 		return err
 	}
-	if len(m.changes) == 0 {
+	if len(m.changes) == 0 && len(cfg.UnknownKeys()) == 0 {
 		_, _ = color.New(color.FgGreen).Fprintln(p.out, "The configuration is up to date; nothing to migrate.")
 		return nil
 	}
