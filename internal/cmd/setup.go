@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -175,14 +176,34 @@ func (p *wizardPrompter) choose(question string, options []string, def int) (int
 		if answer == "" {
 			return def, nil
 		}
-		for i, o := range options {
-			low := strings.ToLower(o)
-			if answer == low || (len(low) > 0 && answer == low[:1]) {
-				return i, nil
-			}
+		if i, ok := matchOption(answer, options); ok {
+			return i, nil
 		}
 		_, _ = fmt.Fprintf(p.out, "  answer one of: %s\n", strings.Join(options, ", "))
 	}
+}
+
+// matchOption returns the option equal to answer (case-insensitive) or, for
+// a single-letter answer, the only option starting with that letter.
+func matchOption(answer string, options []string) (int, bool) {
+	for i, o := range options {
+		if answer == strings.ToLower(o) {
+			return i, true
+		}
+	}
+	if len(answer) != 1 {
+		return 0, false
+	}
+	match := -1
+	for i, o := range options {
+		if strings.HasPrefix(strings.ToLower(o), answer) {
+			if match >= 0 {
+				return 0, false
+			}
+			match = i
+		}
+	}
+	return match, match >= 0
 }
 
 func (p *wizardPrompter) confirm(question string, def bool) (bool, error) {
@@ -553,7 +574,7 @@ func maybeOfferFirstTimeSetup(ctx context.Context, targetDir, seedName string) (
 
 func validatePositiveFloat(s string) error {
 	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil || v <= 0 {
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
 		return fmt.Errorf("CPU must be a positive number (e.g. 2 or 4)")
 	}
 	return nil

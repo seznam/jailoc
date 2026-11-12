@@ -285,4 +285,84 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 		assertContains(t, out.String(), "dry run, nothing written")
 	})
+
+	t.Run("symlink to home directory is treated as broad while retaining symlink path", func(t *testing.T) {
+		t.Parallel()
+
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("cannot get home dir: %v", err)
+		}
+		link := filepath.Join(t.TempDir(), "home-link")
+		if err := os.Symlink(home, link); err != nil {
+			t.Fatalf("create symlink: %v", err)
+		}
+
+		cfgPath := writeCustomConfig(t)
+		var out bytes.Buffer
+		w := &wizardPrompter{
+			in:  answers("linked", link, "yes", "inherit", "inherit", "inherit", "yes"),
+			out: &out,
+		}
+
+		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: link})
+		if err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		assertContains(t, out.String(), "very broad path")
+		if res.dir != link {
+			t.Errorf("res.dir = %q, want original symlink %q", res.dir, link)
+		}
+		cfg, err := config.LoadFrom(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadFrom: %v", err)
+		}
+		if got := cfg.Workspaces["linked"].Paths; len(got) != 1 || got[0] != link {
+			t.Errorf("workspace paths = %v, want [%s]", got, link)
+		}
+	})
+
+	t.Run("ambiguous single-letter shortcut is rejected while unique shortcut succeeds", func(t *testing.T) {
+		t.Parallel()
+
+		var out bytes.Buffer
+		w := &wizardPrompter{
+			ctx: context.Background(),
+			in:  answers("c", "copilot"),
+			out: &out,
+		}
+		idx, err := w.choose("Agent?", []string{"opencode", "claude", "copilot"}, 2)
+		if err != nil {
+			t.Fatalf("choose failed: %v", err)
+		}
+		if idx != 2 {
+			t.Errorf("idx = %d, want 2 (copilot)", idx)
+		}
+		assertContains(t, out.String(), "answer one of: opencode, claude, copilot")
+
+		out.Reset()
+		w.in = answers("o")
+		idx, err = w.choose("Agent?", []string{"opencode", "claude", "copilot"}, 2)
+		if err != nil {
+			t.Fatalf("choose unique shortcut failed: %v", err)
+		}
+		if idx != 0 {
+			t.Errorf("idx = %d, want 0 (opencode)", idx)
+		}
+	})
+
+	t.Run("non-finite CPU values are rejected at prompt", func(t *testing.T) {
+		t.Parallel()
+
+		for _, bad := range []string{"NaN", "nan", "Inf", "+Inf", "-Inf", "0", "-2"} {
+			if err := validatePositiveFloat(bad); err == nil {
+				t.Errorf("validatePositiveFloat(%q) = nil, want error", bad)
+			}
+		}
+		for _, good := range []string{"1", "2.5", "4"} {
+			if err := validatePositiveFloat(good); err != nil {
+				t.Errorf("validatePositiveFloat(%q) = %v, want nil", good, err)
+			}
+		}
+	})
 }

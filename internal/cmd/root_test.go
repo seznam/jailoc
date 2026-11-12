@@ -110,6 +110,15 @@ func TestIsBroadPath(t *testing.T) {
 		t.Skipf("cannot get home dir: %v", err)
 	}
 
+	homeLink := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(home, homeLink); err != nil {
+		t.Fatalf("create home symlink: %v", err)
+	}
+	rootLink := filepath.Join(t.TempDir(), "root-link")
+	if err := os.Symlink("/", rootLink); err != nil {
+		t.Fatalf("create root symlink: %v", err)
+	}
+
 	tests := []struct {
 		name string
 		path string
@@ -117,6 +126,8 @@ func TestIsBroadPath(t *testing.T) {
 	}{
 		{name: "root path", path: "/", want: true},
 		{name: "home directory", path: home, want: true},
+		{name: "symlink to home directory", path: homeLink, want: true},
+		{name: "symlink to root path", path: rootLink, want: true},
 		{name: "normal project path", path: "/home/user/projects/myapp", want: false},
 		{name: "subdirectory of home", path: filepath.Join(home, "projects"), want: false},
 		{name: "empty path", path: "", want: false},
