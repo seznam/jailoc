@@ -83,6 +83,7 @@ type Broker struct {
 	link    *channel.Endpoint
 	policy  atomic.Pointer[Policy]
 	hosts   addrCache
+	names   *dnsCache
 	dialTCP func(string, string) (net.Conn, error)
 	dialUDP func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)
 
@@ -113,7 +114,7 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 	if cfg.Log == nil {
 		cfg.Log = io.Discard
 	}
-	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log)}
+	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log), names: newDNSCache()}
 	b.tcpFlows.max, b.udpFlows.max = maxTCPFlows, maxUDPFlows
 	b.dialTCP = (&net.Dialer{Timeout: dialTimeout}).Dial
 	b.dialUDP = net.DialUDP
@@ -172,14 +173,38 @@ func (b *Broker) SetPolicy(p *Policy) {
 	b.record(map[string]any{"event": "policy", "source": p.source, "deny_all": p.denyAll})
 }
 
-func (b *Broker) env() Env {
-	return Env{Gateway: b.cfg.Gateway, Subnet: b.cfg.Subnet, HostAddrs: b.hosts.get()}
+func (b *Broker) env(dst netip.Addr) Env {
+	return Env{
+		Gateway:   b.cfg.Gateway,
+		Subnet:    b.cfg.Subnet,
+		HostAddrs: b.hosts.get(),
+		Names:     b.names.lookup(dst),
+	}
 }
 
 func (b *Broker) decide(proto string, src, dst netip.AddrPort, conn uint64) Decision {
-	d := Decide(b.policy.Load(), b.env(), proto, dst)
-	b.record(map[string]any{"event": "flow", "conn": conn, "proto": proto, "src": src.String(), "dst": dst.String(), "allow": d.Allow, "reason": d.Reason})
+	d := Decide(b.policy.Load(), b.env(dst.Addr()), proto, dst)
+	b.recordFlow(conn, proto, src, dst, d)
 	return d
+}
+
+func (b *Broker) recordFlow(conn uint64, proto string, src, dst netip.AddrPort, d Decision) {
+	ev := map[string]any{
+		"event":  "flow",
+		"conn":   conn,
+		"proto":  proto,
+		"src":    src.String(),
+		"dst":    dst.String(),
+		"allow":  d.Allow,
+		"reason": d.Reason,
+	}
+	if d.Name != "" {
+		ev["name"] = d.Name
+	}
+	if d.Rule != "" {
+		ev["rule"] = d.Rule
+	}
+	b.record(ev)
 }
 
 func (b *Broker) record(v map[string]any) {

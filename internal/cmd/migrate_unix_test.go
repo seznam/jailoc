@@ -123,7 +123,7 @@ func TestRunMigrateWritesBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Defaults.Backend != config.BackendVM || cfg.Workspaces["web"].Backend != "" {
+	if cfg.Defaults.Backend != config.BackendVM || cfg.Workspaces["web"].Backend != "" || len(cfg.Defaults.Network.Get().Rules) != 1 || !slices.Equal(cfg.Defaults.Network.Rules[0].Allow, []string{"*"}) {
 		t.Fatalf("config not migrated: %+v", cfg.Defaults)
 	}
 

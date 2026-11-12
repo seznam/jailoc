@@ -214,7 +214,33 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 			cfg.Workspaces[name] = ws
 		}
 	}
+	// Add an explicit allow = ["*"] rule when the configuration has no
+	// [[*.network.rules]] yet, so existing workspaces keep their public
+	// internet access until the user narrows the rules.
+	if !hasAnyNetworkRules(cfg) {
+		if d.Network == nil {
+			d.Network = &config.Network{}
+		}
+		d.Network.Rules = []config.NetworkRule{{
+			Name:  "internet",
+			Allow: []string{"*"},
+			Proto: config.RuleProtoAny,
+		}}
+		m.changes = append(m.changes, `[[defaults.network.rules]]: add allow = ["*"] (public internet)`)
+	}
 	return m, nil
+}
+
+func hasAnyNetworkRules(cfg *config.Config) bool {
+	if len(cfg.Defaults.Network.Get().Rules) > 0 {
+		return true
+	}
+	for _, ws := range cfg.Workspaces {
+		if len(ws.Network.Get().Rules) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // usesDocker reports whether workspaces without backend = "vm" are jailoc

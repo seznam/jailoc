@@ -72,7 +72,10 @@ type Resolved struct {
 	FilteredDNS     bool
 	DNSUpstream     string
 	DNSBlockedZones []string
-	CABundle        config.CABundle
+	// NetworkRules are the combined egress rules (defaults, workspace,
+	// migrated legacy settings, and implicit agent endpoints).
+	NetworkRules []config.NetworkRule
+	CABundle     config.CABundle
 }
 
 type SecretKind int
@@ -192,12 +195,9 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		ProtectGit:      boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),
 		IPv6:            boolPtrWithDefault(cfg.Defaults.Network.Get().IPv6, ws.Network.Get().IPv6, false),
 		FilteredDNS:     boolPtrWithDefault(cfg.Defaults.Network.Get().FilteredDNS, ws.Network.Get().FilteredDNS, false),
-		DNSUpstream:     ws.Network.Get().DNSUpstream,
+		DNSUpstream:     cmp.Or(ws.Network.Get().DNS, ws.Network.Get().DNSUpstream, cfg.Defaults.Network.Get().DNS, cfg.Defaults.Network.Get().DNSUpstream),
 		DNSBlockedZones: ws.Network.Get().DNSBlockedZones,
 		CABundle:        caBundleWithDefault(cfg.Defaults.CABundle, ws.CABundle),
-	}
-	if r.DNSUpstream == "" {
-		r.DNSUpstream = cfg.Defaults.Network.Get().DNSUpstream
 	}
 	if r.DNSBlockedZones == nil {
 		r.DNSBlockedZones = cfg.Defaults.Network.Get().DNSBlockedZones
@@ -209,6 +209,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	r.HostPorts = config.MergeHostPorts(cfg.Defaults.HostPorts, ws.HostPorts)
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
 	r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
+	r.NetworkRules = resolveNetworkRules(cfg, ws, r.AllowedHosts, r.AllowedNetworks, r.DNSBlockedZones, h)
 	snapshots, err := config.MergeMounts(cfg.Defaults.Snapshots, ws.Snapshots)
 	if err != nil {
 		return nil, fmt.Errorf("merge snapshots for workspace %s: %w", name, err)
@@ -257,6 +258,43 @@ func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, confi
 	settings.Profile = cmp.Or(tables[0].Profile, tables[1].Profile)
 	h.Version = cmp.Or(settings.Version, h.Version)
 	return h, settings, nil
+}
+
+// resolveNetworkRules combines [defaults.network.rules],
+// [workspaces.<ws>.network.rules], migrated legacy settings, and the implicit
+// agent endpoints rule.
+func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, allowedNetworks, blockedZones []string, h agent.Harness) []config.NetworkRule {
+	dn, wn := cfg.Defaults.Network.Get(), ws.Network.Get()
+	var rules []config.NetworkRule
+	rules = append(rules, dn.Rules...)
+	rules = append(rules, wn.Rules...)
+	if len(allowedHosts) > 0 {
+		rules = append(rules, config.NetworkRule{Name: "legacy", Allow: slices.Clone(allowedHosts), Proto: config.RuleProtoAny})
+	}
+	if len(allowedNetworks) > 0 {
+		rules = append(rules, config.NetworkRule{Name: "legacy", Allow: slices.Clone(allowedNetworks), Proto: config.RuleProtoAny})
+	}
+	if len(blockedZones) > 0 {
+		deny := make([]string, 0, len(blockedZones)*2)
+		for _, z := range blockedZones {
+			z = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(z)), ".")
+			if z != "" {
+				deny = append(deny, z, "*."+z)
+			}
+		}
+		if len(deny) > 0 {
+			rules = append(rules, config.NetworkRule{Name: "legacy", Deny: deny, Proto: config.RuleProtoAny})
+		}
+	}
+	if len(h.Endpoints) > 0 {
+		rules = append(rules, config.NetworkRule{
+			Name:  "agent",
+			Allow: slices.Clone(h.Endpoints),
+			Proto: config.RuleProtoTCP,
+			Ports: []config.RulePort{"443"},
+		})
+	}
+	return rules
 }
 
 // mergeUnique returns a followed by the entries of b not already present.

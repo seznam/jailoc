@@ -40,8 +40,6 @@ const (
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
 # mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
-# allowed_hosts = ["example.com"]
-# allowed_networks = ["10.0.0.0/8"]
 # ssh_auth_sock = false
 # gpg_agent = false
 # git_config = true
@@ -54,9 +52,59 @@ const (
 
 # [defaults.network]
 # ipv6 = false  # true: give the VM IPv6 connectivity (public destinations only)
-# filtered_dns = false
-# dns_upstream = "10.20.30.53"
-# dns_blocked_zones = ["corp.example.com"]
+# dns = "9.9.9.9"
+
+[[defaults.network.rules]]
+name = "dev-deps"
+allow = [
+  # GitHub & GitLab
+  "github.com",
+  "api.github.com",
+  "codeload.github.com",
+  "*.githubusercontent.com",
+  "ghcr.io",
+  "gitlab.com",
+  # Node.js / Bun
+  "registry.npmjs.org",
+  "registry.yarnpkg.com",
+  "nodejs.org",
+  "bun.sh",
+  # Python
+  "pypi.org",
+  "files.pythonhosted.org",
+  "astral.sh",
+  # Go
+  "proxy.golang.org",
+  "sum.golang.org",
+  "storage.googleapis.com",
+  "go.dev",
+  "dl.google.com",
+  # Rust
+  "crates.io",
+  "*.crates.io",
+  "static.rust-lang.org",
+  # Container registries
+  "*.docker.io",
+  "*.docker.com",
+  "quay.io",
+  "gcr.io",
+  "*.gcr.io",
+  "mcr.microsoft.com",
+  "*.data.mcr.microsoft.com",
+  # Linux package mirrors (Ubuntu / Debian / Alpine) and Nix
+  "*.ubuntu.com",
+  "ppa.launchpadcontent.net",
+  "deb.debian.org",
+  "security.debian.org",
+  "dl-cdn.alpinelinux.org",
+  "cache.nixos.org",
+  "channels.nixos.org",
+  "releases.nixos.org",
+]
+
+# [[defaults.network.rules]]
+# name = "no-paste"
+# deny = ["pastebin.com", "gist.github.com", "*.ngrok.io"]
 
 # [defaults.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
@@ -76,8 +124,6 @@ const (
 paths = []
 # agent = "opencode"
 # image = ""
-# allowed_hosts = []
-# allowed_networks = []
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
 # mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
@@ -95,10 +141,10 @@ paths = []
 
 # [workspaces.default.network]
 # ipv6 = false
-# filtered_dns = false
-# dns_upstream = "10.20.30.53"
-# dns_blocked_zones = ["corp.example.com"]
-
+# dns = "9.9.9.9"
+# [[workspaces.default.network.rules]]
+# name = "internet"
+# allow = ["*"]  # explicit opt-in to the whole public internet
 # [workspaces.default.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
 # [workspaces.default.secrets.env.GH_TOKEN]
@@ -406,11 +452,14 @@ type Workspace struct {
 // Unset workspace fields inherit the [defaults.network] values.
 type Network struct {
 	// IPv6 gives the guest IPv6 connectivity; unset means IPv4 only.
-	IPv6        *bool  `toml:"ipv6,omitempty"`
-	FilteredDNS *bool  `toml:"filtered_dns,omitempty"`
-	DNSUpstream string `toml:"dns_upstream,omitempty"`
-	// DNSBlockedZones keeps an empty list when the configuration is written
-	// back: it clears the defaults' zones, which an omitted list inherits.
+	IPv6 *bool `toml:"ipv6,omitempty"`
+	// DNS is the optional upstream DNS resolver IPv4 address.
+	DNS string `toml:"dns,omitempty"`
+	// Rules are the allow/deny egress rules of the scope.
+	Rules []NetworkRule `toml:"rules,omitempty"`
+	// Legacy fields migrated in memory with a deprecation warning.
+	FilteredDNS     *bool    `toml:"filtered_dns,omitempty"`
+	DNSUpstream     string   `toml:"dns_upstream,omitempty"`
 	DNSBlockedZones []string `toml:"dns_blocked_zones"`
 }
 
@@ -1179,10 +1228,18 @@ func Validate(cfg *Config) error {
 	if err := movedToNetwork("[defaults]", cfg.Defaults.LegacyFilteredDNS, cfg.Defaults.LegacyDNSUpstream, cfg.Defaults.LegacyDNSBlockedZones); err != nil {
 		return err
 	}
-	if err := validateDNS(cfg.Defaults.Network.Get().DNSUpstream, cfg.Defaults.Network.Get().DNSBlockedZones); err != nil {
+	for _, cidr := range cfg.Defaults.AllowedNetworks {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("defaults: invalid CIDR %q: %w", cidr, err)
+		}
+	}
+	dn := cfg.Defaults.Network.Get()
+	if err := validateDNS(cmp.Or(dn.DNS, dn.DNSUpstream), dn.DNSBlockedZones); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
-
+	if err := validateNetworkRules(dn.Rules, "defaults"); err != nil {
+		return err
+	}
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
 		names = append(names, name)
@@ -1280,33 +1337,13 @@ func Validate(cfg *Config) error {
 		if err := movedToNetwork(fmt.Sprintf("[workspaces.%s]", name), ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones); err != nil {
 			return err
 		}
-		dn, wn := cfg.Defaults.Network.Get(), ws.Network.Get()
-		if err := validateDNS(wn.DNSUpstream, wn.DNSBlockedZones); err != nil {
+		wn := ws.Network.Get()
+		if err := validateDNS(cmp.Or(wn.DNS, wn.DNSUpstream), wn.DNSBlockedZones); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
-		enabled := explicitTrue(dn.FilteredDNS, wn.FilteredDNS)
-		if enabled && wn.DNSUpstream == "" && dn.DNSUpstream == "" {
-			return fmt.Errorf("workspace %q: dns_upstream is required when filtered_dns is enabled", name)
+		if err := validateNetworkRules(wn.Rules, wsContext); err != nil {
+			return err
 		}
-		if enabled && len(wn.DNSBlockedZones) == 0 && len(dn.DNSBlockedZones) == 0 {
-			return fmt.Errorf("workspace %q: dns_blocked_zones is required when filtered_dns is enabled", name)
-		}
-		if enabled {
-			zones := wn.DNSBlockedZones
-			if zones == nil {
-				zones = dn.DNSBlockedZones
-			}
-			for _, host := range mergeDedup(cfg.Defaults.AllowedHosts, ws.AllowedHosts) {
-				normalizedHost := strings.TrimSuffix(strings.ToLower(host), ".")
-				for _, zone := range zones {
-					normalizedZone := strings.TrimSuffix(strings.ToLower(zone), ".")
-					if normalizedHost == normalizedZone || strings.HasSuffix(normalizedHost, "."+normalizedZone) {
-						return fmt.Errorf("workspace %q: allowed_hosts entry %q conflicts with dns_blocked_zones entry %q", name, host, zone)
-					}
-				}
-			}
-		}
-
 		if ws.ExposePort != nil {
 			return fmt.Errorf("workspace %q: %w", name, v1Setting("expose_port"))
 		}
@@ -1561,36 +1598,6 @@ func AddPath(workspace, path string) error {
 	}
 
 	return nil
-}
-
-// mergeDedup combines two string slices into one, removing duplicates.
-// Order is preserved: items from `a` appear first, followed by items from `b` that weren't in `a`.
-func mergeDedup(a, b []string) []string {
-	if len(a) == 0 {
-		return b
-	}
-	if len(b) == 0 {
-		return a
-	}
-
-	seen := make(map[string]bool)
-	result := make([]string, 0, len(a)+len(b))
-
-	for _, item := range a {
-		if !seen[item] {
-			seen[item] = true
-			result = append(result, item)
-		}
-	}
-
-	for _, item := range b {
-		if !seen[item] {
-			seen[item] = true
-			result = append(result, item)
-		}
-	}
-
-	return result
 }
 
 func ExpandPath(path string) (string, error) {

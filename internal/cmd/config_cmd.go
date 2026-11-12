@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/agent"
@@ -25,6 +26,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	printDeprecationWarnings(cfg)
 
 	// Sort workspace names alphabetically
 	names := make([]string, 0, len(cfg.Workspaces))
@@ -75,6 +77,9 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", network)
 		}
 	}
+
+	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Network Rules:\n")
+	printNetworkRules(cfg.Defaults.Network.Get().Rules, "  ")
 
 	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(os.Stdout, "Defaults Env:\n")
 	if len(cfg.Defaults.Env) == 0 {
@@ -162,6 +167,9 @@ func runConfig(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		_, _ = color.New(color.FgCyan).Fprintf(os.Stdout, "  Network Rules:\n")
+		printNetworkRules(ws.Network.Get().Rules, "    ")
+
 		buildContext := ws.BuildContext
 		if buildContext == "" {
 			buildContext = "(none)"
@@ -230,6 +238,44 @@ func runConfig(cmd *cobra.Command, args []string) error {
 
 	_ = ctx // silence unused variable warning
 	return nil
+}
+
+func printDeprecationWarnings(cfg *config.Config) {
+	for _, w := range config.DeprecationWarnings(cfg) {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
+}
+
+func printNetworkRules(rules []config.NetworkRule, indent string) {
+	if len(rules) == 0 {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
+		return
+	}
+	for _, r := range rules {
+		action := "allow"
+		targets := r.Allow
+		if len(r.Deny) > 0 {
+			action = "deny"
+			targets = r.Deny
+		}
+		prefix := ""
+		if r.Name != "" {
+			prefix = r.Name + ": "
+		}
+		proto := r.Proto
+		if proto == "" {
+			proto = config.RuleProtoTCP
+		}
+		ports := ""
+		if len(r.Ports) > 0 {
+			ps := make([]string, len(r.Ports))
+			for i, p := range r.Ports {
+				ps[i] = string(p)
+			}
+			ports = " ports=" + strings.Join(ps, ",")
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "%s- %s%s %s (%s%s)\n", indent, prefix, action, strings.Join(targets, ", "), proto, ports)
+	}
 }
 
 // printSecrets writes one [<scope>.secrets] block as source references.

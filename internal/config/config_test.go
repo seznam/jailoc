@@ -117,8 +117,6 @@ func TestFilteredDNSValidation(t *testing.T) {
 		wantError      string
 	}{
 		{"valid", "10.20.30.53", []string{"corp.example.com", "internal"}, ""},
-		{"missing upstream", "", nil, "dns_upstream"},
-		{"missing blocked zones", "10.20.30.53", nil, "dns_blocked_zones"},
 		{"hostname upstream", "resolver.example.com", []string{"internal"}, "dns_upstream"},
 		{"loopback upstream", "127.0.0.1", []string{"internal"}, "dns_upstream"},
 		{"link-local upstream", "169.254.53.53", []string{"internal"}, "dns_upstream"},
@@ -140,50 +138,6 @@ func TestFilteredDNSValidation(t *testing.T) {
 			}
 			if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
 				t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
-			}
-		})
-	}
-}
-
-func TestFilteredDNSAllowedHostConflict(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name             string
-		defaultHosts     []string
-		workspaceHosts   []string
-		defaultZones     []string
-		workspaceZones   []string
-		workspaceEnabled *bool
-		wantHost         string
-		wantZone         string
-	}{
-		{"exact default host", []string{"corp.example"}, nil, []string{"corp.example"}, nil, nil, "corp.example", "corp.example"},
-		{"subdomain workspace host", nil, []string{"Api.Corp.Example."}, []string{"corp.example."}, nil, nil, "Api.Corp.Example.", "corp.example."},
-		{"inherited host overridden zone", []string{"api.corp.example"}, nil, []string{"internal"}, []string{"corp.example"}, nil, "api.corp.example", "corp.example"},
-		{"sibling host", nil, []string{"notcorp.example"}, []string{"corp.example"}, nil, nil, "", ""},
-		{"workspace zones replace defaults", []string{"api.corp.example"}, nil, []string{"corp.example"}, []string{"internal"}, nil, "", ""},
-		{"disabled workspace", []string{"api.corp.example"}, nil, []string{"corp.example"}, nil, new(false), "", ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := &Config{
-				Defaults: Defaults{Network: &Network{FilteredDNS: new(true), DNSUpstream: "1.1.1.1", DNSBlockedZones: tc.defaultZones}, AllowedHosts: tc.defaultHosts},
-				Workspaces: map[string]Workspace{"test": {
-					Paths: []string{"/data/work"}, AllowedHosts: tc.workspaceHosts, Network: &Network{DNSBlockedZones: tc.workspaceZones, FilteredDNS: tc.workspaceEnabled},
-				}},
-			}
-			err := Validate(cfg)
-			if tc.wantHost == "" {
-				if err != nil {
-					t.Fatalf("Validate: %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), `workspace "test"`) ||
-				!strings.Contains(err.Error(), tc.wantHost) || !strings.Contains(err.Error(), tc.wantZone) ||
-				!strings.Contains(err.Error(), "allowed_hosts") || !strings.Contains(err.Error(), "dns_blocked_zones") {
-				t.Fatalf("Validate error = %v, want workspace/host/zone conflict", err)
 			}
 		})
 	}

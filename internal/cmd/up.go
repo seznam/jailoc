@@ -38,6 +38,7 @@ func runUp(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	printDeprecationWarnings(cfg)
 
 	wss, err := targetWorkspaces(cfg, args)
 	if err != nil {

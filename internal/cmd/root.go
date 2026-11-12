@@ -60,6 +60,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
+		printDeprecationWarnings(cfg)
 		detachKeys, err := config.ParseDetachKeys(cmp.Or(detachKeysFlag, cfg.DetachKeys, config.DefaultDetachKeys))
 		if err != nil {
 			return err

@@ -1830,3 +1830,55 @@ func TestResolveIPv6(t *testing.T) {
 		t.Fatal("IPv6 enabled by default")
 	}
 }
+
+func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			Agent:        "claude",
+			AllowedHosts: []string{"legacy.example"},
+			Network: &config.Network{
+				DNS:             "9.9.9.9",
+				DNSBlockedZones: []string{"bad.example."},
+				Rules: []config.NetworkRule{
+					{Name: "dev-deps", Allow: []string{"github.com", "registry.npmjs.org"}},
+				},
+			},
+		},
+		Workspaces: map[string]config.Workspace{
+			"api": {
+				Paths:           []string{"/data/api"},
+				AllowedNetworks: []string{"10.0.0.0/8"},
+				Network: &config.Network{
+					Rules: []config.NetworkRule{
+						{Name: "db", Allow: []string{"10.20.5.10"}, Ports: []config.RulePort{"5432"}},
+					},
+				},
+			},
+		},
+	}
+	r, err := workspace.Resolve(cfg, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.DNSUpstream != "9.9.9.9" {
+		t.Fatalf("DNSUpstream = %q, want 9.9.9.9", r.DNSUpstream)
+	}
+	var names []string
+	for _, rule := range r.NetworkRules {
+		names = append(names, rule.Name)
+	}
+	wantNames := []string{"dev-deps", "db", "legacy", "legacy", "legacy", "agent"}
+	if !slices.Equal(names, wantNames) {
+		t.Fatalf("rule names = %v, want %v", names, wantNames)
+	}
+	// Legacy blocked zone expands to exact and wildcard deny rule.
+	if !slices.Equal(r.NetworkRules[4].Deny, []string{"bad.example", "*.bad.example"}) || r.NetworkRules[4].Proto != "any" {
+		t.Fatalf("legacy blocked zone rule = %+v", r.NetworkRules[4])
+	}
+	// Agent rule includes Claude's endpoints on TCP/443.
+	agentRule := r.NetworkRules[5]
+	if agentRule.Name != "agent" || agentRule.Proto != "tcp" || !slices.Equal(agentRule.Ports, []config.RulePort{"443"}) || !slices.Contains(agentRule.Allow, "api.anthropic.com") {
+		t.Fatalf("agent rule = %+v", agentRule)
+	}
+}
