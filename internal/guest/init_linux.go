@@ -179,6 +179,11 @@ func Init(logger *slog.Logger) error {
 	} else {
 		defer stopOOMGuard()
 	}
+	if stopOOMLog, err := startOOMLog(logger); err != nil {
+		logger.Warn("kernel OOM kills not logged", "error", err)
+	} else {
+		defer stopOOMLog()
+	}
 	var docker *dockerDaemon
 	if cfg.Docker != nil {
 		if docker, err = startDocker(logger, cfg.Docker, acct); err != nil {

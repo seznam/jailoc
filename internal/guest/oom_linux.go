@@ -20,10 +20,11 @@ const oomRecvBuf = 4 << 20
 // startOOMGuard makes the agent the least preferred OOM victim among the
 // processes of its session: when a session holder starts its program, the
 // guard lowers the program's oom_score_adj, and resets it for every process
-// the program forks. jailoc-guest session processes are exempt from the
-// OOM killer. Only init can lower the values: sessions run as the agent
-// user. Processes are followed through the kernel proc connector; a child
-// keeps the agent's value from its fork until the guard handles the event.
+// the program forks. jailoc-guest init and its session processes are exempt
+// from the OOM killer; processes init starts outside a session are reset.
+// Only init can lower the values: sessions run as the agent user. Processes
+// are followed through the kernel proc connector; a child keeps its
+// parent's value from its fork until the guard handles the event.
 func startOOMGuard(logger *slog.Logger) (stop func(), err error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, unix.NETLINK_CONNECTOR)
 	if err != nil {
@@ -41,7 +42,9 @@ func startOOMGuard(logger *slog.Logger) (stop func(), err error) {
 		_ = unix.Close(fd)
 		return nil, fmt.Errorf("oom guard: subscribe to proc events: %w", err)
 	}
-	g := &oomGuard{logger: logger, agents: map[int]bool{}}
+	g := &oomGuard{logger: logger, init: os.Getpid(), agents: map[int]bool{}}
+	// Exempts init and resets the processes it started before subscribing.
+	g.rescan()
 	var once sync.Once
 	stop = func() { once.Do(func() { _ = unix.Close(fd) }) }
 	go func() {
@@ -70,6 +73,7 @@ func startOOMGuard(logger *slog.Logger) (stop func(), err error) {
 // oomGuard is the state of the guard's event loop.
 type oomGuard struct {
 	logger *slog.Logger
+	init   int          // PID of jailoc-guest init
 	agents map[int]bool // thread group IDs of session programs
 }
 
@@ -91,7 +95,9 @@ func (g *oomGuard) handle(ev procEvent) {
 		case roleOther:
 		}
 	case procEventFork:
-		if ev.childTGID != ev.tgid && g.agents[ev.tgid] {
+		switch {
+		case ev.childTGID == ev.tgid: // a new thread
+		case g.agents[ev.tgid], ev.tgid == g.init:
 			g.set(ev.childTGID, oomAdjChild)
 		}
 	case procEventExit:
@@ -117,7 +123,7 @@ func (g *oomGuard) rescan() {
 			procs[pid] = p
 		}
 	}
-	agents, writes := rescanPlan(procs)
+	agents, writes := rescanPlan(procs, g.init)
 	g.agents = agents
 	for pid, adj := range writes {
 		g.set(pid, adj)
@@ -156,4 +162,30 @@ func readProcInfo(pid int) (procInfo, error) {
 		p.adj, _ = strconv.Atoi(strings.TrimSpace(string(data))) // malformed: 0, rewritten if needed
 	}
 	return p, nil
+}
+
+// startOOMLog logs the kernel's OOM kills to the console log, which
+// outlives the VM; the kernel log does not.
+func startOOMLog(logger *slog.Logger) (stop func(), err error) {
+	f, err := os.Open("/dev/kmsg")
+	if err != nil {
+		return nil, fmt.Errorf("open kernel log: %w", err)
+	}
+	go func() {
+		buf := make([]byte, 8192) // a record is at most 8 KiB with its header
+		for {
+			n, err := f.Read(buf)
+			if errors.Is(err, syscall.EPIPE) {
+				continue // records were overwritten before they were read
+			}
+			if err != nil {
+				return
+			}
+			if k, ok := parseOOMKill(string(buf[:n])); ok {
+				logger.Warn("out of memory: kernel killed a process",
+					"pid", k.pid, "process", k.comm, "anon_rss_mib", k.anonRSSKiB/1024, "oom_score_adj", k.adj)
+			}
+		}
+	}()
+	return func() { _ = f.Close() }, nil
 }

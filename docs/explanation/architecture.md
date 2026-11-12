@@ -50,11 +50,13 @@ When the VM runs out of memory, the kernel's OOM killer ends the process with th
 
 | Process | `oom_score_adj` |
 |---------|-----------------|
-| Session holders and attached `jailoc-guest` clients | -1000: never killed, so a session can be reattached |
+| `jailoc-guest` init, session holders and attached `jailoc-guest` clients | -1000: never killed, so the VM keeps running and a session can be reattached |
 | The session program (the agent) | -500: killed only when it uses half of the VM memory more than any other process |
-| Processes the agent starts | 0: the kernel default |
+| Processes the agent or `jailoc-guest` init starts outside a session | 0: the kernel default |
 
-A forked process inherits its parent's `oom_score_adj`, and only root may lower it, while sessions run as `agent`. `jailoc-guest` follows process starts through the kernel's proc connector and resets every process the agent forks right after the fork, so the agent needs no changes. A child keeps the agent's value for the short time before `jailoc-guest` handles the event. PID 1 is never an OOM victim. Any program started in a session counts as an agent, including one the agent starts with `jailoc-guest session open`.
+`jailoc-guest` init runs as the child of libkrun's `init.krun`, which powers the VM off when its child exits; without the exemption, an OOM kill of init would stop the whole VM. A forked process inherits its parent's `oom_score_adj`, and only root may lower it, while sessions run as `agent`. `jailoc-guest` follows process starts through the kernel's proc connector and resets every process the agent or init forks right after the fork, so the agent needs no changes. A child keeps its parent's value for the short time before `jailoc-guest` handles the event. Any program started in a session counts as an agent, including one the agent starts with `jailoc-guest session open`.
+
+The kernel log lives in guest memory and is lost with the VM, so `jailoc-guest` copies every OOM kill to the console log as an `out of memory: kernel killed a process` line with the process, its PID, its anonymous memory and its `oom_score_adj`.
 
 ## Files
 
