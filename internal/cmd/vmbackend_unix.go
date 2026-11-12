@@ -225,25 +225,55 @@ func sameVMSpec(a, b vm.Spec) bool {
 	return errA == nil && errB == nil && string(ja) == string(jb)
 }
 
-// vmRuntime is the runner, its library directory and the jailoc-guest
-// binary: the configured runner or the runtime embedded in jailoc (release
-// builds), and the guest binary embedded in jailoc (release builds) or next
-// to the runner.
+// defaultVMRunner and defaultVMLibDir name a VM runtime that the package
+// ships next to jailoc. Packagers set them at link time, for example
+// -ldflags "-X github.com/seznam/jailoc/internal/cmd.defaultVMRunner=/nix/store/...".
+var (
+	defaultVMRunner string
+	defaultVMLibDir string
+)
+
+// vmRuntimeFiles is the runner, its library directory and the jailoc-guest
+// binary: the configured runner, the runtime provided by the package
+// (defaultVMRunner) or the runtime embedded in jailoc (release builds), and
+// the guest binary embedded in jailoc (release builds) or next to the runner.
 type vmRuntimeFiles struct {
 	runner, libDir, guest string
 }
 
 func vmRuntime(cfg *config.Config) (vmRuntimeFiles, error) {
+	return vmRuntimeWith(cfg, defaultVMRunner, defaultVMLibDir)
+}
+
+// selectVMRuntime picks the runtime source: the configured runner, then the
+// package runner, then the embedded runtime (embedded is true). The package
+// lib dir applies only together with the package runner.
+func selectVMRuntime(cfg *config.Config, pkgRunner, pkgLibDir string) (runner, libDir string, embedded bool) {
+	switch {
+	case cfg.VM.Runner != "":
+		return cfg.VM.Runner, vmLibDir(cfg.VM.LibDir), false
+	case pkgRunner != "":
+		return pkgRunner, pkgLibDir, false
+	default:
+		return "", "", true
+	}
+}
+
+func vmRuntimeWith(cfg *config.Config, pkgRunner, pkgLibDir string) (vmRuntimeFiles, error) {
 	var rt vmRuntimeFiles
-	if cfg.VM.Runner != "" {
-		rt = vmRuntimeFiles{runner: cfg.VM.Runner, libDir: vmLibDir(cfg.VM.LibDir)}
-	} else {
-		runner, libDir, err := vm.EnsureRuntime(filepath.Join(vmRootDir(), "runtime"), os.Stdout)
+	runner, libDir, embedded := selectVMRuntime(cfg, pkgRunner, pkgLibDir)
+	if embedded {
+		var err error
+		runner, libDir, err = vm.EnsureRuntime(filepath.Join(vmRootDir(), "runtime"), os.Stdout)
 		if err != nil {
 			return rt, fmt.Errorf("prepare VM runtime: %w", err)
 		}
-		rt = vmRuntimeFiles{runner: runner, libDir: libDir}
+	} else if cfg.VM.Runner == "" {
+		if _, err := os.Stat(runner); err != nil {
+			return rt, fmt.Errorf("VM runner %s provided by this jailoc package is missing: %w; reinstall jailoc or set runner and lib_dir in the [vm] section of the config", runner, err)
+		}
 	}
+	rt = vmRuntimeFiles{runner: runner, libDir: libDir}
 	guest, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
 	switch {
 	case err == nil:
