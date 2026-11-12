@@ -145,6 +145,25 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `ports` | (int \| string)[] | (all) | Port numbers (`1`–`65535`) or `"a-b"` port ranges. |
 | `name` | string | `""` | Label shown in `jailoc traffic` (`rule=<name>`) and validation errors. |
 
+#### Implicit rules and built-in broker behavior
+
+In addition to `[[defaults.network.rules]]` and `[[workspaces.<name>.network.rules]]`, the broker applies:
+
+- **`rule=agent`** (allow, `proto = "tcp"`, `ports = [443]`): appended automatically for the workspace's selected coding agent (or the `from` agent of a custom agent). A matching `deny` rule still overrides it:
+
+| `agent` | Implicit `rule=agent` allowlist (`tcp/443`) |
+|---|---|
+| `opencode`, `opencode1`, `opencode2`, `omo` | `api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `oauth2.googleapis.com`, `api.githubcopilot.com`, `*.githubcopilot.com`, `openrouter.ai`, `opencode.ai`, `*.opencode.ai`, `models.dev` |
+| `claude` | `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `platform.claude.com` |
+| `copilot` | `api.github.com`, `github.com`, `api.githubcopilot.com`, `*.githubcopilot.com`, `copilot-proxy.githubusercontent.com` |
+| `agy` | `generativelanguage.googleapis.com`, `cloudcode-pa.googleapis.com`, `oauth2.googleapis.com`, `accounts.google.com` |
+
+- **`rule=legacy`** (`proto = "any"`): synthesized in memory when deprecated `allowed_hosts`, `allowed_networks` or `dns_blocked_zones` are set.
+- **DoT and QUIC exclusion on `"*"`**: a wildcard rule (`allow = ["*"]`) without explicit `ports` excludes TCP port `853` (DNS over TLS) and UDP port `443` (QUIC/HTTP/3) so DNS stays on the gateway resolver and HTTPS clients fall back to TCP port `443` (where TLS SNI is inspected whenever hostname rules or hostname `deny` rules apply on that port) unless those ports are listed in `ports`.
+- **Direct DNS block**: TCP and UDP port `53` to any address other than the gateway (`192.168.127.1`) is denied (`reason=dns-filtered`).
+- **Gateway services (`192.168.127.1`)**: the broker serves DHCP, DNS (port `53`), SNTP clock sync (UDP port `123`), SSH/GPG agent relays (`ssh_auth_sock`, `gpg_agent`), and configured `host_ports` on the gateway; all other connections to the gateway, guest subnet (`192.168.127.0/24`, `fd00:127::/64`), host interface addresses, and hard-denied ranges are always denied.
+- **Default `dev-deps` rule in new configs**: when jailoc creates a missing `~/.config/jailoc/config.toml`, it writes an explicit `[[defaults.network.rules]]` entry named `dev-deps` into the file (GitHub, GitLab.com, npm, Yarn, Node.js, Bun, PyPI, Astral, Go proxy, crates.io, Rustup, Docker Hub, GHCR, Quay, GCR, MCR, Ubuntu/Debian/Alpine mirrors, and Nix caches). Removing or editing that block in `config.toml` removes or changes those rules.
+
 ### Example
 
 ```toml

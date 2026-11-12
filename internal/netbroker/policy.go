@@ -523,6 +523,11 @@ func decideRules(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic 
 		}
 	}
 	for i := range p.allow {
+		if d, ok := matchAddrRule(&p.allow[i], env.Names, proto, dst, isPublic); ok {
+			return d
+		}
+	}
+	for i := range p.allow {
 		if d, ok := matchRule(&p.allow[i], env.Names, proto, dst, isPublic, true); ok {
 			return d
 		}
@@ -544,9 +549,7 @@ func matchRule(r *Rule, names []string, proto string, dst netip.AddrPort, isPubl
 		reason = "rule " + r.Name
 	}
 	for _, name := range names {
-		// Name rules only open public addresses unless the rule also matches by CIDR;
-		// deny rules match any address whose name matches.
-		if (!allow || isPublic) && r.matchesName(proto, dst.Port(), name) {
+		if r.matchesName(proto, dst.Port(), name) {
 			return Decision{Allow: allow, Reason: reason, Name: name, Rule: r.Name, byName: true}, true
 		}
 	}
@@ -554,6 +557,17 @@ func matchRule(r *Rule, names []string, proto string, dst netip.AddrPort, isPubl
 		return Decision{Allow: allow, Reason: reason, Name: firstName(names), Rule: r.Name}, true
 	}
 	return Decision{}, false
+}
+
+func matchAddrRule(r *Rule, names []string, proto string, dst netip.AddrPort, isPublic bool) (Decision, bool) {
+	if !r.matchesAddr(proto, dst, isPublic) {
+		return Decision{}, false
+	}
+	reason := "rule"
+	if r.Name != "" {
+		reason = "rule " + r.Name
+	}
+	return Decision{Allow: true, Reason: reason, Name: firstName(names), Rule: r.Name}, true
 }
 
 func firstName(names []string) string {

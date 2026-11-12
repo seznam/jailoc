@@ -70,6 +70,7 @@ Background on how jailoc works and why it's designed the way it is.
 
 ### Blog
 
+- [Taming agent egress: default-deny network rules in jailoc 2.4](blog/network-rules.md)
 - [jailoc 2: every agent gets its own computer](blog/jailoc-2.md)
 
 ### Development

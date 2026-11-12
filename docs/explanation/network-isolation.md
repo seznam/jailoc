@@ -45,7 +45,7 @@ Hard-denied regardless of allow rules: unspecified `::`, loopback `::1`, IPv4-co
 
 IPv6 addresses that carry an IPv4 address (IPv4-mapped `::ffff:0:0/96`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) are judged by the IPv4 rules for the embedded address, so they can't be used to reach a blocked IPv4 range.
 
-Unique local addresses (`fc00::/7`) count as private: they're reachable only through an explicit IPv6 CIDR rule. Anything outside global unicast `2000::/3` is denied.
+Unique local addresses (`fc00::/7`) count as private: they're reachable only through an explicit IPv6 CIDR or hostname rule (never `*`). Anything outside global unicast `2000::/3` is denied.
 
 ## Enforcement by name
 
@@ -54,7 +54,7 @@ Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, t
 The broker enforces hostname rules at three points:
 
 1. **DNS**: the gateway resolver checks the queried name and every record owner and CNAME target in the upstream answer against the policy. Names that match a `deny` rule or do not match any `allow` rule get NXDOMAIN. `HTTPS` and `SVCB` records are answered with NODATA so Encrypted ClientHello (ECH) configurations do not reach the guest. Allowed `A` and `AAAA` answers populate a per-workspace IP-to-name cache bounded by record TTL. Direct port 53 to any other resolver is denied, and DoT (port 853) and QUIC (UDP port 443) are denied unless a rule explicitly opens those ports.
-2. **Connect time (L4)**: when the guest opens a TCP connection or UDP flow, the broker looks up the destination IP in its DNS cache. A rule matches if the IP is within a rule's CIDR (or `*` for public addresses), or if a cached DNS name for that IP matches a rule's hostname or `*.wildcard` pattern on the matching protocol and port. Unresolved literal IPs only match CIDR or `*` rules, and hostname rules never open private IP ranges.
+2. **Connect time (L4)**: when the guest opens a TCP connection or UDP flow, the broker looks up the destination IP in its DNS cache. A rule matches if the IP is within a rule's CIDR (or `*` for public addresses), or if a cached DNS name for that IP matches a rule's hostname or `*.wildcard` pattern on the matching protocol and port. Unresolved literal IPs only match CIDR or `*` rules, and `*` never opens private IP ranges.
 3. **TLS SNI and HTTP Host before dialing**: for TCP connections authorized by a hostname rule or on ports with hostname deny rules, the broker completes the guest TCP handshake, reads the TLS ClientHello SNI or HTTP/1 `Host` header, re-evaluates the policy against that name, verifies the name belongs to the destination IP in the DNS cache, and only then dials the upstream host socket. A denied or mismatched SNI resets the connection before any upstream socket is opened, closing the shared-CDN-IP hole.
 
 ## Enforcement details
