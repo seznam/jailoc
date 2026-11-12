@@ -25,7 +25,7 @@ With --purge-cache, also rotates cached from_command secrets with a ttl.`,
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
-		printDeprecationWarnings(cfg)
+		printConfigWarnings(cfg)
 		wss, err := targetWorkspaces(cfg, args)
 		if err != nil {
 			return err

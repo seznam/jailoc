@@ -202,7 +202,12 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if agentChanged {
 		out = append(out, "agent")
 	}
-	if !agentChanged && (!slices.Equal(running.Guest.Env, want.Guest.Env) || running.Guest.WorkDir != want.Guest.WorkDir) {
+	// The session environment differs on the same agent when the OpenCode 2
+	// TUI plugin list (OPENCODE_CLI_CONFIG_CONTENT) changed.
+	if !agentChanged && !slices.Equal(running.Guest.Env, want.Guest.Env) {
+		out = append(out, "TUI plugins")
+	}
+	if !agentChanged && running.Guest.WorkDir != want.Guest.WorkDir {
 		out = append(out, "the working directory")
 	}
 	if !guestCompatible(running) {

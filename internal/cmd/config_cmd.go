@@ -26,7 +26,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	printDeprecationWarnings(cfg)
+	printConfigWarnings(cfg)
 
 	wss, err := targetWorkspaces(cfg, args)
 	if err != nil {
@@ -252,7 +252,10 @@ func printHostPortTargets(ports []config.HostPortTarget, indent string) {
 	}
 }
 
-func printDeprecationWarnings(cfg *config.Config) {
+func printConfigWarnings(cfg *config.Config) {
+	for _, k := range cfg.UnknownKeys() {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: unknown setting %q in config.toml is ignored\n", k)
+	}
 	for _, w := range config.DeprecationWarnings(cfg) {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}

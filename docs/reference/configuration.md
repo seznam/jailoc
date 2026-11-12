@@ -14,7 +14,7 @@ Per-workspace files, such as the CA bundle copied by [`ca_bundle`](#ca_bundle), 
 
 VM state under `~/.cache/jailoc-vm/` is keyed by workspace name only and is shared by all configuration files: workspaces with the same name in two files control the same VM.
 
-All fields are optional unless noted.
+All fields are optional unless noted. jailoc ignores settings it does not know and prints a warning naming each of them; [`jailoc migrate`](cli.md#jailoc-migrate) removes them when it rewrites the file.
 
 ---
 

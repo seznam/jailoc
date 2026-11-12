@@ -131,6 +131,25 @@ func TestRunMigrateWritesBackup(t *testing.T) {
 	if err := runMigrate(context.Background(), path, p); err != nil || !strings.Contains(out.String(), "nothing to migrate") {
 		t.Fatalf("second run = %v\n%s", err, out)
 	}
+
+	// Unknown keys alone trigger a rewrite that drops them.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // G304: test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("pathz = [\"/typo\"]\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p, out = scripted("y")
+	if err := runMigrate(context.Background(), path, p); err != nil || !strings.Contains(out.String(), "remove unknown setting") {
+		t.Fatalf("unknown-key run = %v\n%s", err, out)
+	}
+	if cfg, err = config.ReadRaw(path); err != nil || len(cfg.UnknownKeys()) != 0 {
+		t.Fatalf("reread after migrate: err %v, cfg %+v", err, cfg)
+	}
 }
 
 func TestRunMigrateMovesNetwork(t *testing.T) {

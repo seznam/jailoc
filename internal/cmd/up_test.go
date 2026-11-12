@@ -293,6 +293,12 @@ func TestCLIConfigContent(t *testing.T) {
 			mount: true,
 			want:  `{"plugins":["file:///etc/jailoc-tui-plugin"]}`,
 		},
+		{
+			name:  "cli.json with comments and trailing commas",
+			files: map[string]string{"cli.json": "{\n  // my plugins\n  \"plugins\": [\"npm-plugin\", /* local */ \"./local\",],\n}\n"},
+			mount: true,
+			want:  `{"plugins":["npm-plugin","/home/agent/.config/opencode/local","file:///etc/jailoc-tui-plugin"]}`,
+		},
 		{name: "invalid cli.json", files: map[string]string{"cli.json": `{"plugins":`}, mount: true, wantErr: "parse "},
 		{name: "invalid plugins", files: map[string]string{"cli.json": `{"plugins":"x"}`}, mount: true, wantErr: "plugins"},
 	}
