@@ -14,11 +14,13 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/compose-spec/compose-go/v2/format"
+	"github.com/pelletier/go-toml/v2/unstable/edit"
 	"github.com/seznam/jailoc/internal/agent"
 )
 
@@ -1512,17 +1514,46 @@ func AddPath(workspace, path string) error {
 		return fmt.Errorf("workspace %q does not exist", workspace)
 	}
 
-	ws.Paths = append(ws.Paths, path)
-	cfg.Workspaces[workspace] = ws
-
-	f, err := os.Create(configPath) //nolint:gosec // configPath is derived from ConfigPath(), not user input
+	raw, err := os.ReadFile(configPath) //nolint:gosec // configPath is derived from ConfigPath(), not user input
 	if err != nil {
-		return fmt.Errorf("open config for write: %w", err)
+		return fmt.Errorf("read config for AddPath: %w", err)
 	}
-	defer func() { _ = f.Close() }()
 
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		return fmt.Errorf("encode updated config: %w", err)
+	doc, err := edit.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("parse config for AddPath: %w", err)
+	}
+	keyPath := []string{"workspaces", workspace, "paths"}
+	if doc.Has(keyPath) {
+		if err := doc.Set(append(keyPath, strconv.Itoa(len(ws.Paths))), path); err != nil {
+			return fmt.Errorf("patch config for AddPath: %w", err)
+		}
+	} else {
+		if err := doc.Set(keyPath, []string{path}); err != nil {
+			return fmt.Errorf("patch config for AddPath: %w", err)
+		}
+	}
+	patched := doc.Bytes()
+
+	targetPath := configPath
+	if resolved, err := filepath.EvalSymlinks(configPath); err == nil {
+		targetPath = resolved
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(targetPath), ".config-*.toml")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+
+	if _, err := tmp.Write(patched); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary config: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), targetPath); err != nil {
+		return fmt.Errorf("replace config: %w", err)
 	}
 
 	return nil
