@@ -172,7 +172,8 @@ profile = "work"
 			t.Fatalf("runConfig(ws-opencode-partial) = %v", err)
 		}
 	})
-	wantPartial := filepath.Join(home, "custom-data") + ", " + filepath.Join(home, ".local", "share", "jailoc", "profiles", "work", "opencode-state")
+	profileDir := filepath.Join(home, ".local", "share", "jailoc", "profiles", "work")
+	wantPartial := filepath.Join(home, "custom-data") + ", " + filepath.Join(profileDir, "opencode-state") + ", " + filepath.Join(profileDir, "opencode1-omo")
 	assertContains(t, outPartial, "    Profile Dir: "+wantPartial+"\n")
 	if _, err := os.Stat(filepath.Join(home, "custom-data")); !os.IsNotExist(err) {
 		t.Fatalf("config inspection must not create mount directories on disk: err=%v", err)

@@ -43,6 +43,7 @@ const (
 # ssh_auth_sock = false
 # gpg_agent = false
 # git_config = true
+# agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
 # enable_docker = false
 # ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
 # cpu = 2.0
@@ -132,6 +133,7 @@ paths = []
 # ssh_auth_sock = false
 # gpg_agent = false
 # git_config = true
+# agent_config = true
 # enable_docker = false
 # ca_bundle = true  # omitted: inherit defaults; true/false/string: override
 # cpu = 2.0
@@ -394,6 +396,7 @@ type Defaults struct {
 	SSHAuthSock     bool                     `toml:"ssh_auth_sock,omitempty"`
 	GPGAgent        bool                     `toml:"gpg_agent,omitempty"`
 	GitConfig       *bool                    `toml:"git_config,omitempty"`
+	AgentConfig     *bool                    `toml:"agent_config,omitempty"`
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
 	DockerDisk      *string                  `toml:"docker_disk,omitempty"`
@@ -430,6 +433,7 @@ type Workspace struct {
 	SSHAuthSock     *bool                    `toml:"ssh_auth_sock,omitempty"`
 	GPGAgent        *bool                    `toml:"gpg_agent,omitempty"`
 	GitConfig       *bool                    `toml:"git_config,omitempty"`
+	AgentConfig     *bool                    `toml:"agent_config,omitempty"`
 	CPU             *float64                 `toml:"cpu,omitempty"`
 	Memory          *string                  `toml:"memory,omitempty"`
 	DockerDisk      *string                  `toml:"docker_disk,omitempty"`

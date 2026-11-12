@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
@@ -49,7 +50,7 @@ func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := vmSnapshots(&workspace.Resolved{Name: "w", GitConfig: tt.git, Snapshots: tt.snapshots})
+			got, err := vmSnapshots(&workspace.Resolved{Name: "w", GitConfig: tt.git, Snapshots: tt.snapshots}, nil)
 			if err != nil {
 				t.Fatalf("vmSnapshots: %v", err)
 			}
@@ -67,6 +68,93 @@ func TestVMSnapshotsGitConfigDefault(t *testing.T) {
 				t.Fatalf("snapshots = %v, want %v", pairs, tt.want)
 			}
 		})
+	}
+}
+
+func TestVMSnapshotsAgentConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	skills := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(filepath.Join(skills, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claudeMD, []byte("# rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := agent.Lookup("claude")
+	guestMD := guestHome + "/.claude/CLAUDE.md"
+	guestSkills := guestHome + "/.claude/skills"
+	tests := []struct {
+		name      string
+		off       bool
+		snapshots []string
+		shares    []vm.Share
+		want      []string
+	}{
+		{name: "existing files become snapshots", want: []string{claudeMD + ":" + guestMD, skills + ":" + guestSkills}},
+		{name: "agent_config off", off: true},
+		{name: "removal drops one file", snapshots: []string{":~/.claude/CLAUDE.md"}, want: []string{skills + ":" + guestSkills}},
+		{name: "snapshot overrides a file", snapshots: []string{"/data/team.md:" + guestMD + ":ro"}, want: []string{"/data/team.md:" + guestMD, skills + ":" + guestSkills}},
+		{name: "shared state directory skips them", shares: []vm.Share{{HostPath: "/p/claude", GuestPath: guestHome + "/.claude"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := vmSnapshots(&workspace.Resolved{Name: "w", Agent: h, AgentConfig: !tt.off, Snapshots: tt.snapshots}, tt.shares)
+			if err != nil {
+				t.Fatalf("vmSnapshots: %v", err)
+			}
+			var pairs []string
+			for _, m := range got {
+				pairs = append(pairs, m.Host+":"+m.Container)
+			}
+			if strings.Join(pairs, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("snapshots = %v, want %v", pairs, tt.want)
+			}
+		})
+	}
+}
+
+// The OpenCode configuration copy leaves out node_modules and carries the
+// .gitignore OpenCode would write, unless the host directory has one.
+func TestStageAgentConfigDirectory(t *testing.T) {
+	t.Parallel()
+	h, _ := agent.Lookup("opencode2")
+	for _, hostIgnore := range []string{"", "custom\n"} {
+		home := t.TempDir()
+		dir := filepath.Join(home, ".config", "opencode")
+		if err := os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		wantIgnore := h.ConfigGitignore
+		if hostIgnore != "" {
+			wantIgnore = hostIgnore
+			if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(hostIgnore), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		snapshots := agentConfigSnapshots(h, home, nil)
+		if len(snapshots) != 1 || snapshots[0].Container != h.ConfigDir {
+			t.Fatalf("snapshots = %v, want the config directory", snapshots)
+		}
+		state := t.TempDir()
+		binds, err := stageSnapshots(state, snapshots, "")
+		if err != nil {
+			t.Fatalf("stageSnapshots: %v", err)
+		}
+		staged := filepath.Join(vm.GuestReadOnlyDir(state), snapshotsDir, snapshotGeneration(binds), "0")
+		if _, err := os.Stat(filepath.Join(staged, "opencode.json")); err != nil {
+			t.Fatalf("config file not copied: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(staged, "node_modules")); !os.IsNotExist(err) {
+			t.Fatalf("node_modules copied: %v", err)
+		}
+		if got, _ := os.ReadFile(filepath.Join(staged, ".gitignore")); string(got) != wantIgnore { //nolint:gosec // G304: test file
+			t.Fatalf(".gitignore = %q, want %q", got, wantIgnore)
+		}
 	}
 }
 

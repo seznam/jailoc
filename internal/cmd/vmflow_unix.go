@@ -81,7 +81,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
-	snapshots, err := vmSnapshots(ws)
+	snapshots, err := vmSnapshots(ws, shares)
 	if err != nil {
 		return err
 	}

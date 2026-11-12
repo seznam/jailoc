@@ -94,6 +94,7 @@ Defaults applied to all workspaces.
 | `ssh_auth_sock` | bool | `false` | Relay the host SSH agent (`$SSH_AUTH_SOCK`) into the VM at `/run/ssh-agent.sock` and copy `~/.ssh/known_hosts` into it. |
 | `gpg_agent` | bool | `false` | Relay the host gpg-agent extra socket into the VM at `/run/user/<uid>/gnupg/S.gpg-agent` and import the public key of `user.signingKey`, or of all host secret keys when it is unset, into the VM keyring. Requires `gpg` in the image. |
 | `git_config` | bool | `true` | Copy the host Git configuration read-only into the VM: `~/.gitconfig`, `config`, `ignore` and `attributes` from `$XDG_CONFIG_HOME/git` (default `~/.config/git`), and the files they reference under the home directory. See [`git_config`](#git_config). |
+| `agent_config` | bool | `true` | Copy the coding agent's host configuration read-only into the VM, such as `~/.claude/CLAUDE.md` or `~/.config/opencode`. See [`agent_config`](#agent_config). |
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
@@ -210,7 +211,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
 | `network` | table | `{}` | Same fields as [`[defaults.network]`](#defaultsnetwork); a set field wins. |
-| `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
+| `ssh_auth_sock`, `gpg_agent`, `git_config`, `agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
 
 ### Example
 
@@ -232,7 +233,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 | `agent` | Agent | Package | Session command | Continue (`-c`) | Resume (`-s ID`) | Persistent home directories | Environment |
 |---|---|---|---|---|---|---|---|
 | `opencode2` | OpenCode 2 | `@opencode/cli` | `opencode --standalone --auto` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_CLI_CONFIG_CONTENT` |
-| `opencode1` | OpenCode 1 | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
+| `opencode1` | OpenCode 1 | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode`, `~/.omo` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
 | `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `DISABLE_AUTOUPDATER=1` |
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
 | `omo` | OmO | `omo-ai` | `omo --permission-preset full-access --extension /etc/jailoc-tui-plugin/omo.js` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
@@ -302,11 +303,10 @@ The mounts of the selected agent are merged by guest path; a later entry replace
 ```toml
 [defaults.agents.opencode-legacy]
 from = "opencode"
-mounts = [
-  "~/.config/opencode-legacy:/home/agent/.config/opencode",
-  ":/home/agent/.opencode",
-]
+mounts = ["~/.config/opencode-legacy:/home/agent/.config/opencode"]
 ```
+
+A mount at the destination of an [`agent_config`](#agent_config) copy replaces the copy.
 
 ### Agent profiles
 
@@ -318,7 +318,7 @@ mounts = [
 | `false` | per workspace | emptied on every VM start |
 | `"<name>"` | `~/.local/share/jailoc/profiles/<name>/<dir>` | until deleted by hand; `jailoc down --purge` keeps it |
 
-`<dir>` is the name of the harness's state directory (`opencode2-data`, `opencode2-state` for OpenCode 2, `opencode-data`, `opencode-state` for OpenCode 1, `claude`, `copilot`, `omo`, `antigravity`), so one profile can hold the state of several harnesses, and two agents of the same harness share it when they name the same profile. `~/.cache` stays per workspace. A mount over a persistent home directory replaces it.
+`<dir>` is the name of the harness's state directory (`opencode2-data`, `opencode2-state` for OpenCode 2, `opencode-data`, `opencode-state` for OpenCode 1, plus `opencode1-omo` for the OmO plugin's `~/.omo`, `claude`, `copilot`, `omo`, `antigravity`), so one profile can hold the state of several harnesses, and two agents of the same harness share it when they name the same profile. `~/.cache` stays per workspace. A mount over a persistent home directory replaces it.
 
 A named profile is used by one running workspace at a time: `jailoc up` and `jailoc restart` fail while another workspace using the profile is running.
 
@@ -389,6 +389,24 @@ Files referenced by the copied configuration files are copied to the same path r
 Configuration files are copied with two rewrites: values of the path variables above that lie under the host home directory become `~/...`, and `includeIf "gitdir:~/..."` and `includeIf "gitdir/i:~/..."` conditions use the host home directory, which workspace paths keep inside the VM.
 
 Each copy is a default snapshot: a [`snapshots`](#snapshots) entry with the same destination replaces it, an entry with an empty host removes it, and a directory snapshot that contains its destination replaces it.
+
+### `agent_config`
+
+When `true`, jailoc adds read-only snapshots of the selected agent's host configuration at `jailoc up` and `jailoc reload`:
+
+| Agent | Host, copied to the same path under `/home/agent` |
+|---|---|
+| `opencode`, `opencode1`, `opencode2` | `~/.config/opencode`, without `node_modules` |
+| `claude` | `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, `~/.claude/agents`, `~/.claude/commands`, `~/.claude/skills`, `~/.claude/output-styles` |
+| `copilot` | `~/.copilot/copilot-instructions.md`, `~/.copilot/agents`, `~/.copilot/skills`, `~/.copilot/mcp-config.json` |
+| `agy` | `~/.gemini/GEMINI.md` |
+| `omo` | none |
+
+Missing sources are skipped. Logins, sessions and the agents' own `config.json` and `settings.json` of `copilot` stay in the persistent state directory. The OpenCode copy gets the `.gitignore` OpenCode would write (unless the host directory has one), and OpenCode doesn't install the dependencies of local plugins in the read-only directory: plugins listed in `plugin` still install into `~/.cache`, but a local plugin that imports a package needs it installed in the image.
+
+The copies inside a persistent state directory (`~/.claude`, `~/.copilot`, `~/.gemini`) hide what is there in the VM: a skill the agent installs into `~/.claude/skills` is not visible while that directory is copied. When the snapshot is dropped, the empty mount points it left in the state directory are removed at the next start.
+
+Each copy is a default snapshot like the [Git configuration](#git_config): a [`snapshots`](#snapshots) entry with the same destination replaces it, an entry with an empty host removes it (`snapshots = [":/home/agent/.claude/settings.json"]`), and a directory snapshot that contains its destination replaces it. A copy whose destination equals, contains or lies inside a shared path, such as a mount of `~/.claude` or a [named profile](#agent-profiles) state directory, is skipped.
 
 ### `ports`
 
@@ -499,20 +517,17 @@ Environment variables merge in this order, later wins per key:
 
 | Agent | Destination | Host source | Mode |
 |---|---|---|---|
-| `opencode`, `opencode1`, `opencode2` | `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
-| `opencode`, `opencode1`, `opencode2` | `/home/agent/.opencode` | `~/.opencode` | `rw` |
-| `opencode1` | `/home/agent/.omo` | `~/.omo` | `rw` |
 | all | `/home/agent/.agents` | `~/.agents` | `ro` |
 
-The `opencode1` mount of `~/.omo` serves the OmO plugin (`oh-my-openagent`), which writes its configuration, state and lock files there. It gives every OpenCode 1 workspace write access to the host's `~/.omo`. Make it read-only with `[defaults.agents.opencode1] mounts = ["~/.omo:/home/agent/.omo:ro"]`, or remove it with `mounts = [":/home/agent/.omo"]`; with the mount removed, `~/.omo` lives in the VM root filesystem and is lost on restart.
+The agent's configuration is copied instead of mounted; see [`agent_config`](#agent_config). The OmO plugin (`oh-my-openagent`) of `opencode1` writes its configuration, state and lock files to `~/.omo`, which is a persistent home directory of the workspace. To share the host's `~/.omo` instead, mount it: `[defaults.agents.opencode1] mounts = ["~/.omo:/home/agent/.omo:rw"]`.
 
-`snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config` and `ssh_auth_sock` add lowest-priority snapshots (the [Git configuration files](#git_config), `/home/agent/.ssh/known_hosts`), which a `snapshots` entry for the same destination replaces or, with an empty host, removes.
+`snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config`, `agent_config` and `ssh_auth_sock` add lowest-priority snapshots (the [Git configuration files](#git_config), the [agent configuration](#agent_config), `/home/agent/.ssh/known_hosts`), which a `snapshots` entry for the same destination replaces or, with an empty host, removes.
 
 `ports` merges by host port; the workspace entry wins. `host_ports` merges by guest port; the workspace entry wins.
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 

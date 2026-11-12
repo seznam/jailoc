@@ -49,6 +49,7 @@ type Resolved struct {
 	SSHAuthSock     bool
 	GPGAgent        bool
 	GitConfig       bool
+	AgentConfig     bool
 	Secrets         []ResolvedSecret
 	CPU             float64
 	Memory          string
@@ -186,6 +187,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		SSHAuthSock:     boolWithOverride(cfg.Defaults.SSHAuthSock, ws.SSHAuthSock),
 		GPGAgent:        boolWithOverride(cfg.Defaults.GPGAgent, ws.GPGAgent),
 		GitConfig:       boolPtrWithDefault(cfg.Defaults.GitConfig, ws.GitConfig, true),
+		AgentConfig:     boolPtrWithDefault(cfg.Defaults.AgentConfig, ws.AgentConfig, true),
 		CPU:             floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:          stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 		DockerDisk:      stringWithDefault(cfg.Defaults.DockerDisk, ws.DockerDisk, "20g"),

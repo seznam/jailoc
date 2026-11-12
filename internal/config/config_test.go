@@ -1942,6 +1942,25 @@ paths = ["/data"]
 			},
 		},
 		{
+			name: "agent_config in defaults and workspace",
+			tomlContent: `
+[defaults]
+agent_config = false
+
+[workspaces.default]
+paths = ["/data"]
+agent_config = true
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.AgentConfig == nil || *cfg.Defaults.AgentConfig {
+					t.Fatal("expected defaults.agent_config = false")
+				}
+				if ws := cfg.Workspaces["default"]; ws.AgentConfig == nil || !*ws.AgentConfig {
+					t.Fatal("expected workspace.agent_config = true")
+				}
+			},
+		},
+		{
 			name: "defaults git_config nil when omitted",
 			tomlContent: `
 [workspaces.default]
