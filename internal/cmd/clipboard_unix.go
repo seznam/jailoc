@@ -220,7 +220,7 @@ func copyToHostClipboard(data []byte) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: fixed clipboard tool resolved from PATH
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
