@@ -278,14 +278,24 @@ func runFirstTimeSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 			secretsEnv["GH_TOKEN"] = config.Secret{FromCommand: "gh auth token"}
 		}
 	}
-	if p.hasHostBinary("glab") {
-		useGL, err := p.confirm("Pass GitLab CLI token into the VM as GITLAB_TOKEN (from `glab auth status -t`)?", false)
+	var defaultsEnv []string
+	if p.hasHostBinary("ssh") {
+		useGL, err := p.confirm("Mint a short-lived GitLab token per workspace over SSH as GITLAB_TOKEN?", false)
 		if err != nil {
 			return "", false, err
 		}
 		if useGL {
-			secretsEnv["GITLAB_TOKEN"] = config.Secret{
-				FromCommand: `glab config get token 2>/dev/null`,
+			glHost, err := p.input("GitLab host", "gitlab.com", validateGitLabHost)
+			if err != nil {
+				return "", false, err
+			}
+			glHost = strings.ToLower(strings.TrimSpace(glHost))
+			secretsEnv["GITLAB_TOKEN"] = config.Secret{FromCommand: gitlabTokenCommand(glHost), TTL: "24h"}
+			if glHost != "gitlab.com" {
+				defaultsEnv = append(defaultsEnv, "GITLAB_HOST="+glHost)
+				if !allowInternet && !slices.Contains(extraHosts, glHost) {
+					extraHosts = append(extraHosts, glHost)
+				}
 			}
 		}
 	}
@@ -319,6 +329,7 @@ func runFirstTimeSetup(configPath, targetDir string, p *wizardPrompter, dryRun b
 		AllowInternet: allowInternet,
 		ExtraHosts:    extraHosts,
 		SecretsEnv:    secretsEnv,
+		Env:           defaultsEnv,
 		WorkspaceName: wsName,
 		WorkspacePath: resolvedWSPath,
 	}
@@ -496,6 +507,21 @@ func maybeOfferFirstTimeSetup(ctx context.Context, targetDir string) error {
 	}
 	if !workspaceExplicit && wsName != "" {
 		workspaceFlag = wsName
+	}
+	return nil
+}
+
+// gitlabTokenCommand mints a personal access token named after the workspace
+// over SSH. GitLab tokens expire at midnight UTC on their expiry date, so a
+// 2-day lifetime keeps every token valid longer than its 24h cache.
+func gitlabTokenCommand(host string) string {
+	return "ssh git@" + host + " personal_access_token jailoc-${JAILOC_WORKSPACE} api 2 | awk '/^Token:/ {print $2}'"
+}
+
+func validateGitLabHost(s string) error {
+	kind, normalized, err := config.ParseRuleTarget(s)
+	if err != nil || kind != "name" || strings.HasPrefix(normalized, "*.") {
+		return fmt.Errorf("GitLab host must be a hostname such as gitlab.com, got %q", s)
 	}
 	return nil
 }

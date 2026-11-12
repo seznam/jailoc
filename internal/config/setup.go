@@ -70,6 +70,7 @@ type FirstTimeOptions struct {
 	AllowInternet bool
 	ExtraHosts    []string
 	SecretsEnv    map[string]Secret
+	Env           []string
 	WorkspaceName string
 	WorkspacePath string
 }
@@ -155,6 +156,12 @@ func RenderFirstTime(opts FirstTimeOptions) ([]byte, error) {
 		})
 		if err := doc.Set([]string{"defaults", "network", "rules"}, rules); err != nil {
 			return nil, fmt.Errorf("set defaults.network.rules: %w", err)
+		}
+	}
+
+	if len(opts.Env) > 0 {
+		if err := doc.Set([]string{"defaults", "env"}, opts.Env); err != nil {
+			return nil, fmt.Errorf("set defaults.env: %w", err)
 		}
 	}
 

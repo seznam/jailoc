@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -150,7 +151,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		assertContains(t, out.String(), "dry run, nothing written")
 	})
 
-	t.Run("gh and glab prompts run only when binary is accessible on host", func(t *testing.T) {
+	t.Run("gh and GitLab SSH prompts run only when binary is accessible on host", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -184,6 +185,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 			"4g",
 			"yes",
 			"yes",
+			"gitlab.example.com",
 			"default",
 			projDir,
 			"yes",
@@ -209,8 +211,44 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		if loaded.Defaults.Secrets.Env["GH_TOKEN"].FromCommand == "" {
 			t.Error("expected GH_TOKEN secret to be configured")
 		}
-		if loaded.Defaults.Secrets.Env["GITLAB_TOKEN"].FromCommand == "" {
-			t.Error("expected GITLAB_TOKEN secret to be configured")
+		gl := loaded.Defaults.Secrets.Env["GITLAB_TOKEN"]
+		if gl.FromCommand != gitlabTokenCommand("gitlab.example.com") || gl.TTL != "24h" {
+			t.Errorf("GITLAB_TOKEN secret = %+v, want SSH mint command for gitlab.example.com with ttl 24h", gl)
+		}
+		if !slices.Contains(loaded.Defaults.Env, "GITLAB_HOST=gitlab.example.com") {
+			t.Errorf("defaults env = %v, want GITLAB_HOST=gitlab.example.com", loaded.Defaults.Env)
+		}
+		allowed := false
+		for _, r := range loaded.Defaults.Network.Get().Rules {
+			if slices.Contains(r.Allow, "gitlab.example.com") {
+				allowed = true
+			}
+		}
+		if !allowed {
+			t.Errorf("expected gitlab.example.com in the default network rules, got %+v", loaded.Defaults.Network.Get().Rules)
 		}
 	})
+}
+
+func TestValidateGitLabHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		host    string
+		wantErr bool
+	}{
+		{"gitlab.com", false},
+		{"gitlab.example.com", false},
+		{"*.gitlab.com", true},
+		{"10.0.0.1", true},
+		{"", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.host, func(t *testing.T) {
+			t.Parallel()
+			if err := validateGitLabHost(tc.host); (err != nil) != tc.wantErr {
+				t.Errorf("validateGitLabHost(%q) error = %v, wantErr %v", tc.host, err, tc.wantErr)
+			}
+		})
+	}
 }

@@ -109,6 +109,32 @@ from_command = "security find-generic-password -s npmrc -w"
 jailoc runs each command with `/bin/sh -c` and `JAILOC_WORKSPACE` set to the workspace name at `jailoc up` and `jailoc reload`, before it boots or changes the VM. The command gets your terminal, so a password manager can ask you to unlock it. A command that exits non-zero, prints nothing or runs longer than two minutes stops the operation.
 
 Set `ttl` (for example `"15m"` or `"1h"`) to cache the command's output in the host system keychain (the login keychain on macOS, the kernel user keyring on Linux) so restarting or reloading the workspace within that window reuses the value without prompting again.
+
+---
+
+## Mint a short-lived GitLab token over SSH
+
+GitLab creates personal access tokens over SSH, authenticated with the key you use for Git. With `from_command`, every workspace gets its own short-lived token, minted on the host:
+
+```toml
+[workspaces.my-project]
+env = ["GITLAB_HOST=gitlab.example.com"]
+
+[workspaces.my-project.secrets.env.GITLAB_TOKEN]
+from_command = "ssh git@gitlab.example.com personal_access_token jailoc-${JAILOC_WORKSPACE} api 2 | awk '/^Token:/ {print $2}'"
+ttl = "24h"
+```
+
+- `jailoc-${JAILOC_WORKSPACE}` names the token after the workspace, so you can find and revoke it under **User settings > Access tokens**.
+- `api` is the token scope. `glab` needs it to create merge requests; for repository access only, use `read_api,read_repository,write_repository`.
+- `2` is the lifetime in days. GitLab tokens expire at midnight UTC on their expiry date, so a 1-day token can expire minutes after it is minted. Two days keep every token valid for at least 24 hours, longer than the `ttl` that caches it.
+- `awk` prints the value of the `Token:` line, which works with any token prefix the instance is configured with.
+- `GITLAB_HOST` points `glab` in the VM at the instance. Leave it out for `gitlab.com`.
+
+Every mint creates a new token. The command fails if your SSH key isn't registered in GitLab or if the instance's administrators disabled token creation over SSH; they can also limit the scopes and lifetime it allows. Sessions reach a self-managed instance only when a network rule allows its host, see [Network Access](network-access.md).
+
+`jailoc setup` offers this secret when `ssh` is on the host `PATH`.
+
 ---
 
 ## Set global default secrets
