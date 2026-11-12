@@ -138,12 +138,16 @@ func TestRunMigrateMovesNetwork(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	original := `[defaults]
 backend = "vm"
+allowed_hosts = ["context7.com", "context7.com"]
+allowed_networks = ["10.0.0.0/8"]
 filtered_dns = true
 dns_upstream = "10.20.30.53"
-dns_blocked_zones = ["corp.example.com"]
+dns_blocked_zones = ["corp.example.com."]
 
 [workspaces.web]
 paths = ["/src/web"]
+allowed_hosts = ["gitlab.example.com", "gitlab.example.com"]
+allowed_networks = ["192.168.1.0/24"]
 filtered_dns = false
 dns_upstream = "10.20.30.54"
 dns_blocked_zones = []
@@ -153,6 +157,11 @@ dns_upstream = "10.20.30.55"
 
 [workspaces.api]
 paths = ["/src/api"]
+
+[workspaces.api.network]
+filtered_dns = true
+dns_upstream = "10.20.30.56"
+dns_blocked_zones = ["internal.example.com"]
 `
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -165,9 +174,20 @@ paths = ["/src/api"]
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
 	for _, want := range []string{
-		"[defaults]: move filtered_dns to [defaults.network]",
-		"[workspaces.web]: move filtered_dns to [workspaces.web.network]",
+		"[defaults]: remove filtered_dns (DNS filtering is always on)",
+		"[defaults]: move dns_upstream to [defaults.network] dns",
+		"[defaults]: move allowed_hosts to [[defaults.network.rules]]",
+		"[defaults]: move allowed_networks to [[defaults.network.rules]]",
+		"[defaults]: move dns_blocked_zones to [[defaults.network.rules]]",
+		"[workspaces.web]: remove filtered_dns (DNS filtering is always on)",
+		"[workspaces.web.network]: move dns_upstream to dns",
 		"[workspaces.web]: remove dns_upstream (set in [workspaces.web.network])",
+		"[workspaces.web]: move allowed_hosts to [[workspaces.web.network.rules]]",
+		"[workspaces.web]: move allowed_networks to [[workspaces.web.network.rules]]",
+		"[workspaces.web]: remove dns_blocked_zones",
+		"[workspaces.api.network]: remove filtered_dns (DNS filtering is always on)",
+		"[workspaces.api.network]: move dns_upstream to dns",
+		"[workspaces.api.network]: move dns_blocked_zones to [[workspaces.api.network.rules]]",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output misses %q:\n%s", want, out)
@@ -177,30 +197,44 @@ paths = ["/src/api"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, web := cfg.Defaults, cfg.Workspaces["web"]
-	if len(config.LegacyNetwork(d.LegacyFilteredDNS, d.LegacyDNSUpstream, d.LegacyDNSBlockedZones)) > 0 ||
-		len(config.LegacyNetwork(web.LegacyFilteredDNS, web.LegacyDNSUpstream, web.LegacyDNSBlockedZones)) > 0 {
-		t.Fatalf("legacy settings left: defaults %+v, web %+v", d, web)
+	if warnings := config.DeprecationWarnings(cfg); len(warnings) > 0 {
+		t.Fatalf("DeprecationWarnings after migrate = %v, want none", warnings)
 	}
-	if d.Network.FilteredDNS == nil || !*d.Network.FilteredDNS || d.Network.DNSUpstream != "10.20.30.53" ||
-		!slices.Equal(d.Network.DNSBlockedZones, []string{"corp.example.com"}) {
+	d, web, api := cfg.Defaults, cfg.Workspaces["web"], cfg.Workspaces["api"]
+	if d.Network.DNS != "10.20.30.53" || d.Network.DNSUpstream != "" || d.Network.FilteredDNS != nil || d.Network.DNSBlockedZones != nil {
 		t.Fatalf("defaults network = %+v", d.Network)
 	}
-	if web.Network.FilteredDNS == nil || *web.Network.FilteredDNS || web.Network.DNSUpstream != "10.20.30.55" {
+	wantDefaultRules := []config.NetworkRule{
+		{Name: "internet", Allow: []string{"*"}, Proto: config.RuleProtoAny},
+		{Name: "allowed-hosts", Allow: []string{"context7.com"}, Proto: config.RuleProtoAny},
+		{Name: "allowed-networks", Allow: []string{"10.0.0.0/8"}, Proto: config.RuleProtoAny},
+		{Name: "blocked-zones", Deny: []string{"corp.example.com", "*.corp.example.com"}, Proto: config.RuleProtoAny},
+	}
+	if len(d.Network.Rules) != len(wantDefaultRules) {
+		t.Fatalf("defaults rules = %+v, want %+v", d.Network.Rules, wantDefaultRules)
+	}
+	for i, want := range wantDefaultRules {
+		got := d.Network.Rules[i]
+		if got.Name != want.Name || got.Proto != want.Proto || !slices.Equal(got.Allow, want.Allow) || !slices.Equal(got.Deny, want.Deny) {
+			t.Fatalf("defaults rules[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+	if web.Network.DNS != "10.20.30.55" || web.Network.DNSUpstream != "" || web.Network.FilteredDNS != nil || web.Network.DNSBlockedZones != nil {
 		t.Fatalf("web network = %+v", web.Network)
 	}
-	if web.Network.DNSBlockedZones == nil || len(web.Network.DNSBlockedZones) != 0 {
-		t.Fatalf("web dns_blocked_zones = %#v, want the explicitly empty list kept", web.Network.DNSBlockedZones)
+	if len(web.Network.Rules) != 2 || !slices.Equal(web.Network.Rules[0].Allow, []string{"gitlab.example.com"}) || !slices.Equal(web.Network.Rules[1].Allow, []string{"192.168.1.0/24"}) {
+		t.Fatalf("web rules = %+v", web.Network.Rules)
+	}
+	if api.Network.DNS != "10.20.30.56" || len(api.Network.Rules) != 1 || !slices.Equal(api.Network.Rules[0].Deny, []string{"internal.example.com", "*.internal.example.com"}) {
+		t.Fatalf("api network = %+v", api.Network)
 	}
 	if err := config.ValidateCopy(cfg); err != nil {
 		t.Fatalf("migrated config invalid: %v", err)
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // G304: test file
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "[workspaces.api.network]") {
-		t.Fatalf("empty network table written:\n%s", data)
+
+	p, out = scripted()
+	if err := runMigrate(context.Background(), path, p); err != nil || !strings.Contains(out.String(), "nothing to migrate") {
+		t.Fatalf("second run = %v\n%s", err, out)
 	}
 }
 
@@ -240,8 +274,8 @@ func TestPlanMigrationNetworkOnly(t *testing.T) {
 				strings.Contains(out.String(), data)) {
 				t.Fatalf("mounts of a current configuration touched: %v %+v\n%s", web.Mounts, cfg.Defaults, out)
 			}
-			if cfg.Defaults.Network.FilteredDNS == nil || !*cfg.Defaults.Network.FilteredDNS || cfg.Defaults.LegacyFilteredDNS != nil {
-				t.Fatalf("filtered_dns not moved: %+v", cfg.Defaults)
+			if cfg.Defaults.Network.FilteredDNS != nil || cfg.Defaults.LegacyFilteredDNS != nil {
+				t.Fatalf("filtered_dns not removed: %+v", cfg.Defaults)
 			}
 		})
 	}

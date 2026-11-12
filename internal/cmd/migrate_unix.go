@@ -35,14 +35,16 @@ var migrateCmd = &cobra.Command{
 	Use:   "migrate",
 	Short: "Migrate an older jailoc configuration to the current format",
 	Long: `Rewrite an older config.toml: a jailoc v1 configuration for the VM backend
-(backend = "vm"), and settings that moved to another table.
+(backend = "vm"), and deprecated network settings into the network table and
+rules.
 
 For each Docker workspace, migrate asks how to carry over every mount (a live
 directory mount, or a read-only snapshot), removes v1 settings (mode, password_mode,
 expose_port) after confirmation, stops running Docker workspaces, and copies the
 OpenCode data and cache volumes into the VM's persistent home directories.
-It moves filtered_dns, dns_upstream and dns_blocked_zones of [defaults] and
-every workspace into their network table.
+It moves allowed_hosts, allowed_networks, filtered_dns, dns_upstream and
+dns_blocked_zones of [defaults] and every workspace into their network table
+and [[*.network.rules]].
 The previous config.toml is kept as a backup; comments in it are not carried
 over.`,
 	Args: cobra.NoArgs,
@@ -194,11 +196,12 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		cfg.Workspaces[name] = ws
 	}
 
+	hadNetworkRules := hasAnyNetworkRules(cfg)
 	d := &cfg.Defaults
-	moveNetwork("[defaults]", &d.Network, &d.LegacyFilteredDNS, &d.LegacyDNSUpstream, &d.LegacyDNSBlockedZones, m)
+	moveNetwork("[defaults]", &d.Network, &d.AllowedHosts, &d.AllowedNetworks, &d.LegacyFilteredDNS, &d.LegacyDNSUpstream, &d.LegacyDNSBlockedZones, m)
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
-		moveNetwork(fmt.Sprintf("[workspaces.%s]", name), &ws.Network, &ws.LegacyFilteredDNS, &ws.LegacyDNSUpstream, &ws.LegacyDNSBlockedZones, m)
+		moveNetwork(fmt.Sprintf("[workspaces.%s]", name), &ws.Network, &ws.AllowedHosts, &ws.AllowedNetworks, &ws.LegacyFilteredDNS, &ws.LegacyDNSUpstream, &ws.LegacyDNSBlockedZones, m)
 		cfg.Workspaces[name] = ws
 	}
 
@@ -214,18 +217,18 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 			cfg.Workspaces[name] = ws
 		}
 	}
-	// Add an explicit allow = ["*"] rule when the configuration has no
-	// [[*.network.rules]] yet, so existing workspaces keep their public
-	// internet access until the user narrows the rules.
-	if !hasAnyNetworkRules(cfg) {
+	// Add an explicit allow = ["*"] rule when the configuration had no
+	// [[*.network.rules]] before migration, so existing workspaces keep
+	// their public internet access until the user narrows the rules.
+	if !hadNetworkRules {
 		if d.Network == nil {
 			d.Network = &config.Network{}
 		}
-		d.Network.Rules = []config.NetworkRule{{
+		d.Network.Rules = append([]config.NetworkRule{{
 			Name:  "internet",
 			Allow: []string{"*"},
 			Proto: config.RuleProtoAny,
-		}}
+		}}, d.Network.Rules...)
 		m.changes = append(m.changes, `[[defaults.network.rules]]: add allow = ["*"] (public internet)`)
 	}
 	return m, nil
@@ -251,13 +254,13 @@ func usesDocker(cfg *config.Config, names []string, p *prompter) (bool, error) {
 	if len(defaultsIncompatibilities(cfg)) > 0 || cfg.Defaults.Backend == config.BackendDocker {
 		return true, nil
 	}
-	legacy := len(config.LegacyNetwork(cfg.Defaults.LegacyFilteredDNS, cfg.Defaults.LegacyDNSUpstream, cfg.Defaults.LegacyDNSBlockedZones)) > 0
+	legacy := hasDeprecatedNetwork(&cfg.Defaults)
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
 		if len(workspaceIncompatibilities(&ws)) > 0 || ws.Backend == config.BackendDocker {
 			return true, nil
 		}
-		legacy = legacy || len(config.LegacyNetwork(ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones)) > 0
+		legacy = legacy || hasDeprecatedWorkspaceNetwork(&ws)
 	}
 	if !legacy || cfg.Defaults.Backend == config.BackendVM {
 		return true, nil
@@ -265,48 +268,147 @@ func usesDocker(cfg *config.Config, names []string, p *prompter) (bool, error) {
 	return p.confirm("The configuration names no backend. Is it a jailoc v1 (Docker) configuration whose workspaces should move to the VM backend?", false)
 }
 
-// moveNetwork moves the network settings of a [defaults] or workspace table
-// into its network table. A value already set in the network table wins.
-func moveNetwork(label string, table **config.Network, filteredDNS **bool, upstream *string, zones *[]string, m *migration) {
-	if *filteredDNS == nil && *upstream == "" && *zones == nil {
-		return
+func hasDeprecatedNetwork(d *config.Defaults) bool {
+	n := d.Network.Get()
+	return len(d.AllowedHosts) > 0 || len(d.AllowedNetworks) > 0 ||
+		len(config.LegacyNetwork(d.LegacyFilteredDNS, d.LegacyDNSUpstream, d.LegacyDNSBlockedZones)) > 0 ||
+		n.FilteredDNS != nil || n.DNSUpstream != "" || n.DNSBlockedZones != nil
+}
+
+func hasDeprecatedWorkspaceNetwork(ws *config.Workspace) bool {
+	n := ws.Network.Get()
+	return len(ws.AllowedHosts) > 0 || len(ws.AllowedNetworks) > 0 ||
+		len(config.LegacyNetwork(ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones)) > 0 ||
+		n.FilteredDNS != nil || n.DNSUpstream != "" || n.DNSBlockedZones != nil
+}
+
+// moveNetwork rewrites legacy and deprecated network settings of a [defaults]
+// or workspace table into its network table and [[*.network.rules]]. A value
+// already set in the new field wins.
+func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetworks *[]string, legacyFilteredDNS **bool, legacyUpstream *string, legacyZones *[]string, m *migration) {
+	netName := strings.TrimSuffix(label, "]") + ".network]"
+	rulesName := "[" + strings.TrimSuffix(label, "]") + ".network.rules]]"
+	ensureTable := func() *config.Network {
+		if *table == nil {
+			*table = &config.Network{}
+		}
+		return *table
 	}
-	if *table == nil {
-		*table = &config.Network{}
+
+	if *legacyFilteredDNS != nil {
+		*legacyFilteredDNS = nil
+		if *table != nil && (*table).FilteredDNS != nil {
+			(*table).FilteredDNS = nil
+		}
+		m.changes = append(m.changes, fmt.Sprintf("%s: remove filtered_dns (DNS filtering is always on)", label))
+	} else if *table != nil && (*table).FilteredDNS != nil {
+		(*table).FilteredDNS = nil
+		m.changes = append(m.changes, fmt.Sprintf("%s: remove filtered_dns (DNS filtering is always on)", netName))
 	}
-	n := *table
-	name := strings.TrimSuffix(label, "]") + ".network]"
-	report := func(setting string, moved bool) {
-		if moved {
-			m.changes = append(m.changes, fmt.Sprintf("%s: move %s to %s", label, setting, name))
+
+	if *table != nil && (*table).DNSUpstream != "" {
+		n := *table
+		if n.DNS == "" {
+			n.DNS = n.DNSUpstream
+			m.changes = append(m.changes, fmt.Sprintf("%s: move dns_upstream to dns", netName))
 		} else {
-			m.changes = append(m.changes, fmt.Sprintf("%s: remove %s (set in %s)", label, setting, name))
+			m.changes = append(m.changes, fmt.Sprintf("%s: remove dns_upstream (dns is set)", netName))
+		}
+		n.DNSUpstream = ""
+	}
+	if *legacyUpstream != "" {
+		n := ensureTable()
+		if n.DNS == "" {
+			n.DNS = *legacyUpstream
+			m.changes = append(m.changes, fmt.Sprintf("%s: move dns_upstream to %s dns", label, netName))
+		} else {
+			m.changes = append(m.changes, fmt.Sprintf("%s: remove dns_upstream (set in %s)", label, netName))
+		}
+		*legacyUpstream = ""
+	}
+
+	if len(*allowedHosts) > 0 {
+		n := ensureTable()
+		n.Rules = append(n.Rules, config.NetworkRule{
+			Name:  "allowed-hosts",
+			Allow: uniqueStrings(*allowedHosts),
+			Proto: config.RuleProtoAny,
+		})
+		*allowedHosts = nil
+		m.changes = append(m.changes, fmt.Sprintf("%s: move allowed_hosts to %s", label, rulesName))
+	}
+	if len(*allowedNetworks) > 0 {
+		n := ensureTable()
+		n.Rules = append(n.Rules, config.NetworkRule{
+			Name:  "allowed-networks",
+			Allow: uniqueStrings(*allowedNetworks),
+			Proto: config.RuleProtoAny,
+		})
+		*allowedNetworks = nil
+		m.changes = append(m.changes, fmt.Sprintf("%s: move allowed_networks to %s", label, rulesName))
+	}
+
+	moveZones := func(srcLabel string, zones []string) {
+		deny := blockedZonesToDeny(zones)
+		if len(deny) > 0 {
+			n := ensureTable()
+			n.Rules = append(n.Rules, config.NetworkRule{
+				Name:  "blocked-zones",
+				Deny:  deny,
+				Proto: config.RuleProtoAny,
+			})
+			m.changes = append(m.changes, fmt.Sprintf("%s: move dns_blocked_zones to %s", srcLabel, rulesName))
+		} else {
+			m.changes = append(m.changes, fmt.Sprintf("%s: remove dns_blocked_zones", srcLabel))
 		}
 	}
-	if *filteredDNS != nil {
-		moved := n.FilteredDNS == nil
-		if moved {
-			n.FilteredDNS = *filteredDNS
-		}
-		*filteredDNS = nil
-		report("filtered_dns", moved)
+	if *table != nil && (*table).DNSBlockedZones != nil {
+		zones := (*table).DNSBlockedZones
+		(*table).DNSBlockedZones = nil
+		moveZones(netName, zones)
 	}
-	if *upstream != "" {
-		moved := n.DNSUpstream == ""
-		if moved {
-			n.DNSUpstream = *upstream
-		}
-		*upstream = ""
-		report("dns_upstream", moved)
+	if *legacyZones != nil {
+		zones := *legacyZones
+		*legacyZones = nil
+		moveZones(label, zones)
 	}
-	if *zones != nil {
-		moved := n.DNSBlockedZones == nil
-		if moved {
-			n.DNSBlockedZones = *zones
+	if *table != nil {
+		n := *table
+		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
+			*table = nil
 		}
-		*zones = nil
-		report("dns_blocked_zones", moved)
 	}
+}
+
+func uniqueStrings(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func blockedZonesToDeny(zones []string) []string {
+	var deny []string
+	seen := make(map[string]bool, len(zones)*2)
+	add := func(s string) {
+		if !seen[s] {
+			seen[s] = true
+			deny = append(deny, s)
+		}
+	}
+	for _, z := range zones {
+		z = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(z)), ".")
+		if z != "" {
+			add(z)
+			add("*." + z)
+		}
+	}
+	return deny
 }
 
 func resolveIncompatibilities(p *prompter, label string, items []incompatibility, m *migration) error {
