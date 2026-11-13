@@ -275,11 +275,15 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 	}
 	head, _, complete := strings.Cut(s, "\r\n\r\n")
 	if !complete {
-		lineEnd := strings.Index(rest, "\r\n")
+		lineEnd := strings.IndexByte(rest, '\n')
 		if lineEnd >= 0 {
-			parts := strings.Fields(rest[:lineEnd])
+			firstLine := strings.TrimSuffix(rest[:lineEnd], "\r")
+			parts := strings.Fields(firstLine)
 			if len(parts) < 2 || !strings.HasPrefix(parts[1], "HTTP/") {
 				return nil, false
+			}
+			if hasBareCRorLF(b) {
+				return map[string]any{"proto": "http", "method": method, "path": stripQuery(parts[0]), "bad_authority": true}, false
 			}
 		}
 		return nil, true
@@ -293,14 +297,37 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 	targetHost := extractTargetAuthority(method, target)
 	var hostHeader string
 	hostCount := 0
+	badHeader := strings.ContainsAny(lines[0], "\r\n")
 	for _, l := range lines[1:] {
-		if k, v, ok := strings.Cut(l, ":"); ok && strings.EqualFold(strings.TrimSpace(k), "host") {
+		if strings.ContainsAny(l, "\r\n") {
+			badHeader = true
+			continue
+		}
+		if l != "" && (l[0] == ' ' || l[0] == '\t') {
+			badHeader = true
+			continue
+		}
+		k, v, ok := strings.Cut(l, ":")
+		if !ok {
+			if l != "" {
+				badHeader = true
+			}
+			continue
+		}
+		if !isHTTPToken(k) {
+			badHeader = true
+			continue
+		}
+		if strings.EqualFold(k, "host") {
 			hostCount++
 			hostHeader = normalizeAuthority(strings.TrimSpace(v))
 		}
 	}
+	if _, _, _, framingOK := parseHTTPFraming(head); !framingOK {
+		badHeader = true
+	}
 	info := map[string]any{"proto": "http", "method": method, "path": stripQuery(target)}
-	if hostCount > 1 || (hostCount == 1 && hostHeader == "") {
+	if badHeader || hostCount > 1 || (hostCount == 1 && hostHeader == "") {
 		info["bad_authority"] = true
 		return info, false
 	}
@@ -316,6 +343,25 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 		info["host"] = effective
 	}
 	return info, false
+}
+
+// hasBareCRorLF reports whether b contains any '\n' not immediately preceded by
+// '\r', or any '\r' not immediately followed by '\n' (ignoring a trailing '\r'
+// at the end of an incomplete read buffer).
+func hasBareCRorLF(b []byte) bool {
+	for i := 0; i < len(b); i++ {
+		switch b[i] {
+		case '\n':
+			if i == 0 || b[i-1] != '\r' {
+				return true
+			}
+		case '\r':
+			if i+1 < len(b) && b[i+1] != '\n' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isHTTPToken(s string) bool {
@@ -449,12 +495,19 @@ func (c *enforceConn) inspect(data []byte) bool {
 		idx := bytes.Index(c.buf, []byte("\r\n\r\n"))
 		if idx < 0 {
 			if !c.inHTTP {
-				_, more := identifyHTTPForPolicy(c.buf)
+				info, more := identifyHTTPForPolicy(c.buf)
+				if info != nil {
+					if _, bad := sniffedPeerNameStrict(info); bad {
+						return false
+					}
+				}
 				if !more {
 					// Not TLS and not HTTP (e.g. SSH or SMTP binary/text protocol).
 					c.doneTLS, c.buf = true, nil
 					return true
 				}
+			} else if hasBareCRorLF(c.buf) {
+				return false
 			}
 			return len(c.buf) <= sniffMax
 		}
@@ -540,17 +593,32 @@ func (c *enforceConn) consumeChunked() (done, ok bool) {
 
 func parseHTTPFraming(head string) (contentLen int64, chunked, upgraded, ok bool) {
 	lines := strings.Split(head, "\r\n")
+	if strings.ContainsAny(lines[0], "\r\n") {
+		return 0, false, false, false
+	}
 	parts := strings.Fields(lines[0])
 	if len(parts) == 3 && parts[0] == "CONNECT" {
 		return 0, false, true, true
 	}
 	hasCL := false
 	for _, l := range lines[1:] {
+		if strings.ContainsAny(l, "\r\n") {
+			return 0, false, false, false
+		}
+		if l != "" && (l[0] == ' ' || l[0] == '\t') {
+			return 0, false, false, false
+		}
 		k, v, found := strings.Cut(l, ":")
 		if !found {
+			if l != "" {
+				return 0, false, false, false
+			}
 			continue
 		}
-		k = strings.ToLower(strings.TrimSpace(k))
+		if !isHTTPToken(k) {
+			return 0, false, false, false
+		}
+		k = strings.ToLower(k)
 		v = strings.TrimSpace(v)
 		switch k {
 		case "content-length":

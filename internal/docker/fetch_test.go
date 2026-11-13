@@ -2,10 +2,17 @@ package docker
 
 import (
 	"context"
+	"crypto/x509"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -269,6 +276,324 @@ func TestFetchDockerfile(t *testing.T) {
 				if tt.path == "/empty" && len(data) != 0 {
 					t.Errorf("expected empty body, got %d bytes", len(data))
 				}
+			}
+		})
+	}
+}
+
+func TestFetchDockerfileRedirectConfinement(t *testing.T) {
+	t.Parallel()
+
+	var internalHits atomic.Int32
+	internalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		internalHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("FROM scratch\n"))
+	}))
+	t.Cleanup(internalSrv.Close)
+
+	publisherSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/redirect-other-origin":
+			http.Redirect(w, r, internalSrv.URL+"/internal-data", http.StatusFound)
+		case "/redirect-same-origin":
+			http.Redirect(w, r, "/final", http.StatusFound)
+		case "/final":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("FROM ubuntu:24.04\n"))
+		case "/loop":
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		case "/hops/6":
+			http.Redirect(w, r, "/hops/5", http.StatusFound)
+		case "/hops/5":
+			http.Redirect(w, r, "/hops/4", http.StatusFound)
+		case "/hops/4":
+			http.Redirect(w, r, "/hops/3", http.StatusFound)
+		case "/hops/3":
+			http.Redirect(w, r, "/hops/2", http.StatusFound)
+		case "/hops/2":
+			http.Redirect(w, r, "/hops/1", http.StatusFound)
+		case "/hops/1":
+			http.Redirect(w, r, "/final", http.StatusFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(publisherSrv.Close)
+
+	t.Run("refuses cross-origin redirect without contacting target", func(t *testing.T) {
+		t.Parallel()
+		_, err := fetchDockerfile(t.Context(), publisherSrv.URL+"/redirect-other-origin")
+		if err == nil || !strings.Contains(err.Error(), "refusing redirect") {
+			t.Fatalf("expected refusing redirect error, got %v", err)
+		}
+		if got := internalHits.Load(); got != 0 {
+			t.Fatalf("internal server received %d hits, want 0", got)
+		}
+	})
+
+	t.Run("allows same-origin redirect", func(t *testing.T) {
+		t.Parallel()
+		data, err := fetchDockerfile(t.Context(), publisherSrv.URL+"/redirect-same-origin")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(data) != "FROM ubuntu:24.04\n" {
+			t.Fatalf("got %q, want %q", data, "FROM ubuntu:24.04\n")
+		}
+	})
+
+	t.Run("allows five redirects and refuses six", func(t *testing.T) {
+		t.Parallel()
+		data, err := fetchDockerfile(t.Context(), publisherSrv.URL+"/hops/5")
+		if err != nil {
+			t.Fatalf("five redirects failed: %v", err)
+		}
+		if string(data) != "FROM ubuntu:24.04\n" {
+			t.Fatalf("got %q, want %q", data, "FROM ubuntu:24.04\n")
+		}
+		_, err = fetchDockerfile(t.Context(), publisherSrv.URL+"/hops/6")
+		if err == nil || !strings.Contains(err.Error(), "too many redirects") {
+			t.Fatalf("expected too many redirects on 6th hop, got %v", err)
+		}
+	})
+	t.Run("refuses https to http downgrade", func(t *testing.T) {
+		t.Parallel()
+		origin, err := url.Parse("https://example.com/Dockerfile")
+		if err != nil {
+			t.Fatal(err)
+		}
+		nextReq, err := http.NewRequest(http.MethodGet, "http://example.com/Dockerfile", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = checkDockerfileRedirect(origin, "", nextReq, []*http.Request{nextReq})
+		if err == nil || !strings.Contains(err.Error(), "https to http") {
+			t.Fatalf("expected https to http error, got %v", err)
+		}
+	})
+
+	t.Run("refuses http to https to http downgrade across hops", func(t *testing.T) {
+		t.Parallel()
+		origin, err := url.Parse("http://example.com/a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		hop1, err := http.NewRequest(http.MethodGet, "http://example.com/a", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hop2, err := http.NewRequest(http.MethodGet, "https://example.com/b", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nextReq, err := http.NewRequest(http.MethodGet, "http://example.com/c", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = checkDockerfileRedirect(origin, "", nextReq, []*http.Request{hop1, hop2})
+		if err == nil || !strings.Contains(err.Error(), "https to http") {
+			t.Fatalf("expected https to http error after TLS upgrade hop, got %v", err)
+		}
+	})
+}
+
+func TestFetchDockerfileHonorsHTTPProxy(t *testing.T) {
+	var proxyHits atomic.Int32
+	var gotConnectHost string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits.Add(1)
+		if r.Method == http.MethodConnect {
+			gotConnectHost = r.Host
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("FROM ubuntu:24.04\n"))
+	}))
+	t.Cleanup(proxySrv.Close)
+
+	origLookup := lookupFetchIPs
+	t.Cleanup(func() { lookupFetchIPs = origLookup })
+	lookupFetchIPs = func(_ context.Context, host string) ([]netip.Addr, error) {
+		switch host {
+		case "builds.example.com":
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		case "rebind.example.com":
+			return []netip.Addr{netip.MustParseAddr("169.254.169.254")}, nil
+		default:
+			return nil, errors.New("dns failure")
+		}
+	}
+
+	proxyURL, err := url.Parse(proxySrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origProxy := dockerfileProxy
+	t.Cleanup(func() { dockerfileProxy = origProxy })
+	dockerfileProxy = http.ProxyURL(proxyURL)
+	data, err := fetchDockerfile(t.Context(), "http://93.184.216.34/Dockerfile")
+	if err != nil {
+		t.Fatalf("fetchDockerfile via HTTP_PROXY failed: %v", err)
+	}
+	if string(data) != "FROM ubuntu:24.04\n" {
+		t.Fatalf("got %q, want %q", data, "FROM ubuntu:24.04\n")
+	}
+	if got := proxyHits.Load(); got != 1 {
+		t.Fatalf("proxy hits = %d, want 1", got)
+	}
+
+	// HTTPS hostname fetch pins the CONNECT target sent to the proxy to the validated IP.
+	_, _ = fetchDockerfile(t.Context(), "https://builds.example.com:8443/Dockerfile")
+	if gotConnectHost != "93.184.216.34:8443" {
+		t.Fatalf("proxy CONNECT host = %q, want 93.184.216.34:8443", gotConnectHost)
+	}
+	if got := proxyHits.Load(); got != 2 {
+		t.Fatalf("proxy hits after HTTPS CONNECT = %d, want 2", got)
+	}
+
+	if _, err := fetchDockerfile(t.Context(), "http://builds.example.com:8080/Dockerfile"); err == nil {
+		t.Fatal("expected error for proxied plain-http hostname target, got nil")
+	}
+	if _, err := fetchDockerfile(t.Context(), "http://internal.localhost/Dockerfile"); err == nil {
+		t.Fatal("expected error for proxied .localhost target, got nil")
+	}
+	if _, err := fetchDockerfile(t.Context(), "https://rebind.example.com/Dockerfile"); err == nil {
+		t.Fatal("expected error for proxied hostname resolving to non-public IP, got nil")
+	}
+	if _, err := fetchDockerfile(t.Context(), "https://unresolvable.example.com/Dockerfile"); err == nil {
+		t.Fatal("expected error when proxied hostname DNS lookup fails, got nil")
+	}
+	if got := proxyHits.Load(); got != 2 {
+		t.Fatalf("proxy hits after rejected targets = %d, want 2", got)
+	}
+
+	// End-to-end HTTPS proxy test: proxy TLS certificate is verified against the
+	// proxy's own address (127.0.0.1), while the tunneled origin TLS handshake
+	// uses the Dockerfile hostname ("example.com") even though CONNECT targets
+	// the pinned IP ("93.184.216.34:8443").
+	var originSNI, originReqHost string
+	originTLSSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil {
+			originSNI = r.TLS.ServerName
+		}
+		originReqHost = r.Host
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("FROM alpine:3.20\n"))
+	}))
+	t.Cleanup(originTLSSrv.Close)
+
+	var tlsProxyConnectHost string
+	httpsProxySrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		tlsProxyConnectHost = r.Host
+		if r.Host == "93.184.216.34:9443" {
+			// Verify proxy TLS handshake succeeded even when origin is "builds.example.com"
+			// (which is not in the proxy certificate's SANs).
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		upConn, dialErr := net.Dial("tcp", originTLSSrv.Listener.Addr().String())
+		if dialErr != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			_ = upConn.Close()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		clientConn, buf, hjErr := hj.Hijack()
+		if hjErr != nil {
+			_ = upConn.Close()
+			return
+		}
+		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		go func() {
+			defer func() { _ = upConn.Close() }()
+			_, _ = io.Copy(upConn, buf)
+		}()
+		go func() {
+			defer func() { _ = clientConn.Close() }()
+			_, _ = io.Copy(clientConn, upConn)
+		}()
+	}))
+	t.Cleanup(httpsProxySrv.Close)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(originTLSSrv.Certificate())
+	pool.AddCert(httpsProxySrv.Certificate())
+	origPool := fetchRootCAs
+	t.Cleanup(func() { fetchRootCAs = origPool })
+	fetchRootCAs = pool
+
+	lookupFetchIPs = func(_ context.Context, host string) ([]netip.Addr, error) {
+		switch host {
+		case "example.com", "builds.example.com":
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		default:
+			return nil, errors.New("dns failure")
+		}
+	}
+
+	httpsProxyURL, err := url.Parse(httpsProxySrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfileProxy = http.ProxyURL(httpsProxyURL)
+
+	// 1. Origin hostname ("builds.example.com") not on proxy cert still completes TLS with proxy and sends CONNECT.
+	_, _ = fetchDockerfile(t.Context(), "https://builds.example.com:9443/Dockerfile")
+	if tlsProxyConnectHost != "93.184.216.34:9443" {
+		t.Fatalf("HTTPS proxy CONNECT host for builds.example.com = %q, want 93.184.216.34:9443", tlsProxyConnectHost)
+	}
+
+	// 2. Full tunnel to originTLSSrv verifies origin cert against "example.com" while CONNECT uses "93.184.216.34:8443".
+	tunneledData, err := fetchDockerfile(t.Context(), "https://example.com:8443/Dockerfile")
+	if err != nil {
+		t.Fatalf("fetchDockerfile through HTTPS proxy tunnel failed: %v", err)
+	}
+	if string(tunneledData) != "FROM alpine:3.20\n" {
+		t.Fatalf("got %q, want %q", tunneledData, "FROM alpine:3.20\n")
+	}
+	if tlsProxyConnectHost != "93.184.216.34:8443" {
+		t.Fatalf("HTTPS proxy CONNECT host = %q, want 93.184.216.34:8443", tlsProxyConnectHost)
+	}
+	if originSNI != "example.com" || originReqHost != "example.com:8443" {
+		t.Fatalf("origin saw SNI=%q Host=%q, want SNI=example.com Host=example.com:8443", originSNI, originReqHost)
+	}
+}
+
+func TestCheckFetchDialAddr(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		originHost string
+		address    string
+		wantErr    bool
+	}{
+		{"public IPv4 for hostname", "example.com", "93.184.216.34:443", false},
+		{"public IPv6 for hostname", "example.com", "[2606:2800:220:1:248:1893:25c8:1946]:443", false},
+		{"loopback IPv4 for hostname", "example.com", "127.0.0.1:8080", true},
+		{"loopback IPv6 for hostname", "example.com", "[::1]:8080", true},
+		{"private RFC1918 for hostname", "example.com", "10.0.0.1:80", true},
+		{"link-local metadata for hostname", "example.com", "169.254.169.254:80", true},
+		{"cgnat for hostname", "example.com", "100.64.0.1:80", true},
+		{"unspecified for hostname", "example.com", "0.0.0.0:80", true},
+		{"matching literal loopback allowed", "127.0.0.1", "127.0.0.1:8080", false},
+		{"mismatched literal loopback refused", "127.0.0.1", "127.0.0.2:8080", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := checkFetchDialAddr(tt.originHost, tt.address)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("checkFetchDialAddr(%q, %q) error = %v, wantErr %v", tt.originHost, tt.address, err, tt.wantErr)
 			}
 		})
 	}
