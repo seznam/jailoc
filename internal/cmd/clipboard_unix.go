@@ -264,19 +264,31 @@ type clipboardCmd struct {
 	args []string
 }
 
-const gtkClipboardScript = "import sys, gi\n" +
+const gtkClipboardScript = "import os, sys, gi\n" +
 	"gi.require_version('Gtk', '3.0')\n" +
 	"gi.require_version('Gdk', '3.0')\n" +
 	"from gi.repository import Gtk, Gdk\n" +
-	"if not Gtk.init_check()[0]:\n" +
-	"    sys.exit(1)\n" +
 	"text = sys.stdin.buffer.read().decode('utf-8', 'replace')\n" +
+	"sys.stdin.close()\n" +
+	"if os.fork() > 0:\n" +
+	"    os._exit(0)\n" +
+	"os.setsid()\n" +
+	"if not Gtk.init_check()[0]:\n" +
+	"    os._exit(1)\n" +
+	"owned = {'CLIPBOARD', 'PRIMARY'}\n" +
+	"def on_owner_change(cb, event, name):\n" +
+	"    if getattr(event, 'reason', None) != Gdk.OwnerChange.NEW_OWNER:\n" +
+	"        owned.discard(name)\n" +
+	"    elif not cb.get_owner():\n" +
+	"        owned.discard(name)\n" +
+	"    if not owned:\n" +
+	"        Gtk.main_quit()\n" +
 	"for name in ('CLIPBOARD', 'PRIMARY'):\n" +
 	"    cb = Gtk.Clipboard.get(Gdk.Atom.intern(name, False))\n" +
 	"    cb.set_text(text, -1)\n" +
 	"    cb.store()\n" +
-	"while Gtk.events_pending():\n" +
-	"    Gtk.main_iteration()\n"
+	"    cb.connect('owner-change', on_owner_change, name)\n" +
+	"Gtk.main()\n"
 
 func copyToHostClipboard(data []byte) {
 	for _, c := range hostClipboardCommands(runtime.GOOS, os.Getenv, exec.LookPath) {
@@ -325,7 +337,7 @@ func hostClipboardCommands(
 	}
 	if len(cmds) == 0 && (getenv("WAYLAND_DISPLAY") != "" || getenv("DISPLAY") != "") {
 		if path, err := lookPath("python3"); err == nil {
-			cmds = append(cmds, clipboardCmd{name: path, args: []string{"-c", gtkClipboardScript}})
+			cmds = append(cmds, clipboardCmd{name: path, args: []string{"-I", "-c", gtkClipboardScript}})
 		}
 	}
 	return cmds

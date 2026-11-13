@@ -275,7 +275,7 @@ func TestHostClipboardCommands(t *testing.T) {
 			env:   map[string]string{"DISPLAY": ":0"},
 			tools: map[string]string{"python3": "/usr/bin/python3"},
 			want: []clipboardCmd{
-				{name: "/usr/bin/python3", args: []string{"-c", gtkClipboardScript}},
+				{name: "/usr/bin/python3", args: []string{"-I", "-c", gtkClipboardScript}},
 			},
 		},
 		{
