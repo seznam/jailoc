@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
+	goversion "github.com/hashicorp/go-version"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -112,7 +113,55 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		}
 		binds = append(binds, guest.Bind{Source: src(rel), Target: d.Path})
 	}
+	if start && workspaceProfile(ws) == "" {
+		checkAgentStateVersion(root, guestDataHome, ws)
+	}
 	return binds, nil
+}
+
+// agentVersionsFile records, outside the directories bound into the guest,
+// the highest version of each agent state directory that jailoc started the
+// workspace or profile with.
+const agentVersionsFile = ".jailoc-agent-versions.json"
+
+// checkAgentStateVersion warns when a persistent state directory of ws was
+// previously used with a newer version of the agent, which may have migrated
+// its state database to a schema the configured version cannot read.
+func checkAgentStateVersion(root *os.Root, dir string, ws *workspace.Resolved) {
+	if !ws.AgentInstall || ws.Agent.Version == "" || len(ws.Agent.State) == 0 {
+		return
+	}
+	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
+		return
+	}
+	curV, err := goversion.NewVersion(ws.Agent.Version)
+	if err != nil {
+		return
+	}
+	key := ws.Agent.State[0].Name
+	file := path.Join(dir, agentVersionsFile)
+	versions := map[string]string{}
+	if data, err := readRegular(root, file, maxAgentConfig); err == nil {
+		_ = json.Unmarshal(data, &versions)
+	}
+	if prev := versions[key]; prev != "" && prev != ws.Agent.Version {
+		if prevV, err := goversion.NewVersion(prev); err == nil && curV.LessThan(prevV) {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s state was used with newer version %s (current: %s); if the agent fails to start, upgrade it or reset its state\n", ws.Name, ws.Agent.Title, prev, ws.Agent.Version)
+			return
+		}
+	}
+	if versions[key] == ws.Agent.Version {
+		return
+	}
+	versions[key] = ws.Agent.Version
+	data, err := json.MarshalIndent(versions, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := root.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	_ = root.WriteFile(file, append(data, '\n'), 0o600)
 }
 
 // removeConfigMountPoints removes the empty files and directories the guest

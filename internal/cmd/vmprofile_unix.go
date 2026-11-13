@@ -38,7 +38,14 @@ func claimProfile(ws *workspace.Resolved) error {
 				return fmt.Errorf("profile %q is in use by running workspace %q: stop it, or use another profile", name, owner)
 			}
 		}
-		return writeProfileOwner(f, ws.Name)
+		if err := writeProfileOwner(f, ws.Name); err != nil {
+			return err
+		}
+		if root, err := os.OpenRoot(filepath.Join(profilesDir(), name)); err == nil {
+			checkAgentStateVersion(root, ".", ws)
+			_ = root.Close()
+		}
+		return nil
 	})
 }
 

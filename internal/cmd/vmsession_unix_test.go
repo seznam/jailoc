@@ -4,10 +4,15 @@ package cmd
 
 import (
 	"bytes"
+	"io"
+	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/guest/session"
 	"github.com/seznam/jailoc/internal/vm"
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestDetachMatcher(t *testing.T) {
@@ -105,6 +110,98 @@ func TestCheckGuestCurrent(t *testing.T) {
 			err := checkGuestCurrent(tt.name)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("checkGuestCurrent(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+func TestRelaySessionDiagnoseAndFormatError(t *testing.T) {
+	t.Parallel()
+
+	opencode1, _ := agent.Lookup("opencode1")
+	claude, _ := agent.Lookup("claude")
+
+	tests := []struct {
+		name         string
+		agent        agent.Harness
+		frames       []session.Frame
+		wantDiagnose bool
+		wantErrSub   string
+	}{
+		{
+			name:  "opencode crash after leaving alt screen with server error",
+			agent: opencode1,
+			frames: []session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s1")},
+				{Type: session.FrameStarted},
+				{Type: session.FrameData, Payload: []byte("\x1b[?1049h\x1b[?1049l\x1b[91m\x1b[1mError: \x1b[0mUnexpected server error. Check server logs for details.\n")},
+				session.ExitFrame(1),
+			},
+			wantDiagnose: true,
+			wantErrSub:   "run `jailoc -w szn exec -- opencode --print-logs` for details",
+		},
+		{
+			name:  "opencode crash before drawing any visible text",
+			agent: opencode1,
+			frames: []session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s2")},
+				{Type: session.FrameStarted},
+				{Type: session.FrameData, Payload: []byte("\x1b[?1049h\x1b[2J")},
+				session.ExitFrame(1),
+			},
+			wantDiagnose: true,
+			wantErrSub:   "run `jailoc -w szn exec -- opencode --print-logs` for details",
+		},
+		{
+			name:  "normal exit after drawing TUI without server error",
+			agent: opencode1,
+			frames: []session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s3")},
+				{Type: session.FrameStarted},
+				{Type: session.FrameData, Payload: []byte("\x1b[?1049hWelcome to OpenCode\x1b[?1049l")},
+				session.ExitFrame(1),
+			},
+			wantDiagnose: false,
+			wantErrSub:   "opencode exited with status 1",
+		},
+		{
+			name:  "agent without Diagnose command",
+			agent: claude,
+			frames: []session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s4")},
+				{Type: session.FrameStarted},
+				session.ExitFrame(1),
+			},
+			wantDiagnose: true,
+			wantErrSub:   "claude exited with status 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var stream bytes.Buffer
+			for _, f := range tt.frames {
+				if err := session.WriteFrame(&stream, f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var in bytes.Buffer
+			_, outcome, code, diagnose := relaySession(-1, false, nil, "Starting…", tt.agent.Title, nopWriteCloser{&in}, &stream, 24, 80)
+			if outcome != outcomeExited || code != 1 || diagnose != tt.wantDiagnose {
+				t.Fatalf("relaySession() = outcome %v, code %d, diagnose %v; want %v, 1, %v", outcome, code, diagnose, outcomeExited, tt.wantDiagnose)
+			}
+			ws := &workspace.Resolved{Name: "szn", Agent: tt.agent}
+			err := formatAgentExitError(ws, code, diagnose)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErrSub) {
+				t.Fatalf("formatAgentExitError() = %v, want substring %q", err, tt.wantErrSub)
+			}
+			if !tt.wantDiagnose && strings.Contains(err.Error(), "exec --") {
+				t.Fatalf("unexpected diagnostic hint in %v", err)
 			}
 		})
 	}
