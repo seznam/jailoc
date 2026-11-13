@@ -5,6 +5,8 @@ package cmd
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -207,5 +209,100 @@ func TestHostClipboardQueueDrainsOnClose(t *testing.T) {
 
 	if got, want := strings.Join(copied, "|"), "first|latest"; got != want {
 		t.Fatalf("copied = %q, want %q", got, want)
+	}
+}
+
+func TestHostClipboardCommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		goos  string
+		env   map[string]string
+		tools map[string]string
+		want  []clipboardCmd
+	}{
+		{
+			name: "darwin uses pbcopy",
+			goos: "darwin",
+			want: []clipboardCmd{{name: "pbcopy"}},
+		},
+		{
+			name:  "linux wayland sets clipboard and primary",
+			goos:  "linux",
+			env:   map[string]string{"WAYLAND_DISPLAY": "wayland-0"},
+			tools: map[string]string{"wl-copy": "/usr/bin/wl-copy"},
+			want: []clipboardCmd{
+				{name: "/usr/bin/wl-copy"},
+				{name: "/usr/bin/wl-copy", args: []string{"--primary"}},
+			},
+		},
+		{
+			name:  "linux x11 xclip sets clipboard and primary",
+			goos:  "linux",
+			env:   map[string]string{"DISPLAY": ":0"},
+			tools: map[string]string{"xclip": "/usr/bin/xclip"},
+			want: []clipboardCmd{
+				{name: "/usr/bin/xclip", args: []string{"-selection", "clipboard"}},
+				{name: "/usr/bin/xclip", args: []string{"-selection", "primary"}},
+			},
+		},
+		{
+			name:  "linux x11 xsel sets clipboard and primary",
+			goos:  "linux",
+			env:   map[string]string{"DISPLAY": ":0"},
+			tools: map[string]string{"xsel": "/usr/bin/xsel"},
+			want: []clipboardCmd{
+				{name: "/usr/bin/xsel", args: []string{"--clipboard", "--input"}},
+				{name: "/usr/bin/xsel", args: []string{"--primary", "--input"}},
+			},
+		},
+		{
+			name:  "linux wayland and xwayland updates both when tools present",
+			goos:  "linux",
+			env:   map[string]string{"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
+			tools: map[string]string{"wl-copy": "/usr/bin/wl-copy", "xclip": "/usr/bin/xclip"},
+			want: []clipboardCmd{
+				{name: "/usr/bin/wl-copy"},
+				{name: "/usr/bin/wl-copy", args: []string{"--primary"}},
+				{name: "/usr/bin/xclip", args: []string{"-selection", "clipboard"}},
+				{name: "/usr/bin/xclip", args: []string{"-selection", "primary"}},
+			},
+		},
+		{
+			name:  "linux falls back to python3 gtk when cli tools absent",
+			goos:  "linux",
+			env:   map[string]string{"DISPLAY": ":0"},
+			tools: map[string]string{"python3": "/usr/bin/python3"},
+			want: []clipboardCmd{
+				{name: "/usr/bin/python3", args: []string{"-I", "-c", gtkClipboardScript}},
+			},
+		},
+		{
+			name:  "linux headless returns none",
+			goos:  "linux",
+			tools: map[string]string{"xclip": "/usr/bin/xclip", "python3": "/usr/bin/python3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := hostClipboardCommands(
+				tt.goos,
+				func(k string) string { return tt.env[k] },
+				func(bin string) (string, error) {
+					if p, ok := tt.tools[bin]; ok {
+						return p, nil
+					}
+					return "", errors.New("not found")
+				},
+			)
+			if !slices.EqualFunc(got, tt.want, func(a, b clipboardCmd) bool {
+				return a.name == b.name && slices.Equal(a.args, b.args)
+			}) {
+				t.Fatalf("hostClipboardCommands() = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
