@@ -89,6 +89,51 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		if len(ws.Paths) != 1 || ws.Paths[0] != cwd {
 			t.Errorf("default workspace paths = %v, want [%s]", ws.Paths, cwd)
 		}
+		if strings.Contains(out.String(), "read-only snapshots") {
+			t.Errorf("--yes output must not contain explanations, got:\n%s", out.String())
+		}
+	})
+
+	t.Run("interactive first-time setup explains each question", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		var out bytes.Buffer
+		w := &wizardPrompter{in: answers("", "", "", "", "", "", "", "", "", "", "", ""), out: &out}
+
+		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd}); err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		for _, want := range []string{
+			"Agent installed in the VM and started by",
+			"Copies ~/.gitconfig and ~/.ssh/known_hosts into the VM as read-only snapshots.",
+			"Lets git push/pull over SSH inside the VM",
+			"Lets Git sign commits and tags inside the VM",
+			"allows only GitHub/GitLab",
+			"Add internal services or extra hosts the agent needs",
+			"Runs an isolated Docker daemon inside the VM",
+			"Virtual CPU cores allocated to each workspace VM",
+			"Maximum RAM per workspace VM",
+			"Short identifier used in CLI commands",
+			"Host directory shared read-write into the VM at the same path.",
+		} {
+			assertContains(t, out.String(), want)
+		}
+	})
+
+	t.Run("workspace setup with --yes prints no explanations", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := writeCustomConfig(t)
+		var out bytes.Buffer
+		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+
+		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd}); err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		if strings.Contains(out.String(), "Short identifier for this workspace") {
+			t.Errorf("--yes output must not contain explanations, got:\n%s", out.String())
+		}
 	})
 
 	t.Run("first-time setup seeds the workspace name from the caller", func(t *testing.T) {
@@ -149,6 +194,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		if len(ws.Paths) != 1 || ws.Paths[0] != cwd {
 			t.Errorf("ws.Paths = %v, want [%s]", ws.Paths, cwd)
 		}
+		assertContains(t, out.String(), "Short identifier for this workspace")
 		rules := ws.Network.Get().Rules
 		if len(rules) != 1 || len(rules[0].Allow) != 2 {
 			t.Errorf("unexpected network rules: %+v", rules)

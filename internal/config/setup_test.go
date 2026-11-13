@@ -180,6 +180,214 @@ func TestRenderFirstTime(t *testing.T) {
 		}
 	})
 }
+func TestRenderFirstTimeCommentsUnsetOptions(t *testing.T) {
+	t.Parallel()
+
+	out, err := RenderFirstTime(FirstTimeOptions{GitConfig: true, WorkspaceName: "default"})
+	if err != nil {
+		t.Fatalf("RenderFirstTime failed: %v", err)
+	}
+	defaults := defaultsSection(string(out))
+	for _, want := range []string{
+		`# agent = "opencode"  # opencode (OpenCode 2), opencode1, opencode2, claude, copilot, omo, agy or an agent defined under agents`,
+		"# ssh_auth_sock = false  # forward host $SSH_AUTH_SOCK into the VM",
+		"# gpg_agent = false  # forward host GPG agent into the VM",
+		"# git_config = true  # copy ~/.gitconfig and ~/.ssh/known_hosts read-only",
+		"# enable_docker = false  # run an isolated Docker daemon inside the VM",
+		"# cpu = 2.0  # virtual CPU cores per workspace VM",
+		`# memory = "4g"  # RAM limit per workspace VM`,
+	} {
+		if !strings.Contains(defaults, want+"\n") {
+			t.Errorf("defaults missing commented line %q\n", want)
+		}
+	}
+	if strings.Contains(defaults, "\nagent = ") || strings.Contains(defaults, "\ngit_config = ") {
+		t.Errorf("unset defaults must not be active:\n%s", defaults)
+	}
+}
+
+func TestRenderFirstTimeUncommentsSetOptions(t *testing.T) {
+	t.Parallel()
+
+	out, err := RenderFirstTime(FirstTimeOptions{
+		Agent:         "omo",
+		SSHAuthSock:   true,
+		GPGAgent:      true,
+		EnableDocker:  true,
+		CPU:           4,
+		Memory:        "8g",
+		WorkspaceName: "default",
+	})
+	if err != nil {
+		t.Fatalf("RenderFirstTime failed: %v", err)
+	}
+	defaults := defaultsSection(string(out))
+	for _, want := range []string{
+		`agent = "omo"  # opencode (OpenCode 2), opencode1, opencode2, claude, copilot, omo, agy or an agent defined under agents`,
+		"ssh_auth_sock = true  # forward host $SSH_AUTH_SOCK into the VM",
+		"gpg_agent = true  # forward host GPG agent into the VM",
+		"git_config = false  # copy ~/.gitconfig and ~/.ssh/known_hosts read-only",
+		"enable_docker = true  # run an isolated Docker daemon inside the VM",
+		"cpu = 4.0  # virtual CPU cores per workspace VM",
+		`memory = "8g"  # RAM limit per workspace VM`,
+	} {
+		if !strings.Contains(defaults, want+"\n") {
+			t.Errorf("defaults missing active line %q\n", want)
+		}
+	}
+	for _, key := range []string{"agent", "ssh_auth_sock", "gpg_agent", "git_config", "enable_docker", "cpu", "memory"} {
+		if strings.Contains(defaults, "# "+key+" = ") {
+			t.Errorf("set option %q still has a commented duplicate in defaults", key)
+		}
+	}
+}
+
+func TestRenderFirstTimeNetworkRules(t *testing.T) {
+	t.Parallel()
+
+	t.Run("internet preset replaces dev-deps and keeps examples", func(t *testing.T) {
+		t.Parallel()
+		out, err := RenderFirstTime(FirstTimeOptions{AllowInternet: true, ExtraHosts: []string{"ignored.example"}, WorkspaceName: "default"})
+		if err != nil {
+			t.Fatalf("RenderFirstTime failed: %v", err)
+		}
+		text := string(out)
+		if strings.Contains(text, "dev-deps") {
+			t.Error("internet preset kept the dev-deps rule")
+		}
+		if !strings.Contains(text, "# [[defaults.network.rules]]\n# name = \"no-paste\"") {
+			t.Error("commented rule examples were not kept")
+		}
+		cfg := loadRenderedConfig(t, out)
+		rules := cfg.Defaults.Network.Get().Rules
+		if len(rules) != 1 || rules[0].Name != "internet" || rules[0].Allow[0] != "*" {
+			t.Fatalf("unexpected rules: %+v", rules)
+		}
+	})
+
+	t.Run("extra hosts keep dev-deps and append custom rule", func(t *testing.T) {
+		t.Parallel()
+		out, err := RenderFirstTime(FirstTimeOptions{ExtraHosts: []string{"gitlab.example.com"}, WorkspaceName: "default"})
+		if err != nil {
+			t.Fatalf("RenderFirstTime failed: %v", err)
+		}
+		cfg := loadRenderedConfig(t, out)
+		rules := cfg.Defaults.Network.Get().Rules
+		if len(rules) != 2 || rules[0].Name != "dev-deps" || rules[1].Name != "custom" || rules[1].Allow[0] != "gitlab.example.com" {
+			t.Fatalf("unexpected rules: %+v", rules)
+		}
+	})
+}
+
+func TestRenderFirstTimeNamedWorkspace(t *testing.T) {
+	t.Parallel()
+
+	out, err := RenderFirstTime(FirstTimeOptions{WorkspaceName: "work", WorkspacePath: "/data/work"})
+	if err != nil {
+		t.Fatalf("RenderFirstTime failed: %v", err)
+	}
+	text := string(out)
+	if strings.Contains(text, "[workspaces.default") {
+		t.Error("named initial workspace kept a default workspace section")
+	}
+	for _, want := range []string{"[workspaces.work]\npaths = [\"/data/work\"]\n", "# [workspaces.work.network]\n", "# [workspaces.work.secrets.env.MY_TOKEN]\n"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("output missing %q\n", want)
+		}
+	}
+	cfg := loadRenderedConfig(t, out)
+	if ws := cfg.Workspaces["work"]; len(ws.Paths) != 1 || ws.Paths[0] != "/data/work" {
+		t.Errorf("workspace work paths = %v", ws.Paths)
+	}
+}
+
+func TestRenderWorkspaceNewSection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("commented options when nothing is set", func(t *testing.T) {
+		t.Parallel()
+		out, err := RenderWorkspace([]byte("[defaults]\nagent = \"opencode\"\n"), WorkspaceOptions{Name: "api", Paths: []string{"/data/api"}})
+		if err != nil {
+			t.Fatalf("RenderWorkspace failed: %v", err)
+		}
+		text := string(out)
+		for _, want := range []string{
+			"[workspaces.api]\npaths = [\"/data/api\"]\n",
+			"# agent = \"opencode\"  # opencode (OpenCode 2)",
+			"# enable_docker = false  # run an isolated Docker daemon inside the VM",
+			"# ca_bundle = true  # omitted: inherit defaults; true/false/string: override",
+			"# timezone = \"UTC\"  # time zone in the VM; omitted: the host's zone",
+			"# [[workspaces.api.network.rules]]\n# name = \"internet\"",
+			"# [workspaces.api.secrets.file.MY_FILE]",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("output missing %q\n", want)
+			}
+		}
+		cfg := loadRenderedConfig(t, out)
+		if ws := cfg.Workspaces["api"]; ws.Agent != "" || ws.EnableDocker != nil || len(ws.Paths) != 1 {
+			t.Errorf("new workspace has active overrides: %+v", ws)
+		}
+	})
+
+	t.Run("active agent, docker and internet rule", func(t *testing.T) {
+		t.Parallel()
+		enableDocker := true
+		out, err := RenderWorkspace([]byte("[defaults]\nagent = \"opencode\"\n"), WorkspaceOptions{
+			Name:          "api",
+			Paths:         []string{"/data/api"},
+			Agent:         "claude",
+			EnableDocker:  &enableDocker,
+			AllowInternet: true,
+		})
+		if err != nil {
+			t.Fatalf("RenderWorkspace failed: %v", err)
+		}
+		text := string(out)
+		for _, want := range []string{
+			"agent = \"claude\"  # opencode (OpenCode 2)",
+			"enable_docker = true  # run an isolated Docker daemon inside the VM",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("output missing %q\n", want)
+			}
+		}
+		if strings.Contains(text, "# [[workspaces.api.network.rules]]") {
+			t.Error("internet preset kept the commented internet example")
+		}
+		cfg := loadRenderedConfig(t, out)
+		ws := cfg.Workspaces["api"]
+		if ws.Agent != "claude" || ws.EnableDocker == nil || !*ws.EnableDocker {
+			t.Errorf("workspace overrides = agent %q enable_docker %v", ws.Agent, ws.EnableDocker)
+		}
+		rules := ws.Network.Get().Rules
+		if len(rules) != 1 || rules[0].Name != "internet" {
+			t.Errorf("workspace rules = %+v", rules)
+		}
+	})
+}
+
+// defaultsSection returns the text before the first workspace section.
+func defaultsSection(text string) string {
+	if i := strings.Index(text, "\n[workspaces."); i >= 0 {
+		return text[:i+1]
+	}
+	return text
+}
+
+// loadRenderedConfig writes rendered output to a temporary file and loads it.
+func loadRenderedConfig(t *testing.T, data []byte) *Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := WriteBytes(path, data); err != nil {
+		t.Fatalf("WriteBytes: %v", err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v\n%s", err, data)
+	}
+	return cfg
+}
 
 func TestRenderWorkspace(t *testing.T) {
 	t.Parallel()
