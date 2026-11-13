@@ -42,7 +42,7 @@ const (
 # mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 # ssh_auth_sock = false  # forward host $SSH_AUTH_SOCK into the VM
 # gpg_agent = false  # forward host GPG agent into the VM
-# git_config = true  # copy ~/.gitconfig and ~/.ssh/known_hosts read-only
+# git_config = true  # copy host Git configuration read-only
 # import_agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
 # enable_docker = false  # run an isolated Docker daemon inside the VM
 # ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
@@ -132,7 +132,7 @@ paths = []
 # dockerfile = ""
 # ssh_auth_sock = false  # forward host $SSH_AUTH_SOCK into the VM
 # gpg_agent = false  # forward host GPG agent into the VM
-# git_config = true  # copy ~/.gitconfig and ~/.ssh/known_hosts read-only
+# git_config = true  # copy host Git configuration read-only
 # import_agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
 # enable_docker = false  # run an isolated Docker daemon inside the VM
 # ca_bundle = true  # omitted: inherit defaults; true/false/string: override
