@@ -206,3 +206,17 @@ func TestRelaySessionDiagnoseAndFormatError(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatAgentExitErrorWithConfigFlag(t *testing.T) {
+	prev := configFlag
+	configFlag = "/tmp/my config.toml"
+	t.Cleanup(func() { configFlag = prev })
+
+	opencode1, _ := agent.Lookup("opencode1")
+	ws := &workspace.Resolved{Name: "szn", Agent: opencode1}
+	err := formatAgentExitError(ws, 1, true)
+	want := "run `jailoc --config '/tmp/my config.toml' -w szn exec -- opencode --print-logs` for details"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("formatAgentExitError() = %v, want substring %q", err, want)
+	}
+}

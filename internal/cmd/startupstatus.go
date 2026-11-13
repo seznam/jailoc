@@ -314,6 +314,12 @@ func (s *startupStatus) scan(b byte) scanEvent {
 		case b == '7':
 			s.state = escGround
 			return scanSaveDEC
+		case b == 'c':
+			s.state = escGround
+			if s.alt {
+				s.alt = false
+				return scanAltChanged
+			}
 		default:
 			s.state = escGround
 		}

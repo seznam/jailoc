@@ -221,6 +221,13 @@ func TestStartupStatusStateTrackingAfterPending(t *testing.T) {
 	if s.altScreen() {
 		t.Fatal("altScreen() = true after \\x1b[?1049l, want false")
 	}
+	// Full terminal reset ESC c also clears alternate-screen state.
+	if err := s.write([]byte("\x1b[?1049h\x1bc")); err != nil {
+		t.Fatal(err)
+	}
+	if s.altScreen() {
+		t.Fatal("altScreen() = true after ESC c, want false")
+	}
 }
 
 func TestResetSessionTerminalModes(t *testing.T) {

@@ -315,7 +315,11 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 func formatAgentExitError(ws *workspace.Resolved, code int, diagnose bool) error {
 	if diagnose && len(ws.Agent.Diagnose) > 0 {
 		cmd := strings.Join(append([]string{ws.Agent.Binary}, ws.Agent.Diagnose...), " ")
-		return fmt.Errorf("%s exited with status %d; run `jailoc -w %s exec -- %s` for details", ws.Agent.Binary, code, ws.Name, cmd)
+		cfgArg := ""
+		if configFlag != "" {
+			cfgArg = " --config " + shellJoin([]string{configFlag})
+		}
+		return fmt.Errorf("%s exited with status %d; run `jailoc%s -w %s exec -- %s` for details", ws.Agent.Binary, code, cfgArg, ws.Name, cmd)
 	}
 	return fmt.Errorf("%s exited with status %d", ws.Agent.Binary, code)
 }
