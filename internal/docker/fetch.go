@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -108,13 +109,34 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 		Proxy: func(_ *http.Request) (*url.URL, error) {
 			return proxyURL, nil
 		},
-		DialContext:           dialer.DialContext,
+		DialContext: dialer.DialContext,
+		DialTLSContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			rawConn, dialErr := dialer.DialContext(dialCtx, network, addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			tlsHost, _ := splitHostOptionalPort(addr)
+			if proxyURL == nil {
+				tlsHost = origin.Hostname()
+			}
+			tlsConn := tls.Client(rawConn, &tls.Config{
+				ServerName: tlsHost,
+				MinVersion: tls.VersionTLS12,
+				RootCAs:    fetchRootCAs,
+			})
+			if hsErr := tlsConn.HandshakeContext(dialCtx); hsErr != nil {
+				_ = rawConn.Close()
+				return nil, hsErr
+			}
+			return tlsConn, nil
+		},
 		ForceAttemptHTTP2:     true,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
 		TLSClientConfig: &tls.Config{
 			ServerName: origin.Hostname(),
 			MinVersion: tls.VersionTLS12,
+			RootCAs:    fetchRootCAs,
 		},
 	}
 	defer transport.CloseIdleConnections()
@@ -163,13 +185,14 @@ const maxDockerfileRedirects = 5
 var (
 	cgnatPrefix     = netip.MustParsePrefix("100.64.0.0/10")
 	dockerfileProxy = http.ProxyFromEnvironment
+	fetchRootCAs    *x509.CertPool
 	lookupFetchIPs  = func(ctx context.Context, host string) ([]netip.Addr, error) {
 		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	}
 )
 
 func checkDockerfileRedirect(origin *url.URL, pinnedHost string, next *http.Request, via []*http.Request) error {
-	if len(via) >= maxDockerfileRedirects {
+	if len(via) > maxDockerfileRedirects {
 		return fmt.Errorf("too many redirects")
 	}
 	if next.URL.Scheme != "http" && next.URL.Scheme != "https" {

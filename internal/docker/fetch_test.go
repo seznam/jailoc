@@ -2,7 +2,10 @@ package docker
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -300,6 +303,18 @@ func TestFetchDockerfileRedirectConfinement(t *testing.T) {
 			_, _ = w.Write([]byte("FROM ubuntu:24.04\n"))
 		case "/loop":
 			http.Redirect(w, r, "/loop", http.StatusFound)
+		case "/hops/6":
+			http.Redirect(w, r, "/hops/5", http.StatusFound)
+		case "/hops/5":
+			http.Redirect(w, r, "/hops/4", http.StatusFound)
+		case "/hops/4":
+			http.Redirect(w, r, "/hops/3", http.StatusFound)
+		case "/hops/3":
+			http.Redirect(w, r, "/hops/2", http.StatusFound)
+		case "/hops/2":
+			http.Redirect(w, r, "/hops/1", http.StatusFound)
+		case "/hops/1":
+			http.Redirect(w, r, "/final", http.StatusFound)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -328,14 +343,20 @@ func TestFetchDockerfileRedirectConfinement(t *testing.T) {
 		}
 	})
 
-	t.Run("refuses excessive redirects", func(t *testing.T) {
+	t.Run("allows five redirects and refuses six", func(t *testing.T) {
 		t.Parallel()
-		_, err := fetchDockerfile(t.Context(), publisherSrv.URL+"/loop")
+		data, err := fetchDockerfile(t.Context(), publisherSrv.URL+"/hops/5")
+		if err != nil {
+			t.Fatalf("five redirects failed: %v", err)
+		}
+		if string(data) != "FROM ubuntu:24.04\n" {
+			t.Fatalf("got %q, want %q", data, "FROM ubuntu:24.04\n")
+		}
+		_, err = fetchDockerfile(t.Context(), publisherSrv.URL+"/hops/6")
 		if err == nil || !strings.Contains(err.Error(), "too many redirects") {
-			t.Fatalf("expected too many redirects error, got %v", err)
+			t.Fatalf("expected too many redirects on 6th hop, got %v", err)
 		}
 	})
-
 	t.Run("refuses https to http downgrade", func(t *testing.T) {
 		t.Parallel()
 		origin, err := url.Parse("https://example.com/Dockerfile")
@@ -446,6 +467,105 @@ func TestFetchDockerfileHonorsHTTPProxy(t *testing.T) {
 	}
 	if got := proxyHits.Load(); got != 2 {
 		t.Fatalf("proxy hits after rejected targets = %d, want 2", got)
+	}
+
+	// End-to-end HTTPS proxy test: proxy TLS certificate is verified against the
+	// proxy's own address (127.0.0.1), while the tunneled origin TLS handshake
+	// uses the Dockerfile hostname ("example.com") even though CONNECT targets
+	// the pinned IP ("93.184.216.34:8443").
+	var originSNI, originReqHost string
+	originTLSSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil {
+			originSNI = r.TLS.ServerName
+		}
+		originReqHost = r.Host
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("FROM alpine:3.20\n"))
+	}))
+	t.Cleanup(originTLSSrv.Close)
+
+	var tlsProxyConnectHost string
+	httpsProxySrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		tlsProxyConnectHost = r.Host
+		if r.Host == "93.184.216.34:9443" {
+			// Verify proxy TLS handshake succeeded even when origin is "builds.example.com"
+			// (which is not in the proxy certificate's SANs).
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		upConn, dialErr := net.Dial("tcp", originTLSSrv.Listener.Addr().String())
+		if dialErr != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			_ = upConn.Close()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		clientConn, buf, hjErr := hj.Hijack()
+		if hjErr != nil {
+			_ = upConn.Close()
+			return
+		}
+		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		go func() {
+			defer func() { _ = upConn.Close() }()
+			_, _ = io.Copy(upConn, buf)
+		}()
+		go func() {
+			defer func() { _ = clientConn.Close() }()
+			_, _ = io.Copy(clientConn, upConn)
+		}()
+	}))
+	t.Cleanup(httpsProxySrv.Close)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(originTLSSrv.Certificate())
+	pool.AddCert(httpsProxySrv.Certificate())
+	origPool := fetchRootCAs
+	t.Cleanup(func() { fetchRootCAs = origPool })
+	fetchRootCAs = pool
+
+	lookupFetchIPs = func(_ context.Context, host string) ([]netip.Addr, error) {
+		switch host {
+		case "example.com", "builds.example.com":
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		default:
+			return nil, errors.New("dns failure")
+		}
+	}
+
+	httpsProxyURL, err := url.Parse(httpsProxySrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfileProxy = http.ProxyURL(httpsProxyURL)
+
+	// 1. Origin hostname ("builds.example.com") not on proxy cert still completes TLS with proxy and sends CONNECT.
+	_, _ = fetchDockerfile(t.Context(), "https://builds.example.com:9443/Dockerfile")
+	if tlsProxyConnectHost != "93.184.216.34:9443" {
+		t.Fatalf("HTTPS proxy CONNECT host for builds.example.com = %q, want 93.184.216.34:9443", tlsProxyConnectHost)
+	}
+
+	// 2. Full tunnel to originTLSSrv verifies origin cert against "example.com" while CONNECT uses "93.184.216.34:8443".
+	tunneledData, err := fetchDockerfile(t.Context(), "https://example.com:8443/Dockerfile")
+	if err != nil {
+		t.Fatalf("fetchDockerfile through HTTPS proxy tunnel failed: %v", err)
+	}
+	if string(tunneledData) != "FROM alpine:3.20\n" {
+		t.Fatalf("got %q, want %q", tunneledData, "FROM alpine:3.20\n")
+	}
+	if tlsProxyConnectHost != "93.184.216.34:8443" {
+		t.Fatalf("HTTPS proxy CONNECT host = %q, want 93.184.216.34:8443", tlsProxyConnectHost)
+	}
+	if originSNI != "example.com" || originReqHost != "example.com:8443" {
+		t.Fatalf("origin saw SNI=%q Host=%q, want SNI=example.com Host=example.com:8443", originSNI, originReqHost)
 	}
 }
 

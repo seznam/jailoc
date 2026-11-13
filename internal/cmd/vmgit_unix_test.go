@@ -696,6 +696,22 @@ func TestGitProtectionRejectsHardLinks(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "hard-linked external included config",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				outside := filepath.Join(t.TempDir(), "external.gitconfig")
+				if err := os.WriteFile(outside, []byte("[core]\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(outside, filepath.Join(root, "external-alias.cfg")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, ".git/config"), []byte("[include]\n\tpath = "+outside+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

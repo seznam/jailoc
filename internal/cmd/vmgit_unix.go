@@ -515,8 +515,22 @@ func (p *gitProtector) hookTargets(dir string) error {
 // directory or a regular file.
 func (p *gitProtector) protect(path string, dir, create bool) (string, error) {
 	r, full, err := p.locate(path)
-	if err != nil || r == nil {
+	if err != nil {
 		return "", err
+	}
+	if r == nil {
+		resolved := resolveExisting(path)
+		if !dir {
+			info, statErr := os.Stat(resolved)
+			if statErr == nil && info.Mode().IsRegular() && hardLinked(info) {
+				return "", fmt.Errorf("protect %s: file has other hard links that stay writable (remove the extra links)", path)
+			}
+		} else {
+			if hookErr := p.hookTargets(resolved); hookErr != nil {
+				return "", hookErr
+			}
+		}
+		return "", nil
 	}
 	guest := r.guestOf(full)
 	info, err := os.Lstat(full)
