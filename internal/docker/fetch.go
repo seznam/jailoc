@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -72,11 +76,30 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("create fetch request for %s: %w", rawURL, err)
 	}
 
+	origin := req.URL
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			return checkFetchDialAddr(origin.Hostname(), address)
+		},
+	}
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+	}
+	defer transport.CloseIdleConnections()
+
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(next *http.Request, via []*http.Request) error {
+			return checkDockerfileRedirect(origin, next, via)
+		},
 	}
 
-	resp, err := client.Do(req) //nolint:gosec // URL is validated (scheme + host) in config.Validate before reaching here
+	resp, err := client.Do(req) //nolint:gosec // URL is validated in config.Validate and confined by CheckRedirect + Dialer.Control
 	if err != nil {
 		return nil, fmt.Errorf("execute fetch request to %s: %w", rawURL, err)
 	}
@@ -99,4 +122,56 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+const maxDockerfileRedirects = 5
+
+var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+func checkDockerfileRedirect(origin *url.URL, next *http.Request, via []*http.Request) error {
+	if len(via) >= maxDockerfileRedirects {
+		return fmt.Errorf("too many redirects")
+	}
+	if next.URL.Scheme != "http" && next.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect to unsupported scheme %q", next.URL.Scheme)
+	}
+	if origin.Scheme == "https" && next.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect from https to http")
+	}
+	if !strings.EqualFold(next.URL.Host, origin.Host) {
+		return fmt.Errorf("refusing redirect to %s", next.URL.Redacted())
+	}
+	return nil
+}
+
+func checkFetchDialAddr(originHost, address string) error {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return fmt.Errorf("invalid dial address %q: %w", address, err)
+	}
+	ip := ap.Addr().Unmap()
+	if originIP, err := netip.ParseAddr(originHost); err == nil {
+		if ip == originIP.Unmap() {
+			return nil
+		}
+		return fmt.Errorf("refusing dial to %s for configured host %s", ip, originHost)
+	}
+	if !isPublicFetchAddr(ip) {
+		return fmt.Errorf("refusing dial to non-public address %s for host %s", ip, originHost)
+	}
+	return nil
+}
+
+func isPublicFetchAddr(ip netip.Addr) bool {
+	if !ip.IsValid() ||
+		ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified() ||
+		cgnatPrefix.Contains(ip) {
+		return false
+	}
+	return true
 }
