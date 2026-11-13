@@ -40,14 +40,14 @@ const (
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
 # mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
-# ssh_auth_sock = false
-# gpg_agent = false
-# git_config = true
+# ssh_auth_sock = false  # forward host $SSH_AUTH_SOCK into the VM
+# gpg_agent = false  # forward host GPG agent into the VM
+# git_config = true  # copy host Git configuration read-only
 # import_agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
-# enable_docker = false
+# enable_docker = false  # run an isolated Docker daemon inside the VM
 # ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
-# cpu = 2.0
-# memory = "4g"
+# cpu = 2.0  # virtual CPU cores per workspace VM
+# memory = "4g"  # RAM limit per workspace VM
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 
@@ -123,23 +123,23 @@ allow = [
 
 [workspaces.default]
 paths = []
-# agent = "opencode"
+# agent = "opencode"  # opencode (OpenCode 2), opencode1, opencode2, claude, copilot, omo, agy or an agent defined under agents
 # image = ""
 # env = ["KEY=VALUE"]
 # env_file = ["/path/to/.env"]
 # mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 # build_context = ""
 # dockerfile = ""
-# ssh_auth_sock = false
-# gpg_agent = false
-# git_config = true
-# import_agent_config = true
-# enable_docker = false
+# ssh_auth_sock = false  # forward host $SSH_AUTH_SOCK into the VM
+# gpg_agent = false  # forward host GPG agent into the VM
+# git_config = true  # copy host Git configuration read-only
+# import_agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
+# enable_docker = false  # run an isolated Docker daemon inside the VM
 # ca_bundle = true  # omitted: inherit defaults; true/false/string: override
-# cpu = 2.0
-# memory = "4g"
-# docker_disk = "20g"
-# timezone = "UTC"
+# cpu = 2.0  # virtual CPU cores per workspace VM
+# memory = "4g"  # RAM limit per workspace VM
+# docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
+# timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 
 # [workspaces.default.network]
 # ipv6 = false

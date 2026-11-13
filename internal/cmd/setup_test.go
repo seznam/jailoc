@@ -89,6 +89,66 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		if len(ws.Paths) != 1 || ws.Paths[0] != cwd {
 			t.Errorf("default workspace paths = %v, want [%s]", ws.Paths, cwd)
 		}
+		assertContains(t, out.String(), "Default VM memory [4g]: 4g")
+		for _, hint := range []string{
+			"A read-only copy, so commits in the VM use your name and email.",
+			"RAM limit per VM, not memory reserved on the host.",
+			"Allocated as needed; freed pages and unused file cache return to the host.",
+		} {
+			if strings.Contains(out.String(), hint) {
+				t.Errorf("--yes output must not contain explanation %q, got:\n%s", hint, out.String())
+			}
+		}
+	})
+
+	t.Run("interactive first-time setup explains each question", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		var out bytes.Buffer
+		w := &wizardPrompter{in: answers("", "", "", "", "", "", "", "", "", "", "", ""), out: &out}
+
+		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd}); err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		output := out.String()
+		for _, want := range []string{
+			"jailoc installs this agent in the VM and starts it in each session.",
+			"A read-only copy, so commits in the VM use your name and email.",
+			"Lets SSH and Git in the VM use your keys and ~/.ssh/known_hosts.",
+			"processes in the VM can sign and decrypt with them.",
+			"Private networks stay blocked unless you allow them explicitly.",
+			"such as gitlab.corp.example or 10.20.0.0/16.",
+			"the host Docker socket is not shared.",
+			"Virtual CPUs per VM, rounded up to a whole number.",
+			"Used in commands such as \"jailoc up <name>\".",
+			"The agent can modify any file in it.",
+		} {
+			assertContains(t, output, want)
+		}
+
+		cpuAt := strings.Index(output, "Default VM CPUs")
+		limitAt := strings.Index(output, "RAM limit per VM, not memory reserved on the host.")
+		freedAt := strings.Index(output, "Allocated as needed; freed pages and unused file cache return to the host.")
+		memoryAt := strings.Index(output, "Default VM memory")
+		if cpuAt < 0 || limitAt < cpuAt || freedAt < limitAt || memoryAt < freedAt {
+			t.Errorf("expected both RAM lines, in order, between the CPU and memory prompts, got:\n%s", output)
+		}
+	})
+
+	t.Run("workspace setup with --yes prints no explanations", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := writeCustomConfig(t)
+		var out bytes.Buffer
+		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+
+		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd}); err != nil {
+			t.Fatalf("runSetup failed: %v", err)
+		}
+		if strings.Contains(out.String(), "Used in commands such as") {
+			t.Errorf("--yes output must not contain explanations, got:\n%s", out.String())
+		}
 	})
 
 	t.Run("first-time setup seeds the workspace name from the caller", func(t *testing.T) {
@@ -148,6 +208,13 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 		if len(ws.Paths) != 1 || ws.Paths[0] != cwd {
 			t.Errorf("ws.Paths = %v, want [%s]", ws.Paths, cwd)
+		}
+		for _, want := range []string{
+			"\"inherit\" uses the [defaults] agent.",
+			"\"internet\" adds all public hosts to them, \"custom\" the hosts you list.",
+			"such as *.corp.example or 10.20.0.0/16.",
+		} {
+			assertContains(t, out.String(), want)
 		}
 		rules := ws.Network.Get().Rules
 		if len(rules) != 1 || len(rules[0].Allow) != 2 {

@@ -107,10 +107,11 @@ type setupResult struct {
 }
 
 type wizardPrompter struct {
-	ctx context.Context
-	in  *bufio.Reader
-	out io.Writer
-	yes bool
+	ctx       context.Context
+	in        *bufio.Reader
+	out       io.Writer
+	yes       bool
+	explained bool
 	// interrupt sets a read deadline on the input to unblock a pending read
 	// when ctx is cancelled; nil leaves the read running.
 	interrupt func(time.Time) error
@@ -122,6 +123,20 @@ func newStdinPrompter(yes bool) *wizardPrompter {
 		out:       os.Stdout,
 		yes:       yes,
 		interrupt: os.Stdin.SetReadDeadline,
+	}
+}
+
+func (p *wizardPrompter) explain(lines ...string) {
+	if p.yes || len(lines) == 0 {
+		return
+	}
+	if p.explained {
+		_, _ = fmt.Fprintln(p.out)
+	}
+	p.explained = true
+	faint := color.New(color.Faint)
+	for _, line := range lines {
+		_, _ = faint.Fprintf(p.out, "  %s\n", line)
 	}
 }
 
@@ -337,32 +352,50 @@ func seededWorkspaceName(opts setupOptions, fallback string) string {
 
 func runFirstTimeSetup(p *wizardPrompter, opts setupOptions) (setupResult, error) {
 	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(p.out, "Welcome to jailoc! Let's configure %s.\n\n", opts.configPath)
+	p.explained = false
 
 	agentOptions := []string{"opencode", "omo", "claude", "copilot", "agy", "opencode1"}
 	defAgent := detectPreferredAgent()
 	defAgentIdx := max(slices.Index(agentOptions, defAgent), 0)
+	p.explain(
+		"jailoc installs this agent in the VM and starts it in each session.",
+		"Its host configuration is copied into the VM read-only.",
+	)
 	agentIdx, err := p.choose("Default coding agent", agentOptions, defAgentIdx)
 	if err != nil {
 		return setupResult{}, err
 	}
 	chosenAgent := agentOptions[agentIdx]
 
+	p.explain("A read-only copy, so commits in the VM use your name and email.")
 	gitCfg, err := p.confirm("Copy host Git configuration into the VM (git_config)?", true)
 	if err != nil {
 		return setupResult{}, err
 	}
 
 	sshDef := os.Getenv("SSH_AUTH_SOCK") != ""
+	p.explain(
+		"Lets SSH and Git in the VM use your keys and ~/.ssh/known_hosts.",
+		"Keys stay on the host, but processes in the VM can use them.",
+	)
 	sshAuth, err := p.confirm("Forward host SSH agent into the VM (ssh_auth_sock)?", sshDef)
 	if err != nil {
 		return setupResult{}, err
 	}
 
+	p.explain(
+		"Lets Git in the VM sign commits and tags with your GPG keys.",
+		"Keys stay on the host, but processes in the VM can sign and decrypt with them.",
+	)
 	gpgAgent, err := p.confirm("Forward host GPG agent into the VM (gpg_agent)?", false)
 	if err != nil {
 		return setupResult{}, err
 	}
 
+	p.explain(
+		"\"dev-deps\" allows selected development services, \"internet\" all public hosts.",
+		"Private networks stay blocked unless you allow them explicitly.",
+	)
 	netIdx, err := p.choose("Default network egress policy", []string{"dev-deps", "internet"}, 0)
 	if err != nil {
 		return setupResult{}, err
@@ -371,6 +404,7 @@ func runFirstTimeSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 
 	var extraHosts []string
 	if !allowInternet {
+		p.explain("Other hosts the agent needs, such as gitlab.corp.example or 10.20.0.0/16.")
 		hostsInput, err := p.input("Extra allowed hostnames or CIDRs (comma-separated, optional)", "", validateHostsCSV)
 		if err != nil {
 			return setupResult{}, err
@@ -378,27 +412,38 @@ func runFirstTimeSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 		extraHosts = splitCSV(hostsInput)
 	}
 
+	p.explain("Containers run in the VM's own Docker; the host Docker socket is not shared.")
 	enableDocker, err := p.confirm("Enable Docker inside the VM by default (enable_docker)?", false)
 	if err != nil {
 		return setupResult{}, err
 	}
 
+	p.explain("Virtual CPUs per VM, rounded up to a whole number.")
 	cpuStr, err := p.input("Default VM CPUs", "2", validatePositiveFloat)
 	if err != nil {
 		return setupResult{}, err
 	}
 	cpuVal, _ := strconv.ParseFloat(cpuStr, 64)
 
+	p.explain(
+		"RAM limit per VM, not memory reserved on the host.",
+		"Allocated as needed; freed pages and unused file cache return to the host.",
+	)
 	memVal, err := p.input("Default VM memory", "4g", config.ValidateMemoryFormat)
 	if err != nil {
 		return setupResult{}, err
 	}
 
+	p.explain("Used in commands such as \"jailoc up <name>\".")
 	wsName, err := p.input("Initial workspace name", seededWorkspaceName(opts, "default"), config.ValidateWorkspaceName)
 	if err != nil {
 		return setupResult{}, err
 	}
 
+	p.explain(
+		"Shared read-write with the VM at the same path.",
+		"The agent can modify any file in it.",
+	)
 	wsDir, err := p.workspaceDir("Initial workspace directory path", opts.targetDir)
 	if err != nil {
 		return setupResult{}, err
@@ -437,8 +482,10 @@ func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 	}
 
 	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(p.out, "Existing configuration found at %s. Let's configure a workspace.\n\n", opts.configPath)
+	p.explained = false
 
 	defName := seededWorkspaceName(opts, config.SanitizeWorkspaceName(filepath.Base(opts.targetDir)))
+	p.explain("Used in commands such as \"jailoc up <name>\".")
 	wsName, err := p.input("Workspace name", defName, config.ValidateWorkspaceName)
 	if err != nil {
 		return setupResult{}, err
@@ -454,12 +501,17 @@ func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 		}
 	}
 
+	p.explain(
+		"Shared read-write with the VM at the same path.",
+		"The agent can modify any file in it.",
+	)
 	wsDir, err := p.workspaceDir("Workspace directory path", opts.targetDir)
 	if err != nil {
 		return setupResult{}, err
 	}
 
 	agentOptions := []string{"inherit", "opencode", "omo", "claude", "copilot", "agy", "opencode1"}
+	p.explain("\"inherit\" uses the [defaults] agent.")
 	agentIdx, err := p.choose("Workspace coding agent", agentOptions, 0)
 	if err != nil {
 		return setupResult{}, err
@@ -469,6 +521,10 @@ func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 		wsAgent = agentOptions[agentIdx]
 	}
 
+	p.explain(
+		"Containers run in the VM's own Docker; the host Docker socket is not shared.",
+		"\"inherit\" uses the [defaults] setting.",
+	)
 	dockerIdx, err := p.choose("Enable Docker in this workspace", []string{"inherit", "yes", "no"}, 0)
 	if err != nil {
 		return setupResult{}, err
@@ -483,6 +539,10 @@ func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 		enableDocker = &v
 	}
 
+	p.explain(
+		"\"inherit\" uses the [defaults] rules.",
+		"\"internet\" adds all public hosts to them, \"custom\" the hosts you list.",
+	)
 	netIdx, err := p.choose("Workspace network policy", []string{"inherit", "internet", "custom"}, 0)
 	if err != nil {
 		return setupResult{}, err
@@ -490,6 +550,7 @@ func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 	allowInternet := netIdx == 1
 	var extraHosts []string
 	if netIdx == 2 {
+		p.explain("Other hosts the agent needs, such as *.corp.example or 10.20.0.0/16.")
 		hostsInput, err := p.input("Allowed hostnames or CIDRs for this workspace (comma-separated)", "", validateHostsCSV)
 		if err != nil {
 			return setupResult{}, err
