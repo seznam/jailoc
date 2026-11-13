@@ -285,7 +285,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	logStep("open agent session", start, "workspace", ws.Name)
 
 	starting := fmt.Sprintf("Starting %s in workspace %s…", ws.Agent.Title, ws.Name)
-	id, outcome, code := relaySession(fd, interactive, opts.detach, starting, ws.Agent.Title, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
+	id, outcome, code, diagnose := relaySession(fd, interactive, opts.detach, starting, ws.Agent.Title, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
 	// The guest command exits only after its input closes.
 	_ = stdin.Close()
 	_ = sess.Wait()
@@ -293,7 +293,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	switch outcome {
 	case outcomeExited:
 		if code != 0 {
-			return fmt.Errorf("%s exited with status %d", ws.Agent.Binary, code)
+			return formatAgentExitError(ws, code, diagnose)
 		}
 		return nil
 	case outcomeDetached:
@@ -312,6 +312,18 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	return fmt.Errorf("connection to workspace %q lost; the VM stopped or was stopped by `jailoc down`", ws.Name)
 }
 
+func formatAgentExitError(ws *workspace.Resolved, code int, diagnose bool) error {
+	if diagnose && len(ws.Agent.Diagnose) > 0 {
+		cmd := strings.Join(append([]string{ws.Agent.Binary}, ws.Agent.Diagnose...), " ")
+		cfgArg := ""
+		if configFlag != "" {
+			cfgArg = " --config " + shellJoin([]string{configFlag})
+		}
+		return fmt.Errorf("%s exited with status %d; run `jailoc%s -w %s exec -- %s` for details", ws.Agent.Binary, code, cfgArg, ws.Name, cmd)
+	}
+	return fmt.Errorf("%s exited with status %d", ws.Agent.Binary, code)
+}
+
 // relaySession connects the local terminal to the session protocol on
 // in/out until the session ends, the user detaches or another terminal
 // takes the session over. In an interactive terminal it prints starting
@@ -319,7 +331,7 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 // plugins the agent title installs, with a spinner and the time elapsed on
 // the alternate screen until the agent draws, so the screen is not blank
 // while the agent boots.
-func relaySession(fd int, interactive bool, detachKeys []byte, starting, title string, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int) {
+func relaySession(fd int, interactive bool, detachKeys []byte, starting, title string, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int, diagnose bool) {
 	var writeMu sync.Mutex
 	send := func(f session.Frame) error {
 		writeMu.Lock()
@@ -327,17 +339,29 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 		return session.WriteFrame(in, f)
 	}
 	if err := send(session.SizeFrame(session.FrameHello, rows, cols)); err != nil {
-		return "", outcomeLost, 0
+		return "", outcomeLost, 0, false
 	}
+
+	status := newStartupStatus(os.Stdout, func() (cols, rows int) {
+		if w, h, err := term.GetSize(fd); err == nil {
+			return w, h
+		}
+		return 80, 24
+	})
+	defer status.stop()
 
 	if interactive {
 		old, err := term.MakeRaw(fd)
 		if err == nil {
 			defer func() {
+				// Stop the startup animator before resetting terminal modes so
+				// a ticker cannot draw on the main screen after leaving the
+				// alternate screen.
+				status.stop()
 				// The agent cannot turn its terminal features off when the
 				// session detaches or the VM dies, so reset them here.
 				if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
-					resetTerminalModes(os.Stdout)
+					resetSessionTerminalModes(os.Stdout, status.altScreen())
 				}
 				_ = term.Restore(fd, old)
 			}()
@@ -381,33 +405,30 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 		}
 	}()
 
-	status := newStartupStatus(os.Stdout, func() (cols, rows int) {
-		if w, h, err := term.GetSize(fd); err == nil {
-			return w, h
-		}
-		return 80, 24
-	})
 	var clipboard *osc52Bridge
 	if interactive {
 		clipQueue := newHostClipboardQueue(copyToHostClipboard)
 		defer clipQueue.close()
 		clipboard = newOSC52Bridge(clipQueue.enqueue, os.Getenv("TMUX") != "")
 	}
-	defer status.stop()
+	var created bool
+	var tail []byte
+	const maxTail = 512
 	for {
 		f, err := session.ReadFrame(out)
 		if err != nil {
 			select {
 			case <-detached:
-				return id, outcomeDetached, 0
+				return id, outcomeDetached, 0, false
 			default:
-				return id, outcomeLost, 0
+				return id, outcomeLost, 0, false
 			}
 		}
 		switch f.Type {
 		case session.FrameInfo:
 			id = string(f.Payload)
 		case session.FrameStarted:
+			created = true
 			if interactive {
 				// The terminal is raw: return the carriage explicitly.
 				_, _ = fmt.Fprintf(os.Stdout, "\x1b[2m%s\x1b[0m\r\n", starting)
@@ -422,12 +443,17 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 			if clipboard != nil {
 				payload = clipboard.feed(payload)
 			}
+			tail = append(tail, payload...)
+			if len(tail) > maxTail {
+				tail = tail[len(tail)-maxTail:]
+			}
 			_ = status.write(payload)
 		case session.FrameExit:
 			code, _ = session.ParseExit(f.Payload)
-			return id, outcomeExited, code
+			diagnose = (created && !status.visible()) || bytes.Contains(tail, []byte("Check server logs for details."))
+			return id, outcomeExited, code, diagnose
 		case session.FrameKicked:
-			return id, outcomeKicked, 0
+			return id, outcomeKicked, 0, false
 		}
 	}
 }

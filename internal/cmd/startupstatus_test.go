@@ -195,3 +195,51 @@ func TestStartupMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestStartupStatusStateTrackingAfterPending(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	now, size := time.Unix(0, 0), [2]int{80, 24}
+	s := testStatus(&out, &now, &size)
+	if s.altScreen() || s.visible() {
+		t.Fatalf("initial state: alt=%v, visible=%v", s.altScreen(), s.visible())
+	}
+	// Agent enters alternate screen and draws visible text -> pending stops,
+	// but altScreen and visible stay tracked.
+	if err := s.write([]byte("\x1b[?1049hhello")); err != nil {
+		t.Fatal(err)
+	}
+	if !s.altScreen() || !s.visible() {
+		t.Fatalf("after drawing on alt screen: alt=%v, visible=%v; want true, true", s.altScreen(), s.visible())
+	}
+	// Agent leaves alternate screen on crash -> altScreen becomes false even
+	// though pending was already false.
+	if err := s.write([]byte("\x1b[?1049lUnexpected server error.\n")); err != nil {
+		t.Fatal(err)
+	}
+	if s.altScreen() {
+		t.Fatal("altScreen() = true after \\x1b[?1049l, want false")
+	}
+	// Full terminal reset ESC c also clears alternate-screen state.
+	if err := s.write([]byte("\x1b[?1049h\x1bc")); err != nil {
+		t.Fatal(err)
+	}
+	if s.altScreen() {
+		t.Fatal("altScreen() = true after ESC c, want false")
+	}
+}
+
+func TestResetSessionTerminalModes(t *testing.T) {
+	t.Parallel()
+
+	var onAlt, onMain bytes.Buffer
+	resetSessionTerminalModes(&onAlt, true)
+	resetSessionTerminalModes(&onMain, false)
+	if !bytes.Contains(onAlt.Bytes(), []byte("\x1b[?1049l")) {
+		t.Errorf("resetSessionTerminalModes(alt=true) = %q, want \\x1b[?1049l", onAlt.String())
+	}
+	if bytes.Contains(onMain.Bytes(), []byte("\x1b[?1049l")) {
+		t.Errorf("resetSessionTerminalModes(alt=false) = %q, must not contain \\x1b[?1049l", onMain.String())
+	}
+}

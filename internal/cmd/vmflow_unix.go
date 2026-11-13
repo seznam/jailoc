@@ -81,6 +81,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
+	checkAgentStateVersion(cfg, ws, shares)
 	snapshots, err := vmSnapshots(ws, shares)
 	if err != nil {
 		return err
@@ -150,6 +151,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
 	logStep("deliver secrets", start)
+	recordAgentStateVersion(cfg, ws, shares)
 	logStep("up", upStart, "workspace", ws.Name)
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s started\n", ws.Name)
 	return nil
@@ -857,6 +859,7 @@ func downVM(ctx context.Context, ws *workspace.Resolved, purge bool) error {
 	}
 	if purge {
 		purgeErr := purgeWorkspaceSecretCache(ctx, ws)
+		purgeWorkspaceAgentStateVersions(stateDir)
 		if err := vm.RemoveTree(stateDir); err != nil {
 			return errors.Join(purgeErr, fmt.Errorf("delete vm state: %w", err))
 		}

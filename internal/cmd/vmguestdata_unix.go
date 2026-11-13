@@ -13,8 +13,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/fatih/color"
+	goversion "github.com/hashicorp/go-version"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -113,6 +115,184 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		binds = append(binds, guest.Bind{Source: src(rel), Target: d.Path})
 	}
 	return binds, nil
+}
+
+// agentVersionsFile records, outside the directories shared with the guest,
+// the highest version of each host backing state directory that jailoc started
+// a workspace with.
+const (
+	agentVersionsFile = "agent-versions.json"
+	agentVersionsLock = "agent-versions.lock"
+)
+
+func agentVersionsPath() string {
+	return filepath.Join(vmRootDir(), agentVersionsFile)
+}
+
+func withAgentVersionsLock(fn func(file string)) {
+	dir := vmRootDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, agentVersionsLock), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: jailoc-owned lock path
+	if err != nil {
+		return
+	}
+	defer func() { _ = lock.Close() }()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // G115: file descriptors fit in int
+		return
+	}
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }() //nolint:gosec // G115: file descriptors fit in int
+	fn(filepath.Join(dir, agentVersionsFile))
+}
+
+func canonicalHostPath(p string) string {
+	clean := filepath.Clean(p)
+	if real, err := filepath.EvalSymlinks(clean); err == nil {
+		return real
+	}
+	return clean
+}
+
+// installsConfiguredAgent reports whether the image strategy for ws installs
+// the configured ws.Agent.Version rather than using a pre-built image directly.
+func installsConfiguredAgent(cfg *config.Config, ws *workspace.Resolved) bool {
+	if !ws.AgentInstall || ws.Agent.Version == "" || len(ws.Agent.State) == 0 {
+		return false
+	}
+	if cfg != nil {
+		strategy, _ := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
+		if strategy == strategyDirectImage || strategy == strategyDefaultsDirect {
+			return false
+		}
+	}
+	return true
+}
+
+// agentStateHostDir returns the canonical host directory that backs the
+// agent's primary state directory for ws: an explicit share covering it, or
+// the workspace's persistent guest home state directory.
+func agentStateHostDir(cfg *config.Config, ws *workspace.Resolved, shares []vm.Share) string {
+	if !installsConfiguredAgent(cfg, ws) {
+		return ""
+	}
+	d := ws.Agent.State[0]
+	for _, s := range shares {
+		if s.GuestPath == d.Path {
+			return canonicalHostPath(s.HostPath)
+		}
+	}
+	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
+		return ""
+	}
+	return canonicalHostPath(filepath.Join(vm.GuestDataDir(vmStateDir(ws.Name)), guestDataHome, d.Name))
+}
+
+func loadAgentVersions(file string) map[string]string {
+	var versions map[string]string
+	if data, err := os.ReadFile(file); err == nil { //nolint:gosec // G304: jailoc-owned metadata path
+		_ = json.Unmarshal(data, &versions)
+	}
+	if versions == nil {
+		versions = map[string]string{}
+	}
+	return versions
+}
+
+func saveAgentVersions(file string, versions map[string]string) {
+	data, err := json.MarshalIndent(versions, "", "  ")
+	if err != nil {
+		return
+	}
+	dir := filepath.Dir(file)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(dir, "agent-versions-*.json")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, file); err != nil {
+		_ = os.Remove(tmpName)
+	}
+}
+
+// checkAgentStateVersion warns when the backing host directory of ws's agent
+// state was previously used with a newer version of the agent, which may have
+// migrated its state database to a schema the configured version cannot read.
+func checkAgentStateVersion(cfg *config.Config, ws *workspace.Resolved, shares []vm.Share) {
+	hostDir := agentStateHostDir(cfg, ws, shares)
+	if hostDir == "" {
+		return
+	}
+	curV, err := goversion.NewVersion(ws.Agent.Version)
+	if err != nil {
+		return
+	}
+	withAgentVersionsLock(func(file string) {
+		versions := loadAgentVersions(file)
+		if prev := versions[hostDir]; prev != "" && prev != ws.Agent.Version {
+			if prevV, err := goversion.NewVersion(prev); err == nil && curV.LessThan(prevV) {
+				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s state was used with newer version %s (current: %s); if the agent fails to start, upgrade it or reset its state\n", ws.Name, ws.Agent.Title, prev, ws.Agent.Version)
+			}
+		}
+	})
+}
+
+// recordAgentStateVersion records ws's agent version as the highest version
+// that ran against its backing state directory after the workspace VM starts.
+func recordAgentStateVersion(cfg *config.Config, ws *workspace.Resolved, shares []vm.Share) {
+	hostDir := agentStateHostDir(cfg, ws, shares)
+	if hostDir == "" {
+		return
+	}
+	curV, err := goversion.NewVersion(ws.Agent.Version)
+	if err != nil {
+		return
+	}
+	withAgentVersionsLock(func(file string) {
+		versions := loadAgentVersions(file)
+		if prev := versions[hostDir]; prev != "" {
+			if prev == ws.Agent.Version {
+				return
+			}
+			if prevV, err := goversion.NewVersion(prev); err == nil && !curV.GreaterThan(prevV) {
+				return
+			}
+		}
+		versions[hostDir] = ws.Agent.Version
+		saveAgentVersions(file, versions)
+	})
+}
+
+// purgeWorkspaceAgentStateVersions removes recorded agent version entries for
+// state directories inside stateDir when the workspace VM is purged.
+func purgeWorkspaceAgentStateVersions(stateDir string) {
+	prefix := canonicalHostPath(stateDir) + string(filepath.Separator)
+	rawPrefix := filepath.Clean(stateDir) + string(filepath.Separator)
+	withAgentVersionsLock(func(file string) {
+		versions := loadAgentVersions(file)
+		changed := false
+		for k := range versions {
+			if strings.HasPrefix(k, prefix) || strings.HasPrefix(k, rawPrefix) {
+				delete(versions, k)
+				changed = true
+			}
+		}
+		if changed {
+			saveAgentVersions(file, versions)
+		}
+	})
 }
 
 // removeConfigMountPoints removes the empty files and directories the guest

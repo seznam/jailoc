@@ -177,6 +177,10 @@ type Harness struct {
 	// Endpoints are the API and auth hostnames the agent contacts; they
 	// become an implicit allow rule on TCP port 443.
 	Endpoints []string
+	// Diagnose is the guest command (without the binary) that prints
+	// unbuffered startup and configuration errors when the agent exits
+	// before drawing or after a server error.
+	Diagnose []string
 }
 
 // sharedMounts are default mounts of every harness.
@@ -201,6 +205,7 @@ const (
 	// EROFS on a read-only config directory without it.
 	// See: https://github.com/anomalyco/opencode/issues/23040
 	openCodeConfigGitignore = "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore\n"
+	openCodePrintLogsFlag   = "--print-logs"
 )
 
 // llmEndpoints are the model and auth endpoints shared by multi-provider
@@ -243,6 +248,7 @@ var harnesses = []Harness{
 		ConfigGitignore: openCodeConfigGitignore,
 		Installs:        openCode1Installs,
 		Endpoints:       llmEndpoints,
+		Diagnose:        []string{openCodePrintLogsFlag},
 	},
 	{
 		Name:     "opencode2",
@@ -268,6 +274,7 @@ var harnesses = []Harness{
 		ConfigDir:       openCodeConfigDir,
 		ConfigGitignore: openCodeConfigGitignore,
 		Endpoints:       llmEndpoints,
+		Diagnose:        []string{openCodePrintLogsFlag},
 	},
 	{
 		Name:       "claude",

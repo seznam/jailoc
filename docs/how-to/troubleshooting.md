@@ -174,6 +174,25 @@ See the [Image resolution reference](../reference/image-resolution.md).
 
 **Fix:** Docker is off by default; set `enable_docker = true` and run `jailoc restart`. An image used directly (`image`, or `defaults.image` without a workspace `dockerfile`) must contain Docker; install it there or set `enable_docker = false`. Images jailoc builds get Docker when `enable_docker` is on. Docker is also off when `protect_git = true`. See [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm).
 
+## OpenCode fails to start with a server or database error
+
+**Symptom:** `jailoc` exits before the TUI appears with `Unexpected server error. Check server logs for details.` or `opencode exited with status 1`.
+
+OpenCode batches writes to `~/.local/share/opencode/log/opencode.log`, so an immediate exit at startup may not flush the failure to the log file.
+
+**Debugging:** run OpenCode with `--print-logs` inside the workspace VM to print unbuffered logs and the underlying error to standard error:
+
+```bash
+jailoc -w <workspace> exec -- opencode --print-logs
+jailoc -w <workspace> exec -- opencode debug config --print-logs
+```
+
+**Fix:** if the output reports a SQLite schema error (such as `no such column` after downgrading `agents.<name>.version` or sharing `~/.local/share/opencode` across incompatible OpenCode versions), upgrade the agent version to match the database schema, or stop any running sessions and move the database together with its WAL and SHM sidecars into a backup directory so OpenCode starts with an empty active database:
+
+```bash
+jailoc -w <workspace> exec -- sh -c 'bak=~/.local/share/opencode/db-backup-$(date +%Y%m%d-%H%M%S) && mkdir -p "$bak" && for f in opencode.db opencode.db-wal opencode.db-shm; do [ -e ~/.local/share/opencode/"$f" ] && mv ~/.local/share/opencode/"$f" "$bak"/; done'
+```
+
 ## Clean up
 
 Stop a workspace and delete its persistent home, Docker data and isolated builder:
