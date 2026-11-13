@@ -270,25 +270,52 @@ const gtkClipboardScript = "import os, sys, gi\n" +
 	"from gi.repository import Gtk, Gdk\n" +
 	"text = sys.stdin.buffer.read().decode('utf-8', 'replace')\n" +
 	"sys.stdin.close()\n" +
-	"if os.fork() > 0:\n" +
+	"r, w = os.pipe()\n" +
+	"pid = os.fork()\n" +
+	"if pid > 0:\n" +
+	"    os.close(w)\n" +
+	"    ok = os.read(r, 1)\n" +
+	"    os.close(r)\n" +
+	"    if not ok:\n" +
+	"        os.waitpid(pid, 0)\n" +
+	"        os._exit(1)\n" +
 	"    os._exit(0)\n" +
+	"os.close(r)\n" +
 	"os.setsid()\n" +
 	"if not Gtk.init_check()[0]:\n" +
+	"    os.close(w)\n" +
 	"    os._exit(1)\n" +
+	"seen = {'CLIPBOARD': 0, 'PRIMARY': 0}\n" +
 	"owned = {'CLIPBOARD', 'PRIMARY'}\n" +
+	"ready = False\n" +
+	"def notify_ready():\n" +
+	"    global ready\n" +
+	"    if not ready:\n" +
+	"        ready = True\n" +
+	"        os.write(w, b'1')\n" +
+	"        os.close(w)\n" +
 	"def on_owner_change(cb, event, name):\n" +
 	"    if getattr(event, 'reason', None) != Gdk.OwnerChange.NEW_OWNER:\n" +
 	"        owned.discard(name)\n" +
-	"    elif not cb.get_owner():\n" +
-	"        owned.discard(name)\n" +
+	"    else:\n" +
+	"        seen[name] += 1\n" +
+	"        if seen[name] > 1:\n" +
+	"            owned.discard(name)\n" +
+	"    if all(v >= 1 for v in seen.values()) or not owned:\n" +
+	"        notify_ready()\n" +
 	"    if not owned:\n" +
 	"        Gtk.main_quit()\n" +
 	"for name in ('CLIPBOARD', 'PRIMARY'):\n" +
 	"    cb = Gtk.Clipboard.get(Gdk.Atom.intern(name, False))\n" +
+	"    cb.connect('owner-change', on_owner_change, name)\n" +
 	"    cb.set_text(text, -1)\n" +
 	"    cb.store()\n" +
-	"    cb.connect('owner-change', on_owner_change, name)\n" +
-	"Gtk.main()\n"
+	"Gdk.Display.get_default().sync()\n" +
+	"while Gtk.events_pending():\n" +
+	"    Gtk.main_iteration()\n" +
+	"notify_ready()\n" +
+	"if owned:\n" +
+	"    Gtk.main()\n"
 
 func copyToHostClipboard(data []byte) {
 	for _, c := range hostClipboardCommands(runtime.GOOS, os.Getenv, exec.LookPath) {
