@@ -760,6 +760,19 @@ func TestReviewFixes(t *testing.T) {
 		if ecBareLF.inspect([]byte("GET /first HTTP/1.1\nHost: denied.example.com\n\n")) {
 			t.Fatal("enforceConn accepted bare-LF request without CRLF")
 		}
+		// Keep-alive second request whose request line uses \r\n but headers end with \n\n.
+		ecKeepAlive := &enforceConn{
+			check: func(name string, bad bool) bool {
+				return !bad && name == "allowed.example.com"
+			},
+			abort: func() {},
+		}
+		if !ecKeepAlive.inspect([]byte("GET /first HTTP/1.1\r\nHost: allowed.example.com\r\n\r\n")) {
+			t.Fatal("first keep-alive request rejected")
+		}
+		if ecKeepAlive.inspect([]byte("GET /second HTTP/1.1\r\nHost: denied.example.com\n\n")) {
+			t.Fatal("enforceConn accepted keep-alive request with bare-LF header terminator")
+		}
 	})
 
 	t.Run("allowed DNS query with unlisted CDN CNAME resolves while denied CNAME is blocked", func(t *testing.T) {

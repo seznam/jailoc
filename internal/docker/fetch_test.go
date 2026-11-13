@@ -2,8 +2,10 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -344,7 +346,7 @@ func TestFetchDockerfileRedirectConfinement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = checkDockerfileRedirect(origin, nextReq, []*http.Request{nextReq})
+		err = checkDockerfileRedirect(origin, "", nextReq, []*http.Request{nextReq})
 		if err == nil || !strings.Contains(err.Error(), "https to http") {
 			t.Fatalf("expected https to http error, got %v", err)
 		}
@@ -368,7 +370,7 @@ func TestFetchDockerfileRedirectConfinement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = checkDockerfileRedirect(origin, nextReq, []*http.Request{hop1, hop2})
+		err = checkDockerfileRedirect(origin, "", nextReq, []*http.Request{hop1, hop2})
 		if err == nil || !strings.Contains(err.Error(), "https to http") {
 			t.Fatalf("expected https to http error after TLS upgrade hop, got %v", err)
 		}
@@ -377,14 +379,34 @@ func TestFetchDockerfileRedirectConfinement(t *testing.T) {
 
 func TestFetchDockerfileHonorsHTTPProxy(t *testing.T) {
 	var proxyHits atomic.Int32
+	var gotConnectHost string
 	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		proxyHits.Add(1)
+		if r.Method == http.MethodConnect {
+			gotConnectHost = r.Host
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("FROM ubuntu:24.04\n"))
 	}))
 	t.Cleanup(proxySrv.Close)
 
+	origLookup := lookupFetchIPs
+	t.Cleanup(func() { lookupFetchIPs = origLookup })
+	lookupFetchIPs = func(_ context.Context, host string) ([]netip.Addr, error) {
+		switch host {
+		case "builds.example.com":
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		case "rebind.example.com":
+			return []netip.Addr{netip.MustParseAddr("169.254.169.254")}, nil
+		default:
+			return nil, errors.New("dns failure")
+		}
+	}
+
 	t.Setenv("HTTP_PROXY", proxySrv.URL)
+	t.Setenv("HTTPS_PROXY", proxySrv.URL)
 	t.Setenv("NO_PROXY", "")
 
 	data, err := fetchDockerfile(t.Context(), "http://93.184.216.34/Dockerfile")
@@ -398,8 +420,29 @@ func TestFetchDockerfileHonorsHTTPProxy(t *testing.T) {
 		t.Fatalf("proxy hits = %d, want 1", got)
 	}
 
+	// HTTPS hostname fetch pins the CONNECT target sent to the proxy to the validated IP.
+	_, _ = fetchDockerfile(t.Context(), "https://builds.example.com:8443/Dockerfile")
+	if gotConnectHost != "93.184.216.34:8443" {
+		t.Fatalf("proxy CONNECT host = %q, want 93.184.216.34:8443", gotConnectHost)
+	}
+	if got := proxyHits.Load(); got != 2 {
+		t.Fatalf("proxy hits after HTTPS CONNECT = %d, want 2", got)
+	}
+
+	if _, err := fetchDockerfile(t.Context(), "http://builds.example.com:8080/Dockerfile"); err == nil {
+		t.Fatal("expected error for proxied plain-http hostname target, got nil")
+	}
 	if _, err := fetchDockerfile(t.Context(), "http://internal.localhost/Dockerfile"); err == nil {
 		t.Fatal("expected error for proxied .localhost target, got nil")
+	}
+	if _, err := fetchDockerfile(t.Context(), "https://rebind.example.com/Dockerfile"); err == nil {
+		t.Fatal("expected error for proxied hostname resolving to non-public IP, got nil")
+	}
+	if _, err := fetchDockerfile(t.Context(), "https://unresolvable.example.com/Dockerfile"); err == nil {
+		t.Fatal("expected error when proxied hostname DNS lookup fails, got nil")
+	}
+	if got := proxyHits.Load(); got != 2 {
+		t.Fatalf("proxy hits after rejected targets = %d, want 2", got)
 	}
 }
 

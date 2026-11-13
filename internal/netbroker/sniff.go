@@ -277,13 +277,12 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 	if !complete {
 		lineEnd := strings.IndexByte(rest, '\n')
 		if lineEnd >= 0 {
-			bareLF := lineEnd == 0 || rest[lineEnd-1] != '\r'
 			firstLine := strings.TrimSuffix(rest[:lineEnd], "\r")
 			parts := strings.Fields(firstLine)
 			if len(parts) < 2 || !strings.HasPrefix(parts[1], "HTTP/") {
 				return nil, false
 			}
-			if bareLF || strings.Contains(firstLine, "\r") {
+			if hasBareCRorLF(b) {
 				return map[string]any{"proto": "http", "method": method, "path": stripQuery(parts[0]), "bad_authority": true}, false
 			}
 		}
@@ -344,6 +343,25 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 		info["host"] = effective
 	}
 	return info, false
+}
+
+// hasBareCRorLF reports whether b contains any '\n' not immediately preceded by
+// '\r', or any '\r' not immediately followed by '\n' (ignoring a trailing '\r'
+// at the end of an incomplete read buffer).
+func hasBareCRorLF(b []byte) bool {
+	for i := 0; i < len(b); i++ {
+		switch b[i] {
+		case '\n':
+			if i == 0 || b[i-1] != '\r' {
+				return true
+			}
+		case '\r':
+			if i+1 < len(b) && b[i+1] != '\n' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isHTTPToken(s string) bool {
@@ -488,7 +506,7 @@ func (c *enforceConn) inspect(data []byte) bool {
 					c.doneTLS, c.buf = true, nil
 					return true
 				}
-			} else if lineEnd := bytes.IndexByte(c.buf, '\n'); lineEnd == 0 || (lineEnd > 0 && c.buf[lineEnd-1] != '\r') {
+			} else if hasBareCRorLF(c.buf) {
 				return false
 			}
 			return len(c.buf) <= sniffMax
