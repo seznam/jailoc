@@ -350,6 +350,10 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 		old, err := term.MakeRaw(fd)
 		if err == nil {
 			defer func() {
+				// Stop the startup animator before resetting terminal modes so
+				// a ticker cannot draw on the main screen after leaving the
+				// alternate screen.
+				status.stop()
 				// The agent cannot turn its terminal features off when the
 				// session detaches or the VM dies, so reset them here.
 				if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int

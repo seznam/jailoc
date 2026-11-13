@@ -187,10 +187,10 @@ jailoc -w <workspace> exec -- opencode --print-logs
 jailoc -w <workspace> exec -- opencode debug config --print-logs
 ```
 
-**Fix:** if the output reports a SQLite schema error (such as `no such column` after downgrading `agents.<name>.version` or sharing `~/.local/share/opencode` across incompatible OpenCode versions), upgrade the agent version to match the database schema or move the database aside inside the workspace:
+**Fix:** if the output reports a SQLite schema error (such as `no such column` after downgrading `agents.<name>.version` or sharing `~/.local/share/opencode` across incompatible OpenCode versions), upgrade the agent version to match the database schema, or stop any running sessions and move the database together with its WAL and SHM sidecars into a backup directory so OpenCode starts with an empty active database:
 
 ```bash
-jailoc -w <workspace> exec -- sh -c 'mv ~/.local/share/opencode/opencode.db ~/.local/share/opencode/opencode.db.bak && rm -f ~/.local/share/opencode/opencode.db-wal ~/.local/share/opencode/opencode.db-shm'
+jailoc -w <workspace> exec -- sh -c 'bak=~/.local/share/opencode/db-backup-$(date +%Y%m%d-%H%M%S) && mkdir -p "$bak" && for f in opencode.db opencode.db-wal opencode.db-shm; do [ -e ~/.local/share/opencode/"$f" ] && mv ~/.local/share/opencode/"$f" "$bak"/; done'
 ```
 
 ## Clean up

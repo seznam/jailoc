@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/seznam/jailoc/internal/agent"
+	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -99,25 +100,34 @@ func TestRemoveConfigMountPoints(t *testing.T) {
 	}
 }
 
-func TestCheckAgentStateVersion(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	if err != nil {
+func TestCheckAndRecordAgentStateVersion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	h1, _ := agent.Lookup("opencode1")
+	h2, _ := agent.Lookup("opencode2")
+	ws := &workspace.Resolved{Name: "szn", Agent: h1, AgentInstall: true}
+
+	// Pre-start check alone does not record the version before the VM boots.
+	ws.Agent.Version = "1.19.5"
+	checkAgentStateVersion(ws, nil)
+	if _, err := os.Stat(agentVersionsPath()); !os.IsNotExist(err) {
+		t.Fatalf("checkAgentStateVersion created versions file before start: %v", err)
+	}
+
+	// JSON null in the metadata file must not panic when recording.
+	if err := os.MkdirAll(filepath.Dir(agentVersionsPath()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = root.Close() }()
-
-	h, _ := agent.Lookup("opencode1")
-	ws := &workspace.Resolved{Name: "szn", Agent: h, AgentInstall: true}
+	if err := os.WriteFile(agentVersionsPath(), []byte("null\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	ws.Agent.Version = "1.18.4"
-	checkAgentStateVersion(root, ".", ws)
-
+	recordAgentStateVersion(ws, nil)
 	ws.Agent.Version = "1.19.5"
-	checkAgentStateVersion(root, ".", ws)
+	recordAgentStateVersion(ws, nil)
 
-	data, err := os.ReadFile(filepath.Join(dir, agentVersionsFile)) //nolint:gosec // G304: test file
+	data, err := os.ReadFile(agentVersionsPath()) //nolint:gosec // G304: test file
 	if err != nil {
 		t.Fatalf("read versions file: %v", err)
 	}
@@ -127,12 +137,26 @@ func TestCheckAgentStateVersion(t *testing.T) {
 
 	// Downgrading must not overwrite the recorded higher version.
 	ws.Agent.Version = "1.18.4"
-	checkAgentStateVersion(root, ".", ws)
-	data, err = os.ReadFile(filepath.Join(dir, agentVersionsFile)) //nolint:gosec // G304: test file
+	checkAgentStateVersion(ws, nil)
+	recordAgentStateVersion(ws, nil)
+	data, err = os.ReadFile(agentVersionsPath()) //nolint:gosec // G304: test file
 	if err != nil {
 		t.Fatalf("read versions file after downgrade: %v", err)
 	}
 	if !strings.Contains(string(data), `"1.19.5"`) {
 		t.Fatalf("versions file after downgrade = %s, want 1.19.5 preserved", data)
+	}
+
+	// An explicit mount or profile share tracks history by the backing host directory,
+	// even across OpenCode 1 and OpenCode 2 sharing /home/agent/.local/share/opencode.
+	sharedDir := filepath.Join(t.TempDir(), "shared-opencode")
+	shares := []vm.Share{{HostPath: sharedDir, GuestPath: "/home/agent/.local/share/opencode"}}
+	ws2 := &workspace.Resolved{Name: "other", Agent: h2, AgentInstall: true}
+	ws2.Agent.Version = "2.2.5"
+	recordAgentStateVersion(ws2, shares)
+
+	versions := loadAgentVersions(agentVersionsPath())
+	if got := versions[sharedDir]; got != "2.2.5" {
+		t.Fatalf("versions[%q] = %q, want 2.2.5", sharedDir, got)
 	}
 }

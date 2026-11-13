@@ -113,55 +113,115 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		}
 		binds = append(binds, guest.Bind{Source: src(rel), Target: d.Path})
 	}
-	if start && workspaceProfile(ws) == "" {
-		checkAgentStateVersion(root, guestDataHome, ws)
-	}
 	return binds, nil
 }
 
-// agentVersionsFile records, outside the directories bound into the guest,
-// the highest version of each agent state directory that jailoc started the
-// workspace or profile with.
-const agentVersionsFile = ".jailoc-agent-versions.json"
+// agentVersionsFile records, outside the directories shared with the guest,
+// the highest version of each host backing state directory that jailoc started
+// a workspace with.
+const agentVersionsFile = "agent-versions.json"
 
-// checkAgentStateVersion warns when a persistent state directory of ws was
-// previously used with a newer version of the agent, which may have migrated
-// its state database to a schema the configured version cannot read.
-func checkAgentStateVersion(root *os.Root, dir string, ws *workspace.Resolved) {
+func agentVersionsPath() string {
+	return filepath.Join(vmRootDir(), agentVersionsFile)
+}
+
+// agentStateHostDir returns the host directory that backs the agent's primary
+// state directory for ws: an explicit share covering it, or the workspace's
+// persistent guest home state directory.
+func agentStateHostDir(ws *workspace.Resolved, shares []vm.Share) string {
 	if !ws.AgentInstall || ws.Agent.Version == "" || len(ws.Agent.State) == 0 {
-		return
+		return ""
 	}
 	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
+		return ""
+	}
+	d := ws.Agent.State[0]
+	for _, s := range shares {
+		if s.GuestPath == d.Path {
+			return filepath.Clean(s.HostPath)
+		}
+	}
+	return filepath.Join(vm.GuestDataDir(vmStateDir(ws.Name)), guestDataHome, d.Name)
+}
+
+func loadAgentVersions(file string) map[string]string {
+	var versions map[string]string
+	if data, err := os.ReadFile(file); err == nil { //nolint:gosec // G304: jailoc-owned metadata path
+		_ = json.Unmarshal(data, &versions)
+	}
+	if versions == nil {
+		versions = map[string]string{}
+	}
+	return versions
+}
+
+// checkAgentStateVersion warns when the backing host directory of ws's agent
+// state was previously used with a newer version of the agent, which may have
+// migrated its state database to a schema the configured version cannot read.
+func checkAgentStateVersion(ws *workspace.Resolved, shares []vm.Share) {
+	hostDir := agentStateHostDir(ws, shares)
+	if hostDir == "" {
 		return
 	}
 	curV, err := goversion.NewVersion(ws.Agent.Version)
 	if err != nil {
 		return
 	}
-	key := ws.Agent.State[0].Name
-	file := path.Join(dir, agentVersionsFile)
-	versions := map[string]string{}
-	if data, err := readRegular(root, file, maxAgentConfig); err == nil {
-		_ = json.Unmarshal(data, &versions)
-	}
-	if prev := versions[key]; prev != "" && prev != ws.Agent.Version {
+	versions := loadAgentVersions(agentVersionsPath())
+	if prev := versions[hostDir]; prev != "" && prev != ws.Agent.Version {
 		if prevV, err := goversion.NewVersion(prev); err == nil && curV.LessThan(prevV) {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s state was used with newer version %s (current: %s); if the agent fails to start, upgrade it or reset its state\n", ws.Name, ws.Agent.Title, prev, ws.Agent.Version)
+		}
+	}
+}
+
+// recordAgentStateVersion records ws's agent version as the highest version
+// that ran against its backing state directory after the workspace VM starts.
+func recordAgentStateVersion(ws *workspace.Resolved, shares []vm.Share) {
+	hostDir := agentStateHostDir(ws, shares)
+	if hostDir == "" {
+		return
+	}
+	curV, err := goversion.NewVersion(ws.Agent.Version)
+	if err != nil {
+		return
+	}
+	file := agentVersionsPath()
+	versions := loadAgentVersions(file)
+	if prev := versions[hostDir]; prev != "" {
+		if prev == ws.Agent.Version {
+			return
+		}
+		if prevV, err := goversion.NewVersion(prev); err == nil && !curV.GreaterThan(prevV) {
 			return
 		}
 	}
-	if versions[key] == ws.Agent.Version {
-		return
-	}
-	versions[key] = ws.Agent.Version
+	versions[hostDir] = ws.Agent.Version
 	data, err := json.MarshalIndent(versions, "", "  ")
 	if err != nil {
 		return
 	}
-	if err := root.MkdirAll(dir, 0o700); err != nil {
+	dir := filepath.Dir(file)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	_ = root.WriteFile(file, append(data, '\n'), 0o600)
+	tmp, err := os.CreateTemp(dir, "agent-versions-*.json")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, file); err != nil {
+		_ = os.Remove(tmpName)
+	}
 }
 
 // removeConfigMountPoints removes the empty files and directories the guest
