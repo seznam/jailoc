@@ -259,74 +259,40 @@ func (q *hostClipboardQueue) close() {
 	}
 }
 
-type clipboardCmd struct {
-	name string
-	args []string
-}
-
-const gtkClipboardScript = "import sys, gi\n" +
-	"gi.require_version('Gtk', '3.0')\n" +
-	"gi.require_version('Gdk', '3.0')\n" +
-	"from gi.repository import Gtk, Gdk\n" +
-	"if not Gtk.init_check()[0]:\n" +
-	"    sys.exit(1)\n" +
-	"text = sys.stdin.buffer.read().decode('utf-8', 'replace')\n" +
-	"for name in ('CLIPBOARD', 'PRIMARY'):\n" +
-	"    cb = Gtk.Clipboard.get(Gdk.Atom.intern(name, False))\n" +
-	"    cb.set_text(text, -1)\n" +
-	"    cb.store()\n" +
-	"while Gtk.events_pending():\n" +
-	"    Gtk.main_iteration()\n"
-
 func copyToHostClipboard(data []byte) {
-	for _, c := range hostClipboardCommands(runtime.GOOS, os.Getenv, exec.LookPath) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		cmd := exec.CommandContext(ctx, c.name, c.args...) //nolint:gosec // G204: fixed clipboard tool resolved from PATH
-		cmd.Stdin = bytes.NewReader(data)
-		cmd.Stdout = nil
-		cmd.Stderr = nil
-		if runtime.GOOS == "darwin" && os.Getenv("LANG") == "" {
-			cmd.Env = append(os.Environ(), "LANG=en_US.UTF-8")
-		}
-		_ = cmd.Run()
-		cancel()
+	name, args, ok := hostClipboardCommand()
+	if !ok {
+		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: fixed clipboard tool resolved from PATH
+	cmd.Stdin = bytes.NewReader(data)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if runtime.GOOS == "darwin" && os.Getenv("LANG") == "" {
+		cmd.Env = append(os.Environ(), "LANG=en_US.UTF-8")
+	}
+	_ = cmd.Run()
 }
 
-func hostClipboardCommands(
-	goos string,
-	getenv func(string) string,
-	lookPath func(string) (string, error),
-) []clipboardCmd {
-	if goos == "darwin" {
-		return []clipboardCmd{{name: "pbcopy"}}
+func hostClipboardCommand() (string, []string, bool) {
+	if runtime.GOOS == "darwin" {
+		return "pbcopy", []string{}, true
 	}
-	var cmds []clipboardCmd
-	if getenv("WAYLAND_DISPLAY") != "" {
-		if path, err := lookPath("wl-copy"); err == nil {
-			cmds = append(cmds,
-				clipboardCmd{name: path},
-				clipboardCmd{name: path, args: []string{"--primary"}},
-			)
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		if path, err := exec.LookPath("wl-copy"); err == nil {
+			return path, []string{}, true
 		}
 	}
-	if getenv("DISPLAY") != "" {
-		if path, err := lookPath("xclip"); err == nil {
-			cmds = append(cmds,
-				clipboardCmd{name: path, args: []string{"-selection", "clipboard"}},
-				clipboardCmd{name: path, args: []string{"-selection", "primary"}},
-			)
-		} else if path, err := lookPath("xsel"); err == nil {
-			cmds = append(cmds,
-				clipboardCmd{name: path, args: []string{"--clipboard", "--input"}},
-				clipboardCmd{name: path, args: []string{"--primary", "--input"}},
-			)
-		}
+	if os.Getenv("DISPLAY") == "" {
+		return "", []string{}, false
 	}
-	if len(cmds) == 0 && (getenv("WAYLAND_DISPLAY") != "" || getenv("DISPLAY") != "") {
-		if path, err := lookPath("python3"); err == nil {
-			cmds = append(cmds, clipboardCmd{name: path, args: []string{"-c", gtkClipboardScript}})
-		}
+	if path, err := exec.LookPath("xclip"); err == nil {
+		return path, []string{"-selection", "clipboard"}, true
 	}
-	return cmds
+	if path, err := exec.LookPath("xsel"); err == nil {
+		return path, []string{"--clipboard", "--input"}, true
+	}
+	return "", []string{}, false
 }
