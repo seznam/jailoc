@@ -77,13 +77,29 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 
 	origin := req.URL
+	var proxyHost string
 	dialer := &net.Dialer{
 		Timeout: 10 * time.Second,
 		Control: func(_, address string, _ syscall.RawConn) error {
+			if proxyHost != "" {
+				return checkProxyDialAddr(proxyHost, address)
+			}
 			return checkFetchDialAddr(origin.Hostname(), address)
 		},
 	}
 	transport := &http.Transport{
+		Proxy: func(r *http.Request) (*url.URL, error) {
+			pURL, err := http.ProxyFromEnvironment(r)
+			if err != nil || pURL == nil {
+				proxyHost = ""
+				return pURL, err
+			}
+			if err := checkProxiedTarget(r.Context(), origin.Hostname(), r.URL.Hostname()); err != nil {
+				return nil, err
+			}
+			proxyHost = pURL.Hostname()
+			return pURL, nil
+		},
 		DialContext:           dialer.DialContext,
 		ForceAttemptHTTP2:     true,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -135,11 +151,52 @@ func checkDockerfileRedirect(origin *url.URL, next *http.Request, via []*http.Re
 	if next.URL.Scheme != "http" && next.URL.Scheme != "https" {
 		return fmt.Errorf("refusing redirect to unsupported scheme %q", next.URL.Scheme)
 	}
-	if origin.Scheme == "https" && next.URL.Scheme != "https" {
+	prev := origin
+	if len(via) > 0 && via[len(via)-1].URL != nil {
+		prev = via[len(via)-1].URL
+	}
+	if (origin.Scheme == "https" || prev.Scheme == "https") && next.URL.Scheme != "https" {
 		return fmt.Errorf("refusing redirect from https to http")
 	}
 	if !strings.EqualFold(next.URL.Host, origin.Host) {
 		return fmt.Errorf("refusing redirect to %s", next.URL.Redacted())
+	}
+	return nil
+}
+
+func checkProxiedTarget(ctx context.Context, originHost, targetHost string) error {
+	host := strings.ToLower(strings.TrimSuffix(targetHost, "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return fmt.Errorf("refusing proxied fetch to localhost target %q", targetHost)
+	}
+	if ip, err := netip.ParseAddr(targetHost); err == nil {
+		if originIP, err := netip.ParseAddr(originHost); err == nil && ip.Unmap() == originIP.Unmap() {
+			return nil
+		}
+		if !isPublicFetchAddr(ip.Unmap()) {
+			return fmt.Errorf("refusing proxied fetch to non-public address %s", ip.Unmap())
+		}
+		return nil
+	}
+	if ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", targetHost); err == nil {
+		for _, ip := range ips {
+			if !isPublicFetchAddr(ip.Unmap()) {
+				return fmt.Errorf("refusing proxied fetch to non-public address %s for host %s", ip.Unmap(), targetHost)
+			}
+		}
+	}
+	return nil
+}
+
+func checkProxyDialAddr(proxyHost, address string) error {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return fmt.Errorf("invalid proxy dial address %q: %w", address, err)
+	}
+	if proxyIP, err := netip.ParseAddr(proxyHost); err == nil {
+		if ap.Addr().Unmap() != proxyIP.Unmap() {
+			return fmt.Errorf("refusing dial to %s for configured proxy %s", ap.Addr().Unmap(), proxyHost)
+		}
 	}
 	return nil
 }

@@ -275,11 +275,16 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 	}
 	head, _, complete := strings.Cut(s, "\r\n\r\n")
 	if !complete {
-		lineEnd := strings.Index(rest, "\r\n")
+		lineEnd := strings.IndexByte(rest, '\n')
 		if lineEnd >= 0 {
-			parts := strings.Fields(rest[:lineEnd])
+			bareLF := lineEnd == 0 || rest[lineEnd-1] != '\r'
+			firstLine := strings.TrimSuffix(rest[:lineEnd], "\r")
+			parts := strings.Fields(firstLine)
 			if len(parts) < 2 || !strings.HasPrefix(parts[1], "HTTP/") {
 				return nil, false
+			}
+			if bareLF || strings.Contains(firstLine, "\r") {
+				return map[string]any{"proto": "http", "method": method, "path": stripQuery(parts[0]), "bad_authority": true}, false
 			}
 		}
 		return nil, true
@@ -293,8 +298,12 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 	targetHost := extractTargetAuthority(method, target)
 	var hostHeader string
 	hostCount := 0
-	badHeader := false
+	badHeader := strings.ContainsAny(lines[0], "\r\n")
 	for _, l := range lines[1:] {
+		if strings.ContainsAny(l, "\r\n") {
+			badHeader = true
+			continue
+		}
 		if l != "" && (l[0] == ' ' || l[0] == '\t') {
 			badHeader = true
 			continue
@@ -468,12 +477,19 @@ func (c *enforceConn) inspect(data []byte) bool {
 		idx := bytes.Index(c.buf, []byte("\r\n\r\n"))
 		if idx < 0 {
 			if !c.inHTTP {
-				_, more := identifyHTTPForPolicy(c.buf)
+				info, more := identifyHTTPForPolicy(c.buf)
+				if info != nil {
+					if _, bad := sniffedPeerNameStrict(info); bad {
+						return false
+					}
+				}
 				if !more {
 					// Not TLS and not HTTP (e.g. SSH or SMTP binary/text protocol).
 					c.doneTLS, c.buf = true, nil
 					return true
 				}
+			} else if lineEnd := bytes.IndexByte(c.buf, '\n'); lineEnd == 0 || (lineEnd > 0 && c.buf[lineEnd-1] != '\r') {
+				return false
 			}
 			return len(c.buf) <= sniffMax
 		}
@@ -559,12 +575,18 @@ func (c *enforceConn) consumeChunked() (done, ok bool) {
 
 func parseHTTPFraming(head string) (contentLen int64, chunked, upgraded, ok bool) {
 	lines := strings.Split(head, "\r\n")
+	if strings.ContainsAny(lines[0], "\r\n") {
+		return 0, false, false, false
+	}
 	parts := strings.Fields(lines[0])
 	if len(parts) == 3 && parts[0] == "CONNECT" {
 		return 0, false, true, true
 	}
 	hasCL := false
 	for _, l := range lines[1:] {
+		if strings.ContainsAny(l, "\r\n") {
+			return 0, false, false, false
+		}
 		if l != "" && (l[0] == ' ' || l[0] == '\t') {
 			return 0, false, false, false
 		}

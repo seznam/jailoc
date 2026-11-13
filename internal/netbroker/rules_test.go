@@ -737,6 +737,29 @@ func TestReviewFixes(t *testing.T) {
 		if ecObsFold.inspect(obsFoldStream) {
 			t.Fatal("enforceConn accepted obs-fold Content-Length smuggling stream")
 		}
+		// Bare LF / CR inside headers or request lines must be rejected so Go's
+		// textproto line reader cannot split a second request inside a single
+		// \r\n\r\n block.
+		bareLFStream := []byte("GET /first HTTP/1.1\r\nHost: allowed.example.com\r\nX-Pad: a\n\nGET /second HTTP/1.1\nHost: denied.example.com\nX-Pad: x\r\n\r\n")
+		infoBareLF, _ := identifyForPolicy(bareLFStream)
+		if _, bad := sniffedPeerNameStrict(infoBareLF); !bad {
+			t.Fatalf("expected bad authority for embedded bare LF in headers, got info=%v", infoBareLF)
+		}
+		if _, _, _, ok := parseHTTPFraming("GET /first HTTP/1.1\r\nHost: allowed.example.com\r\nX-Pad: a\n\nGET /second HTTP/1.1\nHost: denied.example.com\nX-Pad: x"); ok {
+			t.Fatal("parseHTTPFraming accepted header block with embedded bare LF")
+		}
+		ecBareLF := &enforceConn{
+			check: func(name string, bad bool) bool {
+				return !bad && name == "allowed.example.com"
+			},
+			abort: func() {},
+		}
+		if ecBareLF.inspect(bareLFStream) {
+			t.Fatal("enforceConn accepted embedded bare-LF smuggling stream")
+		}
+		if ecBareLF.inspect([]byte("GET /first HTTP/1.1\nHost: denied.example.com\n\n")) {
+			t.Fatal("enforceConn accepted bare-LF request without CRLF")
+		}
 	})
 
 	t.Run("allowed DNS query with unlisted CDN CNAME resolves while denied CNAME is blocked", func(t *testing.T) {

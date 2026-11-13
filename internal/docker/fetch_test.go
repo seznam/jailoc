@@ -349,6 +349,58 @@ func TestFetchDockerfileRedirectConfinement(t *testing.T) {
 			t.Fatalf("expected https to http error, got %v", err)
 		}
 	})
+
+	t.Run("refuses http to https to http downgrade across hops", func(t *testing.T) {
+		t.Parallel()
+		origin, err := url.Parse("http://example.com/a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		hop1, err := http.NewRequest(http.MethodGet, "http://example.com/a", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hop2, err := http.NewRequest(http.MethodGet, "https://example.com/b", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nextReq, err := http.NewRequest(http.MethodGet, "http://example.com/c", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = checkDockerfileRedirect(origin, nextReq, []*http.Request{hop1, hop2})
+		if err == nil || !strings.Contains(err.Error(), "https to http") {
+			t.Fatalf("expected https to http error after TLS upgrade hop, got %v", err)
+		}
+	})
+}
+
+func TestFetchDockerfileHonorsHTTPProxy(t *testing.T) {
+	var proxyHits atomic.Int32
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("FROM ubuntu:24.04\n"))
+	}))
+	t.Cleanup(proxySrv.Close)
+
+	t.Setenv("HTTP_PROXY", proxySrv.URL)
+	t.Setenv("NO_PROXY", "")
+
+	data, err := fetchDockerfile(t.Context(), "http://93.184.216.34/Dockerfile")
+	if err != nil {
+		t.Fatalf("fetchDockerfile via HTTP_PROXY failed: %v", err)
+	}
+	if string(data) != "FROM ubuntu:24.04\n" {
+		t.Fatalf("got %q, want %q", data, "FROM ubuntu:24.04\n")
+	}
+	if got := proxyHits.Load(); got != 1 {
+		t.Fatalf("proxy hits = %d, want 1", got)
+	}
+
+	if _, err := fetchDockerfile(t.Context(), "http://internal.localhost/Dockerfile"); err == nil {
+		t.Fatal("expected error for proxied .localhost target, got nil")
+	}
 }
 
 func TestCheckFetchDialAddr(t *testing.T) {
