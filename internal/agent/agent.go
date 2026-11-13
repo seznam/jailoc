@@ -300,15 +300,15 @@ var harnesses = []Harness{
 		Title:      "GitHub Copilot CLI",
 		Binary:     "copilot",
 		Package:    "@github/copilot",
-		Version:    "1.0.105",
+		Version:    "1.0.111",
 		Continue:   "--continue",
 		Resume:     "--resume",
 		Unattended: []string{"--allow-all"},
 		Env:        []string{"COPILOT_AUTO_UPDATE=false"},
 		State:      []StateDir{{Name: "copilot", Path: "/home/agent/.copilot"}},
 		// Not config.json or settings.json: Copilot CLI writes its login
-		// and preferences there, and jailoc adds the status line to
-		// settings.json.
+		// and preferences there, and jailoc sets the status line and
+		// storeTokenPlaintext in settings.json.
 		ConfigFiles: []ConfigFile{
 			{Path: ".copilot/copilot-instructions.md"},
 			{Path: ".copilot/agents"},
