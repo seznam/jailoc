@@ -14,8 +14,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"golang.org/x/net/http/httpproxy"
 )
 
 type sourceType int
@@ -81,7 +79,7 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 
 	originCopy := *req.URL
 	origin := &originCopy
-	proxyURL, err := httpproxy.FromEnvironment().ProxyFunc()(origin)
+	proxyURL, err := dockerfileProxy(req)
 	if err != nil {
 		return nil, fmt.Errorf("resolve proxy for %s: %w", rawURL, err)
 	}
@@ -163,8 +161,9 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 const maxDockerfileRedirects = 5
 
 var (
-	cgnatPrefix    = netip.MustParsePrefix("100.64.0.0/10")
-	lookupFetchIPs = func(ctx context.Context, host string) ([]netip.Addr, error) {
+	cgnatPrefix     = netip.MustParsePrefix("100.64.0.0/10")
+	dockerfileProxy = http.ProxyFromEnvironment
+	lookupFetchIPs  = func(ctx context.Context, host string) ([]netip.Addr, error) {
 		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	}
 )

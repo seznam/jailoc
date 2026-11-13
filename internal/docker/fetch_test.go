@@ -405,10 +405,13 @@ func TestFetchDockerfileHonorsHTTPProxy(t *testing.T) {
 		}
 	}
 
-	t.Setenv("HTTP_PROXY", proxySrv.URL)
-	t.Setenv("HTTPS_PROXY", proxySrv.URL)
-	t.Setenv("NO_PROXY", "")
-
+	proxyURL, err := url.Parse(proxySrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origProxy := dockerfileProxy
+	t.Cleanup(func() { dockerfileProxy = origProxy })
+	dockerfileProxy = http.ProxyURL(proxyURL)
 	data, err := fetchDockerfile(t.Context(), "http://93.184.216.34/Dockerfile")
 	if err != nil {
 		t.Fatalf("fetchDockerfile via HTTP_PROXY failed: %v", err)
