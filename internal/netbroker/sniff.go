@@ -293,14 +293,33 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 	targetHost := extractTargetAuthority(method, target)
 	var hostHeader string
 	hostCount := 0
+	badHeader := false
 	for _, l := range lines[1:] {
-		if k, v, ok := strings.Cut(l, ":"); ok && strings.EqualFold(strings.TrimSpace(k), "host") {
+		if l != "" && (l[0] == ' ' || l[0] == '\t') {
+			badHeader = true
+			continue
+		}
+		k, v, ok := strings.Cut(l, ":")
+		if !ok {
+			if l != "" {
+				badHeader = true
+			}
+			continue
+		}
+		if !isHTTPToken(k) {
+			badHeader = true
+			continue
+		}
+		if strings.EqualFold(k, "host") {
 			hostCount++
 			hostHeader = normalizeAuthority(strings.TrimSpace(v))
 		}
 	}
+	if _, _, _, framingOK := parseHTTPFraming(head); !framingOK {
+		badHeader = true
+	}
 	info := map[string]any{"proto": "http", "method": method, "path": stripQuery(target)}
-	if hostCount > 1 || (hostCount == 1 && hostHeader == "") {
+	if badHeader || hostCount > 1 || (hostCount == 1 && hostHeader == "") {
 		info["bad_authority"] = true
 		return info, false
 	}
@@ -546,11 +565,20 @@ func parseHTTPFraming(head string) (contentLen int64, chunked, upgraded, ok bool
 	}
 	hasCL := false
 	for _, l := range lines[1:] {
+		if l != "" && (l[0] == ' ' || l[0] == '\t') {
+			return 0, false, false, false
+		}
 		k, v, found := strings.Cut(l, ":")
 		if !found {
+			if l != "" {
+				return 0, false, false, false
+			}
 			continue
 		}
-		k = strings.ToLower(strings.TrimSpace(k))
+		if !isHTTPToken(k) {
+			return 0, false, false, false
+		}
+		k = strings.ToLower(k)
 		v = strings.TrimSpace(v)
 		switch k {
 		case "content-length":

@@ -717,6 +717,26 @@ func TestReviewFixes(t *testing.T) {
 		if ecUpgrade.inspect([]byte("GET / HTTP/1.1\r\nHost: allowed.example.com\r\nUpgrade: websocket\r\n\r\n")) {
 			t.Fatal("unvalidated HTTP Upgrade was accepted")
 		}
+		// RFC 7230 obs-fold continuation line (" Content-Length: 48") must be rejected
+		// so it cannot desynchronize enforceConn from Go net/http.Server and smuggle a
+		// pipelined second request with a denied Host header.
+		obsFoldStream := []byte("GET /first HTTP/1.1\r\nHost: allowed.example.com\r\nX-Pad: a\r\n Content-Length: 48\r\n\r\nGET /second HTTP/1.1\r\nHost: denied.example.com\r\n\r\n")
+		infoObs, _ := identifyForPolicy(obsFoldStream)
+		if _, bad := sniffedPeerNameStrict(infoObs); !bad {
+			t.Fatalf("expected bad authority for obs-fold header line, got info=%v", infoObs)
+		}
+		if _, _, _, ok := parseHTTPFraming("GET /first HTTP/1.1\r\nHost: allowed.example.com\r\nX-Pad: a\r\n Content-Length: 48"); ok {
+			t.Fatal("parseHTTPFraming accepted obs-fold Content-Length continuation line")
+		}
+		ecObsFold := &enforceConn{
+			check: func(name string, bad bool) bool {
+				return !bad && name == "allowed.example.com"
+			},
+			abort: func() {},
+		}
+		if ecObsFold.inspect(obsFoldStream) {
+			t.Fatal("enforceConn accepted obs-fold Content-Length smuggling stream")
+		}
 	})
 
 	t.Run("allowed DNS query with unlisted CDN CNAME resolves while denied CNAME is blocked", func(t *testing.T) {
