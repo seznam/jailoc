@@ -22,7 +22,7 @@
   goModLines = lib.splitString "\n" goModText;
   replaceLine =
     lib.findFirst (
-      l: lib.hasPrefix "replace github.com/stacklok/go-microvm =>" l
+      l: builtins.match "[[:space:]]*(replace[[:space:]]+)?github\\.com/stacklok/go-microvm([[:space:]]+[^[:space:]]+)?[[:space:]]*=>.*" l != null
     )
     null
     goModLines;
@@ -30,7 +30,7 @@
   parsed =
     if replaceLine == null
     then null
-    else builtins.match "replace github.com/stacklok/go-microvm => github.com/([^/ ]+)/([^/ ]+) +v[^ ]*-([0-9a-f]{12})[[:space:]]*" replaceLine;
+    else builtins.match "[[:space:]]*(replace[[:space:]]+)?github\\.com/stacklok/go-microvm([[:space:]]+[^[:space:]]+)?[[:space:]]*=>[[:space:]]*github\\.com/([^/ ]+)/([^/ ]+)[[:space:]]+v[^ ]*-([0-9a-f]{12})[[:space:]]*" replaceLine;
 
   fixFiles = "update nix/runtime/sources.nix and nix/runtime/go-microvm-runner.nix to match";
 
@@ -42,9 +42,9 @@
       else "`${replaceLine}`"
     }); expected revision ${goMicrovmRev}; ${fixFiles}"
     else let
-      foundOwner = builtins.elemAt parsed 0;
-      foundRepo = builtins.elemAt parsed 1;
-      foundShort = builtins.elemAt parsed 2;
+      foundOwner = builtins.elemAt parsed 2;
+      foundRepo = builtins.elemAt parsed 3;
+      foundShort = builtins.elemAt parsed 4;
     in
       if foundOwner != goMicrovmOwner || foundRepo != goMicrovmRepo
       then "go.mod replace points at ${foundOwner}/${foundRepo} (revision ${foundShort}) but nix pins ${goMicrovmOwner}/${goMicrovmRepo} at expected revision ${goMicrovmRev}; ${fixFiles}"

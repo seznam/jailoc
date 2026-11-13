@@ -3,6 +3,7 @@
   stdenv,
   libkrunfwSrc,
   libkrunfwVersion,
+  kernelVersion,
   linuxKernelTarball,
   flex,
   bison,
@@ -51,7 +52,7 @@ stdenv.mkDerivation {
     # Linux ELF checks: fixup has moved the upstream lib64 directory to lib.
     test -e "$out/lib/libkrunfw.so.5"
     readelf -d "$out/lib/libkrunfw.so.5" | grep -q 'SONAME.*libkrunfw.so.5'
-    test "$(grep -caF "Linux version 6.12.109" "$out/lib/libkrunfw.so.5")" -ge 1
+    test "$(grep -caF "Linux version ${kernelVersion}" "$out/lib/libkrunfw.so.5")" -ge 1
   '';
 
   meta = {

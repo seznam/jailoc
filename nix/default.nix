@@ -27,6 +27,7 @@
   libkrunfwJailoc = pkgs.callPackage ./runtime/libkrunfw.nix {
     libkrunfwSrc = sources.libkrunfw.src;
     libkrunfwVersion = sources.libkrunfw.version;
+    kernelVersion = sources.libkrunfw.kernelVersion;
     linuxKernelTarball = sources.libkrunfw.kernel;
   };
 
