@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -259,6 +260,9 @@ func (p *gitProtector) repo(r *shareRoot, gitPath string, d fs.DirEntry) error {
 	if !d.Type().IsRegular() {
 		return nil
 	}
+	if info, err := d.Info(); err == nil && hardLinked(info) {
+		return fmt.Errorf("protect %s: file has other hard links that stay writable; protect_git cannot protect it (remove the extra links)", r.guestOf(gitPath))
+	}
 	content, ok := readPointer(gitPath)
 	target, isGitfile := strings.CutPrefix(content, "gitdir:")
 	if !ok || !isGitfile {
@@ -307,14 +311,17 @@ func (p *gitProtector) gitDir(r *shareRoot, dir, worktree string) error {
 // the common directory of a worktree git directory (empty when that is not
 // under a writable share).
 func (p *gitProtector) protectGitDir(r *shareRoot, dir string) (string, error) {
-	common, ok := readPointer(filepath.Join(dir, "commondir"))
+	commondirPath := filepath.Join(dir, "commondir")
+	common, ok := readPointer(commondirPath)
 	if !ok {
 		return dir, p.protectCommonDir(r, dir)
 	}
 	if !p.done[dir] {
 		p.done[dir] = true
 		p.pinHost(dir)
-		p.readOnlyHost(filepath.Join(dir, "commondir"))
+		if _, err := p.protect(commondirPath, false, false); err != nil {
+			return "", err
+		}
 	}
 	cr, commonDir, err := p.locate(resolvePointer(dir, common))
 	if err != nil || cr == nil {
@@ -472,10 +479,16 @@ func (p *gitProtector) hookTargets(dir string) error {
 		return fmt.Errorf("hooks directory %s has more than %d entries; protect_git cannot check them", dir, maxHookEntries)
 	}
 	for _, e := range entries {
+		hook := filepath.Join(dir, e.Name())
+		if e.Type().IsRegular() {
+			if info, err := e.Info(); err == nil && hardLinked(info) {
+				return fmt.Errorf("hook %s has other hard links that stay writable; protect_git cannot protect it (remove the extra links)", hook)
+			}
+			continue
+		}
 		if e.Type()&fs.ModeSymlink == 0 {
 			continue
 		}
-		hook := filepath.Join(dir, e.Name())
 		link, err := os.Readlink(hook)
 		if err != nil {
 			continue
@@ -521,9 +534,16 @@ func (p *gitProtector) protect(path string, dir, create bool) (string, error) {
 		return "", fmt.Errorf("protect %s: not a directory; protect_git cannot protect it", guest)
 	case !dir && !info.Mode().IsRegular():
 		return "", fmt.Errorf("protect %s: not a regular file; protect_git cannot protect it", guest)
+	case !dir && hardLinked(info):
+		return "", fmt.Errorf("protect %s: file has other hard links that stay writable; protect_git cannot protect it (remove the extra links)", guest)
 	}
 	p.readOnlyHost(full)
 	return full, nil
+}
+
+func hardLinked(info fs.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Nlink > 1
 }
 
 // createEmpty creates the empty directory or file path and its parents.
@@ -735,6 +755,7 @@ type gitConfigEntry struct {
 // syntax Git writes and common hand edits, including values continued on
 // the next line with a trailing backslash.
 func parseGitConfig(data []byte) []gitConfigEntry {
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	var out []gitConfigEntry
 	section := ""
 	lines := strings.Split(string(data), "\n")
