@@ -264,7 +264,7 @@ type clipboardCmd struct {
 	args []string
 }
 
-const gtkClipboardScript = "import os, sys, gi\n" +
+const gtkClipboardScript = "import os, signal, sys, gi\n" +
 	"gi.require_version('Gtk', '3.0')\n" +
 	"gi.require_version('Gdk', '3.0')\n" +
 	"from gi.repository import Gtk, Gdk\n" +
@@ -282,6 +282,8 @@ const gtkClipboardScript = "import os, sys, gi\n" +
 	"    os._exit(0)\n" +
 	"os.close(r)\n" +
 	"os.setsid()\n" +
+	"signal.signal(signal.SIGPIPE, signal.SIG_IGN)\n" +
+	"signal.alarm(2)\n" +
 	"if not Gtk.init_check()[0]:\n" +
 	"    os.close(w)\n" +
 	"    os._exit(1)\n" +
@@ -292,8 +294,13 @@ const gtkClipboardScript = "import os, sys, gi\n" +
 	"    global ready\n" +
 	"    if not ready:\n" +
 	"        ready = True\n" +
-	"        os.write(w, b'1')\n" +
-	"        os.close(w)\n" +
+	"        signal.alarm(0)\n" +
+	"        try:\n" +
+	"            os.write(w, b'1')\n" +
+	"        except OSError:\n" +
+	"            os._exit(1)\n" +
+	"        finally:\n" +
+	"            os.close(w)\n" +
 	"def on_owner_change(cb, event, name):\n" +
 	"    if getattr(event, 'reason', None) != Gdk.OwnerChange.NEW_OWNER:\n" +
 	"        owned.discard(name)\n" +
