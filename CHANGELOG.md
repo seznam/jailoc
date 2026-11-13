@@ -1,5 +1,52 @@
 # Changelog
 
+## [2.5.0](https://github.com/seznam/jailoc/compare/v2.4.0...v2.5.0) (2026-11-13)
+
+
+### Features
+
+* **setup:** explain wizard prompts and retain commented options in generated config ([5560a7f](https://github.com/seznam/jailoc/commit/5560a7fc4c80675a8e5634b5ebc6e5d7a9481085))
+* **setup:** explain wizard prompts and retain commented options in generated config ([b3a001d](https://github.com/seznam/jailoc/commit/b3a001d9a0e6572f84bcb25a272adef53a7e3bba))
+
+
+### Bug Fixes
+
+* **agent:** enable storeTokenPlaintext for GitHub Copilot CLI and bump to 1.0.111 ([6a1c869](https://github.com/seznam/jailoc/commit/6a1c8698eae69cebef822bd37f8c9bd361f7678a))
+* **agent:** enable storeTokenPlaintext for GitHub Copilot CLI and bump to 1.0.111 ([310f542](https://github.com/seznam/jailoc/commit/310f542a31b9074a0f137cdea50cf75c9f9ed882))
+* **cmd:** bound GTK clipboard child initialization with signal.alarm ([6b99edb](https://github.com/seznam/jailoc/commit/6b99edb126c493798bdab9f828474c75d4dde724))
+* **cmd:** clear alt-screen state on ESC c and preserve --config in exit hint ([8bb83cd](https://github.com/seznam/jailoc/commit/8bb83cd65cdab28fee3b9a05f72f2a344807fa85))
+* **cmd:** isolate python3 GTK clipboard helper and keep selection owner alive ([b2ec7f1](https://github.com/seznam/jailoc/commit/b2ec7f189ab26aa954db32d10cf0a186f0946e29))
+* **cmd:** lock and canonicalize agent state version history and purge on down ([6881321](https://github.com/seznam/jailoc/commit/6881321a6429848088c1dd46c8062cde45fe2f53))
+* **cmd:** preserve main-screen agent crash output and surface startup diagnostics ([5b62761](https://github.com/seznam/jailoc/commit/5b627610aa178755f9a993ea8cca0e9a0c88a2b1))
+* **cmd:** preserve main-screen agent crash output and surface startup diagnostics ([5f77b1d](https://github.com/seznam/jailoc/commit/5f77b1df63a9bcecf8485e5e67d6cff28ddd87ad))
+* **cmd:** set both Linux clipboard selections and add GTK3 fallback ([a1c9c0f](https://github.com/seznam/jailoc/commit/a1c9c0f26bdce55416d58aff1843aa80ee6a1dc4))
+* **cmd:** set both Linux clipboard selections and add GTK3 fallback ([41846c3](https://github.com/seznam/jailoc/commit/41846c38f0704341eeed87fbc79d3c5e3c480ba0))
+* **cmd:** strip UTF-8 BOM in git config parser and reject hard-linked files in protect_git ([0ebf343](https://github.com/seznam/jailoc/commit/0ebf3433601bcfc89d88f036d7d1396255b6a1ae))
+* **cmd:** synchronize GTK clipboard readiness and track owner-change count ([ed2c0e6](https://github.com/seznam/jailoc/commit/ed2c0e600ff20d62bd8f318f4b0783a60d411e7d))
+* **cmd:** track agent state versions by host path after VM start and stop animator before terminal reset ([acb4df0](https://github.com/seznam/jailoc/commit/acb4df03d08f3ab08bdafb10ce6e90e3e3f5ce27))
+* **config:** correct git_config template description ([908c464](https://github.com/seznam/jailoc/commit/908c464eca14a898c7373832e1934b23dbbc491a))
+* **config:** preserve valid TOML when adding workspaces ([cd1e4e6](https://github.com/seznam/jailoc/commit/cd1e4e6e409344527751b3854c99b8f47b750a94))
+* **docker:** confine remote Dockerfile redirects and block non-public dial targets ([141214f](https://github.com/seznam/jailoc/commit/141214fa394f3c1962a15789287e530b5533eae8))
+* **docker:** use stdlib ProxyFromEnvironment to keep nix vendorHash unchanged ([bfca6d8](https://github.com/seznam/jailoc/commit/bfca6d8950c28a7ec4c1f60f17d983ec48f4c131))
+* **netbroker:** reject HTTP obs-fold continuation lines in framing and policy inspection ([dbbf3bc](https://github.com/seznam/jailoc/commit/dbbf3bceee975302ce3b0022ac15e22fc2876472))
+* **security:** harden HTTP framing, Dockerfile redirects, and protect_git checks ([5e071c0](https://github.com/seznam/jailoc/commit/5e071c0fe39e718c05c97fa67fecfeda146eaebc))
+* **security:** pin proxied Dockerfile targets and reject bare CR/LF across HTTP buffers ([fb59418](https://github.com/seznam/jailoc/commit/fb59418195aeadfd1de752f65b024760ff87fb29))
+* **security:** reject embedded CR/LF in HTTP headers and preserve proxy support in fetchDockerfile ([6bd20c7](https://github.com/seznam/jailoc/commit/6bd20c7bd85a75fb9dd5816c124ec0f3399527e3))
+* **security:** separate proxy TLS ServerName, allow 5 redirects, and check external git config hard links ([f8c4204](https://github.com/seznam/jailoc/commit/f8c420466250a7d0a3d0c655e45f168ddefe45c0))
+
+
+### Code Refactoring
+
+* **setup:** tighten hints and explain memory reclaim ([bc35dd9](https://github.com/seznam/jailoc/commit/bc35dd9ae6b0b56a910ac1cfdb967929227ff274))
+
+
+### Documentation
+
+* **blog:** remove duplicate jailoc 2 nav entry ([b7a21e4](https://github.com/seznam/jailoc/commit/b7a21e4b2dba21d01849df94af4431c3b9a7bcea))
+* **blog:** remove duplicate jailoc 2 nav entry ([b3335ab](https://github.com/seznam/jailoc/commit/b3335abad9f3c5e16f7e7d109643af3fe72fd50b))
+* **homebrew:** clarify Landlock ABI requirement in cask caveats ([63b7154](https://github.com/seznam/jailoc/commit/63b71540c7cded6c41551385ee5e6abf686a1907))
+* **homebrew:** clarify Landlock ABI requirement in cask caveats ([f434e2f](https://github.com/seznam/jailoc/commit/f434e2f7dd7e2c1e3e3afd07fa7fd5a24665fc1a))
+
 ## [2.4.0](https://github.com/seznam/jailoc/compare/v2.3.0...v2.4.0) (2026-11-12)
 
 
