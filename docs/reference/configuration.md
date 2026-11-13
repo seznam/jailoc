@@ -241,7 +241,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 
 `opencode` is an alias of `opencode2`: it runs the same harness and shares its persistent home directories, while `agents.opencode` and `agents.opencode2` are separate tables. OpenCode 2 runs with `--standalone`, so each session has its own server and environment instead of sharing a background service.
 
-Every agent shows the workspace name; `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `--settings` and `--extension` load the jailoc indicator, and for `copilot` and `agy` jailoc adds a `statusLine` to `~/.copilot/settings.json` and `~/.gemini/antigravity-cli/settings.json` when it sets none. See [Workspace indicator](../how-to/tui-plugin.md).
+Every agent shows the workspace name; `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `--settings` and `--extension` load the jailoc indicator, and for `copilot` and `agy` jailoc adds a `statusLine` to `~/.copilot/settings.json` and `~/.gemini/antigravity-cli/settings.json` when it sets none (and `storeTokenPlaintext = true` in `~/.copilot/settings.json` when unset, so Copilot stores logins without a system keyring). See [Workspace indicator](../how-to/tui-plugin.md).
 
 The package versions are pinned by the jailoc release; `version` in [`agents`](#agents) installs another one. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
 

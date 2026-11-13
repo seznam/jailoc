@@ -64,7 +64,7 @@ The agent's state directory (for example `~/.claude` for Claude Code) persists a
 from_command = "security find-generic-password -s anthropic -w"
 ```
 
-Antigravity CLI (`agy`) prints a sign-in URL and reads the code back in the terminal, so the login works over the session without a browser in the VM. With no keyring in the VM, it keeps the token in a file in `~/.gemini`, its state directory.
+GitHub Copilot CLI (`copilot`) signs in with a device code in the terminal; with no keyring in the VM, jailoc sets `storeTokenPlaintext` in `~/.copilot/settings.json` so Copilot keeps the token in `~/.copilot/config.json`, or you can pass `COPILOT_GITHUB_TOKEN` (or `GH_TOKEN`) as an env secret. Antigravity CLI (`agy`) prints a sign-in URL and reads the code back in the terminal, so the login works over the session without a browser in the VM; with no keyring in the VM, it keeps the token in a file in `~/.gemini`, its state directory.
 
 `jailoc down --purge` deletes the state, including logins.
 

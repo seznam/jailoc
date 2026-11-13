@@ -306,17 +306,35 @@ func TestVMShares(t *testing.T) {
 		t.Fatalf("read copilot settings: %q %v", b, err)
 	}
 	line, _ := got["statusLine"].(map[string]any)
-	if got["model"] != "m" || line["command"] != statusLineCommand("copilot") {
+	if got["model"] != "m" || got["storeTokenPlaintext"] != true || line["command"] != statusLineCommand("copilot") {
 		t.Fatalf("copilot settings = %v", got)
 	}
+	if err := os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"mine"},"storeTokenPlaintext":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	got = nil
+	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
+		t.Fatalf("read copilot settings: %q %v", b, err)
+	}
+	if line, _ := got["statusLine"].(map[string]any); line["command"] != "mine" || got["storeTokenPlaintext"] != false {
+		t.Fatalf("user copilot settings replaced: %v", got)
+	}
+	// An existing status line without storeTokenPlaintext still gets storeTokenPlaintext = true.
 	if err := os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"mine"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
 		t.Fatalf("vmGuestData: %v", err)
 	}
-	if b, _ := os.ReadFile(settings); !strings.Contains(string(b), `"mine"`) { //nolint:gosec // G304: test file
-		t.Fatalf("user status line replaced: %s", b)
+	got = nil
+	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
+		t.Fatalf("read copilot settings: %q %v", b, err)
+	}
+	if line, _ := got["statusLine"].(map[string]any); line["command"] != "mine" || got["storeTokenPlaintext"] != true {
+		t.Fatalf("copilot settings after adding storeTokenPlaintext = %v", got)
 	}
 	// The script status line of an older jailoc gives way to the current one.
 	legacy, _ := json.Marshal(map[string]any{"statusLine": map[string]string{"type": "command", "command": scriptStatusLineCommand("copilot")}})
@@ -345,7 +363,7 @@ func TestVMShares(t *testing.T) {
 	if b, err := os.ReadFile(agySettings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
 		t.Fatalf("read agy settings: %q %v", b, err)
 	}
-	if line, _ := got["statusLine"].(map[string]any); line["command"] != statusLineCommand("agy") {
+	if line, _ := got["statusLine"].(map[string]any); line["command"] != statusLineCommand("agy") || got["storeTokenPlaintext"] != nil {
 		t.Fatalf("agy settings = %v", got)
 	}
 

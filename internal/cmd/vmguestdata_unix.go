@@ -335,11 +335,12 @@ func removeConfigMountPoints(root *os.Root, dir string, d agent.StateDir, h agen
 	return nil
 }
 
-// addStatusLine sets the jailoc status line in the settings file of agent h
-// in its state directory dir inside root, unless the file sets a status
-// line other than the script status line of an older jailoc. GitHub Copilot CLI and Antigravity CLI read the status line only
-// from there. A failure leaves the agent without the indicator, so it is
-// only reported.
+// addStatusLine sets the jailoc defaults in the settings file of agent h in
+// its state directory dir inside root: the status line (unless the file sets
+// one other than the script status line of an older jailoc) and, for GitHub
+// Copilot CLI, storeTokenPlaintext (when unset) so logins work without a
+// system keyring in the VM. A failure leaves the agent without the defaults,
+// so it is only reported.
 func addStatusLine(root *os.Root, dir string, h agent.Harness) {
 	file, harness, ok := h.TUIPlugin.SettingsFile()
 	if !ok {
@@ -362,17 +363,24 @@ func setDefaultStatusLine(root *os.Root, file, harness string) error {
 			return fmt.Errorf("parse %s: %w", path.Base(file), err)
 		}
 	}
-	if old, ok := settings["statusLine"]; ok {
-		var line struct{ Command string }
-		if json.Unmarshal(old, &line) != nil || line.Command != scriptStatusLineCommand(harness) {
-			return nil
+	changed := false
+	if old, ok := settings["statusLine"]; !ok || isLegacyStatusLine(old, harness) {
+		line, err := json.Marshal(statusLine(harness))
+		if err != nil {
+			return err
+		}
+		settings["statusLine"] = line
+		changed = true
+	}
+	if harness == "copilot" {
+		if _, ok := settings["storeTokenPlaintext"]; !ok {
+			settings["storeTokenPlaintext"] = json.RawMessage("true")
+			changed = true
 		}
 	}
-	line, err := json.Marshal(statusLine(harness))
-	if err != nil {
-		return err
+	if !changed {
+		return nil
 	}
-	settings["statusLine"] = line
 	data, err = json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
@@ -381,6 +389,11 @@ func setDefaultStatusLine(root *os.Root, file, harness string) error {
 		return err
 	}
 	return root.WriteFile(file, append(data, '\n'), 0o600)
+}
+
+func isLegacyStatusLine(raw json.RawMessage, harness string) bool {
+	var line struct{ Command string }
+	return json.Unmarshal(raw, &line) == nil && line.Command == scriptStatusLineCommand(harness)
 }
 
 // migrateHomeDirs moves persistent home directories of an older layout
