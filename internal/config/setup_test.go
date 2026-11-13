@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2/unstable/edit"
 )
 
 func TestIsDefaultFile(t *testing.T) {
@@ -301,6 +303,23 @@ func TestRenderFirstTimeNamedWorkspace(t *testing.T) {
 	}
 }
 
+func TestRenderFirstTimeEncodesControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	wantPath := "/data/control-\a-path"
+	out, err := RenderFirstTime(FirstTimeOptions{WorkspaceName: "work", WorkspacePath: wantPath})
+	if err != nil {
+		t.Fatalf("RenderFirstTime failed: %v", err)
+	}
+	if _, err := edit.Parse(out); err != nil {
+		t.Fatalf("edit.Parse: %v\n%s", err, out)
+	}
+	cfg := loadRenderedConfig(t, out)
+	if got := cfg.Workspaces["work"].Paths; len(got) != 1 || got[0] != wantPath {
+		t.Errorf("workspace paths = %q, want [%q]", got, wantPath)
+	}
+}
+
 func TestRenderWorkspaceNewSection(t *testing.T) {
 	t.Parallel()
 
@@ -365,6 +384,100 @@ func TestRenderWorkspaceNewSection(t *testing.T) {
 			t.Errorf("workspace rules = %+v", rules)
 		}
 	})
+}
+
+func TestRenderWorkspaceEncodesControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	wantPath := "/data/control-\x1b-\a-\v-path"
+	out, err := RenderWorkspace(nil, WorkspaceOptions{Name: "work", Paths: []string{wantPath}})
+	if err != nil {
+		t.Fatalf("RenderWorkspace failed: %v", err)
+	}
+	doc, err := edit.Parse(out)
+	if err != nil {
+		t.Fatalf("edit.Parse: %v\n%s", err, out)
+	}
+	value, ok := doc.Get([]string{"workspaces", "work", "paths"})
+	if !ok {
+		t.Fatal("edit.Parse output has no workspaces.work.paths")
+	}
+	paths, ok := value.([]any)
+	if !ok || len(paths) != 1 || paths[0] != wantPath {
+		t.Errorf("edit.Parse paths = %#v, want [%q]", value, wantPath)
+	}
+	cfg := loadRenderedConfig(t, out)
+	if got := cfg.Workspaces["work"].Paths; len(got) != 1 || got[0] != wantPath {
+		t.Errorf("workspace paths = %q, want [%q]", got, wantPath)
+	}
+}
+
+func TestRenderWorkspaceRootWorkspacesTable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		raw              string
+		wantExistingPath string
+		wantComment      string
+		wantRootTable    bool
+	}{
+		{
+			name:             "nonempty inline table",
+			raw:              "# top comment\nworkspaces = { existing = { paths = [\"/data/existing\"], agent = \"claude\" } } # keep inline comment\n",
+			wantExistingPath: "/data/existing",
+			wantComment:      "# keep inline comment",
+		},
+		{
+			name:        "empty inline table",
+			raw:         "# top comment\nworkspaces = {} # keep empty inline comment\n",
+			wantComment: "# keep empty inline comment",
+		},
+		{
+			name:          "normal table",
+			raw:           "# top comment\n[workspaces] # keep root table\n",
+			wantComment:   "# keep root table",
+			wantRootTable: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			out, err := RenderWorkspace([]byte(tc.raw), WorkspaceOptions{Name: "api", Paths: []string{"/data/api"}})
+			if err != nil {
+				t.Fatalf("RenderWorkspace failed: %v", err)
+			}
+			if _, err := edit.Parse(out); err != nil {
+				t.Fatalf("edit.Parse: %v\n%s", err, out)
+			}
+			text := string(out)
+			if !strings.Contains(text, "# top comment") || !strings.Contains(text, tc.wantComment) {
+				t.Errorf("comments were not retained:\n%s", text)
+			}
+			if !strings.Contains(text, "[workspaces.api]\npaths = [\"/data/api\"]\n") || !strings.Contains(text, "# agent = \"opencode\"") {
+				t.Errorf("new workspace section is not documented:\n%s", text)
+			}
+			if tc.wantRootTable && !strings.Contains(text, "[workspaces] # keep root table") {
+				t.Errorf("normal workspaces table was rewritten:\n%s", text)
+			}
+
+			cfg := loadRenderedConfig(t, out)
+			if got := cfg.Workspaces["api"].Paths; len(got) != 1 || got[0] != "/data/api" {
+				t.Errorf("api paths = %v, want [/data/api]", got)
+			}
+			if tc.wantExistingPath != "" {
+				existing := cfg.Workspaces["existing"]
+				if got := existing.Paths; len(got) != 1 || got[0] != tc.wantExistingPath {
+					t.Errorf("existing paths = %v, want [%s]", got, tc.wantExistingPath)
+				}
+				if existing.Agent != "claude" {
+					t.Errorf("existing agent = %q, want claude", existing.Agent)
+				}
+			}
+		})
+	}
 }
 
 // defaultsSection returns the text before the first workspace section.

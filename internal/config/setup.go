@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/pelletier/go-toml/v2/unstable"
 	"github.com/pelletier/go-toml/v2/unstable/edit"
 )
 
@@ -155,12 +157,21 @@ func renameWorkspace(lines []string, name string) []string {
 }
 
 // tomlArray renders values as a single-line TOML string array.
-func tomlArray(values []string) string {
-	quoted := make([]string, len(values))
-	for i, v := range values {
-		quoted[i] = strconv.Quote(v)
+func tomlArray(values []string) (string, error) {
+	if values == nil {
+		values = []string{}
 	}
-	return "[" + strings.Join(quoted, ", ") + "]"
+	var encoded bytes.Buffer
+	if err := toml.NewEncoder(&encoded).Encode(struct {
+		Values []string `toml:"values"`
+	}{Values: values}); err != nil {
+		return "", fmt.Errorf("encode TOML string array: %w", err)
+	}
+	value, ok := strings.CutPrefix(strings.TrimSpace(encoded.String()), "values = ")
+	if !ok {
+		return "", errors.New("encode TOML string array: missing encoded value")
+	}
+	return value, nil
 }
 
 // formatCPU renders a float as TOML, keeping a fractional part so 4 becomes 4.0.
@@ -220,11 +231,15 @@ func applyDefaultRules(head []string, opts FirstTimeOptions) ([]string, error) {
 		}
 		return slices.Concat(head[:start:start], internet, head[end+1:]), nil
 	case len(opts.ExtraHosts) > 0:
+		allow, err := tomlArray(opts.ExtraHosts)
+		if err != nil {
+			return nil, err
+		}
 		custom := []string{
 			"",
 			"[[defaults.network.rules]]",
 			`name = "custom"`,
-			"allow = " + tomlArray(opts.ExtraHosts),
+			"allow = " + allow,
 		}
 		return slices.Concat(head[:end+1], custom, head[end+1:]), nil
 	default:
@@ -252,8 +267,12 @@ func RenderFirstTime(opts FirstTimeOptions) ([]byte, error) {
 	if opts.WorkspacePath != "" {
 		paths = []string{opts.WorkspacePath}
 	}
+	pathsValue, err := tomlArray(paths)
+	if err != nil {
+		return nil, fmt.Errorf("set workspaces.%s.paths: %w", wsName, err)
+	}
 	workspace = renameWorkspace(workspace, wsName)
-	if err := replaceLine(workspace, "paths = ", "paths = "+tomlArray(paths)); err != nil {
+	if err := replaceLine(workspace, "paths = ", "paths = "+pathsValue); err != nil {
 		return nil, fmt.Errorf("set workspaces.%s.paths: %w", wsName, err)
 	}
 
@@ -272,7 +291,11 @@ func applyWorkspaceRules(lines []string, opts WorkspaceOptions) ([]string, error
 		rules = append(rules, header, `name = "internet"`, `allow = ["*"]  # explicit opt-in to the whole public internet`)
 	}
 	if len(opts.ExtraHosts) > 0 {
-		rules = append(rules, header, `name = "custom"`, "allow = "+tomlArray(opts.ExtraHosts))
+		allow, err := tomlArray(opts.ExtraHosts)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, header, `name = "custom"`, "allow = "+allow)
 	}
 	if len(rules) == 0 {
 		return lines, nil
@@ -291,7 +314,11 @@ func applyWorkspaceRules(lines []string, opts WorkspaceOptions) ([]string, error
 func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
 	_, template := splitTemplate()
 	lines := renameWorkspace(template, opts.Name)
-	if err := replaceLine(lines, "paths = ", "paths = "+tomlArray(opts.Paths)); err != nil {
+	paths, err := tomlArray(opts.Paths)
+	if err != nil {
+		return "", err
+	}
+	if err := replaceLine(lines, "paths = ", "paths = "+paths); err != nil {
 		return "", err
 	}
 	var overrides []templateOption
@@ -306,7 +333,7 @@ func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
 			return "", err
 		}
 	}
-	lines, err := applyWorkspaceRules(lines, opts)
+	lines, err = applyWorkspaceRules(lines, opts)
 	if err != nil {
 		return "", err
 	}
@@ -323,6 +350,80 @@ func appendWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
 		text += "\n"
 	}
 	return []byte(text + "\n" + section), nil
+}
+
+func hasRootInlineWorkspaces(raw []byte) (bool, error) {
+	var parser unstable.Parser
+	parser.Reset(raw)
+	for parser.NextExpression() {
+		expression := parser.Expression()
+		if expression.Kind == unstable.Table || expression.Kind == unstable.ArrayTable {
+			break
+		}
+		if expression.Kind != unstable.KeyValue || expression.Value().Kind != unstable.InlineTable {
+			continue
+		}
+		key := expression.Key()
+		if key.Next() && key.IsLast() && string(key.Node().Data) == "workspaces" {
+			return true, nil
+		}
+	}
+	if err := parser.Error(); err != nil {
+		return false, fmt.Errorf("inspect root workspaces: %w", err)
+	}
+	return false, nil
+}
+
+func normalizeInlineWorkspaces(doc *edit.Document) error {
+	inline, err := hasRootInlineWorkspaces(doc.Bytes())
+	if err != nil {
+		return err
+	}
+	if !inline {
+		return nil
+	}
+	value, ok := doc.Get([]string{"workspaces"})
+	if !ok {
+		return errors.New("inline workspaces table is missing")
+	}
+	workspaces, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("inline workspaces has type %T, want table", value)
+	}
+
+	comment, hasComment := doc.Comment([]string{"workspaces"})
+	trailingComment, hasTrailingComment := doc.TrailingComment([]string{"workspaces"})
+	doc.Delete([]string{"workspaces"})
+
+	names := make([]string, 0, len(workspaces))
+	for name := range workspaces {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		const placeholder = "__jailoc_placeholder"
+		if err := doc.Set([]string{"workspaces", placeholder}, true); err != nil {
+			return fmt.Errorf("create workspaces table: %w", err)
+		}
+		doc.Delete([]string{"workspaces", placeholder})
+	} else {
+		for _, name := range names {
+			if err := doc.Set([]string{"workspaces", name}, workspaces[name]); err != nil {
+				return fmt.Errorf("preserve workspace %q: %w", name, err)
+			}
+		}
+	}
+	if hasComment {
+		if err := doc.SetComment([]string{"workspaces"}, comment); err != nil {
+			return fmt.Errorf("preserve workspaces comment: %w", err)
+		}
+	}
+	if hasTrailingComment {
+		if err := doc.SetTrailingComment([]string{"workspaces"}, trailingComment); err != nil {
+			return fmt.Errorf("preserve workspaces trailing comment: %w", err)
+		}
+	}
+	return nil
 }
 
 // updateWorkspace rewrites an existing workspace, keeping unrelated settings, and comments the agent and enable_docker lines.
@@ -380,7 +481,10 @@ func RenderWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
 	if doc.Has([]string{"workspaces", opts.Name}) {
 		out, err = updateWorkspace(doc, opts)
 	} else {
-		out, err = appendWorkspace(raw, opts)
+		if err := normalizeInlineWorkspaces(doc); err != nil {
+			return nil, fmt.Errorf("normalize workspaces: %w", err)
+		}
+		out, err = appendWorkspace(doc.Bytes(), opts)
 	}
 	if err != nil {
 		return nil, err
