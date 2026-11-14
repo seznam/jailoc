@@ -62,6 +62,7 @@ func overlayRoot(logger *slog.Logger, cfg *Config) (*idmapper, error) {
 			logger.Warn("idmapped mounts unavailable; running the agent with the host user's IDs", "error", err)
 			cfg.UID, cfg.GID = cfg.IDMap.UID, cfg.IDMap.GID
 			cfg.IDMap = nil
+			cfg.hostIDs = true
 		} else {
 			mapper, layers = m, idmapped
 		}

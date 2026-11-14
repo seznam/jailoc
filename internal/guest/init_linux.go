@@ -74,6 +74,7 @@ func Init(logger *slog.Logger) error {
 			logger.Warn("idmapped mounts unavailable; running the agent with the host user's IDs", "error", err)
 			cfg.UID, cfg.GID = cfg.IDMap.UID, cfg.IDMap.GID
 			cfg.IDMap = nil
+			cfg.hostIDs = true
 		} else if err := remountAfterPivot(logger); err != nil {
 			return err
 		}
@@ -113,7 +114,7 @@ func Init(logger *slog.Logger) error {
 	// As soon as the network is up: the clock starts from the whole-second RTC
 	// and falls behind whenever the host sleeps.
 	defer startClockSync(logger)()
-	acct, err := ensureAccount(cfg)
+	acct, err := ensureAccount(cfg, "/etc")
 	if err != nil {
 		return err
 	}
@@ -265,12 +266,13 @@ func mountShare(logger *slog.Logger, s Share, acct account, mapper *idmapper) er
 	return nil
 }
 
-// ensureAccount returns the passwd entry with the configured UID, adding
-// one when the image has none.
-func ensureAccount(cfg *Config) (account, error) {
-	f, err := os.Open("/etc/passwd")
+// ensureAccount returns the entry of etc/passwd with the configured UID,
+// adding one when the image has none.
+func ensureAccount(cfg *Config, etc string) (account, error) {
+	passwd, group := filepath.Join(etc, "passwd"), filepath.Join(etc, "group")
+	f, err := os.Open(passwd) //nolint:gosec // G304: fixed system path
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return account{}, fmt.Errorf("read /etc/passwd: %w", err)
+		return account{}, fmt.Errorf("read %s: %w", passwd, err)
 	}
 	if err == nil {
 		defer func() { _ = f.Close() }()
@@ -288,7 +290,19 @@ func ensureAccount(cfg *Config) (account, error) {
 			if acct.shell == "" {
 				acct.shell = fallbackShell
 			}
+			// With the host user's IDs, files the agent creates on virtio-fs
+			// keep its GID, which the host user may not be a member of.
+			if cfg.hostIDs && acct.gid != cfg.GID {
+				_ = f.Close()
+				if _, err := renumberAccount(cfg, passwd, group, acct.name); err != nil {
+					return account{}, err
+				}
+				acct.gid = cfg.GID
+			}
 			return acct, nil
+		}
+		if err := sc.Err(); err != nil {
+			return account{}, fmt.Errorf("read %s: %w", passwd, err)
 		}
 	}
 	acct := account{name: cfg.User, uid: cfg.UID, gid: cfg.GID, home: cfg.Home, shell: fallbackShell}
@@ -298,27 +312,27 @@ func ensureAccount(cfg *Config) (account, error) {
 	// An image user with the configured name but another UID (the built-in
 	// image's agent is 1000; Linux hosts use the host user's IDs) is
 	// renumbered rather than duplicated, so names resolve to one account.
-	if renumbered, err := renumberAccount(cfg); err != nil {
+	if renumbered, err := renumberAccount(cfg, passwd, group, cfg.User); err != nil {
 		return account{}, err
 	} else if renumbered != nil {
 		return *renumbered, nil
 	}
-	if err := appendLine("/etc/passwd", fmt.Sprintf("%s:x:%d:%d:jailoc agent:%s:%s", acct.name, acct.uid, acct.gid, acct.home, acct.shell)); err != nil {
+	if err := appendLine(passwd, fmt.Sprintf("%s:x:%d:%d:jailoc agent:%s:%s", acct.name, acct.uid, acct.gid, acct.home, acct.shell)); err != nil {
 		return account{}, err
 	}
-	if err := appendLine("/etc/group", fmt.Sprintf("%s:x:%d:", acct.name, acct.gid)); err != nil {
+	if err := appendLine(group, fmt.Sprintf("%s:x:%d:", acct.name, acct.gid)); err != nil {
 		return account{}, err
 	}
 	return acct, nil
 }
 
-// renumberAccount gives the /etc/passwd entry named cfg.User the configured
-// UID and GID, and the /etc/group entry of the same name the GID. It returns
-// nil when no entry has that name.
-func renumberAccount(cfg *Config) (*account, error) {
+// renumberAccount gives the passwd entry called name the configured UID and
+// GID, and the group entry of the same name the GID. It returns nil when no
+// entry has that name.
+func renumberAccount(cfg *Config, passwd, group, name string) (*account, error) {
 	var acct *account
-	err := rewriteEntries("/etc/passwd", func(fields []string) bool {
-		if len(fields) < 7 || fields[0] != cfg.User {
+	err := rewriteEntries(passwd, func(fields []string) bool {
+		if len(fields) < 7 || fields[0] != name {
 			return false
 		}
 		fields[2] = strconv.FormatUint(uint64(cfg.UID), 10)
@@ -332,8 +346,8 @@ func renumberAccount(cfg *Config) (*account, error) {
 	if err != nil || acct == nil {
 		return nil, err
 	}
-	if err := rewriteEntries("/etc/group", func(fields []string) bool {
-		if len(fields) < 3 || fields[0] != cfg.User {
+	if err := rewriteEntries(group, func(fields []string) bool {
+		if len(fields) < 3 || fields[0] != name {
 			return false
 		}
 		fields[2] = strconv.FormatUint(uint64(cfg.GID), 10)
