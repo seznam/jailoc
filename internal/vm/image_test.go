@@ -450,6 +450,9 @@ func TestLayersHavePath(t *testing.T) {
 	opaqueTop := layerImage(t, layerTar(t,
 		dir("opt/"), file("opt/.wh..wh..opq"), file("opt/other"),
 	))
+	rootOpaqueTop := layerImage(t, layerTar(t,
+		file(".wh..wh..opq"), dir("usr/"), dir("usr/bin/"), file("usr/bin/new"),
+	))
 	whiteoutTop := layerImage(t, layerTar(t,
 		dir("usr/"), dir("usr/bin/"), file("usr/bin/.wh.real"),
 	))
@@ -471,6 +474,9 @@ func TestLayersHavePath(t *testing.T) {
 		{[]fs.FS{opaqueTop, middle, bottom}, "usr/local/bin/dockerd", false},
 		{[]fs.FS{opaqueTop, middle, bottom}, "opt/other", true},
 		{[]fs.FS{opaqueTop, middle, bottom}, "bin/real", true},
+		{[]fs.FS{rootOpaqueTop, middle, bottom}, "usr/bin/new", true},
+		{[]fs.FS{rootOpaqueTop, middle, bottom}, "usr/bin/real", false},
+		{[]fs.FS{rootOpaqueTop, middle, bottom}, "usr/local/bin/dockerd", false},
 		{[]fs.FS{whiteoutTop, middle, bottom}, "bin/real", false},
 		{[]fs.FS{whiteoutTop, middle, bottom}, "tool", false},
 		{[]fs.FS{whiteoutTop, middle, bottom}, "usr/local/bin/dockerd", true},
