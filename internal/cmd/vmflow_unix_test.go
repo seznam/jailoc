@@ -26,8 +26,8 @@ func TestFormatImportProgress(t *testing.T) {
 	}{
 		{name: "save starting", p: vm.ImportProgress{Phase: vm.PhaseSave}, want: "  ⠋ Exporting image from Docker… 3s"},
 		{name: "save bytes", p: vm.ImportProgress{Phase: vm.PhaseSave, Bytes: 128 << 20}, want: "  ⠋ Exporting image from Docker (128 MiB)… 3s"},
-		{name: "extract layers", p: vm.ImportProgress{Phase: vm.PhaseExtract, Layers: 2, Total: 5}, want: "  ⠋ Extracting image layers (2/5)… 3s"},
-		{name: "compose", p: vm.ImportProgress{Phase: vm.PhaseExtract}, want: "  ⠋ Composing root filesystem… 3s"},
+		{name: "extract layers", p: vm.ImportProgress{Phase: vm.PhaseExtract, Layers: 2, Total: 5}, want: "  ⠋ Converting image layers (2/5)… 3s"},
+		{name: "compose", p: vm.ImportProgress{Phase: vm.PhaseExtract}, want: "  ⠋ Linking image layers… 3s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -70,7 +70,7 @@ func TestImportProgressDisplayWritesOnlyForTerminal(t *testing.T) {
 		want        string
 	}{
 		{name: "non-terminal"},
-		{name: "terminal", interactive: true, want: "\r\x1b[2K  ⠋ Extracting image layers (1/2)… 0s\r\x1b[2K"},
+		{name: "terminal", interactive: true, want: "\r\x1b[2K  ⠋ Converting image layers (1/2)… 0s\r\x1b[2K"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

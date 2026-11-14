@@ -157,7 +157,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	return nil
 }
 
-// buildWorkspaceImage runs the image cascade in a builder VM and unpacks the
+// buildWorkspaceImage runs the image cascade in a builder VM and converts the
 // result into the image cache. It returns the image-cache reference.
 func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, rt vmRuntimeFiles) (string, error) {
 	var hostErr error
@@ -258,7 +258,7 @@ func useHostDocker(builder string, isolated bool, hostErr error) (bool, error) {
 }
 
 // importWorkspaceImage resolves and builds the workspace image with the
-// Docker daemon selected by DOCKER_HOST and unpacks it into the VM image
+// Docker daemon selected by DOCKER_HOST and converts it into the VM image
 // cache.
 func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (string, error) {
 	lock, err := lockDockerImages()
@@ -294,7 +294,7 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 		},
 	)
 	err = vm.ImportImage(ctx, filepath.Join(vmRootDir(), "images"), ref, func(w io.Writer) error {
-		_, _ = color.New(color.FgCyan).Printf("Unpacking image %s for the workspace VM...\n", finalImage)
+		_, _ = color.New(color.FgCyan).Printf("Converting image %s for the workspace VM...\n", finalImage)
 		progressDisplay.start()
 		_, err := docker.SaveImage(ctx, finalImage, w)
 		return err
@@ -408,9 +408,9 @@ func formatImportProgress(frame rune, p vm.ImportProgress, seconds int) string {
 	switch p.Phase {
 	case vm.PhaseExtract:
 		if p.Total > 0 {
-			return fmt.Sprintf("  %c Extracting image layers (%d/%d)… %ds", frame, p.Layers, p.Total, seconds)
+			return fmt.Sprintf("  %c Converting image layers (%d/%d)… %ds", frame, p.Layers, p.Total, seconds)
 		}
-		return fmt.Sprintf("  %c Composing root filesystem… %ds", frame, seconds)
+		return fmt.Sprintf("  %c Linking image layers… %ds", frame, seconds)
 	default:
 		if p.Bytes > 0 {
 			return fmt.Sprintf("  %c Exporting image from Docker (%s)… %ds", frame, formatBytes(p.Bytes), seconds)
@@ -538,7 +538,7 @@ func pruneDockerImages(ctx context.Context, lock *os.File, workspace string, cha
 	}
 }
 
-// pruneImageCache removes unpacked workspace images that no workspace or
+// pruneImageCache removes workspace images that no workspace or
 // builder spec uses any more. Failures only warn: the cache is an
 // optimisation.
 func pruneImageCache(current string) {

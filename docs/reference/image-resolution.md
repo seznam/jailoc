@@ -1,6 +1,6 @@
 # Image Resolution Reference
 
-During `jailoc up` and `jailoc restart`, jailoc resolves the workspace image with a Docker daemon, then unpacks it into the VM image cache as the root file system of the workspace VM.
+During `jailoc up` and `jailoc restart`, jailoc resolves the workspace image with a Docker daemon, then converts its layers into read-only EROFS images in the VM image cache, which the workspace VM mounts as its root file system.
 
 ---
 
@@ -23,7 +23,7 @@ jailoc builds with BuildKit when the daemon reports it as its default builder, a
 
 The first step that applies wins; later steps are skipped.
 
-![Image resolution cascade: 1, a workspace image is used as is; 2, defaults.image with a workspace Dockerfile is built into jailoc-<workspace>:<hash> with the Docker layer, agent layer and workspace Dockerfile; 3, defaults.image is used as is; 4, base.dockerfile is built into jailoc-base:preset-<hash> with the Docker and agent layers; 5, otherwise jailoc-base:embedded is built with the Docker and agent layers. Every result is pulled if missing, exported with docker save and unpacked into the VM image cache.](img/image-resolution.svg)
+![Image resolution cascade: 1, a workspace image is used as is; 2, defaults.image with a workspace Dockerfile is built into jailoc-<workspace>:<hash> with the Docker layer, agent layer and workspace Dockerfile; 3, defaults.image is used as is; 4, base.dockerfile is built into jailoc-base:preset-<hash> with the Docker and agent layers; 5, otherwise jailoc-base:embedded is built with the Docker and agent layers. Every result is pulled if missing, exported with docker save and converted into EROFS layer images in the VM image cache.](img/image-resolution.svg)
 
 ### Step 1: Workspace image
 
@@ -83,11 +83,15 @@ After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (
 - Overlay build context: `build_context` when set; otherwise the Dockerfile's parent directory for a local path, or an empty temporary directory for a URL.
 - Images from steps 1 and 3 are pulled for `linux/<host architecture>` when the daemon does not have them.
 
-## Unpacking into the VM
+## Converting for the VM
 
-jailoc exports the final image with `docker save` and unpacks it into `~/.cache/jailoc-vm/images` under `jailoc.local/rootfs:<image ID>`. An image ID already in the cache is not unpacked again, and layers already in the cache are skipped while the export streams in. Unpacked images that no workspace or builder uses are pruned. `docker save` must write an OCI image layout, which requires Docker Engine 25 or later; with an older host daemon, `"auto"` builds in the shared builder VM and `"docker"` fails.
+jailoc exports the final image with `docker save` and converts each layer it does not have yet into one read-only EROFS image file, `~/.cache/jailoc-vm/images/erofs/layers/<DiffID>.erofs`. A workspace image is the directory `~/.cache/jailoc-vm/images/erofs/images/<image ID>/` (reference `jailoc.local/erofs:<image ID>`). It holds hard links `000.erofs`, `001.erofs`, … to the image's layers, bottom layer first, and an `image.json` with the layer order and the image's `ENV`. No host directory tree is extracted. An image ID already in the cache is not converted again, layers shared by images are stored once, and a rebuild that changes only the top layer converts only that layer.
 
-jailoc labels the images it builds with `com.github.seznam.jailoc`. After unpacking, it removes labelled `jailoc-*` images from the Docker daemon that no workspace's last `jailoc up` used and that are older than one hour.
+The layer images keep the image's own numeric owners, modes (setuid, setgid, sticky), extended attributes (including file capabilities), hard links and device nodes, on Linux and macOS hosts alike. File names stay case-sensitive on case-insensitive macOS volumes. OCI whiteouts become overlayfs whiteouts (0/0 character devices) and opaque directories (`trusted.overlay.opaque`), so deletions in upper layers hide lower content as in Docker.
+
+After every import, jailoc removes workspace image directories that no workspace uses any more and that are older than one hour, and layer files that no remaining image links to. The builder VM image stays in go-microvm's directory image cache; only workspace VMs use EROFS images. `jailoc up` prints `Converting image <name> for the workspace VM...`, `Converting image layers (n/m)…` and `Linking image layers…` while it works. `docker save` must write an OCI image layout, which requires Docker Engine 25 or later; with an older host daemon, `"auto"` builds in the shared builder VM and `"docker"` fails.
+
+jailoc labels the images it builds with `com.github.seznam.jailoc`. After converting, it removes labelled `jailoc-*` images from the Docker daemon that no workspace's last `jailoc up` used and that are older than one hour.
 
 The image's `ENTRYPOINT`, `CMD`, `USER`, `WORKDIR` and `EXPOSE` are not used; see [Overlay Compatibility](overlay-compatibility.md).
 

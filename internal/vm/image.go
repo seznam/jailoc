@@ -3,23 +3,25 @@ package vm
 import (
 	"archive/tar"
 	"bufio"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 
+	"github.com/erofs/go-erofs"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/stacklok/go-microvm/image"
@@ -27,7 +29,23 @@ import (
 
 // rootfsRepo names workspace images in the image cache. The tag is the
 // image ID, so a reference always denotes the same content.
-const rootfsRepo = "jailoc.local/rootfs"
+const rootfsRepo = "jailoc.local/erofs"
+
+// legacyRootfsRepo names workspace images unpacked into directories by
+// go-microvm's image cache before jailoc converted layers to EROFS. VMs
+// started by older releases still run from them until they restart.
+const legacyRootfsRepo = "jailoc.local/rootfs"
+
+// The EROFS image cache lives in erofsDir of the VM image cache: one EROFS
+// image per layer in layersDir, named after the layer's DiffID, and one
+// directory per workspace image in imagesDir, named after its tag, with hard
+// links to its layers and the image manifest.
+const (
+	erofsDir          = "erofs"
+	layersDir         = "layers"
+	imagesDir         = "images"
+	imageManifestFile = "image.json"
+)
 
 // ImportPhase is the current phase of [ImportImage].
 type ImportPhase int
@@ -35,7 +53,7 @@ type ImportPhase int
 const (
 	// PhaseSave reads the `docker save` tarball and keeps uncached layer blobs.
 	PhaseSave ImportPhase = iota
-	// PhaseExtract unpacks new layers and composes the root filesystem.
+	// PhaseExtract converts new layers to EROFS images.
 	PhaseExtract
 )
 
@@ -43,7 +61,7 @@ const (
 type ImportProgress struct {
 	Phase         ImportPhase
 	Bytes         int64 // tarball bytes read so far (PhaseSave)
-	Layers, Total int   // new layers unpacked and total new layers (PhaseExtract)
+	Layers, Total int   // new layers converted and total new layers (PhaseExtract)
 }
 
 // RootFSRef is the image-cache reference of a built workspace image.
@@ -51,26 +69,89 @@ func RootFSRef(imageID string) string {
 	return rootfsRepo + ":" + strings.TrimPrefix(imageID, "sha256:")
 }
 
-// ImportImage extracts a built workspace image into the image cache under
-// ref, unless it is already there. save writes the image as a `docker save`
-// tarball in OCI layout (Docker Engine 25 or later). Layer blobs whose
-// content is already in the layer cache are dropped while the tarball is
-// read, so only new layers are kept on disk until they are unpacked.
+// imageManifest describes a workspace image in the EROFS image cache.
+type imageManifest struct {
+	// Layers are the file names of the layer images in the image
+	// directory, the bottom layer first.
+	Layers []string `json:"layers"`
+	// Env is the image's environment (Dockerfile ENV).
+	Env []string `json:"env,omitempty"`
+}
+
+// imageTag matches the tags of workspace image references, which name the
+// image directories.
+var imageTag = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+
+// imageDir returns the directory of the workspace image ref in the image
+// cache.
+func imageDir(cacheDir, ref string) (string, error) {
+	tag, ok := strings.CutPrefix(ref, rootfsRepo+":")
+	if !ok || !imageTag.MatchString(tag) {
+		return "", fmt.Errorf("image %s is not a workspace image reference", ref)
+	}
+	return filepath.Join(cacheDir, erofsDir, imagesDir, tag), nil
+}
+
+func layerPath(cacheDir string, diffID v1.Hash) string {
+	return filepath.Join(cacheDir, erofsDir, layersDir, diffID.Hex+".erofs")
+}
+
+// readImage returns the directory and manifest of the workspace image ref.
+func readImage(cacheDir, ref string) (string, imageManifest, error) {
+	dir, err := imageDir(cacheDir, ref)
+	if err != nil {
+		return "", imageManifest{}, err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, imageManifestFile)) //nolint:gosec // G304: file inside jailoc's image cache
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", imageManifest{}, fmt.Errorf("image %s is not in the image cache; run jailoc up to build it", ref)
+	}
+	if err != nil {
+		return "", imageManifest{}, fmt.Errorf("read image %s: %w", ref, err)
+	}
+	var m imageManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return "", imageManifest{}, fmt.Errorf("parse image %s: %w", ref, err)
+	}
+	if len(m.Layers) == 0 {
+		return "", imageManifest{}, fmt.Errorf("image %s has no layers", ref)
+	}
+	for _, l := range m.Layers {
+		if !imageTag.MatchString(l) {
+			return "", imageManifest{}, fmt.Errorf("image %s has an invalid layer name %q", ref, l)
+		}
+	}
+	return dir, m, nil
+}
+
+// ImportImage converts a built workspace image into EROFS layer images in
+// the image cache under ref, unless it is already there. save writes the
+// image as a `docker save` tarball in OCI layout (Docker Engine 25 or
+// later). Layer blobs whose content is already in the cache are dropped
+// while the tarball is read, so only new layers are kept on disk until they
+// are converted.
 func ImportImage(
 	ctx context.Context,
 	cacheDir, ref string,
 	save func(io.Writer) error,
 	progress func(ImportProgress),
 ) error {
+	dst, err := imageDir(cacheDir, ref)
+	if err != nil {
+		return err
+	}
 	unlock, err := lockCache(cacheDir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	cache := image.NewCache(cacheDir)
-	if rfs := cache.LookupRef(ref); rfs != nil {
-		// Heals images unpacked before ownership was normalized.
-		return normalizeOwnership(rfs.Path)
+	if _, err := os.Stat(filepath.Join(dst, imageManifestFile)); err == nil {
+		return nil
+	}
+	for _, d := range []string{layersDir, imagesDir} {
+		if err := os.MkdirAll(filepath.Join(cacheDir, erofsDir, d), 0o700); err != nil {
+			return fmt.Errorf("create image cache: %w", err)
+		}
 	}
 	dir, err := os.MkdirTemp(cacheDir, ".save-*")
 	if err != nil {
@@ -78,6 +159,10 @@ func ImportImage(
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
+	hasLayer := func(diffID v1.Hash) bool {
+		_, err := os.Stat(layerPath(cacheDir, diffID))
+		return err == nil
+	}
 	pr, pw := io.Pipe()
 	saveErr := make(chan error, 1)
 	go func() {
@@ -86,7 +171,7 @@ func ImportImage(
 		saveErr <- err
 	}()
 	reader := newProgressReader(pr, progress)
-	unpackErr := unpackLayout(ctx, reader, dir, cache.LayerCache())
+	unpackErr := unpackLayout(ctx, reader, dir, hasLayer)
 	reader.reportFinal()
 	// Unblock save if unpacking stopped early; its error is then only the
 	// consequence of the unpack error.
@@ -103,15 +188,146 @@ func ImportImage(
 	if err != nil {
 		return err
 	}
-	img, err = imageWithProgress(img, cacheDir, cache.LayerCache(), progress)
+	return convertImage(ctx, cacheDir, dst, img, hasLayer, progress)
+}
+
+// convertImage converts the layers of img missing from the cache and
+// records img in the image directory dst.
+func convertImage(ctx context.Context, cacheDir, dst string, img v1.Image, hasLayer func(v1.Hash) bool, progress func(ImportProgress)) error {
+	cfg, err := img.ConfigFile()
 	if err != nil {
+		return fmt.Errorf("read image config: %w", err)
+	}
+	layers, err := img.Layers()
+	if err != nil {
+		return fmt.Errorf("read image layers: %w", err)
+	}
+	diffIDs := cfg.RootFS.DiffIDs
+	if len(layers) != len(diffIDs) {
+		return fmt.Errorf("image has %d layers but %d DiffIDs", len(layers), len(diffIDs))
+	}
+	if len(layers) == 0 {
+		return errors.New("image has no layers")
+	}
+	var missing []int
+	for i, d := range diffIDs {
+		if !hasLayer(d) && !slices.ContainsFunc(missing, func(j int) bool { return diffIDs[j] == d }) {
+			missing = append(missing, i)
+		}
+	}
+	report := func(done int) {
+		if progress != nil {
+			progress(ImportProgress{Phase: PhaseExtract, Layers: done, Total: len(missing)})
+		}
+	}
+	report(0)
+	for n, i := range missing {
+		if err := convertLayer(ctx, cacheDir, layers[i], diffIDs[i]); err != nil {
+			return err
+		}
+		report(n + 1)
+	}
+
+	tmp, err := os.MkdirTemp(filepath.Dir(dst), ".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create image directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	m := imageManifest{Env: cfg.Config.Env}
+	for i, d := range diffIDs {
+		name := fmt.Sprintf("%03d.erofs", i)
+		if err := os.Link(layerPath(cacheDir, d), filepath.Join(tmp, name)); err != nil {
+			return fmt.Errorf("link image layer: %w", err)
+		}
+		m.Layers = append(m.Layers, name)
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode image manifest: %w", err)
+	}
+	if err := writeSynced(filepath.Join(tmp, imageManifestFile), data); err != nil {
 		return err
 	}
-	rfs, err := image.PullWithFetcher(ctx, ref, cache, staticFetcher{img: img})
-	if err != nil {
-		return fmt.Errorf("unpack workspace image: %w", err)
+	// The directory is shared read-only with the VM; libkrun only needs to
+	// traverse it.
+	if err := os.Chmod(tmp, 0o755); err != nil { //nolint:gosec // G302: inside the private image cache
+		return fmt.Errorf("create image directory: %w", err)
 	}
-	return normalizeOwnership(rfs.Path)
+	if err := os.RemoveAll(dst); err != nil {
+		return fmt.Errorf("replace image directory: %w", err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("create image directory: %w", err)
+	}
+	return nil
+}
+
+// convertLayer converts layer to its EROFS image in the cache, checking that
+// its content matches diffID.
+func convertLayer(ctx context.Context, cacheDir string, layer v1.Layer, diffID v1.Hash) error {
+	rc, err := layer.Uncompressed()
+	if err != nil {
+		return fmt.Errorf("read layer %s: %w", diffID, err)
+	}
+	defer func() { _ = rc.Close() }()
+	dir := filepath.Dir(layerPath(cacheDir, diffID))
+	f, err := os.CreateTemp(dir, ".tmp-*.erofs")
+	if err != nil {
+		return fmt.Errorf("create layer image: %w", err)
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+	h := sha256.New()
+	r := io.TeeReader(ctxReader{ctx: ctx, r: rc}, h)
+	if err := writeLayerEROFS(r, f, dir); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("convert layer %s: %w", diffID, ctxErr)
+		}
+		return fmt.Errorf("convert layer %s: %w", diffID, err)
+	}
+	// The tar reader stops at the end-of-archive marker; the DiffID also
+	// covers the padding after it.
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return fmt.Errorf("read layer %s: %w", diffID, err)
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); diffID.Algorithm != "sha256" || got != diffID.Hex {
+		return fmt.Errorf("layer %s has content sha256:%s", diffID, got)
+	}
+	if err := f.Chmod(0o444); err != nil {
+		return fmt.Errorf("write layer image: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("write layer image: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("write layer image: %w", err)
+	}
+	if err := os.Rename(f.Name(), layerPath(cacheDir, diffID)); err != nil {
+		return fmt.Errorf("write layer image: %w", err)
+	}
+	return nil
+}
+
+// writeSynced writes data to the new file path and syncs it.
+func writeSynced(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644) //nolint:gosec // G304: path inside jailoc's image cache
+	if err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
 }
 
 const progressByteInterval = 1 << 20
@@ -151,176 +367,9 @@ func (r *progressReader) report(bytes int64) {
 	}
 }
 
-type progressImage struct {
-	v1.Image
-	uncached map[v1.Hash]bool
-	mu       sync.Mutex
-	done     int
-	total    int
-	progress func(ImportProgress)
-}
-
-func imageWithProgress(img v1.Image, cacheDir string, lc *image.LayerCache, progress func(ImportProgress)) (v1.Image, error) {
-	layers, err := img.Layers()
-	if err != nil {
-		return nil, fmt.Errorf("read image layers: %w", err)
-	}
-	cfg, err := img.ConfigFile()
-	if err != nil {
-		return nil, fmt.Errorf("read image config: %w", err)
-	}
-	if len(layers) != len(cfg.RootFS.DiffIDs) {
-		return nil, fmt.Errorf("image has %d layers but %d DiffIDs", len(layers), len(cfg.RootFS.DiffIDs))
-	}
-	start := composeBaseStart(cacheDir, cfg.RootFS.DiffIDs)
-	uncached := make(map[v1.Hash]bool, len(layers)-start)
-	for _, diffID := range cfg.RootFS.DiffIDs[start:] {
-		if !lc.Has(diffID) {
-			uncached[diffID] = true
-		}
-	}
-	p := &progressImage{
-		Image:    img,
-		uncached: uncached,
-		total:    len(uncached),
-		progress: progress,
-	}
-	p.reportInitial()
-	return p, nil
-}
-
-// composeBaseStart returns the number of leading layers that go-microvm's
-// cache composition can clone from an existing snapshot or cached rootfs on
-// darwin hosts.
-func composeBaseStart(cacheDir string, diffIDs []v1.Hash) int {
-	if runtime.GOOS != "darwin" || cacheDir == "" || len(diffIDs) == 0 {
-		return 0
-	}
-	chain := chainIDs(diffIDs)
-	best := 0
-	for i := len(chain) - 1; i >= 0; i-- {
-		dir := filepath.Join(cacheDir, "snapshots", strings.Replace(chain[i], ":", "-", 1))
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			best = i + 1
-			break
-		}
-	}
-	chainsDir := filepath.Join(cacheDir, "chains")
-	entries, err := os.ReadDir(chainsDir)
-	if err != nil {
-		return best
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, "sha256-") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(chainsDir, name)) //nolint:gosec // G304: file inside jailoc's image cache
-		if err != nil {
-			continue
-		}
-		var recorded []v1.Hash
-		sc := bufio.NewScanner(bytes.NewReader(data))
-		for sc.Scan() {
-			h, err := v1.NewHash(strings.TrimSpace(sc.Text()))
-			if err != nil {
-				recorded = nil
-				break
-			}
-			recorded = append(recorded, h)
-		}
-		ids := chainIDs(recorded)
-		k := len(ids)
-		if k <= best || k > len(chain) || ids[k-1] != chain[k-1] {
-			continue
-		}
-		if info, err := os.Stat(filepath.Join(cacheDir, name)); err == nil && info.IsDir() {
-			best = k
-		}
-	}
-	return best
-}
-
-func chainIDs(diffIDs []v1.Hash) []string {
-	ids := make([]string, len(diffIDs))
-	prev := ""
-	for i, d := range diffIDs {
-		if i == 0 {
-			prev = d.String()
-		} else {
-			sum := sha256.Sum256([]byte(prev + " " + d.String()))
-			prev = "sha256:" + hex.EncodeToString(sum[:])
-		}
-		ids[i] = prev
-	}
-	return ids
-}
-
-func (p *progressImage) Layers() ([]v1.Layer, error) {
-	layers, err := p.Image.Layers()
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := p.ConfigFile()
-	if err != nil {
-		return nil, err
-	}
-	for i, layer := range layers {
-		if p.uncached[cfg.RootFS.DiffIDs[i]] {
-			layers[i] = &progressLayer{Layer: layer, image: p}
-		}
-	}
-	return layers, nil
-}
-
-func (p *progressImage) reportInitial() {
-	if p.progress != nil {
-		p.progress(ImportProgress{Phase: PhaseExtract, Layers: 0, Total: p.total})
-	}
-}
-
-func (p *progressImage) layerDone() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.done++
-	if p.done > p.total {
-		p.total = p.done
-	}
-	if p.progress != nil {
-		p.progress(ImportProgress{Phase: PhaseExtract, Layers: p.done, Total: p.total})
-	}
-}
-
-type progressLayer struct {
-	v1.Layer
-	image *progressImage
-	once  sync.Once
-}
-
-func (l *progressLayer) Uncompressed() (io.ReadCloser, error) {
-	r, err := l.Layer.Uncompressed()
-	if err != nil {
-		return nil, err
-	}
-	return &progressReadCloser{ReadCloser: r, done: func() {
-		l.once.Do(l.image.layerDone)
-	}}, nil
-}
-
-type progressReadCloser struct {
-	io.ReadCloser
-	done func()
-}
-
-func (r *progressReadCloser) Close() error {
-	err := r.ReadCloser.Close()
-	r.done()
-	return err
-}
-
 // unpackLayout writes the OCI layout files of a `docker save` tarball to dir,
-// dropping blobs that are layers already in lc.
-func unpackLayout(ctx context.Context, r io.Reader, dir string, lc *image.LayerCache) error {
+// dropping blobs that are layers hasLayer reports as cached.
+func unpackLayout(ctx context.Context, r io.Reader, dir string, hasLayer func(v1.Hash) bool) error {
 	tr := tar.NewReader(r)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -342,7 +391,7 @@ func unpackLayout(ctx context.Context, r io.Reader, dir string, lc *image.LayerC
 			continue
 		}
 		// An uncompressed layer's digest is its DiffID: skip it unread.
-		if blob && lc.Has(v1.Hash{Algorithm: "sha256", Hex: path.Base(name)}) {
+		if blob && hasLayer(v1.Hash{Algorithm: "sha256", Hex: path.Base(name)}) {
 			continue
 		}
 		target := filepath.Join(dir, filepath.FromSlash(name))
@@ -356,7 +405,7 @@ func unpackLayout(ctx context.Context, r io.Reader, dir string, lc *image.LayerC
 		if err != nil {
 			return err
 		}
-		if ok && lc.Has(diffID) {
+		if ok && hasLayer(diffID) {
 			if err := os.Remove(target); err != nil {
 				return fmt.Errorf("drop cached layer blob: %w", err)
 			}
@@ -466,13 +515,94 @@ func indexImage(idx v1.ImageIndex) (v1.Image, error) {
 	return nil, fmt.Errorf("image layout has no linux/%s image", runtime.GOARCH)
 }
 
-type staticFetcher struct{ img v1.Image }
-
-func (f staticFetcher) Pull(context.Context, string) (v1.Image, error) { return f.img, nil }
-
-// ImageHasFile reports whether the unpacked image ref in the image cache
-// contains any of the given paths (relative to the root file system).
+// ImageHasFile reports whether the workspace image ref in the image cache
+// contains any of the given paths (relative to the root file system). It
+// looks the paths up in the layers the way overlayfs does, following
+// symlinks only within a layer.
 func ImageHasFile(cacheDir, ref string, paths ...string) (bool, error) {
+	if strings.HasPrefix(ref, legacyRootfsRepo+":") {
+		return legacyImageHasFile(cacheDir, ref, paths...)
+	}
+	dir, m, err := readImage(cacheDir, ref)
+	if err != nil {
+		return false, err
+	}
+	layers := make([]fs.FS, 0, len(m.Layers))
+	for _, name := range slices.Backward(m.Layers) {
+		f, err := os.Open(filepath.Join(dir, name)) //nolint:gosec // G304: layer inside jailoc's image cache
+		if err != nil {
+			return false, fmt.Errorf("open image layer: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		img, err := erofs.Open(f)
+		if err != nil {
+			return false, fmt.Errorf("open image layer %s: %w", name, err)
+		}
+		layers = append(layers, img)
+	}
+	for _, p := range paths {
+		if found, err := layersHavePath(layers, path.Clean(p)); err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
+}
+
+// layersHavePath looks name up in overlayfs lower layers, the top first.
+func layersHavePath(layers []fs.FS, name string) (bool, error) {
+	for _, l := range layers {
+		fi, err := lstat(l, name)
+		if err == nil {
+			return !isWhiteout(fi), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, erofs.ErrNotDirectory) {
+			return false, fmt.Errorf("look up %s: %w", name, err)
+		}
+		// An ancestor that is not a plain directory in this layer, or an
+		// opaque one, hides the layers below.
+		for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
+			fi, err := lstat(l, dir)
+			if err != nil {
+				continue
+			}
+			if !fi.IsDir() || isOpaque(fi) {
+				return false, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func lstat(fsys fs.FS, name string) (fs.FileInfo, error) {
+	l, ok := fsys.(interface {
+		Lstat(string) (fs.FileInfo, error)
+	})
+	if !ok {
+		return fs.Stat(fsys, name)
+	}
+	return l.Lstat(name)
+}
+
+// isWhiteout reports whether fi is an overlayfs whiteout: a character device
+// with device number 0.
+func isWhiteout(fi fs.FileInfo) bool {
+	d, ok := fi.(interface{ Rdev() uint64 })
+	return fi.Mode().Type() == fs.ModeDevice|fs.ModeCharDevice && ok && d.Rdev() == 0
+}
+
+func isOpaque(fi fs.FileInfo) bool {
+	x, ok := fi.(interface {
+		GetXattr(string) (string, bool)
+	})
+	if !ok {
+		return false
+	}
+	v, _ := x.GetXattr(overlayOpaque)
+	return v == "y"
+}
+
+// legacyImageHasFile is ImageHasFile for images unpacked by go-microvm.
+func legacyImageHasFile(cacheDir, ref string, paths ...string) (bool, error) {
 	rootfs := image.NewCache(cacheDir).LookupRef(ref)
 	if rootfs == nil {
 		return false, fmt.Errorf("image %s is not in the image cache", ref)

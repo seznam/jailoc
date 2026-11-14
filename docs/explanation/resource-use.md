@@ -40,15 +40,15 @@ When the VM still runs out of memory, the kernel's OOM killer picks a victim. `j
 
 ### Image cache
 
-`jailoc` exports a built image from Docker and unpacks it into a local image cache, which the VM boots from read-only. The cache is content-addressed:
+`jailoc` exports a built image from Docker and converts each layer it doesn't have yet into one read-only EROFS image file, `~/.cache/jailoc-vm/images/erofs/layers/<DiffID>.erofs`. No directory tree is extracted. A workspace image is a directory, `erofs/images/<image ID>/`, that holds hard links to its layer files and an `image.json`. The VM mounts the layer files read-only. The cache is content-addressed:
 
 - An image that is already in the cache isn't exported again, so a restart with an unchanged image skips the export entirely.
-- Layers already in the cache are skipped while the export streams, so a rebuild that changes only the top layer stores and unpacks only that layer.
-- Workspaces that use the same image share one unpacked copy.
+- Layers already in the cache are skipped while the export streams, so a rebuild that changes only the top layer converts only that layer.
+- Layers that several images share are stored once, through hard links, and workspaces that use the same image share one directory.
 
-Since the VM boots from the cached tree, starting a VM doesn't copy the image either; the only per-VM root file system is a small boot root with `jailoc-guest` and its configuration.
+Since the VM mounts the cached layer files, starting a VM doesn't copy the image either; the only per-VM root file system is a small boot root with `jailoc-guest` and its configuration.
 
-After every import, jailoc prunes the cache: images no workspace uses any more, unpacked trees nothing references, and layers unused for two weeks. Entries changed within the last hour are kept, so a workspace that is starting at the same moment doesn't lose its image.
+After every import, jailoc prunes the cache: workspace image directories that no workspace uses any more and that are older than one hour, and layer files that no remaining image links to. go-microvm's directory cache, which holds the builder VM image and workspace images unpacked by older jailoc releases, is pruned as well: unpacked trees nothing references, and layers unused for two weeks. Running VMs from older releases keep using their unpacked image until they restart.
 
 ### Data disks
 
