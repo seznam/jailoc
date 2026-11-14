@@ -40,7 +40,7 @@ When the VM still runs out of memory, the kernel's OOM killer picks a victim. `j
 
 ### Image cache
 
-`jailoc` exports a built image from Docker and converts each layer it doesn't have yet into one read-only EROFS image file, `~/.cache/jailoc-vm/images/erofs/layers/<DiffID>.erofs`. No directory tree is extracted. A workspace image is a directory, `erofs/images/<image ID>/`, that holds hard links to its layer files and an `image.json`. The VM mounts the layer files read-only. The cache is content-addressed:
+`jailoc` exports a built image from Docker and converts each layer it doesn't have yet into one read-only EROFS image file, `~/.cache/jailoc-vm/images/erofs/layers/<DiffID>.erofs`. No directory tree is extracted. A workspace image is a directory, `erofs/images/<image ID>/`, that holds hard links to its layer files, an `image.json` and, for some images, a small layer of directory metadata ([Image Resolution](../reference/image-resolution.md#converting-for-the-vm)). The VM mounts the layer files read-only. The cache is content-addressed:
 
 - An image that is already in the cache isn't exported again, so a restart with an unchanged image skips the export entirely.
 - Layers already in the cache are skipped while the export streams, so a rebuild that changes only the top layer converts only that layer.

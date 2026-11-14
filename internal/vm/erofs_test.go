@@ -192,6 +192,10 @@ func TestWriteLayerEROFSWhiteouts(t *testing.T) {
 		// A file replacing a deleted entry is a plain file.
 		layerEntry{hdr: tar.Header{Name: "var/.wh.file", Typeflag: tar.TypeReg}},
 		layerEntry{hdr: tar.Header{Name: "var/file", Typeflag: tar.TypeReg, Mode: 0o644}, data: "f"},
+		// An opaque marker before its directory's entry, and one without.
+		layerEntry{hdr: tar.Header{Name: "home/.wh..wh..opq", Typeflag: tar.TypeReg}},
+		layerEntry{hdr: tar.Header{Name: "home/", Typeflag: tar.TypeDir, Mode: 0o700, Uid: 1000, Gid: 1000}},
+		layerEntry{hdr: tar.Header{Name: "lib/.wh..wh..opq", Typeflag: tar.TypeReg}},
 	)
 	img := layerImage(t, layer)
 
@@ -205,11 +209,14 @@ func TestWriteLayerEROFSWhiteouts(t *testing.T) {
 	if _, err := fs.Stat(img, "opt/.wh..wh..opq"); err == nil {
 		t.Error("opaque marker must not appear in the image")
 	}
-	for _, dir := range []string{"opt", "srv/replace", "var/early"} {
+	for _, dir := range []string{"opt", "srv/replace", "var/early", "home", "lib"} {
 		fi, st := lstatLayer(t, img, dir)
 		if v, _ := st.GetXattr(overlayOpaque); !fi.IsDir() || v != "y" {
 			t.Errorf("%s: dir %v, %s=%q; want an opaque directory", dir, fi.IsDir(), overlayOpaque, v)
 		}
+	}
+	if fi, st := lstatLayer(t, img, "home"); fi.Mode().Perm() != 0o700 || st.UID() != 1000 || st.GID() != 1000 {
+		t.Errorf("home: mode %v owner %d:%d, want the directory entry's 0700 1000:1000", fi.Mode(), st.UID(), st.GID())
 	}
 	for _, name := range []string{"opt/new", "srv/replace/inner"} {
 		if _, err := fs.Stat(img, name); err != nil {
@@ -253,5 +260,48 @@ func TestWriteLayerEROFSRejects(t *testing.T) {
 				t.Errorf("error %q does not name the entry", err)
 			}
 		})
+	}
+}
+
+func TestWriteLayerEROFSImpliedDirs(t *testing.T) {
+	t.Parallel()
+	img := layerImage(t, layerTar(t,
+		// Parents created for an entry only.
+		layerEntry{hdr: tar.Header{Name: "opt/private/new", Typeflag: tar.TypeReg, Mode: 0o644}, data: "n"},
+		// A directory entry after its child.
+		layerEntry{hdr: tar.Header{Name: "srv/a/b/file", Typeflag: tar.TypeReg, Mode: 0o644}, data: "f"},
+		layerEntry{hdr: tar.Header{Name: "srv/a/", Typeflag: tar.TypeDir, Mode: 0o750, Uid: 7}},
+		// A directory deleted and recreated for an entry below it.
+		layerEntry{hdr: tar.Header{Name: "var/", Typeflag: tar.TypeDir, Mode: 0o755}},
+		layerEntry{hdr: tar.Header{Name: "var/.wh.cache", Typeflag: tar.TypeReg}},
+		layerEntry{hdr: tar.Header{Name: "var/cache/x", Typeflag: tar.TypeReg, Mode: 0o644}, data: "x"},
+		// An opaque marker without its directory.
+		layerEntry{hdr: tar.Header{Name: "lib/.wh..wh..opq", Typeflag: tar.TypeReg}},
+	))
+	for _, tt := range []struct {
+		name            string
+		implied, opaque bool
+	}{
+		{"opt", true, false},
+		{"opt/private", true, false},
+		{"srv", true, false},
+		{"srv/a", false, false},
+		{"srv/a/b", true, false},
+		{"var", false, false},
+		{"var/cache", false, true},
+		{"lib", true, true},
+	} {
+		fi, st := lstatLayer(t, img, tt.name)
+		_, implied := st.GetXattr(impliedXattr)
+		_, opaque := st.GetXattr(overlayOpaque)
+		if !fi.IsDir() || implied != tt.implied || opaque != tt.opaque {
+			t.Errorf("%s: dir %v implied %v opaque %v; want implied %v opaque %v", tt.name, fi.IsDir(), implied, opaque, tt.implied, tt.opaque)
+		}
+	}
+	if fi, st := lstatLayer(t, img, "srv/a"); fi.Mode().Perm() != 0o750 || st.UID() != 7 {
+		t.Errorf("srv/a: mode %v uid %d, want the entry's 0750 and 7", fi.Mode(), st.UID())
+	}
+	if _, err := fs.Stat(img, "var/cache/x"); err != nil {
+		t.Errorf("var/cache/x: %v", err)
 	}
 }

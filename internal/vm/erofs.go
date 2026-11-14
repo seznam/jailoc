@@ -21,7 +21,11 @@ const (
 	opaqueWhiteout = ".wh..wh..opq"
 	overlayOpaque  = "trusted.overlay.opaque"
 	overlayXattrs  = "trusted.overlay."
-	paxXattr       = "SCHILY.xattr."
+	// impliedXattr marks a directory the layer has no entry for, only
+	// entries below it. Such a directory keeps the metadata of the layers
+	// below; see writeDirFixup.
+	impliedXattr = "trusted.jailoc.implied"
+	paxXattr     = "SCHILY.xattr."
 )
 
 // Unix file type bits of EROFS inodes.
@@ -41,6 +45,7 @@ func writeLayerEROFS(r io.Reader, out io.WriteSeeker, tmpDir string) error {
 	c := &layerConverter{
 		w:         erofs.Create(out, erofs.WithTempDir(tmpDir), erofs.WithBuildTime(0, 0)),
 		whiteouts: map[string]bool{},
+		implied:   map[string]bool{},
 	}
 	tr := tar.NewReader(r)
 	for {
@@ -54,6 +59,9 @@ func writeLayerEROFS(r io.Reader, out io.WriteSeeker, tmpDir string) error {
 		if err := c.add(hdr, tr); err != nil {
 			return fmt.Errorf("layer entry %s: %w", hdr.Name, err)
 		}
+	}
+	if err := c.markImplied(); err != nil {
+		return err
 	}
 	if err := c.markOpaque(); err != nil {
 		return err
@@ -70,6 +78,9 @@ type layerConverter struct {
 	// entry of the layer itself at such a path replaces the whiteout, and a
 	// directory there must hide the lower directory's content.
 	whiteouts map[string]bool
+	// implied are the directories created as ancestors of entries, without
+	// an entry of their own.
+	implied map[string]bool
 }
 
 func (c *layerConverter) add(hdr *tar.Header, r io.Reader) error {
@@ -81,6 +92,8 @@ func (c *layerConverter) add(hdr *tar.Header, r io.Reader) error {
 	dir = path.Clean(dir)
 	switch {
 	case base == opaqueWhiteout:
+		// The marker may precede the directory's own entry or stand in for
+		// it; a later entry sets the metadata and keeps the mark.
 		if err := c.parentDir(dir); err != nil {
 			return err
 		}
@@ -93,6 +106,9 @@ func (c *layerConverter) add(hdr *tar.Header, r io.Reader) error {
 	}
 	if err := c.replace(name, hdr.Typeflag == tar.TypeDir); err != nil {
 		return err
+	}
+	if hdr.Typeflag == tar.TypeDir {
+		delete(c.implied, name)
 	}
 	if err := c.create(name, hdr, r); err != nil {
 		return err
@@ -120,22 +136,47 @@ func (c *layerConverter) whiteout(name string) error {
 	return c.w.Mknod(name, sIFCHR, 0)
 }
 
-// parentDir fails when an ancestor of an entry is not a directory, which
-// would make the entry unreachable or let it escape through a symlink.
-// Missing ancestors are created by the writer.
+// parentDir creates the directory dir of an entry and its missing
+// ancestors as implied directories. It fails when an ancestor is not a
+// directory, which would make the entry unreachable or let it escape
+// through a symlink, unless it is a whiteout of the layer: the layer then
+// deletes the directory below and adds entries to a new one.
 func (c *layerConverter) parentDir(dir string) error {
 	fi, err := c.w.Lstat(dir)
+	if errors.Is(err, erofs.ErrNotDirectory) {
+		if err := c.parentDir(path.Dir(dir)); err != nil {
+			return err
+		}
+		fi, err = c.w.Lstat(dir)
+	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return nil
-	case errors.Is(err, erofs.ErrNotDirectory):
-		return fmt.Errorf("parent of %s is not a directory", dir)
+		if err := c.parentDir(path.Dir(dir)); err != nil {
+			return err
+		}
 	case err != nil:
 		return fmt.Errorf("look up %s: %w", dir, err)
-	case !fi.IsDir():
+	case fi.IsDir():
+		return nil
+	case c.whiteouts[dir] && writerWhiteout(fi):
+		if err := c.w.Remove(dir); err != nil {
+			return fmt.Errorf("replace %s: %w", dir, err)
+		}
+	default:
 		return fmt.Errorf("%s is not a directory", dir)
 	}
+	if err := c.w.Mkdir(dir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	c.implied[dir] = true
 	return nil
+}
+
+// writerWhiteout reports whether fi, from the writer, is an overlayfs
+// whiteout.
+func writerWhiteout(fi fs.FileInfo) bool {
+	st, ok := fi.Sys().(*erofs.WriterStat)
+	return ok && fi.Mode().Type() == fs.ModeDevice|fs.ModeCharDevice && st.Rdev == 0
 }
 
 // replace removes an earlier entry at name, which a later entry of the same
@@ -153,6 +194,11 @@ func (c *layerConverter) replace(name string, dir bool) error {
 	}
 	if err := c.w.RemoveAll(name); err != nil {
 		return fmt.Errorf("replace %s: %w", name, err)
+	}
+	for dir := range c.implied {
+		if dir == name || strings.HasPrefix(dir, name+"/") {
+			delete(c.implied, dir)
+		}
 	}
 	return nil
 }
@@ -202,11 +248,26 @@ func (c *layerConverter) metadata(name string, hdr *tar.Header) error {
 		attr, ok := strings.CutPrefix(key, paxXattr)
 		// The layer's own overlayfs xattrs would change how the guest
 		// overlay reads it.
-		if !ok || strings.HasPrefix(attr, overlayXattrs) {
+		if !ok || strings.HasPrefix(attr, overlayXattrs) || attr == impliedXattr {
 			continue
 		}
 		if err := c.w.Setxattr(name, attr, value); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// markImplied marks the implied directories that keep the metadata of the
+// layers below. One the layer also deletes replaces the directory below, so
+// its own metadata applies.
+func (c *layerConverter) markImplied() error {
+	for dir := range c.implied {
+		if c.whiteouts[dir] {
+			continue
+		}
+		if err := c.w.Setxattr(dir, impliedXattr, "y"); err != nil {
+			return fmt.Errorf("mark %s implied: %w", dir, err)
 		}
 	}
 	return nil
