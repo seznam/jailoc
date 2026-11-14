@@ -72,7 +72,7 @@ and include the package in your `environment.systemPackages` or `home.packages`:
 inputs.jailoc.packages."${pkgs.stdenv.hostPlatform.system}".jailoc
 ```
 
-The Nix package is a source build, so it doesn't embed the VM runtime either: set `[vm] runner` and `lib_dir` as described in [installation](https://seznam.github.io/jailoc/how-to/installation/#build-from-source).
+On Linux (x86_64, aarch64), the Nix package builds the VM runtime (go-microvm runner, patched libkrun, libkrunfw) from source and points jailoc at it, so no `[vm]` configuration is needed. Without a binary cache, the first build compiles these components, including a Linux kernel for libkrunfw, which takes a while. On aarch64-darwin the Nix package has no runtime: set `[vm] runner` and `lib_dir` as described in [installation](https://seznam.github.io/jailoc/how-to/installation/#install-with-nix), or use the Homebrew cask instead.
 
 ### Pre-built binaries
 

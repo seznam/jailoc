@@ -67,7 +67,17 @@ See [Migrate from jailoc v1](migrate-from-v1.md).
 this jailoc build does not include the VM runtime for <os>/<arch>; use a release build of jailoc or set runner and lib_dir in the [vm] section of the config
 ```
 
-**Fix:** release builds embed the runtime for macOS (Apple Silicon) and Linux (amd64, arm64). On another platform, or with a binary built from source, set `[vm] runner` and `[vm] lib_dir` to a runtime you built yourself. See [How to install jailoc](installation.md#build-from-source).
+**Fix:** release builds embed the runtime for macOS (Apple Silicon) and Linux (amd64, arm64), and the Nix package on Linux provides one. On another platform, or with a binary built from source, set `[vm] runner` and `[vm] lib_dir` to a runtime you built yourself. See [How to install jailoc](installation.md#build-from-source).
+
+**Symptom:** `jailoc up` fails with:
+
+```
+VM runner <path> provided by this jailoc package is missing: <error>; reinstall jailoc or set runner and lib_dir in the [vm] section of the config
+```
+
+**Cause:** the `jailoc` binary was copied out of its Nix store path, or that store path was garbage-collected.
+
+**Fix:** reinstall or rebuild the Nix package, or set `[vm] runner` and `[vm] lib_dir` explicitly.
 
 ## VM can't open /dev/kvm
 

@@ -65,6 +65,35 @@ Upgrade with `brew upgrade --cask jailoc`. The tap carries stable releases only;
 !!! note "Unsigned binary"
     jailoc binaries are not signed or notarized by Apple. The cask removes the `com.apple.quarantine` attribute from `jailoc` after installation so that Gatekeeper does not block it.
 
+## Install with Nix
+
+Run jailoc without installing it:
+
+```bash
+nix run github:seznam/jailoc
+```
+
+To install it, add the flake to your inputs:
+
+```nix
+{
+  inputs.jailoc.url = "github:seznam/jailoc";
+}
+```
+
+Then include the package in `environment.systemPackages` or `home.packages`:
+
+```nix
+inputs.jailoc.packages.${pkgs.stdenv.hostPlatform.system}.jailoc
+```
+
+On Linux (x86_64, aarch64), the package builds the VM runtime (go-microvm runner, patched libkrun, libkrunfw) from source and points jailoc at it, so you don't need a `[vm]` section. A `runner` set in the [`[vm]` section](../reference/configuration.md) takes precedence. Hosts without access to a binary cache compile these components on the first build, including a Linux kernel for libkrunfw, which takes a while.
+
+!!! note "aarch64-darwin"
+    On macOS the Nix package has no VM runtime. Set `runner` and `lib_dir` in the [`[vm]` section](../reference/configuration.md) as shown in [Check your platform](#check-your-platform), or install with [Homebrew](#install-with-homebrew) instead.
+
+The Nix package doesn't change when you need host Docker, see [Know when Docker is needed](#know-when-docker-is-needed).
+
 ## Install a pre-built binary
 
 Pre-built archives for macOS (arm64) and Linux (amd64, arm64) are published with every release. Download the one matching your platform from the [GitHub Releases page](https://github.com/seznam/jailoc/releases), extract it, and place the binary on your `PATH`.
@@ -87,6 +116,8 @@ A source build doesn't include the VM runtime (the `jailoc-vm-runner` process, l
 ## Know where the VM runtime lives
 
 Release binaries embed the VM runtime for their platform. The first `jailoc up` unpacks it into `~/.cache/jailoc-vm/runtime/`; later starts reuse it. Nothing is downloaded.
+
+On Linux, the [Nix package](#install-with-nix) references its runtime directly in the Nix store instead of unpacking it into `~/.cache/jailoc-vm/runtime/`. The licenses below apply to the Nix-built components too.
 
 ### Check the runtime licenses
 

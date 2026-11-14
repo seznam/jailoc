@@ -8,7 +8,7 @@
 **Language**: Go 1.26+
 **Key deps**: stacklok/go-microvm (libkrun), gvisor.dev/gvisor (netbroker stack), docker/docker (image builds, migrate), google/go-containerregistry, golang.org/x/crypto/ssh, BurntSushi/toml, spf13/cobra
 
-**Hosts**: darwin/arm64 (Hypervisor.framework), linux/amd64 and experimental linux/arm64 (KVM). Release builds embed the go-microvm runner + libkrun + libkrunfw runtime (`internal/vm/runtime.go`, `internal/vm/runtimebin/`); other builds need `[vm] runner` / `lib_dir`.
+**Hosts**: darwin/arm64 (Hypervisor.framework), linux/amd64 and experimental linux/arm64 (KVM). Release builds embed the go-microvm runner + libkrun + libkrunfw runtime (`internal/vm/runtime.go`, `internal/vm/runtimebin/`); other builds need `[vm] runner` / `lib_dir`. The Nix package builds the VM runtime from source on Linux (x86_64, aarch64) and links its paths into jailoc; on aarch64-darwin it has no runtime.
 
 ## Architecture
 
@@ -31,6 +31,11 @@ internal/
   vmnet/, logging/, update/  Supporting packages
   vmintegration/             //go:build vmintegration — boots real VMs
 docs/                        MkDocs documentation (Diátaxis framework, see docs/AGENTS.md)
+flake.nix                    Nix flake: systems, formatter, apps, dev shells; packages come from nix/
+nix/
+  default.nix                Dependency map: runtime recipes → jailoc (VM runtime on Linux only)
+  jailoc.nix                 jailoc package, vendorHash, runtime paths via -X defaultVMRunner/defaultVMLibDir
+  runtime/                   sources.nix (pins), libkrun-init, libkrunfw, libkrun, go-microvm-runner recipes
 ```
 
 ### Data flow (`jailoc up`)
@@ -38,7 +43,7 @@ docs/                        MkDocs documentation (Diátaxis framework, see docs
 1. `config.Load` → read `~/.config/jailoc/config.toml`; v1 settings fail validation with a hint to run `jailoc migrate`
 2. `workspace.Resolve` → name → paths, mounts, snapshots, allowed hosts/networks
 3. Validate secret sources, prepare CA bundle and TUI plugin config, compute virtio-fs shares and staged `snapshots`
-4. `vmRuntime` → unpack the embedded VM runtime (or use `[vm] runner` / `lib_dir`)
+4. `vmRuntime` → configured `[vm] runner`, else the package-provided runtime (for example, the Nix package's), else unpack the embedded runtime
 5. `buildWorkspaceImage` → build the image with host Docker (or a builder VM with `isolated_build`) and unpack it into the VM image cache
 6. `startSupervisor` → boot the workspace VM (jailoc-guest as init) with its netbroker; persistent home under `~/.cache/jailoc-vm/workspaces/<ws>/home`
 7. `secretsPayload` (read on the host before boot, incl. `from_command`) → `deliverSecrets` over SSH; the guest writes file secrets to `/run/secrets` (tmpfs) and env secrets to the session environment
@@ -120,6 +125,8 @@ GitHub Actions workflows:
 - **VM Integration** (`.github/workflows/vm-integration.yml`): PRs/pushes to main touching VM code — boots real workspace VMs on an x64 Linux runner with KVM
 - **VM runtime** (`.github/workflows/vm-runtime.yml`): reusable workflow called by the release, re-release and prerelease workflows, plus PRs touching `scripts/vm-runtime/` — builds runtime artifacts for darwin/arm64, linux/amd64, linux/arm64 (libkrun with a musl guest init), the libkrunfw GPL source tarball and runtime license notices (artifacts uploaded only for releases)
 - **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + GitHub Release, builds the VM runtimes into `internal/vm/runtimebin/` and notices/source into `build/vm-runtime/`, then GoReleaser runs `go generate ./internal/guestbin`, generates `THIRD_PARTY_NOTICES` and publishes binaries (darwin/arm64, linux/amd64, linux/arm64, `CGO_ENABLED=0`) plus `jailoc_<version>_vm-runtime-source.tar` and syft SPDX SBOMs, pushes the Homebrew cask to `seznam/homebrew-tap` (`HOMEBREW_TAP_DEPLOY_KEY` deploy-key secret in the `homebrew-tap` environment; skipped for pre-releases), and attests build provenance of all checksummed assets
+- **Nix** (`.github/workflows/nix.yml`): push/PR to main — `nix fmt` check and `nix flake check --all-systems`, plus `nix build .#jailoc` on x86_64 and aarch64 Linux runners
+- **Nix vendorHash** (`.github/workflows/nix-vendor-hash.yml`): `go.mod`/`go.sum` pushes to main, Dependabot PRs, manual — recomputes `vendorHash` in `nix/jailoc.nix` in a cache-free read-only job and commits it from a separate write job
 - **Re-release** (`.github/workflows/release.yml`): manual `workflow_dispatch` fallback — re-runs GoReleaser for an existing tag
 - **Docs** (`.github/workflows/release-please.yml`): runs as part of the release process — zensical + mkdocs-macros-plugin → GitHub Pages
 
