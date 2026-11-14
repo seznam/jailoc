@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/erofs/go-erofs"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -146,6 +147,12 @@ func ImportImage(
 	}
 	defer unlock()
 	if _, err := os.Stat(filepath.Join(dst, imageManifestFile)); err == nil {
+		// A fresh modification time gives the image the pruning grace period
+		// until the workspace that imports it records it in its spec.
+		now := time.Now()
+		if err := os.Chtimes(dst, now, now); err != nil {
+			return fmt.Errorf("refresh cached image: %w", err)
+		}
 		return nil
 	}
 	for _, d := range []string{layersDir, imagesDir} {
@@ -241,6 +248,9 @@ func convertImage(ctx context.Context, cacheDir, dst string, img v1.Image, hasLa
 		}
 		m.Layers = append(m.Layers, name)
 	}
+	if err := addDirFixup(tmp, &m); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode image manifest: %w", err)
@@ -259,6 +269,45 @@ func convertImage(ctx context.Context, cacheDir, dst string, img v1.Image, hasLa
 	if err := os.Rename(tmp, dst); err != nil {
 		return fmt.Errorf("create image directory: %w", err)
 	}
+	return nil
+}
+
+// addDirFixup adds the directory fixup layer of the image in the image
+// directory dir to it and m, when the image needs one.
+func addDirFixup(dir string, m *imageManifest) error {
+	layers := make([]fs.FS, 0, len(m.Layers))
+	for _, name := range m.Layers {
+		f, err := os.Open(filepath.Join(dir, name)) //nolint:gosec // G304: layer inside jailoc's image cache
+		if err != nil {
+			return fmt.Errorf("open image layer: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		img, err := erofs.Open(f)
+		if err != nil {
+			return fmt.Errorf("open image layer %s: %w", name, err)
+		}
+		layers = append(layers, img)
+	}
+	dirs, err := imageDirFixup(layers)
+	if err != nil || len(dirs) == 0 {
+		return err
+	}
+	name := fmt.Sprintf("%03d.erofs", len(m.Layers))
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o444) //nolint:gosec // G304: path inside jailoc's image cache
+	if err != nil {
+		return fmt.Errorf("create directory fixup layer: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	if err := writeDirFixup(dirs, f, dir); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("write directory fixup layer: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("write directory fixup layer: %w", err)
+	}
+	m.Layers = append(m.Layers, name)
 	return nil
 }
 
@@ -517,8 +566,8 @@ func indexImage(idx v1.ImageIndex) (v1.Image, error) {
 
 // ImageHasFile reports whether the workspace image ref in the image cache
 // contains any of the given paths (relative to the root file system). It
-// looks the paths up in the layers the way overlayfs does, following
-// symlinks only within a layer.
+// looks the paths up in the layers the way overlayfs merges them, following
+// symlinks across layers.
 func ImageHasFile(cacheDir, ref string, paths ...string) (bool, error) {
 	if strings.HasPrefix(ref, legacyRootfsRepo+":") {
 		return legacyImageHasFile(cacheDir, ref, paths...)
@@ -548,29 +597,106 @@ func ImageHasFile(cacheDir, ref string, paths ...string) (bool, error) {
 	return false, nil
 }
 
-// layersHavePath looks name up in overlayfs lower layers, the top first.
+// maxSymlinks bounds the symlinks followed while looking up one path, like
+// the kernel's limit.
+const maxSymlinks = 40
+
+// layersHavePath reports whether name exists in the file system that the
+// overlay of layers (the top first) presents. Symlinks are followed across
+// layers as path resolution in the guest follows them, including one at
+// name itself.
 func layersHavePath(layers []fs.FS, name string) (bool, error) {
-	for _, l := range layers {
-		fi, err := lstat(l, name)
-		if err == nil {
-			return !isWhiteout(fi), nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, erofs.ErrNotDirectory) {
-			return false, fmt.Errorf("look up %s: %w", name, err)
-		}
-		// An ancestor that is not a plain directory in this layer, or an
-		// opaque one, hides the layers below.
-		for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
-			fi, err := lstat(l, dir)
-			if err != nil {
-				continue
+	dir := "" // the resolved directory, "" for the root
+	rest := strings.Split(name, "/")
+	for links := 0; len(rest) > 0; {
+		c := rest[0]
+		rest = rest[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			if dir = path.Dir(dir); dir == "." {
+				dir = ""
 			}
-			if !fi.IsDir() || isOpaque(fi) {
+			continue
+		}
+		p := path.Join(dir, c)
+		fi, layer, err := mergedLstat(layers, p)
+		if err != nil || fi == nil {
+			return false, err
+		}
+		switch {
+		case fi.Mode().Type() == fs.ModeSymlink:
+			if links++; links > maxSymlinks {
 				return false, nil
 			}
+			target, err := fs.ReadLink(layer, p)
+			if err != nil {
+				return false, fmt.Errorf("read link %s: %w", p, err)
+			}
+			if path.IsAbs(target) {
+				dir = ""
+			}
+			rest = append(strings.Split(target, "/"), rest...)
+		case len(rest) > 0 && !fi.IsDir():
+			return false, nil
+		default:
+			dir = p
 		}
 	}
-	return false, nil
+	return true, nil
+}
+
+// mergedLstat looks p up in the layers the way overlayfs does, given that
+// every ancestor of p is a directory in the merged file system. It returns
+// the entry of the topmost layer that has p and that layer, or a nil entry
+// when p does not exist.
+func mergedLstat(layers []fs.FS, p string) (fs.FileInfo, fs.FS, error) {
+	parts := strings.Split(p, "/")
+layers:
+	for _, l := range layers {
+		// An opaque ancestor hides the layers below this one; an ancestor
+		// that is no directory in this layer hides p and the layers below.
+		opaque := false
+		for i := 1; i < len(parts); i++ {
+			fi, err := layerLstat(l, path.Join(parts[:i]...))
+			switch {
+			case err != nil:
+				return nil, nil, err
+			case fi == nil && opaque:
+				return nil, nil, nil
+			case fi == nil:
+				continue layers
+			case !fi.IsDir():
+				return nil, nil, nil
+			}
+			opaque = opaque || isOpaque(fi)
+		}
+		fi, err := layerLstat(l, p)
+		switch {
+		case err != nil:
+			return nil, nil, err
+		case fi != nil && isWhiteout(fi):
+			return nil, nil, nil
+		case fi != nil:
+			return fi, l, nil
+		case opaque:
+			return nil, nil, nil
+		}
+	}
+	return nil, nil, nil
+}
+
+// layerLstat is lstat in one layer, with a nil entry when name is missing.
+func layerLstat(l fs.FS, name string) (fs.FileInfo, error) {
+	fi, err := lstat(l, name)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, erofs.ErrNotDirectory) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("look up %s: %w", name, err)
+	}
+	return fi, nil
 }
 
 func lstat(fsys fs.FS, name string) (fs.FileInfo, error) {

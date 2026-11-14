@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -382,6 +383,101 @@ func TestImageDirRejectsForeignRefs(t *testing.T) {
 	for _, ref := range []string{"docker@sha256:feed", legacyRootfsRepo + ":aa", rootfsRepo + ":../x", rootfsRepo + ":", rootfsRepo + ":.hidden"} {
 		if _, err := imageDir("/cache", ref); err == nil {
 			t.Errorf("imageDir(%q) succeeded", ref)
+		}
+	}
+}
+
+func TestImportImageRefreshesCachedImage(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+	ref := RootFSRef("sha256:cached")
+	saved := saveTarball(t, layeredImage(t, nil, layerTar(t,
+		layerEntry{hdr: tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o755}},
+	)))
+	importImg := func() {
+		t.Helper()
+		if err := ImportImage(context.Background(), cacheDir, ref, func(w io.Writer) error {
+			_, err := w.Write(saved)
+			return err
+		}, nil); err != nil {
+			t.Fatalf("ImportImage: %v", err)
+		}
+	}
+	importImg()
+	dir, err := imageDir(cacheDir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(dir, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	// A cache hit gives the image a new grace period, so a prune before the
+	// workspace records the image in its spec keeps it.
+	importImg()
+	if _, err := PruneImages(cacheDir, nil); err != nil {
+		t.Fatalf("PruneImages: %v", err)
+	}
+	if _, _, err := readImage(cacheDir, ref); err != nil {
+		t.Errorf("cached image pruned after a cache hit: %v", err)
+	}
+}
+
+func TestLayersHavePath(t *testing.T) {
+	t.Parallel()
+	dir := func(name string) layerEntry {
+		return layerEntry{hdr: tar.Header{Name: name, Typeflag: tar.TypeDir, Mode: 0o755}}
+	}
+	file := func(name string) layerEntry {
+		return layerEntry{hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o755}, data: "x"}
+	}
+	link := func(name, target string) layerEntry {
+		return layerEntry{hdr: tar.Header{Name: name, Typeflag: tar.TypeSymlink, Linkname: target}}
+	}
+	bottom := layerImage(t, layerTar(t,
+		dir("opt/"), dir("opt/docker/"), dir("opt/docker/bin/"), file("opt/docker/bin/dockerd"),
+		dir("usr/"), dir("usr/bin/"), file("usr/bin/real"),
+	))
+	middle := layerImage(t, layerTar(t,
+		dir("usr/"), dir("usr/local/"), link("usr/local/bin", "/opt/docker/bin"),
+		link("bin", "usr/bin"),
+		dir("rel/"), link("rel/up", "../usr/bin"),
+		link("loop-a", "loop-b"), link("loop-b", "loop-a"),
+		link("dangling", "/nope"),
+		link("tool", "usr/bin/real"),
+	))
+	opaqueTop := layerImage(t, layerTar(t,
+		dir("opt/"), file("opt/.wh..wh..opq"), file("opt/other"),
+	))
+	whiteoutTop := layerImage(t, layerTar(t,
+		dir("usr/"), dir("usr/bin/"), file("usr/bin/.wh.real"),
+	))
+
+	for _, tt := range []struct {
+		layers []fs.FS
+		path   string
+		want   bool
+	}{
+		{[]fs.FS{middle, bottom}, "usr/local/bin/dockerd", true},
+		{[]fs.FS{middle, bottom}, "bin/real", true},
+		{[]fs.FS{middle, bottom}, "rel/up/real", true},
+		{[]fs.FS{middle, bottom}, "tool", true},
+		{[]fs.FS{middle, bottom}, "usr/bin/../bin/real", true},
+		{[]fs.FS{middle, bottom}, "usr/bin/real/x", false},
+		{[]fs.FS{middle, bottom}, "loop-a", false},
+		{[]fs.FS{middle, bottom}, "dangling", false},
+		{[]fs.FS{middle, bottom}, "usr/local/bin/missing", false},
+		{[]fs.FS{opaqueTop, middle, bottom}, "usr/local/bin/dockerd", false},
+		{[]fs.FS{opaqueTop, middle, bottom}, "opt/other", true},
+		{[]fs.FS{opaqueTop, middle, bottom}, "bin/real", true},
+		{[]fs.FS{whiteoutTop, middle, bottom}, "bin/real", false},
+		{[]fs.FS{whiteoutTop, middle, bottom}, "tool", false},
+		{[]fs.FS{whiteoutTop, middle, bottom}, "usr/local/bin/dockerd", true},
+	} {
+		got, err := layersHavePath(tt.layers, tt.path)
+		if err != nil || got != tt.want {
+			t.Errorf("layersHavePath(%d layers, %s) = %v, %v; want %v", len(tt.layers), tt.path, got, err, tt.want)
 		}
 	}
 }
