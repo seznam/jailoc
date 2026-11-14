@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.6.0](https://github.com/seznam/jailoc/compare/v2.5.0...v2.6.0) (2026-11-14)
+
+
+### Features
+
+* **nix:** Jailoc v2 support ([b6ef6f5](https://github.com/seznam/jailoc/commit/b6ef6f54d7352b54c99f48eeefbad0ee866eabdd))
+
+
+### Bug Fixes
+
+* **guest:** give the agent the host GID when idmapped mounts are unavailable ([5f84618](https://github.com/seznam/jailoc/commit/5f846189ccb910a996b5373ce7459c7b50a6e75d))
+* **guest:** give the agent the host GID when idmapped mounts are unavailable ([9856147](https://github.com/seznam/jailoc/commit/98561478fa2c1ced15cda72890048c756ca87eba))
+
 ## [2.5.0](https://github.com/seznam/jailoc/compare/v2.4.0...v2.5.0) (2026-11-13)
 
 
