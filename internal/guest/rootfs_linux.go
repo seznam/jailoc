@@ -5,6 +5,7 @@ package guest
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"os"
@@ -23,11 +24,12 @@ const (
 	overlayDir    = Dir + "/overlay"
 	imageShareDir = overlayDir + "/share" // the share with the image's layer images
 	layerDir      = overlayDir + "/l"     // one EROFS mount per layer, named by its index
-	bootLowerDir  = overlayDir + "/boot"  // idmapped boot root
+	bootLowerDir  = overlayDir + "/boot"  // idmapped boot root, or a tmpfs with jailoc's files
 	upperDir      = overlayDir + "/rw"    // tmpfs with the upper and work directories
 )
 
-// maxMountData is the most option bytes mount(2) passes to a file system.
+// maxMountData is the most option bytes mount(2) passes to a file system;
+// longer overlay options go through fsconfig(2) instead.
 const maxMountData = 4095
 
 // overlayRoot replaces the boot root file system, which holds only jailoc's
@@ -38,6 +40,8 @@ const maxMountData = 4095
 // the returned idmapper serves the shares. When the kernel cannot idmap the
 // boot root, cfg takes the host user's IDs instead, and the layers are
 // idmapped so that the agent's files in the image belong to the host user.
+// Without an idmapped boot root, a root-owned copy of jailoc's files takes
+// its place, so that directories such as /etc keep the image's owner.
 func overlayRoot(logger *slog.Logger, cfg *Config) (*idmapper, error) {
 	if len(cfg.RootLayers) == 0 {
 		return nil, errors.New("guest config lists no root layers")
@@ -81,6 +85,11 @@ func overlayRoot(logger *slog.Logger, cfg *Config) (*idmapper, error) {
 		}
 	}
 
+	if mapper == nil {
+		if boot, err = copyBootFiles(); err != nil {
+			return nil, err
+		}
+	}
 	lowers := []string{boot}
 	for _, l := range slices.Backward(layers) {
 		lowers = append(lowers, l)
@@ -132,6 +141,63 @@ func idmapBoot(m IDMap, agentUID, agentGID uint32) (*idmapper, error) {
 		return nil, fmt.Errorf("idmap /: %w", err)
 	}
 	return &idmapper{shares: sharesNS}, nil
+}
+
+// copyBootFiles mounts a tmpfs at bootLowerDir with root-owned copies of the
+// files the host put in Dir and returns it. The boot root itself belongs to
+// the host user, who would otherwise own its directories, such as /etc, in
+// the overlay.
+func copyBootFiles() (string, error) {
+	if err := unix.Mount("tmpfs", bootLowerDir, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID, "mode=0755"); err != nil {
+		return "", fmt.Errorf("mount boot files tmpfs: %w", err)
+	}
+	dst := filepath.Join(bootLowerDir, Dir)
+	if err := os.Mkdir(dst, 0o755); err != nil { //nolint:gosec // G301: the guest binary must be executable by the agent
+		return "", fmt.Errorf("create %s: %w", dst, err)
+	}
+	entries, err := os.ReadDir(Dir)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", Dir, err)
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if err := copyFile(filepath.Join(Dir, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return "", err
+		}
+	}
+	return bootLowerDir, nil
+}
+
+// copyFile copies the regular file src to the new file dst with its
+// permission bits.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src) //nolint:gosec // G304: files jailoc put in its own directory
+	if err != nil {
+		return fmt.Errorf("open %s: %w", src, err)
+	}
+	defer func() { _ = in.Close() }()
+	fi, err := in.Stat()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", src, err)
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm()) //nolint:gosec // G302,G304: keeps the host's mode
+	if err != nil {
+		return fmt.Errorf("create %s: %w", dst, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("copy %s: %w", src, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", dst, err)
+	}
+	// The umask may have dropped bits of the host's mode.
+	if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
+		return fmt.Errorf("chmod %s: %w", dst, err)
+	}
+	return nil
 }
 
 // idmapLayers replaces each layer mount with an idmapped one that swaps the
@@ -187,10 +253,43 @@ func mountOverlay(target, dir string, lowers ...string) error {
 	}
 	opts := overlayOptions(lowers, upper, work)
 	if len(opts) > maxMountData {
-		return fmt.Errorf("overlay of %d layers exceeds the mount option limit", len(lowers))
+		return mountOverlayFS(target, upper, work, lowers)
 	}
 	if err := unix.Mount("overlay", target, "overlay", 0, opts); err != nil {
 		return fmt.Errorf("mount overlay at %s: %w", target, err)
+	}
+	return nil
+}
+
+// mountOverlayFS mounts an overlay like mountOverlay, but adds the lowers one
+// at a time with fsconfig(2), for images with more layers than the options
+// of mount(2) can list. lowerdir+ needs Linux 6.8.
+func mountOverlayFS(target, upper, work string, lowers []string) error {
+	fd, err := unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC)
+	if err != nil {
+		return fmt.Errorf("open overlay file system context: %w", err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	for _, l := range lowers {
+		if err := unix.FsconfigSetString(fd, "lowerdir+", l); err != nil {
+			return fmt.Errorf("add overlay lower %s: %w", l, err)
+		}
+	}
+	for key, value := range map[string]string{"upperdir": upper, "workdir": work} {
+		if err := unix.FsconfigSetString(fd, key, value); err != nil {
+			return fmt.Errorf("set overlay %s: %w", key, err)
+		}
+	}
+	if err := unix.FsconfigCreate(fd); err != nil {
+		return fmt.Errorf("create overlay of %d layers: %w", len(lowers), err)
+	}
+	mnt, err := unix.Fsmount(fd, unix.FSMOUNT_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("mount overlay: %w", err)
+	}
+	defer func() { _ = unix.Close(mnt) }()
+	if err := unix.MoveMount(mnt, "", unix.AT_FDCWD, target, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
+		return fmt.Errorf("move overlay to %s: %w", target, err)
 	}
 	return nil
 }

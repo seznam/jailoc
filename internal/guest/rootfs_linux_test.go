@@ -4,6 +4,8 @@ package guest
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"syscall"
 	"testing"
@@ -53,5 +55,35 @@ func TestSwapIDs(t *testing.T) {
 				t.Errorf("swapIDs(%d, %d) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "src"), filepath.Join(dir, "dst")
+	if err := os.WriteFile(src, []byte("guest"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Bits a umask of 022 or 077 would drop.
+	if err := os.Chmod(src, 0o775); err != nil { //nolint:gosec // G302: the mode under test
+		t.Fatal(err)
+	}
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	got, err := os.ReadFile(dst) //nolint:gosec // G304: test temp dir
+	if err != nil || string(got) != "guest" {
+		t.Fatalf("dst = %q, %v; want the source data", got, err)
+	}
+	fi, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o775 {
+		t.Errorf("dst mode %v, want 0775", fi.Mode())
+	}
+	if err := copyFile(src, dst); err == nil {
+		t.Error("copyFile replaced an existing file")
 	}
 }
