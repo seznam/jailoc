@@ -487,3 +487,35 @@ func TestLayersHavePath(t *testing.T) {
 		}
 	}
 }
+
+func TestImportImageOpaqueRootLayer(t *testing.T) {
+	t.Parallel()
+	base := layerTar(t,
+		layerEntry{hdr: tar.Header{Name: "old", Typeflag: tar.TypeReg, Mode: 0o644}, data: "o"},
+	)
+	top := layerTar(t,
+		layerEntry{hdr: tar.Header{Name: ".wh..wh..opq", Typeflag: tar.TypeReg, Mode: 0o644}},
+		layerEntry{hdr: tar.Header{Name: "new", Typeflag: tar.TypeReg, Mode: 0o644}, data: "n"},
+	)
+	cacheDir := t.TempDir()
+	ref := RootFSRef("sha256:opaqueroot")
+	saved := saveTarball(t, layeredImage(t, nil, base, top))
+	if err := ImportImage(context.Background(), cacheDir, ref, func(w io.Writer) error {
+		_, err := w.Write(saved)
+		return err
+	}, nil); err != nil {
+		t.Fatalf("ImportImage: %v", err)
+	}
+	_, m, err := readImage(cacheDir, ref)
+	if err != nil {
+		t.Fatalf("readImage: %v", err)
+	}
+	if want := []string{"000.erofs"}; !slices.Equal(m.Layers, want) {
+		t.Fatalf("layers = %v, want %v without the layer below the opaque root", m.Layers, want)
+	}
+	for p, want := range map[string]bool{"old": false, "new": true} {
+		if has, err := ImageHasFile(cacheDir, ref, p); err != nil || has != want {
+			t.Errorf("ImageHasFile(%s) = %v, %v; want %v", p, has, err, want)
+		}
+	}
+}

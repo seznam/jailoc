@@ -241,8 +241,21 @@ func convertImage(ctx context.Context, cacheDir, dst string, img v1.Image, hasLa
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	m := imageManifest{Env: cfg.Config.Env}
-	for i, d := range diffIDs {
-		name := fmt.Sprintf("%03d.erofs", i)
+	// overlayfs ignores the opaque mark of a lower layer's root, so a layer
+	// whose root is opaque starts the image without the layers below it.
+	first := 0
+	for i, d := range slices.Backward(diffIDs) {
+		opaque, err := rootOpaque(layerPath(cacheDir, d))
+		if err != nil {
+			return err
+		}
+		if opaque {
+			first = i
+			break
+		}
+	}
+	for _, d := range diffIDs[first:] {
+		name := fmt.Sprintf("%03d.erofs", len(m.Layers))
 		if err := os.Link(layerPath(cacheDir, d), filepath.Join(tmp, name)); err != nil {
 			return fmt.Errorf("link image layer: %w", err)
 		}
@@ -270,6 +283,24 @@ func convertImage(ctx context.Context, cacheDir, dst string, img v1.Image, hasLa
 		return fmt.Errorf("create image directory: %w", err)
 	}
 	return nil
+}
+
+// rootOpaque reports whether the root of the EROFS layer at name is opaque.
+func rootOpaque(name string) (bool, error) {
+	f, err := os.Open(name) //nolint:gosec // G304: layer inside jailoc's image cache
+	if err != nil {
+		return false, fmt.Errorf("open image layer: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	img, err := erofs.Open(f)
+	if err != nil {
+		return false, fmt.Errorf("open image layer %s: %w", name, err)
+	}
+	fi, err := lstat(img, ".")
+	if err != nil {
+		return false, fmt.Errorf("read image layer %s: %w", name, err)
+	}
+	return isOpaque(fi), nil
 }
 
 // addDirFixup adds the directory fixup layer of the image in the image
