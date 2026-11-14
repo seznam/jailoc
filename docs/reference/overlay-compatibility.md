@@ -22,7 +22,7 @@ jailoc-guest looks for the user with UID 1000 in the image's `/etc/passwd` and u
 
 The image keeps its own numeric owners, modes and extended attributes on every host: `/etc/shadow` keeps its `shadow` group, `sudo` stays setuid root, and files the image gives UID 1000 belong to the agent. The agent cannot create files outside its home, the shares, `/tmp` and `/var/tmp`: use `sudo` or bake changes into the image.
 
-If the guest kernel cannot idmap (possible only with a custom `[vm] runner` or `lib_dir` runtime), the agent runs as the host user's UID and GID, and jailoc-guest idmaps the image layers so that the agent's files in the image appear as the host user's. `sudo` does not grant root in that case.
+If the guest kernel cannot idmap (possible only with a custom `[vm] runner` or `lib_dir` runtime), the agent runs as the host user's UID and GID, and jailoc-guest idmaps the image layers so that the agent's files in the image appear as the host user's.
 
 ## Incompatible changes
 
