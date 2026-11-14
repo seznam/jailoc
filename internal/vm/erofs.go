@@ -2,10 +2,12 @@ package vm
 
 import (
 	"archive/tar"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"path"
 	"strings"
 	"time"
@@ -26,6 +28,11 @@ const (
 	// below; see writeDirFixup.
 	impliedXattr = "trusted.jailoc.implied"
 	paxXattr     = "SCHILY.xattr."
+	// AUFS layers keep the targets of hard links in aufsLinkDir at the
+	// root and other metadata in entries named with aufsMetaPrefix; none of
+	// it belongs in the root file system.
+	aufsMetaPrefix = ".wh..wh."
+	aufsLinkDir    = "/.wh..wh.plnk"
 )
 
 // Unix file type bits of EROFS inodes.
@@ -36,19 +43,39 @@ const (
 	sIFSOCK = 0o140000
 )
 
+// Limits on converting an image's layers, the ones the extraction into a
+// directory had: a small layer can hold vast files, since tar expands
+// sparse files, and the EROFS writer keeps every entry in memory.
+const (
+	maxImageBytes   = 30 << 30  // file data of the layers one import converts
+	maxLayerEntries = 1_000_000 // entries of one layer
+)
+
+// convertLimits is what the layers still to convert may use.
+type convertLimits struct {
+	bytes   int64 // file data, shared by all layers
+	entries int   // entries of each layer
+}
+
+func newConvertLimits() *convertLimits {
+	return &convertLimits{bytes: maxImageBytes, entries: maxLayerEntries}
+}
+
 // writeLayerEROFS converts the uncompressed OCI layer tarball r into an
 // EROFS image written to out, for use as an overlayfs lower layer. File data
-// is spooled in tmpDir until the image is written. The image keeps the
-// numeric owners, modes (setuid, setgid, sticky), xattrs, hard links and
-// device nodes of the tarball.
-func writeLayerEROFS(r io.Reader, out io.WriteSeeker, tmpDir string) error {
+// is spooled in tmpDir until the image is written, and counts against lim.
+// The image keeps the numeric owners, modes (setuid, setgid, sticky),
+// xattrs, hard links and device nodes of the tarball.
+func writeLayerEROFS(ctx context.Context, r io.Reader, out io.WriteSeeker, tmpDir string, lim *convertLimits) error {
 	c := &layerConverter{
+		ctx:       ctx,
 		w:         erofs.Create(out, erofs.WithTempDir(tmpDir), erofs.WithBuildTime(0, 0)),
+		lim:       lim,
 		whiteouts: map[string]bool{},
 		implied:   map[string]bool{},
 	}
 	tr := tar.NewReader(r)
-	for {
+	for entries := 0; ; entries++ {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			break
@@ -56,9 +83,26 @@ func writeLayerEROFS(r io.Reader, out io.WriteSeeker, tmpDir string) error {
 		if err != nil {
 			return fmt.Errorf("read layer: %w", err)
 		}
+		if entries == lim.entries {
+			return fmt.Errorf("layer has more than %d entries", lim.entries)
+		}
+		switch hdr.Typeflag {
+		case tar.TypeXGlobalHeader:
+			// PAX records for the entries that follow, which tar.Reader
+			// does not apply and Docker ignores as well.
+			continue
+		case tar.TypeGNUSparse, tar.TypeCont:
+			// tar.Reader returns the data of a sparse file with its holes
+			// filled in; a contiguous file is a regular one.
+			hdr.Typeflag = tar.TypeReg
+		}
 		if err := c.add(hdr, tr); err != nil {
 			return fmt.Errorf("layer entry %s: %w", hdr.Name, err)
 		}
+	}
+	// Hard links into the AUFS link directory keep their data.
+	if err := c.replace(aufsLinkDir, false); err != nil {
+		return err
 	}
 	if err := c.markImplied(); err != nil {
 		return err
@@ -73,7 +117,9 @@ func writeLayerEROFS(r io.Reader, out io.WriteSeeker, tmpDir string) error {
 }
 
 type layerConverter struct {
-	w *erofs.Writer
+	ctx context.Context
+	w   *erofs.Writer
+	lim *convertLimits
 	// whiteouts are the paths the layer deletes from the layers below. An
 	// entry of the layer itself at such a path replaces the whiteout, and a
 	// directory there must hide the lower directory's content.
@@ -91,6 +137,8 @@ func (c *layerConverter) add(hdr *tar.Header, r io.Reader) error {
 	dir, base := path.Split(name)
 	dir = path.Clean(dir)
 	switch {
+	case name == aufsLinkDir || strings.HasPrefix(name, aufsLinkDir+"/"):
+		// Kept as hard link targets until the whole layer is read.
 	case base == opaqueWhiteout:
 		// The marker may precede the directory's own entry or stand in for
 		// it; a later entry sets the metadata and keeps the mark.
@@ -98,8 +146,17 @@ func (c *layerConverter) add(hdr *tar.Header, r io.Reader) error {
 			return err
 		}
 		return c.w.Setxattr(dir, overlayOpaque, "y")
+	case strings.HasPrefix(base, aufsMetaPrefix):
+		// Other AUFS metadata.
+		return nil
 	case strings.HasPrefix(base, whiteoutPrefix):
 		return c.whiteout(path.Join(dir, strings.TrimPrefix(base, whiteoutPrefix)))
+	}
+	if hdr.Typeflag == tar.TypeReg {
+		if hdr.Size > c.lim.bytes {
+			return fmt.Errorf("file data of the image exceeds %d GiB", maxImageBytes>>30)
+		}
+		c.lim.bytes -= hdr.Size
 	}
 	if err := c.parentDir(dir); err != nil {
 		return err
@@ -216,7 +273,9 @@ func (c *layerConverter) create(name string, hdr *tar.Header, r io.Reader) error
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(f, r); err != nil {
+		// Holes of sparse files never reach the layer stream, so the data
+		// itself must stop on cancellation.
+		if _, err := io.Copy(f, ctxReader{ctx: c.ctx, r: r}); err != nil {
 			_ = f.Close()
 			return fmt.Errorf("copy data: %w", err)
 		}
@@ -237,6 +296,10 @@ func (c *layerConverter) metadata(name string, hdr *tar.Header) error {
 		if err := c.w.Chmod(name, hdr.FileInfo().Mode()); err != nil {
 			return err
 		}
+	}
+	// The EROFS writer would truncate larger IDs to 32 bits.
+	if hdr.Uid < 0 || hdr.Uid > math.MaxUint32 || hdr.Gid < 0 || hdr.Gid > math.MaxUint32 {
+		return fmt.Errorf("owner %d:%d out of range", hdr.Uid, hdr.Gid)
 	}
 	if err := c.w.Chown(name, hdr.Uid, hdr.Gid); err != nil {
 		return err

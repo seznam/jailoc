@@ -3,6 +3,8 @@ package vm
 import (
 	"archive/tar"
 	"bytes"
+	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -54,7 +56,7 @@ func layerImage(t *testing.T, layer []byte) fs.FS {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.Close() })
-	if err := writeLayerEROFS(bytes.NewReader(layer), f, dir); err != nil {
+	if err := writeLayerEROFS(context.Background(), bytes.NewReader(layer), f, dir, newConvertLimits()); err != nil {
 		t.Fatalf("writeLayerEROFS: %v", err)
 	}
 	img, err := erofs.Open(f)
@@ -233,34 +235,178 @@ func TestWriteLayerEROFSWhiteouts(t *testing.T) {
 	}
 }
 
+// convertTestLayer converts layer with lim, under a canceled context when
+// canceled is set.
+func convertTestLayer(t *testing.T, layer []byte, lim *convertLimits, canceled bool) error {
+	t.Helper()
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, "layer.erofs")) //nolint:gosec // G304: test temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if canceled {
+		cancel()
+	}
+	return writeLayerEROFS(ctx, bytes.NewReader(layer), f, dir, lim)
+}
+
 func TestWriteLayerEROFSRejects(t *testing.T) {
 	t.Parallel()
-	for name, layer := range map[string][]byte{
-		"entry below a symlink": layerTar(t,
+	file := func(name, data string) layerEntry {
+		return layerEntry{hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644}, data: data}
+	}
+	for _, tt := range []struct {
+		name     string
+		layer    []byte
+		lim      convertLimits
+		canceled bool
+		want     string
+	}{
+		{name: "entry below a symlink", layer: layerTar(t,
 			layerEntry{hdr: tar.Header{Name: "lib", Typeflag: tar.TypeSymlink, Linkname: "/etc"}},
-			layerEntry{hdr: tar.Header{Name: "lib/passwd", Typeflag: tar.TypeReg, Mode: 0o644}, data: "x"}),
-		"hard link to a missing file": layerTar(t,
-			layerEntry{hdr: tar.Header{Name: "a", Typeflag: tar.TypeLink, Linkname: "missing"}}),
-		"root whiteout": layerTar(t,
-			layerEntry{hdr: tar.Header{Name: ".wh.", Typeflag: tar.TypeReg}}),
+			file("lib/passwd", "x")), want: "layer entry lib/passwd"},
+		{name: "hard link to a missing file", layer: layerTar(t,
+			layerEntry{hdr: tar.Header{Name: "a", Typeflag: tar.TypeLink, Linkname: "missing"}}), want: "layer entry a"},
+		{name: "root whiteout", layer: layerTar(t, file(".wh.", "")), want: "layer entry .wh."},
+		{name: "owner beyond 32 bits", layer: layerTar(t,
+			layerEntry{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644, Uid: 1 << 32}}), want: "owner 4294967296:0 out of range"},
+		{name: "too many entries", layer: layerTar(t, file("a", ""), file("b", ""), file("c", "")),
+			lim: convertLimits{bytes: maxImageBytes, entries: 2}, want: "more than 2 entries"},
+		{name: "too much data", layer: layerTar(t, file("a", "abc"), file("b", "de")),
+			lim: convertLimits{bytes: 4, entries: maxLayerEntries}, want: "layer entry b: file data of the image exceeds"},
+		{name: "canceled", layer: layerTar(t, file("a", "abc")), canceled: true, want: "context canceled"},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			dir := t.TempDir()
-			f, err := os.Create(filepath.Join(dir, "layer.erofs")) //nolint:gosec // G304: test temp dir
-			if err != nil {
-				t.Fatal(err)
+			lim := tt.lim
+			if lim == (convertLimits{}) {
+				lim = *newConvertLimits()
 			}
-			defer func() { _ = f.Close() }()
-			err = writeLayerEROFS(bytes.NewReader(layer), f, dir)
+			err := convertTestLayer(t, tt.layer, &lim, tt.canceled)
 			if err == nil {
 				t.Fatal("writeLayerEROFS succeeded")
 			}
-			if !strings.Contains(err.Error(), "layer entry") {
-				t.Errorf("error %q does not name the entry", err)
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q, want it to contain %q", err, tt.want)
 			}
 		})
 	}
+}
+
+func TestWriteLayerEROFSSharesDataLimit(t *testing.T) {
+	t.Parallel()
+	lim := &convertLimits{bytes: 5, entries: maxLayerEntries}
+	layer := layerTar(t, layerEntry{hdr: tar.Header{Name: "a", Typeflag: tar.TypeReg, Mode: 0o644}, data: "abc"})
+	if err := convertTestLayer(t, layer, lim, false); err != nil {
+		t.Fatalf("first layer: %v", err)
+	}
+	if lim.bytes != 2 {
+		t.Errorf("%d bytes left, want 2", lim.bytes)
+	}
+	if err := convertTestLayer(t, layer, lim, false); err == nil {
+		t.Fatal("second layer stayed within the limit of the first")
+	}
+}
+
+func TestWriteLayerEROFSTarFormats(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, e := range []layerEntry{
+		{hdr: tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": "x"}}},
+		{hdr: tar.Header{Name: "contiguous", Typeflag: tar.TypeCont, Mode: 0o644, Size: 1}, data: "c"},
+	} {
+		e.hdr.Format = tar.FormatPAX
+		if err := tw.WriteHeader(&e.hdr); err != nil {
+			t.Fatalf("write header %s: %v", e.hdr.Name, err)
+		}
+		if _, err := io.WriteString(tw, e.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	buf.Write(gnuSparseEntry(t, "sparse", 4096, "abc"))
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	img := layerImage(t, buf.Bytes())
+	for name, want := range map[string]string{
+		"contiguous": "c",
+		"sparse":     strings.Repeat("\x00", 4096) + "abc",
+	} {
+		got, err := fs.ReadFile(img, name)
+		if err != nil || string(got) != want {
+			t.Errorf("%s: %d bytes, err %v; want %d bytes", name, len(got), err, len(want))
+		}
+	}
+	if _, err := fs.Stat(img, "pax_global_header"); err == nil {
+		t.Error("the global header must not appear in the image")
+	}
+}
+
+// gnuSparseEntry returns an old GNU sparse file entry, which tar.Writer does
+// not write, holding data after a hole of the given size.
+func gnuSparseEntry(t *testing.T, name string, hole int, data string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(data)), ModTime: time.Unix(1700000000, 0), Format: tar.FormatGNU}
+	if err := tw.WriteHeader(&hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(tw, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	octal := func(off, size int, v int) {
+		copy(b[off:off+size], fmt.Sprintf("%0*o\x00", size-1, v))
+	}
+	b[156] = tar.TypeGNUSparse
+	octal(386, 12, hole)           // first sparse entry: offset
+	octal(398, 12, len(data))      // and length of the data
+	octal(483, 12, hole+len(data)) // real size
+	copy(b[148:156], "        ")
+	sum := 0
+	for _, c := range b[:512] {
+		sum += int(c)
+	}
+	copy(b[148:156], fmt.Sprintf("%06o\x00 ", sum))
+	return b
+}
+
+func TestWriteLayerEROFSAUFSMetadata(t *testing.T) {
+	t.Parallel()
+	img := layerImage(t, layerTar(t,
+		layerEntry{hdr: tar.Header{Name: ".wh..wh.plnk/", Typeflag: tar.TypeDir, Mode: 0o700}},
+		layerEntry{hdr: tar.Header{Name: ".wh..wh.plnk/123.4", Typeflag: tar.TypeReg, Mode: 0o755}, data: "tool"},
+		layerEntry{hdr: tar.Header{Name: ".wh..wh.aufs", Typeflag: tar.TypeReg}},
+		layerEntry{hdr: tar.Header{Name: "usr/.wh..wh.orph", Typeflag: tar.TypeDir, Mode: 0o700}},
+		layerEntry{hdr: tar.Header{Name: "usr/bin/tool", Typeflag: tar.TypeLink, Linkname: ".wh..wh.plnk/123.4"}},
+	))
+	for _, name := range []string{".wh..wh.plnk", ".wh.plnk", ".wh..wh.aufs", ".wh.aufs", "usr/.wh..wh.orph", "usr/.wh.orph"} {
+		if _, err := lstatLayerErr(img, name); err == nil {
+			t.Errorf("%s must not appear in the image", name)
+		}
+	}
+	fi, _ := lstatLayer(t, img, "usr/bin/tool")
+	if got, err := fs.ReadFile(img, "usr/bin/tool"); err != nil || string(got) != "tool" || fi.Mode().Perm() != 0o755 {
+		t.Errorf("usr/bin/tool: %q, %v, mode %v; want the hard link target's data and mode", got, err, fi.Mode())
+	}
+}
+
+func lstatLayerErr(img fs.FS, name string) (fs.FileInfo, error) {
+	return img.(interface {
+		Lstat(string) (fs.FileInfo, error)
+	}).Lstat(name)
 }
 
 func TestWriteLayerEROFSImpliedDirs(t *testing.T) {

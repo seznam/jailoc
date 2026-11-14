@@ -228,8 +228,9 @@ func convertImage(ctx context.Context, cacheDir, dst string, img v1.Image, hasLa
 		}
 	}
 	report(0)
+	lim := newConvertLimits()
 	for n, i := range missing {
-		if err := convertLayer(ctx, cacheDir, layers[i], diffIDs[i]); err != nil {
+		if err := convertLayer(ctx, cacheDir, layers[i], diffIDs[i], lim); err != nil {
 			return err
 		}
 		report(n + 1)
@@ -344,7 +345,7 @@ func addDirFixup(dir string, m *imageManifest) error {
 
 // convertLayer converts layer to its EROFS image in the cache, checking that
 // its content matches diffID.
-func convertLayer(ctx context.Context, cacheDir string, layer v1.Layer, diffID v1.Hash) error {
+func convertLayer(ctx context.Context, cacheDir string, layer v1.Layer, diffID v1.Hash, lim *convertLimits) error {
 	rc, err := layer.Uncompressed()
 	if err != nil {
 		return fmt.Errorf("read layer %s: %w", diffID, err)
@@ -361,7 +362,7 @@ func convertLayer(ctx context.Context, cacheDir string, layer v1.Layer, diffID v
 	}()
 	h := sha256.New()
 	r := io.TeeReader(ctxReader{ctx: ctx, r: rc}, h)
-	if err := writeLayerEROFS(r, f, dir); err != nil {
+	if err := writeLayerEROFS(ctx, r, f, dir, lim); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("convert layer %s: %w", diffID, ctxErr)
 		}

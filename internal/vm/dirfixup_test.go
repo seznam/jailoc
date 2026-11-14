@@ -63,7 +63,9 @@ func TestImageDirFixup(t *testing.T) {
 	for _, d := range fixup {
 		got[d.name] = d.meta
 	}
-	if want := []string{"gone", "keep", "keep/sub", "opt", "opt/private", "swap"}; !slices.Equal(slices.Sorted(maps.Keys(got)), want) {
+	// Directories deleted below, such as gone, keep/sub and swap, are new and
+	// need no fixup.
+	if want := []string{"keep", "opt", "opt/private"}; !slices.Equal(slices.Sorted(maps.Keys(got)), want) {
 		t.Fatalf("fixup directories = %v, want %v", slices.Sorted(maps.Keys(got)), want)
 	}
 	for _, tt := range []struct {
@@ -75,10 +77,6 @@ func TestImageDirFixup(t *testing.T) {
 		{"opt", 0o755, 0},
 		{"opt/private", 0o700, 1000},
 		{"keep", 0o770 | fs.ModeSetgid, 1000},
-		// Deleted below, so new.
-		{"gone", 0o755, 0},
-		{"keep/sub", 0o755, 0},
-		{"swap", 0o755, 0},
 	} {
 		m := got[tt.name]
 		if m.mode != fs.ModeDir|tt.mode || m.uid != tt.uid || m.gid != tt.uid {
@@ -89,9 +87,12 @@ func TestImageDirFixup(t *testing.T) {
 		t.Errorf("opt/private: mtime %v xattrs %v, want %v and the lower layer's xattrs", m.mtime, m.xattrs, mtime)
 	}
 
-	// Layers without implied directories need no fixup.
-	if fixup, err := imageDirFixup([]fs.FS{base}); err != nil || len(fixup) != 0 {
-		t.Errorf("imageDirFixup(base) = %v, %v; want none", fixup, err)
+	// Layers without implied directories, or with none found below, need no
+	// fixup.
+	for name, layers := range map[string][]fs.FS{"base": {base}, "top": {top}} {
+		if fixup, err := imageDirFixup(layers); err != nil || len(fixup) != 0 {
+			t.Errorf("imageDirFixup(%s) = %v, %v; want none", name, fixup, err)
+		}
 	}
 }
 

@@ -93,13 +93,16 @@ func replayLayer(dirs map[string]dirState, l fs.FS) error {
 		if name == "." {
 			return nil
 		}
-		_, implied := xattr(fi, impliedXattr)
-		if d, ok := dirs[name]; ok && implied {
-			d.implied = true
-			dirs[name] = d
-			return nil
+		// An implied directory keeps the metadata of one below; with none
+		// below, its own metadata applies, as the extraction would create it.
+		if _, implied := xattr(fi, impliedXattr); implied {
+			if d, ok := dirs[name]; ok {
+				d.implied = true
+				dirs[name] = d
+				return nil
+			}
 		}
-		dirs[name] = dirState{meta: metaOf(fi), implied: implied}
+		dirs[name] = dirState{meta: metaOf(fi)}
 		return nil
 	})
 }
