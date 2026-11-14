@@ -129,6 +129,9 @@ type Config struct {
 	// as the agent in its home and the shares. Without it, or when the guest
 	// kernel cannot idmap, the agent takes the host user's IDs.
 	IDMap *IDMap `json:"idmap,omitempty"`
+	// hostIDs is set when the guest kernel cannot idmap and UID and GID
+	// were replaced by the host user's IDs.
+	hostIDs bool //nolint:unused // set and read only by the Linux guest
 	// RootShare is the virtio-fs tag of the workspace image's root file
 	// system, shared read-only. The boot root file system then holds only
 	// jailoc's own files, and the guest assembles its root as an overlay of

@@ -88,3 +88,79 @@ func TestWakeListener(t *testing.T) {
 	}
 	_ = serverConn.Close()
 }
+
+func TestEnsureAccount(t *testing.T) {
+	t.Parallel()
+	const imagePasswd = "root:x:0:0:root:/root:/bin/bash\nagent:x:1000:1000::/home/agent:/bin/bash\n" //nolint:gosec // G101: passwd fixture, no credentials
+	const imageGroup = "root:x:0:\nagent:x:1000:\n"
+	tests := []struct {
+		name       string
+		cfg        Config
+		passwd     string
+		wantGID    uint32
+		wantPasswd string
+		wantGroup  string
+	}{
+		{
+			name:       "image entry keeps its GID",
+			cfg:        Config{User: "agent", UID: 1000, GID: 1002, Home: "/home/agent"},
+			passwd:     imagePasswd,
+			wantGID:    1000,
+			wantPasswd: imagePasswd,
+			wantGroup:  imageGroup,
+		},
+		{ //nolint:gosec // G101: passwd fixture, no credentials
+			name:       "host IDs replace the image GID",
+			cfg:        Config{User: "agent", UID: 1000, GID: 1002, Home: "/home/agent", hostIDs: true},
+			passwd:     imagePasswd,
+			wantGID:    1002,
+			wantPasswd: "root:x:0:0:root:/root:/bin/bash\nagent:x:1000:1002::/home/agent:/bin/bash\n",
+			wantGroup:  "root:x:0:\nagent:x:1002:\n",
+		},
+		{
+			name:       "host IDs matching the image leave files alone",
+			cfg:        Config{User: "agent", UID: 1000, GID: 1000, Home: "/home/agent", hostIDs: true},
+			passwd:     imagePasswd,
+			wantGID:    1000,
+			wantPasswd: imagePasswd,
+			wantGroup:  imageGroup,
+		},
+		{ //nolint:gosec // G101: passwd fixture, no credentials
+			name:       "named entry is renumbered",
+			cfg:        Config{User: "agent", UID: 1001, GID: 1002, Home: "/home/agent"},
+			passwd:     imagePasswd,
+			wantGID:    1002,
+			wantPasswd: "root:x:0:0:root:/root:/bin/bash\nagent:x:1001:1002::/home/agent:/bin/bash\n",
+			wantGroup:  "root:x:0:\nagent:x:1002:\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			etc := t.TempDir()
+			if err := os.WriteFile(filepath.Join(etc, "passwd"), []byte(tt.passwd), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(etc, "group"), []byte(imageGroup), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := tt.cfg
+			acct, err := ensureAccount(&cfg, etc)
+			if err != nil {
+				t.Fatalf("ensureAccount: %v", err)
+			}
+			if acct.name != "agent" || acct.uid != cfg.UID || acct.gid != tt.wantGID {
+				t.Errorf("account = %+v, want agent %d:%d", acct, cfg.UID, tt.wantGID)
+			}
+			for file, want := range map[string]string{"passwd": tt.wantPasswd, "group": tt.wantGroup} {
+				got, err := os.ReadFile(filepath.Join(etc, file)) //nolint:gosec // G304: test file
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != want {
+					t.Errorf("%s = %q, want %q", file, got, want)
+				}
+			}
+		})
+	}
+}
