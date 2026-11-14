@@ -33,7 +33,7 @@ cat /sys/kernel/security/lsm
 If it is missing, add `landlock` to the `lsm=` kernel parameter.
 
 !!! note "Linux file ownership"
-    On Linux, libkrun's virtio-fs shows the real host owner of every file, so `jailoc-guest` mounts the VM's root filesystem and the shares idmapped: inside the VM your files appear as root's or the agent's, and on the host everything belongs to your user. Root inside the VM cannot give a shared file another host owner. If the guest kernel rejects idmapped mounts, the agent falls back to your user's UID and GID and `sudo` does not grant root.
+    On Linux, libkrun's virtio-fs shows the real host owner of every file, so `jailoc-guest` mounts the boot root (jailoc's own files) and the shares idmapped: inside the VM your files appear as root's or the agent's, and on the host everything belongs to your user. The image layers keep the image's own owners. Root inside the VM cannot give a shared file another host owner. If the guest kernel rejects idmapped mounts, the agent falls back to your user's UID and GID, `jailoc-guest` idmaps the image layers so that the agent's files in the image appear as yours, and `sudo` does not grant root.
 
 Other platforms, including Intel Macs, are unsupported. If you build the [go-microvm](https://github.com/stacklok/go-microvm) runner and libkrun yourself, point jailoc at them in the [`[vm]` section](../reference/configuration.md):
 

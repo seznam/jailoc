@@ -16,9 +16,9 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 **3. Runtime check.** On first use jailoc unpacks the VM runtime embedded in its binary (`jailoc-vm-runner`, libkrun and the libkrunfw guest kernel) into its cache. Supported hosts are Apple Silicon Macs (Hypervisor.framework) and Linux on amd64 or, experimentally, arm64 (KVM).
 
-**4. Image build and export.** The workspace image is built with Docker, either on the host daemon or inside a builder VM, then exported and unpacked into a local image cache. See [Image Resolution](../reference/image-resolution.md).
+**4. Image build and export.** The workspace image is built with Docker, either on the host daemon or inside a builder VM, then exported and converted into read-only EROFS layer images in a local image cache. See [Image Resolution](../reference/image-resolution.md).
 
-**5. VM start.** A detached supervisor starts the network broker and boots the VM from a small root file system that holds `jailoc-guest`; the cached image is shared into the VM read-only and writes to the root file system stay in VM memory. `jailoc-guest`, the VM's init process, mounts the shares, prepares the `agent` user and starts an SSH server. jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
+**5. VM start.** A detached supervisor starts the network broker and boots the VM from a small root file system that holds `jailoc-guest`; the cached image layers are shared into the VM read-only and writes to the root file system stay in VM memory. `jailoc-guest`, the VM's init process, mounts the layers as an overlay over the boot root, mounts the shares, prepares the `agent` user and starts an SSH server. jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
 
 Sessions run over SSH: `jailoc` attaches to a running agent session or starts a new one. The host publishes no agent port, so nothing outside jailoc can reach the agent. See [Manage sessions](../how-to/sessions.md).
 

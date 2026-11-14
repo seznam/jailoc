@@ -3,12 +3,16 @@
 package guest
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -17,31 +21,33 @@ import (
 // system.
 const (
 	overlayDir    = Dir + "/overlay"
-	imageShareDir = overlayDir + "/share" // the image share as mounted
+	imageShareDir = overlayDir + "/share" // the share with the image's layer images
+	layerDir      = overlayDir + "/l"     // one EROFS mount per layer, named by its index
 	bootLowerDir  = overlayDir + "/boot"  // idmapped boot root
-	imageLowerDir = overlayDir + "/image" // idmapped image share
-	homeLowerDir  = overlayDir + "/home"  // the image's agent home, idmapped to the agent
 	upperDir      = overlayDir + "/rw"    // tmpfs with the upper and work directories
 )
 
-// overlayLayers are the lower layers of the root overlay. home is empty when
-// the agent's home needs no overlay of its own.
-type overlayLayers struct{ boot, image, home string }
+// maxMountData is the most option bytes mount(2) passes to a file system.
+const maxMountData = 4095
 
 // overlayRoot replaces the boot root file system, which holds only jailoc's
-// files, with an overlay of it over the image shared read-only under
-// cfg.RootShare. Writes go to a tmpfs and last until the VM stops, like the
-// copy of the image the boot root replaces. With cfg.IDMap the layers are
-// idmapped as in idmapRoot and the returned idmapper serves the shares; when
-// the kernel cannot idmap, cfg takes the host user's IDs instead.
+// files, with an overlay of it over the image's EROFS layer images in the
+// share cfg.RootShare. Writes go to a tmpfs and last until the VM stops. The
+// layer images keep the image's own owners, so only the boot root is
+// idmapped, with cfg.IDMap, so that the host user's files belong to root;
+// the returned idmapper serves the shares. When the kernel cannot idmap the
+// boot root, cfg takes the host user's IDs instead, and the layers are
+// idmapped so that the agent's files in the image belong to the host user.
 func overlayRoot(logger *slog.Logger, cfg *Config) (*idmapper, error) {
-	for _, dir := range []string{imageShareDir, bootLowerDir, imageLowerDir, homeLowerDir, upperDir, newRootDir} {
+	if len(cfg.RootLayers) == 0 {
+		return nil, errors.New("guest config lists no root layers")
+	}
+	for _, dir := range []string{imageShareDir, bootLowerDir, upperDir, newRootDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create %s: %w", dir, err)
 		}
 	}
-	// No nosuid: the image's setuid programs, such as sudo, keep working.
-	if err := unix.Mount(cfg.RootShare, imageShareDir, "virtiofs", unix.MS_RDONLY|unix.MS_NODEV, ""); err != nil {
+	if err := unix.Mount(cfg.RootShare, imageShareDir, "virtiofs", unix.MS_RDONLY|unix.MS_NODEV|unix.MS_NOSUID, ""); err != nil {
 		return nil, fmt.Errorf("mount image share: %w", err)
 	}
 	// pivot_root refuses a shared parent mount.
@@ -51,87 +57,122 @@ func overlayRoot(logger *slog.Logger, cfg *Config) (*idmapper, error) {
 	if err := unix.Mount("tmpfs", upperDir, "tmpfs", 0, "mode=0755"); err != nil {
 		return nil, fmt.Errorf("mount overlay upper tmpfs: %w", err)
 	}
+	layers, err := mountLayers(cfg.RootLayers)
+	if err != nil {
+		return nil, err
+	}
 
 	var mapper *idmapper
-	layers := overlayLayers{boot: "/", image: imageShareDir}
+	boot := "/"
 	if cfg.IDMap != nil {
-		m, idmapped, err := idmappedLayers(*cfg.IDMap, cfg.Home, cfg.UID, cfg.GID)
+		m, err := idmapBoot(*cfg.IDMap, cfg.UID, cfg.GID)
 		if err != nil {
 			// Without idmapped mounts the agent runs with the host user's IDs,
 			// so its files on virtio-fs keep their owner.
 			logger.Warn("idmapped mounts unavailable; running the agent with the host user's IDs", "error", err)
+			if err := idmapLayers(layers, cfg.UID, cfg.GID, cfg.IDMap.UID, cfg.IDMap.GID); err != nil {
+				logger.Warn("idmap image layers; the agent may not own its home directory", "error", err)
+			}
 			cfg.UID, cfg.GID = cfg.IDMap.UID, cfg.IDMap.GID
 			cfg.IDMap = nil
 		} else {
-			mapper, layers = m, idmapped
+			mapper, boot = m, bootLowerDir
 		}
 	}
 
-	if err := mountOverlay(newRootDir, filepath.Join(upperDir, "root"), layers.boot, layers.image); err != nil {
+	lowers := []string{boot}
+	for _, l := range slices.Backward(layers) {
+		lowers = append(lowers, l)
+	}
+	if err := mountOverlay(newRootDir, filepath.Join(upperDir, "root"), lowers...); err != nil {
 		mapper.close()
 		return nil, err
-	}
-	if layers.home != "" {
-		if err := mountHomeOverlay(filepath.Join(newRootDir, cfg.Home), filepath.Join(upperDir, "home"), layers.home); err != nil {
-			_ = unix.Unmount(newRootDir, unix.MNT_DETACH)
-			mapper.close()
-			return nil, err
-		}
 	}
 	if err := switchRoot(newRootDir); err != nil {
 		mapper.close()
 		return nil, err
 	}
-	logger.Info("overlay root filesystem", "idmapped", mapper != nil)
+	logger.Info("overlay root filesystem", "layers", len(layers), "idmapped", mapper != nil)
 	return mapper, nil
 }
 
-// idmappedLayers attaches the boot root and the image idmapped so that the
-// host user's files belong to root, and the image's agent home, when it has
-// one, so that they belong to the agent. Nothing stays attached when it
-// fails.
-func idmappedLayers(m IDMap, home string, agentUID, agentGID uint32) (_ *idmapper, _ overlayLayers, err error) {
-	// Looking up the home also waits for the image share's FUSE INIT reply,
-	// which idmapped mounts require.
-	imageHome := filepath.Join(imageShareDir, home)
-	info, statErr := os.Stat(imageHome)
-	hasHome := statErr == nil && info.IsDir()
+// mountLayers mounts the EROFS layer images in the image share read-only
+// and returns their mount points, the bottom layer first. The kernel reads
+// the images straight from the share, without loop devices.
+func mountLayers(names []string) ([]string, error) {
+	dirs := make([]string, 0, len(names))
+	for i, name := range names {
+		if name != filepath.Base(name) || strings.HasPrefix(name, ".") {
+			return nil, fmt.Errorf("invalid layer name %q", name)
+		}
+		dir := filepath.Join(layerDir, strconv.Itoa(i))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create %s: %w", dir, err)
+		}
+		// No nosuid: the image's setuid programs, such as sudo, keep working.
+		if err := unix.Mount(filepath.Join(imageShareDir, name), dir, "erofs", unix.MS_RDONLY|unix.MS_NODEV, ""); err != nil {
+			return nil, fmt.Errorf("mount image layer %s: %w", name, err)
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs, nil
+}
 
+// idmapBoot attaches the boot root idmapped so that the host user's files
+// belong to root, and returns the idmapper for the shares.
+func idmapBoot(m IDMap, agentUID, agentGID uint32) (*idmapper, error) {
 	rootNS, sharesNS, err := idNamespaces(m, agentUID, agentGID)
 	if err != nil {
-		return nil, overlayLayers{}, err
+		return nil, err
 	}
 	defer func() { _ = rootNS.Close() }()
-	var attached []string
-	defer func() {
-		if err != nil {
-			for _, dir := range slices.Backward(attached) {
-				_ = unix.Unmount(dir, unix.MNT_DETACH)
-			}
-			_ = sharesNS.Close()
-		}
-	}()
-	attach := func(src, dst string, ns *os.File) error {
-		if err := attachIdmapped(src, dst, ns); err != nil {
-			return fmt.Errorf("idmap %s: %w", src, err)
-		}
-		attached = append(attached, dst)
+	if err := attachIdmapped("/", bootLowerDir, rootNS); err != nil {
+		_ = sharesNS.Close()
+		return nil, fmt.Errorf("idmap /: %w", err)
+	}
+	return &idmapper{shares: sharesNS}, nil
+}
+
+// idmapLayers replaces each layer mount with an idmapped one that swaps the
+// agent's IDs with the host user's, leaving all other IDs as they are.
+func idmapLayers(layers []string, agentUID, agentGID, hostUID, hostGID uint32) error {
+	if agentUID == hostUID && agentGID == hostGID {
 		return nil
 	}
-	layers := overlayLayers{boot: bootLowerDir, image: imageLowerDir}
-	if err = attach("/", bootLowerDir, rootNS); err != nil {
-		return nil, overlayLayers{}, err
+	ns, err := userNamespace(swapIDs(agentUID, hostUID), swapIDs(agentGID, hostGID))
+	if err != nil {
+		return err
 	}
-	if err = attach(imageShareDir, imageLowerDir, rootNS); err != nil {
-		return nil, overlayLayers{}, err
-	}
-	if hasHome {
-		if err = attach(imageHome, homeLowerDir, sharesNS); err != nil {
-			return nil, overlayLayers{}, err
+	defer func() { _ = ns.Close() }()
+	for _, dir := range layers {
+		if err := attachIdmapped(dir, dir, ns); err != nil {
+			return fmt.Errorf("idmap %s: %w", dir, err)
 		}
-		layers.home = homeLowerDir
 	}
-	return &idmapper{shares: sharesNS}, layers, nil
+	return nil
+}
+
+// swapIDs returns ID mappings, in the form userNamespace takes, that
+// exchange a and b and map every other valid ID to itself.
+func swapIDs(a, b uint32) []syscall.SysProcIDMap {
+	var maps []syscall.SysProcIDMap
+	identity := func(from, to uint32) { // [from, to)
+		if from < to {
+			maps = append(maps, syscall.SysProcIDMap{ContainerID: int(from), HostID: int(from), Size: int(to - from)})
+		}
+	}
+	if a == b {
+		// The ID 2^32-1 is invalid and cannot be mapped.
+		identity(0, math.MaxUint32)
+		return maps
+	}
+	lo, hi := min(a, b), max(a, b)
+	identity(0, lo)
+	maps = append(maps, syscall.SysProcIDMap{ContainerID: int(lo), HostID: int(hi), Size: 1})
+	identity(lo+1, hi)
+	maps = append(maps, syscall.SysProcIDMap{ContainerID: int(hi), HostID: int(lo), Size: 1})
+	identity(hi+1, math.MaxUint32)
+	return maps
 }
 
 // mountOverlay mounts an overlay of lowers, the first on top, at target with
@@ -143,31 +184,14 @@ func mountOverlay(target, dir string, lowers ...string) error {
 			return fmt.Errorf("create %s: %w", d, err)
 		}
 	}
-	if err := unix.Mount("overlay", target, "overlay", 0, overlayOptions(lowers, upper, work)); err != nil {
+	opts := overlayOptions(lowers, upper, work)
+	if len(opts) > maxMountData {
+		return fmt.Errorf("overlay of %d layers exceeds the mount option limit", len(lowers))
+	}
+	if err := unix.Mount("overlay", target, "overlay", 0, opts); err != nil {
 		return fmt.Errorf("mount overlay at %s: %w", target, err)
 	}
 	return nil
-}
-
-// mountHomeOverlay mounts an overlay of the agent home lower at target. Its
-// upper directory takes the lower's owner and mode, because the overlay's
-// root shows the upper directory.
-func mountHomeOverlay(target, dir, lower string) error {
-	var st unix.Stat_t
-	if err := unix.Stat(lower, &st); err != nil {
-		return fmt.Errorf("stat home: %w", err)
-	}
-	upper := filepath.Join(dir, "upper")
-	if err := os.MkdirAll(upper, 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", upper, err)
-	}
-	if err := os.Chown(upper, int(st.Uid), int(st.Gid)); err != nil {
-		return fmt.Errorf("chown home upper: %w", err)
-	}
-	if err := os.Chmod(upper, os.FileMode(st.Mode&0o777)); err != nil {
-		return fmt.Errorf("chmod home upper: %w", err)
-	}
-	return mountOverlay(target, dir, lower)
 }
 
 // overlayOptions returns overlayfs mount options for lowers, the first on

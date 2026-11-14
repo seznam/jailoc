@@ -58,27 +58,17 @@ func Init(logger *slog.Logger) error {
 	if err := mount.Essential(logger, tmpSizeMiB); err != nil {
 		return fmt.Errorf("essential mounts: %w", err)
 	}
-	var mapper *idmapper
-	switch {
-	case cfg.RootShare != "":
-		if mapper, err = overlayRoot(logger, cfg); err != nil {
-			return fmt.Errorf("root filesystem: %w", err)
-		}
-		if err := remountAfterPivot(logger); err != nil {
-			return err
-		}
-	case cfg.IDMap != nil:
-		if mapper, err = idmapRoot(logger, *cfg.IDMap, cfg.Home, cfg.UID, cfg.GID); err != nil {
-			// Without idmapped mounts the agent runs with the host user's IDs,
-			// so its files on virtio-fs keep their owner.
-			logger.Warn("idmapped mounts unavailable; running the agent with the host user's IDs", "error", err)
-			cfg.UID, cfg.GID = cfg.IDMap.UID, cfg.IDMap.GID
-			cfg.IDMap = nil
-		} else if err := remountAfterPivot(logger); err != nil {
-			return err
-		}
+	if cfg.RootShare == "" {
+		return errors.New("guest config has no root share")
+	}
+	mapper, err := overlayRoot(logger, cfg)
+	if err != nil {
+		return fmt.Errorf("root filesystem: %w", err)
 	}
 	defer mapper.close()
+	if err := remountAfterPivot(logger); err != nil {
+		return err
+	}
 	if cfg.Hostname != "" {
 		if err := syscall.Sethostname([]byte(cfg.Hostname)); err != nil {
 			logger.Warn("set hostname", "error", err)

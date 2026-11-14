@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -22,7 +21,7 @@ import (
 // to mounts.
 const UsernsHoldCommand = "userns-hold"
 
-// newRootDir is where the idmapped root filesystem is attached before
+// newRootDir is where the overlay root filesystem is mounted before
 // pivot_root switches to it.
 const newRootDir = Dir + "/newroot"
 
@@ -38,48 +37,6 @@ func (m *idmapper) close() {
 	if m != nil && m.shares != nil {
 		_ = m.shares.Close()
 	}
-}
-
-// idmapRoot replaces the root filesystem with an idmapped clone in which the
-// host user's files belong to root, and attaches the agent's home with the
-// host user mapped to the agent, so setuid programs such as sudo and the
-// agent's own files keep their meaning. It returns an idmapper for the
-// shares. Nothing changes when it fails.
-func idmapRoot(logger *slog.Logger, m IDMap, home string, agentUID, agentGID uint32) (*idmapper, error) {
-	if err := os.MkdirAll(home, 0o755); err != nil { //nolint:gosec // G301: home directories are world-readable
-		return nil, fmt.Errorf("create %s: %w", home, err)
-	}
-	if err := os.MkdirAll(newRootDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create %s: %w", newRootDir, err)
-	}
-	rootNS, sharesNS, err := idNamespaces(m, agentUID, agentGID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rootNS.Close() }()
-	mapper := &idmapper{shares: sharesNS}
-
-	// pivot_root refuses a shared parent mount.
-	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
-		mapper.close()
-		return nil, fmt.Errorf("make / private: %w", err)
-	}
-	if err := attachIdmapped("/", newRootDir, rootNS); err != nil {
-		mapper.close()
-		return nil, fmt.Errorf("idmap root filesystem: %w", err)
-	}
-	if err := attachIdmapped(home, filepath.Join(newRootDir, home), sharesNS); err != nil {
-		_ = unix.Unmount(newRootDir, unix.MNT_DETACH)
-		mapper.close()
-		return nil, fmt.Errorf("idmap %s: %w", home, err)
-	}
-	if err := switchRoot(newRootDir); err != nil {
-		_ = unix.Unmount(newRootDir, unix.MNT_DETACH)
-		mapper.close()
-		return nil, err
-	}
-	logger.Info("idmapped root filesystem", "host_uid", m.UID, "host_gid", m.GID)
-	return mapper, nil
 }
 
 // idNamespaces returns user namespaces for idmapped mounts: rootNS maps the
