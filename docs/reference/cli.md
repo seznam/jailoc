@@ -74,7 +74,7 @@ Start a workspace VM.
 jailoc up [workspace] [flags]
 ```
 
-Validates secret sources on the host, builds the workspace image with the host Docker daemon or in a builder VM (see [Image Resolution](image-resolution.md)), unpacks it into the VM image cache, boots it as the root file system of the workspace VM behind the host-side network broker, and delivers `env` and secrets to the guest.
+Validates secret sources on the host, builds the workspace image with the host Docker daemon or in a builder VM (see [Image Resolution](image-resolution.md)), converts its layers into read-only EROFS images in the VM image cache, boots them as the root file system of the workspace VM behind the host-side network broker, and delivers `env` and secrets to the guest.
 
 When the VM already runs, `jailoc up` does what [`jailoc reload`](#jailoc-reload) does.
 

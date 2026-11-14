@@ -44,7 +44,7 @@ nix/
 2. `workspace.Resolve` → name → paths, mounts, snapshots, allowed hosts/networks
 3. Validate secret sources, prepare CA bundle and TUI plugin config, compute virtio-fs shares and staged `snapshots`
 4. `vmRuntime` → configured `[vm] runner`, else the package-provided runtime (for example, the Nix package's), else unpack the embedded runtime
-5. `buildWorkspaceImage` → build the image with host Docker (or a builder VM with `isolated_build`) and unpack it into the VM image cache
+5. `buildWorkspaceImage` → build the image with host Docker (or a builder VM with `isolated_build`) and convert its layers into EROFS images in the VM image cache
 6. `startSupervisor` → boot the workspace VM (jailoc-guest as init) with its netbroker; persistent home under `~/.cache/jailoc-vm/workspaces/<ws>/home`
 7. `secretsPayload` (read on the host before boot, incl. `from_command`) → `deliverSecrets` over SSH; the guest writes file secrets to `/run/secrets` (tmpfs) and env secrets to the session environment
 

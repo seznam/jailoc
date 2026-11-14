@@ -8,6 +8,7 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/platforms v1.0.0-rc.5
 	github.com/creack/pty v1.1.24
+	github.com/erofs/go-erofs v0.3.2
 	github.com/fatih/color v1.19.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/hashicorp/go-version v1.9.0
@@ -118,6 +119,7 @@ require (
 )
 
 // Fork with WithRootFSShare (stacklok/go-microvm#160), WithProcessName
-// (stacklok/go-microvm#162) and root-only tar ownership restore
-// (stacklok/go-microvm#164) on top of upstream v0.0.44, until merged upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261103225112-32f39314de8e
+// (stacklok/go-microvm#162), root-only tar ownership restore
+// (stacklok/go-microvm#164) and WithRootFSShareDir (stacklok/go-microvm#176)
+// on top of upstream v0.0.44, until released upstream.
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261114115008-f6df49aad2e1

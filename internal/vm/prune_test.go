@@ -3,6 +3,7 @@ package vm
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,7 @@ func TestPruneImages(t *testing.T) {
 	dir := t.TempDir()
 	past := time.Now().Add(-2 * time.Hour)
 	digest := func(n string) string { return "sha256:" + n + "0000" }
+	legacyRef := func(n string) string { return legacyRootfsRepo + ":" + n }
 	addImage := func(name string, old bool) string {
 		p := filepath.Join(dir, "sha256-"+name+"0000")
 		if err := os.MkdirAll(filepath.Join(p, "etc", "ro"), 0o750); err != nil {
@@ -47,13 +49,13 @@ func TestPruneImages(t *testing.T) {
 	}
 
 	stale := addImage("aa", true)
-	staleRef := addRef(RootFSRef("aa"), digest("aa"), true)
+	staleRef := addRef(legacyRef("aa"), digest("aa"), true)
 	current := addImage("bb", true)
-	currentRef := addRef(RootFSRef("bb"), digest("bb"), true)
+	currentRef := addRef(legacyRef("bb"), digest("bb"), true)
 	builder := addImage("cc", true)
 	builderRef := addRef("docker@sha256:feed", digest("cc"), true)
 	fresh := addImage("dd", false)
-	freshRef := addRef(RootFSRef("dd"), digest("dd"), false)
+	freshRef := addRef(legacyRef("dd"), digest("dd"), false)
 	orphanOld := addImage("ee", true)
 	orphanNew := addImage("ff", false)
 	snapshot := filepath.Join(dir, "snapshots", "sha256-0f0f")
@@ -64,7 +66,7 @@ func TestPruneImages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := PruneImages(dir, []string{RootFSRef("bb")})
+	res, err := PruneImages(dir, []string{legacyRef("bb")})
 	if err != nil {
 		t.Fatalf("PruneImages: %v", err)
 	}
@@ -83,6 +85,80 @@ func TestPruneImages(t *testing.T) {
 	}
 	for _, p := range []string{current, builder, fresh, orphanNew} {
 		_ = os.Chmod(filepath.Join(p, "etc", "ro"), 0o700) //nolint:gosec // G302: test cleanup
+	}
+}
+
+func TestPruneImagesEROFS(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	past := time.Now().Add(-2 * time.Hour)
+	age := func(p string) {
+		t.Helper()
+		if err := os.Chtimes(p, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	layers := filepath.Join(dir, erofsDir, layersDir)
+	images := filepath.Join(dir, erofsDir, imagesDir)
+	for _, d := range []string{layers, images} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addLayer := func(name string) string {
+		p := filepath.Join(layers, name+".erofs")
+		if err := os.WriteFile(p, []byte(name), 0o444); err != nil { //nolint:gosec // G306: read-only layer file like the cache writes
+			t.Fatal(err)
+		}
+		age(p)
+		return p
+	}
+	addImage := func(tag string, old bool, layers ...string) string {
+		p := filepath.Join(images, tag)
+		if err := os.Mkdir(p, 0o755); err != nil { //nolint:gosec // G301: image directory mode like the cache writes
+			t.Fatal(err)
+		}
+		for i, l := range layers {
+			if err := os.Link(l, filepath.Join(p, fmt.Sprintf("%03d.erofs", i))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if old {
+			age(p)
+		}
+		return p
+	}
+	shared, staleOnly, freshOnly, unused := addLayer("shared"), addLayer("stale"), addLayer("fresh"), addLayer("unused")
+	stale := addImage("aa", true, shared, staleOnly)
+	current := addImage("bb", true, shared)
+	fresh := addImage("cc", false, freshOnly)
+	staging := filepath.Join(images, ".tmp-1")
+	if err := os.Mkdir(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	age(staging)
+	stagingLayer := filepath.Join(layers, ".tmp-1.erofs")
+	if err := os.WriteFile(stagingLayer, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	age(stagingLayer)
+
+	res, err := PruneImages(dir, []string{RootFSRef("bb")})
+	if err != nil {
+		t.Fatalf("PruneImages: %v", err)
+	}
+	if res.Images != 1 || res.Layers != 2 {
+		t.Fatalf("result = %+v, want 1 image and 2 layers removed", res)
+	}
+	for _, p := range []string{stale, staleOnly, unused, staging, stagingLayer} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s still exists (err %v)", p, err)
+		}
+	}
+	for _, p := range []string{current, fresh, shared, freshOnly} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was removed: %v", p, err)
+		}
 	}
 }
 

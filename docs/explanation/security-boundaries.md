@@ -25,7 +25,7 @@ The hypervisor (KVM on Linux, Hypervisor.framework on macOS) separates the guest
 - One virtio-net interface whose only peer is the workspace's network broker.
 - Unix sockets on the host that the broker forwards: the guest SSH server for jailoc, the host SSH agent with `ssh_auth_sock`, the host gpg-agent extra socket with `gpg_agent`, and `host_ports` targets.
 
-libkrun's virtio-fs server doesn't confine file requests to the shared directories by itself. On Linux, jailoc runs the VMM process under Landlock with access only to the VM runtime, `/dev/kvm` and the null and random devices, the VM's root filesystem, data directory and disks, the unpacked image (read-only) and the declared shares, and refuses to start a VM when the kernel lacks Landlock. Landlock doesn't cover metadata operations such as `stat`, `chmod` or extended attributes. On macOS the VMM process runs without equivalent confinement.
+libkrun's virtio-fs server doesn't confine file requests to the shared directories by itself. On Linux, jailoc runs the VMM process under Landlock with access only to the VM runtime, `/dev/kvm` and the null and random devices, the VM's root filesystem, data directory and disks, the image's EROFS layer files (read-only) and the declared shares, and refuses to start a VM when the kernel lacks Landlock. Landlock doesn't cover metadata operations such as `stat`, `chmod` or extended attributes. On macOS the VMM process runs without equivalent confinement.
 
 The host trusts nothing it reads back from the guest. The read-write internal share is writable by the guest, so it never holds keys or the VM specification, and jailoc accesses it only in ways that can't follow a link out of it. Per-workspace state directories on the host are created with mode `0700`.
 

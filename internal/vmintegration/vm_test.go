@@ -320,6 +320,14 @@ func TestWorkspaceVM(t *testing.T) {
 		}
 	})
 
+	t.Run("root filesystem from EROFS layers keeps image ownership", func(t *testing.T) {
+		// The layers keep the image's own IDs: /etc/shadow belongs to the
+		// shadow group and sudo stays setuid root.
+		if got := mustGuest(ctx, t, "findmnt -n -o FSTYPE /; stat -c %u:%g /etc/shadow; stat -c %u:%a /usr/bin/sudo"); got != "overlay\n0:42\n0:4755" {
+			t.Fatalf("root filesystem = %q, want an overlay with the image's owners and modes", got)
+		}
+	})
+
 	t.Run("guest clock follows the host", func(t *testing.T) {
 		// Set the clock back like a host sleep does; jailoc-guest steps it
 		// back to host time on its next sync.

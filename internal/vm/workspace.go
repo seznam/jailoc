@@ -12,9 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	microvm "github.com/stacklok/go-microvm"
 	"github.com/stacklok/go-microvm/image"
 	"golang.org/x/crypto/ssh"
@@ -80,7 +80,7 @@ func newKey() ([]byte, ssh.PublicKey, error) {
 // prepareGuest returns the files injected into the workspace root file
 // system: jailoc-guest, its configuration and a fresh SSH host key whose
 // public half is kept in the state directory for host key pinning.
-func prepareGuest(spec Spec) (map[string]fileContent, error) {
+func prepareGuest(spec Spec, layers []string) (map[string]fileContent, error) {
 	if spec.Guest == nil || spec.GuestBinary == "" {
 		return nil, errors.New("workspace vm spec has no guest configuration")
 	}
@@ -108,9 +108,8 @@ func prepareGuest(spec Spec) (map[string]fileContent, error) {
 	cfg.Shares = append(cfg.Shares,
 		guest.Share{Tag: internalTag, GuestPath: guest.HostDir},
 		guest.Share{Tag: internalROTag, GuestPath: guest.ReadOnlyHostDir, ReadOnly: true})
-	if rootShare {
-		cfg.RootShare = rootTag
-	}
+	cfg.RootShare = rootTag
+	cfg.RootLayers = layers
 	cfgJSON, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode guest config: %w", err)
@@ -129,11 +128,6 @@ func shareTag(i int) string { return fmt.Sprintf("jailoc%d", i) }
 // on macOS (its Linux passthrough backend ignores the semantics), and
 // go-microvm rejects it on other hosts, where guests see host ownership.
 const simplifiedOwnership = runtime.GOOS == "darwin"
-
-// rootShare boots workspace VMs from the cached image shared read-only, with
-// the guest assembling an overlay root, instead of from a copy of the image
-// made on every start.
-const rootShare = true
 
 // virtioIRQs is the number of interrupt lines libkrun gives virtio-mmio
 // devices: lines 5-23 of the I/O APIC on x86_64 (with the runtime's
@@ -159,7 +153,11 @@ func maxShares(arch string, docker bool) int {
 	return n
 }
 
-func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option {
+// workspaceOptions boots the workspace VM from an empty root holding files.
+// The directory imageDir of the workspace image, with its EROFS layer
+// images, is shared read-only, and the guest assembles its root as an
+// overlay of them; env is the image's environment.
+func workspaceOptions(spec Spec, files map[string]fileContent, imageDir string, env []string) []microvm.Option {
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares)+2)
 	for i, s := range spec.Shares {
 		mounts = append(mounts, microvm.VirtioFSMount{Tag: shareTag(i), HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: simplifiedOwnership})
@@ -172,12 +170,10 @@ func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option 
 		// The only disk, so the guest sees it as /dev/vda (guest.DockerDisk).
 		opts = append(opts, microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}))
 	}
-	if rootShare {
-		opts = append(opts, microvm.WithRootFSShare(rootTag))
-	}
 	return append(opts,
+		microvm.WithRootFSShareDir(rootTag, imageDir),
+		microvm.WithEnv(imageEnv(env)...),
 		microvm.WithVirtioFS(mounts...),
-		microvm.WithImageFetcher(cacheOnlyFetcher{}),
 		microvm.WithInitOverride(guest.BinaryPath),
 		microvm.WithRootFSHook(func(rootfs string, _ *image.OCIConfig) error {
 			if err := os.MkdirAll(filepath.Join(rootfs, guest.Dir), 0o755); err != nil { //nolint:gosec // G301: the guest binary must be executable by the agent
@@ -193,12 +189,16 @@ func workspaceOptions(spec Spec, files map[string]fileContent) []microvm.Option 
 	)
 }
 
-// cacheOnlyFetcher fails every pull: workspace images reach the image cache
-// through the builder before the VM starts.
-type cacheOnlyFetcher struct{}
-
-func (cacheOnlyFetcher) Pull(_ context.Context, ref string) (v1.Image, error) {
-	return nil, fmt.Errorf("image %s is not in the jailoc image cache; run jailoc up to build it", ref)
+// imageEnv returns the entries of an image environment go-microvm accepts
+// for the init environment, which reaches the guest's sessions.
+func imageEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if key, _, ok := strings.Cut(kv, "="); ok && key != "" && !strings.ContainsRune(kv, 0) {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // DialSSH opens an SSH connection to a workspace VM through the broker's
