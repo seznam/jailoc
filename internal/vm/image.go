@@ -658,8 +658,12 @@ layers:
 		// An opaque ancestor hides the layers below this one; an ancestor
 		// that is no directory in this layer hides p and the layers below.
 		opaque := false
-		for i := 1; i < len(parts); i++ {
-			fi, err := layerLstat(l, path.Join(parts[:i]...))
+		for i := range len(parts) {
+			dir := "."
+			if i > 0 {
+				dir = path.Join(parts[:i]...)
+			}
+			fi, err := layerLstat(l, dir)
 			switch {
 			case err != nil:
 				return nil, nil, err
