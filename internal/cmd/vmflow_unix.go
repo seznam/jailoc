@@ -875,7 +875,59 @@ func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec, p
 			payload.Files[s.Name] = value
 		}
 	}
+	if spec.Guest != nil && spec.Guest.CABundle != "" {
+		payload.Env = appendUnsetEnv(payload.Env, caBundleEnv())
+	}
 	return payload, nil
+}
+
+// caBundleVars are the variables that point TLS clients at a CA bundle
+// file. With a forwarded CA bundle, sessions get them set to the guest's
+// system bundle, which then holds the forwarded certificates, so clients
+// that ship their own roots or read only a variable trust them too:
+// NODE_EXTRA_CA_CERTS for Node and Bun, SSL_CERT_FILE for OpenSSL, Go, uv
+// and httpx, and the variables of requests, curl, pip, the AWS and Google
+// Cloud CLIs, httplib2, gRPC, cargo, git, Nix, Deno and Hex.
+var caBundleVars = []string{
+	"NODE_EXTRA_CA_CERTS",
+	"SSL_CERT_FILE",
+	"REQUESTS_CA_BUNDLE",
+	"CURL_CA_BUNDLE",
+	"PIP_CERT",
+	"AWS_CA_BUNDLE",
+	"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE",
+	"HTTPLIB2_CA_CERTS",
+	"GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
+	"CARGO_HTTP_CAINFO",
+	"GIT_SSL_CAINFO",
+	"NIX_SSL_CERT_FILE",
+	"DENO_CERT",
+	"HEX_CACERTS_PATH",
+}
+
+// caBundleEnv sets caBundleVars to the guest's system CA bundle.
+func caBundleEnv() []string {
+	env := make([]string, 0, len(caBundleVars))
+	for _, k := range caBundleVars {
+		env = append(env, k+"="+guest.SystemCABundle)
+	}
+	return env
+}
+
+// appendUnsetEnv appends the entries of add whose keys env does not set, so
+// a workspace's own env or secret wins.
+func appendUnsetEnv(env, add []string) []string {
+	set := make(map[string]bool, len(env))
+	for _, e := range env {
+		k, _, _ := strings.Cut(e, "=")
+		set[k] = true
+	}
+	for _, e := range add {
+		if k, _, _ := strings.Cut(e, "="); !set[k] {
+			env = append(env, e)
+		}
+	}
+	return env
 }
 
 // secretsMarker exists while the running workspace VM holds the secrets of
