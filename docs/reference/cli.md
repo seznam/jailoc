@@ -206,7 +206,7 @@ jailoc list
 
 ### `jailoc logs`
 
-Print the VM supervisor log and the guest console log of a workspace.
+Print the log of the workspace's last `jailoc up` (`up.log`: its steps with their durations, Docker pulls, builds and build steps, image size and conversion), the VM supervisor log and the guest console log, in that order. When `jailoc up` failed before the VM started, only its log is printed.
 
 ```
 jailoc logs [workspace] [flags]

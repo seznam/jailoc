@@ -190,7 +190,12 @@ func workspaceLayers(ctx context.Context, ws *workspace.Resolved, chain []string
 // logStep logs how long the step that began at start took, for finding
 // slow phases in jailoc.log.
 func logStep(step string, start time.Time, args ...any) {
-	slog.Info("step finished", append([]any{"step", step, "duration", time.Since(start).Round(time.Millisecond)}, args...)...)
+	logDuration(step, time.Since(start), args...)
+}
+
+// logDuration logs that step took d.
+func logDuration(step string, d time.Duration, args ...any) {
+	slog.Info("step finished", append([]any{"step", step, "duration", d.Round(time.Millisecond)}, args...)...)
 }
 
 const tuiPluginContainerDir = agent.PluginDir

@@ -27,6 +27,7 @@ import (
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/logging"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -55,6 +56,11 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	} else if st != nil {
 		return reloadVM(ctx, ws, false)
 	}
+	stopUpLog, err := teeUpLog(stateDir)
+	if err != nil {
+		return err
+	}
+	defer stopUpLog()
 
 	// Must run before every generated-file write below.
 	if err := validateSecretSources(ws); err != nil {
@@ -282,6 +288,7 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	}
 	ref := vm.RootFSRef(id)
 	start = time.Now()
+	phases := importPhases{start: start}
 	progressDisplay := newImportProgressDisplay(
 		os.Stderr,
 		term.IsTerminal(int(os.Stderr.Fd())), //nolint:gosec // G115: file descriptors fit in int
@@ -294,21 +301,97 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 		},
 	)
 	err = vm.ImportImage(ctx, filepath.Join(vmRootDir(), "images"), ref, func(w io.Writer) error {
+		warnLargeImage(ctx, finalImage)
 		_, _ = color.New(color.FgCyan).Printf("Converting image %s for the workspace VM...\n", finalImage)
 		progressDisplay.start()
 		_, err := docker.SaveImage(ctx, finalImage, w)
 		return err
-	}, progressDisplay.update)
+	}, func(p vm.ImportProgress) {
+		phases.update(p, time.Now())
+		progressDisplay.update(p)
+	})
 	progressDisplay.stop()
 	if err != nil {
 		return "", err
 	}
-	logStep("import image into VM cache", start, "ref", ref)
+	phases.log(time.Now())
+	logStep("import image into VM cache", start, "ref", ref, "cached", phases.converting.IsZero())
 	start = time.Now()
 	pruneImageCache(ref)
 	pruneDockerImages(ctx, lock, ws.Name, chain)
 	logStep("prune images", start)
 	return ref, nil
+}
+
+// Image sizes above which jailoc warns before converting an image: the
+// conversion reads the whole image, and each layer is one more mount that
+// file lookups in the VM pass through.
+const (
+	largeImageLayers = 50
+	largeImageBytes  = 10 << 30
+)
+
+// warnLargeImage logs the size of image and warns on stderr when it is
+// large.
+func warnLargeImage(ctx context.Context, image string) {
+	layers, size, err := docker.ImageSize(ctx, image)
+	if err != nil {
+		slog.Debug("image size unknown", "image", image, "error", err)
+		return
+	}
+	slog.Info("workspace image", "image", image, "layers", layers, "bytes", size)
+	if msg := largeImageWarning(image, layers, size); msg != "" {
+		slog.Warn("large workspace image", "image", image, "layers", layers, "bytes", size)
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", msg)
+	}
+}
+
+// largeImageWarning returns the warning for an image with that many layers
+// and bytes, or "" when it is not large.
+func largeImageWarning(image string, layers int, size int64) string {
+	var what []string
+	if layers > largeImageLayers {
+		what = append(what, fmt.Sprintf("%d layers", layers))
+	}
+	if size > largeImageBytes {
+		what = append(what, formatBytes(size))
+	}
+	if len(what) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("image %s has %s; converting it for the VM takes a while, and each layer slows down file lookups in the VM. "+
+		"Fewer RUN steps, a multi-stage build or a smaller base image make it faster to convert and boot", image, strings.Join(what, " and "))
+}
+
+// importPhases times the export from Docker and the layer conversion of an
+// image import from its progress reports.
+type importPhases struct {
+	start      time.Time
+	converting time.Time // first conversion report; zero while exporting
+	bytes      int64
+	layers     int
+}
+
+func (p *importPhases) update(progress vm.ImportProgress, now time.Time) {
+	switch progress.Phase {
+	case vm.PhaseSave:
+		p.bytes = progress.Bytes
+	case vm.PhaseExtract:
+		if p.converting.IsZero() {
+			p.converting = now
+		}
+		p.layers = progress.Total
+	}
+}
+
+// log logs the phases of an import that finished at now; an image already
+// in the cache has none.
+func (p *importPhases) log(now time.Time) {
+	if p.converting.IsZero() {
+		return
+	}
+	logDuration("export image from Docker", p.converting.Sub(p.start), "bytes", p.bytes)
+	logDuration("convert image layers", now.Sub(p.converting), "new_layers", p.layers)
 }
 
 type importProgressDisplay struct {
@@ -1062,13 +1145,41 @@ func profileLabel(spec vm.Spec) string {
 	}
 }
 
-// logsVM prints the supervisor and guest console logs; follow keeps
-// printing the console log as it grows.
+// upLogPath is the log of the last `jailoc up` of a workspace: its steps with
+// their durations, including the image builds.
+func upLogPath(stateDir string) string { return filepath.Join(stateDir, "up.log") }
+
+// teeUpLog writes the log records of this `jailoc up` to the workspace's
+// up.log too, until the returned function is called.
+func teeUpLog(stateDir string) (func(), error) {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create vm state dir: %w", err)
+	}
+	f, err := os.OpenFile(upLogPath(stateDir), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // G304: jailoc-owned state path
+	if err != nil {
+		return nil, fmt.Errorf("open up log: %w", err)
+	}
+	restore := logging.Tee(f)
+	return func() {
+		restore()
+		_ = f.Close()
+	}, nil
+}
+
+// logsVM prints the log of the last `jailoc up`, the supervisor log and the
+// guest console log; follow keeps printing the console log as it grows.
 func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Writer) error {
 	stateDir := vmStateDir(ws.Name)
 	console := filepath.Join(stateDir, "microvm", "console.log")
-	if _, err := os.Stat(console); err != nil {
+	_, consoleErr := os.Stat(console)
+	upLog, upErr := os.ReadFile(upLogPath(stateDir)) //nolint:gosec // G304: jailoc-owned state path
+	if consoleErr != nil && upErr != nil {
 		return fmt.Errorf("workspace %q has no VM logs; start it with 'jailoc up'", ws.Name)
+	}
+	_, _ = w.Write(upLog)
+	if consoleErr != nil {
+		// `jailoc up` failed before the VM started.
+		return nil
 	}
 	if data, err := os.ReadFile(filepath.Join(stateDir, "supervisor.log")); err == nil { //nolint:gosec // G304: jailoc-owned state path
 		_, _ = w.Write(data)

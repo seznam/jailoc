@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -263,5 +265,80 @@ func TestStatusLabels(t *testing.T) {
 				t.Errorf("got %q, want %q", tt.got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLargeImageWarning(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		layers int
+		size   int64
+		want   string
+	}{
+		{name: "small", layers: largeImageLayers, size: largeImageBytes},
+		{name: "many layers", layers: 80, size: 1 << 30, want: "image img has 80 layers; converting"},
+		{name: "large", layers: 10, size: 12 << 30, want: "image img has 12 GiB; converting"},
+		{name: "both", layers: 60, size: 11 << 30, want: "image img has 60 layers and 11 GiB; converting"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := largeImageWarning("img", tt.layers, tt.size)
+			if tt.want == "" {
+				if got != "" {
+					t.Errorf("largeImageWarning = %q, want none", got)
+				}
+				return
+			}
+			assertContains(t, got, tt.want)
+		})
+	}
+}
+
+func TestImportPhases(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1000, 0)
+	p := importPhases{start: start}
+	p.update(vm.ImportProgress{Phase: vm.PhaseSave, Bytes: 512}, start.Add(time.Second))
+	p.update(vm.ImportProgress{Phase: vm.PhaseExtract, Total: 3}, start.Add(4*time.Second))
+	p.update(vm.ImportProgress{Phase: vm.PhaseExtract, Layers: 3, Total: 3}, start.Add(9*time.Second))
+	if !p.converting.Equal(start.Add(4*time.Second)) || p.bytes != 512 || p.layers != 3 {
+		t.Errorf("phases = %+v, want conversion from 4s with 512 bytes and 3 layers", p)
+	}
+}
+
+func TestLogsVM(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{Name: "logs"}
+	stateDir := vmStateDir(ws.Name)
+
+	var out bytes.Buffer
+	if err := logsVM(context.Background(), ws, false, &out); err == nil {
+		t.Fatal("logsVM succeeded without logs")
+	}
+
+	// `jailoc up` failed before the VM started.
+	writeLogFile(t, upLogPath(stateDir), "up\n")
+	out.Reset()
+	if err := logsVM(context.Background(), ws, false, &out); err != nil || out.String() != "up\n" {
+		t.Fatalf("logsVM = %q, %v; want the up log", out.String(), err)
+	}
+
+	writeLogFile(t, filepath.Join(stateDir, "supervisor.log"), "supervisor\n")
+	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log"), "console\n")
+	out.Reset()
+	if err := logsVM(context.Background(), ws, false, &out); err != nil || out.String() != "up\nsupervisor\nconsole\n" {
+		t.Fatalf("logsVM = %q, %v; want the up, supervisor and console logs in order", out.String(), err)
+	}
+}
+
+func writeLogFile(t *testing.T, name, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
