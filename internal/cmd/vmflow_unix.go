@@ -1203,31 +1203,26 @@ func teeUpLog(stateDir string) (func(), error) {
 }
 
 // logsVM prints the log of the last `jailoc up`, the supervisor log and the
-// guest console log. follow keeps printing the up log until the VM has a
-// console log, while `jailoc up` builds the image, and then the console log
-// as it grows.
+// guest console log. follow keeps printing what is added to all three, so
+// that it shows a running `jailoc up` from its image build to the VM boot,
+// and the next start after it.
 func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Writer) error {
 	stateDir := vmStateDir(ws.Name)
 	console := filepath.Join(stateDir, "microvm", "console.log")
 	if !fileExists(console) && !fileExists(upLogPath(stateDir)) {
 		return fmt.Errorf("workspace %q has no VM logs; start it with 'jailoc up'", ws.Name)
 	}
-	if err := printUpLog(ctx, upLogPath(stateDir), console, follow, w); err != nil || !fileExists(console) {
-		// Without a console log, `jailoc up` failed before the VM started or
-		// follow was interrupted.
-		return err
-	}
-	if data, err := os.ReadFile(filepath.Join(stateDir, "supervisor.log")); err == nil { //nolint:gosec // G304: jailoc-owned state path
-		_, _ = w.Write(data)
-	}
-	f, err := os.Open(console) //nolint:gosec // G304: jailoc-owned state path
-	if err != nil {
-		return fmt.Errorf("open console log: %w", err)
-	}
-	defer func() { _ = f.Close() }()
+	tails := []*logTail{{path: upLogPath(stateDir)}, {path: filepath.Join(stateDir, "supervisor.log")}, {path: console}}
+	defer func() {
+		for _, t := range tails {
+			t.close()
+		}
+	}()
 	for {
-		if _, err := io.Copy(w, f); err != nil {
-			return fmt.Errorf("read console log: %w", err)
+		for _, t := range tails {
+			if err := t.copy(w); err != nil {
+				return err
+			}
 		}
 		if !follow || !waitLogs(ctx) {
 			return nil
@@ -1235,27 +1230,52 @@ func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Write
 	}
 }
 
-// printUpLog prints the up log at path, if any. With follow it keeps
-// printing what is added to it until console exists or ctx is done.
-func printUpLog(ctx context.Context, path, console string, follow bool, w io.Writer) error {
-	f, err := os.Open(path) //nolint:gosec // G304: jailoc-owned state path
+// logTail prints what is added to a log file. It starts from the beginning
+// again when the file is replaced or truncated, as the next `jailoc up` and
+// VM start do with theirs.
+type logTail struct {
+	path string
+	f    *os.File
+	off  int64
+}
+
+// copy prints what was added to the file since the last copy; a missing
+// file has nothing to print yet.
+func (t *logTail) copy(w io.Writer) error {
+	fi, err := os.Stat(t.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("open up log: %w", err)
+		return fmt.Errorf("stat %s: %w", t.path, err)
 	}
-	defer func() { _ = f.Close() }()
-	for {
-		// Checked before reading, so the last read has what was written
-		// before the VM started.
-		done := !follow || fileExists(console)
-		if _, err := io.Copy(w, f); err != nil {
-			return fmt.Errorf("read up log: %w", err)
+	if t.f != nil {
+		if cur, err := t.f.Stat(); err != nil || !os.SameFile(cur, fi) || fi.Size() < t.off {
+			t.close()
 		}
-		if done || !waitLogs(ctx) {
+	}
+	if t.f == nil {
+		f, err := os.Open(t.path)
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
+		if err != nil {
+			return fmt.Errorf("open %s: %w", t.path, err)
+		}
+		t.f, t.off = f, 0
+	}
+	n, err := io.Copy(w, t.f)
+	t.off += n
+	if err != nil {
+		return fmt.Errorf("read %s: %w", t.path, err)
+	}
+	return nil
+}
+
+func (t *logTail) close() {
+	if t.f != nil {
+		_ = t.f.Close()
+		t.f = nil
 	}
 }
 

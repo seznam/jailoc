@@ -206,7 +206,7 @@ jailoc list
 
 ### `jailoc logs`
 
-Print the log of the workspace's last `jailoc up` (`up.log`: its steps with their durations, Docker pulls, builds and build steps, image size and conversion), the VM supervisor log and the guest console log, in that order. When `jailoc up` failed before the VM started, only its log is printed, ending with the error. While `jailoc up` still builds the image, `--follow` follows its log and continues with the console log once the VM starts.
+Print the log of the workspace's last `jailoc up` (`up.log`: its steps with their durations, Docker pulls, builds and build steps, image size and conversion), the VM supervisor log and the guest console log, in that order. When `jailoc up` failed before the VM started, only its log is printed, ending with the error. `--follow` keeps printing what is added to all three logs, from a running `jailoc up` and its image build through the VM boot; a log that the next `jailoc up` or VM start begins afresh is printed again from its start.
 
 ```
 jailoc logs [workspace] [flags]

@@ -388,7 +388,13 @@ func TestLogsVMFollowsUp(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ws := &workspace.Resolved{Name: "follow"}
 	stateDir := vmStateDir(ws.Name)
-	writeLogFile(t, upLogPath(stateDir), "resolve\n")
+	upLog := upLogPath(stateDir)
+	supervisor := filepath.Join(stateDir, "supervisor.log")
+	console := filepath.Join(stateDir, "microvm", "console.log")
+	// The logs of a VM that ran before.
+	writeLogFile(t, upLog, "old up records\n")
+	writeLogFile(t, supervisor, "old supervisor records\n")
+	writeLogFile(t, console, "old console output\n")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -399,24 +405,41 @@ func TestLogsVMFollowsUp(t *testing.T) {
 	waitFor := func(want string) {
 		t.Helper()
 		deadline := time.Now().Add(10 * time.Second)
-		for !strings.Contains(out.String(), want) {
+		for strings.Count(out.String(), want) != 1 {
 			if time.Now().After(deadline) {
-				t.Fatalf("output %q never held %q", out.String(), want)
+				t.Fatalf("output %q does not hold %q once", out.String(), want)
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	waitFor("resolve\n")
-	f, err := os.OpenFile(upLogPath(stateDir), os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // G304: test temp dir
-	if err != nil {
-		t.Fatal(err)
+	appendLog := func(name, data string) {
+		t.Helper()
+		f, err := os.OpenFile(name, os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // G304: test temp dir
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = f.Close() }()
+		if _, err := f.WriteString(data); err != nil {
+			t.Fatal(err)
+		}
 	}
-	_, _ = f.WriteString("build\n")
-	_ = f.Close()
+	waitFor("old up records\nold supervisor records\nold console output\n")
+
+	// The next `jailoc up` truncates its log, builds the image and starts
+	// the VM, which starts its logs afresh, and then logs more steps.
+	writeLogFile(t, upLog, "resolve\n")
+	waitFor("resolve\n")
+	appendLog(upLog, "build\n")
 	waitFor("resolve\nbuild\n")
-	writeLogFile(t, filepath.Join(stateDir, "supervisor.log"), "supervisor\n")
-	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log"), "console\n")
-	waitFor("resolve\nbuild\nsupervisor\nconsole\n")
+	writeLogFile(t, supervisor, "vm started\n")
+	writeLogFile(t, console, "boot\n")
+	waitFor("vm started\n")
+	waitFor("boot\n")
+	appendLog(upLog, "deliver secrets\n")
+	appendLog(console, "ready\n")
+	// Lines of different logs interleave in the order they are polled.
+	waitFor("deliver secrets\n")
+	waitFor("ready\n")
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("logsVM: %v", err)
