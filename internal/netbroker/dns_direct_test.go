@@ -3,6 +3,7 @@ package netbroker
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -162,52 +163,126 @@ func TestBrokerDirectDNS(t *testing.T) {
 	}
 }
 
+// TestBrokerDNSSharedBudget checks that the gateway resolver and direct DNS
+// draw on the same broker-wide query and DNS-over-TCP connection budgets.
+func TestBrokerDNSSharedBudget(t *testing.T) {
+	t.Parallel()
+	gateway := netip.MustParseAddrPort("192.168.127.1:53")
+	direct := netip.MustParseAddrPort("10.33.4.25:53")
+	tests := []struct {
+		name    string
+		network string
+		server  netip.AddrPort
+	}{
+		{"gateway udp", "udp", gateway},
+		{"gateway tcp", "tcp", gateway},
+		{"direct udp", "udp", direct},
+		{"direct tcp", "tcp", direct},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			policy, err := ParsePolicy([]byte(`{"dns":"10.99.1.53","allow":[
+				{"name":"resolver","cidrs":["10.33.4.25"],"proto":"any","ports":["53"]},
+				{"name":"web","names":["*.example.com"],"proto":"tcp","ports":["443"]}]}`), "budget")
+			if err != nil {
+				t.Fatal(err)
+			}
+			broker, err := New(Config{Subnet: netip.MustParsePrefix("192.168.127.0/24"), Gateway: netip.MustParseAddr("192.168.127.1"), GuestIP: netip.MustParseAddr("192.168.127.2")}, policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			broker.exchange = func(_ context.Context, _ string, _ netip.AddrPort, q []byte) ([]byte, error) {
+				var msg dnsmessage.Message
+				if err := msg.Unpack(q); err != nil {
+					return nil, err
+				}
+				msg.Response = true
+				return msg.Pack()
+			}
+			guest := connectTestBroker(t, broker)
+			request := dnsmessage.Message{
+				Header:    dnsmessage.Header{ID: 7, RecursionDesired: true},
+				Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName("app.example.com."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+			}
+			query, err := request.Pack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			budget := broker.dnsQueries
+			if tt.network == "tcp" {
+				budget = broker.dnsConns
+			}
+			for range cap(budget) {
+				budget <- struct{}{}
+			}
+			if _, err := guestDNSQuery(t.Context(), guest, tt.network, tt.server, query, 500*time.Millisecond); err == nil {
+				t.Fatalf("query to %s answered with the shared budget exhausted", tt.server)
+			}
+			<-budget
+			if _, err := guestDNSQuery(t.Context(), guest, tt.network, tt.server, query, 10*time.Second); err != nil {
+				t.Fatalf("query to %s with a free slot: %v", tt.server, err)
+			}
+		})
+	}
+}
+
 // directDNSQuery sends query from the guest to server over network and
 // returns the parsed answer.
 func directDNSQuery(t *testing.T, guest *stack.Stack, network string, server netip.AddrPort, query []byte) dnsmessage.Message {
 	t.Helper()
+	response, err := guestDNSQuery(t.Context(), guest, network, server, query, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+// guestDNSQuery sends query from the guest to server over network and waits
+// up to timeout for the answer.
+func guestDNSQuery(ctx context.Context, guest *stack.Stack, network string, server netip.AddrPort, query []byte, timeout time.Duration) (dnsmessage.Message, error) {
 	addr := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4(server.Addr().As4()), Port: server.Port()}
 	var conn net.Conn
 	var err error
 	if network == "udp" {
 		conn, err = gonet.DialUDP(guest, nil, &addr, ipv4.ProtocolNumber)
 	} else {
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		dctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		conn, err = gonet.DialContextTCP(ctx, guest, addr, ipv4.ProtocolNumber)
+		conn, err = gonet.DialContextTCP(dctx, guest, addr, ipv4.ProtocolNumber)
 	}
 	if err != nil {
-		t.Fatalf("dial %s %s: %v", network, server, err)
+		return dnsmessage.Message{}, fmt.Errorf("dial %s %s: %w", network, server, err)
 	}
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	var raw []byte
 	if network == "udp" {
 		if _, err := conn.Write(query); err != nil {
-			t.Fatal(err)
+			return dnsmessage.Message{}, fmt.Errorf("write query: %w", err)
 		}
 		buffer := make([]byte, 512)
 		count, err := conn.Read(buffer)
 		if err != nil {
-			t.Fatal(err)
+			return dnsmessage.Message{}, fmt.Errorf("read answer: %w", err)
 		}
 		raw = buffer[:count]
 	} else {
 		if _, err := conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(query))), query...)); err != nil { //nolint:gosec // G115: test query is small
-			t.Fatal(err)
+			return dnsmessage.Message{}, fmt.Errorf("write query: %w", err)
 		}
 		var length [2]byte
 		if _, err := io.ReadFull(conn, length[:]); err != nil {
-			t.Fatal(err)
+			return dnsmessage.Message{}, fmt.Errorf("read answer length: %w", err)
 		}
 		raw = make([]byte, binary.BigEndian.Uint16(length[:]))
 		if _, err := io.ReadFull(conn, raw); err != nil {
-			t.Fatal(err)
+			return dnsmessage.Message{}, fmt.Errorf("read answer: %w", err)
 		}
 	}
 	var response dnsmessage.Message
 	if err := response.Unpack(raw); err != nil {
-		t.Fatal(err)
+		return dnsmessage.Message{}, fmt.Errorf("parse answer: %w", err)
 	}
-	return response
+	return response, nil
 }

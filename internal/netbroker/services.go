@@ -23,9 +23,10 @@ import (
 
 const (
 	dnsTimeout = 3 * time.Second
-	// maxDNSQueries caps the queries the broker resolves at once, and
+	// maxDNSQueries caps the UDP queries the broker resolves at once, and
 	// maxDNSConns the open DNS-over-TCP connections, so a busy guest cannot
-	// grow the host process without bound.
+	// grow the host process without bound. Both are shared by the gateway
+	// resolver and direct DNS to allowed resolvers.
 	maxDNSQueries = 128
 	maxDNSConns   = 64
 )
@@ -38,6 +39,16 @@ func (b *Broker) upstreams() []netip.AddrPort {
 		return b.cfg.DNSFallback
 	}
 	return b.cfg.HostDNS()
+}
+
+// tryAcquire takes a slot of sem, or reports false when all are taken.
+func tryAcquire(sem chan struct{}) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
 // startDNS serves DNS on the gateway over UDP and TCP. Queries are forwarded
@@ -56,7 +67,6 @@ func (b *Broker) startDNS(ctx context.Context) error {
 		_ = uc.Close()
 		_ = tl.Close()
 	}()
-	queries := make(chan struct{}, maxDNSQueries)
 	go func() {
 		buf := make([]byte, 65535)
 		for {
@@ -64,36 +74,31 @@ func (b *Broker) startDNS(ctx context.Context) error {
 			if err != nil {
 				return
 			}
-			select {
-			case queries <- struct{}{}:
-			default:
+			if !tryAcquire(b.dnsQueries) {
 				// Drop the query; the guest resolver retries.
 				continue
 			}
 			q := append([]byte(nil), buf[:n]...)
 			go func() {
-				defer func() { <-queries }()
+				defer func() { <-b.dnsQueries }()
 				if resp := b.resolve(ctx, "udp", q, netip.AddrPort{}); resp != nil {
 					_, _ = uc.WriteTo(resp, peer)
 				}
 			}()
 		}
 	}()
-	conns := make(chan struct{}, maxDNSConns)
 	go func() {
 		for {
 			c, err := tl.Accept()
 			if err != nil {
 				return
 			}
-			select {
-			case conns <- struct{}{}:
-			default:
+			if !tryAcquire(b.dnsConns) {
 				_ = c.Close()
 				continue
 			}
 			go func() {
-				defer func() { <-conns }()
+				defer func() { <-b.dnsConns }()
 				b.serveDNSTCP(ctx, c, netip.AddrPort{})
 			}()
 		}

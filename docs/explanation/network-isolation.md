@@ -59,7 +59,7 @@ The broker enforces hostname rules at three points:
 
 ## Enforcement details
 
-Denied TCP connections are reset and denied UDP gets ICMP port unreachable, so tools fail fast instead of hanging. Each decision is written to `broker.jsonl` in the workspace's VM state directory with the resolved `name` and matching `rule`, which `jailoc traffic` prints. The broker moves the log to `broker.jsonl.1` when it reaches 16 MiB, so it keeps at most about 32 MiB. It also caps a workspace at 4096 open TCP connections, 1024 UDP flows and 128 DNS queries in flight; connections beyond the cap are refused and logged.
+Denied TCP connections are reset and denied UDP gets ICMP port unreachable, so tools fail fast instead of hanging. Each decision is written to `broker.jsonl` in the workspace's VM state directory with the resolved `name` and matching `rule`, which `jailoc traffic` prints. The broker moves the log to `broker.jsonl.1` when it reaches 16 MiB, so it keeps at most about 32 MiB. It also caps a workspace at 4096 open TCP connections, 1024 UDP flows, 128 UDP DNS queries in flight and 64 open DNS-over-TCP connections; the DNS caps count the gateway resolver and direct DNS to allowed resolvers together. Connections beyond a cap are refused and logged, and UDP DNS queries beyond it are dropped for the guest resolver to retry.
 
 An invalid policy at start keeps the VM from starting. If a policy reload fails, the broker switches to a deny-all policy rather than keep the old one.
 

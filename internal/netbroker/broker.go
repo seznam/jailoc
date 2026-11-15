@@ -103,6 +103,9 @@ type Broker struct {
 	connSeq atomic.Uint64
 
 	tcpFlows, udpFlows flowLimit
+	// dnsQueries and dnsConns hold the in-flight UDP DNS queries and open
+	// DNS-over-TCP connections of the gateway resolver and direct DNS.
+	dnsQueries, dnsConns chan struct{}
 }
 
 // New builds the stack. It does not open any socket.
@@ -118,6 +121,7 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 	}
 	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log), names: newDNSCache()}
 	b.tcpFlows.max, b.udpFlows.max = maxTCPFlows, maxUDPFlows
+	b.dnsQueries, b.dnsConns = make(chan struct{}, maxDNSQueries), make(chan struct{}, maxDNSConns)
 	b.dialTCP = (&net.Dialer{Timeout: dialTimeout}).Dial
 	b.dialUDP = net.DialUDP
 	b.exchange = exchange

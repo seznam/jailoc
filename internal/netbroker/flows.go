@@ -70,9 +70,17 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 	if p.inspectsDNS(dst) {
+		if !tryAcquire(b.dnsConns) {
+			b.tcpFlows.release()
+			b.recordFlow(conn, ProtoTCP, src, dst, d)
+			b.record(map[string]any{"event": "flow-limit", "conn": conn, "proto": ProtoTCP, "dst": dst.String()})
+			r.Complete(true)
+			return
+		}
 		var wq waiter.Queue
 		ep, terr := r.CreateEndpoint(&wq)
 		if terr != nil {
+			<-b.dnsConns
 			b.tcpFlows.release()
 			r.Complete(true)
 			return
@@ -81,6 +89,7 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		b.recordFlow(conn, ProtoTCP, src, dst, d)
 		go func() {
 			defer b.tcpFlows.release()
+			defer func() { <-b.dnsConns }()
 			b.serveDNSTCP(context.Background(), gonet.NewTCPConn(&wq, ep), dst)
 		}()
 		return
@@ -318,7 +327,8 @@ func relayUDP(in *gonet.UDPConn, out *net.UDPConn) {
 	<-done
 }
 
-// maxDNSFlowQueries caps the queries one direct DNS flow resolves at once.
+// maxDNSFlowQueries caps the queries one direct DNS flow resolves at once, on
+// top of the broker-wide maxDNSQueries.
 const maxDNSFlowQueries = 16
 
 // serveDNSUDP answers the guest's queries on one UDP flow to the resolver
@@ -335,15 +345,18 @@ func (b *Broker) serveDNSUDP(c *gonet.UDPConn, server netip.AddrPort) {
 		if err != nil {
 			return
 		}
-		select {
-		case queries <- struct{}{}:
-		default:
+		if !tryAcquire(queries) {
 			// Drop the query; the guest resolver retries.
+			continue
+		}
+		if !tryAcquire(b.dnsQueries) {
+			<-queries
 			continue
 		}
 		q := append([]byte(nil), buf[:n]...)
 		wg.Go(func() {
 			defer func() { <-queries }()
+			defer func() { <-b.dnsQueries }()
 			if resp := b.resolve(context.Background(), "udp", q, server); resp != nil {
 				_, _ = c.Write(resp)
 			}
