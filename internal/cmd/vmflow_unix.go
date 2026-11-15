@@ -48,7 +48,7 @@ func builderStateDir(ws *workspace.Resolved) string {
 
 // runUpVM builds the workspace image in a builder VM and boots it as the
 // workspace VM.
-func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) error {
+func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (err error) {
 	upStart := time.Now()
 	stateDir := vmStateDir(ws.Name)
 	if st, err := runningVM(stateDir); err != nil {
@@ -60,7 +60,13 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
-	defer stopUpLog()
+	defer func() {
+		// The error reaches only the terminal otherwise.
+		if err != nil {
+			slog.Error("up failed", "workspace", ws.Name, "error", err)
+		}
+		stopUpLog()
+	}()
 
 	// Must run before every generated-file write below.
 	if err := validateSecretSources(ws); err != nil {
@@ -288,7 +294,7 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	}
 	ref := vm.RootFSRef(id)
 	start = time.Now()
-	phases := importPhases{start: start}
+	var phases importPhases
 	progressDisplay := newImportProgressDisplay(
 		os.Stderr,
 		term.IsTerminal(int(os.Stderr.Fd())), //nolint:gosec // G115: file descriptors fit in int
@@ -303,6 +309,8 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	err = vm.ImportImage(ctx, filepath.Join(vmRootDir(), "images"), ref, func(w io.Writer) error {
 		warnLargeImage(ctx, finalImage, dockerfileBase(chain))
 		_, _ = color.New(color.FgCyan).Printf("Converting image %s for the workspace VM...\n", finalImage)
+		// Not earlier: ImportImage waits for other imports before it calls save.
+		phases.start = time.Now()
 		progressDisplay.start()
 		_, err := docker.SaveImage(ctx, finalImage, w)
 		return err
@@ -1195,19 +1203,19 @@ func teeUpLog(stateDir string) (func(), error) {
 }
 
 // logsVM prints the log of the last `jailoc up`, the supervisor log and the
-// guest console log; follow keeps printing the console log as it grows.
+// guest console log. follow keeps printing the up log until the VM has a
+// console log, while `jailoc up` builds the image, and then the console log
+// as it grows.
 func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Writer) error {
 	stateDir := vmStateDir(ws.Name)
 	console := filepath.Join(stateDir, "microvm", "console.log")
-	_, consoleErr := os.Stat(console)
-	upLog, upErr := os.ReadFile(upLogPath(stateDir)) //nolint:gosec // G304: jailoc-owned state path
-	if consoleErr != nil && upErr != nil {
+	if !fileExists(console) && !fileExists(upLogPath(stateDir)) {
 		return fmt.Errorf("workspace %q has no VM logs; start it with 'jailoc up'", ws.Name)
 	}
-	_, _ = w.Write(upLog)
-	if consoleErr != nil {
-		// `jailoc up` failed before the VM started.
-		return nil
+	if err := printUpLog(ctx, upLogPath(stateDir), console, follow, w); err != nil || !fileExists(console) {
+		// Without a console log, `jailoc up` failed before the VM started or
+		// follow was interrupted.
+		return err
 	}
 	if data, err := os.ReadFile(filepath.Join(stateDir, "supervisor.log")); err == nil { //nolint:gosec // G304: jailoc-owned state path
 		_, _ = w.Write(data)
@@ -1221,15 +1229,50 @@ func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Write
 		if _, err := io.Copy(w, f); err != nil {
 			return fmt.Errorf("read console log: %w", err)
 		}
-		if !follow {
+		if !follow || !waitLogs(ctx) {
 			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// printUpLog prints the up log at path, if any. With follow it keeps
+// printing what is added to it until console exists or ctx is done.
+func printUpLog(ctx context.Context, path, console string, follow bool, w io.Writer) error {
+	f, err := os.Open(path) //nolint:gosec // G304: jailoc-owned state path
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open up log: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	for {
+		// Checked before reading, so the last read has what was written
+		// before the VM started.
+		done := !follow || fileExists(console)
+		if _, err := io.Copy(w, f); err != nil {
+			return fmt.Errorf("read up log: %w", err)
+		}
+		if done || !waitLogs(ctx) {
+			return nil
+		}
+	}
+}
+
+// waitLogs waits for followed logs to grow and reports false once ctx is
+// done.
+func waitLogs(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(500 * time.Millisecond):
+		return true
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // restartVMIfRunning restarts a running workspace VM so configuration

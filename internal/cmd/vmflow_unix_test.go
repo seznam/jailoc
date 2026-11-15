@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -363,4 +365,79 @@ func writeLogFile(t *testing.T, name, data string) {
 	if err := os.WriteFile(name, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestRunUpVMLogsFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{
+		Name:    "fails",
+		Env:     []string{"TOKEN=x"},
+		Secrets: []workspace.ResolvedSecret{{Name: "TOKEN", Kind: workspace.SecretKindEnv}},
+	}
+	if err := runUpVM(context.Background(), &config.Config{}, ws); err == nil {
+		t.Fatal("runUpVM succeeded with a colliding secret")
+	}
+	data, err := os.ReadFile(upLogPath(vmStateDir(ws.Name)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, string(data), `msg="up failed" workspace=fails error="validate secrets for workspace \"fails\": env secret \"TOKEN\" collides`)
+}
+
+func TestLogsVMFollowsUp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{Name: "follow"}
+	stateDir := vmStateDir(ws.Name)
+	writeLogFile(t, upLogPath(stateDir), "resolve\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &syncBuffer{}
+	done := make(chan error, 1)
+	go func() { done <- logsVM(ctx, ws, true, out) }()
+
+	waitFor := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for !strings.Contains(out.String(), want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("output %q never held %q", out.String(), want)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	waitFor("resolve\n")
+	f, err := os.OpenFile(upLogPath(stateDir), os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // G304: test temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString("build\n")
+	_ = f.Close()
+	waitFor("resolve\nbuild\n")
+	writeLogFile(t, filepath.Join(stateDir, "supervisor.log"), "supervisor\n")
+	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log"), "console\n")
+	waitFor("resolve\nbuild\nsupervisor\nconsole\n")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("logsVM: %v", err)
+	}
+}
+
+// syncBuffer is a bytes.Buffer that one goroutine writes while another
+// reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
