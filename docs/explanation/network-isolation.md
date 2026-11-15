@@ -24,7 +24,7 @@ Every new TCP connection and UDP flow gets one decision. The broker evaluates ru
 | The gateway, the guest's own subnet, any address of a host interface | denied |
 | Any IPv6 address, when `network.ipv6` is off | denied |
 | Hard-denied ranges (below) | denied, no rule opens them |
-| Direct DNS (port 53) to any address other than the gateway | denied |
+| Direct DNS (port 53) to any address other than the gateway, unless an `allow` rule lists port 53 in `ports` | denied (`dns-filtered`) |
 | Any matching `deny` rule | denied (`rule=<name>`) |
 | Any matching `allow` rule (including the implicit `agent` rule) | allowed (`rule=<name>`) |
 | Everything else | denied (`default-deny` or `denied-range`) |
@@ -53,7 +53,7 @@ Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, t
 
 The broker enforces hostname rules at three points:
 
-1. **DNS**: the gateway resolver checks the queried name and every record owner and CNAME target in the upstream answer against the policy. Names that match a `deny` rule or do not match any `allow` rule get NXDOMAIN. `HTTPS` and `SVCB` records are answered with NODATA so Encrypted ClientHello (ECH) configurations do not reach the guest. Allowed `A` and `AAAA` answers populate a per-workspace IP-to-name cache bounded by record TTL. Direct port 53 to any other resolver is denied, and DoT (port 853) and QUIC (UDP port 443) are denied unless a rule explicitly opens those ports.
+1. **DNS**: the gateway resolver checks the queried name and every record owner and CNAME target in the upstream answer against the policy. Names that match a `deny` rule or do not match any `allow` rule get NXDOMAIN. `HTTPS` and `SVCB` records are answered with NODATA so Encrypted ClientHello (ECH) configurations do not reach the guest. Allowed `A` and `AAAA` answers populate a per-workspace IP-to-name cache bounded by record TTL. Direct port 53 to any other resolver is denied unless an `allow` rule lists port 53 in `ports`; the broker then answers those queries itself, sends them only to that resolver and filters them like the gateway resolver, but their answers stay out of the IP-to-name cache, so they never open a hostname rule. DoT (port 853) and QUIC (UDP port 443) are denied unless a rule explicitly opens those ports.
 2. **Connect time (L4)**: when the guest opens a TCP connection or UDP flow, the broker looks up the destination IP in its DNS cache. A rule matches if the IP is within a rule's CIDR (or `*` for public addresses), or if a cached DNS name for that IP matches a rule's hostname or `*.wildcard` pattern on the matching protocol and port. Unresolved literal IPs only match CIDR or `*` rules, and `*` never opens private IP ranges.
 3. **TLS SNI and HTTP Host before dialing**: for TCP connections authorized by a hostname rule or on ports with hostname deny rules, the broker completes the guest TCP handshake, reads the TLS ClientHello SNI or HTTP/1 `Host` header, re-evaluates the policy against that name, verifies the name belongs to the destination IP in the DNS cache, and only then dials the upstream host socket. A denied or mismatched SNI resets the connection before any upstream socket is opened, closing the shared-CDN-IP hole.
 

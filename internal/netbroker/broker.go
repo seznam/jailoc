@@ -86,6 +86,8 @@ type Broker struct {
 	names   *dnsCache
 	dialTCP func(string, string) (net.Conn, error)
 	dialUDP func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)
+	// exchange sends one DNS query to an upstream resolver.
+	exchange func(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error)
 
 	logMu sync.Mutex
 	log   *json.Encoder
@@ -118,6 +120,7 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 	b.tcpFlows.max, b.udpFlows.max = maxTCPFlows, maxUDPFlows
 	b.dialTCP = (&net.Dialer{Timeout: dialTimeout}).Dial
 	b.dialUDP = net.DialUDP
+	b.exchange = exchange
 	b.policy.Store(p)
 
 	s := stack.New(stack.Options{
@@ -182,8 +185,8 @@ func (b *Broker) env(dst netip.Addr) Env {
 	}
 }
 
-func (b *Broker) decide(proto string, src, dst netip.AddrPort, conn uint64) Decision {
-	d := Decide(b.policy.Load(), b.env(dst.Addr()), proto, dst)
+func (b *Broker) decide(p *Policy, proto string, src, dst netip.AddrPort, conn uint64) Decision {
+	d := Decide(p, b.env(dst.Addr()), proto, dst)
 	b.recordFlow(conn, proto, src, dst, d)
 	return d
 }

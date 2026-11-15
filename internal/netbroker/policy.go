@@ -493,8 +493,8 @@ func Decide(p *Policy, env Env, proto string, dst netip.AddrPort) Decision {
 		return decideIPv6(p, env, proto, netip.AddrPortFrom(a, dst.Port()))
 	case inAny(a, hardDeniedV4):
 		return Decision{Reason: "hard-deny"}
-	case (p.rulesMode || len(p.blockedZones) > 0) && dst.Port() == 53:
-		return Decision{Reason: "dns-filtered"}
+	case p.inspectsDNS(dst):
+		return decideDNS(p, env, proto, netip.AddrPortFrom(a, dst.Port()), !inAny(a, deniedV4))
 	}
 	isPublic := !inAny(a, deniedV4)
 	if p.rulesMode {
@@ -514,6 +514,46 @@ func Decide(p *Policy, env Env, proto string, dst netip.AddrPort) Decision {
 		}
 	}
 	return Decision{Reason: "denied-range", Name: firstName(env.Names)}
+}
+
+// inspectsDNS reports whether a guest flow to dst is DNS the broker filters:
+// it denies the flow unless decideDNS opens it, and then answers the queries
+// itself instead of relaying them.
+func (p *Policy) inspectsDNS(dst netip.AddrPort) bool {
+	return p != nil && (p.rulesMode || len(p.blockedZones) > 0) && dst.Port() == 53
+}
+
+// decideDNS opens DNS to a resolver other than the gateway only through an
+// allow rule that lists port 53 in its ports, so a rule without ports, such as
+// allow = ["*"], never lets the guest bypass the gateway resolver. Deny rules
+// still win.
+func decideDNS(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic bool) Decision {
+	denied := Decision{Reason: "dns-filtered", Name: firstName(env.Names)}
+	if !p.rulesMode {
+		return denied
+	}
+	allowed, ok := Decision{}, false
+	for i := range p.allow {
+		r := &p.allow[i]
+		if len(r.ranges) == 0 {
+			continue
+		}
+		if allowed, ok = matchAddrRule(r, env.Names, proto, dst, isPublic); ok {
+			break
+		}
+		if allowed, ok = matchRule(r, env.Names, proto, dst, isPublic, true); ok {
+			break
+		}
+	}
+	if !ok {
+		return denied
+	}
+	for i := range p.deny {
+		if d, ok := matchRule(&p.deny[i], env.Names, proto, dst, isPublic, false); ok {
+			return d
+		}
+	}
+	return allowed
 }
 
 func decideRules(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic bool, privateDenyReason string) Decision {

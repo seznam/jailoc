@@ -53,10 +53,14 @@ func decideIPv6(policy *Policy, env Env, proto string, dst netip.AddrPort) Decis
 	if embedded, ok := embeddedIPv4(address); ok {
 		return Decide(policy, env, proto, netip.AddrPortFrom(embedded, dst.Port()))
 	}
-	if (policy.rulesMode || len(policy.blockedZones) > 0) && dst.Port() == 53 {
-		return Decision{Reason: "dns-filtered"}
+	reserved := !address.IsPrivate() && !public6.Contains(address)
+	if policy.inspectsDNS(dst) {
+		if reserved {
+			return Decision{Reason: "dns-filtered"}
+		}
+		return decideDNS(policy, env, proto, dst, !address.IsPrivate())
 	}
-	if !address.IsPrivate() && !public6.Contains(address) {
+	if reserved {
 		return Decision{Reason: "ipv6-reserved"}
 	}
 	isPublic := !address.IsPrivate() && public6.Contains(address)
