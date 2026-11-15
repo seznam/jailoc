@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -43,6 +44,7 @@ const maxMountData = 4095
 // Without an idmapped boot root, a root-owned copy of jailoc's files takes
 // its place, so that directories such as /etc keep the image's owner.
 func overlayRoot(logger *slog.Logger, cfg *Config) (*idmapper, error) {
+	start := time.Now()
 	if len(cfg.RootLayers) == 0 {
 		return nil, errors.New("guest config lists no root layers")
 	}
@@ -102,7 +104,7 @@ func overlayRoot(logger *slog.Logger, cfg *Config) (*idmapper, error) {
 		mapper.close()
 		return nil, err
 	}
-	logger.Info("overlay root filesystem", "layers", len(layers), "idmapped", mapper != nil)
+	logger.Info("overlay root filesystem", "layers", len(layers), "idmapped", mapper != nil, "duration", time.Since(start).Round(time.Millisecond))
 	return mapper, nil
 }
 

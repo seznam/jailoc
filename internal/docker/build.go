@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strings"
+	"time"
 
 	controlapi "github.com/moby/buildkit/api/services/control"
 	bkclient "github.com/moby/buildkit/client"
@@ -58,6 +60,7 @@ func forBuilder(version build.BuilderVersion, dockerfile []byte, args map[string
 // imageBuild builds buildCtx with the builder version and shows its progress
 // on stderr.
 func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Reader, version build.BuilderVersion, opts dockerclient.ImageBuildOptions) error {
+	start := time.Now()
 	opts.Version = version
 	if version == build.BuilderBuildKit {
 		// BuildKit resolves base images through a client session, as docker
@@ -89,6 +92,7 @@ func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Rea
 	if err := display(resp.Body); err != nil {
 		return fmt.Errorf("read build output: %w", err)
 	}
+	slog.Info("image built", "image", strings.Join(opts.Tags, ","), "duration", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
@@ -100,6 +104,7 @@ func displayBuildKitStream(ctx context.Context, r io.Reader) error {
 		return fmt.Errorf("create build progress display: %w", err)
 	}
 	statuses := make(chan *bkclient.SolveStatus)
+	finished := map[string]bool{}
 	displayDone := make(chan error, 1)
 	go func() {
 		// The display must drain statuses until the stream ends, even
@@ -121,7 +126,9 @@ func displayBuildKitStream(ctx context.Context, r io.Reader) error {
 			slog.Debug("decode BuildKit status", "error", err)
 			return
 		}
-		statuses <- bkclient.NewSolveStatus(&status)
+		s := bkclient.NewSolveStatus(&status)
+		logBuildSteps(s, finished)
+		statuses <- s
 	})
 	close(statuses)
 	displayErr := <-displayDone
@@ -132,4 +139,24 @@ func displayBuildKitStream(ctx context.Context, r io.Reader) error {
 		return fmt.Errorf("display build progress: %w", displayErr)
 	}
 	return nil
+}
+
+// logBuildSteps logs the build steps of s that finished, each once: finished
+// holds the ones already logged.
+func logBuildSteps(s *bkclient.SolveStatus, finished map[string]bool) {
+	for _, v := range s.Vertexes {
+		if v.Completed == nil || finished[v.Digest.String()] {
+			continue
+		}
+		finished[v.Digest.String()] = true
+		var d time.Duration
+		if v.Started != nil {
+			d = v.Completed.Sub(*v.Started).Round(time.Millisecond)
+		}
+		args := []any{"step", v.Name, "duration", d, "cached", v.Cached}
+		if v.Error != "" {
+			args = append(args, "error", v.Error)
+		}
+		slog.Info("build step finished", args...)
+	}
 }

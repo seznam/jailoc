@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"runtime"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
@@ -50,6 +52,21 @@ func ImageID(ctx context.Context, ref string) (string, error) {
 		return "", fmt.Errorf("inspect image %s: %w", ref, err)
 	}
 	return inspect.ID, nil
+}
+
+// ImageSize returns the number of layers of an image known to the daemon
+// selected by the environment and its size as the daemon reports it.
+func ImageSize(ctx context.Context, ref string) (layers int, size int64, err error) {
+	cli, err := dockerclient.New(dockerclient.FromEnv)
+	if err != nil {
+		return 0, 0, fmt.Errorf("create Docker Engine client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+	inspect, err := cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return 0, 0, fmt.Errorf("inspect image %s: %w", ref, err)
+	}
+	return len(inspect.RootFS.Layers), inspect.Size, nil
 }
 
 // minSaveAPIVersion is the Engine API version of Docker Engine 25, the first
@@ -143,6 +160,7 @@ func pullImage(ctx context.Context, cli *dockerclient.Client, ref, platform stri
 	if err != nil {
 		return fmt.Errorf("parse platform %s: %w", platform, err)
 	}
+	start := time.Now()
 	rc, err := cli.ImagePull(ctx, ref, dockerclient.ImagePullOptions{Platforms: []ocispec.Platform{p}})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
@@ -151,6 +169,7 @@ func pullImage(ctx context.Context, cli *dockerclient.Client, ref, platform stri
 	if err := displayStream(rc); err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
+	slog.Info("image pulled", "image", ref, "platform", platform, "duration", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 

@@ -141,9 +141,10 @@ enable_docker = true
 ipv6 = %[8]t
 dns = "1.1.1.1"
 
+# Docker Hub serves image blobs from Cloudflare or, at times, from S3.
 [[workspaces.%[7]s.network.rules]]
 name = "dev-deps"
-allow = ["example.com", "*.docker.io", "*.docker.com", "dl-cdn.alpinelinux.org"]
+allow = ["example.com", "*.docker.io", "*.docker.com", "docker-images-prod.s3.dualstack.us-east-1.amazonaws.com", "dl-cdn.alpinelinux.org"]
 
 [[workspaces.%[7]s.network.rules]]
 name = "blocked"

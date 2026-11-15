@@ -12,10 +12,13 @@ To find out where a slow start spends its time, list the duration of each step: 
 grep -E 'step (finished|failed)' ~/.cache/jailoc/jailoc.log | tail -n 30
 ```
 
+`jailoc logs <workspace>` starts with the same records of the workspace's last `jailoc up`, kept in its `up.log`, followed by the supervisor and guest console logs with the boot timings.
+
 Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/`:
 
 | File | Content |
 |------|---------|
+| `up.log` | The log records of the last `jailoc up`: each step with its duration, Docker pulls and builds with every build step (`build step finished`, with `cached` and its duration), the image's layer count and size, and the export from Docker and layer conversion |
 | `supervisor.log` | VM supervisor output: broker and VM start, readiness with the time each took, shutdown reason |
 | `microvm/console.log` | Guest console: boot, SSH connections and processes the kernel killed when the VM ran out of memory |
 | `broker.jsonl`, `broker.jsonl.1` | Network broker decisions, one JSON object per line, rotated at 16 MiB; read them with `jailoc traffic` |
@@ -24,7 +27,7 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 | `guest-ro/` | The read-only internal share: configuration copies and staged snapshots |
 | `state.json` | Supervisor PID and readiness |
 
-Print the two logs with:
+Print `up.log`, `supervisor.log` and the console log with:
 
 ```bash
 jailoc logs <workspace>

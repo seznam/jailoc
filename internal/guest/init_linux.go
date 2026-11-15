@@ -51,6 +51,7 @@ type account struct {
 // Init prepares the guest and serves SSH sessions until the host requests a
 // shutdown. It returns when the VM should power off.
 func Init(logger *slog.Logger) error {
+	start := time.Now()
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -202,7 +203,7 @@ func Init(logger *slog.Logger) error {
 	}()
 	stopReaper := reaper.Start(logger)
 	defer stopReaper()
-	logger.Info("jailoc guest ready", "user", acct.name, "workdir", cfg.WorkDir)
+	logger.Info("jailoc guest ready", "user", acct.name, "workdir", cfg.WorkDir, "after", time.Since(start).Round(time.Millisecond))
 
 	ticker := time.NewTicker(shutdownPoll)
 	defer ticker.Stop()

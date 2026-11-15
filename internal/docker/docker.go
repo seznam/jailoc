@@ -109,7 +109,7 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 	content := forBuilder(version, embed.Dockerfile(), buildArgs)
 	hash := contentHash(content, buildArgs)
 	if haveImage(ctx, cli, tag, hash) {
-		slog.Debug("embedded base image is up to date", "tag", tag)
+		slog.Info("image up to date", "image", tag)
 		return nil
 	}
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
@@ -320,6 +320,7 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 	// The tag names the base image and the Dockerfile, so an existing image
 	// is the result of this build.
 	if haveImage(ctx, cli, tag, "") {
+		slog.Info("image up to date", "image", tag)
 		return tag, nil
 	}
 

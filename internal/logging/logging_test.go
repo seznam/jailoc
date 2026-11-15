@@ -1,9 +1,11 @@
 package logging
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -124,4 +126,40 @@ func bytesOfSize(size int) []byte {
 		buf[i] = 'x'
 	}
 	return buf
+}
+
+func TestTee(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cleanupLogFile(t)
+	if err := Init(); err != nil {
+		t.Fatalf("Init() error = %v, want nil", err)
+	}
+	before := slog.Default()
+
+	var tee bytes.Buffer
+	restore := Tee(&tee)
+	slog.Debug("debug only in the log file")
+	slog.Info("step finished", "step", "build")
+	restore()
+	slog.Info("after restore")
+
+	if slog.Default() != before {
+		t.Error("restore did not bring back the previous logger")
+	}
+	got := tee.String()
+	if !strings.Contains(got, `msg="step finished" step=build`) {
+		t.Errorf("tee = %q, want the info record", got)
+	}
+	if strings.Contains(got, "debug only") || strings.Contains(got, "after restore") {
+		t.Errorf("tee = %q, want neither debug records nor records after restore", got)
+	}
+	data, err := os.ReadFile(logFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"debug only in the log file", "step finished", "after restore"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("log file lacks %q", want)
+		}
+	}
 }
