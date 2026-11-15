@@ -277,14 +277,14 @@ func TestLargeImageWarning(t *testing.T) {
 		want   string
 	}{
 		{name: "small", layers: largeImageLayers, size: largeImageBytes},
-		{name: "many layers", layers: 80, size: 1 << 30, want: "image img has 80 layers; converting"},
-		{name: "large", layers: 10, size: 12 << 30, want: "image img has 12 GiB; converting"},
-		{name: "both", layers: 60, size: 11 << 30, want: "image img has 60 layers and 11 GiB; converting"},
+		{name: "many layers", layers: 30, size: 1 << 30, want: "image img has 30 layers; converting"},
+		{name: "large", layers: 10, size: 6 << 30, want: "image img has 6 GiB; converting"},
+		{name: "both", layers: 25, size: 7 << 30, want: "image img has 25 layers and 7 GiB; converting"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := largeImageWarning("img", tt.layers, tt.size)
+			got := largeImageWarning("image img has", tt.layers, tt.size)
 			if tt.want == "" {
 				if got != "" {
 					t.Errorf("largeImageWarning = %q, want none", got)
@@ -292,6 +292,28 @@ func TestLargeImageWarning(t *testing.T) {
 				return
 			}
 			assertContains(t, got, tt.want)
+		})
+	}
+}
+
+func TestDockerfileBase(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		chain []string
+		want  string
+	}{
+		{name: "image used as is", chain: []string{"img"}},
+		{name: "no workspace Dockerfile", chain: []string{"base", "agent", "agent"}, want: "agent"},
+		{name: "workspace Dockerfile", chain: []string{"base", "docker", "agent", "overlay"}, want: "agent"},
+		{name: "Dockerfile on defaults image", chain: []string{"defaults", "overlay"}, want: "defaults"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := dockerfileBase(tt.chain); got != tt.want {
+				t.Errorf("dockerfileBase(%v) = %q, want %q", tt.chain, got, tt.want)
+			}
 		})
 	}
 }

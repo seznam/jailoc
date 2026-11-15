@@ -301,7 +301,7 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 		},
 	)
 	err = vm.ImportImage(ctx, filepath.Join(vmRootDir(), "images"), ref, func(w io.Writer) error {
-		warnLargeImage(ctx, finalImage)
+		warnLargeImage(ctx, finalImage, dockerfileBase(chain))
 		_, _ = color.New(color.FgCyan).Printf("Converting image %s for the workspace VM...\n", finalImage)
 		progressDisplay.start()
 		_, err := docker.SaveImage(ctx, finalImage, w)
@@ -323,32 +323,60 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	return ref, nil
 }
 
-// Image sizes above which jailoc warns before converting an image: the
-// conversion reads the whole image, and each layer is one more mount that
-// file lookups in the VM pass through.
+// Sizes of what the user adds to an image above which jailoc warns before
+// converting it: the conversion reads every new layer, and each layer is one
+// more mount that file lookups in the VM pass through.
 const (
-	largeImageLayers = 50
-	largeImageBytes  = 10 << 30
+	largeImageLayers = 20
+	largeImageBytes  = 5 << 30
 )
 
-// warnLargeImage logs the size of image and warns on stderr when it is
-// large.
-func warnLargeImage(ctx context.Context, image string) {
+// warnLargeImage logs the size of image and warns on stderr when the user's
+// part of it is large: the layers the workspace Dockerfile adds to parent,
+// or all of image when it is used as is (parent is empty). The base image and
+// the layers jailoc adds do not count.
+func warnLargeImage(ctx context.Context, image, parent string) {
 	layers, size, err := docker.ImageSize(ctx, image)
 	if err != nil {
 		slog.Debug("image size unknown", "image", image, "error", err)
 		return
 	}
 	slog.Info("workspace image", "image", image, "layers", layers, "bytes", size)
-	if msg := largeImageWarning(image, layers, size); msg != "" {
+	subject := "image " + image + " has"
+	if parent != "" {
+		if parent == image {
+			// No workspace Dockerfile.
+			return
+		}
+		baseLayers, baseSize, err := docker.ImageSize(ctx, parent)
+		if err != nil {
+			slog.Debug("image size unknown", "image", parent, "error", err)
+			return
+		}
+		layers, size = layers-baseLayers, size-baseSize
+		subject = "the workspace Dockerfile adds"
+		slog.Info("workspace Dockerfile layers", "image", image, "base", parent, "layers", layers, "bytes", size)
+	}
+	if msg := largeImageWarning(subject, layers, size); msg != "" {
 		slog.Warn("large workspace image", "image", image, "layers", layers, "bytes", size)
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", msg)
 	}
 }
 
-// largeImageWarning returns the warning for an image with that many layers
-// and bytes, or "" when it is not large.
-func largeImageWarning(image string, layers int, size int64) string {
+// dockerfileBase returns the image the workspace Dockerfile was built on,
+// from the chain ResolveAndLayerImage returns: the image before the final
+// one, which is the final one itself without a workspace Dockerfile. An image
+// used as is has none.
+func dockerfileBase(chain []string) string {
+	if len(chain) < 2 {
+		return ""
+	}
+	return chain[len(chain)-2]
+}
+
+// largeImageWarning returns the warning that subject, such as "image x has",
+// that many layers and bytes, or "" when they are not large.
+func largeImageWarning(subject string, layers int, size int64) string {
 	var what []string
 	if layers > largeImageLayers {
 		what = append(what, fmt.Sprintf("%d layers", layers))
@@ -359,8 +387,8 @@ func largeImageWarning(image string, layers int, size int64) string {
 	if len(what) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("image %s has %s; converting it for the VM takes a while, and each layer slows down file lookups in the VM. "+
-		"Fewer RUN steps, a multi-stage build or a smaller base image make it faster to convert and boot", image, strings.Join(what, " and "))
+	return fmt.Sprintf("%s %s; converting it for the VM takes a while, and each layer slows down file lookups in the VM. "+
+		"Fewer RUN steps or a multi-stage build make it faster to convert and boot", subject, strings.Join(what, " and "))
 }
 
 // importPhases times the export from Docker and the layer conversion of an
