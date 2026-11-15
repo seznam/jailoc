@@ -99,6 +99,8 @@ github.com/docker/go-units v0.5.0 h1:69rxXcBk27SvSaaxTtLh/8llcHD8vYHT7WSdRZ/jvr4
 github.com/docker/go-units v0.5.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
 github.com/elastic/go-seccomp-bpf v1.6.0 h1:NYduiYxRJ0ZkIyQVwlSskcqPPSg6ynu5pK0/d7SQATs=
 github.com/elastic/go-seccomp-bpf v1.6.0/go.mod h1:5tFsTvH4NtWGfpjsOQD53H8HdVQ+zSZFRUDSGevC0Kc=
+github.com/erofs/go-erofs v0.3.2 h1:GBWc9wyDOBVMLpA9OC0MkFfs4AbiEAAEhNH8SpQwD/4=
+github.com/erofs/go-erofs v0.3.2/go.mod h1:XkSeN9MHszGd4+3gcEjadJLYHCQpWzJ7/8yznzMuzJs=
 github.com/fatih/color v1.19.0 h1:Zp3PiM21/9Ld6FzSKyL5c/BULoe/ONr9KlbYVOfG8+w=
 github.com/fatih/color v1.19.0/go.mod h1:zNk67I0ZUT1bEGsSGyCZYZNrHuTkJJB+r6Q9VuMi0LE=
 github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeORc=
@@ -243,8 +245,8 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f h1:9hiVElpCmKzsBKQHkBqZ8LGzt82iLfM8egxr4sew+Ys=
 github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f/go.mod h1:8/zr1Tv0+cKpVtGCEB/7YfRXr2TszsMxMXLaT8YuBgU=
-github.com/thejoeejoee/go-microvm v0.0.42-0.20261103225112-32f39314de8e h1:CVINOPBwyFnxDQ304f7bGysa6KmngQA5OBR+mJSbJaA=
-github.com/thejoeejoee/go-microvm v0.0.42-0.20261103225112-32f39314de8e/go.mod h1:qe+JDPzfKtm8PUWJglHBuNqcGw2So6Zs+sqOgnN0z48=
+github.com/thejoeejoee/go-microvm v0.0.42-0.20261114115008-f6df49aad2e1 h1:gpgclG0dVI53jZw4uctxseq4Kj/XLZq0b70Y6aTK4E8=
+github.com/thejoeejoee/go-microvm v0.0.42-0.20261114115008-f6df49aad2e1/go.mod h1:qe+JDPzfKtm8PUWJglHBuNqcGw2So6Zs+sqOgnN0z48=
 github.com/tonistiigi/fsutil v0.0.0-20260819142231-83cac42c1c52 h1:SGUsSbltLA7/kcCcWVaw6FtqkwvOCM9Ypq0ZLtsVbUE=
 github.com/tonistiigi/fsutil v0.0.0-20260819142231-83cac42c1c52/go.mod h1:oO0lfhK8QAY3alnpiYXcRVjyVx95XGWZE3K2M+AqfcM=
 github.com/tonistiigi/go-csvvalue v0.0.0-20240814133006-030d3b2625d0 h1:2f304B10LaZdB8kkVEaoXvAMVan2tl9AiK4G0odjQtE=

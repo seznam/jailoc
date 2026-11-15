@@ -28,12 +28,14 @@ type PruneResult struct {
 }
 
 // PruneImages drops workspace images from the image cache at cacheDir that
-// no reference in keep names, and the unpacked images no reference points
-// to any more, with the composed-layer snapshots none of the remaining images
-// starts with. Extracted layers unused for two weeks are removed as well.
-// Only workspace image references (RootFSRef) are dropped; other references
-// such as the builder image stay. Entries changed within the last hour are
-// kept.
+// no reference in keep names, together with the EROFS layers no remaining
+// workspace image uses. In go-microvm's part of the cache, which holds the
+// builder image and workspace images of older releases, it drops the
+// unpacked images no reference points to any more, with the composed-layer
+// snapshots none of the remaining images starts with, and extracted layers
+// unused for two weeks. Only workspace image references (RootFSRef and the
+// older unpacked ones) are dropped; other references such as the builder
+// image stay. Entries changed within the last hour are kept.
 func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 	var res PruneResult
 	unlock, err := lockCache(cacheDir)
@@ -52,6 +54,10 @@ func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 		return err == nil && info.ModTime().Before(cutoff)
 	}
 
+	if err := pruneEROFS(cacheDir, kept, old, &res); err != nil {
+		return res, err
+	}
+
 	refsDir := filepath.Join(cacheDir, "refs")
 	entries, err := os.ReadDir(refsDir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -65,7 +71,7 @@ func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 			continue
 		}
 		ref, digest := parseRef(data)
-		if strings.HasPrefix(ref, rootfsRepo+":") && !kept[ref] && old(path) {
+		if strings.HasPrefix(ref, legacyRootfsRepo+":") && !kept[ref] && old(path) {
 			if err := os.Remove(path); err != nil {
 				return res, fmt.Errorf("remove image reference %s: %w", ref, err)
 			}
@@ -100,11 +106,60 @@ func PruneImages(cacheDir string, keep []string) (PruneResult, error) {
 	// Pruning must not migrate the cache format, so the layers are evicted
 	// without their parent cache.
 	n, err := image.NewLayerCache(filepath.Join(cacheDir, "layers")).Evict(layerUnusedLimit)
-	res.Layers = n
+	res.Layers += n
 	if err != nil {
 		return res, fmt.Errorf("remove unused image layers: %w", err)
 	}
 	return res, nil
+}
+
+// pruneEROFS removes the EROFS workspace images whose reference is not in
+// kept and the layer images no workspace image links to, along with staging
+// files of interrupted imports.
+func pruneEROFS(cacheDir string, kept map[string]bool, old func(string) bool, res *PruneResult) error {
+	images := filepath.Join(cacheDir, erofsDir, imagesDir)
+	entries, err := os.ReadDir(images)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read workspace images: %w", err)
+	}
+	for _, e := range entries {
+		path := filepath.Join(images, e.Name())
+		staging := strings.HasPrefix(e.Name(), ".")
+		if !old(path) || !staging && kept[rootfsRepo+":"+e.Name()] {
+			continue
+		}
+		if err := RemoveTree(path); err != nil {
+			return fmt.Errorf("remove workspace image %s: %w", e.Name(), err)
+		}
+		if !staging {
+			res.Images++
+		}
+	}
+
+	layers := filepath.Join(cacheDir, erofsDir, layersDir)
+	entries, err = os.ReadDir(layers)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read image layers: %w", err)
+	}
+	for _, e := range entries {
+		path := filepath.Join(layers, e.Name())
+		info, err := e.Info()
+		if err != nil || !old(path) {
+			continue
+		}
+		// Every workspace image holds a hard link to each of its layers.
+		staging := strings.HasPrefix(e.Name(), ".")
+		if st, ok := info.Sys().(*syscall.Stat_t); !staging && (!ok || st.Nlink > 1) {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove image layer %s: %w", e.Name(), err)
+		}
+		if !staging {
+			res.Layers++
+		}
+	}
+	return nil
 }
 
 // PruneCacheDirs removes subdirectories of cacheDir (such as unpacked VM

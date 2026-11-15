@@ -1,6 +1,6 @@
 # Default Image Contents
 
-The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below. This image is used when no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile). jailoc unpacks it into the VM image cache and boots it as the root file system of the workspace VM.
+The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below. This image is used when no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile). jailoc converts its layers into read-only EROFS images in the VM image cache and boots them as the root file system of the workspace VM.
 
 Core tool versions (Node.js, the npm language servers) are pinned as `ARG` declarations at the top of the Dockerfile.
 

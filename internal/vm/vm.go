@@ -297,8 +297,13 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		}
 	}
 	var guestFiles map[string]fileContent
+	var imgDir string
+	var img imageManifest
 	if workspace {
-		if guestFiles, err = prepareGuest(spec); err != nil {
+		if imgDir, img, err = readImage(spec.ImageCache, spec.Image); err != nil {
+			return err
+		}
+		if guestFiles, err = prepareGuest(spec, img.Layers); err != nil {
 			return err
 		}
 	}
@@ -322,7 +327,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 
 	opts := builderOptions(spec)
 	if workspace {
-		opts = workspaceOptions(spec, guestFiles)
+		opts = workspaceOptions(spec, guestFiles, imgDir, img.Env)
 	}
 	vm, err := microvm.Run(ctx, imageRef(spec), opts...)
 	if err != nil {
