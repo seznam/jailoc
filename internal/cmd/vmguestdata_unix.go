@@ -94,7 +94,12 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		}
 	}
 	for _, d := range persistentHomeDirs(ws.Agent) {
-		if slices.ContainsFunc(shares, func(s vm.Share) bool { return s.GuestPath == d.Path }) {
+		if i := slices.IndexFunc(shares, func(s vm.Share) bool { return s.GuestPath == d.Path }); i >= 0 {
+			// The VM claimed a named profile before this start; other
+			// shares belong to the user.
+			if name := workspaceProfile(ws); start && name != "" && shares[i].HostPath == filepath.Join(profilesDir(), name, d.Name) {
+				addProfileStateDefaults(shares[i].HostPath, d, ws.Agent)
+			}
 			continue
 		}
 		rel := guestDataHome + "/" + d.Name
@@ -108,6 +113,7 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 			if err := removeConfigMountPoints(root, rel, d, ws.Agent); err != nil {
 				return nil, fmt.Errorf("workspace %q: %w", ws.Name, err)
 			}
+			addStateDefaults(root, rel, d, ws.Agent)
 		}
 		if slices.Contains(ws.Agent.State, d) {
 			addStatusLine(root, rel, ws.Agent)
@@ -331,6 +337,95 @@ func removeConfigMountPoints(root *os.Root, dir string, d agent.StateDir, h agen
 		if err := root.Remove(p); err != nil {
 			return fmt.Errorf("remove mount point %s: %w", p, err)
 		}
+	}
+	return nil
+}
+
+// maxAgentState bounds the agent state files jailoc edits; Claude Code keeps
+// per-project history in .claude.json.
+const maxAgentState = 64 << 20
+
+// addStateDefaults sets the StateDefaults of agent h that are in state
+// directory d, at dir inside root. It runs only before the VM starts, while
+// the agent cannot write the files. A failure leaves the agent without the
+// defaults, so it is only reported.
+func addStateDefaults(root *os.Root, dir string, d agent.StateDir, h agent.Harness) {
+	for _, sd := range h.StateDefaults {
+		inner, ok := strings.CutPrefix(sd.File, d.Path+"/")
+		if !ok {
+			continue
+		}
+		if err := setStateDefault(root, path.Join(dir, inner), sd); err != nil {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not set %s in %s: %v\n", sd.Key, sd.File, err)
+		}
+	}
+}
+
+// addProfileStateDefaults sets the StateDefaults in state directory d of a
+// named profile, at host directory dir.
+func addProfileStateDefaults(dir string, d agent.StateDir, h agent.Harness) {
+	if len(h.StateDefaults) == 0 {
+		return
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not open profile directory %s: %v\n", dir, err)
+		return
+	}
+	defer func() { _ = root.Close() }() // directory handle
+	addStateDefaults(root, ".", d, h)
+}
+
+func setStateDefault(root *os.Root, file string, sd agent.StateDefault) error {
+	values := map[string]json.RawMessage{}
+	data, err := readRegular(root, file, maxAgentState)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return err
+	default:
+		if err := json.Unmarshal(data, &values); err != nil {
+			return fmt.Errorf("parse %s: %w", path.Base(file), err)
+		}
+	}
+	if values == nil {
+		values = map[string]json.RawMessage{}
+	}
+	if _, ok := values[sd.Key]; ok {
+		return nil
+	}
+	values[sd.Key] = json.RawMessage(sd.Value)
+	data, err = json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := root.MkdirAll(path.Dir(file), 0o700); err != nil {
+		return err
+	}
+	return replaceFile(root, file, append(data, '\n'))
+}
+
+// replaceFile writes data to file inside root through a temporary file that
+// it renames over file, so a failed write leaves the old file intact.
+func replaceFile(root *os.Root, file string, data []byte) error {
+	tmp := file + ".jailoc-tmp"
+	if err := root.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", tmp, err)
+	}
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", tmp, err)
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = root.Rename(tmp, file)
+	}
+	if err != nil {
+		_ = root.Remove(tmp) // best effort; the write error is reported
+		return fmt.Errorf("write %s: %w", file, err)
 	}
 	return nil
 }

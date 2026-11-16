@@ -9,8 +9,11 @@
 #   0002  describe IOAPIC pins 16-23 in the MP table so the guest can route
 #         the devices on them (not upstream: libkrun describes them only
 #         through its opt-in ACPI tables).
-# Drop 0001 once go-microvm pins a libkrun release that contains it. Both
-# patches touch only x86_64 code; on aarch64 they apply and change nothing.
+#   0003  open inodes with O_NONBLOCK before unlinking on macOS so a FIFO
+#         does not block the virtio-fs worker (upstream e3a887a2).
+# Drop 0001 once go-microvm pins a libkrun release that contains it. The IRQ
+# patches touch only x86_64 code (on aarch64 they apply and change nothing);
+# 0003 touches only the macOS source, which the Linux build ignores.
 # The patches are applied to the source tree inside the builder image,
 # which has the matching toolchain, and the result replaces libkrun.so.1.
 #

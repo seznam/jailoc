@@ -358,7 +358,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 |---|---|---|---|---|---|---|---|
 | `opencode2` | OpenCode 2 | `@opencode/cli` | `opencode --standalone --auto` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_CLI_CONFIG_CONTENT` |
 | `opencode1` | OpenCode 1 | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode`, `~/.omo` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
-| `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `DISABLE_AUTOUPDATER=1` |
+| `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `CLAUDE_CODE_SANDBOXED=1`, `DISABLE_AUTOUPDATER=1` |
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
 | `omo` | OmO | `omo-ai` | `omo --permission-preset full-access --extension /etc/jailoc-tui-plugin/omo.js` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
 | `agy` | Antigravity CLI | GitHub release `google-antigravity/antigravity-cli` | `agy --dangerously-skip-permissions` | `--continue` | `--conversation ID` | `~/.gemini` | `AGY_CLI_DISABLE_AUTO_UPDATE=1` |
@@ -366,6 +366,8 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 `opencode` is an alias of `opencode2`: it runs the same harness and shares its persistent home directories, while `agents.opencode` and `agents.opencode2` are separate tables. OpenCode 2 runs with `--standalone`, so each session has its own server and environment instead of sharing a background service.
 
 Every agent shows the workspace name; `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `--settings` and `--extension` load the jailoc indicator, and for `copilot` and `agy` jailoc adds a `statusLine` to `~/.copilot/settings.json` and `~/.gemini/antigravity-cli/settings.json` when it sets none (and `storeTokenPlaintext = true` in `~/.copilot/settings.json` when unset, so Copilot stores logins without a system keyring). See [Workspace indicator](../how-to/tui-plugin.md).
+
+For `claude`, jailoc sets `bypassPermissionsModeAccepted = true` in `~/.claude/.claude.json` on every VM start when the file does not set it, and `CLAUDE_CODE_SANDBOXED=1` makes Claude Code trust the working directory without its trust prompt. Background sessions (`claude --bg`, which switching sessions in Claude Code uses) start only after both, and would otherwise ask to run `claude --dangerously-skip-permissions` interactively once.
 
 The package versions are pinned by the jailoc release; `version` in [`agents`](#agents) installs another one. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
 
@@ -619,7 +621,7 @@ With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an
 
 ### `env`
 
-Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`, `AGY_CLI_DISABLE_AUTO_UPDATE`.
+Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_SANDBOXED`, `DISABLE_AUTOUPDATER`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`, `AGY_CLI_DISABLE_AUTO_UPDATE`.
 
 ### `env_file`
 
@@ -681,6 +683,20 @@ Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_ag
 ## Persistent state
 
 `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` keeps the agent's persistent home directories (see [Coding agents](#coding-agents)) and `~/.cache` across restarts. `jailoc down --purge` deletes it. An agent [`profile`](#agent-profiles) moves the agent's directories to a shared profile or makes them ephemeral.
+
+### Tool caches
+
+Sessions get these variables, so download caches that tools keep outside `~/.cache` by default land in the VM's persistent `~/.cache` (`/home/agent/.cache`) instead of its in-memory overlay:
+
+| Variable | Value | Read by |
+|---|---|---|
+| `GOMODCACHE` | `~/.cache/go-mod` | Go module cache (default `~/go/pkg/mod`) |
+| `NPM_CONFIG_CACHE` | `~/.cache/npm` | npm (default `~/.npm`) |
+| `BUN_INSTALL_CACHE_DIR` | `~/.cache/bun` | Bun install cache (default `~/.bun/install/cache`) |
+| `NUGET_PACKAGES` | `~/.cache/nuget/packages` | NuGet global packages (default `~/.nuget/packages`) |
+| `NUGET_HTTP_CACHE_PATH` | `~/.cache/nuget/v3-cache` | NuGet HTTP cache (default `~/.local/share/NuGet/v3-cache`) |
+
+A variable the image sets is kept; for npm, which reads its variables case-insensitively, either `NPM_CONFIG_CACHE` or `npm_config_cache` counts. A variable set by the workspace's `env`, `env_file` or an env secret takes precedence. The variables also take precedence over the tools' own configuration files, such as a `cache` setting in `.npmrc` or `bunfig.toml`; set the variable in the workspace's `env` to choose another location.
 
 ---
 

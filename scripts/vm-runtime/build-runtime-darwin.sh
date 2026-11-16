@@ -3,10 +3,11 @@
 # embed (internal/vm/runtime.go).
 #
 # libkrun is built from the release go-microvm names in versions.env, with
-# jailoc's patches (build-libkrun-linux.sh explains them; on arm64 they change
-# nothing) and the same features as on Linux, so the runtime needs no GPU
-# libraries. Its guest init is the musl build of the linux-arm64 job
-# (build-init.sh) instead of a cross-compile against a Debian glibc sysroot.
+# jailoc's patches (build-libkrun-linux.sh explains them; 0001/0002 are
+# x86_64-only, 0003 is the macOS FIFO fix) and the same features as on Linux,
+# so the runtime needs no GPU libraries. Its guest init is the musl build of
+# the linux-arm64 job (build-init.sh) instead of a cross-compile against a
+# Debian glibc sysroot.
 # It is built with cargo-auditable, which records the Rust crates it
 # contains so SBOM tools such as syft can list them. The runner is built from
 # the go-microvm revision jailoc pins in go.mod against that libkrun. The

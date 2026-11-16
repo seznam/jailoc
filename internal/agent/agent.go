@@ -131,6 +131,16 @@ type ConfigFile struct {
 	Exclude []string
 }
 
+// StateDefault is a top-level value of a JSON file in a state directory that
+// jailoc sets when the file does not, before the VM starts.
+type StateDefault struct {
+	// File is the guest path of the file.
+	File string
+	// Key is the top-level key and Value its JSON value.
+	Key   string
+	Value string
+}
+
 // Harness describes a built-in coding agent.
 type Harness struct {
 	// Name is the value of agent in the configuration.
@@ -157,6 +167,9 @@ type Harness struct {
 	Env []string
 	// State are the home directories that survive VM restarts.
 	State []StateDir
+	// StateDefaults are values jailoc sets in files of the State
+	// directories.
+	StateDefaults []StateDefault
 	// Mounts are the default mounts added before [defaults] and workspace
 	// mounts.
 	Mounts []string
@@ -286,9 +299,14 @@ var harnesses = []Harness{
 		Resume:     "--resume",
 		Unattended: []string{"--dangerously-skip-permissions"},
 		// CLAUDE_CONFIG_DIR also moves ~/.claude.json into the persistent
-		// directory.
-		Env:   []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "DISABLE_AUTOUPDATER=1"},
+		// directory. CLAUDE_CODE_SANDBOXED makes Claude Code trust the
+		// working directory without its trust prompt, which background
+		// sessions (--bg, used to switch sessions) otherwise require.
+		Env:   []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "CLAUDE_CODE_SANDBOXED=1", "DISABLE_AUTOUPDATER=1"},
 		State: []StateDir{{Name: "claude", Path: "/home/agent/.claude"}},
+		// Background sessions refuse --dangerously-skip-permissions until
+		// its disclaimer was accepted interactively once.
+		StateDefaults: []StateDefault{{File: "/home/agent/.claude/.claude.json", Key: "bypassPermissionsModeAccepted", Value: "true"}},
 		ConfigFiles: []ConfigFile{
 			{Path: ".claude/CLAUDE.md"},
 			{Path: ".claude/RTK.md"},
