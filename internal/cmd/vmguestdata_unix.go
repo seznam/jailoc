@@ -94,7 +94,12 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		}
 	}
 	for _, d := range persistentHomeDirs(ws.Agent) {
-		if slices.ContainsFunc(shares, func(s vm.Share) bool { return s.GuestPath == d.Path }) {
+		if i := slices.IndexFunc(shares, func(s vm.Share) bool { return s.GuestPath == d.Path }); i >= 0 {
+			// The VM claimed a named profile before this start; other
+			// shares belong to the user.
+			if name := workspaceProfile(ws); start && name != "" && shares[i].HostPath == filepath.Join(profilesDir(), name, d.Name) {
+				addProfileStateDefaults(shares[i].HostPath, d, ws.Agent)
+			}
 			continue
 		}
 		rel := guestDataHome + "/" + d.Name
@@ -108,6 +113,7 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 			if err := removeConfigMountPoints(root, rel, d, ws.Agent); err != nil {
 				return nil, fmt.Errorf("workspace %q: %w", ws.Name, err)
 			}
+			addStateDefaults(root, rel, d, ws.Agent)
 		}
 		if slices.Contains(ws.Agent.State, d) {
 			addStatusLine(root, rel, ws.Agent)
@@ -333,6 +339,70 @@ func removeConfigMountPoints(root *os.Root, dir string, d agent.StateDir, h agen
 		}
 	}
 	return nil
+}
+
+// maxAgentState bounds the agent state files jailoc edits; Claude Code keeps
+// per-project history in .claude.json.
+const maxAgentState = 64 << 20
+
+// addStateDefaults sets the StateDefaults of agent h that are in state
+// directory d, at dir inside root. It runs only before the VM starts, while
+// the agent cannot write the files. A failure leaves the agent without the
+// defaults, so it is only reported.
+func addStateDefaults(root *os.Root, dir string, d agent.StateDir, h agent.Harness) {
+	for _, sd := range h.StateDefaults {
+		inner, ok := strings.CutPrefix(sd.File, d.Path+"/")
+		if !ok {
+			continue
+		}
+		if err := setStateDefault(root, path.Join(dir, inner), sd); err != nil {
+			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not set %s in %s: %v\n", sd.Key, sd.File, err)
+		}
+	}
+}
+
+// addProfileStateDefaults sets the StateDefaults in state directory d of a
+// named profile, at host directory dir.
+func addProfileStateDefaults(dir string, d agent.StateDir, h agent.Harness) {
+	if len(h.StateDefaults) == 0 {
+		return
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not open profile directory %s: %v\n", dir, err)
+		return
+	}
+	defer func() { _ = root.Close() }() // directory handle
+	addStateDefaults(root, ".", d, h)
+}
+
+func setStateDefault(root *os.Root, file string, sd agent.StateDefault) error {
+	values := map[string]json.RawMessage{}
+	data, err := readRegular(root, file, maxAgentState)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return err
+	default:
+		if err := json.Unmarshal(data, &values); err != nil {
+			return fmt.Errorf("parse %s: %w", path.Base(file), err)
+		}
+	}
+	if values == nil {
+		values = map[string]json.RawMessage{}
+	}
+	if _, ok := values[sd.Key]; ok {
+		return nil
+	}
+	values[sd.Key] = json.RawMessage(sd.Value)
+	data, err = json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := root.MkdirAll(path.Dir(file), 0o700); err != nil {
+		return err
+	}
+	return root.WriteFile(file, append(data, '\n'), 0o600)
 }
 
 // addStatusLine sets the jailoc defaults in the settings file of agent h in

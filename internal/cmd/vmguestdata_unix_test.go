@@ -3,6 +3,8 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +100,52 @@ func TestRemoveConfigMountPoints(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(state, name)); (err == nil) != want {
 			t.Errorf("%s exists = %v, want %v", name, err == nil, want)
 		}
+	}
+}
+
+// Claude Code's bypass-permissions disclaimer counts as accepted unless its
+// global configuration sets the key; other keys are kept.
+func TestAddStateDefaults(t *testing.T) {
+	t.Parallel()
+	h, _ := agent.Lookup("claude")
+	for name, tc := range map[string]struct{ in, want string }{
+		"missing file": {want: `{"bypassPermissionsModeAccepted":true}`},
+		"other keys":   {in: `{"userID":"u","projects":{"/p":{"a":1}}}`, want: `{"bypassPermissionsModeAccepted":true,"projects":{"/p":{"a":1}},"userID":"u"}`},
+		"set false":    {in: `{"bypassPermissionsModeAccepted":false}`, want: `{"bypassPermissionsModeAccepted":false}`},
+		"null":         {in: `null`, want: `{"bypassPermissionsModeAccepted":true}`},
+		"invalid":      {in: `{`, want: `{`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			data := t.TempDir()
+			file := filepath.Join(data, "claude", ".claude.json")
+			if tc.in != "" {
+				if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(file, []byte(tc.in), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			root, err := os.OpenRoot(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = root.Close() }()
+			addStateDefaults(root, "claude", h.State[0], h)
+			got, err := os.ReadFile(file) //nolint:gosec // G304: test temp file
+			if err != nil {
+				t.Fatal(err)
+			}
+			var b bytes.Buffer
+			if json.Compact(&b, got) != nil {
+				b.Reset()
+				b.Write(got)
+			}
+			if b.String() != tc.want {
+				t.Errorf(".claude.json = %s, want %s", b.String(), tc.want)
+			}
+		})
 	}
 }
 
