@@ -5,6 +5,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,26 +105,42 @@ func TestRemoveConfigMountPoints(t *testing.T) {
 }
 
 // Claude Code's bypass-permissions disclaimer counts as accepted unless its
-// global configuration sets the key; other keys are kept.
+// global configuration sets the key; other keys are kept, and a failed write
+// leaves the file as it was.
 func TestAddStateDefaults(t *testing.T) {
 	t.Parallel()
 	h, _ := agent.Lookup("claude")
-	for name, tc := range map[string]struct{ in, want string }{
-		"missing file": {want: `{"bypassPermissionsModeAccepted":true}`},
-		"other keys":   {in: `{"userID":"u","projects":{"/p":{"a":1}}}`, want: `{"bypassPermissionsModeAccepted":true,"projects":{"/p":{"a":1}},"userID":"u"}`},
-		"set false":    {in: `{"bypassPermissionsModeAccepted":false}`, want: `{"bypassPermissionsModeAccepted":false}`},
-		"null":         {in: `null`, want: `{"bypassPermissionsModeAccepted":true}`},
-		"invalid":      {in: `{`, want: `{`},
+	// tmp is what is left at the temporary path: "file" a stale file, "dir"
+	// a directory that cannot be replaced, so the write fails.
+	for name, tc := range map[string]struct{ in, tmp, want string }{
+		"missing file":    {want: `{"bypassPermissionsModeAccepted":true}`},
+		"other keys":      {in: `{"userID":"u","projects":{"/p":{"a":1}}}`, want: `{"bypassPermissionsModeAccepted":true,"projects":{"/p":{"a":1}},"userID":"u"}`},
+		"set false":       {in: `{"bypassPermissionsModeAccepted":false}`, want: `{"bypassPermissionsModeAccepted":false}`},
+		"null":            {in: `null`, want: `{"bypassPermissionsModeAccepted":true}`},
+		"invalid":         {in: `{`, want: `{`},
+		"stale temp file": {in: `{"userID":"u"}`, tmp: "file", want: `{"bypassPermissionsModeAccepted":true,"userID":"u"}`},
+		"failed write":    {in: `{"userID":"u"}`, tmp: "dir", want: `{"userID":"u"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			data := t.TempDir()
 			file := filepath.Join(data, "claude", ".claude.json")
+			tmp := file + ".jailoc-tmp"
+			if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+				t.Fatal(err)
+			}
 			if tc.in != "" {
-				if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+				if err := os.WriteFile(file, []byte(tc.in), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(file, []byte(tc.in), 0o600); err != nil {
+			}
+			switch tc.tmp {
+			case "file":
+				if err := os.WriteFile(tmp, []byte("junk"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "dir":
+				if err := os.MkdirAll(filepath.Join(tmp, "x"), 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -144,6 +161,9 @@ func TestAddStateDefaults(t *testing.T) {
 			}
 			if b.String() != tc.want {
 				t.Errorf(".claude.json = %s, want %s", b.String(), tc.want)
+			}
+			if _, err := os.Lstat(tmp); tc.tmp != "dir" && !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("temporary file left behind: %v", err)
 			}
 		})
 	}

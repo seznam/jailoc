@@ -402,7 +402,32 @@ func setStateDefault(root *os.Root, file string, sd agent.StateDefault) error {
 	if err := root.MkdirAll(path.Dir(file), 0o700); err != nil {
 		return err
 	}
-	return root.WriteFile(file, append(data, '\n'), 0o600)
+	return replaceFile(root, file, append(data, '\n'))
+}
+
+// replaceFile writes data to file inside root through a temporary file that
+// it renames over file, so a failed write leaves the old file intact.
+func replaceFile(root *os.Root, file string, data []byte) error {
+	tmp := file + ".jailoc-tmp"
+	if err := root.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", tmp, err)
+	}
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", tmp, err)
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = root.Rename(tmp, file)
+	}
+	if err != nil {
+		_ = root.Remove(tmp) // best effort; the write error is reported
+		return fmt.Errorf("write %s: %w", file, err)
+	}
+	return nil
 }
 
 // addStatusLine sets the jailoc defaults in the settings file of agent h in
