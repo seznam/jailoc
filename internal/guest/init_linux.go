@@ -613,7 +613,8 @@ func chown(path string, acct account) error {
 }
 
 // sessionEnv is the base environment of every session: the image
-// environment that libkrun passes to init, plus the configured entries. It
+// environment that libkrun passes to init, plus the configured entries and
+// the tool cache variables they leave unset (see cacheEnv). It
 // also returns the zone the guest manages through /etc/localtime: the
 // configured one, or else the image's TZ when it names a zone the image has.
 // The image's TZ is dropped whenever a zone is managed, at boot, so sessions
@@ -638,7 +639,8 @@ func sessionEnv(cfg *Config) ([]string, *TimeZone) {
 		}
 		env = append(env, kv)
 	}
-	return append(env, cfg.Env...), zone
+	env = append(env, cfg.Env...)
+	return append(env, cacheEnv(cfg.CacheDir, env)...), zone
 }
 
 func newSSHServer(logger *slog.Logger, cfg *Config, acct account, env []string) (*sshd.Server, error) {

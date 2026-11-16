@@ -74,7 +74,7 @@ Files and directories in `snapshots`, and the Git and agent configuration, aren'
 
 ### Persistent home
 
-Only the state directories of the workspace's coding agent (for OpenCode `~/.local/share/opencode` and `~/.local/state/opencode`, for Claude Code `~/.claude`) and `~/.cache` survive a restart. They live in `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` on the host, next to the Docker data disk of `enable_docker`. `jailoc down --purge` deletes them.
+Only the state directories of the workspace's coding agent (for OpenCode `~/.local/share/opencode` and `~/.local/state/opencode`, for Claude Code `~/.claude`) and `~/.cache` survive a restart. They live in `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` on the host, next to the Docker data disk of `enable_docker`. `jailoc down --purge` deletes them. Sessions point the download caches of Go modules, npm, Bun and NuGet into `~/.cache` (see [Tool caches](../reference/configuration.md#tool-caches)), so they survive a restart and stay out of VM memory.
 
 ### Secrets
 

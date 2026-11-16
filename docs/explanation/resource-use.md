@@ -26,7 +26,7 @@ A VM has no swap disk. `jailoc-guest` sets up a zram device of half the VM memor
 
 Besides process memory and page cache, a few file systems live in VM memory:
 
-- The overlay over the read-only image: any file written outside the shares and the persistent home, for example a package installed with `apt-get`, stays in memory until the VM stops.
+- The overlay over the read-only image: any file written outside the shares and the persistent home, for example a package installed with `apt-get`, stays in memory until the VM stops. Download caches of Go modules, npm, Bun and NuGet go to the persistent `~/.cache` instead (see [Tool caches](../reference/configuration.md#tool-caches)); caches that other tools keep elsewhere below the home directory, such as `~/.cargo` or `~/.m2`, count against memory.
 - `/tmp`, limited to 1 GiB, plus `/var/tmp` and `/dev/shm`.
 - `/run/secrets` and the session environment.
 

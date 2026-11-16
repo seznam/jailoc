@@ -746,6 +746,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Env:       append([]string{"JAILOC=1", "JAILOC_WORKSPACE=" + ws.Name}, ws.Agent.Env...),
 		IPv6:      ws.IPv6,
 		TimeZone:  workspaceTimeZone(ws.TimeZone),
+		CacheDir:  guestUserCache,
 	}
 	switch ws.Agent.TUIPlugin {
 	case agent.OpenCode1TUI:
