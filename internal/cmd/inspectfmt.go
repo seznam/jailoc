@@ -139,10 +139,7 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 		case len(e.Answers) == 0 && len(e.Dropped) == 0:
 			return fmt.Sprintf("%s  %s  dns  %s %s %s", ts, colInfo.Sprint("DNS  "), name, escapeVisible(e.Type), colDim.Sprint("→ no records"))
 		default:
-			answers := make([]string, len(e.Answers))
-			for i, answer := range e.Answers {
-				answers[i] = escapeVisible(answer)
-			}
+			answers := collapseAnswers(e.Answers)
 			line := fmt.Sprintf("%s  %s  dns  %s %s → %s", ts, colInfo.Sprint("DNS  "), name, escapeVisible(e.Type), cmp.Or(strings.Join(answers, ", "), colDim.Sprint("no records")))
 			if len(e.Dropped) > 0 {
 				dropped := make([]string, len(e.Dropped))
