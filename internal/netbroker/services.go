@@ -270,9 +270,10 @@ func stripHTTPSSVCB(resp []byte) []byte {
 }
 
 // dropPrivateAnswers removes A and AAAA records with a private address from
-// every section of the answer resp to q unless the question and the record owner are both in
-// the policy's internal zones (privateAnswerAllowed), so a name outside them
-// cannot be pointed at the user's network. It returns the dropped addresses.
+// every section of the answer resp to q unless the question, the record
+// owner and every CNAME in the answer are in the policy's internal zones
+// (privateAnswerAllowed), so a name outside them cannot point the guest at
+// the user's network. It returns the dropped addresses.
 // The question is taken from q, not from resp. A query or response that does
 // not parse gets SERVFAIL, so a malformed answer cannot slip a private
 // address past the filter.
@@ -281,6 +282,14 @@ func dropPrivateAnswers(pol *Policy, q, resp []byte) ([]byte, []string) {
 	var msg dnsmessage.Message
 	if err := msg.Unpack(resp); !ok || err != nil {
 		return servfail(q), nil
+	}
+	// The CNAME records of the answer are the chain from the question to
+	// the address records; all of their names must be internal too.
+	var chain []string
+	for _, r := range msg.Answers {
+		if c, isCNAME := r.Body.(*dnsmessage.CNAMEResource); isCNAME {
+			chain = append(chain, r.Header.Name.String(), c.CNAME.String())
+		}
 	}
 	var dropped []string
 	keep := func(rs []dnsmessage.Resource) []dnsmessage.Resource {
@@ -293,7 +302,7 @@ func dropPrivateAnswers(pol *Policy, q, resp []byte) ([]byte, []string) {
 			case *dnsmessage.AAAAResource:
 				addr = netip.AddrFrom16(body.AAAA)
 			}
-			if addr.IsValid() && privateAnswer(addr) && !pol.privateAnswerAllowed(qname, r.Header.Name.String()) {
+			if addr.IsValid() && privateAnswer(addr) && !pol.privateAnswerAllowed(qname, r.Header.Name.String(), chain) {
 				dropped = append(dropped, addr.String())
 				continue
 			}

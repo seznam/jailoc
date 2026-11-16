@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -70,6 +71,8 @@ type prompter struct {
 	in  *bufio.Reader
 	out io.Writer
 	yes bool
+	// resolver looks up legacy allowed_hosts names; nil uses hostResolver.
+	resolver legacyResolver
 }
 
 // choose returns the index of the chosen option. Options are matched by
@@ -439,10 +442,30 @@ func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetw
 	}
 	if *table != nil {
 		n := *table
-		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
+		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && len(n.InternalZones) == 0 && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
 			*table = nil
 		}
 	}
+}
+
+// legacyHostScope is the allowed_hosts of [defaults] or a workspace before
+// migration.
+type legacyHostScope struct {
+	label, workspace string
+	hosts            []string
+}
+
+func legacyHostScopes(cfg *config.Config) []legacyHostScope {
+	var out []legacyHostScope
+	if len(cfg.Defaults.AllowedHosts) > 0 {
+		out = append(out, legacyHostScope{label: "[defaults]", hosts: slices.Clone(cfg.Defaults.AllowedHosts)})
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Workspaces)) {
+		if hosts := cfg.Workspaces[name].AllowedHosts; len(hosts) > 0 {
+			out = append(out, legacyHostScope{label: fmt.Sprintf("[workspaces.%s]", name), workspace: name, hosts: slices.Clone(hosts)})
+		}
+	}
+	return out
 }
 
 func uniqueStrings(in []string) []string {
@@ -612,6 +635,7 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
+	legacyHosts := legacyHostScopes(cfg)
 	m, err := planMigration(cfg, p, os.Stat)
 	if err != nil {
 		return err
@@ -630,6 +654,19 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 	}
 	for _, k := range cfg.UnknownKeys() {
 		_, _ = color.New(color.FgYellow).Fprintf(p.out, "  remove unknown setting %q\n", k)
+	}
+	resolver := p.resolver
+	if resolver == nil {
+		resolver = hostResolver
+	}
+	for _, s := range legacyHosts {
+		zones := cfg.Defaults.Network.Get().InternalZones
+		if s.workspace != "" {
+			zones = slices.Concat(zones, cfg.Workspaces[s.workspace].Network.Get().InternalZones)
+		}
+		for _, w := range legacyAliasWarnings(ctx, resolver, s.hosts, zones) {
+			_, _ = color.New(color.FgYellow).Fprintf(p.out, "  warning: %s: %s\n", s.label, w)
+		}
 	}
 	if migrateDryRun {
 		data, err := config.Encode(cfg)

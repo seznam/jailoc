@@ -164,17 +164,39 @@ func TestVMPolicyLegacyFallback(t *testing.T) {
 	}
 }
 
+// fakeResolver answers legacy host lookups from maps; a missing name fails.
+type fakeResolver struct {
+	ips    map[string]string
+	cnames map[string]string
+	looked []string
+}
+
+func (r *fakeResolver) LookupIP(_ context.Context, _, host string) ([]net.IP, error) {
+	r.looked = append(r.looked, host)
+	if ip, ok := r.ips[host]; ok {
+		return []net.IP{net.ParseIP(ip)}, nil
+	}
+	return nil, fmt.Errorf("no such host %s", host)
+}
+
+func (r *fakeResolver) LookupCNAME(_ context.Context, host string) (string, error) {
+	if c, ok := r.cnames[host]; ok {
+		return c, nil
+	}
+	if _, ok := r.ips[host]; ok {
+		return host + ".", nil
+	}
+	return "", fmt.Errorf("no such host %s", host)
+}
+
 // TestVMPolicyLegacyHostsSkipUnsafeZones checks that legacy allowed_hosts
 // names that cannot be internal zones are not resolved on the host into
-// private CIDR rules. Not parallel: it replaces lookupLegacyHost.
+// private CIDR rules. Not parallel: it replaces hostResolver.
 func TestVMPolicyLegacyHostsSkipUnsafeZones(t *testing.T) {
-	var looked []string
-	orig := lookupLegacyHost
-	lookupLegacyHost = func(_ context.Context, _, host string) ([]net.IP, error) {
-		looked = append(looked, host)
-		return []net.IP{net.ParseIP("10.0.0.5")}, nil
-	}
-	t.Cleanup(func() { lookupLegacyHost = orig })
+	fake := &fakeResolver{ips: map[string]string{"10-0-0-5.nip.io": "10.0.0.5", "github.io": "10.0.0.5", "gitlab.corp.example": "10.0.0.5"}}
+	orig := hostResolver
+	hostResolver = fake
+	t.Cleanup(func() { hostResolver = orig })
 	ws := &workspace.Resolved{
 		Name:         "w",
 		AllowedHosts: []string{"10-0-0-5.nip.io", "github.io", "gitlab.corp.example", "10.9.9.9"},
@@ -183,7 +205,7 @@ func TestVMPolicyLegacyHostsSkipUnsafeZones(t *testing.T) {
 	if err != nil {
 		t.Fatalf("vmPolicy: %v", err)
 	}
-	if !slices.Equal(looked, []string{"gitlab.corp.example"}) {
+	if looked := slices.Compact(fake.looked); !slices.Equal(looked, []string{"gitlab.corp.example"}) {
 		t.Fatalf("resolved hosts = %v, want only gitlab.corp.example", looked)
 	}
 	var got struct {
@@ -198,6 +220,35 @@ func TestVMPolicyLegacyHostsSkipUnsafeZones(t *testing.T) {
 	}
 	if !slices.Equal(cidrs, []string{"10.9.9.9/32", "10.0.0.5/32"}) {
 		t.Fatalf("allow CIDRs = %v, want the explicit IP and the resolved internal host", cidrs)
+	}
+}
+
+func TestLegacyAliasWarnings(t *testing.T) {
+	t.Parallel()
+	r := &fakeResolver{
+		ips: map[string]string{
+			"db.corp.example":      "10.0.0.5",
+			"wiki.corp.example":    "10.0.0.6",
+			"git.corp.example":     "10.0.0.7",
+			"cdn.example.com":      "93.184.216.34",
+			"plain.corp.example":   "10.0.0.8",
+			"api.lab.corp.example": "10.0.0.9",
+		},
+		cnames: map[string]string{
+			"db.corp.example":      "db-node.corp.example.",
+			"wiki.corp.example":    "wiki.other.example.",
+			"git.corp.example":     "git.internal.example.",
+			"cdn.example.com":      "edge.cdn.example.net.",
+			"api.lab.corp.example": "api.lab.corp.example.",
+		},
+	}
+	hosts := []string{"db.corp.example", "wiki.corp.example", "git.corp.example", "cdn.example.com", "plain.corp.example", "api.lab.corp.example", "10.1.2.3", "*.wild.example", "missing.corp.example"}
+	got := legacyAliasWarnings(context.Background(), r, hosts, []string{"internal.example"})
+	if len(got) != 2 || !strings.Contains(got[0], `"db.corp.example" is an alias of "db-node.corp.example"`) || !strings.Contains(got[1], `"wiki.corp.example" is an alias of "wiki.other.example"`) {
+		t.Fatalf("warnings = %q, want db.corp.example and wiki.corp.example", got)
+	}
+	if got := legacyAliasWarnings(context.Background(), r, hosts, []string{"corp.example", "other.example", "internal.example"}); len(got) != 0 {
+		t.Fatalf("warnings with the zones trusted = %q, want none", got)
 	}
 }
 

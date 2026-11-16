@@ -18,7 +18,7 @@ import (
 func scripted(answers ...string) (*prompter, *bytes.Buffer) {
 	out := &bytes.Buffer{}
 	in := strings.NewReader(strings.Join(answers, "\n") + "\n")
-	return &prompter{in: bufio.NewReader(in), out: out}, out
+	return &prompter{in: bufio.NewReader(in), out: out, resolver: &fakeResolver{}}, out
 }
 
 func migrationFixture(t *testing.T) (string, string, *config.Config) {
@@ -310,5 +310,72 @@ func TestPlanMigrationNetworkOnly(t *testing.T) {
 				t.Fatalf("filtered_dns not removed: %+v", cfg.Defaults)
 			}
 		})
+	}
+}
+
+func TestRunMigrateKeepsZoneOnlyNetworkTable(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := `[defaults]
+backend = "vm"
+
+[defaults.network]
+internal_zones = ["corp.example"]
+
+[[defaults.network.rules]]
+name = "internet"
+allow = ["*"]
+
+[workspaces.web]
+paths = ["/src/web"]
+allowed_networks = ["10.1.0.0/16"]
+
+[workspaces.api]
+paths = ["/src/api"]
+
+[workspaces.api.network]
+internal_zones = ["api.corp.example"]
+filtered_dns = true
+`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, out := scripted("y")
+	if err := runMigrate(context.Background(), path, p); err != nil {
+		t.Fatalf("runMigrate: %v\n%s", err, out)
+	}
+	cfg, err := config.ReadRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.Defaults.Network.Get().InternalZones, []string{"corp.example"}) {
+		t.Fatalf("defaults internal_zones = %v, want [corp.example]", cfg.Defaults.Network.Get().InternalZones)
+	}
+	if got := cfg.Workspaces["api"].Network.Get().InternalZones; !slices.Equal(got, []string{"api.corp.example"}) {
+		t.Fatalf("api internal_zones = %v, want [api.corp.example]\n%s", got, out)
+	}
+}
+
+func TestRunMigrateWarnsAboutLegacyAliases(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := `[defaults]
+backend = "vm"
+allowed_hosts = ["db.corp.example"]
+`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, out := scripted("y")
+	p.resolver = &fakeResolver{
+		ips:    map[string]string{"db.corp.example": "10.0.0.5"},
+		cnames: map[string]string{"db.corp.example": "db-node.corp.example."},
+	}
+	if err := runMigrate(context.Background(), path, p); err != nil {
+		t.Fatalf("runMigrate: %v\n%s", err, out)
+	}
+	want := `warning: [defaults]: allowed host "db.corp.example" is an alias of "db-node.corp.example", outside internal_zones`
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("output misses %q:\n%s", want, out)
 	}
 }

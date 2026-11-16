@@ -396,12 +396,20 @@ func privateAnswer(a netip.Addr) bool {
 }
 
 // privateAnswerAllowed reports whether an answer to the question qname may
-// give the guest a private address owned by owner. Both names must be in
-// the internal zones: a CNAME from an allowed public name into an internal
-// zone would otherwise let whoever runs the public name reach internal
-// hosts the user never allowed.
-func (p *Policy) privateAnswerAllowed(qname, owner string) bool {
-	return p.internal(qname) && p.internal(owner)
+// give the guest a private address owned by owner, reached through the CNAME
+// records chain (owner and target names). Every name on the way must be in
+// the internal zones: a public name anywhere in the chain would let whoever
+// runs it choose which internal host an allowed name ends at.
+func (p *Policy) privateAnswerAllowed(qname, owner string, chain []string) bool {
+	if !p.internal(qname) || !p.internal(owner) {
+		return false
+	}
+	for _, name := range chain {
+		if !p.internal(name) {
+			return false
+		}
+	}
+	return true
 }
 
 // denied reports whether name is explicitly blocked by blockedZones or a

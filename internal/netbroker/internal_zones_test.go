@@ -126,6 +126,15 @@ func TestDropPrivateAnswers(t *testing.T) {
 			kept:    []string{"10.20.5.10"},
 		},
 		{
+			name: "external hop between internal names", qname: "api.internal.example.com.",
+			records: []testRecord{
+				{owner: "api.internal.example.com.", cname: "app.saas.example."},
+				{owner: "app.saas.example.", cname: "db.internal.example.com."},
+				{owner: "db.internal.example.com.", addr: "10.20.5.11"},
+			},
+			dropped: []string{"10.20.5.11"},
+		},
+		{
 			name: "cgnat", qname: "app.example.net.",
 			records: []testRecord{{owner: "app.example.net.", addr: "100.64.1.1"}},
 			dropped: []string{"100.64.1.1"},
@@ -287,5 +296,49 @@ func TestDropPrivateAnswersAllSections(t *testing.T) {
 	}
 	if len(out.Answers) != 1 || len(out.Authorities) != 0 || len(out.Additionals) != 0 {
 		t.Fatalf("filtered sections = %d answers, %d authorities, %d additionals; want 1, 0, 0", len(out.Answers), len(out.Authorities), len(out.Additionals))
+	}
+}
+
+// TestExternalCNAMEHopCannotOpenInternalHost checks the resolver and the
+// connect-time decision together: an allowed internal name whose CNAME chain
+// passes through a public name never opens the private address it ends at.
+func TestExternalCNAMEHopCannotOpenInternalHost(t *testing.T) {
+	t.Parallel()
+	pol, err := ParsePolicy([]byte(`{
+		"dns": "10.99.1.53",
+		"internal_zones": ["corp.example"],
+		"allow": [
+			{"name": "api", "names": ["api.corp.example"], "proto": "tcp"},
+			{"name": "saas", "names": ["app.saas.example"], "proto": "tcp"},
+			{"name": "db", "names": ["db.corp.example"], "proto": "tcp"}
+		]
+	}`), "cname-hop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := New(Config{Subnet: netip.MustParsePrefix("192.168.127.0/24"), Gateway: netip.MustParseAddr("192.168.127.1"), GuestIP: netip.MustParseAddr("192.168.127.2")}, pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const qname = "api.corp.example."
+	b.exchange = func(_ context.Context, _ string, _ netip.AddrPort, _ []byte) ([]byte, error) {
+		return packAnswer(t, qname, []testRecord{
+			{owner: qname, cname: "app.saas.example."},
+			{owner: "app.saas.example.", cname: "db.corp.example."},
+			{owner: "db.corp.example.", addr: "10.0.0.5"},
+		}), nil
+	}
+	resp := b.resolve(t.Context(), "udp", packAnswer(t, qname, nil), netip.AddrPort{})
+	if addrs, _ := answerAddrs(t, resp); len(addrs) != 0 {
+		t.Fatalf("answer addresses = %v, want none", addrs)
+	}
+	db := netip.MustParseAddr("10.0.0.5")
+	names := b.names.lookup(db)
+	if len(names) != 0 {
+		t.Fatalf("IP-to-name cache for %s = %v, want empty", db, names)
+	}
+	env := Env{Gateway: netip.MustParseAddr("192.168.127.1"), Subnet: netip.MustParsePrefix("192.168.127.0/24"), Names: names}
+	if d := Decide(pol, env, ProtoTCP, netip.AddrPortFrom(db, 5432)); d.Allow {
+		t.Fatalf("Decide(10.0.0.5:5432) = %+v, want denied", d)
 	}
 }
