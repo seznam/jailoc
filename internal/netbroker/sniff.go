@@ -212,7 +212,7 @@ func (c *prefixConn) CloseWrite() error {
 // to identify a TLS ClientHello or HTTP/1 request, returning the wrapped
 // connection that replays those bytes, the identified info (if any), and
 // whether the client began a TLS/HTTP stream that did not complete.
-func sniffBeforeDial(c net.Conn, timeout time.Duration) (net.Conn, map[string]any, bool) {
+func sniffBeforeDial(c net.Conn, timeout time.Duration) (*prefixConn, map[string]any, bool) {
 	_ = c.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
 	var buf []byte
@@ -427,10 +427,15 @@ func sniffedPeerNameStrict(info map[string]any) (string, bool) {
 // delayed TLS/HTTP handshakes (after a server-first greeting) and on subsequent
 // HTTP requests on keep-alive/pipelined HTTP connections, tracking HTTP body
 // framing (Content-Length, chunked Transfer-Encoding, and protocol upgrades).
+// It also watches the upstream-to-guest direction, so a denied request can be
+// answered without the answer landing inside an upstream response.
 type enforceConn struct {
 	net.Conn
-	check func(peerName string, badAuthority bool) bool
-	abort func()
+	check func(peerName string) Decision
+	// closeUpstream closes the upstream side before the guest gets a deny
+	// reply; abort closes both sides and resets the guest.
+	closeUpstream func()
+	abort         func()
 
 	mu        sync.Mutex
 	buf       []byte
@@ -439,23 +444,81 @@ type enforceConn struct {
 	inHTTP    bool
 	bodyBytes int64
 	chunked   bool
-	chunkRem  int64 // -1 when reading chunk size line; >= 0 when reading chunk data + \r\n
+	chunkRem  int64  // -1 when reading chunk size line; >= 0 when reading chunk data + \r\n
+	reply     []byte // answer to the request inspect denied, nil for a reset
+
+	wmu       sync.Mutex
+	responded bool // upstream data or a half-close reached the guest
+	denied    bool
 }
+
+var errPolicyDenied = errors.New("policy denied stream")
 
 func (c *enforceConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 && !c.inspect(p[:n]) {
-		c.abort()
-		return 0, errors.New("policy denied stream")
+		c.deny()
+		return 0, errPolicyDenied
 	}
 	return n, err
 }
 
+// deny answers a request denied at a request boundary while the guest has
+// received nothing from upstream yet, so the answer cannot end up inside an
+// upstream response. Any other denial resets the connection.
+func (c *enforceConn) deny() {
+	c.wmu.Lock()
+	reply := c.reply
+	if c.responded {
+		reply = nil
+	}
+	c.denied = true
+	c.wmu.Unlock()
+	if reply == nil {
+		c.abort()
+		return
+	}
+	c.closeUpstream()
+	replyAndClose(c.Conn, reply)
+}
+
+func (c *enforceConn) Write(p []byte) (int, error) {
+	c.wmu.Lock()
+	if c.denied {
+		c.wmu.Unlock()
+		return 0, errPolicyDenied
+	}
+	c.responded = true
+	c.wmu.Unlock()
+	return c.Conn.Write(p)
+}
+
+// CloseWrite half-closes the guest side, unless a denial is answering the
+// guest and closes the connection itself.
 func (c *enforceConn) CloseWrite() error {
+	c.wmu.Lock()
+	if c.denied {
+		c.wmu.Unlock()
+		return nil
+	}
+	c.responded = true
+	c.wmu.Unlock()
 	if cw, ok := c.Conn.(closeWriter); ok {
 		return cw.CloseWrite()
 	}
 	return c.Close()
+}
+
+// decide checks the peer name of an identified TLS ClientHello or HTTP request.
+func (c *enforceConn) decide(info map[string]any) Decision {
+	name, bad := sniffedPeerNameStrict(info)
+	switch {
+	case bad:
+		return Decision{Reason: "sni-mismatch"}
+	case name == "":
+		return Decision{Reason: "sni-required"}
+	}
+	return c.check(name)
 }
 
 func (c *enforceConn) inspect(data []byte) bool {
@@ -469,9 +532,13 @@ func (c *enforceConn) inspect(data []byte) bool {
 	if !c.inHTTP && len(c.buf) > 0 && c.buf[0] == 0x16 {
 		info, more := identifyForPolicy(c.buf)
 		if info != nil {
+			head := c.buf
 			c.doneTLS, c.buf = true, nil
-			name, bad := sniffedPeerNameStrict(info)
-			return name != "" && c.check(name, bad)
+			d := c.decide(info)
+			if !d.Allow {
+				c.reply = denyReply(head, info, d)
+			}
+			return d.Allow
 		}
 		return more && len(c.buf) <= sniffMax
 	}
@@ -521,8 +588,8 @@ func (c *enforceConn) inspect(data []byte) bool {
 			return false
 		}
 		c.inHTTP = true
-		name, bad := sniffedPeerNameStrict(info)
-		if name == "" || !c.check(name, bad) {
+		if d := c.decide(info); !d.Allow {
+			c.reply = denyReply(block, info, d)
 			return false
 		}
 		bodyLen, chunked, upgraded, ok := parseHTTPFraming(string(block[:idx]))

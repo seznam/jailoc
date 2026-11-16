@@ -49,7 +49,8 @@ func (l *flowLimit) release() { l.n.Add(-1) }
 // accepted. The host socket is opened only after the policy allows the real
 // destination; denied or unreachable destinations get a RST. When name rules
 // apply, the broker completes the guest handshake and inspects the TLS SNI or
-// HTTP Host before dialing upstream. Allowed DNS to another resolver is
+// HTTP Host before dialing upstream; a flow denied there gets a TLS alert or
+// HTTP 403 instead of a RST (see denyReply). Allowed DNS to another resolver is
 // answered by the broker itself (see serveDNSTCP).
 func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
@@ -193,6 +194,12 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		b.record(info)
 	}
 	if !d.Allow {
+		// Answer in the protocol the guest spoke, so the client reports a
+		// policy denial instead of a reset; without one, reset.
+		if reply := denyReply(replayed.buf, info, d); reply != nil {
+			replyAndClose(rawConn, reply)
+			return
+		}
 		ep.Abort()
 		_ = rawConn.Close()
 		return
@@ -211,16 +218,14 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	// Wrapping replayed directly causes the first splice Read to feed the
 	// buffered bytes through enforceConn.inspect once, setting up HTTP body
 	// framing (Content-Length / chunked) before subsequent reads from rawConn.
-	stream := replayed
+	var stream net.Conn = replayed
 	if peerName == "" || info["proto"] == "http" {
 		stream = &enforceConn{
 			Conn: replayed,
-			check: func(name string, bad bool) bool {
-				if bad {
-					return false
-				}
-				return b.allowPeerName(p, env, dst, name)
+			check: func(name string) Decision {
+				return b.peerDecision(p, env, dst, name)
 			},
+			closeUpstream: func() { _ = out.Close() },
 			abort: func() {
 				ep.Abort()
 				_ = rawConn.Close()
@@ -231,7 +236,10 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	splice(stream, out)
 }
 
-func (b *Broker) allowPeerName(p *Policy, env Env, dst netip.AddrPort, peerName string) bool {
+// peerDecision decides a TLS SNI or HTTP Host seen on a spliced stream. A
+// name rule only counts when the guest resolved peerName to dst through the
+// broker, unless an address rule allows dst on its own.
+func (b *Broker) peerDecision(p *Policy, env Env, dst netip.AddrPort, peerName string) Decision {
 	inCache := false
 	for _, n := range env.Names {
 		if n == peerName {
@@ -242,15 +250,15 @@ func (b *Broker) allowPeerName(p *Policy, env Env, dst netip.AddrPort, peerName 
 	envWithPeer := env
 	envWithPeer.Names = []string{peerName}
 	dPeer := Decide(p, envWithPeer, ProtoTCP, dst)
-	if !dPeer.Allow {
-		return false
+	if !dPeer.Allow || inCache || !dPeer.byName {
+		return dPeer
 	}
-	if !inCache && dPeer.byName {
-		envNoNames := env
-		envNoNames.Names = nil
-		return Decide(p, envNoNames, ProtoTCP, dst).Allow
+	envNoNames := env
+	envNoNames.Names = nil
+	if dAddr := Decide(p, envNoNames, ProtoTCP, dst); dAddr.Allow {
+		return dAddr
 	}
-	return true
+	return Decision{Reason: "sni-mismatch", Name: peerName}
 }
 
 // handleUDP runs for every new guest UDP flow. Returning false makes the

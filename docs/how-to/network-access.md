@@ -23,6 +23,8 @@ Rules from `[defaults.network.rules]` and the workspace are combined into one se
 
 The broker enforces hostname rules at DNS resolution, at connection time (using its TTL-bounded IP-to-name cache), and by inspecting the TLS ClientHello SNI or HTTP `Host` header before dialing upstream.
 
+A denied name gets NXDOMAIN at DNS. When the agent reaches an allowed address with a denied name in the SNI or `Host` header, as on a CDN address shared with an allowed site, the client reports `tlsv1 alert access denied` for HTTPS or a `403 Forbidden` that names the rule for plain HTTP.
+
 ## Reach internal hosts by name
 
 A hostname rule reaches a private address (for example `10.20.5.10`) only when the name is in an internal zone. List the DNS zones you control in `internal_zones`, then allow the hosts:

@@ -391,7 +391,8 @@ func TestDNSCacheAndNameEnforcement(t *testing.T) {
 		t.Fatal("upstream did not receive ClientHello")
 	}
 
-	// 6. Connect to the SAME resolved IP (shared CDN IP) with a denied or mismatched SNI -> aborted before dialing upstream.
+	// 6. Connect to the SAME resolved IP (shared CDN IP) with a denied or mismatched SNI -> answered with
+	// an access_denied TLS alert before dialing upstream.
 	for _, badSNI := range []string{"pastebin.com", "other.example.com", "other-tenant.cdn.example.com"} {
 		helloBad := clientHelloBytes(t, badSNI, nil)
 		dctx, cancel = context.WithTimeout(ctx, 5*time.Second)
@@ -404,14 +405,36 @@ func TestDNSCacheAndNameEnforcement(t *testing.T) {
 		_, _ = c.Write(helloBad)
 		got, readErr := io.ReadAll(c)
 		_ = c.Close()
-		if len(got) > 0 && readErr == nil {
-			t.Fatalf("SNI %s received upstream data %q, want connection aborted", badSNI, got)
+		wantAlert := []byte{0x15, helloBad[1], helloBad[2], 0x00, 0x02, 0x02, 49}
+		if readErr != nil || !bytes.Equal(got, wantAlert) {
+			t.Fatalf("SNI %s got %x, %v; want access_denied alert %x", badSNI, got, readErr, wantAlert)
 		}
 		select {
 		case <-receivedHello:
 			t.Fatalf("upstream was dialed for disallowed SNI %s", badSNI)
 		default:
 		}
+	}
+
+	// 7. Plain HTTP with a denied Host on the shared IP -> 403 naming the rule, upstream never dialed.
+	dctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+	c, err = gonet.DialContextTCP(dctx, guest, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4(sharedIP), Port: 443}, ipv4.ProtocolNumber)
+	cancel()
+	if err != nil {
+		t.Fatalf("dial for denied Host: %v", err)
+	}
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = c.Write([]byte("GET / HTTP/1.1\r\nHost: pastebin.com\r\n\r\n"))
+	got, readErr := io.ReadAll(c)
+	_ = c.Close()
+	if readErr != nil || !strings.HasPrefix(string(got), "HTTP/1.1 403 Forbidden\r\n") ||
+		!strings.HasSuffix(string(got), "\r\n\r\nblocked by jailoc network policy (rule=no-paste)\n") {
+		t.Fatalf("denied Host reply = %q, %v; want 403 naming rule no-paste", got, readErr)
+	}
+	select {
+	case <-receivedHello:
+		t.Fatal("upstream was dialed for denied Host")
+	default:
 	}
 
 	logText := log.String()
@@ -739,9 +762,7 @@ func TestReviewFixes(t *testing.T) {
 	t.Run("enforceConn tracks HTTP body framing and blocks pipelined denied Host or Upgrade", func(t *testing.T) {
 		t.Parallel()
 		ec := &enforceConn{
-			check: func(name string, bad bool) bool {
-				return !bad && name == "allowed.example.com"
-			},
+			check: allowOnly("allowed.example.com"),
 			abort: func() {},
 		}
 		// Large upload (> 16 KiB) without \r\n\r\n in body succeeds.
@@ -761,9 +782,7 @@ func TestReviewFixes(t *testing.T) {
 		}
 		// Unvalidated Upgrade header is rejected so subsequent pipelined requests cannot bypass Host checks.
 		ecUpgrade := &enforceConn{
-			check: func(name string, bad bool) bool {
-				return !bad && name == "allowed.example.com"
-			},
+			check: allowOnly("allowed.example.com"),
 			abort: func() {},
 		}
 		if ecUpgrade.inspect([]byte("GET / HTTP/1.1\r\nHost: allowed.example.com\r\nUpgrade: websocket\r\n\r\n")) {
@@ -781,9 +800,7 @@ func TestReviewFixes(t *testing.T) {
 			t.Fatal("parseHTTPFraming accepted obs-fold Content-Length continuation line")
 		}
 		ecObsFold := &enforceConn{
-			check: func(name string, bad bool) bool {
-				return !bad && name == "allowed.example.com"
-			},
+			check: allowOnly("allowed.example.com"),
 			abort: func() {},
 		}
 		if ecObsFold.inspect(obsFoldStream) {
@@ -801,9 +818,7 @@ func TestReviewFixes(t *testing.T) {
 			t.Fatal("parseHTTPFraming accepted header block with embedded bare LF")
 		}
 		ecBareLF := &enforceConn{
-			check: func(name string, bad bool) bool {
-				return !bad && name == "allowed.example.com"
-			},
+			check: allowOnly("allowed.example.com"),
 			abort: func() {},
 		}
 		if ecBareLF.inspect(bareLFStream) {
@@ -814,9 +829,7 @@ func TestReviewFixes(t *testing.T) {
 		}
 		// Keep-alive second request whose request line uses \r\n but headers end with \n\n.
 		ecKeepAlive := &enforceConn{
-			check: func(name string, bad bool) bool {
-				return !bad && name == "allowed.example.com"
-			},
+			check: allowOnly("allowed.example.com"),
 			abort: func() {},
 		}
 		if !ecKeepAlive.inspect([]byte("GET /first HTTP/1.1\r\nHost: allowed.example.com\r\n\r\n")) {
