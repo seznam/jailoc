@@ -23,9 +23,10 @@ import (
 
 const (
 	dnsTimeout = 3 * time.Second
-	// maxDNSQueries caps the queries the broker resolves at once, and
+	// maxDNSQueries caps the UDP queries the broker resolves at once, and
 	// maxDNSConns the open DNS-over-TCP connections, so a busy guest cannot
-	// grow the host process without bound.
+	// grow the host process without bound. Both are shared by the gateway
+	// resolver and direct DNS to allowed resolvers.
 	maxDNSQueries = 128
 	maxDNSConns   = 64
 )
@@ -38,6 +39,16 @@ func (b *Broker) upstreams() []netip.AddrPort {
 		return b.cfg.DNSFallback
 	}
 	return b.cfg.HostDNS()
+}
+
+// tryAcquire takes a slot of sem, or reports false when all are taken.
+func tryAcquire(sem chan struct{}) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
 // startDNS serves DNS on the gateway over UDP and TCP. Queries are forwarded
@@ -56,7 +67,6 @@ func (b *Broker) startDNS(ctx context.Context) error {
 		_ = uc.Close()
 		_ = tl.Close()
 	}()
-	queries := make(chan struct{}, maxDNSQueries)
 	go func() {
 		buf := make([]byte, 65535)
 		for {
@@ -64,44 +74,42 @@ func (b *Broker) startDNS(ctx context.Context) error {
 			if err != nil {
 				return
 			}
-			select {
-			case queries <- struct{}{}:
-			default:
+			if !tryAcquire(b.dnsQueries) {
 				// Drop the query; the guest resolver retries.
 				continue
 			}
 			q := append([]byte(nil), buf[:n]...)
 			go func() {
-				defer func() { <-queries }()
-				if resp := b.resolve(ctx, "udp", q); resp != nil {
+				defer func() { <-b.dnsQueries }()
+				if resp := b.resolve(ctx, "udp", q, netip.AddrPort{}); resp != nil {
 					_, _ = uc.WriteTo(resp, peer)
 				}
 			}()
 		}
 	}()
-	conns := make(chan struct{}, maxDNSConns)
 	go func() {
 		for {
 			c, err := tl.Accept()
 			if err != nil {
 				return
 			}
-			select {
-			case conns <- struct{}{}:
-			default:
+			if !tryAcquire(b.dnsConns) {
 				_ = c.Close()
 				continue
 			}
 			go func() {
-				defer func() { <-conns }()
-				b.serveDNSTCP(ctx, c)
+				defer func() { <-b.dnsConns }()
+				b.serveDNSTCP(ctx, c, netip.AddrPort{})
 			}()
 		}
 	}()
 	return nil
 }
 
-func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
+// serveDNSTCP answers DNS-over-TCP queries on c until the guest closes it or
+// goes idle. A valid server sends them to that resolver instead of the
+// upstreams (see resolve).
+func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn, server netip.AddrPort) {
 	defer func() { _ = c.Close() }()
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -113,7 +121,7 @@ func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
 		if _, err := io.ReadFull(c, q); err != nil {
 			return
 		}
-		resp := b.resolve(ctx, "tcp", q)
+		resp := b.resolve(ctx, "tcp", q, server)
 		if resp == nil {
 			return
 		}
@@ -129,18 +137,23 @@ func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
 // a query must carry exactly one question, and an answer that names a blocked
 // or unallowed domain in any record owner or CNAME target is replaced by
 // NXDOMAIN. HTTPS and SVCB queries get NODATA so ECH configurations never
-// reach the guest.
-func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
+// reach the guest. A valid server is a resolver the guest queried directly:
+// the query goes only to it, filtered the same way, and its answers do not
+// enter the IP-to-name cache.
+func (b *Broker) resolve(ctx context.Context, network string, q []byte, server netip.AddrPort) []byte {
 	p := b.policy.Load()
 	filtered := p != nil && (p.rulesMode || len(p.blockedZones) > 0 || len(p.deny) > 0)
 	name, qtype, singleOK := singleQuestion(q)
 	if filtered {
 		if !singleOK {
-			b.record(map[string]any{"event": "dns", "network": network, "error": "query without exactly one question"})
+			entry := dnsEvent(network, server)
+			entry["error"] = "query without exactly one question"
+			b.record(entry)
 			return dnsError(q, 0x01) // FORMERR
 		}
 		if blocked, rule := p.blocked(name); blocked {
-			entry := map[string]any{"event": "dns", "network": network, "name": name, "blocked": true}
+			entry := dnsEvent(network, server)
+			entry["name"], entry["blocked"] = name, true
 			if rule != "" {
 				entry["rule"] = rule
 			}
@@ -149,13 +162,19 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
 		}
 	}
 	if singleOK && (qtype == dnsTypeSVCB || qtype == dnsTypeHTTPS) {
-		b.record(map[string]any{"event": "dns", "network": network, "name": name, "type": qtype.String(), "answers": []string{}})
+		entry := dnsEvent(network, server)
+		entry["name"], entry["type"], entry["answers"] = name, qtype.String(), []string{}
+		b.record(entry)
 		return dnsError(q, 0x00) // NOERROR / NODATA
+	}
+	upstreams := b.upstreams()
+	if server.IsValid() {
+		upstreams = []netip.AddrPort{server}
 	}
 	var resp []byte
 	lastErr := errNoUpstream
-	for _, up := range b.upstreams() {
-		r, err := exchange(ctx, network, up, q)
+	for _, up := range upstreams {
+		r, err := b.exchange(ctx, network, up, q)
 		if err == nil {
 			resp = r
 			break
@@ -163,17 +182,18 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
 		lastErr = err
 	}
 	if resp == nil {
-		b.logDNS(network, q, nil, lastErr)
+		b.logDNS(network, q, nil, lastErr, server)
 		return servfail(q)
 	}
 	if filtered {
 		blockedName, rule, ok := blockedAnswer(p, resp)
 		if !ok {
-			b.logDNS(network, q, resp, nil)
+			b.logDNS(network, q, resp, nil, server)
 			return servfail(q)
 		}
 		if blockedName != "" {
-			entry := map[string]any{"event": "dns", "network": network, "name": blockedName, "blocked": true}
+			entry := dnsEvent(network, server)
+			entry["name"], entry["blocked"] = blockedName, true
 			if rule != "" {
 				entry["rule"] = rule
 			}
@@ -184,8 +204,18 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
 	if p != nil && (p.rulesMode || len(p.deny) > 0) {
 		resp = stripHTTPSSVCB(resp)
 	}
-	b.logDNS(network, q, resp, nil)
+	b.logDNS(network, q, resp, nil, server)
 	return resp
+}
+
+// dnsEvent starts a dns log entry; server is set for queries the guest sent
+// to a resolver other than the gateway.
+func dnsEvent(network string, server netip.AddrPort) map[string]any {
+	entry := map[string]any{"event": "dns", "network": network}
+	if server.IsValid() {
+		entry["server"] = server.String()
+	}
+	return entry
 }
 
 // singleQuestion returns the name and type of the only question in q. It fails
@@ -357,10 +387,12 @@ func dnsError(q []byte, rcode byte) []byte {
 	return r
 }
 
-// logDNS records the question and A/AAAA answers and populates the broker's
-// IP->name cache for allowed answers.
-func (b *Broker) logDNS(network string, q, resp []byte, err error) {
-	entry := map[string]any{"event": "dns", "network": network}
+// logDNS records the question and A/AAAA answers and, for queries to the
+// gateway resolver (server not valid), populates the broker's IP->name cache
+// for allowed answers.
+func (b *Broker) logDNS(network string, q, resp []byte, err error, server netip.AddrPort) {
+	entry := dnsEvent(network, server)
+	cache := !server.IsValid()
 	pol := b.policy.Load()
 	var qname string
 	var p dnsmessage.Parser
@@ -412,10 +444,12 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 							if hasCNAME && minCNAME < qTTL {
 								qTTL = minCNAME
 							}
-							b.names.record(ip, qname, qTTL)
-							if owner != qname {
-								if blocked, _ := pol.blocked(owner); !blocked {
-									b.names.record(ip, owner, ttl)
+							if cache {
+								b.names.record(ip, qname, qTTL)
+								if owner != qname {
+									if blocked, _ := pol.blocked(owner); !blocked {
+										b.names.record(ip, owner, ttl)
+									}
 								}
 							}
 						}
@@ -427,10 +461,12 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 							if hasCNAME && minCNAME < qTTL {
 								qTTL = minCNAME
 							}
-							b.names.record(ip, qname, qTTL)
-							if owner != qname {
-								if blocked, _ := pol.blocked(owner); !blocked {
-									b.names.record(ip, owner, ttl)
+							if cache {
+								b.names.record(ip, qname, qTTL)
+								if owner != qname {
+									if blocked, _ := pol.blocked(owner); !blocked {
+										b.names.record(ip, owner, ttl)
+									}
 								}
 							}
 						}

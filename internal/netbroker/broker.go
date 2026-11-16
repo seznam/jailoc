@@ -86,6 +86,8 @@ type Broker struct {
 	names   *dnsCache
 	dialTCP func(string, string) (net.Conn, error)
 	dialUDP func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)
+	// exchange sends one DNS query to an upstream resolver.
+	exchange func(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error)
 
 	logMu sync.Mutex
 	log   *json.Encoder
@@ -101,6 +103,9 @@ type Broker struct {
 	connSeq atomic.Uint64
 
 	tcpFlows, udpFlows flowLimit
+	// dnsQueries and dnsConns hold the in-flight UDP DNS queries and open
+	// DNS-over-TCP connections of the gateway resolver and direct DNS.
+	dnsQueries, dnsConns chan struct{}
 }
 
 // New builds the stack. It does not open any socket.
@@ -116,8 +121,10 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 	}
 	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log), names: newDNSCache()}
 	b.tcpFlows.max, b.udpFlows.max = maxTCPFlows, maxUDPFlows
+	b.dnsQueries, b.dnsConns = make(chan struct{}, maxDNSQueries), make(chan struct{}, maxDNSConns)
 	b.dialTCP = (&net.Dialer{Timeout: dialTimeout}).Dial
 	b.dialUDP = net.DialUDP
+	b.exchange = exchange
 	b.policy.Store(p)
 
 	s := stack.New(stack.Options{
@@ -182,8 +189,8 @@ func (b *Broker) env(dst netip.Addr) Env {
 	}
 }
 
-func (b *Broker) decide(proto string, src, dst netip.AddrPort, conn uint64) Decision {
-	d := Decide(b.policy.Load(), b.env(dst.Addr()), proto, dst)
+func (b *Broker) decide(p *Policy, proto string, src, dst netip.AddrPort, conn uint64) Decision {
+	d := Decide(p, b.env(dst.Addr()), proto, dst)
 	b.recordFlow(conn, proto, src, dst, d)
 	return d
 }

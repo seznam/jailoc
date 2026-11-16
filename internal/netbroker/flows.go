@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,7 +49,8 @@ func (l *flowLimit) release() { l.n.Add(-1) }
 // accepted. The host socket is opened only after the policy allows the real
 // destination; denied or unreachable destinations get a RST. When name rules
 // apply, the broker completes the guest handshake and inspects the TLS SNI or
-// HTTP Host before dialing upstream.
+// HTTP Host before dialing upstream. Allowed DNS to another resolver is
+// answered by the broker itself (see serveDNSTCP).
 func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
@@ -65,6 +67,31 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		b.recordFlow(conn, ProtoTCP, src, dst, d)
 		b.record(map[string]any{"event": "flow-limit", "conn": conn, "proto": ProtoTCP, "dst": dst.String()})
 		r.Complete(true)
+		return
+	}
+	if p.inspectsDNS(dst) {
+		if !tryAcquire(b.dnsConns) {
+			b.tcpFlows.release()
+			b.recordFlow(conn, ProtoTCP, src, dst, d)
+			b.record(map[string]any{"event": "flow-limit", "conn": conn, "proto": ProtoTCP, "dst": dst.String()})
+			r.Complete(true)
+			return
+		}
+		var wq waiter.Queue
+		ep, terr := r.CreateEndpoint(&wq)
+		if terr != nil {
+			<-b.dnsConns
+			b.tcpFlows.release()
+			r.Complete(true)
+			return
+		}
+		r.Complete(false)
+		b.recordFlow(conn, ProtoTCP, src, dst, d)
+		go func() {
+			defer b.tcpFlows.release()
+			defer func() { <-b.dnsConns }()
+			b.serveDNSTCP(context.Background(), gonet.NewTCPConn(&wq, ep), dst)
+		}()
 		return
 	}
 	if p.needsNameInspection(dst, d.byName) {
@@ -233,12 +260,26 @@ func (b *Broker) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
 	conn := b.connSeq.Add(1)
-	if !b.decide(ProtoUDP, src, dst, conn).Allow {
+	p := b.policy.Load()
+	if !b.decide(p, ProtoUDP, src, dst, conn).Allow {
 		return false
 	}
 	if !b.udpFlows.acquire() {
 		b.record(map[string]any{"event": "flow-limit", "conn": conn, "proto": ProtoUDP, "dst": dst.String()})
 		return false
+	}
+	if p.inspectsDNS(dst) {
+		var wq waiter.Queue
+		ep, terr := r.CreateEndpoint(&wq)
+		if terr != nil {
+			b.udpFlows.release()
+			return true
+		}
+		go func() {
+			defer b.udpFlows.release()
+			b.serveDNSUDP(gonet.NewUDPConn(&wq, ep), dst)
+		}()
+		return true
 	}
 	out, err := b.dialUDP("udp", nil, net.UDPAddrFromAddrPort(dst))
 	if err != nil {
@@ -284,6 +325,43 @@ func relayUDP(in *gonet.UDPConn, out *net.UDPConn) {
 	_ = in.Close()
 	_ = out.Close()
 	<-done
+}
+
+// maxDNSFlowQueries caps the queries one direct DNS flow resolves at once, on
+// top of the broker-wide maxDNSQueries.
+const maxDNSFlowQueries = 16
+
+// serveDNSUDP answers the guest's queries on one UDP flow to the resolver
+// server, filtered like the gateway resolver, until the flow is idle.
+func (b *Broker) serveDNSUDP(c *gonet.UDPConn, server netip.AddrPort) {
+	defer func() { _ = c.Close() }()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	queries := make(chan struct{}, maxDNSFlowQueries)
+	buf := make([]byte, 65535)
+	for {
+		_ = c.SetReadDeadline(time.Now().Add(udpIdle))
+		n, err := c.Read(buf)
+		if err != nil {
+			return
+		}
+		if !tryAcquire(queries) {
+			// Drop the query; the guest resolver retries.
+			continue
+		}
+		if !tryAcquire(b.dnsQueries) {
+			<-queries
+			continue
+		}
+		q := append([]byte(nil), buf[:n]...)
+		wg.Go(func() {
+			defer func() { <-queries }()
+			defer func() { <-b.dnsQueries }()
+			if resp := b.resolve(context.Background(), "udp", q, server); resp != nil {
+				_, _ = c.Write(resp)
+			}
+		})
+	}
 }
 
 // startForward publishes guest port f.GuestPort on the host loopback address,

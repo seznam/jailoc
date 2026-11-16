@@ -587,7 +587,7 @@ func TestReviewFixes(t *testing.T) {
 				},
 			},
 		}).Pack()
-		b.logDNS("udp", q, resp, nil)
+		b.logDNS("udp", q, resp, nil, netip.AddrPort{})
 		ip := netip.MustParseAddr("93.184.216.34")
 		now = now.Add(5 * time.Second)
 		got := b.names.lookup(ip)
@@ -661,7 +661,7 @@ func TestReviewFixes(t *testing.T) {
 				},
 			},
 		}).Pack()
-		b.logDNS("udp", q, resp, nil)
+		b.logDNS("udp", q, resp, nil, netip.AddrPort{})
 		ip := netip.MustParseAddr("93.184.216.34")
 		now = now.Add(5 * time.Second)
 		got := b.names.lookup(ip)

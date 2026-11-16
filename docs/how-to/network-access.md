@@ -66,6 +66,21 @@ dns = "9.9.9.9"
 name = "dev-deps"
 allow = ["github.com", "api.github.com", "*.githubusercontent.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "proxy.golang.org", "sum.golang.org"]
 ```
+
+## Query another DNS server directly
+
+The guest resolves through the gateway (`192.168.127.1`), and port 53 to any other server is denied (`dns-filtered`). To let tools such as `dig @10.33.4.25` query a specific resolver, allow it with an explicit port 53:
+
+```toml
+[[workspaces.api.network.rules]]
+name = "coredns"
+allow = ["10.33.4.25", "coredns-lb.example.internal"]
+proto = "any"
+ports = [53]
+```
+
+`allow = ["*"]` with `ports = [53]` opens every public resolver. A rule without `ports` never opens port 53. The broker answers these queries itself with the same name filtering as the gateway resolver, but it doesn't remember their answers, so connecting to an address learned this way needs an IP or CIDR rule, or the same name resolved through the gateway.
+
 ## See what the agent connects to
 
 ```bash

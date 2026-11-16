@@ -35,6 +35,7 @@ type trafficEvent struct {
 	Host          string    `json:"host"`
 	GuestPort     int       `json:"guest_port"`
 	Network       string    `json:"network"`
+	Server        string    `json:"server"`
 	Target        string    `json:"target"`
 	SNI           string    `json:"sni"`
 	ALPN          []string  `json:"alpn"`
@@ -118,6 +119,9 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 		return fmt.Sprintf("%s  %s %-4s %s", ts, colDim.Sprint("      └"), escapeVisible(e.Proto), colInfo.Sprint(strings.Join(parts, "  ")))
 	case "dns":
 		name := escapeVisible(strings.TrimSuffix(e.Name, "."))
+		if e.Server != "" {
+			name += " " + colDim.Sprint("@"+escapeVisible(e.Server))
+		}
 		switch {
 		case e.Blocked:
 			why := "filtered_dns"

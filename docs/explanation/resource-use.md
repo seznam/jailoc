@@ -68,7 +68,7 @@ A restart costs a VM boot and, after an image change, an export. Much of the con
 
 ## Host processes
 
-Each running workspace has three host processes: a supervisor, the VMM and the network broker. The broker runs a userspace TCP/IP stack and opens a host socket for every guest connection it allows. To keep one workspace from exhausting host sockets or memory, it holds at most 4096 TCP connections (including host services) and 1024 UDP flows at once, idle UDP flows close after a minute, and filtered DNS handles at most 128 queries and 64 TCP connections at once. Connections and flows over a limit are refused; refused ones appear in `jailoc traffic`, while DNS queries over the limit are dropped and the client retries.
+Each running workspace has three host processes: a supervisor, the VMM and the network broker. The broker runs a userspace TCP/IP stack and opens a host socket for every guest connection it allows. To keep one workspace from exhausting host sockets or memory, it holds at most 4096 TCP connections (including host services) and 1024 UDP flows at once, idle UDP flows close after a minute, and DNS, counting the gateway resolver and direct DNS to allowed resolvers together, handles at most 128 UDP queries and 64 TCP connections at once. Connections and flows over a limit are refused; refused ones appear in `jailoc traffic`, while DNS queries over the limit are dropped and the client retries.
 
 ## Logs
 
