@@ -74,7 +74,7 @@ Start a workspace VM.
 jailoc up [workspace] [flags]
 ```
 
-Validates secret sources on the host, builds the workspace image with the host Docker daemon or in a builder VM (see [Image Resolution](image-resolution.md)), unpacks it into the VM image cache, boots it as the root file system of the workspace VM behind the host-side network broker, and delivers `env` and secrets to the guest.
+Validates secret sources on the host, builds the workspace image with the host Docker daemon or in a builder VM (see [Image Resolution](image-resolution.md)), converts its layers into read-only EROFS images in the VM image cache, boots them as the root file system of the workspace VM behind the host-side network broker, and delivers `env` and secrets to the guest.
 
 When the VM already runs, `jailoc up` does what [`jailoc reload`](#jailoc-reload) does.
 
@@ -206,7 +206,7 @@ jailoc list
 
 ### `jailoc logs`
 
-Print the VM supervisor log and the guest console log of a workspace.
+Print the log of the workspace's last `jailoc up` (`up.log`: its steps with their durations, Docker pulls, builds and build steps, image size and conversion), the VM supervisor log and the guest console log, in that order. When `jailoc up` failed before the VM started, only its log is printed, ending with the error. `--follow` keeps printing what is added to all three logs, from a running `jailoc up` and its image build through the VM boot; a log that the next `jailoc up` or VM start begins afresh is printed again from its start.
 
 ```
 jailoc logs [workspace] [flags]
@@ -293,14 +293,17 @@ Prints each session's ID, state (`attached` or `detached`), start time, director
 
 ### `jailoc config`
 
-Print the resolved configuration.
+Print the resolved configuration of a workspace.
 
 ```
-jailoc config [flags]
+jailoc config [workspace] [flags]
 ```
 
-Reads the configuration file, resolves defaults and `~` expansions, and prints the result. Secrets are listed per scope, under `Defaults Secrets:` and under each workspace, as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--all` | `-A` | Show the resolved configuration of every configured workspace. |
 
+Reads the configuration file, resolves `[defaults]`, agent settings and `~` expansions for the selected workspace (from the argument, `--workspace`, or the current working directory), and prints the effective workspace configuration together with its `Computed Paths` (`Config File`, `Workspace Config Dir`, `Workspace Cache Dir`, `VM State Dir`, and `Profile Dir`). Secrets are listed under `Secrets:` as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
 ---
 
 ### `jailoc add`
@@ -317,9 +320,34 @@ Without `--workspace`, the workspace is resolved from the path being added (long
 
 ---
 
+### `jailoc setup`
+
+Interactive onboarding and workspace setup wizard (`jailoc wizard` is an alias).
+
+```
+jailoc setup [path] [flags]
+jailoc wizard [path] [flags]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--dry-run` | | Print the generated or updated `config.toml` without writing it. |
+| `--yes` | `-y` | Accept the default answer to every question. Required when standard input is not a terminal. |
+
+`jailoc setup` operates in two modes depending on the state of `config.toml`:
+
+- **First-time onboarding** (when `config.toml` does not exist or still matches the unmodified default template): asks for `[defaults]` settings (`agent`, `git_config`, `ssh_auth_sock`, `gpg_agent`, network egress policy `dev-deps` vs `internet` plus optional extra hostnames/CIDRs, `enable_docker`, `cpu` and `memory`) and configures the initial workspace for `path` (default: the current working directory).
+- **Add-workspace mode** (when a customized `config.toml` already exists): asks for a workspace name (default: sanitized basename of `path` or `--workspace`), workspace directory path, optional agent override, Docker inside the VM, and workspace network rules, then patches `[workspaces.<name>]` while preserving existing comments in `config.toml`. Answering `inherit` removes the workspace's own `agent`, `enable_docker` or `network.rules`.
+
+A workspace directory of `/` or the home directory needs explicit confirmation; with `--yes` it is refused.
+
+When standard input and standard output are terminals and `config.toml` is missing or unmodified default, running `jailoc` or `jailoc up` offers to run `jailoc setup` first. `jailoc up <workspace>` uses `<workspace>` as the default workspace name, and the command then starts the workspace the wizard created.
+
+---
+
 ### `jailoc migrate`
 
-Rewrite an older `config.toml` (jailoc v1, or DNS settings outside the `network` table) for the current format.
+Rewrite an older `config.toml` (jailoc v1, or deprecated network settings) for the current format.
 
 ```
 jailoc migrate [flags]
@@ -334,7 +362,7 @@ A workspace counts as a jailoc v1 Docker workspace unless its effective `backend
 
 - Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
 - Lists the jailoc v1 settings `mode`, `password_mode` and `expose_port` per scope and removes them after confirmation. Declining stops the migration.
-- Moves `filtered_dns`, `dns_upstream` and `dns_blocked_zones` of `[defaults]` and of every workspace into its `network` table. A value already set in the table wins and the old one is removed.
+- Moves `allowed_hosts`, `allowed_networks`, `dns_upstream` and `dns_blocked_zones` of `[defaults]` and of every workspace into `network.dns` and `[[*.network.rules]]`, removes `filtered_dns`, and adds `allow = ["*"]` when the configuration had no `network.rules`. A value already set in the new field wins and the old one is removed.
 - Asks for every `mounts` entry of `[defaults]` and of each Docker workspace whether it stays a directory share (default for directories), becomes a read-only [snapshot](configuration.md#snapshots) (default for files), or is dropped. Files cannot stay mounts.
 
 For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories, unless a mount covers those paths or VM data already exists there. The volumes are left in place. Without a reachable Docker daemon, these steps are skipped after confirmation.

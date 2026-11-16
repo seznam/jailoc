@@ -12,19 +12,22 @@ To find out where a slow start spends its time, list the duration of each step: 
 grep -E 'step (finished|failed)' ~/.cache/jailoc/jailoc.log | tail -n 30
 ```
 
+`jailoc logs <workspace>` starts with the same records of the workspace's last `jailoc up`, kept in its `up.log`, followed by the supervisor and guest console logs with the boot timings.
+
 Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/`:
 
 | File | Content |
 |------|---------|
+| `up.log` | The log records of the last `jailoc up`: each step with its duration, Docker pulls and builds with every build step (`build step finished`, with `cached` and its duration), the image's layer count and size, and the export from Docker and layer conversion |
 | `supervisor.log` | VM supervisor output: broker and VM start, readiness with the time each took, shutdown reason |
-| `microvm/console.log` | Guest console: boot and SSH connections |
+| `microvm/console.log` | Guest console: boot, SSH connections and processes the kernel killed when the VM ran out of memory |
 | `broker.jsonl`, `broker.jsonl.1` | Network broker decisions, one JSON object per line, rotated at 16 MiB; read them with `jailoc traffic` |
 | `guest/control/exec.jsonl` | Processes started in the guest and their exits; read it with `jailoc strace` |
 | `guest/` | The internal share the guest can write: control files and persistent home directories (`guest/home`) |
 | `guest-ro/` | The read-only internal share: configuration copies and staged snapshots |
 | `state.json` | Supervisor PID and readiness |
 
-Print the two logs with:
+Print `up.log`, `supervisor.log` and the console log with:
 
 ```bash
 jailoc logs <workspace>
@@ -67,7 +70,17 @@ See [Migrate from jailoc v1](migrate-from-v1.md).
 this jailoc build does not include the VM runtime for <os>/<arch>; use a release build of jailoc or set runner and lib_dir in the [vm] section of the config
 ```
 
-**Fix:** release builds embed the runtime for macOS (Apple Silicon) and Linux (amd64, arm64). On another platform, or with a binary built from source, set `[vm] runner` and `[vm] lib_dir` to a runtime you built yourself. See [How to install jailoc](installation.md#build-from-source).
+**Fix:** release builds embed the runtime for macOS (Apple Silicon) and Linux (amd64, arm64), and the Nix package on Linux provides one. On another platform, or with a binary built from source, set `[vm] runner` and `[vm] lib_dir` to a runtime you built yourself. See [How to install jailoc](installation.md#build-from-source).
+
+**Symptom:** `jailoc up` fails with:
+
+```
+VM runner <path> provided by this jailoc package is missing: <error>; reinstall jailoc or set runner and lib_dir in the [vm] section of the config
+```
+
+**Cause:** the `jailoc` binary was copied out of its Nix store path, or that store path was garbage-collected.
+
+**Fix:** reinstall or rebuild the Nix package, or set `[vm] runner` and `[vm] lib_dir` explicitly.
 
 ## VM can't open /dev/kvm
 
@@ -108,6 +121,21 @@ Common causes:
 - a stale VM left over from a crash.
 
 Clear a stale VM with `jailoc down <workspace>` and start again.
+
+## Processes die or the VM stops when memory runs out
+
+**Symptom:** builds, tests or a language server die without an error of their own, or `jailoc logs` reports `vm stopped: workspace vm stopped: nic-disconnected` while the VM was busy.
+
+**Debugging:** the guest copies each kernel OOM kill to the console log:
+
+```bash
+jailoc logs <workspace> | grep 'out of memory'
+jailoc strace -n 200 | grep SIGKILL   # processes that ended with SIGKILL
+```
+
+A line such as `msg="out of memory: kernel killed a process" pid=271 process=gopls anon_rss_mib=1536 oom_score_adj=0` names the victim and its memory use. See [Memory pressure](../explanation/architecture.md#memory-pressure) for the order in which the kernel picks victims.
+
+**Fix:** give the workspace more memory with `memory` in its config (see [Configuration reference](../reference/configuration.md)), or run fewer memory-hungry jobs at once, for example `go test -p 1` or a lower `GOMAXPROCS`.
 
 ## A mount fails at start
 
@@ -158,6 +186,25 @@ See the [Image resolution reference](../reference/image-resolution.md).
 **Symptom:** `docker` is not found in the guest, `jailoc up` fails with `enable_docker is on, but the workspace image has no dockerd`, or `docker` commands fail in the guest.
 
 **Fix:** Docker is off by default; set `enable_docker = true` and run `jailoc restart`. An image used directly (`image`, or `defaults.image` without a workspace `dockerfile`) must contain Docker; install it there or set `enable_docker = false`. Images jailoc builds get Docker when `enable_docker` is on. Docker is also off when `protect_git = true`. See [Use Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm).
+
+## OpenCode fails to start with a server or database error
+
+**Symptom:** `jailoc` exits before the TUI appears with `Unexpected server error. Check server logs for details.` or `opencode exited with status 1`.
+
+OpenCode batches writes to `~/.local/share/opencode/log/opencode.log`, so an immediate exit at startup may not flush the failure to the log file.
+
+**Debugging:** run OpenCode with `--print-logs` inside the workspace VM to print unbuffered logs and the underlying error to standard error:
+
+```bash
+jailoc -w <workspace> exec -- opencode --print-logs
+jailoc -w <workspace> exec -- opencode debug config --print-logs
+```
+
+**Fix:** if the output reports a SQLite schema error (such as `no such column` after downgrading `agents.<name>.version` or sharing `~/.local/share/opencode` across incompatible OpenCode versions), upgrade the agent version to match the database schema, or stop any running sessions and move the database together with its WAL and SHM sidecars into a backup directory so OpenCode starts with an empty active database:
+
+```bash
+jailoc -w <workspace> exec -- sh -c 'bak=~/.local/share/opencode/db-backup-$(date +%Y%m%d-%H%M%S) && mkdir -p "$bak" && for f in opencode.db opencode.db-wal opencode.db-shm; do [ -e ~/.local/share/opencode/"$f" ] && mv ~/.local/share/opencode/"$f" "$bak"/; done'
+```
 
 ## Clean up
 

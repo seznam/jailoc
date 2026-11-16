@@ -88,53 +88,73 @@ func TestVMDockerDiskSize(t *testing.T) {
 func TestVMPolicy(t *testing.T) {
 	t.Parallel()
 	ws := &workspace.Resolved{
-		Name:            "w",
-		AllowedNetworks: []string{"10.1.0.0/16", "10.1.0.5/16", "fd00::/8"},
-		AllowedHosts:    []string{"192.168.1.10", "10.1.0.0", "fd12::7"},
+		Name:        "w",
+		DNSUpstream: "9.9.9.9",
+		NetworkRules: []config.NetworkRule{
+			{Name: "no-paste", Deny: []string{"pastebin.com", "*.ngrok.io"}},
+			{Name: "db", Allow: []string{"10.1.0.5/16", "192.168.1.10"}, Proto: "tcp", Ports: []config.RulePort{" 5432 ", "8000 - 8100"}},
+			{Name: "dev-deps", Allow: []string{"github.com", "registry.npmjs.org"}},
+			{Name: "agent", Allow: []string{"api.anthropic.com"}, Proto: "tcp", Ports: []config.RulePort{"443"}},
+		},
 	}
 	data, err := vmPolicy(context.Background(), ws)
 	if err != nil {
 		t.Fatalf("vmPolicy: %v", err)
 	}
 	var got struct {
-		Exceptions []vmException `json:"exceptions"`
+		DNS   string   `json:"dns"`
+		Deny  []vmRule `json:"deny"`
+		Allow []vmRule `json:"allow"`
 	}
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", data, err)
 	}
-	want := []vmException{
-		{CIDR: "10.1.0.0/16", Proto: "any"},
-		{CIDR: "fd00::/8", Proto: "any"},
-		{CIDR: "192.168.1.10/32", Proto: "any"},
-		{CIDR: "10.1.0.0/32", Proto: "any"},
-		{CIDR: "fd12::7/128", Proto: "any"},
+	if got.DNS != "9.9.9.9" {
+		t.Fatalf("dns = %q, want 9.9.9.9", got.DNS)
 	}
-	if !slices.Equal(got.Exceptions, want) {
-		t.Fatalf("exceptions = %v, want %v", got.Exceptions, want)
+	if len(got.Deny) != 1 || got.Deny[0].Name != "no-paste" || !slices.Equal(got.Deny[0].Names, []string{"pastebin.com", "*.ngrok.io"}) {
+		t.Fatalf("deny = %+v", got.Deny)
+	}
+	if len(got.Allow) != 3 {
+		t.Fatalf("allow = %+v, want 3 rules", got.Allow)
+	}
+	if !slices.Equal(got.Allow[0].CIDRs, []string{"10.1.0.0/16", "192.168.1.10/32"}) || !slices.Equal(got.Allow[0].Ports, []string{"5432", "8000-8100"}) {
+		t.Fatalf("allow[0] = %+v", got.Allow[0])
+	}
+	if got.Allow[1].Name != "dev-deps" || !slices.Contains(got.Allow[1].Names, "registry.npmjs.org") {
+		t.Fatalf("allow[1] = %+v", got.Allow[1])
+	}
+	if got.Allow[2].Name != "agent" || !slices.Equal(got.Allow[2].Names, []string{"api.anthropic.com"}) {
+		t.Fatalf("allow[2] = %+v", got.Allow[2])
 	}
 }
 
-func TestVMPolicyFilteredDNS(t *testing.T) {
+func TestVMPolicyLegacyFallback(t *testing.T) {
 	t.Parallel()
-	for _, filtered := range []bool{false, true} {
-		ws := &workspace.Resolved{Name: "w", FilteredDNS: filtered, DNSUpstream: "10.0.0.53", DNSBlockedZones: []string{"corp.example"}}
-		data, err := vmPolicy(context.Background(), ws)
-		if err != nil {
-			t.Fatalf("vmPolicy: %v", err)
-		}
-		var got struct {
-			DNSUpstreams    []string `json:"dns_upstreams"`
-			DNSBlockedZones []string `json:"dns_blocked_zones"`
-		}
-		if err := json.Unmarshal(data, &got); err != nil {
-			t.Fatalf("unmarshal %s: %v", data, err)
-		}
-		if filtered && (!slices.Equal(got.DNSUpstreams, []string{"10.0.0.53"}) || !slices.Equal(got.DNSBlockedZones, []string{"corp.example"})) {
-			t.Fatalf("filtered policy = %s", data)
-		}
-		if !filtered && (got.DNSUpstreams != nil || got.DNSBlockedZones != nil) {
-			t.Fatalf("unfiltered policy names DNS settings: %s", data)
-		}
+	ws := &workspace.Resolved{
+		Name:            "w",
+		DNSUpstream:     "10.0.0.53",
+		AllowedNetworks: []string{"10.1.0.0/16", "fd00::/8"},
+		AllowedHosts:    []string{"192.168.1.10", "fd12::7"},
+		DNSBlockedZones: []string{"corp.example"},
+	}
+	data, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	var got struct {
+		DNS   string   `json:"dns"`
+		Deny  []vmRule `json:"deny"`
+		Allow []vmRule `json:"allow"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", data, err)
+	}
+	if got.DNS != "10.0.0.53" || len(got.Deny) != 1 || !slices.Equal(got.Deny[0].Names, []string{"corp.example", "*.corp.example"}) {
+		t.Fatalf("legacy policy deny/dns = %s", data)
+	}
+	if len(got.Allow) != 2 || !slices.Equal(got.Allow[0].CIDRs, []string{"192.168.1.10/32", "fd12::7/128"}) {
+		t.Fatalf("legacy policy allow = %+v", got.Allow)
 	}
 }
 
@@ -240,6 +260,7 @@ func TestVMShares(t *testing.T) {
 		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/home/opencode-state", Target: guestOpenCodeState},
+		{Source: guest.HostDir + "/home/opencode1-omo", Target: "/home/agent/.omo"},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
@@ -285,17 +306,35 @@ func TestVMShares(t *testing.T) {
 		t.Fatalf("read copilot settings: %q %v", b, err)
 	}
 	line, _ := got["statusLine"].(map[string]any)
-	if got["model"] != "m" || line["command"] != statusLineCommand("copilot") {
+	if got["model"] != "m" || got["storeTokenPlaintext"] != true || line["command"] != statusLineCommand("copilot") {
 		t.Fatalf("copilot settings = %v", got)
 	}
+	if err := os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"mine"},"storeTokenPlaintext":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	got = nil
+	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
+		t.Fatalf("read copilot settings: %q %v", b, err)
+	}
+	if line, _ := got["statusLine"].(map[string]any); line["command"] != "mine" || got["storeTokenPlaintext"] != false {
+		t.Fatalf("user copilot settings replaced: %v", got)
+	}
+	// An existing status line without storeTokenPlaintext still gets storeTokenPlaintext = true.
 	if err := os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"mine"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
 		t.Fatalf("vmGuestData: %v", err)
 	}
-	if b, _ := os.ReadFile(settings); !strings.Contains(string(b), `"mine"`) { //nolint:gosec // G304: test file
-		t.Fatalf("user status line replaced: %s", b)
+	got = nil
+	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
+		t.Fatalf("read copilot settings: %q %v", b, err)
+	}
+	if line, _ := got["statusLine"].(map[string]any); line["command"] != "mine" || got["storeTokenPlaintext"] != true {
+		t.Fatalf("copilot settings after adding storeTokenPlaintext = %v", got)
 	}
 	// The script status line of an older jailoc gives way to the current one.
 	legacy, _ := json.Marshal(map[string]any{"statusLine": map[string]string{"type": "command", "command": scriptStatusLineCommand("copilot")}})
@@ -324,7 +363,7 @@ func TestVMShares(t *testing.T) {
 	if b, err := os.ReadFile(agySettings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
 		t.Fatalf("read agy settings: %q %v", b, err)
 	}
-	if line, _ := got["statusLine"].(map[string]any); line["command"] != statusLineCommand("agy") {
+	if line, _ := got["statusLine"].(map[string]any); line["command"] != statusLineCommand("agy") || got["storeTokenPlaintext"] != nil {
 		t.Fatalf("agy settings = %v", got)
 	}
 
@@ -352,10 +391,11 @@ func TestVMAgentProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("vmShares: %v", err)
 	}
-	profileState := filepath.Join(home, ".local", "share", "jailoc", "profiles", "work", "opencode-state")
+	profileDir := filepath.Join(home, ".local", "share", "jailoc", "profiles", "work")
 	want := []vm.Share{
 		{HostPath: filepath.Join(home, "data"), GuestPath: dataDir},
-		{HostPath: profileState, GuestPath: stateDir},
+		{HostPath: filepath.Join(profileDir, "opencode-state"), GuestPath: stateDir},
+		{HostPath: filepath.Join(profileDir, "opencode1-omo"), GuestPath: oc.State[2].Path},
 	}
 	if !slices.Equal(shares, want) {
 		t.Fatalf("shares =\n%+v\nwant\n%+v", shares, want)
@@ -389,6 +429,7 @@ func TestVMAgentProfile(t *testing.T) {
 		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
 		{Source: guest.HostDir + "/ephemeral/opencode-data", Target: dataDir},
 		{Source: guest.HostDir + "/ephemeral/opencode-state", Target: stateDir},
+		{Source: guest.HostDir + "/ephemeral/opencode1-omo", Target: oc.State[2].Path},
 		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {

@@ -87,7 +87,7 @@ jailoc sessions stop <ID> -w my-project
 ## Read workspace logs
 
 ```bash
-jailoc logs my-project      # print the VM supervisor and guest console logs
+jailoc logs my-project      # print the last up, VM supervisor and guest console logs
 jailoc logs my-project -f   # follow them
 ```
 

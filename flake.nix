@@ -14,76 +14,39 @@
       "aarch64-linux"
       "aarch64-darwin"
     ];
+    packageSystems = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
 
     forAllSystems = f:
       nixpkgs.lib.genAttrs allSystems (system:
         f {
           pkgs = nixpkgs.legacyPackages.${system};
         });
+
+    forPackagedSystems = f:
+      nixpkgs.lib.genAttrs packageSystems (system:
+        f {
+          pkgs = nixpkgs.legacyPackages.${system};
+        });
   in {
     formatter = forAllSystems ({pkgs}: pkgs.alejandra);
 
-    packages = forAllSystems ({pkgs}: {
-      jailoc = pkgs.buildGoModule {
-        pname = "jailoc";
-        version = let
+    packages = forPackagedSystems ({pkgs}:
+      import ./nix {
+        inherit pkgs;
+        jailocVersion = let
           dateStr = builtins.substring 0 8 (self.lastModifiedDate or "19700101");
           shortRev = self.shortRev or "dirty";
         in "0-unstable-${dateStr}-${shortRev}";
+        jailocRev = self.shortRev or "dirty";
+      }
+      // {
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.jailoc;
+      });
 
-        src = pkgs.lib.fileset.toSource {
-          root = ./.;
-          fileset = pkgs.lib.fileset.unions [
-            ./go.mod
-            ./go.sum
-            ./cmd
-            ./internal
-          ];
-        };
-
-        vendorHash = "sha256-Vv5vbXvTs6vnd+pF6LgqE8f0/a1oUWIt2a8ItDFrd3k=";
-
-        subPackages = ["cmd/jailoc"];
-
-        env.CGO_ENABLED = 0;
-
-        # Embed jailoc-guest for linux/arm64 and linux/amd64, as the
-        # GoReleaser before hook does; without it jailoc cannot boot a VM.
-        preBuild = ''
-          go generate ./internal/guestbin
-        '';
-        # The vendored-modules derivation runs preBuild too, before vendor/ exists.
-        overrideModAttrs = _: {preBuild = "";};
-
-        ldflags = [
-          "-s"
-          "-w"
-          "-X main.version=${self.shortRev or "dirty"}"
-          "-X main.commit=${self.shortRev or "dirty"}"
-          # date intentionally omitted for reproducible builds
-        ];
-
-        nativeBuildInputs = [pkgs.installShellFiles];
-
-        postInstall = pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
-          installShellCompletion --cmd jailoc \
-            --bash <($out/bin/jailoc completion bash) \
-            --fish <($out/bin/jailoc completion fish) \
-            --zsh <($out/bin/jailoc completion zsh)
-        '';
-
-        meta = with pkgs.lib; {
-          description = "Manage sandboxed Docker Compose environments for headless OpenCode coding agents";
-          homepage = "https://github.com/seznam/jailoc";
-          license = licenses.mit;
-          mainProgram = "jailoc";
-        };
-      };
-
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.jailoc;
-    });
-
-    apps = forAllSystems ({pkgs}: {
+    apps = forPackagedSystems ({pkgs}: {
       jailoc = {
         type = "app";
         program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.jailoc}/bin/jailoc";

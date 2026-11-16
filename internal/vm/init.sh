@@ -88,7 +88,7 @@ while kill -0 "$pid" 2>/dev/null; do
 		done
 		break
 	fi
-	sleep 0.5
+	sleep 0.1
 done
 log "dockerd stopped"
 sync

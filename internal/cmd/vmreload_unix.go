@@ -118,11 +118,12 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
-	snapshots, err := vmSnapshots(ws)
+	allShares := slices.Concat(shares, running.Shares)
+	snapshots, err := vmSnapshots(ws, allShares)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
-	if err := checkSnapshots(ws, snapshots, shares); err != nil {
+	if err := checkSnapshots(ws, snapshots, allShares); err != nil {
 		return vm.Spec{}, nil, err
 	}
 	rt := vmRuntimeFiles{runner: running.RunnerPath, libDir: running.LibDir, guest: running.GuestBinary}
@@ -136,10 +137,8 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 		spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
 	}
 	spec.Guest.NoPrivilegeEscalation = ws.ProtectGit
-	if ws.IPv6 {
-		if spec.Policy, err = reloadPolicy(ctx, ws, running); err != nil {
-			return vm.Spec{}, nil, err
-		}
+	if spec.Policy, err = reloadPolicy(ctx, ws, running); err != nil {
+		return vm.Spec{}, nil, err
 	}
 	return spec, snapshots, nil
 }
@@ -147,7 +146,12 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 // reloadPolicy builds the broker policy for the running VM. IPv6 stays off
 // when the guest booted without it, which only a restart changes, and when
 // the running broker predates the ipv6 policy field and would reject it.
+// A running VM started by an older jailoc release (< protocol 3) whose broker
+// predates the rules policy schema cannot be reloaded in place.
 func reloadPolicy(ctx context.Context, ws *workspace.Resolved, running vm.Spec) ([]byte, error) {
+	if running.GuestProtocol < 3 && (len(ws.NetworkRules) > 0 || ws.DNSUpstream != "") {
+		return nil, fmt.Errorf("workspace %q runs a network broker from an older jailoc version; run `jailoc restart %s` to apply the new network rules", ws.Name, ws.Name)
+	}
 	if ws.IPv6 && (running.GuestProtocol < 2 || running.Guest == nil || !running.Guest.IPv6) {
 		v4 := *ws
 		v4.IPv6 = false
@@ -198,7 +202,12 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if agentChanged {
 		out = append(out, "agent")
 	}
-	if !agentChanged && (!slices.Equal(running.Guest.Env, want.Guest.Env) || running.Guest.WorkDir != want.Guest.WorkDir) {
+	// The session environment differs on the same agent when the OpenCode 2
+	// TUI plugin list (OPENCODE_CLI_CONFIG_CONTENT) changed.
+	if !agentChanged && !slices.Equal(running.Guest.Env, want.Guest.Env) {
+		out = append(out, "TUI plugins")
+	}
+	if !agentChanged && running.Guest.WorkDir != want.Guest.WorkDir {
 		out = append(out, "the working directory")
 	}
 	if !guestCompatible(running) {
@@ -279,7 +288,7 @@ func reloadBroker(spec vm.Spec, pid int) error {
 			}
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	return fmt.Errorf("broker did not confirm the reload within %s", reloadTimeout)
 }
@@ -347,7 +356,7 @@ func reloadGuest(stateDir string, g guest.Config) error {
 			}
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	return fmt.Errorf("the guest did not confirm the reload within %s; it may run a jailoc-guest from another jailoc version (`jailoc restart` updates it)", reloadTimeout)
 }

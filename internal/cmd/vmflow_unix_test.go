@@ -3,9 +3,14 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +20,87 @@ import (
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
+
+func TestFormatImportProgress(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		p    vm.ImportProgress
+		want string
+	}{
+		{name: "save starting", p: vm.ImportProgress{Phase: vm.PhaseSave}, want: "  ⠋ Exporting image from Docker… 3s"},
+		{name: "save bytes", p: vm.ImportProgress{Phase: vm.PhaseSave, Bytes: 128 << 20}, want: "  ⠋ Exporting image from Docker (128 MiB)… 3s"},
+		{name: "extract layers", p: vm.ImportProgress{Phase: vm.PhaseExtract, Layers: 2, Total: 5}, want: "  ⠋ Converting image layers (2/5)… 3s"},
+		{name: "compose", p: vm.ImportProgress{Phase: vm.PhaseExtract}, want: "  ⠋ Linking image layers… 3s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatImportProgress('⠋', tt.p, 3); got != tt.want {
+				t.Errorf("formatImportProgress = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		bytes int64
+		want  string
+	}{
+		{name: "less than kibibyte", bytes: 511, want: "< 1 KiB"},
+		{name: "kibibytes", bytes: 512 << 10, want: "512 KiB"},
+		{name: "less than mebibyte", bytes: (1 << 20) - 1, want: "1023 KiB"},
+		{name: "mebibytes", bytes: 128 << 20, want: "128 MiB"},
+		{name: "gibibytes", bytes: 3 << 29, want: "1.5 GiB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatBytes(tt.bytes); got != tt.want {
+				t.Errorf("formatBytes(%d) = %q, want %q", tt.bytes, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestImportProgressDisplayWritesOnlyForTerminal(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		interactive bool
+		want        string
+	}{
+		{name: "non-terminal"},
+		{name: "terminal", interactive: true, want: "\r\x1b[2K  ⠋ Converting image layers (1/2)… 0s\r\x1b[2K"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			display := newImportProgressDisplay(&out, tt.interactive, func() int { return 80 })
+			display.update(vm.ImportProgress{Phase: vm.PhaseExtract, Layers: 1, Total: 2})
+			display.redraw()
+			display.erase()
+			if got := out.String(); got != tt.want {
+				t.Errorf("display output = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestImportProgressDisplayTruncatesToTerminalWidth(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	display := newImportProgressDisplay(&out, true, func() int { return 12 })
+	display.update(vm.ImportProgress{Phase: vm.PhaseSave, Bytes: 128 << 20})
+	display.redraw()
+	if got, want := out.String(), "\r\x1b[2K  ⠋ Exporti…"; got != want {
+		t.Errorf("display output = %q, want %q", got, want)
+	}
+}
 
 func TestUseHostDocker(t *testing.T) {
 	t.Parallel()
@@ -87,11 +173,75 @@ func TestSecretsPayload(t *testing.T) {
 		t.Fatalf("secretsPayload: %v", err)
 	}
 	wantEnv := []string{"PLAIN=1", "SSH_AUTH_SOCK=" + guest.SSHAgentSocket, "NODE_USE_SYSTEM_CA=1", "TOKEN=env-value"}
+	wantEnv = append(wantEnv, caBundleEnv()...)
 	if !slices.Equal(got.Env, wantEnv) {
 		t.Errorf("Env = %q, want %q", got.Env, wantEnv)
 	}
 	if len(got.Files) != 1 || string(got.Files["netrc"]) != "file-value\n" {
 		t.Errorf("Files = %q, want only netrc with the command output", got.Files)
+	}
+}
+
+func TestSecretsPayloadCABundleEnv(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		env      []string
+		caBundle string
+		want     map[string]string
+		absent   []string
+	}{
+		{
+			name:     "no bundle",
+			absent:   append([]string{"NODE_USE_SYSTEM_CA"}, caBundleVars...),
+			caBundle: "",
+		},
+		{
+			name:     "bundle",
+			caBundle: "/etc/jailoc/ca-bundle.pem",
+			want: map[string]string{
+				"NODE_USE_SYSTEM_CA":  "1",
+				"NODE_EXTRA_CA_CERTS": guest.SystemCABundle,
+				"SSL_CERT_FILE":       guest.SystemCABundle,
+				"REQUESTS_CA_BUNDLE":  guest.SystemCABundle,
+				"GIT_SSL_CAINFO":      guest.SystemCABundle,
+			},
+		},
+		{
+			name:     "workspace env wins",
+			env:      []string{"REQUESTS_CA_BUNDLE=/custom.pem"},
+			caBundle: "/etc/jailoc/ca-bundle.pem",
+			want: map[string]string{
+				"REQUESTS_CA_BUNDLE": "/custom.pem",
+				"SSL_CERT_FILE":      guest.SystemCABundle,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ws := &workspace.Resolved{Name: "ws", Env: tt.env}
+			spec := vm.Spec{Guest: &guest.Config{CABundle: tt.caBundle}}
+			got, err := secretsPayload(context.Background(), ws, spec, false)
+			if err != nil {
+				t.Fatalf("secretsPayload: %v", err)
+			}
+			values := map[string][]string{}
+			for _, e := range got.Env {
+				k, v, _ := strings.Cut(e, "=")
+				values[k] = append(values[k], v)
+			}
+			for k, v := range tt.want {
+				if !slices.Equal(values[k], []string{v}) {
+					t.Errorf("%s = %q, want exactly %q", k, values[k], v)
+				}
+			}
+			for _, k := range tt.absent {
+				if _, ok := values[k]; ok {
+					t.Errorf("%s set without a CA bundle", k)
+				}
+			}
+		})
 	}
 }
 
@@ -182,4 +332,199 @@ func TestStatusLabels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLargeImageWarning(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		layers int
+		size   int64
+		want   string
+	}{
+		{name: "small", layers: largeImageLayers, size: largeImageBytes},
+		{name: "many layers", layers: 30, size: 1 << 30, want: "image img has 30 layers; converting"},
+		{name: "large", layers: 10, size: 6 << 30, want: "image img has 6 GiB; converting"},
+		{name: "both", layers: 25, size: 7 << 30, want: "image img has 25 layers and 7 GiB; converting"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := largeImageWarning("image img has", tt.layers, tt.size)
+			if tt.want == "" {
+				if got != "" {
+					t.Errorf("largeImageWarning = %q, want none", got)
+				}
+				return
+			}
+			assertContains(t, got, tt.want)
+		})
+	}
+}
+
+func TestDockerfileBase(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		chain []string
+		want  string
+	}{
+		{name: "image used as is", chain: []string{"img"}},
+		{name: "no workspace Dockerfile", chain: []string{"base", "agent", "agent"}, want: "agent"},
+		{name: "workspace Dockerfile", chain: []string{"base", "docker", "agent", "overlay"}, want: "agent"},
+		{name: "Dockerfile on defaults image", chain: []string{"defaults", "overlay"}, want: "defaults"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := dockerfileBase(tt.chain); got != tt.want {
+				t.Errorf("dockerfileBase(%v) = %q, want %q", tt.chain, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestImportPhases(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1000, 0)
+	p := importPhases{start: start}
+	p.update(vm.ImportProgress{Phase: vm.PhaseSave, Bytes: 512}, start.Add(time.Second))
+	p.update(vm.ImportProgress{Phase: vm.PhaseExtract, Total: 3}, start.Add(4*time.Second))
+	p.update(vm.ImportProgress{Phase: vm.PhaseExtract, Layers: 3, Total: 3}, start.Add(9*time.Second))
+	if !p.converting.Equal(start.Add(4*time.Second)) || p.bytes != 512 || p.layers != 3 {
+		t.Errorf("phases = %+v, want conversion from 4s with 512 bytes and 3 layers", p)
+	}
+}
+
+func TestLogsVM(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{Name: "logs"}
+	stateDir := vmStateDir(ws.Name)
+
+	var out bytes.Buffer
+	if err := logsVM(context.Background(), ws, false, &out); err == nil {
+		t.Fatal("logsVM succeeded without logs")
+	}
+
+	// `jailoc up` failed before the VM started.
+	writeLogFile(t, upLogPath(stateDir), "up\n")
+	out.Reset()
+	if err := logsVM(context.Background(), ws, false, &out); err != nil || out.String() != "up\n" {
+		t.Fatalf("logsVM = %q, %v; want the up log", out.String(), err)
+	}
+
+	writeLogFile(t, filepath.Join(stateDir, "supervisor.log"), "supervisor\n")
+	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log"), "console\n")
+	out.Reset()
+	if err := logsVM(context.Background(), ws, false, &out); err != nil || out.String() != "up\nsupervisor\nconsole\n" {
+		t.Fatalf("logsVM = %q, %v; want the up, supervisor and console logs in order", out.String(), err)
+	}
+}
+
+func writeLogFile(t *testing.T, name, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunUpVMLogsFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{
+		Name:    "fails",
+		Env:     []string{"TOKEN=x"},
+		Secrets: []workspace.ResolvedSecret{{Name: "TOKEN", Kind: workspace.SecretKindEnv}},
+	}
+	if err := runUpVM(context.Background(), &config.Config{}, ws); err == nil {
+		t.Fatal("runUpVM succeeded with a colliding secret")
+	}
+	data, err := os.ReadFile(upLogPath(vmStateDir(ws.Name)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, string(data), `msg="up failed" workspace=fails error="validate secrets for workspace \"fails\": env secret \"TOKEN\" collides`)
+}
+
+func TestLogsVMFollowsUp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{Name: "follow"}
+	stateDir := vmStateDir(ws.Name)
+	upLog := upLogPath(stateDir)
+	supervisor := filepath.Join(stateDir, "supervisor.log")
+	console := filepath.Join(stateDir, "microvm", "console.log")
+	// The logs of a VM that ran before.
+	writeLogFile(t, upLog, "old up records\n")
+	writeLogFile(t, supervisor, "old supervisor records\n")
+	writeLogFile(t, console, "old console output\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &syncBuffer{}
+	done := make(chan error, 1)
+	go func() { done <- logsVM(ctx, ws, true, out) }()
+
+	waitFor := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for strings.Count(out.String(), want) != 1 {
+			if time.Now().After(deadline) {
+				t.Fatalf("output %q does not hold %q once", out.String(), want)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	appendLog := func(name, data string) {
+		t.Helper()
+		f, err := os.OpenFile(name, os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // G304: test temp dir
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = f.Close() }()
+		if _, err := f.WriteString(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor("old up records\nold supervisor records\nold console output\n")
+
+	// The next `jailoc up` truncates its log, builds the image and starts
+	// the VM, which starts its logs afresh, and then logs more steps.
+	writeLogFile(t, upLog, "resolve\n")
+	waitFor("resolve\n")
+	appendLog(upLog, "build\n")
+	waitFor("resolve\nbuild\n")
+	writeLogFile(t, supervisor, "vm started\n")
+	writeLogFile(t, console, "boot\n")
+	waitFor("vm started\n")
+	waitFor("boot\n")
+	appendLog(upLog, "deliver secrets\n")
+	appendLog(console, "ready\n")
+	// Lines of different logs interleave in the order they are polled.
+	waitFor("deliver secrets\n")
+	waitFor("ready\n")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("logsVM: %v", err)
+	}
+}
+
+// syncBuffer is a bytes.Buffer that one goroutine writes while another
+// reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

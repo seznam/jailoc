@@ -12,8 +12,11 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strings"
+	"syscall"
 
 	"github.com/fatih/color"
+	goversion "github.com/hashicorp/go-version"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -101,6 +104,11 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		if err := root.MkdirAll(rel, 0o700); err != nil {
 			return nil, fmt.Errorf("create %s: %w", rel, err)
 		}
+		if start {
+			if err := removeConfigMountPoints(root, rel, d, ws.Agent); err != nil {
+				return nil, fmt.Errorf("workspace %q: %w", ws.Name, err)
+			}
+		}
 		if slices.Contains(ws.Agent.State, d) {
 			addStatusLine(root, rel, ws.Agent)
 		}
@@ -109,11 +117,230 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 	return binds, nil
 }
 
-// addStatusLine sets the jailoc status line in the settings file of agent h
-// in its state directory dir inside root, unless the file sets a status
-// line other than the script status line of an older jailoc. GitHub Copilot CLI and Antigravity CLI read the status line only
-// from there. A failure leaves the agent without the indicator, so it is
-// only reported.
+// agentVersionsFile records, outside the directories shared with the guest,
+// the highest version of each host backing state directory that jailoc started
+// a workspace with.
+const (
+	agentVersionsFile = "agent-versions.json"
+	agentVersionsLock = "agent-versions.lock"
+)
+
+func agentVersionsPath() string {
+	return filepath.Join(vmRootDir(), agentVersionsFile)
+}
+
+func withAgentVersionsLock(fn func(file string)) {
+	dir := vmRootDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, agentVersionsLock), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: jailoc-owned lock path
+	if err != nil {
+		return
+	}
+	defer func() { _ = lock.Close() }()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // G115: file descriptors fit in int
+		return
+	}
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }() //nolint:gosec // G115: file descriptors fit in int
+	fn(filepath.Join(dir, agentVersionsFile))
+}
+
+func canonicalHostPath(p string) string {
+	clean := filepath.Clean(p)
+	if real, err := filepath.EvalSymlinks(clean); err == nil {
+		return real
+	}
+	return clean
+}
+
+// installsConfiguredAgent reports whether the image strategy for ws installs
+// the configured ws.Agent.Version rather than using a pre-built image directly.
+func installsConfiguredAgent(cfg *config.Config, ws *workspace.Resolved) bool {
+	if !ws.AgentInstall || ws.Agent.Version == "" || len(ws.Agent.State) == 0 {
+		return false
+	}
+	if cfg != nil {
+		strategy, _ := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
+		if strategy == strategyDirectImage || strategy == strategyDefaultsDirect {
+			return false
+		}
+	}
+	return true
+}
+
+// agentStateHostDir returns the canonical host directory that backs the
+// agent's primary state directory for ws: an explicit share covering it, or
+// the workspace's persistent guest home state directory.
+func agentStateHostDir(cfg *config.Config, ws *workspace.Resolved, shares []vm.Share) string {
+	if !installsConfiguredAgent(cfg, ws) {
+		return ""
+	}
+	d := ws.Agent.State[0]
+	for _, s := range shares {
+		if s.GuestPath == d.Path {
+			return canonicalHostPath(s.HostPath)
+		}
+	}
+	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
+		return ""
+	}
+	return canonicalHostPath(filepath.Join(vm.GuestDataDir(vmStateDir(ws.Name)), guestDataHome, d.Name))
+}
+
+func loadAgentVersions(file string) map[string]string {
+	var versions map[string]string
+	if data, err := os.ReadFile(file); err == nil { //nolint:gosec // G304: jailoc-owned metadata path
+		_ = json.Unmarshal(data, &versions)
+	}
+	if versions == nil {
+		versions = map[string]string{}
+	}
+	return versions
+}
+
+func saveAgentVersions(file string, versions map[string]string) {
+	data, err := json.MarshalIndent(versions, "", "  ")
+	if err != nil {
+		return
+	}
+	dir := filepath.Dir(file)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(dir, "agent-versions-*.json")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, file); err != nil {
+		_ = os.Remove(tmpName)
+	}
+}
+
+// checkAgentStateVersion warns when the backing host directory of ws's agent
+// state was previously used with a newer version of the agent, which may have
+// migrated its state database to a schema the configured version cannot read.
+func checkAgentStateVersion(cfg *config.Config, ws *workspace.Resolved, shares []vm.Share) {
+	hostDir := agentStateHostDir(cfg, ws, shares)
+	if hostDir == "" {
+		return
+	}
+	curV, err := goversion.NewVersion(ws.Agent.Version)
+	if err != nil {
+		return
+	}
+	withAgentVersionsLock(func(file string) {
+		versions := loadAgentVersions(file)
+		if prev := versions[hostDir]; prev != "" && prev != ws.Agent.Version {
+			if prevV, err := goversion.NewVersion(prev); err == nil && curV.LessThan(prevV) {
+				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s state was used with newer version %s (current: %s); if the agent fails to start, upgrade it or reset its state\n", ws.Name, ws.Agent.Title, prev, ws.Agent.Version)
+			}
+		}
+	})
+}
+
+// recordAgentStateVersion records ws's agent version as the highest version
+// that ran against its backing state directory after the workspace VM starts.
+func recordAgentStateVersion(cfg *config.Config, ws *workspace.Resolved, shares []vm.Share) {
+	hostDir := agentStateHostDir(cfg, ws, shares)
+	if hostDir == "" {
+		return
+	}
+	curV, err := goversion.NewVersion(ws.Agent.Version)
+	if err != nil {
+		return
+	}
+	withAgentVersionsLock(func(file string) {
+		versions := loadAgentVersions(file)
+		if prev := versions[hostDir]; prev != "" {
+			if prev == ws.Agent.Version {
+				return
+			}
+			if prevV, err := goversion.NewVersion(prev); err == nil && !curV.GreaterThan(prevV) {
+				return
+			}
+		}
+		versions[hostDir] = ws.Agent.Version
+		saveAgentVersions(file, versions)
+	})
+}
+
+// purgeWorkspaceAgentStateVersions removes recorded agent version entries for
+// state directories inside stateDir when the workspace VM is purged.
+func purgeWorkspaceAgentStateVersions(stateDir string) {
+	prefix := canonicalHostPath(stateDir) + string(filepath.Separator)
+	rawPrefix := filepath.Clean(stateDir) + string(filepath.Separator)
+	withAgentVersionsLock(func(file string) {
+		versions := loadAgentVersions(file)
+		changed := false
+		for k := range versions {
+			if strings.HasPrefix(k, prefix) || strings.HasPrefix(k, rawPrefix) {
+				delete(versions, k)
+				changed = true
+			}
+		}
+		if changed {
+			saveAgentVersions(file, versions)
+		}
+	})
+}
+
+// removeConfigMountPoints removes the empty files and directories the guest
+// created in state directory d, at dir inside root, as mount points of
+// import_agent_config snapshots. A snapshot that no longer applies, such as one
+// turned off or one whose host file is gone, would otherwise leave the agent
+// an empty settings file. The guest creates them again for the snapshots it
+// binds.
+func removeConfigMountPoints(root *os.Root, dir string, d agent.StateDir, h agent.Harness) error {
+	for _, cf := range h.ConfigFiles {
+		inner, ok := strings.CutPrefix(guestHome+"/"+cf.Path, d.Path+"/")
+		if !ok {
+			continue
+		}
+		p := path.Join(dir, inner)
+		info, err := root.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", p, err)
+		}
+		switch {
+		case info.Mode().IsRegular() && info.Size() == 0:
+		case info.IsDir():
+			entries, err := fs.ReadDir(root.FS(), p)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", p, err)
+			}
+			if len(entries) > 0 {
+				continue
+			}
+		default:
+			continue
+		}
+		if err := root.Remove(p); err != nil {
+			return fmt.Errorf("remove mount point %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+// addStatusLine sets the jailoc defaults in the settings file of agent h in
+// its state directory dir inside root: the status line (unless the file sets
+// one other than the script status line of an older jailoc) and, for GitHub
+// Copilot CLI, storeTokenPlaintext (when unset) so logins work without a
+// system keyring in the VM. A failure leaves the agent without the defaults,
+// so it is only reported.
 func addStatusLine(root *os.Root, dir string, h agent.Harness) {
 	file, harness, ok := h.TUIPlugin.SettingsFile()
 	if !ok {
@@ -136,17 +363,24 @@ func setDefaultStatusLine(root *os.Root, file, harness string) error {
 			return fmt.Errorf("parse %s: %w", path.Base(file), err)
 		}
 	}
-	if old, ok := settings["statusLine"]; ok {
-		var line struct{ Command string }
-		if json.Unmarshal(old, &line) != nil || line.Command != scriptStatusLineCommand(harness) {
-			return nil
+	changed := false
+	if old, ok := settings["statusLine"]; !ok || isLegacyStatusLine(old, harness) {
+		line, err := json.Marshal(statusLine(harness))
+		if err != nil {
+			return err
+		}
+		settings["statusLine"] = line
+		changed = true
+	}
+	if harness == "copilot" {
+		if _, ok := settings["storeTokenPlaintext"]; !ok {
+			settings["storeTokenPlaintext"] = json.RawMessage("true")
+			changed = true
 		}
 	}
-	line, err := json.Marshal(statusLine(harness))
-	if err != nil {
-		return err
+	if !changed {
+		return nil
 	}
-	settings["statusLine"] = line
 	data, err = json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
@@ -155,6 +389,11 @@ func setDefaultStatusLine(root *os.Root, file, harness string) error {
 		return err
 	}
 	return root.WriteFile(file, append(data, '\n'), 0o600)
+}
+
+func isLegacyStatusLine(raw json.RawMessage, harness string) bool {
+	var line struct{ Command string }
+	return json.Unmarshal(raw, &line) == nil && line.Command == scriptStatusLineCommand(harness)
 }
 
 // migrateHomeDirs moves persistent home directories of an older layout

@@ -593,3 +593,139 @@ func TestGitBool(t *testing.T) {
 		}
 	}
 }
+
+func TestGitProtectionUTF8BOM(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	mk, write := gitTree(t, root)
+	mk(".git/hooks")
+	write(".git/config", "\xef\xbb\xbf[include]\n\tpath = ../extra.cfg\n")
+	write("extra.cfg", "\xef\xbb\xbf[core]\n\thooksPath = custom-hooks\n")
+
+	_, ro, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
+	if err != nil {
+		t.Fatalf("gitProtection: %v", err)
+	}
+	for _, rel := range []string{".git/config", ".git/hooks", "extra.cfg", "custom-hooks", ".git/custom-hooks"} {
+		want := filepath.Join(root, rel)
+		if !slices.Contains(ro, want) {
+			t.Errorf("read-only = %v, missing %s", ro, want)
+		}
+	}
+}
+
+func TestGitProtectionRejectsHardLinks(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, root string)
+	}{
+		{
+			name: "hard-linked .git/config",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Link(filepath.Join(root, ".git/config"), filepath.Join(root, "alias.cfg")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "hard-linked included config",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, ".git/config"), []byte("[include]\n\tpath = ../extra.cfg\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "extra.cfg"), []byte("[core]\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(filepath.Join(root, "extra.cfg"), filepath.Join(root, "extra-alias.cfg")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "hard-linked regular hook file",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				hook := filepath.Join(root, ".git/hooks/pre-commit")
+				if err := os.WriteFile(hook, []byte("#!/bin/sh\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(hook, filepath.Join(root, "hook-alias")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "hard-linked .git file",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(root, "sub"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				gitfile := filepath.Join(root, "sub/.git")
+				if err := os.WriteFile(gitfile, []byte("gitdir: ../.git\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(gitfile, filepath.Join(root, "gitfile-alias")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "hard-linked commondir file",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				wtDir := filepath.Join(root, ".git/worktrees/wt")
+				if err := os.MkdirAll(wtDir, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				commondir := filepath.Join(wtDir, "commondir")
+				if err := os.WriteFile(commondir, []byte("../..\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Join(root, "wt"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "wt/.git"), []byte("gitdir: ../.git/worktrees/wt\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(commondir, filepath.Join(root, "commondir-alias")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "hard-linked external included config",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				outside := filepath.Join(t.TempDir(), "external.gitconfig")
+				if err := os.WriteFile(outside, []byte("[core]\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(outside, filepath.Join(root, "external-alias.cfg")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, ".git/config"), []byte("[include]\n\tpath = "+outside+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			mk, write := gitTree(t, root)
+			mk(".git/hooks")
+			write(".git/config", "[core]\n")
+			tt.setup(t, root)
+			_, _, err := gitProtection([]vm.Share{{HostPath: root}}, nil)
+			if err == nil {
+				t.Fatal("want error for hard-linked protected file")
+			}
+			assertContains(t, err.Error(), "other hard links")
+		})
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,7 +35,6 @@ const (
 	tmpSizeMiB    = 1024
 	mountRetries  = 20
 	shutdownPoll  = 500 * time.Millisecond
-	systemCA      = "/etc/ssl/certs/ca-certificates.crt"
 	fallbackShell = "/bin/sh"
 )
 
@@ -50,6 +50,7 @@ type account struct {
 // Init prepares the guest and serves SSH sessions until the host requests a
 // shutdown. It returns when the VM should power off.
 func Init(logger *slog.Logger) error {
+	start := time.Now()
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -57,27 +58,17 @@ func Init(logger *slog.Logger) error {
 	if err := mount.Essential(logger, tmpSizeMiB); err != nil {
 		return fmt.Errorf("essential mounts: %w", err)
 	}
-	var mapper *idmapper
-	switch {
-	case cfg.RootShare != "":
-		if mapper, err = overlayRoot(logger, cfg); err != nil {
-			return fmt.Errorf("root filesystem: %w", err)
-		}
-		if err := remountAfterPivot(logger); err != nil {
-			return err
-		}
-	case cfg.IDMap != nil:
-		if mapper, err = idmapRoot(logger, *cfg.IDMap, cfg.Home, cfg.UID, cfg.GID); err != nil {
-			// Without idmapped mounts the agent runs with the host user's IDs,
-			// so its files on virtio-fs keep their owner.
-			logger.Warn("idmapped mounts unavailable; running the agent with the host user's IDs", "error", err)
-			cfg.UID, cfg.GID = cfg.IDMap.UID, cfg.IDMap.GID
-			cfg.IDMap = nil
-		} else if err := remountAfterPivot(logger); err != nil {
-			return err
-		}
+	if cfg.RootShare == "" {
+		return errors.New("guest config has no root share")
+	}
+	mapper, err := overlayRoot(logger, cfg)
+	if err != nil {
+		return fmt.Errorf("root filesystem: %w", err)
 	}
 	defer mapper.close()
+	if err := remountAfterPivot(logger); err != nil {
+		return err
+	}
 	if cfg.Hostname != "" {
 		if err := syscall.Sethostname([]byte(cfg.Hostname)); err != nil {
 			logger.Warn("set hostname", "error", err)
@@ -112,7 +103,7 @@ func Init(logger *slog.Logger) error {
 	// As soon as the network is up: the clock starts from the whole-second RTC
 	// and falls behind whenever the host sleeps.
 	defer startClockSync(logger)()
-	acct, err := ensureAccount(cfg)
+	acct, err := ensureAccount(cfg, "/etc")
 	if err != nil {
 		return err
 	}
@@ -178,6 +169,11 @@ func Init(logger *slog.Logger) error {
 	} else {
 		defer stopOOMGuard()
 	}
+	if stopOOMLog, err := startOOMLog(logger); err != nil {
+		logger.Warn("kernel OOM kills not logged", "error", err)
+	} else {
+		defer stopOOMLog()
+	}
 	var docker *dockerDaemon
 	if cfg.Docker != nil {
 		if docker, err = startDocker(logger, cfg.Docker, acct); err != nil {
@@ -194,10 +190,11 @@ func Init(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", SSHPort))
+	rawLn, err := net.Listen("tcp", fmt.Sprintf(":%d", SSHPort))
 	if err != nil {
 		return fmt.Errorf("listen on port %d: %w", SSHPort, err)
 	}
+	ln := newWakeListener(rawLn)
 	go func() {
 		if err := srv.Serve(ln); err != nil {
 			logger.Error("ssh server", "error", err)
@@ -205,8 +202,10 @@ func Init(logger *slog.Logger) error {
 	}()
 	stopReaper := reaper.Start(logger)
 	defer stopReaper()
-	logger.Info("jailoc guest ready", "user", acct.name, "workdir", cfg.WorkDir)
+	logger.Info("jailoc guest ready", "user", acct.name, "workdir", cfg.WorkDir, "after", time.Since(start).Round(time.Millisecond))
 
+	ticker := time.NewTicker(shutdownPoll)
+	defer ticker.Stop()
 	for {
 		live.poll()
 		if _, err := os.Stat(filepath.Join(ControlDir, "shutdown")); err == nil {
@@ -216,7 +215,10 @@ func Init(logger *slog.Logger) error {
 			syscall.Sync()
 			return nil
 		}
-		time.Sleep(shutdownPoll)
+		select {
+		case <-ln.wake:
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -253,12 +255,13 @@ func mountShare(logger *slog.Logger, s Share, acct account, mapper *idmapper) er
 	return nil
 }
 
-// ensureAccount returns the passwd entry with the configured UID, adding
-// one when the image has none.
-func ensureAccount(cfg *Config) (account, error) {
-	f, err := os.Open("/etc/passwd")
+// ensureAccount returns the entry of etc/passwd with the configured UID,
+// adding one when the image has none.
+func ensureAccount(cfg *Config, etc string) (account, error) {
+	passwd, group := filepath.Join(etc, "passwd"), filepath.Join(etc, "group")
+	f, err := os.Open(passwd) //nolint:gosec // G304: fixed system path
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return account{}, fmt.Errorf("read /etc/passwd: %w", err)
+		return account{}, fmt.Errorf("read %s: %w", passwd, err)
 	}
 	if err == nil {
 		defer func() { _ = f.Close() }()
@@ -276,7 +279,19 @@ func ensureAccount(cfg *Config) (account, error) {
 			if acct.shell == "" {
 				acct.shell = fallbackShell
 			}
+			// With the host user's IDs, files the agent creates on virtio-fs
+			// keep its GID, which the host user may not be a member of.
+			if cfg.hostIDs && acct.gid != cfg.GID {
+				_ = f.Close()
+				if _, err := renumberAccount(cfg, passwd, group, acct.name); err != nil {
+					return account{}, err
+				}
+				acct.gid = cfg.GID
+			}
 			return acct, nil
+		}
+		if err := sc.Err(); err != nil {
+			return account{}, fmt.Errorf("read %s: %w", passwd, err)
 		}
 	}
 	acct := account{name: cfg.User, uid: cfg.UID, gid: cfg.GID, home: cfg.Home, shell: fallbackShell}
@@ -286,27 +301,27 @@ func ensureAccount(cfg *Config) (account, error) {
 	// An image user with the configured name but another UID (the built-in
 	// image's agent is 1000; Linux hosts use the host user's IDs) is
 	// renumbered rather than duplicated, so names resolve to one account.
-	if renumbered, err := renumberAccount(cfg); err != nil {
+	if renumbered, err := renumberAccount(cfg, passwd, group, cfg.User); err != nil {
 		return account{}, err
 	} else if renumbered != nil {
 		return *renumbered, nil
 	}
-	if err := appendLine("/etc/passwd", fmt.Sprintf("%s:x:%d:%d:jailoc agent:%s:%s", acct.name, acct.uid, acct.gid, acct.home, acct.shell)); err != nil {
+	if err := appendLine(passwd, fmt.Sprintf("%s:x:%d:%d:jailoc agent:%s:%s", acct.name, acct.uid, acct.gid, acct.home, acct.shell)); err != nil {
 		return account{}, err
 	}
-	if err := appendLine("/etc/group", fmt.Sprintf("%s:x:%d:", acct.name, acct.gid)); err != nil {
+	if err := appendLine(group, fmt.Sprintf("%s:x:%d:", acct.name, acct.gid)); err != nil {
 		return account{}, err
 	}
 	return acct, nil
 }
 
-// renumberAccount gives the /etc/passwd entry named cfg.User the configured
-// UID and GID, and the /etc/group entry of the same name the GID. It returns
-// nil when no entry has that name.
-func renumberAccount(cfg *Config) (*account, error) {
+// renumberAccount gives the passwd entry called name the configured UID and
+// GID, and the group entry of the same name the GID. It returns nil when no
+// entry has that name.
+func renumberAccount(cfg *Config, passwd, group, name string) (*account, error) {
 	var acct *account
-	err := rewriteEntries("/etc/passwd", func(fields []string) bool {
-		if len(fields) < 7 || fields[0] != cfg.User {
+	err := rewriteEntries(passwd, func(fields []string) bool {
+		if len(fields) < 7 || fields[0] != name {
 			return false
 		}
 		fields[2] = strconv.FormatUint(uint64(cfg.UID), 10)
@@ -320,8 +335,8 @@ func renumberAccount(cfg *Config) (*account, error) {
 	if err != nil || acct == nil {
 		return nil, err
 	}
-	if err := rewriteEntries("/etc/group", func(fields []string) bool {
-		if len(fields) < 3 || fields[0] != cfg.User {
+	if err := rewriteEntries(group, func(fields []string) bool {
+		if len(fields) < 3 || fields[0] != name {
 			return false
 		}
 		fields[2] = strconv.FormatUint(uint64(cfg.GID), 10)
@@ -657,6 +672,71 @@ func newSSHServer(logger *slog.Logger, cfg *Config, acct account, env []string) 
 		return nil, fmt.Errorf("create ssh server: %w", err)
 	}
 	return srv, nil
+}
+
+// wakeListener wraps the SSH listener so a host connection (including the
+// control nudge from WriteControl) wakes the control loop immediately, and
+// Close closes active connections so srv.Close does not block on open sessions.
+type wakeListener struct {
+	net.Listener
+	wake   chan struct{}
+	mu     sync.Mutex
+	closed bool
+	conns  map[net.Conn]struct{}
+}
+
+func newWakeListener(ln net.Listener) *wakeListener {
+	return &wakeListener{
+		Listener: ln,
+		wake:     make(chan struct{}, 1),
+		conns:    map[net.Conn]struct{}{},
+	}
+}
+
+func (l *wakeListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = c.Close()
+		return nil, net.ErrClosed
+	}
+	l.conns[c] = struct{}{}
+	l.mu.Unlock()
+	select {
+	case l.wake <- struct{}{}:
+	default:
+	}
+	return &trackedConn{Conn: c, release: func() {
+		l.mu.Lock()
+		delete(l.conns, c)
+		l.mu.Unlock()
+	}}, nil
+}
+
+func (l *wakeListener) Close() error {
+	err := l.Listener.Close()
+	l.mu.Lock()
+	l.closed = true
+	for c := range l.conns {
+		_ = c.Close()
+	}
+	l.mu.Unlock()
+	return err
+}
+
+type trackedConn struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+func (c *trackedConn) Close() error {
+	c.once.Do(c.release)
+	return c.Conn.Close()
 }
 
 // WriteSecrets stores the secrets payload read from r: file secrets in

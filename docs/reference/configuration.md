@@ -14,7 +14,7 @@ Per-workspace files, such as the CA bundle copied by [`ca_bundle`](#ca_bundle), 
 
 VM state under `~/.cache/jailoc-vm/` is keyed by workspace name only and is shared by all configuration files: workspaces with the same name in two files control the same VM.
 
-All fields are optional unless noted.
+All fields are optional unless noted. jailoc ignores settings it does not know and prints a warning naming each of them; [`jailoc migrate`](cli.md#jailoc-migrate) removes them when it rewrites the file.
 
 ---
 
@@ -42,8 +42,8 @@ Host runtime of the workspace VMs. All fields are optional.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `runner` | string | (embedded) | Path to a `jailoc-vm-runner` (or `go-microvm-runner`) binary. When empty, jailoc unpacks the VM runtime (`jailoc-vm-runner`, `libkrun`, `libkrunfw`) embedded in release builds for darwin/arm64, linux/amd64 and linux/arm64 into `~/.cache/jailoc-vm/runtime/` on first use. Builds without an embedded runtime (other platforms, builds from source) require `runner` and `lib_dir`. Must be absolute; supports `~` expansion. |
-| `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Ignored when `runner` is empty. When empty with a configured `runner`, jailoc uses `/opt/homebrew/lib` on macOS if it exists, otherwise the system library path. Must be absolute; supports `~` expansion. |
+| `runner` | string | (embedded or package-provided) | Path to a `jailoc-vm-runner` (or `go-microvm-runner`) binary. Runtime selection order: a configured `runner`; otherwise a runtime provided by the package (for example, the Nix package on Linux, which references its runner and libraries in the Nix store); otherwise the VM runtime (`jailoc-vm-runner`, `libkrun`, `libkrunfw`) embedded in release builds for darwin/arm64, linux/amd64 and linux/arm64, unpacked into `~/.cache/jailoc-vm/runtime/` on first use. Builds with none of these (other platforms, builds from source) require `runner` and `lib_dir`. Must be absolute; supports `~` expansion. |
+| `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Ignored when `runner` is empty, including with a package-provided runtime, which always uses its own library directory. When empty with a configured `runner`, jailoc uses `/opt/homebrew/lib` on macOS if it exists, otherwise the system library path. This fallback applies only to a configured `runner`. Must be absolute; supports `~` expansion. |
 | `builder` | string | `"auto"` | Where workspace images are built: `"auto"` uses the host Docker daemon when it answers and runs Linux on the host's CPU architecture, otherwise the shared builder VM; `"docker"` requires the host daemon; `"vm"` always uses the shared builder VM. A workspace with `isolated_build = true` always uses its own builder VM. |
 
 ### Example
@@ -94,6 +94,7 @@ Defaults applied to all workspaces.
 | `ssh_auth_sock` | bool | `false` | Relay the host SSH agent (`$SSH_AUTH_SOCK`) into the VM at `/run/ssh-agent.sock` and copy `~/.ssh/known_hosts` into it. |
 | `gpg_agent` | bool | `false` | Relay the host gpg-agent extra socket into the VM at `/run/user/<uid>/gnupg/S.gpg-agent` and import the public key of `user.signingKey`, or of all host secret keys when it is unset, into the VM keyring. Requires `gpg` in the image. |
 | `git_config` | bool | `true` | Copy the host Git configuration read-only into the VM: `~/.gitconfig`, `config`, `ignore` and `attributes` from `$XDG_CONFIG_HOME/git` (default `~/.config/git`), and the files they reference under the home directory. See [`git_config`](#git_config). |
+| `import_agent_config` | bool | `true` | Copy the coding agent's host configuration read-only into the VM, such as `~/.claude/CLAUDE.md` or `~/.config/opencode`. See [`import_agent_config`](#import_agent_config). |
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
@@ -132,22 +133,59 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `ipv6` | bool | `false` | Give the guest IPv6 (`fd00:127::2/64`) and let the broker allow IPv6 destinations by the [IPv6 policy](../explanation/network-isolation.md#ipv6). When off, the guest has IPv4 only and the broker denies every IPv6 flow. Changing it needs `jailoc restart`; `jailoc reload` turns it off at the broker right away, except in a VM started by a jailoc release without this setting: that VM keeps IPv6 until `jailoc restart`. |
-| `filtered_dns` | bool | `false` | Filter DNS answers in the network broker. Requires `dns_upstream` and at least one `dns_blocked_zones` entry. |
-| `dns_upstream` | string | (none) | Numeric IPv4 resolver used for permitted DNS queries when `filtered_dns` is enabled. |
-| `dns_blocked_zones` | string[] | `[]` | DNS suffixes answered with NXDOMAIN, including all subdomains. |
+| `dns` | string | (host resolver) | Routable numeric IPv4 resolver used for permitted DNS queries. |
+| `rules` | table[] | `[]` | Allow and deny egress rules (`[[<scope>.network.rules]]`). Combined across `[defaults]` and the workspace; `deny` always wins over `allow`. |
+
+### `[[<scope>.network.rules]]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allow` | string[] | (none) | Hostnames, `*.wildcard` names, IP addresses, CIDRs, or `"*"` (public internet). Exactly one of `allow` or `deny` is required. |
+| `deny` | string[] | (none) | Hostnames, `*.wildcard` names, IP addresses, CIDRs, or `"*"`. Exactly one of `allow` or `deny` is required. |
+| `proto` | string | `"tcp"` | `"tcp"`, `"udp"`, or `"any"`. |
+| `ports` | (int \| string)[] | (all) | Port numbers (`1`–`65535`) or `"a-b"` port ranges. |
+| `name` | string | `""` | Label shown in `jailoc traffic` (`rule=<name>`) and validation errors. |
+
+#### Implicit rules and built-in broker behavior
+
+In addition to `[[defaults.network.rules]]` and `[[workspaces.<name>.network.rules]]`, the broker applies:
+
+- **`rule=agent`** (allow, `proto = "tcp"`, `ports = [443]`): appended automatically for the workspace's selected coding agent (or the `from` agent of a custom agent). A matching `deny` rule still overrides it:
+
+| `agent` | Implicit `rule=agent` allowlist (`tcp/443`) |
+|---|---|
+| `opencode`, `opencode1`, `opencode2`, `omo` | `api.anthropic.com`, `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `generativelanguage.googleapis.com`, `oauth2.googleapis.com`, `api.githubcopilot.com`, `*.githubcopilot.com`, `openrouter.ai`, `opencode.ai`, `*.opencode.ai`, `models.dev` |
+| `claude` | `api.anthropic.com`, `claude.ai`, `console.anthropic.com`, `platform.claude.com` |
+| `copilot` | `api.github.com`, `github.com`, `api.githubcopilot.com`, `*.githubcopilot.com`, `copilot-proxy.githubusercontent.com` |
+| `agy` | `generativelanguage.googleapis.com`, `cloudcode-pa.googleapis.com`, `oauth2.googleapis.com`, `accounts.google.com` |
+
+- **`rule=legacy`** (`proto = "any"`): synthesized in memory when deprecated `allowed_hosts`, `allowed_networks` or `dns_blocked_zones` are set.
+- **DoT and QUIC exclusion on `"*"`**: a wildcard rule (`allow = ["*"]`) without explicit `ports` excludes TCP port `853` (DNS over TLS) and UDP port `443` (QUIC/HTTP/3) so DNS stays on the gateway resolver and HTTPS clients fall back to TCP port `443` (where TLS SNI is inspected whenever hostname rules or hostname `deny` rules apply on that port) unless those ports are listed in `ports`.
+- **Direct DNS block**: TCP and UDP port `53` to any address other than the gateway (`192.168.127.1`) is denied (`reason=dns-filtered`) unless an `allow` rule lists port `53` in `ports` and matches the resolver by IP, CIDR, hostname or `"*"` (public resolvers only); a rule without `ports`, including `allow = ["*"]`, never opens it. The broker answers allowed direct queries itself: it sends each query only to that resolver, applies the same name filtering, NXDOMAIN and `HTTPS`/`SVCB` handling as the gateway resolver, and does not add the answers to its IP-to-name cache, so connections to the returned addresses match hostname rules only through names the gateway resolver returned. `jailoc traffic` shows these queries with `@<resolver>`.
+- **Gateway services (`192.168.127.1`)**: the broker serves DHCP, DNS (port `53`), SNTP clock sync (UDP port `123`), SSH/GPG agent relays (`ssh_auth_sock`, `gpg_agent`), and configured `host_ports` on the gateway; all other connections to the gateway, guest subnet (`192.168.127.0/24`, `fd00:127::/64`), host interface addresses, and hard-denied ranges are always denied.
+- **Default `dev-deps` rule in new configs**: when jailoc creates a missing `~/.config/jailoc/config.toml`, it writes an explicit `[[defaults.network.rules]]` entry named `dev-deps` into the file (GitHub, GitLab.com, npm, Yarn, Node.js, Bun, PyPI, Astral, Go proxy, crates.io, Rustup, Docker Hub, GHCR, Quay, GCR, MCR, Ubuntu/Debian/Alpine mirrors, and Nix caches). Removing or editing that block in `config.toml` removes or changes those rules.
 
 ### Example
 
 ```toml
 [defaults.network]
 ipv6 = true
+dns = "9.9.9.9"
 
-[workspaces.api.network]
-filtered_dns = true
-dns_upstream = "10.20.30.53"
-dns_blocked_zones = ["corp.example.com", "internal"]
+[[defaults.network.rules]]
+name = "dev-deps"
+allow = ["github.com", "api.github.com", "*.githubusercontent.com", "registry.npmjs.org"]
+
+[[defaults.network.rules]]
+name = "no-paste"
+deny = ["pastebin.com", "gist.github.com", "*.ngrok.io"]
+
+[[workspaces.api.network.rules]]
+name = "db"
+allow = ["10.20.5.10"]
+proto = "tcp"
+ports = [5432]
 ```
-
 ---
 
 ## `[workspaces.<name>]`
@@ -173,7 +211,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
 | `network` | table | `{}` | Same fields as [`[defaults.network]`](#defaultsnetwork); a set field wins. |
-| `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
+| `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
 
 ### Example
 
@@ -195,7 +233,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 | `agent` | Agent | Package | Session command | Continue (`-c`) | Resume (`-s ID`) | Persistent home directories | Environment |
 |---|---|---|---|---|---|---|---|
 | `opencode2` | OpenCode 2 | `@opencode/cli` | `opencode --standalone --auto` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_CLI_CONFIG_CONTENT` |
-| `opencode1` | OpenCode 1 | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
+| `opencode1` | OpenCode 1 | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode`, `~/.omo` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
 | `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `DISABLE_AUTOUPDATER=1` |
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
 | `omo` | OmO | `omo-ai` | `omo --permission-preset full-access --extension /etc/jailoc-tui-plugin/omo.js` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
@@ -203,7 +241,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 
 `opencode` is an alias of `opencode2`: it runs the same harness and shares its persistent home directories, while `agents.opencode` and `agents.opencode2` are separate tables. OpenCode 2 runs with `--standalone`, so each session has its own server and environment instead of sharing a background service.
 
-Every agent shows the workspace name; `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `--settings` and `--extension` load the jailoc indicator, and for `copilot` and `agy` jailoc adds a `statusLine` to `~/.copilot/settings.json` and `~/.gemini/antigravity-cli/settings.json` when it sets none. See [Workspace indicator](../how-to/tui-plugin.md).
+Every agent shows the workspace name; `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `--settings` and `--extension` load the jailoc indicator, and for `copilot` and `agy` jailoc adds a `statusLine` to `~/.copilot/settings.json` and `~/.gemini/antigravity-cli/settings.json` when it sets none (and `storeTokenPlaintext = true` in `~/.copilot/settings.json` when unset, so Copilot stores logins without a system keyring). See [Workspace indicator](../how-to/tui-plugin.md).
 
 The package versions are pinned by the jailoc release; `version` in [`agents`](#agents) installs another one. The session command line is: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
 
@@ -265,11 +303,10 @@ The mounts of the selected agent are merged by guest path; a later entry replace
 ```toml
 [defaults.agents.opencode-legacy]
 from = "opencode"
-mounts = [
-  "~/.config/opencode-legacy:/home/agent/.config/opencode",
-  ":/home/agent/.opencode",
-]
+mounts = ["~/.config/opencode-legacy:/home/agent/.config/opencode"]
 ```
+
+A mount at the destination of an [`import_agent_config`](#import_agent_config) copy replaces the copy.
 
 ### Agent profiles
 
@@ -281,7 +318,7 @@ mounts = [
 | `false` | per workspace | emptied on every VM start |
 | `"<name>"` | `~/.local/share/jailoc/profiles/<name>/<dir>` | until deleted by hand; `jailoc down --purge` keeps it |
 
-`<dir>` is the name of the harness's state directory (`opencode2-data`, `opencode2-state` for OpenCode 2, `opencode-data`, `opencode-state` for OpenCode 1, `claude`, `copilot`, `omo`, `antigravity`), so one profile can hold the state of several harnesses, and two agents of the same harness share it when they name the same profile. `~/.cache` stays per workspace. A mount over a persistent home directory replaces it.
+`<dir>` is the name of the harness's state directory (`opencode2-data`, `opencode2-state` for OpenCode 2, `opencode-data`, `opencode-state` for OpenCode 1, plus `opencode1-omo` for the OmO plugin's `~/.omo`, `claude`, `copilot`, `omo`, `antigravity`), so one profile can hold the state of several harnesses, and two agents of the same harness share it when they name the same profile. `~/.cache` stays per workspace. A mount over a persistent home directory replaces it.
 
 A named profile is used by one running workspace at a time: `jailoc up` and `jailoc restart` fail while another workspace using the profile is running.
 
@@ -353,6 +390,25 @@ Configuration files are copied with two rewrites: values of the path variables a
 
 Each copy is a default snapshot: a [`snapshots`](#snapshots) entry with the same destination replaces it, an entry with an empty host removes it, and a directory snapshot that contains its destination replaces it.
 
+### `import_agent_config`
+
+When `true`, jailoc adds read-only snapshots of the selected agent's host configuration at `jailoc up` and `jailoc reload`:
+
+| Agent | Host, copied to the same path under `/home/agent` |
+|---|---|
+| `opencode`, `opencode2` | `~/.config/opencode`, without `node_modules` |
+| `opencode1` | `~/.config/opencode`, without `node_modules`; `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
+| `claude` | `~/.claude/CLAUDE.md`, `~/.claude/RTK.md`, `~/.claude/settings.json`, `~/.claude/agents`, `~/.claude/commands`, `~/.claude/hooks`, `~/.claude/skills`, `~/.claude/output-styles` |
+| `copilot` | `~/.copilot/copilot-instructions.md`, `~/.copilot/agents`, `~/.copilot/hooks`, `~/.copilot/skills`, `~/.copilot/mcp-config.json` |
+| `agy` | `~/.gemini/GEMINI.md` |
+| `omo` | `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
+
+Missing sources are skipped. Logins, sessions and the agents' own `config.json` and `settings.json` of `copilot` stay in the persistent state directory. The OpenCode copy gets the `.gitignore` OpenCode would write (unless the host directory has one), and OpenCode doesn't install the dependencies of local plugins in the read-only directory: plugins listed in `plugin` still install into `~/.cache`, but a local plugin that imports a package needs it installed in the image.
+
+The copies inside a persistent state directory (`~/.claude`, `~/.copilot`, `~/.omo`, `~/.gemini`) hide what is there in the VM: a skill the agent installs into `~/.claude/skills` is not visible while that directory is copied. When the snapshot is dropped, the empty mount points it left in the state directory are removed at the next start.
+
+Each copy is a default snapshot like the [Git configuration](#git_config): a [`snapshots`](#snapshots) entry with the same destination replaces it, an entry with an empty host removes it (`snapshots = [":/home/agent/.claude/settings.json"]`), and a directory snapshot that contains its destination replaces it. A copy whose destination equals, contains or lies inside a shared path, such as a mount of `~/.claude` or a [named profile](#agent-profiles) state directory, is skipped.
+
 ### `ports`
 
 Each entry is a port number (`3000`: guest 3000 on host 3000) or `"HOST:GUEST"` (`"8080:80"`: guest 80 on host 8080), with ports 1 to 65535. A host port may appear only once per list. A workspace entry replaces a `[defaults]` entry with the same host port. Ports are published on host `127.0.0.1` only.
@@ -382,7 +438,7 @@ jailoc warns when an entry targets port 9222 (Chrome DevTools Protocol) or a con
 
 ### Filtered DNS
 
-When `network.filtered_dns = true`, an effective `dns_upstream` and at least one effective `dns_blocked_zones` entry are required. `dns_upstream` must be a numeric IPv4 address other than unspecified, loopback, link-local or multicast. Each zone must be a DNS name of labels with letters, digits or internal hyphens (63 characters per label, 253 total); a trailing dot is accepted and `"."` is rejected. Queries for names in blocked zones get NXDOMAIN, matched case-insensitively including subdomains, and so do answers that name a blocked zone anywhere, for example through a CNAME. Queries with more or fewer than one question are refused. Direct DNS to port 53 of other servers is blocked.
+When `network.filtered_dns = true`, an effective `dns_upstream` and at least one effective `dns_blocked_zones` entry are required. `dns_upstream` must be a numeric IPv4 address other than unspecified, loopback, link-local or multicast. Each zone must be a DNS name of labels with letters, digits or internal hyphens (63 characters per label, 253 total); a trailing dot is accepted and `"."` is rejected. Queries for names in blocked zones get NXDOMAIN, matched case-insensitively including subdomains, and so do answers that name a blocked zone anywhere, for example through a CNAME. Queries with more or fewer than one question are refused. Direct DNS to port 53 of other servers is blocked unless an `allow` rule opens it (see [Direct DNS block](#implicit-rules-and-built-in-broker-behavior)), and such queries get the same filtering.
 
 With filtering on, an effective `allowed_hosts` entry equal to or under an effective blocked zone is rejected at config load.
 
@@ -393,7 +449,27 @@ With filtering on, an effective `allowed_hosts` entry equal to or under an effec
 - Non-empty string: custom bundle path, absolute or `~`. Symlinks are resolved; the target must be a readable regular file with at least one `CERTIFICATE` PEM block and no private-key PEM block.
 - Empty string or any other TOML type: rejected at config load.
 
-The bundle is added to the VM's system trust store, which its Docker daemon also uses, and to the builder VM's Docker daemon. Sessions get `NODE_USE_SYSTEM_CA=1` when a bundle is forwarded.
+The bundle is added to the VM's system trust store, which its Docker daemon also uses, and to the builder VM's Docker daemon. In the VM, `/etc/ssl/certs/ca-certificates.crt` then holds the image's roots plus the forwarded certificates, also when the image keeps its own bundle elsewhere. Each forwarded certificate is also written to `jailoc/` under `/usr/local/share/ca-certificates` or `/etc/pki/ca-trust/source/anchors`, if the image has that directory, so running `update-ca-certificates` or `update-ca-trust` in a session keeps it. When a reload removes or replaces these certificates, jailoc runs that tool, if the image has it, so stores it generated stop trusting the old ones.
+
+When a bundle is forwarded, sessions get `NODE_USE_SYSTEM_CA=1` and these variables set to `/etc/ssl/certs/ca-certificates.crt`, for clients that ship their own roots or read only a variable:
+
+| Variable | Read by |
+|---|---|
+| `NODE_EXTRA_CA_CERTS` | Node.js, Bun and the agents built on them |
+| `SSL_CERT_FILE` | OpenSSL, Go, uv, httpx |
+| `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` | Python requests, curl |
+| `PIP_CERT` | pip |
+| `AWS_CA_BUNDLE` | AWS CLI and SDKs |
+| `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` | Google Cloud CLI |
+| `HTTPLIB2_CA_CERTS` | httplib2 |
+| `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` | gRPC |
+| `CARGO_HTTP_CAINFO` | cargo |
+| `GIT_SSL_CAINFO` | git |
+| `NIX_SSL_CERT_FILE` | Nix |
+| `DENO_CERT` | Deno |
+| `HEX_CACERTS_PATH` | Hex |
+
+A variable set by the workspace's `env`, `env_file` or an env secret takes precedence.
 
 ### `enable_docker`
 
@@ -462,20 +538,17 @@ Environment variables merge in this order, later wins per key:
 
 | Agent | Destination | Host source | Mode |
 |---|---|---|---|
-| `opencode`, `opencode1`, `opencode2` | `/home/agent/.config/opencode` | `~/.config/opencode` | `rw` |
-| `opencode`, `opencode1`, `opencode2` | `/home/agent/.opencode` | `~/.opencode` | `rw` |
-| `opencode1` | `/home/agent/.omo` | `~/.omo` | `rw` |
 | all | `/home/agent/.agents` | `~/.agents` | `ro` |
 
-The `opencode1` mount of `~/.omo` serves the OmO plugin (`oh-my-openagent`), which writes its configuration, state and lock files there. It gives every OpenCode 1 workspace write access to the host's `~/.omo`. Make it read-only with `[defaults.agents.opencode1] mounts = ["~/.omo:/home/agent/.omo:ro"]`, or remove it with `mounts = [":/home/agent/.omo"]`; with the mount removed, `~/.omo` lives in the VM root filesystem and is lost on restart.
+The agent's configuration is copied instead of mounted; see [`import_agent_config`](#import_agent_config). The OmO plugin (`oh-my-openagent`) of `opencode1` writes its configuration, state and lock files to `~/.omo`, which is a persistent home directory of the workspace. To share the host's `~/.omo` instead, mount it: `[defaults.agents.opencode1] mounts = ["~/.omo:/home/agent/.omo:rw"]`.
 
-`snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config` and `ssh_auth_sock` add lowest-priority snapshots (the [Git configuration files](#git_config), `/home/agent/.ssh/known_hosts`), which a `snapshots` entry for the same destination replaces or, with an empty host, removes.
+`snapshots` merges `[defaults].snapshots` and workspace `snapshots` keyed by destination. `git_config`, `import_agent_config` and `ssh_auth_sock` add lowest-priority snapshots (the [Git configuration files](#git_config), the [agent configuration](#import_agent_config), `/home/agent/.ssh/known_hosts`), which a `snapshots` entry for the same destination replaces or, with an empty host, removes.
 
 `ports` merges by host port; the workspace entry wins. `host_ports` merges by guest port; the workspace entry wins.
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 

@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,25 +47,13 @@ var vmSuperviseCmd = &cobra.Command{
 			return fmt.Errorf("read vm spec: %w", err)
 		}
 		spec.Log = os.Stderr
-		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
-		defer stop()
-		return vm.Run(ctx, *spec)
+		return vm.Run(cmd.Context(), *spec)
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(vmSuperviseCmd)
 }
-
-func vmRootDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "jailoc-vm")
-	}
-	return filepath.Join(home, ".cache", "jailoc-vm")
-}
-
-func vmStateDir(name string) string { return filepath.Join(vmRootDir(), "workspaces", name) }
 
 func setDockerHost(socket string) (func(), error) {
 	orig, set := os.LookupEnv("DOCKER_HOST")
@@ -211,7 +200,7 @@ func stopSupervisor(stateDir string) error {
 	}
 	deadline := time.Now().Add(vmStopTimeout)
 	for processAlive(st.PID) && time.Now().Before(deadline) {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	if processAlive(st.PID) {
 		_ = syscall.Kill(st.PID, syscall.SIGKILL)
@@ -225,25 +214,55 @@ func sameVMSpec(a, b vm.Spec) bool {
 	return errA == nil && errB == nil && string(ja) == string(jb)
 }
 
-// vmRuntime is the runner, its library directory and the jailoc-guest
-// binary: the configured runner or the runtime embedded in jailoc (release
-// builds), and the guest binary embedded in jailoc (release builds) or next
-// to the runner.
+// defaultVMRunner and defaultVMLibDir name a VM runtime that the package
+// ships next to jailoc. Packagers set them at link time, for example
+// -ldflags "-X github.com/seznam/jailoc/internal/cmd.defaultVMRunner=/nix/store/...".
+var (
+	defaultVMRunner string
+	defaultVMLibDir string
+)
+
+// vmRuntimeFiles is the runner, its library directory and the jailoc-guest
+// binary: the configured runner, the runtime provided by the package
+// (defaultVMRunner) or the runtime embedded in jailoc (release builds), and
+// the guest binary embedded in jailoc (release builds) or next to the runner.
 type vmRuntimeFiles struct {
 	runner, libDir, guest string
 }
 
 func vmRuntime(cfg *config.Config) (vmRuntimeFiles, error) {
+	return vmRuntimeWith(cfg, defaultVMRunner, defaultVMLibDir)
+}
+
+// selectVMRuntime picks the runtime source: the configured runner, then the
+// package runner, then the embedded runtime (embedded is true). The package
+// lib dir applies only together with the package runner.
+func selectVMRuntime(cfg *config.Config, pkgRunner, pkgLibDir string) (runner, libDir string, embedded bool) {
+	switch {
+	case cfg.VM.Runner != "":
+		return cfg.VM.Runner, vmLibDir(cfg.VM.LibDir), false
+	case pkgRunner != "":
+		return pkgRunner, pkgLibDir, false
+	default:
+		return "", "", true
+	}
+}
+
+func vmRuntimeWith(cfg *config.Config, pkgRunner, pkgLibDir string) (vmRuntimeFiles, error) {
 	var rt vmRuntimeFiles
-	if cfg.VM.Runner != "" {
-		rt = vmRuntimeFiles{runner: cfg.VM.Runner, libDir: vmLibDir(cfg.VM.LibDir)}
-	} else {
-		runner, libDir, err := vm.EnsureRuntime(filepath.Join(vmRootDir(), "runtime"), os.Stdout)
+	runner, libDir, embedded := selectVMRuntime(cfg, pkgRunner, pkgLibDir)
+	if embedded {
+		var err error
+		runner, libDir, err = vm.EnsureRuntime(filepath.Join(vmRootDir(), "runtime"), os.Stdout)
 		if err != nil {
 			return rt, fmt.Errorf("prepare VM runtime: %w", err)
 		}
-		rt = vmRuntimeFiles{runner: runner, libDir: libDir}
+	} else if cfg.VM.Runner == "" {
+		if _, err := os.Stat(runner); err != nil {
+			return rt, fmt.Errorf("VM runner %s provided by this jailoc package is missing: %w; reinstall jailoc or set runner and lib_dir in the [vm] section of the config", runner, err)
+		}
 	}
+	rt = vmRuntimeFiles{runner: runner, libDir: libDir}
 	guest, err := guestbin.Path(filepath.Join(vmRootDir(), "guest"))
 	switch {
 	case err == nil:
@@ -511,56 +530,176 @@ func vmDockerDiskSize(size string) (int64, error) {
 	return bytes, nil
 }
 
-type vmException struct {
-	CIDR  string `json:"cidr"`
-	Proto string `json:"proto"`
+type vmRule struct {
+	Name  string   `json:"name,omitempty"`
+	Names []string `json:"names,omitempty"`
+	CIDRs []string `json:"cidrs,omitempty"`
+	Proto string   `json:"proto,omitempty"`
+	Ports []string `json:"ports,omitempty"`
 }
 
-// vmPolicy turns allowed_networks and allowed_hosts into broker exceptions.
-// Host names are resolved on the host once, when the VM starts.
+// vmPolicy builds the broker policy JSON from the workspace's resolved network
+// rules and DNS settings. @list references are expanded on the host.
 func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
-	exceptions := []vmException{}
-	seen := map[string]bool{}
-	add := func(cidr string) {
-		if !seen[cidr] {
-			seen[cidr] = true
-			exceptions = append(exceptions, vmException{CIDR: cidr, Proto: "any"})
+	allow := []vmRule{}
+	deny := []vmRule{}
+
+	rules := slices.Clone(ws.NetworkRules)
+	if len(rules) == 0 && (len(ws.AllowedNetworks) > 0 || len(ws.AllowedHosts) > 0 || len(ws.DNSBlockedZones) > 0) {
+		if len(ws.AllowedHosts) > 0 {
+			rules = append(rules, config.NetworkRule{Name: "legacy", Allow: slices.Clone(ws.AllowedHosts), Proto: config.RuleProtoAny})
+		}
+		if len(ws.AllowedNetworks) > 0 {
+			rules = append(rules, config.NetworkRule{Name: "legacy", Allow: slices.Clone(ws.AllowedNetworks), Proto: config.RuleProtoAny})
+		}
+		if len(ws.DNSBlockedZones) > 0 {
+			var blocked []string
+			for _, z := range ws.DNSBlockedZones {
+				z = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(z)), ".")
+				if z != "" {
+					blocked = append(blocked, z, "*."+z)
+				}
+			}
+			if len(blocked) > 0 {
+				rules = append(rules, config.NetworkRule{Name: "legacy", Deny: blocked, Proto: config.RuleProtoAny})
+			}
 		}
 	}
-	for _, n := range ws.AllowedNetworks {
-		_, ipnet, err := net.ParseCIDR(n)
-		if err != nil {
-			return nil, fmt.Errorf("allowed network %q: %w", n, err)
-		}
-		add(ipnet.String())
-	}
+
+	// Legacy allowed_hosts could resolve to private/ULA addresses, which
+	// hostname rules alone do not open. Resolve them on the host and emit
+	// only non-public addresses as CIDRs so public hosts stay governed by
+	// hostname rules and SNI inspection.
+	var resolvedLegacyCIDRs []string
 	for _, h := range ws.AllowedHosts {
+		if net.ParseIP(h) != nil || strings.Contains(h, "/") {
+			continue
+		}
 		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", h)
 		if err != nil {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: cannot resolve allowed host %q: %v\n", h, err)
 			continue
 		}
 		for _, ip := range ips {
+			addr, ok := netip.AddrFromSlice(ip)
+			if !ok {
+				continue
+			}
+			addr = addr.Unmap()
+			if isPublicLegacyAddr(addr) {
+				continue
+			}
 			prefix := "/128"
-			if ip.To4() != nil {
+			if addr.Is4() {
 				prefix = "/32"
 			}
-			add(ip.String() + prefix)
+			resolvedLegacyCIDRs = append(resolvedLegacyCIDRs, addr.String()+prefix)
 		}
 	}
+	for _, r := range rules {
+		isAllow := len(r.Allow) > 0
+		targets := r.Allow
+		if !isAllow {
+			targets = r.Deny
+		}
+		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets)
+		if err != nil {
+			return nil, err
+		}
+		if isAllow {
+			allow = append(allow, br)
+		} else {
+			deny = append(deny, br)
+		}
+	}
+	if len(resolvedLegacyCIDRs) > 0 {
+		br, err := compileVMRule("legacy", config.RuleProtoAny, nil, resolvedLegacyCIDRs)
+		if err != nil {
+			return nil, err
+		}
+		allow = append(allow, br)
+	}
+
 	policy := struct {
-		Exceptions      []vmException `json:"exceptions"`
-		DNSUpstreams    []string      `json:"dns_upstreams,omitempty"`
-		DNSBlockedZones []string      `json:"dns_blocked_zones,omitempty"`
-		IPv6            bool          `json:"ipv6,omitempty"`
-	}{Exceptions: exceptions, IPv6: ws.IPv6}
-	if ws.FilteredDNS {
-		policy.DNSUpstreams = []string{ws.DNSUpstream}
-		policy.DNSBlockedZones = ws.DNSBlockedZones
+		DNS   string   `json:"dns,omitempty"`
+		Deny  []vmRule `json:"deny"`
+		Allow []vmRule `json:"allow"`
+		IPv6  bool     `json:"ipv6,omitempty"`
+	}{
+		DNS:   ws.DNSUpstream,
+		Deny:  deny,
+		Allow: allow,
+		IPv6:  ws.IPv6,
 	}
 	data, err := json.Marshal(policy)
 	if err != nil {
 		return nil, fmt.Errorf("encode broker policy: %w", err)
 	}
 	return data, nil
+}
+
+var legacyPrivateV4 = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
+func isPublicLegacyAddr(addr netip.Addr) bool {
+	if addr.Is4() {
+		for _, pfx := range legacyPrivateV4 {
+			if pfx.Contains(addr) {
+				return false
+			}
+		}
+		return true
+	}
+	return !addr.IsPrivate() && netip.MustParsePrefix("2000::/3").Contains(addr)
+}
+
+func compileVMRule(name, proto string, ports []config.RulePort, targets []string) (vmRule, error) {
+	if proto == "" {
+		proto = config.RuleProtoTCP
+	}
+	var portStrs []string
+	for _, p := range ports {
+		canon, err := config.CanonicalRulePort(p)
+		if err != nil {
+			return vmRule{}, err
+		}
+		portStrs = append(portStrs, canon)
+	}
+	out := vmRule{Name: name, Proto: proto, Ports: portStrs}
+	seenNames := map[string]bool{}
+	seenCIDRs := map[string]bool{}
+	for _, t := range targets {
+		kind, norm, err := config.ParseRuleTarget(t)
+		if err != nil {
+			return vmRule{}, err
+		}
+		switch kind {
+		case "cidr":
+			if !seenCIDRs[norm] {
+				seenCIDRs[norm] = true
+				out.CIDRs = append(out.CIDRs, norm)
+			}
+		case "wildcard", "name":
+			if !seenNames[norm] {
+				seenNames[norm] = true
+				out.Names = append(out.Names, norm)
+			}
+		}
+	}
+	return out, nil
 }

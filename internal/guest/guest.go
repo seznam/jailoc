@@ -20,7 +20,8 @@ package guest
 //
 // Protocol 2: the guest configures IPv6 only when Config.IPv6 is set, and
 // the broker policy denies IPv6 unless its ipv6 field is set.
-const Protocol = 2
+// Protocol 3: the broker policy uses dns, allow and deny rules.
+const Protocol = 3
 
 // Paths inside the guest root file system.
 const (
@@ -51,6 +52,10 @@ const (
 	SecretsDir = "/run/secrets"
 	// EnvFile holds KEY=VALUE lines added to every agent session.
 	EnvFile = "/run/jailoc/env"
+	// SystemCABundle is the guest's system CA bundle. With a forwarded CA
+	// bundle it holds the image's roots plus the forwarded certificates, and
+	// the session CA variables name it.
+	SystemCABundle = "/etc/ssl/certs/ca-certificates.crt"
 	// MTU of the guest network interface. It matches the broker's MTU;
 	// large frames cut per-packet work in the broker roughly in half.
 	MTU = 65520
@@ -123,16 +128,23 @@ type Config struct {
 	// CABundle is a guest path appended to the system CA bundle.
 	CABundle string `json:"ca_bundle,omitempty"`
 	// IDMap is set when virtio-fs shows the real host owner of shared files
-	// and of the root filesystem (Linux hosts). The guest then mounts them
-	// idmapped so the host user appears as root in the root filesystem and
-	// as the agent in its home and the shares. Without it, or when the guest
-	// kernel cannot idmap, the agent takes the host user's IDs.
+	// and of the boot root file system (Linux hosts). The guest then mounts
+	// them idmapped so the host user appears as root in the boot root and as
+	// the agent in its home and the shares; the image layers keep their own
+	// owners. Without it, or when the guest kernel cannot idmap, the agent
+	// takes the host user's IDs.
 	IDMap *IDMap `json:"idmap,omitempty"`
-	// RootShare is the virtio-fs tag of the workspace image's root file
-	// system, shared read-only. The boot root file system then holds only
-	// jailoc's own files, and the guest assembles its root as an overlay of
-	// them over the image with writes kept in memory.
+	// hostIDs is set when the guest kernel cannot idmap and UID and GID
+	// were replaced by the host user's IDs.
+	hostIDs bool //nolint:unused // set and read only by the Linux guest
+	// RootShare is the virtio-fs tag of the share holding the workspace
+	// image's EROFS layer images, shared read-only. The boot root file
+	// system then holds only jailoc's own files, and the guest assembles its
+	// root as an overlay of them over the layers with writes kept in memory.
 	RootShare string `json:"root_share,omitempty"`
+	// RootLayers are the file names of the layer images in RootShare, the
+	// bottom layer first.
+	RootLayers []string `json:"root_layers,omitempty"`
 	// SSHAgent exposes the host SSH agent at SSHAgentSocket, relayed
 	// through the broker gateway.
 	SSHAgent bool `json:"ssh_agent,omitempty"`

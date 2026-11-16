@@ -139,10 +139,16 @@ enable_docker = true
 
 [workspaces.%[7]s.network]
 ipv6 = %[8]t
-filtered_dns = true
-dns_upstream = "1.1.1.1"
-dns_blocked_zones = ["example.org"]
+dns = "1.1.1.1"
 
+# Docker Hub serves image blobs from Cloudflare or, at times, from S3.
+[[workspaces.%[7]s.network.rules]]
+name = "dev-deps"
+allow = ["example.com", "*.docker.io", "*.docker.com", "docker-images-prod.s3.dualstack.us-east-1.amazonaws.com", "dl-cdn.alpinelinux.org"]
+
+[[workspaces.%[7]s.network.rules]]
+name = "blocked"
+deny = ["example.org", "*.example.org"]
 [workspaces.%[7]s.secrets.env.VMTEST_TOKEN]
 from_env = "VMTEST_HOST_TOKEN"
 
@@ -312,6 +318,14 @@ func TestWorkspaceVM(t *testing.T) {
 		}
 		if got := mustGuest(ctx, t, "stat -c %u:%g /etc/passwd ~ "+project); got != "0:0\n1000:1000\n1000:1000" {
 			t.Fatalf("guest ownership = %q, want root files, agent home and project", got)
+		}
+	})
+
+	t.Run("root filesystem from EROFS layers keeps image ownership", func(t *testing.T) {
+		// The layers keep the image's own IDs: /etc/shadow belongs to the
+		// shadow group and sudo stays setuid root.
+		if got := mustGuest(ctx, t, "findmnt -n -o FSTYPE /; stat -c %u:%g /etc/shadow; stat -c %u:%a /usr/bin/sudo"); got != "overlay\n0:42\n0:4755" {
+			t.Fatalf("root filesystem = %q, want an overlay with the image's owners and modes", got)
 		}
 	})
 

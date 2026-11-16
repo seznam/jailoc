@@ -1,5 +1,184 @@
 # Changelog
 
+## [2.6.0](https://github.com/seznam/jailoc/compare/v2.5.0...v2.6.0) (2026-11-16)
+
+
+### Features
+
+* **cmd:** show up timings in jailoc logs and warn about large images ([0157347](https://github.com/seznam/jailoc/commit/0157347ee7c41de1ca6126f320e1bb7b66df75a2))
+* **cmd:** show up timings in jailoc logs and warn about large images ([f918e42](https://github.com/seznam/jailoc/commit/f918e42ebf4911b5834df2d5ab2367cb58f05899))
+* **cmd:** warn only about what the workspace Dockerfile adds, above 20 layers or 5 GiB ([8748860](https://github.com/seznam/jailoc/commit/87488603703f9476ba775533c91426efe49950d8))
+* **guest:** make more TLS clients trust a forwarded CA bundle ([bc1e15b](https://github.com/seznam/jailoc/commit/bc1e15bc86e5cca0fe57ba03a4a6fb94e1f1f2be))
+* **guest:** make more TLS clients trust a forwarded CA bundle ([089d984](https://github.com/seznam/jailoc/commit/089d984eb8214f66b9b7628f7331b91283cc492a))
+* **netbroker:** answer direct DNS to resolvers allowed by a port 53 rule ([0d54ae9](https://github.com/seznam/jailoc/commit/0d54ae9ebf08778e37c8760a09aa7dc08af88ef8))
+* **netbroker:** answer direct DNS to resolvers allowed by a port 53 rule ([19f3afe](https://github.com/seznam/jailoc/commit/19f3afe6865e88459779c1f0d63f28f87c7f816c))
+* **nix:** Jailoc v2 support ([b6ef6f5](https://github.com/seznam/jailoc/commit/b6ef6f54d7352b54c99f48eeefbad0ee866eabdd))
+* **vm:** boot workspace VMs from per-layer EROFS images ([87fca57](https://github.com/seznam/jailoc/commit/87fca5770b5f26bddc3949b7cc45a22af3a7fdd4))
+* **vm:** boot workspace VMs from per-layer EROFS images ([56acc84](https://github.com/seznam/jailoc/commit/56acc84a37d7d6dccb32ed8bf24b157ff98165bc))
+
+
+### Bug Fixes
+
+* **cmd:** follow the up, supervisor and console logs together and across restarts ([ebe1736](https://github.com/seznam/jailoc/commit/ebe1736ab8f98fa5a07b5cd793d61e797a4978ef))
+* **cmd:** log up failures, time the export after the cache lock and follow a running up ([455e9b6](https://github.com/seznam/jailoc/commit/455e9b6b91a6c910d565f73dfeab0755c5ee47fc))
+* **guest:** give the agent the host GID when idmapped mounts are unavailable ([5f84618](https://github.com/seznam/jailoc/commit/5f846189ccb910a996b5373ce7459c7b50a6e75d))
+* **guest:** give the agent the host GID when idmapped mounts are unavailable ([9856147](https://github.com/seznam/jailoc/commit/98561478fa2c1ced15cda72890048c756ca87eba))
+* **guest:** keep image owners without an idmapped boot root and mount deep images ([e1a2320](https://github.com/seznam/jailoc/commit/e1a2320a0c7a420838130fd48211e0f879c9c87a))
+* **guest:** refresh generated trust stores when a forwarded CA is removed or replaced ([47d7f9b](https://github.com/seznam/jailoc/commit/47d7f9bc574a630e2734abe5e961dddc4fd4a646))
+* **guest:** retry a failed trust store refresh and keep the system bundle current ([24cf519](https://github.com/seznam/jailoc/commit/24cf51931c56346538cfa7e5e80d8f6c5e6f394c))
+* **guest:** run trust store tools from system dirs, tracked by the reaper, with content-named certificates ([fe5eb29](https://github.com/seznam/jailoc/commit/fe5eb29c2986da13ab01047163a204ace5894870))
+* **netbroker:** share the DNS query and connection budget with direct DNS ([53eaed2](https://github.com/seznam/jailoc/commit/53eaed2f496be01ea9da6649eff06976b327bc92))
+* **nix:** pin go-microvm runner to the EROFS share revision ([3eaa732](https://github.com/seznam/jailoc/commit/3eaa732687e719a471c720f9edb5343bd2a79d0f))
+* **vm:** bound layer conversion and handle more tar and AUFS entries ([4a69795](https://github.com/seznam/jailoc/commit/4a69795d15fb633340e306278614b25516401996))
+* **vm:** drop layers below a layer with an opaque root ([e3cdb23](https://github.com/seznam/jailoc/commit/e3cdb23b021f5fb2901c772ba7b5ebb6a3dec51f))
+* **vm:** honour an opaque layer root in image path lookups ([44fb55a](https://github.com/seznam/jailoc/commit/44fb55adc191591aeb5ff1c7f10a05667c7f9ec8))
+* **vmintegration:** allow the S3 host Docker Hub serves blobs from ([3fde769](https://github.com/seznam/jailoc/commit/3fde769612075891957e31e2e1a3e0351b1a30ca))
+* **vm:** keep inherited directory metadata and resolve image paths across layers ([6ded59b](https://github.com/seznam/jailoc/commit/6ded59b6710633b7b22242c38951247cc64836b0))
+
+
+### Documentation
+
+* drop claim that sudo does not grant root without idmapped mounts ([78bd3e6](https://github.com/seznam/jailoc/commit/78bd3e66e4c218648b143689cf9168761853d0a4))
+
+## [2.5.0](https://github.com/seznam/jailoc/compare/v2.4.0...v2.5.0) (2026-11-13)
+
+
+### Features
+
+* **setup:** explain wizard prompts and retain commented options in generated config ([5560a7f](https://github.com/seznam/jailoc/commit/5560a7fc4c80675a8e5634b5ebc6e5d7a9481085))
+* **setup:** explain wizard prompts and retain commented options in generated config ([b3a001d](https://github.com/seznam/jailoc/commit/b3a001d9a0e6572f84bcb25a272adef53a7e3bba))
+
+
+### Bug Fixes
+
+* **agent:** enable storeTokenPlaintext for GitHub Copilot CLI and bump to 1.0.111 ([6a1c869](https://github.com/seznam/jailoc/commit/6a1c8698eae69cebef822bd37f8c9bd361f7678a))
+* **agent:** enable storeTokenPlaintext for GitHub Copilot CLI and bump to 1.0.111 ([310f542](https://github.com/seznam/jailoc/commit/310f542a31b9074a0f137cdea50cf75c9f9ed882))
+* **cmd:** bound GTK clipboard child initialization with signal.alarm ([6b99edb](https://github.com/seznam/jailoc/commit/6b99edb126c493798bdab9f828474c75d4dde724))
+* **cmd:** clear alt-screen state on ESC c and preserve --config in exit hint ([8bb83cd](https://github.com/seznam/jailoc/commit/8bb83cd65cdab28fee3b9a05f72f2a344807fa85))
+* **cmd:** isolate python3 GTK clipboard helper and keep selection owner alive ([b2ec7f1](https://github.com/seznam/jailoc/commit/b2ec7f189ab26aa954db32d10cf0a186f0946e29))
+* **cmd:** lock and canonicalize agent state version history and purge on down ([6881321](https://github.com/seznam/jailoc/commit/6881321a6429848088c1dd46c8062cde45fe2f53))
+* **cmd:** preserve main-screen agent crash output and surface startup diagnostics ([5b62761](https://github.com/seznam/jailoc/commit/5b627610aa178755f9a993ea8cca0e9a0c88a2b1))
+* **cmd:** preserve main-screen agent crash output and surface startup diagnostics ([5f77b1d](https://github.com/seznam/jailoc/commit/5f77b1df63a9bcecf8485e5e67d6cff28ddd87ad))
+* **cmd:** set both Linux clipboard selections and add GTK3 fallback ([a1c9c0f](https://github.com/seznam/jailoc/commit/a1c9c0f26bdce55416d58aff1843aa80ee6a1dc4))
+* **cmd:** set both Linux clipboard selections and add GTK3 fallback ([41846c3](https://github.com/seznam/jailoc/commit/41846c38f0704341eeed87fbc79d3c5e3c480ba0))
+* **cmd:** strip UTF-8 BOM in git config parser and reject hard-linked files in protect_git ([0ebf343](https://github.com/seznam/jailoc/commit/0ebf3433601bcfc89d88f036d7d1396255b6a1ae))
+* **cmd:** synchronize GTK clipboard readiness and track owner-change count ([ed2c0e6](https://github.com/seznam/jailoc/commit/ed2c0e600ff20d62bd8f318f4b0783a60d411e7d))
+* **cmd:** track agent state versions by host path after VM start and stop animator before terminal reset ([acb4df0](https://github.com/seznam/jailoc/commit/acb4df03d08f3ab08bdafb10ce6e90e3e3f5ce27))
+* **config:** correct git_config template description ([908c464](https://github.com/seznam/jailoc/commit/908c464eca14a898c7373832e1934b23dbbc491a))
+* **config:** preserve valid TOML when adding workspaces ([cd1e4e6](https://github.com/seznam/jailoc/commit/cd1e4e6e409344527751b3854c99b8f47b750a94))
+* **docker:** confine remote Dockerfile redirects and block non-public dial targets ([141214f](https://github.com/seznam/jailoc/commit/141214fa394f3c1962a15789287e530b5533eae8))
+* **docker:** use stdlib ProxyFromEnvironment to keep nix vendorHash unchanged ([bfca6d8](https://github.com/seznam/jailoc/commit/bfca6d8950c28a7ec4c1f60f17d983ec48f4c131))
+* **netbroker:** reject HTTP obs-fold continuation lines in framing and policy inspection ([dbbf3bc](https://github.com/seznam/jailoc/commit/dbbf3bceee975302ce3b0022ac15e22fc2876472))
+* **security:** harden HTTP framing, Dockerfile redirects, and protect_git checks ([5e071c0](https://github.com/seznam/jailoc/commit/5e071c0fe39e718c05c97fa67fecfeda146eaebc))
+* **security:** pin proxied Dockerfile targets and reject bare CR/LF across HTTP buffers ([fb59418](https://github.com/seznam/jailoc/commit/fb59418195aeadfd1de752f65b024760ff87fb29))
+* **security:** reject embedded CR/LF in HTTP headers and preserve proxy support in fetchDockerfile ([6bd20c7](https://github.com/seznam/jailoc/commit/6bd20c7bd85a75fb9dd5816c124ec0f3399527e3))
+* **security:** separate proxy TLS ServerName, allow 5 redirects, and check external git config hard links ([f8c4204](https://github.com/seznam/jailoc/commit/f8c420466250a7d0a3d0c655e45f168ddefe45c0))
+
+
+### Code Refactoring
+
+* **setup:** tighten hints and explain memory reclaim ([bc35dd9](https://github.com/seznam/jailoc/commit/bc35dd9ae6b0b56a910ac1cfdb967929227ff274))
+
+
+### Documentation
+
+* **blog:** remove duplicate jailoc 2 nav entry ([b7a21e4](https://github.com/seznam/jailoc/commit/b7a21e4b2dba21d01849df94af4431c3b9a7bcea))
+* **blog:** remove duplicate jailoc 2 nav entry ([b3335ab](https://github.com/seznam/jailoc/commit/b3335abad9f3c5e16f7e7d109643af3fe72fd50b))
+* **homebrew:** clarify Landlock ABI requirement in cask caveats ([63b7154](https://github.com/seznam/jailoc/commit/63b71540c7cded6c41551385ee5e6abf686a1907))
+* **homebrew:** clarify Landlock ABI requirement in cask caveats ([f434e2f](https://github.com/seznam/jailoc/commit/f434e2f7dd7e2c1e3e3afd07fa7fd5a24665fc1a))
+
+## [2.4.0](https://github.com/seznam/jailoc/compare/v2.3.0...v2.4.0) (2026-11-12)
+
+
+### Features
+
+* **agent:** copy agent configuration read-only into the VM ([98ea73d](https://github.com/seznam/jailoc/commit/98ea73daded00e16b65eb4106eb611b2f6d73a0c))
+* **agent:** copy agent configuration read-only into the VM ([a7178ad](https://github.com/seznam/jailoc/commit/a7178ad213d40e823ba1c9c4063f139f454378d8))
+* **agent:** snapshot ~/.omo/omo.jsonc for opencode1 and omo ([975d327](https://github.com/seznam/jailoc/commit/975d32707420bdf907f15a20b411f7b6aa3ace47))
+* **agent:** snapshot Claude and Copilot hooks and RTK.md ([e2e127b](https://github.com/seznam/jailoc/commit/e2e127b306a7c1404fdb26c8dc4bba08d6f72cea))
+* **cmd:** add interactive setup/wizard command and first-run onboarding ([7600778](https://github.com/seznam/jailoc/commit/7600778e83adab99353fb1746145f1ce744a3684))
+* **cmd:** add interactive setup/wizard command and first-run onboarding ([c13179a](https://github.com/seznam/jailoc/commit/c13179aad1628198a5eca4c505f97f471f9e884e))
+* **cmd:** bridge OSC 52 clipboard sequences to the host clipboard ([ba4baf9](https://github.com/seznam/jailoc/commit/ba4baf92bfb7bab206d05283c57407757d3a4c85))
+* **cmd:** display progress while unpacking workspace images ([8890a27](https://github.com/seznam/jailoc/commit/8890a270bb23e9de3bdf5a6ed1ddb218666da6f3))
+* **cmd:** gate gh and glab secret prompts on host binary availability ([8a6011a](https://github.com/seznam/jailoc/commit/8a6011a7bc7f5e0423aa43fe74c05148d2d48c8e))
+* **cmd:** mint per-workspace GitLab tokens over SSH in setup ([eb99715](https://github.com/seznam/jailoc/commit/eb9971573b07d5480563d91c2df41ef1f1e88ece))
+* **cmd:** show image unpack progress and bridge OSC 52 clipboard ([5a4db49](https://github.com/seznam/jailoc/commit/5a4db4985ed6eaa185555cf11159702196cc8206))
+* **cmd:** show resolved workspace config and computed paths in jailoc config ([67c92c0](https://github.com/seznam/jailoc/commit/67c92c017dac3cc83f74e7bfb177664298f80b7c))
+* **cmd:** show resolved workspace config and computed paths in jailoc config ([aa19212](https://github.com/seznam/jailoc/commit/aa19212440774baa90c84ed8f69cc1891fbca53e))
+* **homebrew:** install jl alias symlink alongside jailoc binary ([9ff92b6](https://github.com/seznam/jailoc/commit/9ff92b6b609ed52e7c9e930259e2e597ac0df3a7))
+* **homebrew:** install jt alias symlink alongside jailoc binary ([579b62d](https://github.com/seznam/jailoc/commit/579b62d05f7d0bc99dce1e08d33f7cefd28ca893))
+* **homebrew:** rename alias from jt to jl ([fb3611b](https://github.com/seznam/jailoc/commit/fb3611bf20436443759172a50aeb5fbb368626e9))
+* **migrate:** add allow = ["*"] rule when migrating configs without network.rules ([328a0c4](https://github.com/seznam/jailoc/commit/328a0c4a32ade44440499f80c55abee097ff3a98))
+* **network:** add default-deny egress rules and name enforcement ([f6f2515](https://github.com/seznam/jailoc/commit/f6f2515e1b8d8b2c8f832434620ffcbc75a43880))
+* **network:** add default-deny egress rules and name enforcement ([be4cc92](https://github.com/seznam/jailoc/commit/be4cc921cb95e50a466b459e6ca814b7020a3396))
+* **vm:** prune unused unpacked runtimes and guest binaries after 7d ([c106297](https://github.com/seznam/jailoc/commit/c106297c08ec25a09661ca0f71ba94b76b51d043))
+
+
+### Bug Fixes
+
+* **cmd:** address setup wizard review findings ([e754f17](https://github.com/seznam/jailoc/commit/e754f17c18c297027cc8526287bbd24071b7bcf1))
+* **cmd:** close secret command stdout only on cancel and drop duplicate signal hook ([1576f5b](https://github.com/seznam/jailoc/commit/1576f5bcb8db42df68c36447e9f5b7b013c2d99d))
+* **cmd:** compute layer prefix before extraction and drain clipboard queue on exit ([2e72bc7](https://github.com/seznam/jailoc/commit/2e72bc7869c14ab06e8862a65543cc04a933b685))
+* **cmd:** keep lib_dir paths when pruning VM runtime cache ([1fb11b8](https://github.com/seznam/jailoc/commit/1fb11b8b7232946429416d83ea89b298f1764247))
+* **cmd:** make secret commands interruptible and report slow runs ([891f4cb](https://github.com/seznam/jailoc/commit/891f4cb8767a6100cf05598c97d021b07b3a1174))
+* **cmd:** make secret commands interruptible and report slow runs ([ace6b0e](https://github.com/seznam/jailoc/commit/ace6b0ec61585bebcee2d2aee040759b4193eb03))
+* **cmd:** preserve OSC 52 selection and serialize layer progress callbacks ([349a1b3](https://github.com/seznam/jailoc/commit/349a1b319dbbbf63c93a8eea3e350c7c59eed2f7))
+* **cmd:** report mounted agent state sources in computed profile dir ([cb98715](https://github.com/seznam/jailoc/commit/cb98715cf1536a52db0d27aa6839686563b6d8b7))
+* **cmd:** resolve TUI config files individually and preserve snapshot removals ([aa056a7](https://github.com/seznam/jailoc/commit/aa056a759ca39583290ba792f9b6fbcbca3f7a56))
+* **cmd:** resolve TUI plugins from snapshots and keep running shares on reload ([b7e3826](https://github.com/seznam/jailoc/commit/b7e382698154cbd7396cb7d8d9c9504bfe70056e))
+* **cmd:** skip tmux passthrough for OSC 52 queries and adjust layer totals for reused prefixes ([9a74cc2](https://github.com/seznam/jailoc/commit/9a74cc2a96d7197030de097e299e64589ff89d97))
+* **cmd:** use portable working directory parent in config test ([db9eecb](https://github.com/seznam/jailoc/commit/db9eecb2da3918e4f45fda172b4dcd952481b07f))
+* **cmd:** warn on unknown config keys, accept JSONC TUI configs and name TUI plugin changes on reload ([2388a25](https://github.com/seznam/jailoc/commit/2388a25ec5a6496077e683c0bb146f5f8b71b42e))
+* **cmd:** warn on unknown config keys, accept JSONC TUI configs and name TUI plugin changes on reload ([bb1f8a7](https://github.com/seznam/jailoc/commit/bb1f8a7c9dd9c846caee2cf9dd6e0d55df6e8411))
+* **config:** explain why non-credential forbidden mount host paths are rejected ([ee681f5](https://github.com/seznam/jailoc/commit/ee681f51314b1565af96c5fbabd7db53a10ae682))
+* **config:** explain why non-credential forbidden mount host paths are rejected ([4630b06](https://github.com/seznam/jailoc/commit/4630b063e722f75149979972cb1c09da7cfe8be8))
+* **config:** preserve comments and formatting in AddPath ([1861009](https://github.com/seznam/jailoc/commit/1861009b704d1b4c073608393898b31e47382c97))
+* **config:** preserve comments and formatting in AddPath ([2b9562c](https://github.com/seznam/jailoc/commit/2b9562c3a67039e748cdce14749fff6336c394d8))
+* **guest:** exempt init from the OOM killer and log kernel OOM kills ([8a43127](https://github.com/seznam/jailoc/commit/8a4312783f04e98fb1358c3075da2abf5d76483d))
+* **guest:** exempt init from the OOM killer and log kernel OOM kills ([e519801](https://github.com/seznam/jailoc/commit/e519801d9818cdb5bb4c598593bd14ff0dd54c6a))
+* **guest:** keep session exemption restored by rescan on queued forks ([540a5b6](https://github.com/seznam/jailoc/commit/540a5b62d85f937c5ca2d7887156bbc32acc62e0))
+* **guest:** reset inherited OOM values of orphans adopted by PID 1 ([33ce926](https://github.com/seznam/jailoc/commit/33ce92615cc52f819c2266c90b0854f123c03a67))
+* **guest:** reset init's OOM exemption inherited by early forks ([ed0783d](https://github.com/seznam/jailoc/commit/ed0783d6f51927558f4b16d9dba78c05f1cd332e))
+* **guest:** tell threads from processes in OOM guard fork events ([95ec7ab](https://github.com/seznam/jailoc/commit/95ec7aba0eebbd263e130ed3ce8d5c13400dcd9c))
+* **migrate:** preserve blocked zone overrides and allow DNS-resolved private IPs for name rules ([3a17de4](https://github.com/seznam/jailoc/commit/3a17de4ad9f1511a60e8ce46b187cda76a026549))
+* **migrate:** prompt on default blocked zone overrides and prefer CIDR allows ([d41eda4](https://github.com/seznam/jailoc/commit/d41eda41906c6e09d3fb70822195ac32c55f6ee1))
+* **migrate:** rewrite config when only unknown keys need removing ([e6dfcd7](https://github.com/seznam/jailoc/commit/e6dfcd752b2cb38f2369e67eda8e7c14548baa25))
+* **migrate:** rewrite deprecated network settings into network.dns and network.rules ([0d472d7](https://github.com/seznam/jailoc/commit/0d472d79cada2a8ff99dd1055d07c861f52db4e2))
+* **migrate:** rewrite deprecated network settings into network.dns and network.rules ([bfb633f](https://github.com/seznam/jailoc/commit/bfb633f2a238cf373c3bd463595eb7fc802c8f03))
+* **netbroker:** address CNAME TTLs, strict HTTP/TLS sniffing, and legacy rules ([a625e2e](https://github.com/seznam/jailoc/commit/a625e2ea5ae9bd8833633f1b7fc4db940d51f9fc))
+* **netbroker:** allow unlisted CDN CNAMEs for allowed queries and reject HTTP Upgrade ([30fa3fc](https://github.com/seznam/jailoc/commit/30fa3fc103e52d52f788d409eac0e49884b070e8))
+* **netbroker:** harden DNS cache, DNS filtering, and SNI/Host inspection ([efcbb9a](https://github.com/seznam/jailoc/commit/efcbb9a92882462ad2c0c0e11af66c6a93124b6c))
+* **netbroker:** harden stream enforcement, mapped CIDRs, and broker reload check ([f6c3e19](https://github.com/seznam/jailoc/commit/f6c3e1914d52f9a0440610652ca588e654753f5c))
+* **netbroker:** restrict legacy host CIDRs to private IPs and track HTTP body framing ([08afe40](https://github.com/seznam/jailoc/commit/08afe40dd23bbf52a0ecb5fc42efb05573d6f8b9))
+* **setup:** harden broad-path check, option shortcuts, and CPU input ([f816751](https://github.com/seznam/jailoc/commit/f8167512780c77d09cc523b7aef717956bcaa3ba))
+* **setup:** reload running VM and use onboarding directory ([c01ab9a](https://github.com/seznam/jailoc/commit/c01ab9ac30e744842999309663148d4ae9e0b8a7))
+* **vm:** rename embedded runner binary to jailoc-vm-runner ([4fdb5e0](https://github.com/seznam/jailoc/commit/4fdb5e0613e97f9d492e9f29dfbd7eec88523b0e))
+* **vm:** serialize runtime and guest cache access with pruning ([cc65623](https://github.com/seznam/jailoc/commit/cc65623ea1e2ddb2faf0abe4f26c98301ebd3756))
+* **vm:** wake guest on control writes and shorten stop polls ([39bd4e2](https://github.com/seznam/jailoc/commit/39bd4e23d7ec0fdfa6f62c05f4ae90b73463ab65))
+* **vm:** wake guest on control writes and shorten stop polls ([ab98a2b](https://github.com/seznam/jailoc/commit/ab98a2bd5e536aac7a34c7e6cce07c30c3537591))
+
+
+### Code Refactoring
+
+* **cmd:** drop gh and GitLab token prompts from setup ([6fa9457](https://github.com/seznam/jailoc/commit/6fa9457e29b38a7e46a28d636c1ef518d0f6f496))
+* **config:** inline default dev-deps hosts and remove built-in [@dev](https://github.com/dev) list ([ffdd1d1](https://github.com/seznam/jailoc/commit/ffdd1d186edefe73162cca10e9ab91903357b67f))
+* **config:** rename agent_config to import_agent_config ([987e914](https://github.com/seznam/jailoc/commit/987e914616ba198460bb97646775959326e966e5))
+
+
+### Documentation
+
+* **blog:** add network rules and setups post ([10c3b19](https://github.com/seznam/jailoc/commit/10c3b194c373598d53d0794dd293ab11d891be6b))
+* **blog:** add read-only agent configs post ([c73d4b7](https://github.com/seznam/jailoc/commit/c73d4b772bb86e6f676f73bd3dc01203f1516540))
+* **network:** clarify IPv6 link-local hard-deny and wildcard SNI inspection scope ([abe6f2b](https://github.com/seznam/jailoc/commit/abe6f2bc4c7fd5fcd203ec6725a1f254919fa9e7))
+* **network:** document implicit agent endpoints and built-in broker rules ([099f78d](https://github.com/seznam/jailoc/commit/099f78d928eca80edaaf9597f7987a8ceb212e0a))
+* **readme:** add downloads, homebrew cask, go version, and license badges ([ad0fc30](https://github.com/seznam/jailoc/commit/ad0fc30bb70bb7d4ca3a4c4573d56ce7e5a30a0a))
+* **readme:** add downloads, homebrew cask, go version, and license badges ([d7b6c09](https://github.com/seznam/jailoc/commit/d7b6c09e55cc3acefabae0fac13c116fe683103a))
+
+
+### Tests
+
+* **setup:** place symlink outside /tmp in broad-path test ([7b4cf91](https://github.com/seznam/jailoc/commit/7b4cf913f9dbafe8d2c16cb1e7a066fc4c161df1))
+
 ## [2.3.0](https://github.com/seznam/jailoc/compare/v2.2.0...v2.3.0) (2026-11-10)
 
 

@@ -83,8 +83,11 @@ type Broker struct {
 	link    *channel.Endpoint
 	policy  atomic.Pointer[Policy]
 	hosts   addrCache
+	names   *dnsCache
 	dialTCP func(string, string) (net.Conn, error)
 	dialUDP func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)
+	// exchange sends one DNS query to an upstream resolver.
+	exchange func(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error)
 
 	logMu sync.Mutex
 	log   *json.Encoder
@@ -100,6 +103,9 @@ type Broker struct {
 	connSeq atomic.Uint64
 
 	tcpFlows, udpFlows flowLimit
+	// dnsQueries and dnsConns hold the in-flight UDP DNS queries and open
+	// DNS-over-TCP connections of the gateway resolver and direct DNS.
+	dnsQueries, dnsConns chan struct{}
 }
 
 // New builds the stack. It does not open any socket.
@@ -113,10 +119,12 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 	if cfg.Log == nil {
 		cfg.Log = io.Discard
 	}
-	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log)}
+	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log), names: newDNSCache()}
 	b.tcpFlows.max, b.udpFlows.max = maxTCPFlows, maxUDPFlows
+	b.dnsQueries, b.dnsConns = make(chan struct{}, maxDNSQueries), make(chan struct{}, maxDNSConns)
 	b.dialTCP = (&net.Dialer{Timeout: dialTimeout}).Dial
 	b.dialUDP = net.DialUDP
+	b.exchange = exchange
 	b.policy.Store(p)
 
 	s := stack.New(stack.Options{
@@ -172,14 +180,38 @@ func (b *Broker) SetPolicy(p *Policy) {
 	b.record(map[string]any{"event": "policy", "source": p.source, "deny_all": p.denyAll})
 }
 
-func (b *Broker) env() Env {
-	return Env{Gateway: b.cfg.Gateway, Subnet: b.cfg.Subnet, HostAddrs: b.hosts.get()}
+func (b *Broker) env(dst netip.Addr) Env {
+	return Env{
+		Gateway:   b.cfg.Gateway,
+		Subnet:    b.cfg.Subnet,
+		HostAddrs: b.hosts.get(),
+		Names:     b.names.lookup(dst),
+	}
 }
 
-func (b *Broker) decide(proto string, src, dst netip.AddrPort, conn uint64) Decision {
-	d := Decide(b.policy.Load(), b.env(), proto, dst)
-	b.record(map[string]any{"event": "flow", "conn": conn, "proto": proto, "src": src.String(), "dst": dst.String(), "allow": d.Allow, "reason": d.Reason})
+func (b *Broker) decide(p *Policy, proto string, src, dst netip.AddrPort, conn uint64) Decision {
+	d := Decide(p, b.env(dst.Addr()), proto, dst)
+	b.recordFlow(conn, proto, src, dst, d)
 	return d
+}
+
+func (b *Broker) recordFlow(conn uint64, proto string, src, dst netip.AddrPort, d Decision) {
+	ev := map[string]any{
+		"event":  "flow",
+		"conn":   conn,
+		"proto":  proto,
+		"src":    src.String(),
+		"dst":    dst.String(),
+		"allow":  d.Allow,
+		"reason": d.Reason,
+	}
+	if d.Name != "" {
+		ev["name"] = d.Name
+	}
+	if d.Rule != "" {
+		ev["rule"] = d.Rule
+	}
+	b.record(ev)
 }
 
 func (b *Broker) record(v map[string]any) {

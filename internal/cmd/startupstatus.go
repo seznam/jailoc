@@ -34,6 +34,7 @@ type startupStatus struct {
 	msg     string
 	started time.Time
 	pending bool // the agent has not drawn anything visible yet
+	drew    bool // the agent has drawn a visible character
 	row     int  // row the status line is drawn on, 0 if not drawn
 	alt     bool // the agent is on the alternate screen
 	state   escState
@@ -98,6 +99,20 @@ func (s *startupStatus) stop() {
 	s.pending = false
 }
 
+// altScreen reports whether the agent is currently on the alternate screen.
+func (s *startupStatus) altScreen() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.alt
+}
+
+// visible reports whether the agent has drawn any visible character.
+func (s *startupStatus) visible() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.drew
+}
+
 // animate redraws the status line every spinnerInterval until it is no
 // longer needed.
 func (s *startupStatus) animate() {
@@ -129,22 +144,37 @@ func (s *startupStatus) tick() bool {
 }
 
 // write writes p, agent output, and keeps the status line on the alternate
-// screen until the agent draws its first visible character.
+// screen until the agent draws its first visible character. It continues
+// scanning after the status line stops so altScreen and visible stay accurate
+// for the lifetime of the session.
 func (s *startupStatus) write(p []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.pending {
+		for _, b := range p {
+			if s.scan(b) == scanVisible {
+				s.drew = true
+			}
+		}
 		_, err := s.w.Write(p)
 		return err
 	}
 	for i, b := range p {
 		ev := s.scan(b)
+		if ev == scanVisible {
+			s.drew = true
+		}
 		switch {
 		case ev == scanAltChanged && !s.alt:
 			// The agent left the alternate screen and the status with it.
 			s.pending = false
 		case ev == scanVisible && s.alt && s.row > 0:
 			s.pending = false
+			for _, rem := range p[i+1:] {
+				if s.scan(rem) == scanVisible {
+					s.drew = true
+				}
+			}
 			_, err := s.w.Write(slices.Concat(p[:i], s.erase(), p[i:]))
 			return err
 		case ev == scanVisible:
@@ -157,11 +187,21 @@ func (s *startupStatus) write(p []byte) error {
 			// agent saved.
 			s.pending = false
 			if s.row > 0 {
+				for _, rem := range p[i+1:] {
+					if s.scan(rem) == scanVisible {
+						s.drew = true
+					}
+				}
 				_, err := s.w.Write(slices.Concat(p[:i+1], s.eraseAfterSave(ev), p[i+1:]))
 				return err
 			}
 		}
 		if !s.pending {
+			for _, rem := range p[i+1:] {
+				if s.scan(rem) == scanVisible {
+					s.drew = true
+				}
+			}
 			_, err := s.w.Write(p)
 			return err
 		}
@@ -274,6 +314,12 @@ func (s *startupStatus) scan(b byte) scanEvent {
 		case b == '7':
 			s.state = escGround
 			return scanSaveDEC
+		case b == 'c':
+			s.state = escGround
+			if s.alt {
+				s.alt = false
+				return scanAltChanged
+			}
 		default:
 			s.state = escGround
 		}

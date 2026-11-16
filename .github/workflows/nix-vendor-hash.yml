@@ -33,7 +33,7 @@ jobs:
       || (github.event.pull_request.user.login == 'dependabot[bot]'
           && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
       vendor-hash: ${{ steps.hash.outputs.vendor-hash }}
@@ -48,7 +48,7 @@ jobs:
       - name: Check for changes
         id: diff
         run: |
-          if git diff --quiet -- flake.nix; then
+          if git diff --quiet -- nix/jailoc.nix; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -100,18 +100,18 @@ jobs:
             echo "Expected a SHA-256 vendor hash" >&2
             exit 1
           fi
-          if [[ ! -f flake.nix || -L flake.nix ]]; then
-            echo "Expected flake.nix to be a regular file, not a symlink" >&2
+          if [[ -L nix || ! -d nix || -L nix/jailoc.nix || ! -f nix/jailoc.nix ]]; then
+            echo "Expected nix/jailoc.nix to be a regular file under a real nix/ directory, not a symlink" >&2
             exit 1
           fi
 
-          current_vendor_hash=$(grep '^[[:blank:]]*vendorHash = "' flake.nix | cut -d '"' -f 2)
+          current_vendor_hash=$(grep '^[[:blank:]]*vendorHash = "' nix/jailoc.nix | cut -d '"' -f 2)
           if [[ ! "$current_vendor_hash" =~ ^sha256-[A-Za-z0-9+/]{43}=$ ]]; then
             echo "Expected exactly one existing SHA-256 vendor hash" >&2
             exit 1
           fi
 
-          sed -i "/^[[:blank:]]*vendorHash = /s|${current_vendor_hash}|${VENDOR_HASH}|" flake.nix
+          sed -i "/^[[:blank:]]*vendorHash = /s|${current_vendor_hash}|${VENDOR_HASH}|" nix/jailoc.nix
       - name: Update Dependabot branch
         if: github.event_name == 'pull_request'
         env:
@@ -119,14 +119,14 @@ jobs:
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if git diff --quiet -- flake.nix; then
+          if git diff --quiet -- nix/jailoc.nix; then
             exit 0
           fi
           gh auth setup-git
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git -c core.hooksPath=/dev/null commit --only \
-            -m 'chore(nix): update vendorHash [dependabot skip]' -- flake.nix
+            -m 'chore(nix): update vendorHash [dependabot skip]' -- nix/jailoc.nix
           # Compare-and-swap against the original PR head: rejects the push if the branch
           # advanced or was deleted (e.g. PR closed/superseded) while `calculate` ran.
           git -c core.hooksPath=/dev/null push \
@@ -137,7 +137,7 @@ jobs:
         with:
           token: ${{ github.token }}
           base: main
-          add-paths: flake.nix
+          add-paths: nix/jailoc.nix
           branch: chore/nix-vendor-hash-update
           commit-message: "chore(nix): update vendorHash"
           title: "chore(nix): update vendorHash"

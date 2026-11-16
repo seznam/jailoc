@@ -2,12 +2,18 @@ package docker
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -72,11 +78,84 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("create fetch request for %s: %w", rawURL, err)
 	}
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
+	originCopy := *req.URL
+	origin := &originCopy
+	proxyURL, err := dockerfileProxy(req)
+	if err != nil {
+		return nil, fmt.Errorf("resolve proxy for %s: %w", rawURL, err)
+	}
+	var pinnedHost string
+	var proxyHost string
+	if proxyURL != nil {
+		pinnedHost, err = resolveProxiedTarget(ctx, origin.Scheme, origin.Hostname(), origin.Host)
+		if err != nil {
+			return nil, fmt.Errorf("execute fetch request to %s: %w", rawURL, err)
+		}
+		proxyHost = proxyURL.Hostname()
+		req.Host = origin.Host
+		req.URL.Host = pinnedHost
 	}
 
-	resp, err := client.Do(req) //nolint:gosec // URL is validated (scheme + host) in config.Validate before reaching here
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			if proxyHost != "" {
+				return checkProxyDialAddr(proxyHost, address)
+			}
+			return checkFetchDialAddr(origin.Hostname(), address)
+		},
+	}
+	transport := &http.Transport{
+		Proxy: func(_ *http.Request) (*url.URL, error) {
+			return proxyURL, nil
+		},
+		DialContext: dialer.DialContext,
+		DialTLSContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			rawConn, dialErr := dialer.DialContext(dialCtx, network, addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			tlsHost, _ := splitHostOptionalPort(addr)
+			if proxyURL == nil {
+				tlsHost = origin.Hostname()
+			}
+			tlsConn := tls.Client(rawConn, &tls.Config{
+				ServerName: tlsHost,
+				MinVersion: tls.VersionTLS12,
+				RootCAs:    fetchRootCAs,
+			})
+			if hsErr := tlsConn.HandshakeContext(dialCtx); hsErr != nil {
+				_ = rawConn.Close()
+				return nil, hsErr
+			}
+			return tlsConn, nil
+		},
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		TLSClientConfig: &tls.Config{
+			ServerName: origin.Hostname(),
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    fetchRootCAs,
+		},
+	}
+	defer transport.CloseIdleConnections()
+
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(next *http.Request, via []*http.Request) error {
+			if err := checkDockerfileRedirect(origin, pinnedHost, next, via); err != nil {
+				return err
+			}
+			if pinnedHost != "" {
+				next.Host = origin.Host
+				next.URL.Host = pinnedHost
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(req) //nolint:gosec // URL is validated in config.Validate and confined by CheckRedirect + Dialer.Control
 	if err != nil {
 		return nil, fmt.Errorf("execute fetch request to %s: %w", rawURL, err)
 	}
@@ -99,4 +178,132 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+const maxDockerfileRedirects = 5
+
+var (
+	cgnatPrefix     = netip.MustParsePrefix("100.64.0.0/10")
+	dockerfileProxy = http.ProxyFromEnvironment
+	fetchRootCAs    *x509.CertPool
+	lookupFetchIPs  = func(ctx context.Context, host string) ([]netip.Addr, error) {
+		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	}
+)
+
+func checkDockerfileRedirect(origin *url.URL, pinnedHost string, next *http.Request, via []*http.Request) error {
+	if len(via) > maxDockerfileRedirects {
+		return fmt.Errorf("too many redirects")
+	}
+	if next.URL.Scheme != "http" && next.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect to unsupported scheme %q", next.URL.Scheme)
+	}
+	prev := origin
+	if len(via) > 0 && via[len(via)-1].URL != nil {
+		prev = via[len(via)-1].URL
+	}
+	if (origin.Scheme == "https" || prev.Scheme == "https") && next.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect from https to http")
+	}
+	sameOrigin := strings.EqualFold(next.URL.Host, origin.Host) ||
+		(pinnedHost != "" && strings.EqualFold(next.URL.Host, pinnedHost))
+	if !sameOrigin {
+		return fmt.Errorf("refusing redirect to %s", next.URL.Redacted())
+	}
+	return nil
+}
+
+func resolveProxiedTarget(ctx context.Context, scheme, originHost, targetHostPort string) (string, error) {
+	host, port := splitHostOptionalPort(targetHostPort)
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return "", fmt.Errorf("refusing proxied fetch to localhost target %q", host)
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		unmapped := ip.Unmap()
+		if originIP, err := netip.ParseAddr(originHost); err == nil && unmapped == originIP.Unmap() {
+			return joinHostOptionalPort(unmapped.String(), port), nil
+		}
+		if !isPublicFetchAddr(unmapped) {
+			return "", fmt.Errorf("refusing proxied fetch to non-public address %s", unmapped)
+		}
+		return joinHostOptionalPort(unmapped.String(), port), nil
+	}
+	if scheme != "https" {
+		return "", fmt.Errorf("refusing proxied plain-http fetch for hostname %s: use https or an IP literal so destination IP can be pinned", host)
+	}
+	ips, err := lookupFetchIPs(ctx, host)
+	if err != nil {
+		return "", fmt.Errorf("resolve proxied host %s: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("resolve proxied host %s: no addresses", host)
+	}
+	for _, ip := range ips {
+		if !isPublicFetchAddr(ip.Unmap()) {
+			return "", fmt.Errorf("refusing proxied fetch to non-public address %s for host %s", ip.Unmap(), host)
+		}
+	}
+	return joinHostOptionalPort(ips[0].Unmap().String(), port), nil
+}
+
+func splitHostOptionalPort(hostPort string) (host, port string) {
+	if h, p, err := net.SplitHostPort(hostPort); err == nil {
+		return h, p
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(hostPort, "["), "]"), ""
+}
+
+func joinHostOptionalPort(host, port string) string {
+	if port != "" {
+		return net.JoinHostPort(host, port)
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+func checkProxyDialAddr(proxyHost, address string) error {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return fmt.Errorf("invalid proxy dial address %q: %w", address, err)
+	}
+	if proxyIP, err := netip.ParseAddr(proxyHost); err == nil {
+		if ap.Addr().Unmap() != proxyIP.Unmap() {
+			return fmt.Errorf("refusing dial to %s for configured proxy %s", ap.Addr().Unmap(), proxyHost)
+		}
+	}
+	return nil
+}
+
+func checkFetchDialAddr(originHost, address string) error {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return fmt.Errorf("invalid dial address %q: %w", address, err)
+	}
+	ip := ap.Addr().Unmap()
+	if originIP, err := netip.ParseAddr(originHost); err == nil {
+		if ip == originIP.Unmap() {
+			return nil
+		}
+		return fmt.Errorf("refusing dial to %s for configured host %s", ip, originHost)
+	}
+	if !isPublicFetchAddr(ip) {
+		return fmt.Errorf("refusing dial to non-public address %s for host %s", ip, originHost)
+	}
+	return nil
+}
+
+func isPublicFetchAddr(ip netip.Addr) bool {
+	if !ip.IsValid() ||
+		ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified() ||
+		cgnatPrefix.Contains(ip) {
+		return false
+	}
+	return true
 }

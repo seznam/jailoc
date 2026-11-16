@@ -23,9 +23,10 @@ import (
 
 const (
 	dnsTimeout = 3 * time.Second
-	// maxDNSQueries caps the queries the broker resolves at once, and
+	// maxDNSQueries caps the UDP queries the broker resolves at once, and
 	// maxDNSConns the open DNS-over-TCP connections, so a busy guest cannot
-	// grow the host process without bound.
+	// grow the host process without bound. Both are shared by the gateway
+	// resolver and direct DNS to allowed resolvers.
 	maxDNSQueries = 128
 	maxDNSConns   = 64
 )
@@ -38,6 +39,16 @@ func (b *Broker) upstreams() []netip.AddrPort {
 		return b.cfg.DNSFallback
 	}
 	return b.cfg.HostDNS()
+}
+
+// tryAcquire takes a slot of sem, or reports false when all are taken.
+func tryAcquire(sem chan struct{}) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
 // startDNS serves DNS on the gateway over UDP and TCP. Queries are forwarded
@@ -56,7 +67,6 @@ func (b *Broker) startDNS(ctx context.Context) error {
 		_ = uc.Close()
 		_ = tl.Close()
 	}()
-	queries := make(chan struct{}, maxDNSQueries)
 	go func() {
 		buf := make([]byte, 65535)
 		for {
@@ -64,44 +74,42 @@ func (b *Broker) startDNS(ctx context.Context) error {
 			if err != nil {
 				return
 			}
-			select {
-			case queries <- struct{}{}:
-			default:
+			if !tryAcquire(b.dnsQueries) {
 				// Drop the query; the guest resolver retries.
 				continue
 			}
 			q := append([]byte(nil), buf[:n]...)
 			go func() {
-				defer func() { <-queries }()
-				if resp := b.resolve(ctx, "udp", q); resp != nil {
+				defer func() { <-b.dnsQueries }()
+				if resp := b.resolve(ctx, "udp", q, netip.AddrPort{}); resp != nil {
 					_, _ = uc.WriteTo(resp, peer)
 				}
 			}()
 		}
 	}()
-	conns := make(chan struct{}, maxDNSConns)
 	go func() {
 		for {
 			c, err := tl.Accept()
 			if err != nil {
 				return
 			}
-			select {
-			case conns <- struct{}{}:
-			default:
+			if !tryAcquire(b.dnsConns) {
 				_ = c.Close()
 				continue
 			}
 			go func() {
-				defer func() { <-conns }()
-				b.serveDNSTCP(ctx, c)
+				defer func() { <-b.dnsConns }()
+				b.serveDNSTCP(ctx, c, netip.AddrPort{})
 			}()
 		}
 	}()
 	return nil
 }
 
-func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
+// serveDNSTCP answers DNS-over-TCP queries on c until the guest closes it or
+// goes idle. A valid server sends them to that resolver instead of the
+// upstreams (see resolve).
+func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn, server netip.AddrPort) {
 	defer func() { _ = c.Close() }()
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -113,7 +121,7 @@ func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
 		if _, err := io.ReadFull(c, q); err != nil {
 			return
 		}
-		resp := b.resolve(ctx, "tcp", q)
+		resp := b.resolve(ctx, "tcp", q, server)
 		if resp == nil {
 			return
 		}
@@ -125,88 +133,163 @@ func (b *Broker) serveDNSTCP(ctx context.Context, c net.Conn) {
 }
 
 // resolve forwards one query to the upstreams in order and returns the first
-// answer, or SERVFAIL when none answers. With blocked zones, a query must
-// carry exactly one question, and an answer that names a blocked zone in any
-// record owner or CNAME target is replaced by NXDOMAIN.
-func (b *Broker) resolve(ctx context.Context, network string, q []byte) []byte {
+// answer, or SERVFAIL when none answers. With blocked zones or network rules,
+// a query must carry exactly one question, and an answer that names a blocked
+// or unallowed domain in any record owner or CNAME target is replaced by
+// NXDOMAIN. HTTPS and SVCB queries get NODATA so ECH configurations never
+// reach the guest. A valid server is a resolver the guest queried directly:
+// the query goes only to it, filtered the same way, and its answers do not
+// enter the IP-to-name cache.
+func (b *Broker) resolve(ctx context.Context, network string, q []byte, server netip.AddrPort) []byte {
 	p := b.policy.Load()
-	filtered := p != nil && len(p.blockedZones) > 0
+	filtered := p != nil && (p.rulesMode || len(p.blockedZones) > 0 || len(p.deny) > 0)
+	name, qtype, singleOK := singleQuestion(q)
 	if filtered {
-		name, ok := singleQuestion(q)
-		if !ok {
-			b.record(map[string]any{"event": "dns", "network": network, "error": "query without exactly one question"})
+		if !singleOK {
+			entry := dnsEvent(network, server)
+			entry["error"] = "query without exactly one question"
+			b.record(entry)
 			return dnsError(q, 0x01) // FORMERR
 		}
-		if p.blocked(name) {
-			b.record(map[string]any{"event": "dns", "network": network, "name": name, "blocked": true})
+		if blocked, rule := p.blocked(name); blocked {
+			entry := dnsEvent(network, server)
+			entry["name"], entry["blocked"] = name, true
+			if rule != "" {
+				entry["rule"] = rule
+			}
+			b.record(entry)
 			return nxdomain(q)
 		}
 	}
+	if singleOK && (qtype == dnsTypeSVCB || qtype == dnsTypeHTTPS) {
+		entry := dnsEvent(network, server)
+		entry["name"], entry["type"], entry["answers"] = name, qtype.String(), []string{}
+		b.record(entry)
+		return dnsError(q, 0x00) // NOERROR / NODATA
+	}
+	upstreams := b.upstreams()
+	if server.IsValid() {
+		upstreams = []netip.AddrPort{server}
+	}
 	var resp []byte
 	lastErr := errNoUpstream
-	for _, up := range b.upstreams() {
-		r, err := exchange(ctx, network, up, q)
+	for _, up := range upstreams {
+		r, err := b.exchange(ctx, network, up, q)
 		if err == nil {
 			resp = r
 			break
 		}
 		lastErr = err
 	}
-	b.logDNS(network, q, resp, lastErr)
 	if resp == nil {
+		b.logDNS(network, q, nil, lastErr, server)
 		return servfail(q)
 	}
 	if filtered {
-		name, ok := blockedAnswer(p, resp)
+		blockedName, rule, ok := blockedAnswer(p, resp)
 		if !ok {
+			b.logDNS(network, q, resp, nil, server)
 			return servfail(q)
 		}
-		if name != "" {
-			b.record(map[string]any{"event": "dns", "network": network, "name": name, "blocked": true})
+		if blockedName != "" {
+			entry := dnsEvent(network, server)
+			entry["name"], entry["blocked"] = blockedName, true
+			if rule != "" {
+				entry["rule"] = rule
+			}
+			b.record(entry)
 			return nxdomain(q)
 		}
 	}
+	if p != nil && (p.rulesMode || len(p.deny) > 0) {
+		resp = stripHTTPSSVCB(resp)
+	}
+	b.logDNS(network, q, resp, nil, server)
 	return resp
 }
 
-// singleQuestion returns the name of the only question in q. It fails when
-// q does not parse or carries other than one question.
-func singleQuestion(q []byte) (string, bool) {
+// dnsEvent starts a dns log entry; server is set for queries the guest sent
+// to a resolver other than the gateway.
+func dnsEvent(network string, server netip.AddrPort) map[string]any {
+	entry := map[string]any{"event": "dns", "network": network}
+	if server.IsValid() {
+		entry["server"] = server.String()
+	}
+	return entry
+}
+
+// singleQuestion returns the name and type of the only question in q. It fails
+// when q does not parse or carries other than one question.
+func singleQuestion(q []byte) (string, dnsmessage.Type, bool) {
 	var p dnsmessage.Parser
 	if _, err := p.Start(q); err != nil {
-		return "", false
+		return "", 0, false
 	}
 	qs, err := p.AllQuestions()
 	if err != nil || len(qs) != 1 {
-		return "", false
+		return "", 0, false
 	}
-	return qs[0].Name.String(), true
+	return qs[0].Name.String(), qs[0].Type, true
 }
 
-// blockedAnswer returns the first blocked name among the record owners and
-// CNAME targets of resp, or "" when there is none. It fails when resp does
-// not parse.
-func blockedAnswer(pol *Policy, resp []byte) (string, bool) {
+// stripHTTPSSVCB removes HTTPS and SVCB records from all sections of resp so
+// ECH configurations never reach the guest.
+func stripHTTPSSVCB(resp []byte) []byte {
+	var msg dnsmessage.Message
+	if err := msg.Unpack(resp); err != nil {
+		return resp
+	}
+	keep := func(rs []dnsmessage.Resource) ([]dnsmessage.Resource, bool) {
+		var out []dnsmessage.Resource
+		changed := false
+		for _, r := range rs {
+			if r.Header.Type == dnsTypeSVCB || r.Header.Type == dnsTypeHTTPS {
+				changed = true
+				continue
+			}
+			out = append(out, r)
+		}
+		return out, changed
+	}
+	a, c1 := keep(msg.Answers)
+	ns, c2 := keep(msg.Authorities)
+	add, c3 := keep(msg.Additionals)
+	if !c1 && !c2 && !c3 {
+		return resp
+	}
+	msg.Answers, msg.Authorities, msg.Additionals = a, ns, add
+	packed, err := msg.Pack()
+	if err != nil {
+		return resp
+	}
+	return packed
+}
+
+// blockedAnswer returns the first blocked name and rule among the record
+// owners and CNAME targets of resp, or "" when there is none. It fails when
+// resp does not parse.
+func blockedAnswer(pol *Policy, resp []byte) (string, string, bool) {
 	var p dnsmessage.Parser
 	if _, err := p.Start(resp); err != nil {
-		return "", false
+		return "", "", false
 	}
 	qs, err := p.AllQuestions()
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	for _, q := range qs {
-		if pol.blocked(q.Name.String()) {
-			return q.Name.String(), true
+		if blocked, rule := pol.blocked(q.Name.String()); blocked {
+			return q.Name.String(), rule, true
 		}
 	}
 	sections := []struct {
-		header func() (dnsmessage.ResourceHeader, error)
-		skip   func() error
+		header     func() (dnsmessage.ResourceHeader, error)
+		skip       func() error
+		checkOwner bool
 	}{
-		{p.AnswerHeader, p.SkipAnswer},
-		{p.AuthorityHeader, p.SkipAuthority},
-		{p.AdditionalHeader, p.SkipAdditional},
+		{p.AnswerHeader, p.SkipAnswer, true},
+		{p.AuthorityHeader, p.SkipAuthority, false},
+		{p.AdditionalHeader, p.SkipAdditional, true},
 	}
 	for _, sec := range sections {
 		for {
@@ -215,27 +298,35 @@ func blockedAnswer(pol *Policy, resp []byte) (string, bool) {
 				break
 			}
 			if err != nil {
-				return "", false
+				return "", "", false
 			}
-			if pol.blocked(h.Name.String()) {
-				return h.Name.String(), true
+			if h.Type == dnsmessage.TypeOPT {
+				if err := sec.skip(); err != nil {
+					return "", "", false
+				}
+				continue
+			}
+			if sec.checkOwner {
+				if denied, rule := pol.denied(h.Name.String()); denied {
+					return h.Name.String(), rule, true
+				}
 			}
 			if h.Type != dnsmessage.TypeCNAME {
 				if err := sec.skip(); err != nil {
-					return "", false
+					return "", "", false
 				}
 				continue
 			}
 			c, err := p.CNAMEResource()
 			if err != nil {
-				return "", false
+				return "", "", false
 			}
-			if pol.blocked(c.CNAME.String()) {
-				return c.CNAME.String(), true
+			if denied, rule := pol.denied(c.CNAME.String()); denied {
+				return c.CNAME.String(), rule, true
 			}
 		}
 	}
-	return "", true
+	return "", "", true
 }
 
 func exchange(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error) {
@@ -296,14 +387,19 @@ func dnsError(q []byte, rcode byte) []byte {
 	return r
 }
 
-// logDNS records the question and A/AAAA answers. The mapping is evidence for
-// allowed_hosts review; it never authorizes a destination.
-func (b *Broker) logDNS(network string, q, resp []byte, err error) {
-	entry := map[string]any{"event": "dns", "network": network}
+// logDNS records the question and A/AAAA answers and, for queries to the
+// gateway resolver (server not valid), populates the broker's IP->name cache
+// for allowed answers.
+func (b *Broker) logDNS(network string, q, resp []byte, err error, server netip.AddrPort) {
+	entry := dnsEvent(network, server)
+	cache := !server.IsValid()
+	pol := b.policy.Load()
+	var qname string
 	var p dnsmessage.Parser
 	if _, perr := p.Start(q); perr == nil {
 		if qs, perr := p.Question(); perr == nil {
-			entry["name"], entry["type"] = qs.Name.String(), qs.Type.String()
+			qname = qs.Name.String()
+			entry["name"], entry["type"] = qname, qs.Type.String()
 		}
 	}
 	if resp == nil {
@@ -313,22 +409,70 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error) {
 		var rp dnsmessage.Parser
 		if _, perr := rp.Start(resp); perr == nil {
 			_ = rp.SkipAllQuestions()
+			minCNAME := time.Duration(0)
+			hasCNAME := false
 			for {
 				h, perr := rp.AnswerHeader()
 				if perr != nil {
 					break
 				}
-				switch h.Type {
-				case dnsmessage.TypeA:
-					if a, perr := rp.AResource(); perr == nil {
-						answers = append(answers, netip.AddrFrom4(a.A).String())
+				if h.Type == dnsmessage.TypeCNAME {
+					ttl := time.Duration(h.TTL) * time.Second
+					if !hasCNAME || ttl < minCNAME {
+						minCNAME = ttl
+						hasCNAME = true
 					}
-				case dnsmessage.TypeAAAA:
-					if a, perr := rp.AAAAResource(); perr == nil {
-						answers = append(answers, netip.AddrFrom16(a.AAAA).String())
+				}
+				_ = rp.SkipAnswer()
+			}
+			var rp2 dnsmessage.Parser
+			if _, perr := rp2.Start(resp); perr == nil {
+				_ = rp2.SkipAllQuestions()
+				for {
+					h, perr := rp2.AnswerHeader()
+					if perr != nil {
+						break
 					}
-				default:
-					_ = rp.SkipAnswer()
+					ttl := time.Duration(h.TTL) * time.Second
+					owner := h.Name.String()
+					switch h.Type {
+					case dnsmessage.TypeA:
+						if a, perr := rp2.AResource(); perr == nil {
+							ip := netip.AddrFrom4(a.A)
+							answers = append(answers, ip.String())
+							qTTL := ttl
+							if hasCNAME && minCNAME < qTTL {
+								qTTL = minCNAME
+							}
+							if cache {
+								b.names.record(ip, qname, qTTL)
+								if owner != qname {
+									if blocked, _ := pol.blocked(owner); !blocked {
+										b.names.record(ip, owner, ttl)
+									}
+								}
+							}
+						}
+					case dnsmessage.TypeAAAA:
+						if a, perr := rp2.AAAAResource(); perr == nil {
+							ip := netip.AddrFrom16(a.AAAA)
+							answers = append(answers, ip.String())
+							qTTL := ttl
+							if hasCNAME && minCNAME < qTTL {
+								qTTL = minCNAME
+							}
+							if cache {
+								b.names.record(ip, qname, qTTL)
+								if owner != qname {
+									if blocked, _ := pol.blocked(owner); !blocked {
+										b.names.record(ip, owner, ttl)
+									}
+								}
+							}
+						}
+					default:
+						_ = rp2.SkipAnswer()
+					}
 				}
 			}
 		}

@@ -26,6 +26,7 @@ type trafficEvent struct {
 	Dst           string    `json:"dst"`
 	Allow         bool      `json:"allow"`
 	Reason        string    `json:"reason"`
+	Rule          string    `json:"rule"`
 	Name          string    `json:"name"`
 	Type          string    `json:"type"`
 	Answers       []string  `json:"answers"`
@@ -34,6 +35,7 @@ type trafficEvent struct {
 	Host          string    `json:"host"`
 	GuestPort     int       `json:"guest_port"`
 	Network       string    `json:"network"`
+	Server        string    `json:"server"`
 	Target        string    `json:"target"`
 	SNI           string    `json:"sni"`
 	ALPN          []string  `json:"alpn"`
@@ -84,14 +86,18 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 	switch e.Event {
 	case "flow":
 		verdict := colAllow.Sprint("ALLOW")
+		label := e.Reason
+		if e.Rule != "" {
+			label = "rule=" + e.Rule
+		}
 		detail := ""
 		if !e.Allow {
 			verdict = colDeny.Sprint("DENY ")
-			detail = colDeny.Sprint(escapeVisible(e.Reason))
-		} else if e.Reason != "public" {
-			detail = colDim.Sprint(escapeVisible(e.Reason))
+			detail = colDeny.Sprint(escapeVisible(label))
+		} else if label != "public" {
+			detail = colDim.Sprint(escapeVisible(label))
 		}
-		return fmt.Sprintf("%s  %s  %-4s %-48s %s", ts, verdict, escapeVisible(e.Proto), f.dest(e.Dst), detail)
+		return fmt.Sprintf("%s  %s  %-4s %-48s %s", ts, verdict, escapeVisible(e.Proto), f.destWith(e.Dst, e.Name), detail)
 	case "l7":
 		var parts []string
 		switch e.Proto {
@@ -113,9 +119,16 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 		return fmt.Sprintf("%s  %s %-4s %s", ts, colDim.Sprint("      └"), escapeVisible(e.Proto), colInfo.Sprint(strings.Join(parts, "  ")))
 	case "dns":
 		name := escapeVisible(strings.TrimSuffix(e.Name, "."))
+		if e.Server != "" {
+			name += " " + colDim.Sprint("@"+escapeVisible(e.Server))
+		}
 		switch {
 		case e.Blocked:
-			return fmt.Sprintf("%s  %s  dns  %s %s", ts, colDeny.Sprint("BLOCK"), name, colDeny.Sprint("→ NXDOMAIN (filtered_dns)"))
+			why := "filtered_dns"
+			if e.Rule != "" {
+				why = "rule=" + escapeVisible(e.Rule)
+			}
+			return fmt.Sprintf("%s  %s  dns  %s %s", ts, colDeny.Sprint("BLOCK"), name, colDeny.Sprint("→ NXDOMAIN ("+why+")"))
 		case e.Error != "":
 			return fmt.Sprintf("%s  %s  dns  %s %s %s", ts, colInfo.Sprint("DNS  "), name, escapeVisible(e.Type), colDeny.Sprint("→ "+escapeVisible(e.Error)))
 		case len(e.Answers) == 0:
@@ -180,11 +193,19 @@ func serviceTarget(e trafficEvent) string {
 
 // dest renders an address with the DNS name it was looked up by.
 func (f *trafficFormatter) dest(addr string) string {
+	return f.destWith(addr, "")
+}
+
+func (f *trafficFormatter) destWith(addr, eventName string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return escapeVisible(addr)
 	}
-	if name, ok := f.names[host]; ok {
+	name := strings.TrimSuffix(eventName, ".")
+	if name == "" {
+		name = f.names[host]
+	}
+	if name != "" {
 		return escapeVisible(net.JoinHostPort(name, port)) + " " + colDim.Sprint("["+escapeVisible(host)+"]")
 	}
 	return escapeVisible(addr)

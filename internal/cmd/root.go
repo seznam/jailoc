@@ -56,10 +56,22 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("resolve target path: %w", err)
 		}
 
+		res, err := maybeOfferFirstTimeSetup(ctx, targetPath, "")
+		if err != nil {
+			return err
+		}
+		if res.name != "" {
+			workspaceFlag = res.name
+		}
+		if res.dir != "" {
+			targetPath = res.dir
+		}
+
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
+		printConfigWarnings(cfg)
 		detachKeys, err := config.ParseDetachKeys(cmp.Or(detachKeysFlag, cfg.DetachKeys, config.DefaultDetachKeys))
 		if err != nil {
 			return err
@@ -175,15 +187,30 @@ func resolveTargetPath(args []string) (string, error) {
 	return abs, nil
 }
 
+// isBroadPath reports whether path shares the whole filesystem or the home
+// directory. It follows symlinks, so a link to either counts as broad too.
 func isBroadPath(path string) bool {
-	if path == "/" {
+	if path == "" {
+		return false
+	}
+	resolved := resolveSymlinks(path)
+	if resolved == "/" {
 		return true
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
 	}
-	return path == home
+	return path == home || resolved == resolveSymlinks(home)
+}
+
+// resolveSymlinks returns p with symlinks resolved, or p cleaned when it
+// cannot be resolved (for example because it does not exist).
+func resolveSymlinks(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 func confirmBroadPath(ctx context.Context, path string) (bool, error) {
@@ -237,6 +264,8 @@ func Execute(version, commit, date string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	stopOnCancel := context.AfterFunc(ctx, stop)
+	defer stopOnCancel()
 	rootCmd.SetContext(ctx)
 
 	// Fire non-blocking update check only when stderr is a terminal —

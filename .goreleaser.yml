@@ -121,7 +121,9 @@ homebrew_casks:
     commit_msg_template: "chore(jailoc): update to {{ .Tag }}"
     caveats: |
       On Linux, jailoc needs read-write access to /dev/kvm and a kernel with
-      Landlock (5.19+). Docker is optional and only used to build images.
+      Landlock ABI 2+ (Linux 5.19+). Any "Landlock ABI 10" warning above comes
+      from Homebrew's own unpack sandbox and does not affect jailoc.
+      Docker is optional and only used to build images.
     hooks:
       post:
         # The binary is not notarized: drop the quarantine attribute

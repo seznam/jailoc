@@ -14,7 +14,7 @@ agent = "claude"
 
 Values: `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo`, `agy`. Set `agent` in `[defaults]` to change it for every workspace.
 
-`opencode` is an alias of `opencode2`, OpenCode 2. `opencode1` runs OpenCode 1 (`opencode-ai`). The two keep their sessions apart: OpenCode 2 doesn't see the sessions of OpenCode 1, and switching back and forth doesn't mix their databases. Both read the same `~/.config/opencode`. To keep using OpenCode 1 and its existing sessions:
+`opencode` is an alias of `opencode2`, OpenCode 2. `opencode1` runs OpenCode 1 (`opencode-ai`). The two keep their sessions apart: OpenCode 2 doesn't see the sessions of OpenCode 1, and switching back and forth doesn't mix their databases. Both get a read-only copy of the same `~/.config/opencode`. To keep using OpenCode 1 and its existing sessions:
 
 ```toml
 [defaults]
@@ -64,7 +64,7 @@ The agent's state directory (for example `~/.claude` for Claude Code) persists a
 from_command = "security find-generic-password -s anthropic -w"
 ```
 
-Antigravity CLI (`agy`) prints a sign-in URL and reads the code back in the terminal, so the login works over the session without a browser in the VM. With no keyring in the VM, it keeps the token in a file in `~/.gemini`, its state directory.
+GitHub Copilot CLI (`copilot`) signs in with a device code in the terminal; with no keyring in the VM, jailoc sets `storeTokenPlaintext` in `~/.copilot/settings.json` so Copilot keeps the token in `~/.copilot/config.json`, or you can pass `COPILOT_GITHUB_TOKEN` (or `GH_TOKEN`) as an env secret. Antigravity CLI (`agy`) prints a sign-in URL and reads the code back in the terminal, so the login works over the session without a browser in the VM; with no keyring in the VM, it keeps the token in a file in `~/.gemini`, its state directory.
 
 `jailoc down --purge` deletes the state, including logins.
 
@@ -97,16 +97,30 @@ mounts = ["~/.config/opencode-legacy:/home/agent/.config/opencode"]
 
 An entry with an empty host, such as `":/home/agent/.agents"`, removes a built-in mount. See [Agent mounts](../reference/configuration.md#agent-mounts).
 
-## Keep OpenCode from changing its configuration
+## Use your host agent configuration
 
-The built-in OpenCode mount shares `~/.config/opencode` read-write with the host and every OpenCode workspace, so an agent can add plugins or instructions that run everywhere else. Mount it read-only:
+jailoc copies the agent's configuration from the host into the VM read-only when the VM starts and on `jailoc reload`: `~/.config/opencode` for OpenCode (plus `omo.jsonc` and `omo.json` from `~/.omo` for OpenCode 1), `CLAUDE.md`, `RTK.md`, `settings.json`, agents, commands, hooks, skills and output styles from `~/.claude` for Claude Code, instructions, agents, hooks, skills and MCP servers from `~/.copilot` for GitHub Copilot CLI, `omo.jsonc` and `omo.json` from `~/.omo` for OmO, and `~/.gemini/GEMINI.md` for Antigravity CLI. An agent in the VM can't change what runs on the host or in other workspaces. Change the configuration on the host, then run `jailoc reload <name>`.
+
+OpenCode doesn't install plugins into the read-only copy, and `node_modules` isn't copied. Plugins listed in `plugin` install into `~/.cache`; install the packages a local plugin imports in the image.
+
+Leave out one copy with an empty-host snapshot, or all of them with `import_agent_config`:
+
+```toml
+[defaults]
+snapshots = [":/home/agent/.claude/settings.json"]
+
+[workspaces.scratch]
+import_agent_config = false
+```
+
+To let the agent change the host configuration, mount it read-write; the mount replaces the copy. Every workspace using the mount, and the host, then run what the agent writes there:
 
 ```toml
 [defaults.agents.opencode]
-mounts = ["~/.config/opencode:/home/agent/.config/opencode:ro"]
+mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 ```
 
-OpenCode then can't install plugins inside the VM. Install them on the host, where `~/.config/opencode` is writable.
+See [`import_agent_config`](../reference/configuration.md#import_agent_config).
 
 ## Pass extra arguments
 

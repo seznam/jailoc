@@ -16,15 +16,18 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/logging"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -45,7 +48,7 @@ func builderStateDir(ws *workspace.Resolved) string {
 
 // runUpVM builds the workspace image in a builder VM and boots it as the
 // workspace VM.
-func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) error {
+func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (err error) {
 	upStart := time.Now()
 	stateDir := vmStateDir(ws.Name)
 	if st, err := runningVM(stateDir); err != nil {
@@ -53,6 +56,17 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	} else if st != nil {
 		return reloadVM(ctx, ws, false)
 	}
+	stopUpLog, err := teeUpLog(stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// The error reaches only the terminal otherwise.
+		if err != nil {
+			slog.Error("up failed", "workspace", ws.Name, "error", err)
+		}
+		stopUpLog()
+	}()
 
 	// Must run before every generated-file write below.
 	if err := validateSecretSources(ws); err != nil {
@@ -79,7 +93,8 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 	if err != nil {
 		return err
 	}
-	snapshots, err := vmSnapshots(ws)
+	checkAgentStateVersion(cfg, ws, shares)
+	snapshots, err := vmSnapshots(ws, shares)
 	if err != nil {
 		return err
 	}
@@ -148,12 +163,13 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) er
 		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
 	logStep("deliver secrets", start)
+	recordAgentStateVersion(cfg, ws, shares)
 	logStep("up", upStart, "workspace", ws.Name)
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s started\n", ws.Name)
 	return nil
 }
 
-// buildWorkspaceImage runs the image cascade in a builder VM and unpacks the
+// buildWorkspaceImage runs the image cascade in a builder VM and converts the
 // result into the image cache. It returns the image-cache reference.
 func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, rt vmRuntimeFiles) (string, error) {
 	var hostErr error
@@ -254,7 +270,7 @@ func useHostDocker(builder string, isolated bool, hostErr error) (bool, error) {
 }
 
 // importWorkspaceImage resolves and builds the workspace image with the
-// Docker daemon selected by DOCKER_HOST and unpacks it into the VM image
+// Docker daemon selected by DOCKER_HOST and converts it into the VM image
 // cache.
 func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (string, error) {
 	lock, err := lockDockerImages()
@@ -278,20 +294,279 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	}
 	ref := vm.RootFSRef(id)
 	start = time.Now()
+	var phases importPhases
+	progressDisplay := newImportProgressDisplay(
+		os.Stderr,
+		term.IsTerminal(int(os.Stderr.Fd())), //nolint:gosec // G115: file descriptors fit in int
+		func() int {
+			width, _, err := term.GetSize(int(os.Stderr.Fd())) //nolint:gosec // G115: file descriptors fit in int
+			if err != nil {
+				return 0
+			}
+			return width
+		},
+	)
 	err = vm.ImportImage(ctx, filepath.Join(vmRootDir(), "images"), ref, func(w io.Writer) error {
-		_, _ = color.New(color.FgCyan).Printf("Unpacking image %s for the workspace VM...\n", finalImage)
+		warnLargeImage(ctx, finalImage, dockerfileBase(chain))
+		_, _ = color.New(color.FgCyan).Printf("Converting image %s for the workspace VM...\n", finalImage)
+		// Not earlier: ImportImage waits for other imports before it calls save.
+		phases.start = time.Now()
+		progressDisplay.start()
 		_, err := docker.SaveImage(ctx, finalImage, w)
 		return err
+	}, func(p vm.ImportProgress) {
+		phases.update(p, time.Now())
+		progressDisplay.update(p)
 	})
+	progressDisplay.stop()
 	if err != nil {
 		return "", err
 	}
-	logStep("import image into VM cache", start, "ref", ref)
+	phases.log(time.Now())
+	logStep("import image into VM cache", start, "ref", ref, "cached", phases.converting.IsZero())
 	start = time.Now()
 	pruneImageCache(ref)
 	pruneDockerImages(ctx, lock, ws.Name, chain)
 	logStep("prune images", start)
 	return ref, nil
+}
+
+// Sizes of what the user adds to an image above which jailoc warns before
+// converting it: the conversion reads every new layer, and each layer is one
+// more mount that file lookups in the VM pass through.
+const (
+	largeImageLayers = 20
+	largeImageBytes  = 5 << 30
+)
+
+// warnLargeImage logs the size of image and warns on stderr when the user's
+// part of it is large: the layers the workspace Dockerfile adds to parent,
+// or all of image when it is used as is (parent is empty). The base image and
+// the layers jailoc adds do not count.
+func warnLargeImage(ctx context.Context, image, parent string) {
+	layers, size, err := docker.ImageSize(ctx, image)
+	if err != nil {
+		slog.Debug("image size unknown", "image", image, "error", err)
+		return
+	}
+	slog.Info("workspace image", "image", image, "layers", layers, "bytes", size)
+	subject := "image " + image + " has"
+	if parent != "" {
+		if parent == image {
+			// No workspace Dockerfile.
+			return
+		}
+		baseLayers, baseSize, err := docker.ImageSize(ctx, parent)
+		if err != nil {
+			slog.Debug("image size unknown", "image", parent, "error", err)
+			return
+		}
+		layers, size = layers-baseLayers, size-baseSize
+		subject = "the workspace Dockerfile adds"
+		slog.Info("workspace Dockerfile layers", "image", image, "base", parent, "layers", layers, "bytes", size)
+	}
+	if msg := largeImageWarning(subject, layers, size); msg != "" {
+		slog.Warn("large workspace image", "image", image, "layers", layers, "bytes", size)
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", msg)
+	}
+}
+
+// dockerfileBase returns the image the workspace Dockerfile was built on,
+// from the chain ResolveAndLayerImage returns: the image before the final
+// one, which is the final one itself without a workspace Dockerfile. An image
+// used as is has none.
+func dockerfileBase(chain []string) string {
+	if len(chain) < 2 {
+		return ""
+	}
+	return chain[len(chain)-2]
+}
+
+// largeImageWarning returns the warning that subject, such as "image x has",
+// that many layers and bytes, or "" when they are not large.
+func largeImageWarning(subject string, layers int, size int64) string {
+	var what []string
+	if layers > largeImageLayers {
+		what = append(what, fmt.Sprintf("%d layers", layers))
+	}
+	if size > largeImageBytes {
+		what = append(what, formatBytes(size))
+	}
+	if len(what) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s %s; converting it for the VM takes a while, and each layer slows down file lookups in the VM. "+
+		"Fewer RUN steps or a multi-stage build make it faster to convert and boot", subject, strings.Join(what, " and "))
+}
+
+// importPhases times the export from Docker and the layer conversion of an
+// image import from its progress reports.
+type importPhases struct {
+	start      time.Time
+	converting time.Time // first conversion report; zero while exporting
+	bytes      int64
+	layers     int
+}
+
+func (p *importPhases) update(progress vm.ImportProgress, now time.Time) {
+	switch progress.Phase {
+	case vm.PhaseSave:
+		p.bytes = progress.Bytes
+	case vm.PhaseExtract:
+		if p.converting.IsZero() {
+			p.converting = now
+		}
+		p.layers = progress.Total
+	}
+}
+
+// log logs the phases of an import that finished at now; an image already
+// in the cache has none.
+func (p *importPhases) log(now time.Time) {
+	if p.converting.IsZero() {
+		return
+	}
+	logDuration("export image from Docker", p.converting.Sub(p.start), "bytes", p.bytes)
+	logDuration("convert image layers", now.Sub(p.converting), "new_layers", p.layers)
+}
+
+type importProgressDisplay struct {
+	w           io.Writer
+	interactive bool
+	width       func() int
+	now         func() time.Time
+
+	mu       sync.Mutex
+	progress vm.ImportProgress
+	started  time.Time
+	running  bool
+	frame    int
+	stopOnce sync.Once
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+}
+
+func newImportProgressDisplay(w io.Writer, interactive bool, width func() int) *importProgressDisplay {
+	return &importProgressDisplay{
+		w:           w,
+		interactive: interactive,
+		width:       width,
+		now:         time.Now,
+		started:     time.Now(),
+		stopCh:      make(chan struct{}),
+		doneCh:      make(chan struct{}),
+	}
+}
+
+func (d *importProgressDisplay) start() {
+	if !d.interactive {
+		return
+	}
+	d.mu.Lock()
+	d.started = d.now()
+	d.running = true
+	d.mu.Unlock()
+	go d.animate()
+}
+
+func (d *importProgressDisplay) animate() {
+	ticker := time.NewTicker(spinnerInterval)
+	defer ticker.Stop()
+	defer close(d.doneCh)
+	for {
+		select {
+		case <-ticker.C:
+			d.redraw()
+		case <-d.stopCh:
+			return
+		}
+	}
+}
+
+func (d *importProgressDisplay) update(progress vm.ImportProgress) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.progress = progress
+}
+
+func (d *importProgressDisplay) redraw() {
+	if !d.interactive {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	frame := spinnerFrames[d.frame%len(spinnerFrames)]
+	d.frame++
+	seconds := int(d.now().Sub(d.started) / time.Second)
+	line := truncateImportProgress(formatImportProgress(frame, d.progress, seconds), d.width())
+	_, _ = fmt.Fprint(d.w, "\r\x1b[2K", line)
+}
+
+func (d *importProgressDisplay) stop() {
+	if !d.interactive {
+		return
+	}
+	d.mu.Lock()
+	running := d.running
+	d.mu.Unlock()
+	if !running {
+		return
+	}
+	d.stopOnce.Do(func() { close(d.stopCh) })
+	<-d.doneCh
+	d.erase()
+}
+
+func (d *importProgressDisplay) erase() {
+	if d.interactive {
+		_, _ = io.WriteString(d.w, "\r\x1b[2K")
+	}
+}
+
+func formatImportProgress(frame rune, p vm.ImportProgress, seconds int) string {
+	switch p.Phase {
+	case vm.PhaseExtract:
+		if p.Total > 0 {
+			return fmt.Sprintf("  %c Converting image layers (%d/%d)… %ds", frame, p.Layers, p.Total, seconds)
+		}
+		return fmt.Sprintf("  %c Linking image layers… %ds", frame, seconds)
+	default:
+		if p.Bytes > 0 {
+			return fmt.Sprintf("  %c Exporting image from Docker (%s)… %ds", frame, formatBytes(p.Bytes), seconds)
+		}
+		return fmt.Sprintf("  %c Exporting image from Docker… %ds", frame, seconds)
+	}
+}
+
+func formatBytes(bytes int64) string {
+	const (
+		kib = int64(1 << 10)
+		mib = int64(1 << 20)
+		gib = int64(1 << 30)
+	)
+	switch {
+	case bytes < kib:
+		return "< 1 KiB"
+	case bytes < mib:
+		return fmt.Sprintf("%d KiB", bytes/kib)
+	case bytes < gib:
+		return fmt.Sprintf("%d MiB", bytes/mib)
+	case bytes%gib == 0:
+		return fmt.Sprintf("%d GiB", bytes/gib)
+	default:
+		return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(gib))
+	}
+}
+
+func truncateImportProgress(line string, width int) string {
+	runes := []rune(line)
+	if width <= 0 || len(runes) <= width {
+		return line
+	}
+	if width == 1 {
+		return "…"
+	}
+	return string(runes[:width-1]) + "…"
 }
 
 // lockDockerImages returns the host-wide lock on the Docker images jailoc
@@ -382,7 +657,7 @@ func pruneDockerImages(ctx context.Context, lock *os.File, workspace string, cha
 	}
 }
 
-// pruneImageCache removes unpacked workspace images that no workspace or
+// pruneImageCache removes workspace images that no workspace or
 // builder spec uses any more. Failures only warn: the cache is an
 // optimisation.
 func pruneImageCache(current string) {
@@ -600,7 +875,59 @@ func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec, p
 			payload.Files[s.Name] = value
 		}
 	}
+	if spec.Guest != nil && spec.Guest.CABundle != "" {
+		payload.Env = appendUnsetEnv(payload.Env, caBundleEnv())
+	}
 	return payload, nil
+}
+
+// caBundleVars are the variables that point TLS clients at a CA bundle
+// file. With a forwarded CA bundle, sessions get them set to the guest's
+// system bundle, which then holds the forwarded certificates, so clients
+// that ship their own roots or read only a variable trust them too:
+// NODE_EXTRA_CA_CERTS for Node and Bun, SSL_CERT_FILE for OpenSSL, Go, uv
+// and httpx, and the variables of requests, curl, pip, the AWS and Google
+// Cloud CLIs, httplib2, gRPC, cargo, git, Nix, Deno and Hex.
+var caBundleVars = []string{
+	"NODE_EXTRA_CA_CERTS",
+	"SSL_CERT_FILE",
+	"REQUESTS_CA_BUNDLE",
+	"CURL_CA_BUNDLE",
+	"PIP_CERT",
+	"AWS_CA_BUNDLE",
+	"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE",
+	"HTTPLIB2_CA_CERTS",
+	"GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
+	"CARGO_HTTP_CAINFO",
+	"GIT_SSL_CAINFO",
+	"NIX_SSL_CERT_FILE",
+	"DENO_CERT",
+	"HEX_CACERTS_PATH",
+}
+
+// caBundleEnv sets caBundleVars to the guest's system CA bundle.
+func caBundleEnv() []string {
+	env := make([]string, 0, len(caBundleVars))
+	for _, k := range caBundleVars {
+		env = append(env, k+"="+guest.SystemCABundle)
+	}
+	return env
+}
+
+// appendUnsetEnv appends the entries of add whose keys env does not set, so
+// a workspace's own env or secret wins.
+func appendUnsetEnv(env, add []string) []string {
+	set := make(map[string]bool, len(env))
+	for _, e := range env {
+		k, _, _ := strings.Cut(e, "=")
+		set[k] = true
+	}
+	for _, e := range add {
+		if k, _, _ := strings.Cut(e, "="); !set[k] {
+			env = append(env, e)
+		}
+	}
+	return env
 }
 
 // secretsMarker exists while the running workspace VM holds the secrets of
@@ -703,6 +1030,7 @@ func downVM(ctx context.Context, ws *workspace.Resolved, purge bool) error {
 	}
 	if purge {
 		purgeErr := purgeWorkspaceSecretCache(ctx, ws)
+		purgeWorkspaceAgentStateVersions(stateDir)
 		if err := vm.RemoveTree(stateDir); err != nil {
 			return errors.Join(purgeErr, fmt.Errorf("delete vm state: %w", err))
 		}
@@ -769,24 +1097,6 @@ func statusVM(ctx context.Context, ws *workspace.Resolved) error {
 	fmt.Printf("Config:    %s\n", configLabel(ws, *spec, configChangedSince(stateDir)))
 	fmt.Printf("Data:      %s\n", shortenHome(stateDir, home))
 	return nil
-}
-
-// agentLabel names the agent of the workspace, the package or release
-// version jailoc installs and the arguments added to every start.
-func agentLabel(ws *workspace.Resolved) string {
-	label := ws.Agent.Name
-	switch {
-	case !ws.AgentInstall:
-		label += " (installed by the image)"
-	case ws.Agent.Package != "":
-		label += " (" + ws.Agent.Package + "@" + cmp.Or(ws.Agent.Version, "latest") + ")"
-	case ws.Agent.Release != nil:
-		label += " (" + ws.Agent.Release.Repo + "@" + ws.Agent.Version + ")"
-	}
-	if len(ws.AgentArgs) > 0 {
-		label += ", args: " + strings.Join(ws.AgentArgs, " ")
-	}
-	return label
 }
 
 // stoppedLabel describes a stopped VM from its last supervisor state, nil
@@ -923,35 +1233,118 @@ func profileLabel(spec vm.Spec) string {
 	}
 }
 
-// logsVM prints the supervisor and guest console logs; follow keeps
-// printing the console log as it grows.
+// upLogPath is the log of the last `jailoc up` of a workspace: its steps with
+// their durations, including the image builds.
+func upLogPath(stateDir string) string { return filepath.Join(stateDir, "up.log") }
+
+// teeUpLog writes the log records of this `jailoc up` to the workspace's
+// up.log too, until the returned function is called.
+func teeUpLog(stateDir string) (func(), error) {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create vm state dir: %w", err)
+	}
+	f, err := os.OpenFile(upLogPath(stateDir), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // G304: jailoc-owned state path
+	if err != nil {
+		return nil, fmt.Errorf("open up log: %w", err)
+	}
+	restore := logging.Tee(f)
+	return func() {
+		restore()
+		_ = f.Close()
+	}, nil
+}
+
+// logsVM prints the log of the last `jailoc up`, the supervisor log and the
+// guest console log. follow keeps printing what is added to all three, so
+// that it shows a running `jailoc up` from its image build to the VM boot,
+// and the next start after it.
 func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Writer) error {
 	stateDir := vmStateDir(ws.Name)
 	console := filepath.Join(stateDir, "microvm", "console.log")
-	if _, err := os.Stat(console); err != nil {
+	if !fileExists(console) && !fileExists(upLogPath(stateDir)) {
 		return fmt.Errorf("workspace %q has no VM logs; start it with 'jailoc up'", ws.Name)
 	}
-	if data, err := os.ReadFile(filepath.Join(stateDir, "supervisor.log")); err == nil { //nolint:gosec // G304: jailoc-owned state path
-		_, _ = w.Write(data)
-	}
-	f, err := os.Open(console) //nolint:gosec // G304: jailoc-owned state path
-	if err != nil {
-		return fmt.Errorf("open console log: %w", err)
-	}
-	defer func() { _ = f.Close() }()
+	tails := []*logTail{{path: upLogPath(stateDir)}, {path: filepath.Join(stateDir, "supervisor.log")}, {path: console}}
+	defer func() {
+		for _, t := range tails {
+			t.close()
+		}
+	}()
 	for {
-		if _, err := io.Copy(w, f); err != nil {
-			return fmt.Errorf("read console log: %w", err)
+		for _, t := range tails {
+			if err := t.copy(w); err != nil {
+				return err
+			}
 		}
-		if !follow {
+		if !follow || !waitLogs(ctx) {
 			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// logTail prints what is added to a log file. It starts from the beginning
+// again when the file is replaced or truncated, as the next `jailoc up` and
+// VM start do with theirs.
+type logTail struct {
+	path string
+	f    *os.File
+	off  int64
+}
+
+// copy prints what was added to the file since the last copy; a missing
+// file has nothing to print yet.
+func (t *logTail) copy(w io.Writer) error {
+	fi, err := os.Stat(t.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", t.path, err)
+	}
+	if t.f != nil {
+		if cur, err := t.f.Stat(); err != nil || !os.SameFile(cur, fi) || fi.Size() < t.off {
+			t.close()
+		}
+	}
+	if t.f == nil {
+		f, err := os.Open(t.path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("open %s: %w", t.path, err)
+		}
+		t.f, t.off = f, 0
+	}
+	n, err := io.Copy(w, t.f)
+	t.off += n
+	if err != nil {
+		return fmt.Errorf("read %s: %w", t.path, err)
+	}
+	return nil
+}
+
+func (t *logTail) close() {
+	if t.f != nil {
+		_ = t.f.Close()
+		t.f = nil
+	}
+}
+
+// waitLogs waits for followed logs to grow and reports false once ctx is
+// done.
+func waitLogs(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(500 * time.Millisecond):
+		return true
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // restartVMIfRunning restarts a running workspace VM so configuration
