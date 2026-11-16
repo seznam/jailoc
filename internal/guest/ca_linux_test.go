@@ -283,3 +283,56 @@ func TestInstallCABundleRefreshFailure(t *testing.T) {
 		t.Fatalf("installCABundle error = %v, want the tool failure", err)
 	}
 }
+
+func TestInstallCABundleRetriesFailedRefresh(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	orig := []byte("-----ORIGINAL-----\n")
+	writeTestFile(t, filepath.Join(root, SystemCABundle), orig)
+	if err := os.MkdirAll(filepath.Join(root, "/usr/local/share/ca-certificates"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(t.TempDir(), "ca-bundle.pem")
+	writeTestFile(t, bundle, testCertPEM(t, "corp"))
+	if err := installCABundle(root, bundle, noCATool(t)); err != nil {
+		t.Fatalf("installCABundle: %v", err)
+	}
+
+	runs := 0
+	failing := true
+	run := func(args []string) error {
+		runs++
+		if !slices.Equal(args, []string{"update-ca-certificates"}) {
+			t.Errorf("tool run %q, want update-ca-certificates", args)
+		}
+		if failing {
+			return errors.New("boom")
+		}
+		return nil
+	}
+	if err := installCABundle(root, "", run); err == nil {
+		t.Fatal("installCABundle with a failing tool succeeded")
+	}
+	if got := readTestFile(t, filepath.Join(root, SystemCABundle)); !bytes.Equal(got, orig) {
+		t.Errorf("system bundle after a failed refresh = %q, want the original", got)
+	}
+	if err := installCABundle(root, "", run); err == nil {
+		t.Fatal("retry with a failing tool succeeded")
+	}
+	failing = false
+	if err := installCABundle(root, "", run); err != nil {
+		t.Fatalf("retry with a working tool: %v", err)
+	}
+	if runs != 3 {
+		t.Errorf("tool runs = %d, want 3: one per call until it succeeds", runs)
+	}
+	if _, err := os.Stat(filepath.Join(root, caRefreshPending)); !os.IsNotExist(err) {
+		t.Errorf("pending refresh kept after success: %v", err)
+	}
+	if err := installCABundle(root, "", run); err != nil {
+		t.Fatalf("installCABundle after the refresh: %v", err)
+	}
+	if runs != 3 {
+		t.Errorf("tool runs = %d after nothing changed, want 3", runs)
+	}
+}

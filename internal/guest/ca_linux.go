@@ -10,12 +10,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 const (
 	// originalCA keeps the image's system CA bundle so a changed or removed
 	// workspace bundle can be applied on top of the original.
 	originalCA = "/run/jailoc-system-ca.crt"
+	// caRefreshPending lists, one per line, the CA source directories whose
+	// tool has not yet refreshed the generated stores after their jailoc
+	// certificates were removed or replaced.
+	caRefreshPending = "/run/jailoc-ca-refresh"
 	// caSourceSubdir is the directory of the workspace certificates in each
 	// CA source directory of the image.
 	caSourceSubdir = "jailoc"
@@ -77,8 +82,9 @@ func runCATool(args []string) error {
 // one file per workspace certificate in each CA source directory of the
 // image. When certificates there are removed or replaced, run regenerates
 // the distribution's stores, which a session may have generated from them,
-// so they stop trusting the old certificates. SystemCABundle is written
-// last and keeps its content.
+// so they stop trusting the old certificates. A source whose tool failed
+// stays pending and is refreshed again on the next call. SystemCABundle is
+// written last, also when a tool failed.
 func installCABundle(root, path string, run func(args []string) error) error {
 	orig, err := originalCABundle(root)
 	if err != nil {
@@ -92,16 +98,78 @@ func installCABundle(root, path string, run func(args []string) error) error {
 	if len(extra) > 0 {
 		content = append(append(append([]byte{}, orig...), '\n'), extra...)
 	}
+	pending, err := readCARefreshPending(root)
+	if err != nil {
+		return err
+	}
 	stale, err := syncCASources(root, pemCertificates(extra))
 	if err != nil {
 		return err
 	}
 	for _, src := range stale {
-		if err := run(src.tool); err != nil {
-			return fmt.Errorf("refresh trust stores from %s: %w", src.dir, err)
+		if !slices.Contains(pending, src.dir) {
+			pending = append(pending, src.dir)
 		}
 	}
-	return writeSystemCABundle(root, content)
+	if err := writeCARefreshPending(root, pending); err != nil {
+		return err
+	}
+	runErr := refreshCASources(root, pending, run)
+	if err := writeSystemCABundle(root, content); err != nil {
+		return errors.Join(runErr, err)
+	}
+	return runErr
+}
+
+// refreshCASources runs the tool of each pending source directory and
+// rewrites caRefreshPending under root with the ones whose tool failed.
+func refreshCASources(root string, pending []string, run func(args []string) error) error {
+	var errs error
+	failed := []string{}
+	for _, src := range caSources {
+		if !slices.Contains(pending, src.dir) {
+			continue
+		}
+		if err := run(src.tool); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("refresh trust stores from %s: %w", src.dir, err))
+			failed = append(failed, src.dir)
+		}
+	}
+	if err := writeCARefreshPending(root, failed); err != nil {
+		return errors.Join(errs, err)
+	}
+	return errs
+}
+
+// readCARefreshPending returns the pending source directories under root.
+func readCARefreshPending(root string) ([]string, error) {
+	b, err := os.ReadFile(filepath.Join(root, caRefreshPending)) //nolint:gosec // G304: fixed guest path
+	if errors.Is(err, fs.ErrNotExist) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", caRefreshPending, err)
+	}
+	return strings.Fields(string(b)), nil
+}
+
+// writeCARefreshPending saves the pending source directories under root, or
+// removes the list when none are pending.
+func writeCARefreshPending(root string, pending []string) error {
+	path := filepath.Join(root, caRefreshPending)
+	if len(pending) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", caRefreshPending, err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // G301: system directory
+		return fmt.Errorf("create %s: %w", filepath.Dir(caRefreshPending), err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(pending, "\n")+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", caRefreshPending, err)
+	}
+	return nil
 }
 
 // originalCABundle returns the image's CA bundle, saving it on the first
