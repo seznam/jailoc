@@ -21,7 +21,8 @@ import (
 // and enforce it with older semantics.
 //
 // Version 1: internal_zones; private DNS answers outside them are dropped.
-const PolicyVersion = 1
+// Version 2: http rules and TLS inspection.
+const PolicyVersion = 2
 
 // Protocol names used in policy exceptions and decisions.
 const (
@@ -119,6 +120,10 @@ type Rule struct {
 	CIDRs []string `json:"cidrs,omitempty"`
 	Proto string   `json:"proto,omitempty"`
 	Ports []string `json:"ports,omitempty"`
+	// HTTP makes the rule apply per HTTP request instead of per connection;
+	// it requires proto tcp. An http allow rule narrows its hosts to the
+	// matching requests, and an http deny rule never denies a connection.
+	HTTP *HTTPMatch `json:"http,omitempty"`
 
 	nameSet  nameSet
 	prefixes []netip.Prefix
@@ -186,6 +191,14 @@ func (r *Rule) compile(kind string) error {
 	if !r.wildcard && len(r.prefixes) == 0 && r.nameSet.empty() {
 		return fmt.Errorf("%s rule %q: rule has no names or cidrs", kind, r.Name)
 	}
+	if r.HTTP != nil {
+		if r.Proto != ProtoTCP {
+			return fmt.Errorf("%s rule %q: http requires proto tcp, got %q", kind, r.Name, r.Proto)
+		}
+		if err := r.HTTP.compile(kind, r.Name); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -236,9 +249,13 @@ func (r *Rule) matchesName(proto string, port uint16, name string) bool {
 
 // Policy is an immutable, validated broker policy.
 type Policy struct {
-	exceptions   []Exception
-	allow        []Rule
+	exceptions []Exception
+	allow      []Rule
+	// deny holds the plain deny rules, which deny a connection. http deny
+	// rules are kept apart in httpDeny: they act per request only and never
+	// deny a connection or block DNS.
 	deny         []Rule
+	httpDeny     []Rule
 	rulesMode    bool
 	dnsUpstreams []netip.AddrPort
 	blockedZones []string
@@ -248,6 +265,12 @@ type Policy struct {
 	internalZones []string
 	ipv6          bool
 	source        string
+
+	// inspect decrypts and filters HTTP for the http rules; nil without them.
+	inspect *inspector
+	// plainView is p without its http allow rules, nil when there are none.
+	// It decides flows that are not HTTP, which http rules must not open.
+	plainView *Policy
 }
 
 type policyFile struct {
@@ -267,6 +290,9 @@ type policyFile struct {
 	// addresses. The resolver drops any other private answer, and a name
 	// rule opens a private address only for a name in these zones.
 	InternalZones []string `json:"internal_zones"`
+	// Inspect holds the CA that signs the certificates the broker shows the
+	// guest for hosts with http rules. Required when any rule has http.
+	Inspect *inspectFile `json:"inspect,omitempty"`
 }
 
 // ParsePolicy validates a JSON policy. Unknown fields are rejected so a typo
@@ -298,7 +324,11 @@ func ParsePolicy(data []byte, source string) (*Policy, error) {
 			if err := r.compile("deny"); err != nil {
 				return nil, fmt.Errorf("policy %s: %w", source, err)
 			}
-			p.deny = append(p.deny, r)
+			if r.HTTP != nil {
+				p.httpDeny = append(p.httpDeny, r)
+			} else {
+				p.deny = append(p.deny, r)
+			}
 		}
 	}
 	if f.DNS != "" {
@@ -332,7 +362,59 @@ func ParsePolicy(data []byte, source string) (*Policy, error) {
 	if len(p.blockedZones) > 0 && len(p.dnsUpstreams) == 0 {
 		return nil, fmt.Errorf("policy %s: dns_blocked_zones requires dns_upstreams", source)
 	}
+	if err := p.compileHTTP(f.Inspect); err != nil {
+		return nil, fmt.Errorf("policy %s: %w", source, err)
+	}
 	return p, nil
+}
+
+// compileHTTP loads the inspection CA and builds the plain view when rules
+// have http matches. Rules with http need the CA: without it they could not
+// be enforced, so the policy is rejected.
+func (p *Policy) compileHTTP(in *inspectFile) error {
+	var plain []Rule
+	httpAllow := false
+	for _, r := range p.allow {
+		if r.HTTP != nil {
+			httpAllow = true
+			continue
+		}
+		plain = append(plain, r)
+	}
+	if (httpAllow || len(p.httpDeny) > 0) && in == nil {
+		return fmt.Errorf("http rules require an inspect section")
+	}
+	if in != nil {
+		insp, err := loadInspector(in)
+		if err != nil {
+			return err
+		}
+		p.inspect = insp
+	}
+	if httpAllow {
+		view := *p
+		view.allow = plain
+		view.inspect, view.plainView = nil, nil
+		p.plainView = &view
+	}
+	return nil
+}
+
+// hasHTTP reports whether any rule has an http match.
+func (p *Policy) hasHTTP() bool {
+	if p == nil {
+		return false
+	}
+	return p.plainView != nil || len(p.httpDeny) > 0
+}
+
+// plain returns the policy that decides flows which are not HTTP: p without
+// its http allow rules.
+func (p *Policy) plain() *Policy {
+	if p != nil && p.plainView != nil {
+		return p.plainView
+	}
+	return p
 }
 
 // normalizeName lowercases a DNS name and drops its trailing dot.
@@ -521,6 +603,13 @@ func ruleCovers(denyProto *string, denyRanges []portRange, allowProto string, al
 // needsNameInspection reports whether a TCP flow to dst on port requires
 // reading the TLS SNI or HTTP Host header before dialing upstream.
 func (p *Policy) needsNameInspection(dst netip.AddrPort, byName bool) bool {
+	return p.needsNameForRules(dst, byName) || p.needsNameForHTTP(dst)
+}
+
+// needsNameForRules reports whether name rules alone require the SNI or Host
+// of a TCP flow to dst: the flow was allowed by a name, or a deny rule has
+// name patterns on its port. A flow without a name then fails closed.
+func (p *Policy) needsNameForRules(dst netip.AddrPort, byName bool) bool {
 	if p == nil || !p.rulesMode {
 		return false
 	}
@@ -533,6 +622,27 @@ func (p *Policy) needsNameInspection(dst netip.AddrPort, byName bool) bool {
 	// bypassing name-based denies via a shared IP or wildcard allow.
 	for i := range p.deny {
 		if !p.deny[i].nameSet.empty() && p.deny[i].matchesProtoPort(ProtoTCP, dst.Port()) {
+			return true
+		}
+	}
+	return false
+}
+
+// needsNameForHTTP reports whether an http rule on dst's port requires the
+// SNI or Host of a TCP flow: an http rule is enforced per request, which
+// needs the request's host. A flow without a name is then only inspected when
+// an http rule covers its address (see httpScope).
+func (p *Policy) needsNameForHTTP(dst netip.AddrPort) bool {
+	if p == nil || !p.rulesMode {
+		return false
+	}
+	for i := range p.httpDeny {
+		if p.httpDeny[i].matchesProtoPort(ProtoTCP, dst.Port()) {
+			return true
+		}
+	}
+	for i := range p.allow {
+		if p.allow[i].HTTP != nil && p.allow[i].matchesProtoPort(ProtoTCP, dst.Port()) {
 			return true
 		}
 	}

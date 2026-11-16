@@ -1881,6 +1881,57 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 	}
 }
 
+func TestResolveNetworkRulesHTTP(t *testing.T) {
+	t.Parallel()
+	plain := &config.Config{Workspaces: map[string]config.Workspace{"api": {Paths: []string{"/data/api"}}}}
+	r, err := workspace.Resolve(plain, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.InspectsHTTP() {
+		t.Fatalf("InspectsHTTP() = true without http rules: %+v", r.NetworkRules)
+	}
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{Network: &config.Network{Rules: []config.NetworkRule{
+			{Name: "default-http", Deny: []string{"example.com"}, HTTP: &config.HTTPMatch{Methods: []string{"DELETE"}}},
+		}}},
+		Workspaces: map[string]config.Workspace{"api": {
+			Paths: []string{"/data/api"},
+			Network: &config.Network{Rules: []config.NetworkRule{
+				{Name: "gh", Allow: []string{"api.github.com"}, HTTP: &config.HTTPMatch{Methods: []string{"GET"}, Paths: []string{"/repos/**"}}},
+				{Name: "empty", Allow: []string{"example.org"}, HTTP: &config.HTTPMatch{}},
+			}},
+		}},
+	}
+	r, err = workspace.Resolve(cfg, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !r.InspectsHTTP() {
+		t.Fatal("InspectsHTTP() = false with http rules")
+	}
+	byName := map[string]config.NetworkRule{}
+	for _, rule := range r.NetworkRules {
+		byName[rule.Name] = rule
+	}
+	gh := byName["gh"]
+	if gh.HTTP == nil || !slices.Equal(gh.HTTP.Methods, []string{"GET"}) || !slices.Equal(gh.HTTP.Paths, []string{"/repos/**"}) {
+		t.Fatalf("gh rule http = %+v", gh.HTTP)
+	}
+	if byName["default-http"].HTTP == nil || byName["empty"].HTTP == nil {
+		t.Fatalf("http tables lost: %+v", r.NetworkRules)
+	}
+	if byName["agent"].HTTP != nil {
+		t.Fatalf("implicit agent rule has http: %+v", byName["agent"])
+	}
+	// The resolved rule must not alias the loaded config.
+	gh.HTTP.Methods[0] = "POST"
+	if got := cfg.Workspaces["api"].Network.Rules[0].HTTP.Methods[0]; got != "GET" {
+		t.Fatalf("config mutated through resolved rule: %q", got)
+	}
+}
+
 func TestResolveInternalZones(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{

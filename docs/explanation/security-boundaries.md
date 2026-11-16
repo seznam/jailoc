@@ -33,6 +33,8 @@ The host trusts nothing it reads back from the guest. The read-write internal sh
 
 The network broker runs on the host, so nothing in the guest can change its policy. It terminates every guest connection in a userspace TCP/IP stack and opens a host socket only for destinations the policy allows: public addresses are allowed, private and reserved ranges are denied unless `allowed_networks` or a resolved `allowed_hosts` address opens them, and loopback, multicast, cloud metadata endpoints and special IPv6 ranges stay denied regardless. The guest has no network when the broker isn't running, and the VM stops when the broker exits. Containers from the in-VM Docker daemon go through the same broker. See [Network Isolation](network-isolation.md).
 
+With rules that have an `http` table, the broker also terminates TLS for the hosts they match. It signs certificates with a per-workspace CA whose key stays on the host, outside every share, and which the guest trusts, so the broker can read the decrypted traffic of those hosts. The upstream side is verified against the host's trust roots, not the guest's. WebSocket frames after an upgrade aren't inspected. See [TLS inspection](network-isolation.md#tls-inspection).
+
 ### Workspace and workspace
 
 Each workspace has its own VM, broker, SSH key, state directory and persistent home. A workspace doesn't see another workspace's files, secrets, sessions or network allowances, except through state the configuration shares between them:
@@ -77,6 +79,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
 | CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |
+| Inspection CA | Host to guest | Trust certificates the broker signs for hosts matched by `http` rules, which lets the broker read their traffic | `network.rules` with `http` |
 | Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `network` |
 | SSH session | Host to guest | Accept sessions only from jailoc, which authenticates with a per-workspace key and pins the guest host key generated at each start | fixed |
 

@@ -1,6 +1,7 @@
 package netbroker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -50,8 +51,12 @@ func (l *flowLimit) release() { l.n.Add(-1) }
 // destination; denied or unreachable destinations get a RST. When name rules
 // apply, the broker completes the guest handshake and inspects the TLS SNI or
 // HTTP Host before dialing upstream; a flow denied there gets a TLS alert or
-// HTTP 403 instead of a RST (see denyReply). Allowed DNS to another resolver is
-// answered by the broker itself (see serveDNSTCP).
+// HTTP 403 instead of a RST (see denyReply). When an http rule covers the
+// flow's host, the flow is inspected instead of spliced: the broker terminates
+// the guest's TLS with a certificate from the workspace inspection CA (or reads
+// plain HTTP) and applies the rules to every request (see inspectFlow); other
+// protocols to that host are decided by the plain rules alone. Allowed DNS to
+// another resolver is answered by the broker itself (see serveDNSTCP).
 func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
@@ -139,6 +144,10 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 
 const sniffBeforeDialTimeout = 2 * time.Second
 
+// h2PrefaceHead is the part of the HTTP/2 client preface that parses as an
+// HTTP/1 request head: what a cleartext prior-knowledge (h2c) flow starts with.
+const h2PrefaceHead = "PRI * HTTP/2.0\r\n\r\n"
+
 func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Policy, env Env, d Decision, ep tcpip.Endpoint, wq *waiter.Queue) {
 	rawConn := gonet.NewTCPConn(wq, ep)
 	timeout := 200 * time.Millisecond
@@ -147,9 +156,32 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	}
 	replayed, info, incomplete := sniffBeforeDial(rawConn, timeout)
 	peerName, badAuthority := sniffedPeerNameStrict(info)
+	// httpOnly: only http rules asked for the name. Name rules (a flow allowed
+	// by name, a name deny rule) fail closed without one; http rules do so only
+	// where one covers the destination's address, because the host of a flow
+	// they do not cover is of no use to them.
+	httpOnly := !p.needsNameForRules(dst, d.byName)
+	// A cleartext prior-knowledge HTTP/2 flow has no name to decide at flow
+	// level; every request carries its own :authority (see inspectFlow).
+	h2c := peerName == "" && !badAuthority && info != nil && info["proto"] == "http" &&
+		bytes.HasPrefix(replayed.buf, []byte(h2PrefaceHead))
+	var addrScope httpScope
+	if httpOnly && !h2c {
+		addrScope = p.httpScope("", dst)
+	}
+	ipInspect := false
+	// dp decides the flow. A flow that cannot be HTTP (no HTTP or TLS bytes,
+	// or TLS with only non-HTTP ALPN) is decided without the http allow
+	// rules, so they never open other protocols.
+	dp := p
+	if p.hasHTTP() && !httpCapable(info) {
+		dp = p.plain()
+	}
 	switch {
 	case badAuthority:
 		d = Decision{Allow: false, Reason: "sni-mismatch", Name: d.Name}
+	case h2c:
+		// Decided per request; the L4 decision stands.
 	case peerName != "":
 		// Check whether the sniffed SNI/Host belongs to the destination IP in
 		// the DNS cache (unless a CIDR or wildcard rule allows the IP directly).
@@ -162,7 +194,7 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		}
 		envWithPeer := env
 		envWithPeer.Names = []string{peerName}
-		dPeer := Decide(p, envWithPeer, ProtoTCP, dst)
+		dPeer := Decide(dp, envWithPeer, ProtoTCP, dst)
 		switch {
 		case !dPeer.Allow:
 			d = dPeer
@@ -171,7 +203,7 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 			// Check if an address/wildcard rule allows dst without any name.
 			envNoNames := env
 			envNoNames.Names = nil
-			if dAddr := Decide(p, envNoNames, ProtoTCP, dst); dAddr.Allow {
+			if dAddr := Decide(dp, envNoNames, ProtoTCP, dst); dAddr.Allow {
 				d = dAddr
 				d.Name = peerName
 			} else {
@@ -180,6 +212,19 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		default:
 			d = dPeer
 		}
+	case httpOnly && addrScope.empty():
+		// No http rule covers the address and no name rule needs a name:
+		// decided as without http rules, and not inspected.
+		if dp != p {
+			d = Decide(dp, env, ProtoTCP, dst)
+		}
+	case httpOnly && info != nil && httpCapable(info):
+		// An http rule covers the address but the flow names no host: inspect
+		// it under the destination's IP literal.
+		ipInspect = true
+	case httpOnly && info != nil:
+		// TLS offering no HTTP protocol: the plain rules decide.
+		d = Decide(dp, env, ProtoTCP, dst)
 	case incomplete || info != nil || isHTTPOrTLSPort(dst.Port()):
 		// Timed out waiting for TLS ClientHello / HTTP headers on an HTTP/TLS
 		// port (or after partial TLS/HTTP bytes), or received TLS/HTTP without
@@ -187,6 +232,10 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		// matched at L4, so a guest cannot wait out the 2s deadline and then
 		// send a denied SNI/Host over an unchecked splice.
 		d = Decision{Allow: false, Reason: "sni-required", Name: d.Name}
+	case dp != p:
+		// Nothing identified on a non-HTTP port: the earlier decision may
+		// rest on an http allow rule.
+		d = Decide(dp, env, ProtoTCP, dst)
 	}
 	b.recordFlow(conn, ProtoTCP, src, dst, d)
 	if info != nil {
@@ -203,6 +252,25 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		ep.Abort()
 		_ = rawConn.Close()
 		return
+	}
+	if info != nil && httpCapable(info) {
+		switch {
+		case h2c:
+			f := b.newInspectFlow(p, env, d, httpScope{}, conn, dst, "", false, true)
+			f.serveInspected(replayed)
+			return
+		case peerName != "":
+			if scope := p.httpScope(peerName, dst); !scope.empty() {
+				f := b.newInspectFlow(p, env, d, scope, conn, dst, peerName, info["proto"] == "tls", false)
+				f.serveInspected(replayed)
+				return
+			}
+		case ipInspect:
+			f := b.newInspectFlow(p, env, d, addrScope, conn, dst, dst.Addr().Unmap().String(), info["proto"] == "tls", false)
+			f.byIP = true
+			f.serveInspected(replayed)
+			return
+		}
 	}
 	out, err := b.dialTCP("tcp", dst.String())
 	if err != nil {
@@ -222,8 +290,20 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	if peerName == "" || info["proto"] == "http" {
 		stream = &enforceConn{
 			Conn: replayed,
+			// Without http rules asking for it, a later request without a name
+			// is as welcome as before they existed. So is a handshake that is
+			// conclusively not HTTP (TLS offering no HTTP protocol): http rules
+			// never apply to it, and the plain rules already decided it.
+			allowNoName: httpOnly && (addrScope.empty() || info != nil && !httpCapable(info)),
 			check: func(name string) Decision {
-				return b.peerDecision(p, env, dst, name)
+				d := b.peerDecision(dp, env, dst, name)
+				if d.Allow && !p.httpScope(name, dst).empty() {
+					// A host an http rule covers cannot be reached over a
+					// connection that is not inspected: a later request or
+					// handshake would skip the rule.
+					return Decision{Reason: "inspection-required", Name: name}
+				}
+				return d
 			},
 			closeUpstream: func() { _ = out.Close() },
 			abort: func() {

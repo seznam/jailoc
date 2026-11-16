@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/fatih/color"
 )
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -74,6 +76,83 @@ func TestTrafficFormatter(t *testing.T) {
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+}
+
+func TestTrafficFormatterInspectedHTTP(t *testing.T) {
+	t.Parallel()
+	hint := "upstream certificate failed verification; the broker only trusts the host system roots and ca_bundle"
+	tests := []struct {
+		name string
+		line string
+		want string
+	}{
+		{
+			name: "allowed https request",
+			line: `{"event":"l7","conn":3,"dst":"140.82.121.6:443","proto":"https","method":"GET","host":"api.github.com","path":"/repos/seznam/jailoc","status":200,"rule":"github-readonly","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https GET api.github.com/repos/seznam/jailoc 200 rule=github-readonly",
+		},
+		{
+			name: "allowed plain http request",
+			line: `{"event":"l7","conn":4,"dst":"1.2.3.4:80","proto":"http","method":"HEAD","host":"plain.example","path":"/","status":204,"time":"2026-10-27T10:00:00Z"}`,
+			want: "└ http HEAD plain.example/ 204",
+		},
+		{
+			name: "denied by rule",
+			line: `{"event":"l7","conn":5,"dst":"140.82.121.6:443","proto":"https","method":"DELETE","host":"api.github.com","path":"/repos/x","status":403,"denied":true,"reason":"rule no-delete","rule":"no-delete","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https DELETE api.github.com/repos/x 403 DENY rule=no-delete",
+		},
+		{
+			name: "denied without matching allow",
+			line: `{"event":"l7","conn":6,"dst":"140.82.121.6:443","proto":"https","method":"GET","host":"api.github.com","path":"/user","status":403,"denied":true,"reason":"http-no-match","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https GET api.github.com/user 403 DENY http-no-match",
+		},
+		{
+			name: "host mismatch",
+			line: `{"event":"l7","conn":7,"dst":"140.82.121.6:443","proto":"https","method":"GET","host":"evil.example","path":"/","status":421,"denied":true,"reason":"host-mismatch","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https GET evil.example/ 421 DENY host-mismatch",
+		},
+		{
+			name: "upstream error with hint",
+			line: `{"event":"l7","conn":8,"dst":"140.82.121.6:443","proto":"https","method":"GET","host":"api.github.com","path":"/","status":502,"error":"x509: certificate signed by unknown authority","hint":"` + hint + `","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https GET api.github.com/ 502 x509: certificate signed by unknown authority " + hint,
+		},
+		{
+			name: "passive tls event is unchanged",
+			line: `{"event":"l7","conn":9,"proto":"tls","dst":"104.20.23.154:443","sni":"example.com","alpn":["h2"],"rule":"r","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ tls example.com h2",
+		},
+		{
+			name: "inspect error",
+			line: `{"event":"inspect-error","conn":10,"dst":"140.82.121.6:443","name":"api.github.com","error":"remote error: tls: bad certificate","hint":"the client does not trust the workspace inspection CA","time":"2026-10-27T10:00:00Z"}`,
+			want: "FAIL tcp api.github.com:443 [140.82.121.6] remote error: tls: bad certificate the client does not trust the workspace inspection CA",
+		},
+		{
+			name: "inspect error without hint",
+			line: `{"event":"inspect-error","conn":11,"dst":"1.2.3.4:443","error":"not HTTP","time":"2026-10-27T10:00:00Z"}`,
+			want: "FAIL tcp 1.2.3.4:443 not HTTP",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := newTrafficFormatter(false).line([]byte(tc.line))
+			if got := plain(out)[9:]; got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTrafficFormatterInspectedHTTPColors(t *testing.T) {
+	// color.NoColor is process-global: do not run in parallel.
+	prev := color.NoColor
+	color.NoColor = false
+	t.Cleanup(func() { color.NoColor = prev })
+	denied := newTrafficFormatter(false).line([]byte(`{"event":"l7","proto":"https","method":"GET","host":"h","path":"/","status":403,"denied":true,"reason":"http-no-match","time":"2026-10-27T10:00:00Z"}`))
+	assertContains(t, denied, colDeny.Sprint("DENY http-no-match"))
+	failed := newTrafficFormatter(false).line([]byte(`{"event":"inspect-error","dst":"1.2.3.4:443","error":"boom","time":"2026-10-27T10:00:00Z"}`))
+	assertContains(t, failed, colDeny.Sprint("FAIL "))
+	assertContains(t, failed, colDeny.Sprint("boom"))
 }
 
 func TestExecFormatter(t *testing.T) {
@@ -150,6 +229,9 @@ func TestTrafficFormatterEscapesGuestFields(t *testing.T) {
 		{"flow", trafficEvent{Event: "flow", Proto: attack, Dst: attack, Reason: attack}},
 		{"tls", trafficEvent{Event: "l7", Proto: "tls", SNI: attack, ALPN: []string{attack}}},
 		{"http", trafficEvent{Event: "l7", Proto: "http", Method: attack, Host: attack, Path: attack}},
+		{"inspected denied", trafficEvent{Event: "l7", Proto: "https", Method: "GET", Host: "h", Path: "/", Denied: true, Reason: attack, Rule: attack}},
+		{"inspected error", trafficEvent{Event: "l7", Proto: "https", Method: "GET", Host: "h", Path: "/", Error: attack, Hint: attack}},
+		{"inspect error", trafficEvent{Event: "inspect-error", Dst: attack, Name: attack, Error: attack, Hint: attack}},
 		{"dns answer", trafficEvent{Event: "dns", Name: attack, Type: attack, Answers: []string{attack}}},
 		{"dns error", trafficEvent{Event: "dns", Name: attack, Type: attack, Error: attack}},
 		{"dns blocked", trafficEvent{Event: "dns", Name: attack, Blocked: true}},

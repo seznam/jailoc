@@ -205,7 +205,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	policy := []byte(`{}`)
 	label := "shared image builder VM"
 	if ws.IsolatedBuild {
-		if policy, err = vmPolicy(ctx, ws); err != nil {
+		if policy, err = vmBuilderPolicy(ctx, ws); err != nil {
 			return "", err
 		}
 		label = "image builder VM for workspace " + ws.Name

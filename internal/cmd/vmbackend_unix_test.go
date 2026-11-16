@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -713,5 +714,216 @@ func TestReadRegular(t *testing.T) {
 			t.Fatalf("readRegular(%s) = nil error", name)
 		}
 		assertContains(t, err.Error(), want)
+	}
+}
+
+func TestVMPolicyHTTPRules(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel: HOME decides where the
+	// inspection CA is stored.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ws := &workspace.Resolved{
+		Name: "w",
+		NetworkRules: []config.NetworkRule{
+			{Name: "plain", Allow: []string{"example.com"}},
+			{Name: "gh", Allow: []string{"api.github.com"}, HTTP: &config.HTTPMatch{Methods: []string{"get", "Head", "GET"}, Paths: []string{"/repos/seznam/*", "/repos/seznam/*"}}},
+			{Name: "any-method", Allow: []string{"*.example.org"}, HTTP: &config.HTTPMatch{Methods: []string{"get", "*"}}},
+			{Name: "no-delete", Deny: []string{"10.0.0.0/8"}, Proto: "tcp", Ports: []config.RulePort{"8080"}, HTTP: &config.HTTPMatch{Methods: []string{"delete"}}},
+			{Name: "empty", Allow: []string{"empty.example"}, HTTP: &config.HTTPMatch{}},
+		},
+	}
+	data, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	var got struct {
+		Deny    []vmRule   `json:"deny"`
+		Allow   []vmRule   `json:"allow"`
+		Inspect *vmInspect `json:"inspect"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", data, err)
+	}
+	if len(got.Allow) != 4 || len(got.Deny) != 1 {
+		t.Fatalf("policy = %s", data)
+	}
+	if got.Allow[0].HTTP != nil {
+		t.Fatalf("plain rule has http: %+v", got.Allow[0])
+	}
+	gh := got.Allow[1].HTTP
+	if gh == nil || !slices.Equal(gh.Methods, []string{"GET", "HEAD"}) || !slices.Equal(gh.Paths, []string{"/repos/seznam/*"}) {
+		t.Fatalf("gh http = %+v", gh)
+	}
+	if h := got.Allow[2].HTTP; h == nil || !slices.Equal(h.Methods, []string{"*"}) || len(h.Paths) != 0 {
+		t.Fatalf("any-method http = %+v", h)
+	}
+	if h := got.Deny[0].HTTP; h == nil || !slices.Equal(h.Methods, []string{"DELETE"}) || got.Deny[0].Proto != "tcp" || !slices.Equal(got.Deny[0].CIDRs, []string{"10.0.0.0/8"}) {
+		t.Fatalf("deny rule = %+v", got.Deny[0])
+	}
+	// An empty http table must survive as an object: it means inspect everything.
+	assertContains(t, string(data), `"name":"empty","names":["empty.example"],"proto":"tcp","http":{}`)
+	assertContains(t, string(data), `"name":"gh","names":["api.github.com"],"proto":"tcp","http":{"methods":["GET","HEAD"],"paths":["/repos/seznam/*"]}`)
+
+	stateDir := filepath.Join(home, ".cache", "jailoc-vm", "workspaces", "w")
+	want := &vmInspect{CACert: filepath.Join(stateDir, "inspect-ca.pem"), CAKey: filepath.Join(stateDir, "inspect-ca.key")}
+	if got.Inspect == nil || *got.Inspect != *want {
+		t.Fatalf("inspect = %+v, want %+v", got.Inspect, want)
+	}
+	if _, err := os.Stat(got.Inspect.CACert); err != nil {
+		t.Fatalf("CA certificate not created: %v", err)
+	}
+	if strings.Contains(string(data), "BEGIN") {
+		t.Fatalf("policy embeds key material: %s", data)
+	}
+}
+
+func TestVMBuilderPolicyHTTPRules(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel: HOME decides where the
+	// inspection CA would be stored. Stderr is swapped to read the warning.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ws := &workspace.Resolved{
+		Name: "w",
+		NetworkRules: []config.NetworkRule{
+			{Name: "plain", Allow: []string{"example.com"}},
+			{Name: "gh", Allow: []string{"api.github.com"}, Ports: []config.RulePort{"443"}, HTTP: &config.HTTPMatch{Methods: []string{"get"}, Paths: []string{"/repos/*"}}},
+			{Name: "no-delete", Deny: []string{"10.0.0.0/8"}, HTTP: &config.HTTPMatch{Methods: []string{"delete"}}},
+			{Name: "no", Deny: []string{"bad.example"}},
+		},
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	data, err := vmBuilderPolicy(context.Background(), ws)
+	os.Stderr = stderr
+	_ = w.Close()
+	warning, _ := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil {
+		t.Fatalf("vmBuilderPolicy: %v", err)
+	}
+
+	const want = `{"deny":[{"name":"no","names":["bad.example"],"proto":"tcp"}],"allow":[{"name":"plain","names":["example.com"],"proto":"tcp"},{"name":"gh","names":["api.github.com"],"proto":"tcp","ports":["443"]}]}`
+	if string(data) != want {
+		t.Fatalf("builder policy = %s\nwant %s", data, want)
+	}
+	for _, unwanted := range []string{`"http"`, `"inspect"`, "no-delete"} {
+		if strings.Contains(string(data), unwanted) {
+			t.Fatalf("builder policy contains %s: %s", unwanted, data)
+		}
+	}
+	assertContains(t, string(warning), "WARNING: the isolated image build does not inspect HTTPS")
+	if _, err := os.Stat(filepath.Join(home, ".cache", "jailoc-vm", "workspaces", "w", "inspect-ca.pem")); !os.IsNotExist(err) {
+		t.Fatalf("builder policy created the inspection CA: %v", err)
+	}
+
+	// The workspace's own policy is unchanged.
+	full, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	assertContains(t, string(full), `"http":{"methods":["GET"],"paths":["/repos/*"]}`)
+	assertContains(t, string(full), `"inspect"`)
+}
+
+func TestVMBuilderPolicyWithoutHTTPRulesIsUnchanged(t *testing.T) {
+	// No HTTP rules: same policy as the workspace's, and no warning.
+	ws := &workspace.Resolved{
+		Name:         "no-http-builder-test",
+		NetworkRules: []config.NetworkRule{{Name: "dev", Allow: []string{"github.com"}}, {Name: "no", Deny: []string{"bad.example"}}},
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	builder, err := vmBuilderPolicy(context.Background(), ws)
+	os.Stderr = stderr
+	_ = w.Close()
+	warning, _ := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil {
+		t.Fatalf("vmBuilderPolicy: %v", err)
+	}
+	full, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	if string(builder) != string(full) {
+		t.Fatalf("builder policy = %s, want %s", builder, full)
+	}
+	if len(warning) != 0 {
+		t.Fatalf("warning = %q, want none", warning)
+	}
+}
+
+func TestVMPolicyHTTPUpstreamCA(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	rules := []config.NetworkRule{{Name: "gh", Allow: []string{"api.github.com"}, HTTP: &config.HTTPMatch{}}}
+	tests := []struct {
+		name   string
+		bundle config.CABundle
+		want   string
+	}{
+		{"automatic", config.AutomaticCABundle(), ""},
+		{"disabled", config.DisabledCABundle(), ""},
+		{"custom absolute", config.CustomCABundle("/etc/corp/ca.pem"), "/etc/corp/ca.pem"},
+		{"custom tilde", config.CustomCABundle("~/corp/ca.pem"), filepath.Join(home, "corp", "ca.pem")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := vmPolicy(context.Background(), &workspace.Resolved{Name: "w", NetworkRules: rules, CABundle: tc.bundle})
+			if err != nil {
+				t.Fatalf("vmPolicy: %v", err)
+			}
+			var got struct {
+				Inspect *vmInspect `json:"inspect"`
+			}
+			if err := json.Unmarshal(data, &got); err != nil || got.Inspect == nil {
+				t.Fatalf("policy = %s, err = %v", data, err)
+			}
+			if got.Inspect.UpstreamCA != tc.want {
+				t.Fatalf("upstream_ca = %q, want %q", got.Inspect.UpstreamCA, tc.want)
+			}
+			if tc.want == "" && strings.Contains(string(data), "upstream_ca") {
+				t.Fatalf("empty upstream_ca is serialized: %s", data)
+			}
+		})
+	}
+}
+
+func TestVMPolicyWithoutHTTPRulesIsUnchanged(t *testing.T) {
+	// No HOME override: without http rules no CA may be created at all.
+	ws := &workspace.Resolved{
+		Name:         "no-http-policy-test",
+		NetworkRules: []config.NetworkRule{{Name: "dev", Allow: []string{"github.com"}}, {Name: "no", Deny: []string{"bad.example"}}},
+		CABundle:     config.CustomCABundle("/etc/corp/ca.pem"),
+	}
+	data, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	const want = `{"deny":[{"name":"no","names":["bad.example"],"proto":"tcp"}],"allow":[{"name":"dev","names":["github.com"],"proto":"tcp"}]}`
+	if string(data) != want {
+		t.Fatalf("policy = %s, want %s", data, want)
+	}
+}
+
+func TestCompileVMRuleRejectsInvalidHTTP(t *testing.T) {
+	t.Parallel()
+	for _, h := range []*config.HTTPMatch{
+		{Methods: []string{"GET POST"}},
+		{Methods: []string{""}},
+		{Paths: []string{"repos"}},
+		{Paths: []string{"/a/**/b"}},
+	} {
+		if _, err := compileVMRule("r", "tcp", nil, []string{"example.com"}, h); err == nil {
+			t.Errorf("compileVMRule(%+v) error = nil", h)
+		}
 	}
 }

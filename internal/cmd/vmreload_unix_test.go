@@ -212,6 +212,28 @@ func TestReloadPolicyRejectsBrokerBeforeInternalZones(t *testing.T) {
 	}
 }
 
+func TestReloadPolicyRequiresCurrentBrokerOnlyForHTTPRules(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	v1 := vm.Spec{GuestProtocol: guest.Protocol, Guest: &guest.Config{}, BrokerPolicy: policyVersionRules}
+	plain := &workspace.Resolved{Name: "api", NetworkRules: []config.NetworkRule{{Name: "agent", Allow: []string{"api.anthropic.com"}}}}
+	if _, err := reloadPolicy(context.Background(), plain, v1); err != nil {
+		t.Fatalf("reloadPolicy without http rules on a version 1 broker: %v", err)
+	}
+	inspected := &workspace.Resolved{Name: "api", NetworkRules: []config.NetworkRule{{
+		Name:  "gh",
+		Allow: []string{"api.github.com"},
+		HTTP:  &config.HTTPMatch{Methods: []string{"GET"}},
+	}}}
+	if _, err := reloadPolicy(context.Background(), inspected, v1); err == nil {
+		t.Fatal("reloadPolicy accepted http rules for a version 1 broker")
+	}
+	current := v1
+	current.BrokerPolicy = netbroker.PolicyVersion
+	if _, err := reloadPolicy(context.Background(), inspected, current); err != nil {
+		t.Fatalf("reloadPolicy with http rules on a current broker: %v", err)
+	}
+}
+
 func TestReloadSpecRunningSharesExcludeSnapshots(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

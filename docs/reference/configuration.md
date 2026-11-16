@@ -125,7 +125,7 @@ Defaults applied to all workspaces.
 | `timezone` | string | (host zone) | Time zone of the workspace VM, an IANA name such as `"UTC"` or `"Europe/Prague"`. Omitted: the host's local zone. See [`timezone`](#timezone). |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 | `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, `core.hooksPath` and included config files read-only inside the VM for repositories under workspace `paths` and read-write `mounts`, including symlinked workspace roots. Disable `sudo` and Docker there. |
-| `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. |
+| `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. The build does not inspect HTTPS: `allow` rules with an [`http` table](#http-rules) open their hosts and ports for all methods and paths, and `deny` rules with `http` don't apply. |
 | `network` | table | `{}` | IPv6 and DNS settings of the network broker. See [`[defaults.network]`](#defaultsnetwork). |
 | `ca_bundle` | bool \| string | `true` | CA bundle added to the VM's system trust store. See [`ca_bundle`](#ca_bundle). |
 | `secrets` | table | `{}` | Secrets for all workspaces. See [`secrets`](#secrets). |
@@ -170,6 +170,104 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `proto` | string | `"tcp"` | `"tcp"`, `"udp"`, or `"any"`. |
 | `ports` | (int \| string)[] | (all) | Port numbers (`1`–`65535`) or `"a-b"` port ranges. |
 | `name` | string | `""` | Label shown in `jailoc traffic` (`rule=<name>`) and validation errors. |
+| `http` | table | (none) | Inspect HTTP requests to the matched destinations and apply `methods` and `paths` per request. Allowed on `allow` and `deny` rules; requires `proto = "tcp"`. See [HTTP rules](#http-rules). |
+
+#### HTTP rules
+
+A rule with an `http` table decides per HTTP request instead of per connection. The broker decrypts TLS for the flows such a rule covers (see [TLS inspection](../explanation/network-isolation.md#tls-inspection)). Rules without `http` are plain rules.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `http.methods` | string[] | (any) | Request methods. `"*"` matches any method. Values are normalized to upper case and must consist of RFC 9110 token characters. |
+| `http.paths` | string[] | (any) | Request path patterns, matched case-sensitively against the path without the query string. |
+
+- `http` takes any target an `allow` or `deny` rule takes: names, `*.wildcard`, `"*"`, IP addresses and CIDRs. Without `ports` it covers all ports.
+- `http` requires `proto = "tcp"` (the default). `proto = "udp"` or `"any"` with `http` fails config load.
+- An empty table (`http = {}`) is valid and matches every request.
+
+```toml
+[[workspaces.api.network.rules]]
+name = "github-readonly"
+allow = ["api.github.com"]
+http.methods = ["GET", "HEAD"]
+http.paths = ["/repos/seznam/*"]
+
+[[workspaces.api.network.rules]]
+name = "no-writes"
+deny = ["registry.example.com"]
+http.methods = ["DELETE", "POST", "PUT", "PATCH"]
+```
+
+##### Path patterns
+
+A pattern starts with `/` and is split into segments at `/`.
+
+| Segment | Matches |
+|---------|---------|
+| literal | exactly that segment |
+| `*` | exactly one non-empty segment |
+| `**` | zero or more remaining segments; allowed only as the last segment |
+
+`/repos/*` matches `/repos/a`, not `/repos`, `/repos/` or `/repos/a/b`. `/repos/**` matches `/repos`, `/repos/`, `/repos/a` and `/repos/a/b`. A trailing `/` is a trailing empty segment and matches literally.
+
+A pattern is rejected at config load when it does not start with `/`, has a partial wildcard (`foo*`), `**` anywhere but last, an empty segment in the middle (`//`), a `.` or `..` segment, or contains `?`, `#`, `%`, `\` or a control character. A method with a character outside the RFC 9110 token set and `http` with a `proto` other than `tcp` are rejected as well.
+
+##### Request path checking
+
+The broker matches patterns against the percent-decoded segments of the request path. A request is denied with reason `bad-path` when its path:
+
+- does not start with `/`, or contains `//` or `\`;
+- contains an encoded slash, backslash or NUL (`%2f`, `%5c`, `%00`, any case);
+- has a segment that fails percent-decoding, decodes to `.` or `..`, or contains a control character.
+
+##### Evaluation
+
+`deny` rules with `http` never deny a connection and never block DNS; they act on requests only. For every other decision step the rule counts like a plain rule: an `allow` rule with `http` lets the connection reach the TLS or HTTP stage, a plain `deny` rule denies it first.
+
+The broker inspects a TCP connection when an `http` rule (allow or deny) matches its port and, after the TLS server name or HTTP `Host` is known, its name or address. These rules form the http scope of the connection. An empty scope leaves the connection to plain rules and undecrypted.
+
+A connection that shows no name (TLS without SNI, HTTP/1.0 without `Host`) is judged by the `http` rules that match its destination address (an IP or CIDR target, or `*`). Without such a rule it is handled as if no `http` rule existed. With one it is inspected under the destination's IP address as its name: the broker's certificate carries the IP as a subject alternative name, the upstream certificate must be valid for the IP, and every request's `Host` must be the IP (an HTTP/1.0 request without `Host` counts as such). A connection without a name whose TLS offers no HTTP protocol in ALPN is not inspected and passes by the plain rules alone. IPv6 literals in `Host` or `:authority` are compared by address, so the compressed and expanded forms are the same host. Connections that name rules require a name for (a connection allowed by a name, a plain `deny` rule with names) still fail with `sni-required` without one.
+
+A connection that was not inspected stays checked: if a later request on it names a host that an `http` rule covers, the request is refused with reason `inspection-required`.
+
+An `http` allow rule narrows its host: when the scope has `http` allow rules, only they decide the requests, and plain `allow` rules matching the same host and port grant nothing for it. Each request is checked in this order:
+
+1. The request host (`Host` or `:authority`, port stripped) must equal the connection's server name, otherwise `421` with reason `host-mismatch`.
+2. A bad path is denied with reason `bad-path`; `CONNECT` and HTTP/2 extended `CONNECT` with reason `connect-denied`.
+3. A matching `http` deny rule (method and path both match) denies the request with `rule=<name>`.
+4. If the scope has `http` allow rules, one must match both method and path, otherwise the request is denied with reason `http-no-match`. If the scope has none, a plain allow rule allowed the connection and the request passes.
+
+| Outcome | Status | Body |
+|---------|--------|------|
+| Denied request | `403 Forbidden` | `blocked by network policy (rule=<name>)` for a deny rule, `blocked by network policy (reason=<reason>)` otherwise |
+| Host does not match the server name | `421 Misdirected Request` | `blocked by network policy (reason=host-mismatch)` |
+| Upstream failure (connect or certificate verification) | `502 Bad Gateway` | the error |
+
+| Reason | Meaning |
+|--------|---------|
+| `http-no-match` | The scope has `http` allow rules and none matched the method and path. |
+| `bad-path` | The request path failed [checking](#request-path-checking). |
+| `connect-denied` | The request is a `CONNECT` or an HTTP/2 extended `CONNECT`. |
+| `host-mismatch` | The request host differs from the TLS server name or `Host` of the connection. |
+| `inspection-required` | A request on an uninspected connection names a host that an `http` rule covers. |
+
+Protocol detection decides per connection whether HTTP is served:
+
+| Traffic | Handling |
+|---------|----------|
+| TLS, ClientHello ALPN offers `h2` or `http/1.1` | Decrypted, HTTP served |
+| TLS, ALPN offered but neither is HTTP | Not decrypted; plain rules decide; spliced |
+| TLS, no ALPN | Decrypted; the first line decides: a request line (`method SP target SP HTTP/x.y`, any method token in any case) or the HTTP/2 preface is served as HTTP, anything else is decided by plain rules and relayed (denied: closed, `inspect-error`). A first line that looks like a request but is not valid (a method followed by two spaces or any other whitespace, leading whitespace or empty lines, trailing whitespace after the version, any line ending in `HTTP/x.y`) closes the connection with reason `malformed-request-line`, also when it comes after the 1 s peek. A first line that starts with a word and whitespace is read to its line end before it is judged, because a lenient server accepts any whitespace as a separator. A first line over 8 KiB that is no request line, or an undecided partial line when the 1 s peek ends, closes the connection. If the guest sends nothing for 1 s the connection is relayed (server-first protocols), but a request line or preface the guest sends later closes it before anything is forwarded |
+| Plain HTTP request | Checked per request, no TLS. A request line that is not valid but looks like one (any whitespace separator, leading empty lines, extra words) is denied, not relayed |
+| Cleartext HTTP/2 (prior knowledge, `h2c`) | Served per request: each `:authority` is decided like a server name (it must resolve to the destination, or be its IP), then the `http` scope of that name applies. A request without `:authority` is denied (`sni-required`). Requests are forwarded upstream as prior-knowledge HTTP/2, so the upstream must speak `h2c` |
+| No server name or Host (silent, server-first or other protocols) | Plain rules decide; `http` rules never open non-HTTP traffic; denied connections are reset |
+
+A WebSocket upgrade request is checked like any request. After the `101` response the connection passes through unfiltered; frames are not inspected. An `Upgrade: h2c` offer is removed from the request, which is then sent as plain HTTP/1.1, so a connection can't be switched to HTTP/2 past the per-request checks.
+
+The broker verifies the upstream certificate against the host's system roots plus the file named by [`ca_bundle`](#ca_bundle) when it is a path; a failure ends the request with `502`. The broker does not use `HTTP_PROXY` or another upstream proxy.
+
+!!! note
+    Inspection adds the workspace's inspection CA to the guest trust stores, also with `ca_bundle = false`. See [TLS inspection](../explanation/network-isolation.md#tls-inspection).
 
 #### Implicit rules and built-in broker behavior
 
@@ -498,6 +596,8 @@ When a bundle is forwarded, sessions get `NODE_USE_SYSTEM_CA=1` and these variab
 | `HEX_CACERTS_PATH` | Hex |
 
 A variable set by the workspace's `env`, `env_file` or an env secret takes precedence.
+
+When any network rule has an [`http` table](#http-rules), the workspace's inspection CA certificate is appended to the bundle, also with `ca_bundle = false` (the bundle then holds only that certificate), so the guest trusts it and the variables above are set. A `ca_bundle` path is also the extra trust anchor for the broker's upstream certificate checks.
 
 ### `enable_docker`
 
