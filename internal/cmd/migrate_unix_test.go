@@ -18,7 +18,7 @@ import (
 func scripted(answers ...string) (*prompter, *bytes.Buffer) {
 	out := &bytes.Buffer{}
 	in := strings.NewReader(strings.Join(answers, "\n") + "\n")
-	return &prompter{in: bufio.NewReader(in), out: out}, out
+	return &prompter{in: bufio.NewReader(in), out: out, resolver: &fakeResolver{}}, out
 }
 
 func migrationFixture(t *testing.T) (string, string, *config.Config) {
@@ -165,7 +165,7 @@ dns_blocked_zones = ["corp.example.com."]
 
 [workspaces.web]
 paths = ["/src/web"]
-allowed_hosts = ["gitlab.example.com", "gitlab.example.com"]
+allowed_hosts = ["gitlab.example.com", "gitlab.example.com", "app.nip.io", "10.1.2.3"]
 allowed_networks = ["192.168.1.0/24"]
 filtered_dns = false
 dns_upstream = "10.20.30.54"
@@ -206,6 +206,9 @@ paths = ["/src/inherited"]
 		"[workspaces.web.network]: move dns_upstream to dns",
 		"[workspaces.web]: remove dns_upstream (set in [workspaces.web.network])",
 		"[workspaces.web]: move allowed_hosts to [[workspaces.web.network.rules]]",
+		"[defaults]: add allowed_hosts names to [defaults.network] internal_zones (context7.com)",
+		"[workspaces.web]: add allowed_hosts names to [workspaces.web.network] internal_zones (gitlab.example.com)",
+		"[workspaces.web]: app.nip.io cannot be internal zones; their names no longer resolve to private addresses",
 		"[workspaces.web]: move allowed_networks to [[workspaces.web.network.rules]]",
 		"[workspaces.web.network]: remove dns_blocked_zones",
 		"[workspaces.web]: remove dns_blocked_zones (set in [workspaces.web.network])",
@@ -245,7 +248,10 @@ paths = ["/src/inherited"]
 	if web.Network.DNS != "10.20.30.55" || web.Network.DNSUpstream != "" || web.Network.FilteredDNS != nil || web.Network.DNSBlockedZones != nil {
 		t.Fatalf("web network = %+v", web.Network)
 	}
-	if len(web.Network.Rules) != 2 || !slices.Equal(web.Network.Rules[0].Allow, []string{"gitlab.example.com"}) || !slices.Equal(web.Network.Rules[1].Allow, []string{"192.168.1.0/24"}) {
+	if !slices.Equal(d.Network.InternalZones, []string{"context7.com"}) || !slices.Equal(web.Network.InternalZones, []string{"gitlab.example.com"}) {
+		t.Fatalf("internal zones = %v (defaults), %v (web)", d.Network.InternalZones, web.Network.InternalZones)
+	}
+	if len(web.Network.Rules) != 2 || !slices.Equal(web.Network.Rules[0].Allow, []string{"gitlab.example.com", "app.nip.io", "10.1.2.3"}) || !slices.Equal(web.Network.Rules[1].Allow, []string{"192.168.1.0/24"}) {
 		t.Fatalf("web rules = %+v", web.Network.Rules)
 	}
 	if api.Network.DNS != "10.20.30.56" || len(api.Network.Rules) != 1 || !slices.Equal(api.Network.Rules[0].Deny, []string{"internal.example.com", "*.internal.example.com"}) {
@@ -304,5 +310,72 @@ func TestPlanMigrationNetworkOnly(t *testing.T) {
 				t.Fatalf("filtered_dns not removed: %+v", cfg.Defaults)
 			}
 		})
+	}
+}
+
+func TestRunMigrateKeepsZoneOnlyNetworkTable(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := `[defaults]
+backend = "vm"
+
+[defaults.network]
+internal_zones = ["corp.example"]
+
+[[defaults.network.rules]]
+name = "internet"
+allow = ["*"]
+
+[workspaces.web]
+paths = ["/src/web"]
+allowed_networks = ["10.1.0.0/16"]
+
+[workspaces.api]
+paths = ["/src/api"]
+
+[workspaces.api.network]
+internal_zones = ["api.corp.example"]
+filtered_dns = true
+`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, out := scripted("y")
+	if err := runMigrate(context.Background(), path, p); err != nil {
+		t.Fatalf("runMigrate: %v\n%s", err, out)
+	}
+	cfg, err := config.ReadRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.Defaults.Network.Get().InternalZones, []string{"corp.example"}) {
+		t.Fatalf("defaults internal_zones = %v, want [corp.example]", cfg.Defaults.Network.Get().InternalZones)
+	}
+	if got := cfg.Workspaces["api"].Network.Get().InternalZones; !slices.Equal(got, []string{"api.corp.example"}) {
+		t.Fatalf("api internal_zones = %v, want [api.corp.example]\n%s", got, out)
+	}
+}
+
+func TestRunMigrateWarnsAboutLegacyAliases(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	original := `[defaults]
+backend = "vm"
+allowed_hosts = ["db.corp.example"]
+`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, out := scripted("y")
+	p.resolver = &fakeResolver{
+		ips:    map[string]string{"db.corp.example": "10.0.0.5"},
+		cnames: map[string]string{"db.corp.example": "db-node.corp.example."},
+	}
+	if err := runMigrate(context.Background(), path, p); err != nil {
+		t.Fatalf("runMigrate: %v\n%s", err, out)
+	}
+	want := `warning: [defaults]: allowed host "db.corp.example" is an alias of "db-node.corp.example", outside internal_zones`
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("output misses %q:\n%s", want, out)
 	}
 }

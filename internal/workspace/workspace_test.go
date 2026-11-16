@@ -1880,3 +1880,27 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 		t.Fatalf("agent rule = %+v", agentRule)
 	}
 }
+
+func TestResolveInternalZones(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			AllowedHosts: []string{"Legacy.Example.", "10.1.2.3", "10.2.0.0/16", "*.wild.example"},
+			Network:      &config.Network{InternalZones: []string{"internal.example.com", "*.corp.example"}},
+		},
+		Workspaces: map[string]config.Workspace{
+			"api": {
+				Paths:   []string{"/data/api"},
+				Network: &config.Network{InternalZones: []string{"Lab.Example.", "internal.example.com"}},
+			},
+		},
+	}
+	r, err := workspace.Resolve(cfg, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := []string{"internal.example.com", "corp.example", "lab.example", "legacy.example", "wild.example"}
+	if !slices.Equal(r.InternalZones, want) {
+		t.Fatalf("InternalZones = %v, want %v", r.InternalZones, want)
+	}
+}

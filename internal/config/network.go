@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // RuleProto is a protocol name in a network rule.
@@ -167,6 +169,53 @@ func validateNetworkRules(rules []NetworkRule, context string) error {
 	return nil
 }
 
+// wildcardDNSZones are public services that answer any name under them with
+// the address written into the name (10-0-0-5.nip.io → 10.0.0.5). Anyone can
+// point such a name anywhere, so they can never be internal zones.
+var wildcardDNSZones = []string{"nip.io", "sslip.io", "xip.io", "localtest.me", "lvh.me", "traefik.me", "vcap.me", "local.gd"}
+
+// NormalizeInternalZone lowercases zone and drops a trailing dot and a
+// leading "*.", since an internal zone always covers its subdomains.
+func NormalizeInternalZone(zone string) string {
+	z := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(zone)), ".")
+	return strings.TrimPrefix(z, "*.")
+}
+
+// ValidateInternalZone checks one internal_zones entry. A zone must be a
+// domain someone owns: not "*", not a top-level domain or other public
+// suffix (com, co.uk, github.io) and not a wildcard DNS service. Unlisted
+// top-level names such as internal, corp or lan, and home.arpa, are private
+// by convention and allowed.
+func ValidateInternalZone(zone string) error {
+	z := NormalizeInternalZone(zone)
+	if z == "" || strings.Contains(z, "*") {
+		return fmt.Errorf("invalid internal_zones entry %q: must be a domain name", zone)
+	}
+	if err := validateRuleHostname(z); err != nil {
+		return fmt.Errorf("invalid internal_zones entry %q: %w", zone, err)
+	}
+	if suffix, icann := publicsuffix.PublicSuffix(z); z == suffix && (icann || strings.Contains(suffix, ".")) && z != "home.arpa" {
+		return fmt.Errorf("internal_zones entry %q is a public suffix: anyone can register names under it", zone)
+	}
+	for _, w := range wildcardDNSZones {
+		if z == w || strings.HasSuffix(z, "."+w) {
+			return fmt.Errorf("internal_zones entry %q is a wildcard DNS service that resolves names to any address", zone)
+		}
+	}
+	return nil
+}
+
+// validateInternalZones checks the internal_zones of a [<scope>.network]
+// table.
+func validateInternalZones(zones []string, context string) error {
+	for _, zone := range zones {
+		if err := ValidateInternalZone(zone); err != nil {
+			return fmt.Errorf("%s: %w", context, err)
+		}
+	}
+	return nil
+}
+
 // DeprecationWarnings returns one-line warnings for legacy network settings in
 // cfg that are migrated in memory.
 func DeprecationWarnings(cfg *Config) []string {
@@ -215,4 +264,24 @@ func DeprecationWarnings(cfg *Config) []string {
 	}
 
 	return warnings
+}
+
+// LegacyHostZones returns the internal zones that stand for legacy
+// allowed_hosts entries. allowed_hosts opened whatever its names resolved to,
+// private addresses included, so each name stays trusted for private
+// answers. IP addresses and CIDRs are ignored; names that cannot be internal
+// zones (public suffixes, wildcard DNS services) are returned in skipped.
+func LegacyHostZones(hosts []string) (zones, skipped []string) {
+	for _, h := range hosts {
+		kind, name, err := ParseRuleTarget(h)
+		if err != nil || kind != "name" {
+			continue
+		}
+		if ValidateInternalZone(name) != nil {
+			skipped = append(skipped, h)
+			continue
+		}
+		zones = append(zones, NormalizeInternalZone(name))
+	}
+	return zones, skipped
 }

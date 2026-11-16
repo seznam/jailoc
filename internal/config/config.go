@@ -54,6 +54,7 @@ const (
 # [defaults.network]
 # ipv6 = false  # true: give the VM IPv6 connectivity (public destinations only)
 # dns = "9.9.9.9"
+# internal_zones = ["internal.example.com"]  # DNS zones whose names may resolve to private addresses
 
 [[defaults.network.rules]]
 name = "dev-deps"
@@ -469,6 +470,10 @@ type Network struct {
 	IPv6 *bool `toml:"ipv6,omitempty"`
 	// DNS is the optional upstream DNS resolver IPv4 address.
 	DNS string `toml:"dns,omitempty"`
+	// InternalZones are the DNS zones trusted to answer with private
+	// addresses. The broker drops a private address from any other answer, so
+	// DNS for an allowed name cannot open the user's network (rebinding).
+	InternalZones []string `toml:"internal_zones,omitempty"`
 	// Rules are the allow/deny egress rules of the scope.
 	Rules []NetworkRule `toml:"rules,omitempty"`
 	// Legacy fields migrated in memory with a deprecation warning.
@@ -1289,6 +1294,9 @@ func Validate(cfg *Config) error {
 	if err := validateNetworkRules(dn.Rules, "defaults"); err != nil {
 		return err
 	}
+	if err := validateInternalZones(dn.InternalZones, "defaults"); err != nil {
+		return err
+	}
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
 		names = append(names, name)
@@ -1391,6 +1399,9 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if err := validateNetworkRules(wn.Rules, wsContext); err != nil {
+			return err
+		}
+		if err := validateInternalZones(wn.InternalZones, wsContext); err != nil {
 			return err
 		}
 		if ws.ExposePort != nil {

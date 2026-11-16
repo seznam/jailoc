@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -88,8 +89,9 @@ func TestVMDockerDiskSize(t *testing.T) {
 func TestVMPolicy(t *testing.T) {
 	t.Parallel()
 	ws := &workspace.Resolved{
-		Name:        "w",
-		DNSUpstream: "9.9.9.9",
+		Name:          "w",
+		DNSUpstream:   "9.9.9.9",
+		InternalZones: []string{"internal.example.com"},
 		NetworkRules: []config.NetworkRule{
 			{Name: "no-paste", Deny: []string{"pastebin.com", "*.ngrok.io"}},
 			{Name: "db", Allow: []string{"10.1.0.5/16", "192.168.1.10"}, Proto: "tcp", Ports: []config.RulePort{" 5432 ", "8000 - 8100"}},
@@ -102,12 +104,16 @@ func TestVMPolicy(t *testing.T) {
 		t.Fatalf("vmPolicy: %v", err)
 	}
 	var got struct {
-		DNS   string   `json:"dns"`
-		Deny  []vmRule `json:"deny"`
-		Allow []vmRule `json:"allow"`
+		DNS           string   `json:"dns"`
+		Deny          []vmRule `json:"deny"`
+		Allow         []vmRule `json:"allow"`
+		InternalZones []string `json:"internal_zones"`
 	}
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", data, err)
+	}
+	if !slices.Equal(got.InternalZones, []string{"internal.example.com"}) {
+		t.Fatalf("internal_zones = %v, want [internal.example.com]", got.InternalZones)
 	}
 	if got.DNS != "9.9.9.9" {
 		t.Fatalf("dns = %q, want 9.9.9.9", got.DNS)
@@ -155,6 +161,100 @@ func TestVMPolicyLegacyFallback(t *testing.T) {
 	}
 	if len(got.Allow) != 2 || !slices.Equal(got.Allow[0].CIDRs, []string{"192.168.1.10/32", "fd12::7/128"}) {
 		t.Fatalf("legacy policy allow = %+v", got.Allow)
+	}
+}
+
+// fakeResolver answers legacy host lookups from maps; a missing name fails.
+type fakeResolver struct {
+	ips    map[string]string
+	cnames map[string]string
+	looked []string
+}
+
+func (r *fakeResolver) LookupIP(_ context.Context, _, host string) ([]net.IP, error) {
+	r.looked = append(r.looked, host)
+	if ip, ok := r.ips[host]; ok {
+		return []net.IP{net.ParseIP(ip)}, nil
+	}
+	return nil, fmt.Errorf("no such host %s", host)
+}
+
+func (r *fakeResolver) LookupCNAME(_ context.Context, host string) (string, error) {
+	if c, ok := r.cnames[host]; ok {
+		return c, nil
+	}
+	if _, ok := r.ips[host]; ok {
+		return host + ".", nil
+	}
+	return "", fmt.Errorf("no such host %s", host)
+}
+
+// TestVMPolicyLegacyHostsOpenNoResolvedCIDRs checks that legacy
+// allowed_hosts names never become CIDR rules from host resolution, even when
+// an internal-looking name is an alias of a rebinding name: only explicit IPs
+// become CIDRs. Not parallel: it replaces hostResolver.
+func TestVMPolicyLegacyHostsOpenNoResolvedCIDRs(t *testing.T) {
+	fake := &fakeResolver{
+		ips:    map[string]string{"10-0-0-5.nip.io": "10.0.0.5", "dev.corp.example": "10.0.0.5"},
+		cnames: map[string]string{"dev.corp.example": "10-0-0-5.nip.io."},
+	}
+	orig := hostResolver
+	hostResolver = fake
+	t.Cleanup(func() { hostResolver = orig })
+	ws := &workspace.Resolved{
+		Name:          "w",
+		AllowedHosts:  []string{"10-0-0-5.nip.io", "dev.corp.example", "10.9.9.9"},
+		InternalZones: []string{"dev.corp.example"},
+	}
+	data, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	var got struct {
+		Allow         []vmRule `json:"allow"`
+		InternalZones []string `json:"internal_zones"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", data, err)
+	}
+	var cidrs []string
+	for _, r := range got.Allow {
+		cidrs = append(cidrs, r.CIDRs...)
+	}
+	if !slices.Equal(cidrs, []string{"10.9.9.9/32"}) {
+		t.Fatalf("allow CIDRs = %v, want only the explicit IP", cidrs)
+	}
+	if !slices.Equal(got.InternalZones, []string{"dev.corp.example"}) {
+		t.Fatalf("internal_zones = %v, want [dev.corp.example]", got.InternalZones)
+	}
+}
+
+func TestLegacyAliasWarnings(t *testing.T) {
+	t.Parallel()
+	r := &fakeResolver{
+		ips: map[string]string{
+			"db.corp.example":      "10.0.0.5",
+			"wiki.corp.example":    "10.0.0.6",
+			"git.corp.example":     "10.0.0.7",
+			"cdn.example.com":      "93.184.216.34",
+			"plain.corp.example":   "10.0.0.8",
+			"api.lab.corp.example": "10.0.0.9",
+		},
+		cnames: map[string]string{
+			"db.corp.example":      "db-node.corp.example.",
+			"wiki.corp.example":    "wiki.other.example.",
+			"git.corp.example":     "git.internal.example.",
+			"cdn.example.com":      "edge.cdn.example.net.",
+			"api.lab.corp.example": "api.lab.corp.example.",
+		},
+	}
+	hosts := []string{"db.corp.example", "wiki.corp.example", "git.corp.example", "cdn.example.com", "plain.corp.example", "api.lab.corp.example", "10.1.2.3", "*.wild.example", "missing.corp.example"}
+	got := legacyAliasWarnings(context.Background(), r, hosts, []string{"internal.example"})
+	if len(got) != 2 || !strings.Contains(got[0], `"db.corp.example" is an alias of "db-node.corp.example"`) || !strings.Contains(got[1], `"wiki.corp.example" is an alias of "wiki.other.example"`) {
+		t.Fatalf("warnings = %q, want db.corp.example and wiki.corp.example", got)
+	}
+	if got := legacyAliasWarnings(context.Background(), r, hosts, []string{"corp.example", "other.example", "internal.example"}); len(got) != 0 {
+		t.Fatalf("warnings with the zones trusted = %q, want none", got)
 	}
 }
 

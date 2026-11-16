@@ -180,17 +180,27 @@ func (b *Broker) SetPolicy(p *Policy) {
 	b.record(map[string]any{"event": "policy", "source": p.source, "deny_all": p.denyAll})
 }
 
-func (b *Broker) env(dst netip.Addr) Env {
+// env returns the decision environment for dst under policy p. Every cached
+// name counts for deny rules. A cached name of a private address opens it
+// only while p still trusts its whole DNS chain, so removing an internal zone
+// takes effect on the next connection, not when the cached answer expires.
+func (b *Broker) env(p *Policy, dst netip.Addr) Env {
+	var trusted func(chain []string) bool
+	if privateAnswer(dst) {
+		trusted = p.trustsChain
+	}
+	names, untrusted := b.names.lookupTrusted(dst, trusted)
 	return Env{
 		Gateway:   b.cfg.Gateway,
 		Subnet:    b.cfg.Subnet,
 		HostAddrs: b.hosts.get(),
-		Names:     b.names.lookup(dst),
+		Names:     names,
+		Untrusted: untrusted,
 	}
 }
 
 func (b *Broker) decide(p *Policy, proto string, src, dst netip.AddrPort, conn uint64) Decision {
-	d := Decide(p, b.env(dst.Addr()), proto, dst)
+	d := Decide(p, b.env(p, dst.Addr()), proto, dst)
 	b.recordFlow(conn, proto, src, dst, d)
 	return d
 }
@@ -394,3 +404,7 @@ func splice(a, b net.Conn) {
 }
 
 var errNoUpstream = errors.New("no dns upstream configured")
+
+// errMalformedDNSResponse is logged for an upstream reply the filter cannot
+// parse; the guest gets SERVFAIL.
+var errMalformedDNSResponse = errors.New("malformed dns response")

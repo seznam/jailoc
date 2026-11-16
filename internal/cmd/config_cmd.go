@@ -62,6 +62,7 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  Network:\n")
 	_, _ = cyan.Fprintf(os.Stdout, "    IPv6: %t\n", ws.IPv6)
 	_, _ = cyan.Fprintf(os.Stdout, "    DNS: %s\n", cmp.Or(ws.DNSUpstream, "(default)"))
+	printStringList("    Internal zones", ws.InternalZones, "      ")
 	_, _ = cyan.Fprintf(os.Stdout, "    Rules:\n")
 	printNetworkRules(ws.NetworkRules, "      ")
 	_, _ = cyan.Fprintf(os.Stdout, "  Ports:\n")

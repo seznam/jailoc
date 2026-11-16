@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -70,6 +71,8 @@ type prompter struct {
 	in  *bufio.Reader
 	out io.Writer
 	yes bool
+	// resolver looks up legacy allowed_hosts names; nil uses hostResolver.
+	resolver legacyResolver
 }
 
 // choose returns the index of the chosen option. Options are matched by
@@ -370,8 +373,18 @@ func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetw
 			Allow: uniqueStrings(*allowedHosts),
 			Proto: config.RuleProtoAny,
 		})
+		// allowed_hosts opened private addresses its names resolved to; keep
+		// that by trusting the names for private answers.
+		zones, skipped := config.LegacyHostZones(*allowedHosts)
 		*allowedHosts = nil
 		m.changes = append(m.changes, fmt.Sprintf("%s: move allowed_hosts to %s", label, rulesName))
+		if added := newStrings(n.InternalZones, zones); len(added) > 0 {
+			n.InternalZones = append(n.InternalZones, added...)
+			m.changes = append(m.changes, fmt.Sprintf("%s: add allowed_hosts names to %s internal_zones (%s)", label, netName, strings.Join(added, ", ")))
+		}
+		if len(skipped) > 0 {
+			m.changes = append(m.changes, fmt.Sprintf("%s: %s cannot be internal zones; their names no longer resolve to private addresses", label, strings.Join(skipped, ", ")))
+		}
 	}
 	if len(*allowedNetworks) > 0 {
 		n := ensureTable()
@@ -429,10 +442,30 @@ func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetw
 	}
 	if *table != nil {
 		n := *table
-		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
+		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && len(n.InternalZones) == 0 && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
 			*table = nil
 		}
 	}
+}
+
+// legacyHostScope is the allowed_hosts of [defaults] or a workspace before
+// migration.
+type legacyHostScope struct {
+	label, workspace string
+	hosts            []string
+}
+
+func legacyHostScopes(cfg *config.Config) []legacyHostScope {
+	var out []legacyHostScope
+	if len(cfg.Defaults.AllowedHosts) > 0 {
+		out = append(out, legacyHostScope{label: "[defaults]", hosts: slices.Clone(cfg.Defaults.AllowedHosts)})
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Workspaces)) {
+		if hosts := cfg.Workspaces[name].AllowedHosts; len(hosts) > 0 {
+			out = append(out, legacyHostScope{label: fmt.Sprintf("[workspaces.%s]", name), workspace: name, hosts: slices.Clone(hosts)})
+		}
+	}
+	return out
 }
 
 func uniqueStrings(in []string) []string {
@@ -441,6 +474,18 @@ func uniqueStrings(in []string) []string {
 	for _, s := range in {
 		if !seen[s] {
 			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// newStrings returns the entries of add that are not in have, without
+// duplicates.
+func newStrings(have, add []string) []string {
+	var out []string
+	for _, s := range add {
+		if !slices.Contains(have, s) && !slices.Contains(out, s) {
 			out = append(out, s)
 		}
 	}
@@ -590,6 +635,7 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
+	legacyHosts := legacyHostScopes(cfg)
 	m, err := planMigration(cfg, p, os.Stat)
 	if err != nil {
 		return err
@@ -608,6 +654,19 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 	}
 	for _, k := range cfg.UnknownKeys() {
 		_, _ = color.New(color.FgYellow).Fprintf(p.out, "  remove unknown setting %q\n", k)
+	}
+	resolver := p.resolver
+	if resolver == nil {
+		resolver = hostResolver
+	}
+	for _, s := range legacyHosts {
+		zones := cfg.Defaults.Network.Get().InternalZones
+		if s.workspace != "" {
+			zones = slices.Concat(zones, cfg.Workspaces[s.workspace].Network.Get().InternalZones)
+		}
+		for _, w := range legacyAliasWarnings(ctx, resolver, s.hosts, zones) {
+			_, _ = color.New(color.FgYellow).Fprintf(p.out, "  warning: %s: %s\n", s.label, w)
+		}
 	}
 	if migrateDryRun {
 		data, err := config.Encode(cfg)

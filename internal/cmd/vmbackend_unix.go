@@ -538,6 +538,58 @@ type vmRule struct {
 	Ports []string `json:"ports,omitempty"`
 }
 
+// legacyResolver looks up legacy allowed_hosts names on the host.
+type legacyResolver interface {
+	LookupIP(ctx context.Context, network, host string) ([]net.IP, error)
+	LookupCNAME(ctx context.Context, host string) (string, error)
+}
+
+// hostResolver is the legacyResolver of up and reload; tests replace it.
+var hostResolver legacyResolver = net.DefaultResolver
+
+// legacyAliasWarnings reports legacy allowed_hosts names that are CNAME
+// aliases of a name outside zones and resolve to a private address.
+// allowed_hosts opened such a host, but now only the alias is an internal
+// zone, so the broker drops the private answer of its canonical name and the
+// host does not resolve in the VM. The user decides which zone to trust.
+func legacyAliasWarnings(ctx context.Context, r legacyResolver, hosts, zones []string) []string {
+	trusted, _ := config.LegacyHostZones(hosts)
+	for _, z := range zones {
+		trusted = append(trusted, config.NormalizeInternalZone(z))
+	}
+	var out []string
+	for _, h := range hosts {
+		if strings.HasPrefix(h, "*.") || net.ParseIP(h) != nil || strings.Contains(h, "/") || config.ValidateInternalZone(h) != nil {
+			continue
+		}
+		canonical, err := r.LookupCNAME(ctx, h)
+		if err != nil {
+			continue // an unresolvable host is reported where it is resolved
+		}
+		c := config.NormalizeInternalZone(canonical)
+		if c == "" || c == config.NormalizeInternalZone(h) || inZones(c, trusted) || !resolvesPrivate(ctx, r, h) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("allowed host %q is an alias of %q, outside internal_zones: its private address does not resolve in the VM; add the zone of %q to internal_zones", h, c, c))
+	}
+	return out
+}
+
+func inZones(name string, zones []string) bool {
+	return slices.ContainsFunc(zones, func(z string) bool { return name == z || strings.HasSuffix(name, "."+z) })
+}
+
+func resolvesPrivate(ctx context.Context, r legacyResolver, host string) bool {
+	ips, err := r.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(ips, func(ip net.IP) bool {
+		addr, ok := netip.AddrFromSlice(ip)
+		return ok && !isPublicLegacyAddr(addr.Unmap())
+	})
+}
+
 // vmPolicy builds the broker policy JSON from the workspace's resolved network
 // rules and DNS settings. @list references are expanded on the host.
 func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
@@ -566,35 +618,12 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		}
 	}
 
-	// Legacy allowed_hosts could resolve to private/ULA addresses, which
-	// hostname rules alone do not open. Resolve them on the host and emit
-	// only non-public addresses as CIDRs so public hosts stay governed by
-	// hostname rules and SNI inspection.
-	var resolvedLegacyCIDRs []string
-	for _, h := range ws.AllowedHosts {
-		if net.ParseIP(h) != nil || strings.Contains(h, "/") {
-			continue
-		}
-		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", h)
-		if err != nil {
-			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: cannot resolve allowed host %q: %v\n", h, err)
-			continue
-		}
-		for _, ip := range ips {
-			addr, ok := netip.AddrFromSlice(ip)
-			if !ok {
-				continue
-			}
-			addr = addr.Unmap()
-			if isPublicLegacyAddr(addr) {
-				continue
-			}
-			prefix := "/128"
-			if addr.Is4() {
-				prefix = "/32"
-			}
-			resolvedLegacyCIDRs = append(resolvedLegacyCIDRs, addr.String()+prefix)
-		}
+	// Legacy allowed_hosts names open private addresses through the broker's
+	// DNS: Resolve adds them to InternalZones, and their legacy allow rule
+	// matches the cached names. They are not resolved into CIDRs here, which
+	// would open an address an alias outside the internal zones points to.
+	for _, w := range legacyAliasWarnings(ctx, hostResolver, ws.AllowedHosts, ws.InternalZones) {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
 	for _, r := range rules {
 		isAllow := len(r.Allow) > 0
@@ -612,24 +641,19 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 			deny = append(deny, br)
 		}
 	}
-	if len(resolvedLegacyCIDRs) > 0 {
-		br, err := compileVMRule("legacy", config.RuleProtoAny, nil, resolvedLegacyCIDRs)
-		if err != nil {
-			return nil, err
-		}
-		allow = append(allow, br)
-	}
 
 	policy := struct {
-		DNS   string   `json:"dns,omitempty"`
-		Deny  []vmRule `json:"deny"`
-		Allow []vmRule `json:"allow"`
-		IPv6  bool     `json:"ipv6,omitempty"`
+		DNS           string   `json:"dns,omitempty"`
+		Deny          []vmRule `json:"deny"`
+		Allow         []vmRule `json:"allow"`
+		InternalZones []string `json:"internal_zones,omitempty"`
+		IPv6          bool     `json:"ipv6,omitempty"`
 	}{
-		DNS:   ws.DNSUpstream,
-		Deny:  deny,
-		Allow: allow,
-		IPv6:  ws.IPv6,
+		DNS:           ws.DNSUpstream,
+		Deny:          deny,
+		Allow:         allow,
+		InternalZones: ws.InternalZones,
+		IPv6:          ws.IPv6,
 	}
 	data, err := json.Marshal(policy)
 	if err != nil {

@@ -74,22 +74,36 @@ func (s nameSet) matches(name string) bool {
 }
 
 // dnsCache maps resolved IP addresses back to the DNS names that returned
-// them, bounded by TTL.
+// them, bounded by TTL. Each name keeps the DNS chain it came from (the
+// question, CNAME names and record owner) so a private address can be
+// revalidated against the current internal zones on every lookup.
 type dnsCache struct {
 	mu      sync.Mutex
-	entries map[netip.Addr]map[string]time.Time
+	entries map[netip.Addr]map[string]cacheEntry
 	now     func() time.Time
+}
+
+type cacheEntry struct {
+	exp   time.Time
+	chain []string
 }
 
 func newDNSCache() *dnsCache {
 	return &dnsCache{
-		entries: make(map[netip.Addr]map[string]time.Time),
+		entries: make(map[netip.Addr]map[string]cacheEntry),
 		now:     time.Now,
 	}
 }
 
 // record stores addr -> name with ttl.
 func (c *dnsCache) record(addr netip.Addr, name string, ttl time.Duration) {
+	c.recordChain(addr, name, ttl, nil)
+}
+
+// recordChain stores addr -> name with ttl and the DNS chain names of the
+// answer. A later record of the same name replaces both the expiry and the
+// chain, so a name never stays trusted longer than the answer that trusted it.
+func (c *dnsCache) recordChain(addr netip.Addr, name string, ttl time.Duration, chain []string) {
 	if c == nil || !addr.IsValid() || ttl <= 0 {
 		return
 	}
@@ -112,7 +126,7 @@ func (c *dnsCache) record(addr netip.Addr, name string, ttl time.Duration) {
 	names := c.entries[addr]
 	if names != nil {
 		for k, e := range names {
-			if now.After(e) {
+			if now.After(e.exp) {
 				delete(names, k)
 			}
 		}
@@ -125,49 +139,57 @@ func (c *dnsCache) record(addr netip.Addr, name string, ttl time.Duration) {
 		if len(c.entries) >= maxDNSCacheIPs {
 			return
 		}
-		names = make(map[string]time.Time, 1)
+		names = make(map[string]cacheEntry, 1)
 		c.entries[addr] = names
 	}
 	if _, exists := names[name]; !exists && len(names) >= maxDNSCachePerIP {
 		return
 	}
-	if prev, ok := names[name]; !ok || exp.After(prev) {
-		names[name] = exp
-	}
+	names[name] = cacheEntry{exp: exp, chain: chain}
 }
 
 // lookup returns the non-expired DNS names recorded for addr.
 func (c *dnsCache) lookup(addr netip.Addr) []string {
+	names, _ := c.lookupTrusted(addr, nil)
+	return names
+}
+
+// lookupTrusted returns the non-expired DNS names recorded for addr and the
+// subset of them whose DNS chain trusted rejects; a nil trusted accepts
+// every name.
+func (c *dnsCache) lookupTrusted(addr netip.Addr, trusted func(chain []string) bool) (names []string, untrusted map[string]bool) {
 	if c == nil || !addr.IsValid() {
-		return nil
+		return nil, nil
 	}
 	addr = addr.WithZone("").Unmap()
 	now := c.now()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	names := c.entries[addr]
-	if len(names) == 0 {
-		return nil
-	}
-	var out []string
-	for name, exp := range names {
-		if now.After(exp) {
-			delete(names, name)
+	entries := c.entries[addr]
+	for name, e := range entries {
+		if now.After(e.exp) {
+			delete(entries, name)
 			continue
 		}
-		out = append(out, name)
+		names = append(names, name)
+		if trusted != nil && !trusted(e.chain) {
+			if untrusted == nil {
+				untrusted = map[string]bool{}
+			}
+			untrusted[name] = true
+		}
 	}
-	if len(names) == 0 {
+	if entries != nil && len(entries) == 0 {
 		delete(c.entries, addr)
 	}
-	return out
+	return names, untrusted
 }
 
 func (c *dnsCache) evictExpiredLocked(now time.Time) {
 	for addr, names := range c.entries {
-		for name, exp := range names {
-			if now.After(exp) {
+		for name, e := range names {
+			if now.After(e.exp) {
 				delete(names, name)
 			}
 		}
