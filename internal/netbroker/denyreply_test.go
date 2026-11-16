@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -204,4 +205,57 @@ func TestEnforceConnDenyReply(t *testing.T) {
 			t.Fatalf("CloseWrite after denial = %v, want nil", err)
 		}
 	})
+}
+
+// TestReplyAndCloseDrainsLargeUpload checks that a client still uploading a
+// large denied request body finishes the upload and reads the 403, instead of
+// a reset or broken pipe from a close with unread data.
+func TestReplyAndCloseDrainsLargeUpload(t *testing.T) {
+	t.Parallel()
+	const bodySize = 16 << 20
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	reply := http403(map[string]any{"method": "POST"}, Decision{Rule: "no-paste"})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		// The broker decides on the request head, before the body arrives.
+		var head []byte
+		for b := make([]byte, 1); !bytes.HasSuffix(head, []byte("\r\n\r\n")); head = append(head, b[0]) {
+			if _, err := c.Read(b); err != nil {
+				_ = c.Close()
+				return
+			}
+		}
+		replyAndClose(c, reply)
+	}()
+
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	head := "POST /upload HTTP/1.1\r\nHost: pastebin.com\r\nContent-Length: " + strconv.Itoa(bodySize) + "\r\n\r\n"
+	if _, err := c.Write([]byte(head)); err != nil {
+		t.Fatalf("write head: %v", err)
+	}
+	chunk := make([]byte, 64<<10)
+	for sent := 0; sent < bodySize; sent += len(chunk) {
+		if _, err := c.Write(chunk); err != nil {
+			t.Fatalf("upload failed after %d of %d body bytes: %v", sent, bodySize, err)
+		}
+	}
+	got, err := io.ReadAll(c)
+	if err != nil {
+		t.Fatalf("read reply: %v (got %q)", err, got)
+	}
+	if !bytes.Equal(got, reply) {
+		t.Fatalf("client got %q, want the 403", got)
+	}
 }

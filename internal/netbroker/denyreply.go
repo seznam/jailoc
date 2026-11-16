@@ -21,7 +21,6 @@ const (
 
 	replyWriteTimeout = 2 * time.Second
 	replyLinger       = time.Second
-	replyDrainMax     = 64 << 10
 )
 
 // denyReply returns what the broker sends the guest before closing a flow it
@@ -82,9 +81,12 @@ func replyText(s string) string {
 }
 
 // replyAndClose sends reply to the guest, half-closes the connection and
-// discards what the guest still sends for a short time before closing it.
-// Closing with unread data would make the stack reset the connection and
-// drop the reply. Errors are ignored: the connection is closed either way.
+// discards what the guest still sends until it closes or replyLinger ends.
+// Closing with unread data would make the stack reset the connection, so a
+// client still uploading a denied request body would see a reset instead of
+// the reply. The linger is bounded by time, not bytes: a byte cap would
+// close a fast upload with data still arriving. Errors are ignored: the
+// connection is closed either way.
 func replyAndClose(c net.Conn, reply []byte) {
 	defer func() { _ = c.Close() }()
 	_ = c.SetWriteDeadline(time.Now().Add(replyWriteTimeout))
@@ -95,5 +97,5 @@ func replyAndClose(c net.Conn, reply []byte) {
 		_ = cw.CloseWrite()
 	}
 	_ = c.SetReadDeadline(time.Now().Add(replyLinger))
-	_, _ = io.Copy(io.Discard, io.LimitReader(c, replyDrainMax))
+	_, _ = io.Copy(io.Discard, c)
 }
