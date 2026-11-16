@@ -1,0 +1,28 @@
+From e3a887a2ec98b86de5922e58b4f63b76e0dd50c9 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] virtio/fs/macos: open unlinked inodes non-blocking
+
+Upstream commit e3a887a2ec98b86de5922e58b4f63b76e0dd50c9
+https://github.com/libkrun/libkrun/commit/e3a887a2ec98b86de5922e58b4f63b76e0dd50c9
+
+Before unlinking an inode, grab_unlinked_fd opens it to preserve access after
+removal. Opening a FIFO without a peer blocks, stalling the virtio-fs worker.
+Add O_NONBLOCK to the openat flags so the open returns immediately.
+macOS-only: this changes only the macOS passthrough implementation.
+
+diff --git a/src/devices/src/virtio/fs/macos/passthrough.rs b/src/devices/src/virtio/fs/macos/passthrough.rs
+--- a/src/devices/src/virtio/fs/macos/passthrough.rs
++++ b/src/devices/src/virtio/fs/macos/passthrough.rs
+@@ -943,6 +943,11 @@ impl PassthroughFs {
+     fn grab_unlinked_fd(&self, parent_fd: RawFd, name: &CStr) -> io::Result<RawFd> {
+-        let fd =
+-            unsafe { libc::openat(parent_fd, name.as_ptr(), libc::O_NOFOLLOW | libc::O_CLOEXEC) };
++        let fd = unsafe {
++            libc::openat(
++                parent_fd,
++                name.as_ptr(),
++                libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
++            )
++        };
+         if fd < 0 {
+             return Err(io::Error::last_os_error());
+         }
