@@ -211,6 +211,7 @@ allow = ["10.20.5.10"]
 proto = "tcp"
 ports = [5432]
 ```
+
 ---
 
 ## `[workspaces.<name>]`

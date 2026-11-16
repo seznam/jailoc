@@ -3,6 +3,7 @@ site_description: Sandboxed micro-VMs for headless OpenCode coding agents
 site_dir: public
 repo_url: https://github.com/seznam/jailoc
 repo_name: seznam/jailoc
+edit_uri: edit/main/docs/
 
 theme:
   name: material
@@ -32,6 +33,7 @@ theme:
   logo: logo.png
   favicon: favicon-light.png
   features:
+    - content.action.edit
     - content.code.copy
     - navigation.sections
     - navigation.top
