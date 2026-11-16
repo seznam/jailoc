@@ -389,6 +389,9 @@ func TestVMShares(t *testing.T) {
 	if !slices.Equal(binds, wantBinds) {
 		t.Fatalf("claude binds =\n%+v\nwant\n%+v", binds, wantBinds)
 	}
+	if b, err := os.ReadFile(filepath.Join(data, "home", "claude", ".claude.json")); err != nil || !strings.Contains(string(b), `"bypassPermissionsModeAccepted": true`) { //nolint:gosec // G304: test file
+		t.Fatalf("claude global config = %q, %v", b, err)
+	}
 
 	ws.Agent, _ = agent.Lookup("copilot")
 	settings := filepath.Join(data, "home", "copilot", "settings.json")
@@ -513,6 +516,27 @@ func TestVMAgentProfile(t *testing.T) {
 	if !slices.Equal(binds, wantBinds) {
 		t.Fatalf("named profile binds =\n%+v\nwant\n%+v", binds, wantBinds)
 	}
+
+	// Claude Code's defaults go into the profile on start only: on reload
+	// the agent may be writing the file.
+	ws.Agent, _ = agent.Lookup("claude")
+	claudeJSON := filepath.Join(profileDir, "claude", ".claude.json")
+	if shares, err = vmShares(ws); err != nil {
+		t.Fatalf("vmShares: %v", err)
+	}
+	if _, err := vmGuestData(ws, cacheDir, shares, false); err != nil {
+		t.Fatalf("vmGuestData reload: %v", err)
+	}
+	if _, err := os.Stat(claudeJSON); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reload wrote %s: %v", claudeJSON, err)
+	}
+	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
+		t.Fatalf("vmGuestData: %v", err)
+	}
+	if b, err := os.ReadFile(claudeJSON); err != nil || !strings.Contains(string(b), `"bypassPermissionsModeAccepted": true`) { //nolint:gosec // G304: test file
+		t.Fatalf("claude profile global config = %q, %v", b, err)
+	}
+	ws.Agent = oc
 
 	ephemeral := config.EphemeralProfile()
 	ws.AgentProfile = &ephemeral
