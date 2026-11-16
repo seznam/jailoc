@@ -132,7 +132,7 @@ jobs:
           git -c core.hooksPath=/dev/null push \
             --force-with-lease="refs/heads/$HEAD_BRANCH:$HEAD_SHA" \
             origin "HEAD:refs/heads/$HEAD_BRANCH"
-      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+      - uses: peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8 # v8.1.2
         if: github.event_name != 'pull_request'
         with:
           token: ${{ github.token }}
