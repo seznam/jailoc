@@ -28,6 +28,7 @@ import (
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/logging"
+	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -784,6 +785,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Broker:        []string{exe, "netbroker"},
 		GuestBinary:   rt.guest,
 		GuestProtocol: guest.Protocol,
+		BrokerPolicy:  netbroker.PolicyVersion,
 		Agent:         ws.Agent.Name,
 		Guest:         g,
 		Forwards:      vmForwards(ws.Ports),

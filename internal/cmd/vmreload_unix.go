@@ -19,6 +19,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -146,10 +147,14 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 // reloadPolicy builds the broker policy for the running VM. IPv6 stays off
 // when the guest booted without it, which only a restart changes, and when
 // the running broker predates the ipv6 policy field and would reject it.
-// A running VM started by an older jailoc release (< protocol 3) whose broker
-// predates the rules policy schema cannot be reloaded in place.
+// A running VM whose broker predates the current policy version (rules before
+// guest protocol 3, internal_zones before netbroker.PolicyVersion 1) cannot
+// be reloaded in place: the broker would reject the policy or enforce it
+// with older semantics, such as letting any allowed name resolve to private
+// addresses.
 func reloadPolicy(ctx context.Context, ws *workspace.Resolved, running vm.Spec) ([]byte, error) {
-	if running.GuestProtocol < 3 && (len(ws.NetworkRules) > 0 || ws.DNSUpstream != "") {
+	rules := len(ws.NetworkRules) > 0 || ws.DNSUpstream != "" || len(ws.InternalZones) > 0
+	if rules && (running.GuestProtocol < 3 || running.BrokerPolicy < netbroker.PolicyVersion) {
 		return nil, fmt.Errorf("workspace %q runs a network broker from an older jailoc version; run `jailoc restart %s` to apply the new network rules", ws.Name, ws.Name)
 	}
 	if ws.IPv6 && (running.GuestProtocol < 2 || running.Guest == nil || !running.Guest.IPv6) {

@@ -54,7 +54,8 @@ A hostname rule opens a private address (RFC 1918, CGNAT, link-local, IPv6 uniqu
 - **Connect time**: a hostname rule matches a private destination only through a cached name in an internal zone. Otherwise the flow is denied with `reason=not-internal-zone` and the name of the rule that matched.
 - IP and CIDR rules are unaffected, `deny` rules still win, and `"*"` never opens private addresses. Loopback and other hard-denied answers are left in DNS answers; the broker never connects to them.
 - **Validation**: a zone must be a domain name. `"*"`, top-level domains and other public suffixes (`com`, `co.uk`, `github.io`) and wildcard DNS services that resolve names to any address (`nip.io`, `sslip.io`, `xip.io`, `localtest.me`, `lvh.me`, `traefik.me`, `vcap.me`, `local.gd`) are rejected. Top-level names without a public registry, such as `internal`, `corp`, `lan`, and `home.arpa`, are allowed.
-- **Legacy `allowed_hosts`**: its hostnames are trusted as internal zones in memory, and `jailoc migrate` writes them to `internal_zones`, so they keep resolving to private addresses.
+- **Legacy `allowed_hosts`**: its hostnames are trusted as internal zones in memory, and `jailoc migrate` writes them to `internal_zones`, so they keep resolving to private addresses. Hostnames that can't be internal zones are no longer resolved on the host into private CIDRs either.
+- **Running VMs after an upgrade**: the network broker of a workspace VM started by a jailoc release without internal zones keeps the old behaviour, so `jailoc reload` and `jailoc up` refuse to update its network policy and ask for `jailoc restart`.
 
 ```toml
 [defaults.network]

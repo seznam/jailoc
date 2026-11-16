@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -160,6 +161,43 @@ func TestVMPolicyLegacyFallback(t *testing.T) {
 	}
 	if len(got.Allow) != 2 || !slices.Equal(got.Allow[0].CIDRs, []string{"192.168.1.10/32", "fd12::7/128"}) {
 		t.Fatalf("legacy policy allow = %+v", got.Allow)
+	}
+}
+
+// TestVMPolicyLegacyHostsSkipUnsafeZones checks that legacy allowed_hosts
+// names that cannot be internal zones are not resolved on the host into
+// private CIDR rules. Not parallel: it replaces lookupLegacyHost.
+func TestVMPolicyLegacyHostsSkipUnsafeZones(t *testing.T) {
+	var looked []string
+	orig := lookupLegacyHost
+	lookupLegacyHost = func(_ context.Context, _, host string) ([]net.IP, error) {
+		looked = append(looked, host)
+		return []net.IP{net.ParseIP("10.0.0.5")}, nil
+	}
+	t.Cleanup(func() { lookupLegacyHost = orig })
+	ws := &workspace.Resolved{
+		Name:         "w",
+		AllowedHosts: []string{"10-0-0-5.nip.io", "github.io", "gitlab.corp.example", "10.9.9.9"},
+	}
+	data, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	if !slices.Equal(looked, []string{"gitlab.corp.example"}) {
+		t.Fatalf("resolved hosts = %v, want only gitlab.corp.example", looked)
+	}
+	var got struct {
+		Allow []vmRule `json:"allow"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", data, err)
+	}
+	var cidrs []string
+	for _, r := range got.Allow {
+		cidrs = append(cidrs, r.CIDRs...)
+	}
+	if !slices.Equal(cidrs, []string{"10.9.9.9/32", "10.0.0.5/32"}) {
+		t.Fatalf("allow CIDRs = %v, want the explicit IP and the resolved internal host", cidrs)
 	}
 }
 

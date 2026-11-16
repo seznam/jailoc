@@ -250,3 +250,42 @@ func TestDropPrivateAnswersMalformed(t *testing.T) {
 		t.Fatalf("truncated answer = %+v (err %v), want SERVFAIL without answers", msg, err)
 	}
 }
+
+// TestDropPrivateAnswersAllSections checks that a private address cannot
+// bypass the filter in the authority or additional section.
+func TestDropPrivateAnswersAllSections(t *testing.T) {
+	t.Parallel()
+	pol, err := ParsePolicy([]byte(`{"allow": [{"name": "all", "names": ["*"], "proto": "tcp"}]}`), "sections")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := dnsmessage.MustNewName("app.example.net.")
+	record := func(a string) dnsmessage.Resource {
+		return dnsmessage.Resource{
+			Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
+			Body:   &dnsmessage.AResource{A: netip.MustParseAddr(a).As4()},
+		}
+	}
+	msg := dnsmessage.Message{
+		Header:      dnsmessage.Header{ID: 7, Response: true},
+		Questions:   []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		Answers:     []dnsmessage.Resource{record("1.2.3.4")},
+		Authorities: []dnsmessage.Resource{record("10.0.0.5")},
+		Additionals: []dnsmessage.Resource{record("192.168.1.5")},
+	}
+	resp, err := msg.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, dropped := dropPrivateAnswers(pol, packAnswer(t, "app.example.net.", nil), resp)
+	if !slices.Equal(dropped, []string{"10.0.0.5", "192.168.1.5"}) {
+		t.Fatalf("dropped = %v, want the authority and additional addresses", dropped)
+	}
+	var out dnsmessage.Message
+	if err := out.Unpack(got); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Answers) != 1 || len(out.Authorities) != 0 || len(out.Additionals) != 0 {
+		t.Fatalf("filtered sections = %d answers, %d authorities, %d additionals; want 1, 0, 0", len(out.Answers), len(out.Authorities), len(out.Additionals))
+	}
+}

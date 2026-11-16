@@ -108,6 +108,9 @@ type Spec struct {
 	// GuestProtocol is the guest.Protocol of the jailoc that booted the VM;
 	// zero in specs written before jailoc recorded it.
 	GuestProtocol int `json:"guest_protocol,omitempty"`
+	// BrokerPolicy is the netbroker.PolicyVersion of the jailoc that started
+	// the network broker; zero in specs written before jailoc recorded it.
+	BrokerPolicy int `json:"broker_policy,omitempty"`
 	// Agent is the agent harness of a workspace VM; empty in specs written
 	// before jailoc ran other agents than OpenCode.
 	Agent string `json:"agent,omitempty"`

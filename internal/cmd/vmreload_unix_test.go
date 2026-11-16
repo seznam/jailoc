@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/seznam/jailoc/internal/agent"
+	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -193,6 +195,20 @@ func TestReloadPolicyRejectsOlderBrokerForRules(t *testing.T) {
 	ws := &workspace.Resolved{Name: "api", DNSUpstream: "9.9.9.9"}
 	if _, err := reloadPolicy(context.Background(), ws, running); err == nil {
 		t.Fatal("reloadPolicy accepted rules policy for protocol 2 broker")
+	}
+}
+
+func TestReloadPolicyRejectsBrokerBeforeInternalZones(t *testing.T) {
+	t.Parallel()
+	ws := &workspace.Resolved{Name: "api", NetworkRules: []config.NetworkRule{{Name: "agent", Allow: []string{"api.anthropic.com"}}}}
+	old := vm.Spec{GuestProtocol: guest.Protocol, Guest: &guest.Config{}}
+	if _, err := reloadPolicy(context.Background(), ws, old); err == nil {
+		t.Fatal("reloadPolicy accepted a broker that predates internal_zones")
+	}
+	current := old
+	current.BrokerPolicy = netbroker.PolicyVersion
+	if _, err := reloadPolicy(context.Background(), ws, current); err != nil {
+		t.Fatalf("reloadPolicy with a current broker: %v", err)
 	}
 }
 

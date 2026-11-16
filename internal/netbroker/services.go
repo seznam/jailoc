@@ -270,7 +270,7 @@ func stripHTTPSSVCB(resp []byte) []byte {
 }
 
 // dropPrivateAnswers removes A and AAAA records with a private address from
-// the answer resp to q unless the question and the record owner are both in
+// every section of the answer resp to q unless the question and the record owner are both in
 // the policy's internal zones (privateAnswerAllowed), so a name outside them
 // cannot be pointed at the user's network. It returns the dropped addresses.
 // The question is taken from q, not from resp. A query or response that does
@@ -301,11 +301,11 @@ func dropPrivateAnswers(pol *Policy, q, resp []byte) ([]byte, []string) {
 		}
 		return out
 	}
-	answers, additionals := keep(msg.Answers), keep(msg.Additionals)
+	answers, authorities, additionals := keep(msg.Answers), keep(msg.Authorities), keep(msg.Additionals)
 	if len(dropped) == 0 {
 		return resp, nil
 	}
-	msg.Answers, msg.Additionals = answers, additionals
+	msg.Answers, msg.Authorities, msg.Additionals = answers, authorities, additionals
 	packed, err := msg.Pack()
 	if err != nil {
 		// Never hand out the private records when the reply cannot be rebuilt.

@@ -538,6 +538,10 @@ type vmRule struct {
 	Ports []string `json:"ports,omitempty"`
 }
 
+// lookupLegacyHost resolves legacy allowed_hosts names on the host; tests
+// replace it.
+var lookupLegacyHost = net.DefaultResolver.LookupIP
+
 // vmPolicy builds the broker policy JSON from the workspace's resolved network
 // rules and DNS settings. @list references are expanded on the host.
 func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
@@ -569,13 +573,15 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 	// Legacy allowed_hosts could resolve to private/ULA addresses, which
 	// hostname rules alone do not open. Resolve them on the host and emit
 	// only non-public addresses as CIDRs so public hosts stay governed by
-	// hostname rules and SNI inspection.
+	// hostname rules and SNI inspection. Names that cannot be internal zones
+	// (public suffixes, wildcard DNS services such as nip.io) are skipped, so
+	// they cannot open private addresses this way either.
 	var resolvedLegacyCIDRs []string
 	for _, h := range ws.AllowedHosts {
-		if net.ParseIP(h) != nil || strings.Contains(h, "/") {
+		if net.ParseIP(h) != nil || strings.Contains(h, "/") || config.ValidateInternalZone(h) != nil {
 			continue
 		}
-		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", h)
+		ips, err := lookupLegacyHost(ctx, "ip", h)
 		if err != nil {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: cannot resolve allowed host %q: %v\n", h, err)
 			continue

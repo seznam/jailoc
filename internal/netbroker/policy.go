@@ -14,6 +14,15 @@ import (
 	"strings"
 )
 
+// PolicyVersion is the version of the policy schema and semantics this
+// broker implements. jailoc records it when it starts a broker and reloads a
+// running broker's policy only when the broker is at least this version: an
+// older broker would reject the policy and deny all connections, or accept it
+// and enforce it with older semantics.
+//
+// Version 1: internal_zones; private DNS answers outside them are dropped.
+const PolicyVersion = 1
+
 // Protocol names used in policy exceptions and decisions.
 const (
 	ProtoTCP = "tcp"
