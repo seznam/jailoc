@@ -582,6 +582,20 @@ Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_ag
 
 `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` keeps the agent's persistent home directories (see [Coding agents](#coding-agents)) and `~/.cache` across restarts. `jailoc down --purge` deletes it. An agent [`profile`](#agent-profiles) moves the agent's directories to a shared profile or makes them ephemeral.
 
+### Tool caches
+
+Sessions get these variables, so download caches that tools keep outside `~/.cache` by default land in the VM's persistent `~/.cache` (`/home/agent/.cache`) instead of its in-memory overlay:
+
+| Variable | Value | Read by |
+|---|---|---|
+| `GOMODCACHE` | `~/.cache/go-mod` | Go module cache (default `~/go/pkg/mod`) |
+| `npm_config_cache` | `~/.cache/npm` | npm (default `~/.npm`) |
+| `BUN_INSTALL_CACHE_DIR` | `~/.cache/bun` | Bun install cache (default `~/.bun/install/cache`) |
+| `NUGET_PACKAGES` | `~/.cache/nuget/packages` | NuGet global packages (default `~/.nuget/packages`) |
+| `NUGET_HTTP_CACHE_PATH` | `~/.cache/nuget/v3-cache` | NuGet HTTP cache (default `~/.local/share/NuGet/v3-cache`) |
+
+A variable the image sets is kept, and so is `npm_config_cache` when the image sets `NPM_CONFIG_CACHE`. A variable set by the workspace's `env`, `env_file` or an env secret takes precedence. The variables also take precedence over the tools' own configuration files, such as a `cache` setting in `.npmrc` or `bunfig.toml`; set the variable in the workspace's `env` to choose another location.
+
 ---
 
 See the [workspace configuration how-to](../how-to/workspace-configuration.md) for step-by-step setup.

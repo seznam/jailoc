@@ -171,6 +171,9 @@ type Config struct {
 	// TimeZone is the host's local time zone, installed as /etc/localtime.
 	// Without it the guest keeps the image's zone.
 	TimeZone *TimeZone `json:"time_zone,omitempty"`
+	// CacheDir is the persistent cache directory. When set, sessions point
+	// tool download caches that default to other home paths into it.
+	CacheDir string `json:"cache_dir,omitempty"`
 }
 
 // DockerDisk is the block device of the workspace VM's Docker data disk.
