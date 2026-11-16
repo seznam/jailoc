@@ -10,7 +10,7 @@ func TestCacheEnv(t *testing.T) {
 
 	all := []string{
 		"GOMODCACHE=/c/go-mod",
-		"npm_config_cache=/c/npm",
+		"NPM_CONFIG_CACHE=/c/npm",
 		"BUN_INSTALL_CACHE_DIR=/c/bun",
 		"NUGET_PACKAGES=/c/nuget/packages",
 		"NUGET_HTTP_CACHE_PATH=/c/nuget/v3-cache",
@@ -33,7 +33,7 @@ func TestCacheEnv(t *testing.T) {
 		{
 			name:     "alias set",
 			cacheDir: "/c",
-			env:      []string{"NPM_CONFIG_CACHE=/npm"},
+			env:      []string{"npm_config_cache=/npm"},
 			want:     []string{all[0], all[2], all[3], all[4]},
 		},
 		{

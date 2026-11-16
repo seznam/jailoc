@@ -23,7 +23,7 @@ type cacheVar struct {
 // and so is the pnpm store, which must share a filesystem with node_modules.
 var cacheVars = []cacheVar{
 	{name: "GOMODCACHE", subdir: "go-mod"},
-	{name: "npm_config_cache", subdir: "npm", aliases: []string{"NPM_CONFIG_CACHE"}},
+	{name: "NPM_CONFIG_CACHE", subdir: "npm", aliases: []string{"npm_config_cache"}},
 	{name: "BUN_INSTALL_CACHE_DIR", subdir: "bun"},
 	{name: "NUGET_PACKAGES", subdir: "nuget/packages"},
 	{name: "NUGET_HTTP_CACHE_PATH", subdir: "nuget/v3-cache"},

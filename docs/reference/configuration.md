@@ -589,12 +589,12 @@ Sessions get these variables, so download caches that tools keep outside `~/.cac
 | Variable | Value | Read by |
 |---|---|---|
 | `GOMODCACHE` | `~/.cache/go-mod` | Go module cache (default `~/go/pkg/mod`) |
-| `npm_config_cache` | `~/.cache/npm` | npm (default `~/.npm`) |
+| `NPM_CONFIG_CACHE` | `~/.cache/npm` | npm (default `~/.npm`) |
 | `BUN_INSTALL_CACHE_DIR` | `~/.cache/bun` | Bun install cache (default `~/.bun/install/cache`) |
 | `NUGET_PACKAGES` | `~/.cache/nuget/packages` | NuGet global packages (default `~/.nuget/packages`) |
 | `NUGET_HTTP_CACHE_PATH` | `~/.cache/nuget/v3-cache` | NuGet HTTP cache (default `~/.local/share/NuGet/v3-cache`) |
 
-A variable the image sets is kept, and so is `npm_config_cache` when the image sets `NPM_CONFIG_CACHE`. A variable set by the workspace's `env`, `env_file` or an env secret takes precedence. The variables also take precedence over the tools' own configuration files, such as a `cache` setting in `.npmrc` or `bunfig.toml`; set the variable in the workspace's `env` to choose another location.
+A variable the image sets is kept; for npm, which reads its variables case-insensitively, either `NPM_CONFIG_CACHE` or `npm_config_cache` counts. A variable set by the workspace's `env`, `env_file` or an env secret takes precedence. The variables also take precedence over the tools' own configuration files, such as a `cache` setting in `.npmrc` or `bunfig.toml`; set the variable in the workspace's `env` to choose another location.
 
 ---
 
