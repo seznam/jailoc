@@ -69,8 +69,20 @@ func TestCanonicalPath(t *testing.T) {
 		{"/a//b", nil},
 		{"//a", nil},
 		{"/a/%2F/b", nil},
-		{"/a%2fb", nil},
-		{"/a%2Fb", nil},
+		{"/a%2fb", []string{"a/b"}},
+		{"/a%2Fb", []string{"a/b"}},
+		{"/%40tarquinen%2Fopencode-dcp/latest", []string{"@tarquinen/opencode-dcp", "latest"}},
+		{"/a%2Fb%2Fc/d", []string{"a/b/c", "d"}},
+		{"/x%2F..%2Fadmin", nil},
+		{"/x%2f..", nil},
+		{"/..%2Fb", nil},
+		{"/a/..%2Fb", nil},
+		{"/%2E%2E/a", nil},
+		{"/x%2F.%2Fy", nil},
+		{"/%2Fa", nil},
+		{"/a%2F", nil},
+		{"/a%2F%2Fb", nil},
+		{"/a%2F/b", nil},
 		{"/a%5cb", nil},
 		{"/a%5Cb", nil},
 		{"/a\\b", nil},
@@ -128,6 +140,12 @@ func TestPathPatternMatch(t *testing.T) {
 		{"/**", "/", true},
 		{"/**", "/a/b", true},
 		{"/a b", "/a%20b", true},
+		{"/*/latest", "/%40tarquinen%2Fopencode-dcp/latest", true},
+		{"/*", "/a%2Fb", true},
+		{"/a/*", "/a%2Fb", false},
+		{"/@tarquinen/*", "/%40tarquinen%2Fopencode-dcp/latest", false},
+		{"/@tarquinen/opencode-dcp/latest", "/%40tarquinen%2Fopencode-dcp/latest", false},
+		{"/**", "/a%2Fb/c", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.pattern+" "+tt.path, func(t *testing.T) {
@@ -195,6 +213,60 @@ func TestHTTPMatch(t *testing.T) {
 			}
 			if got := m.matches(tt.method, segs, tt.fold); got != tt.want {
 				t.Fatalf("matches(%s %s) = %v, want %v", tt.method, tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResplitPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		segs []string
+		want []string // nil: no segment holds a slash
+	}{
+		{"plain", []string{"a", "b"}, nil},
+		{"root", []string{""}, nil},
+		{"encoded slash", []string{"a/b", "c"}, []string{"a", "b", "c"}},
+		{"scoped package", []string{"@scope/name", "latest"}, []string{"@scope", "name", "latest"}},
+		{"trailing slash kept", []string{"a/b", ""}, []string{"a", "b", ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resplitPath(tt.segs); !slices.Equal(got, tt.want) {
+				t.Fatalf("resplitPath(%q) = %q, want %q", tt.segs, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHTTPMatchNeedsPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		match  HTTPMatch
+		method string
+		fold   bool
+		want   bool
+	}{
+		{name: "empty rule", match: HTTPMatch{}, method: "GET"},
+		{name: "methods only", match: HTTPMatch{Methods: []string{"*"}}, method: "GET"},
+		{name: "paths for any method", match: HTTPMatch{Paths: []string{"/a"}}, method: "GET", want: true},
+		{name: "paths for the method", match: HTTPMatch{Methods: []string{"GET"}, Paths: []string{"/a"}}, method: "GET", want: true},
+		{name: "paths for another method", match: HTTPMatch{Methods: []string{"POST"}, Paths: []string{"/a"}}, method: "GET"},
+		{name: "allow compares the method as sent", match: HTTPMatch{Methods: []string{"GET"}, Paths: []string{"/a"}}, method: "get"},
+		{name: "deny folds the method", match: HTTPMatch{Methods: []string{"GET"}, Paths: []string{"/a"}}, method: "get", fold: true, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := tt.match
+			if err := m.compile("allow", "r"); err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			if got := m.needsPath(tt.method, tt.fold); got != tt.want {
+				t.Fatalf("needsPath(%s) = %v, want %v", tt.method, got, tt.want)
 			}
 		})
 	}

@@ -214,11 +214,16 @@ A pattern is rejected at config load when it does not start with `/`, has a part
 
 ##### Request path checking
 
-The broker matches patterns against the percent-decoded segments of the request path. A request is denied with reason `bad-path` when its path:
+The broker checks and matches the path only when a path pattern takes part in the decision: some `http` rule in the connection's scope (allow or deny) lists `paths` and covers the request's method. Otherwise the path is not evaluated, and an odd path such as `//x` or `/a%5Cb` is never denied as `bad-path`.
+
+When patterns apply, the broker matches them against the percent-decoded segments of the request path, taken between literal `/`. An encoded slash does not split a segment: `*` matches `@scope%2Fname` (decoded `@scope/name`) as one segment, a literal never does, because a pattern segment cannot contain `/`. A request is denied with reason `bad-path` when its path:
 
 - does not start with `/`, or contains `//` or `\`;
-- contains an encoded slash, backslash or NUL (`%2f`, `%5c`, `%00`, any case);
-- has a segment that fails percent-decoding, decodes to `.` or `..`, or contains a control character.
+- contains an encoded backslash or NUL (`%5c`, `%00`, any case);
+- has a segment that fails percent-decoding, or contains a control character;
+- has a segment that is, or after splitting on its encoded slashes contains, a `.` or `..` piece (`..`, `%2e%2e`, `x%2F..%2Fadmin`) or an empty piece (`%2Fadmin`, `a%2F`, `a%2F%2Fb`).
+
+`deny` patterns also see the path with encoded slashes decoded and split again, so `/a/b` denies `/a%2Fb` as well as `/a/b`. `allow` patterns match the raw segments only. A server that decodes `%2F` before routing sees more segments than an `allow` pattern's `*` matched; use `deny` rules for paths that must stay unreachable.
 
 ##### Evaluation
 
@@ -233,9 +238,10 @@ A connection that was not inspected stays checked: if a later request on it name
 An `http` allow rule narrows its host: when the scope has `http` allow rules, only they decide the requests, and plain `allow` rules matching the same host and port grant nothing for it. Each request is checked in this order:
 
 1. The request host (`Host` or `:authority`, port stripped) must equal the connection's server name, otherwise `421` with reason `host-mismatch`.
-2. A bad path is denied with reason `bad-path`; `CONNECT` and HTTP/2 extended `CONNECT` with reason `connect-denied`.
-3. A matching `http` deny rule (method and path both match) denies the request with `rule=<name>`.
-4. If the scope has `http` allow rules, one must match both method and path, otherwise the request is denied with reason `http-no-match`. If the scope has none, a plain allow rule allowed the connection and the request passes.
+2. `CONNECT` and HTTP/2 extended `CONNECT` are denied with reason `connect-denied`.
+3. When a path pattern applies to the method (see [request path checking](#request-path-checking)), a bad path is denied with reason `bad-path`.
+4. A matching `http` deny rule (method and path both match) denies the request with `rule=<name>`.
+5. If the scope has `http` allow rules, one must match both method and path, otherwise the request is denied with reason `http-no-match`. If the scope has none, a plain allow rule allowed the connection and the request passes.
 
 | Outcome | Status | Body |
 |---------|--------|------|

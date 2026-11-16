@@ -23,6 +23,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -434,7 +435,8 @@ func TestInspectRejectsRequests(t *testing.T) {
 		hits.Store(r.RequestURI, true)
 		_, _ = io.WriteString(w, "ok")
 	}))
-	e.start(ruleWeb+`,{"name":"all","names":["example.com"],"http":{}}`, "", true)
+	// The rule lists a path pattern, so every request path is canonicalized.
+	e.start(ruleWeb+`,{"name":"all","names":["example.com"],"http":{"paths":["/**"]}}`, "", true)
 
 	// Each request gets its own connection: net/http closes the connection
 	// after denying a CONNECT, so later requests cannot share it.
@@ -471,7 +473,9 @@ func TestInspectRejectsRequests(t *testing.T) {
 		{"host with port matches", "GET /fine HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 200, ""},
 		{"connect", "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 403, "reason=connect-denied"},
 		{"double slash", "GET //etc HTTP/1.1\r\nHost: example.com\r\n\r\n", 403, "reason=bad-path"},
-		{"encoded slash", "GET /a%2Fb HTTP/1.1\r\nHost: example.com\r\n\r\n", 403, "reason=bad-path"},
+		{"encoded slash is one segment", "GET /a%2Fb HTTP/1.1\r\nHost: example.com\r\n\r\n", 200, ""},
+		{"encoded slash traversal", "GET /x%2F..%2Fadmin HTTP/1.1\r\nHost: example.com\r\n\r\n", 403, "reason=bad-path"},
+		{"leading encoded slash", "GET /%2Fadmin HTTP/1.1\r\nHost: example.com\r\n\r\n", 403, "reason=bad-path"},
 		{"encoded dot dot", "GET /%2e%2e/etc HTTP/1.1\r\nHost: example.com\r\n\r\n", 403, "reason=bad-path"},
 		{"encoded nul", "GET /a%00 HTTP/1.1\r\nHost: example.com\r\n\r\n", 403, "reason=bad-path"},
 		{"backslash", "GET /a\\b HTTP/1.1\r\nHost: example.com\r\n\r\n", 403, "reason=bad-path"},
@@ -483,7 +487,7 @@ func TestInspectRejectsRequests(t *testing.T) {
 			t.Fatalf("%s: got %d %q, want %d containing %q", tt.name, status, body, tt.status, tt.reason)
 		}
 	}
-	for _, uri := range []string{"//etc", "/a%2Fb", "/%2e%2e/etc", "/a%00", "/a\\b"} {
+	for _, uri := range []string{"//etc", "/x%2F..%2Fadmin", "/%2Fadmin", "/%2e%2e/etc", "/a%00", "/a\\b"} {
 		if _, ok := hits.Load(uri); ok {
 			t.Fatalf("rejected path %q reached upstream", uri)
 		}
@@ -493,6 +497,63 @@ func TestInspectRejectsRequests(t *testing.T) {
 	}
 	if evs := e.find("l7", map[string]any{"status": float64(403), "denied": true, "reason": "connect-denied"}); len(evs) != 1 {
 		t.Fatalf("connect events = %v", evs)
+	}
+}
+
+// TestInspectPathNotEvaluated covers an http rule without path patterns: the
+// request path is not canonicalized, and reaches the upstream and the l7 event
+// as the guest sent it, escaped.
+func TestInspectPathNotEvaluated(t *testing.T) {
+	t.Parallel()
+	for _, h2 := range []bool{false, true} {
+		name := "http/1.1"
+		if h2 {
+			name = "h2"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newL7Env(t)
+			var mu sync.Mutex
+			var got []string
+			e.httpsUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				got = append(got, r.RequestURI)
+				mu.Unlock()
+				_, _ = io.WriteString(w, "ok")
+			}))
+			e.start(ruleWeb+`,{"name":"any","names":["example.com"],"http":{"methods":["*"]}}`, "", true)
+			client := e.client(h2, 443)
+			paths := []string{
+				"/%40tarquinen%2Fopencode-dcp/latest",
+				"/a%2Fb/%2e%2e/c",
+				"//x",
+				"/a%5Cb",
+			}
+			for _, path := range paths {
+				req, err := http.NewRequest(http.MethodGet, "https://example.com"+path, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatalf("GET %s: %v", path, err)
+				}
+				if body := readBody(t, resp); resp.StatusCode != 200 || body != "ok" {
+					t.Fatalf("GET %s = %d %q, want 200", path, resp.StatusCode, body)
+				}
+				if evs := e.find("l7", map[string]any{"method": "GET", "path": path, "status": float64(200), "rule": "any"}); len(evs) != 1 {
+					t.Fatalf("l7 events for %s = %v\n%s", path, evs, e.log.String())
+				}
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(got, paths) {
+				t.Fatalf("upstream saw %q, want %q", got, paths)
+			}
+			if evs := e.find("l7", map[string]any{"reason": "bad-path"}); len(evs) != 0 {
+				t.Fatalf("bad-path events: %v", evs)
+			}
+		})
 	}
 }
 

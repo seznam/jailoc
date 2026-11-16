@@ -170,7 +170,7 @@ jailoc reload myproject
 
 **Cause:** a rule with an `http` table matches the host. Once one does, only `http` allow rules decide its requests; a plain `allow` rule for the same host and port doesn't grant them. The method or path of the request matches none of them.
 
-**Fix:** find the request with `jailoc traffic` (method, host, path, status, reason), then add the method or path to the `http` rule, or add `http.methods = ["*"]` or `http.paths = ["/**"]` to a more permissive rule for that host. Paths with `//`, `\`, `%2f`, `.` or `..` segments are denied as `bad-path` instead. Apply with `jailoc reload`. See [Restrict HTTP methods and paths](network-access.md#restrict-http-methods-and-paths).
+**Fix:** find the request with `jailoc traffic` (method, host, path, status, reason), then add the method or path to the `http` rule, or add `http.methods = ["*"]` or `http.paths = ["/**"]` to a more permissive rule for that host. Where an `http` rule with `paths` applies to the method, a path with `//`, `\`, `%5c`, `.` or `..` segments, or an encoded slash that forms a `..` or empty piece, is denied as `bad-path` instead; without `paths` the path is not checked. Apply with `jailoc reload`. See [Restrict HTTP methods and paths](network-access.md#restrict-http-methods-and-paths).
 
 ## Certificate error on an inspected host
 

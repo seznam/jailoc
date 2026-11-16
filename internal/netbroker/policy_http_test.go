@@ -268,11 +268,69 @@ func TestHTTPScopeAndEvaluate(t *testing.T) {
 	for _, tt := range verdicts {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			segs, ok := canonicalPath(tt.path)
-			if !ok {
-				t.Fatalf("canonicalPath(%q)", tt.path)
+			if got := tt.scope.evaluate(tt.method, tt.path, "flow-rule"); got != tt.want {
+				t.Fatalf("evaluate(%s %s) = %+v, want %+v", tt.method, tt.path, got, tt.want)
 			}
-			if got := tt.scope.evaluate(tt.method, segs, "flow-rule"); got != tt.want {
+		})
+	}
+}
+
+func TestHTTPEvaluatePaths(t *testing.T) {
+	t.Parallel()
+	const npm = "/%40tarquinen%2Fopencode-dcp/latest"
+	ok := func(rule string) httpVerdict { return httpVerdict{allow: true, rule: rule} }
+	badPath := httpVerdict{reason: "bad-path"}
+	noMatch := httpVerdict{reason: "http-no-match"}
+	denied := httpVerdict{rule: "d", reason: "rule d"}
+	tests := []struct {
+		name   string
+		rules  string
+		method string
+		path   string
+		want   httpVerdict
+	}{
+		// No path pattern in play: the path is not evaluated.
+		{"methods-only rule allows the npm path", `{"allow":[{"name":"m","names":["example.com"],"http":{"methods":["*"]}}]}`, "GET", npm, ok("m")},
+		{"methods-only rule, double slash", `{"allow":[{"name":"m","names":["example.com"],"http":{"methods":["*"]}}]}`, "GET", "//x", ok("m")},
+		{"methods-only rule, encoded backslash", `{"allow":[{"name":"m","names":["example.com"],"http":{"methods":["*"]}}]}`, "GET", "/a%5Cb", ok("m")},
+		{"methods-only rule, dot dot", `{"allow":[{"name":"m","names":["example.com"],"http":{"methods":["*"]}}]}`, "GET", "/..", ok("m")},
+		{"methods-only rule, nul", `{"allow":[{"name":"m","names":["example.com"],"http":{}}]}`, "GET", "/a%00", ok("m")},
+		{"methods-only deny rule leaves the path alone", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"methods":["DELETE"]}}]}`, "GET", "//x", ok("flow-rule")},
+		{"methods-only deny rule still denies", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"methods":["DELETE"]}}]}`, "DELETE", "//x", denied},
+		{"paths rule for another method does not canonicalize", `{"allow":[{"name":"a","names":["example.com"],"http":{"methods":["GET"],"paths":["/ok"]}}]}`, "POST", "//x", noMatch},
+		{"deny paths for POST only: GET not canonicalized", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"methods":["POST"],"paths":["/a"]}}]}`, "GET", "//x", ok("flow-rule")},
+		{"deny paths for POST only: POST canonicalized", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"methods":["POST"],"paths":["/a"]}}]}`, "POST", "//x", badPath},
+		{"deny paths fold the method", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"methods":["POST"],"paths":["/a"]}}]}`, "post", "//x", badPath},
+		{"allow paths do not fold the method", `{"allow":[{"name":"a","names":["example.com"],"http":{"methods":["POST"],"paths":["/a"]}}]}`, "post", "//x", noMatch},
+		// A path pattern applies: the path is canonicalized.
+		{"paths rule allows the npm path", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/*/latest"]}}]}`, "GET", npm, ok("a")},
+		{"paths rule, star is one segment", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/*/latest"]}}]}`, "GET", "/a%2Fb/c/latest", noMatch},
+		{"paths rule, doublestar takes the rest", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/**"]}}]}`, "GET", "/a%2Fb/c", ok("a")},
+		{"paths rule, literal never matches an encoded slash", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/a/b"]}}]}`, "GET", "/a%2Fb", noMatch},
+		{"paths rule, traversal through encoded slashes", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/**"]}}]}`, "GET", "/x%2F..%2Fadmin", badPath},
+		{"paths rule, encoded dot dot", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/**"]}}]}`, "GET", "/%2E%2E/a", badPath},
+		{"paths rule, leading encoded slash", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/**"]}}]}`, "GET", "/%2Fa", badPath},
+		{"paths rule, double slash", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/**"]}}]}`, "GET", "//x", badPath},
+		{"paths rule, encoded backslash", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/**"]}}]}`, "GET", "/a%5Cb", badPath},
+		// Deny patterns also see the path split on decoded slashes.
+		{"deny pattern vs encoded slash", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"paths":["/a/b"]}}]}`, "GET", "/a%2Fb", denied},
+		{"deny pattern vs encoded slash, lowercase", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"paths":["/a/b"]}}]}`, "GET", "/a%2fb", denied},
+		{"deny pattern vs plain path", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"paths":["/a/b"]}}]}`, "GET", "/a/b", denied},
+		{"deny pattern, other encoded path passes", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"paths":["/a/b"]}}]}`, "GET", "/a%2Fc", ok("flow-rule")},
+		{"deny prefix pattern vs encoded slash", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"paths":["/secrets/**"]}}]}`, "GET", "/secrets%2Fkey", denied},
+		{"deny pattern vs npm path", `{"allow":[{"name":"w","names":["*"]}],"deny":[{"name":"d","names":["example.com"],"http":{"paths":["/@tarquinen/*/latest"]}}]}`, "GET", npm, denied},
+		{"allow pattern uses raw segments only", `{"allow":[{"name":"a","names":["example.com"],"http":{"paths":["/a/b"]}}]}`, "GET", "/a%2Fb", noMatch},
+		{"deny path rule canonicalizes with a methods-only allow rule", `{"allow":[{"name":"m","names":["example.com"],"http":{"methods":["*"]}}],"deny":[{"name":"d","names":["example.com"],"http":{"paths":["/a/b"]}}]}`, "GET", "/a%2Fb", denied},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := httpTestPolicy(t, tt.rules)
+			s := p.httpScope("example.com", netip.MustParseAddrPort(l7IP+":443"))
+			if s.empty() {
+				t.Fatal("scope is empty")
+			}
+			if got := s.evaluate(tt.method, tt.path, "flow-rule"); got != tt.want {
 				t.Fatalf("evaluate(%s %s) = %+v, want %+v", tt.method, tt.path, got, tt.want)
 			}
 		})
