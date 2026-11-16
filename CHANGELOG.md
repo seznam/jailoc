@@ -1,5 +1,45 @@
 # Changelog
 
+## [2.6.0](https://github.com/seznam/jailoc/compare/v2.5.0...v2.6.0) (2026-11-16)
+
+
+### Features
+
+* **cmd:** show up timings in jailoc logs and warn about large images ([0157347](https://github.com/seznam/jailoc/commit/0157347ee7c41de1ca6126f320e1bb7b66df75a2))
+* **cmd:** show up timings in jailoc logs and warn about large images ([f918e42](https://github.com/seznam/jailoc/commit/f918e42ebf4911b5834df2d5ab2367cb58f05899))
+* **cmd:** warn only about what the workspace Dockerfile adds, above 20 layers or 5 GiB ([8748860](https://github.com/seznam/jailoc/commit/87488603703f9476ba775533c91426efe49950d8))
+* **guest:** make more TLS clients trust a forwarded CA bundle ([bc1e15b](https://github.com/seznam/jailoc/commit/bc1e15bc86e5cca0fe57ba03a4a6fb94e1f1f2be))
+* **guest:** make more TLS clients trust a forwarded CA bundle ([089d984](https://github.com/seznam/jailoc/commit/089d984eb8214f66b9b7628f7331b91283cc492a))
+* **netbroker:** answer direct DNS to resolvers allowed by a port 53 rule ([0d54ae9](https://github.com/seznam/jailoc/commit/0d54ae9ebf08778e37c8760a09aa7dc08af88ef8))
+* **netbroker:** answer direct DNS to resolvers allowed by a port 53 rule ([19f3afe](https://github.com/seznam/jailoc/commit/19f3afe6865e88459779c1f0d63f28f87c7f816c))
+* **nix:** Jailoc v2 support ([b6ef6f5](https://github.com/seznam/jailoc/commit/b6ef6f54d7352b54c99f48eeefbad0ee866eabdd))
+* **vm:** boot workspace VMs from per-layer EROFS images ([87fca57](https://github.com/seznam/jailoc/commit/87fca5770b5f26bddc3949b7cc45a22af3a7fdd4))
+* **vm:** boot workspace VMs from per-layer EROFS images ([56acc84](https://github.com/seznam/jailoc/commit/56acc84a37d7d6dccb32ed8bf24b157ff98165bc))
+
+
+### Bug Fixes
+
+* **cmd:** follow the up, supervisor and console logs together and across restarts ([ebe1736](https://github.com/seznam/jailoc/commit/ebe1736ab8f98fa5a07b5cd793d61e797a4978ef))
+* **cmd:** log up failures, time the export after the cache lock and follow a running up ([455e9b6](https://github.com/seznam/jailoc/commit/455e9b6b91a6c910d565f73dfeab0755c5ee47fc))
+* **guest:** give the agent the host GID when idmapped mounts are unavailable ([5f84618](https://github.com/seznam/jailoc/commit/5f846189ccb910a996b5373ce7459c7b50a6e75d))
+* **guest:** give the agent the host GID when idmapped mounts are unavailable ([9856147](https://github.com/seznam/jailoc/commit/98561478fa2c1ced15cda72890048c756ca87eba))
+* **guest:** keep image owners without an idmapped boot root and mount deep images ([e1a2320](https://github.com/seznam/jailoc/commit/e1a2320a0c7a420838130fd48211e0f879c9c87a))
+* **guest:** refresh generated trust stores when a forwarded CA is removed or replaced ([47d7f9b](https://github.com/seznam/jailoc/commit/47d7f9bc574a630e2734abe5e961dddc4fd4a646))
+* **guest:** retry a failed trust store refresh and keep the system bundle current ([24cf519](https://github.com/seznam/jailoc/commit/24cf51931c56346538cfa7e5e80d8f6c5e6f394c))
+* **guest:** run trust store tools from system dirs, tracked by the reaper, with content-named certificates ([fe5eb29](https://github.com/seznam/jailoc/commit/fe5eb29c2986da13ab01047163a204ace5894870))
+* **netbroker:** share the DNS query and connection budget with direct DNS ([53eaed2](https://github.com/seznam/jailoc/commit/53eaed2f496be01ea9da6649eff06976b327bc92))
+* **nix:** pin go-microvm runner to the EROFS share revision ([3eaa732](https://github.com/seznam/jailoc/commit/3eaa732687e719a471c720f9edb5343bd2a79d0f))
+* **vm:** bound layer conversion and handle more tar and AUFS entries ([4a69795](https://github.com/seznam/jailoc/commit/4a69795d15fb633340e306278614b25516401996))
+* **vm:** drop layers below a layer with an opaque root ([e3cdb23](https://github.com/seznam/jailoc/commit/e3cdb23b021f5fb2901c772ba7b5ebb6a3dec51f))
+* **vm:** honour an opaque layer root in image path lookups ([44fb55a](https://github.com/seznam/jailoc/commit/44fb55adc191591aeb5ff1c7f10a05667c7f9ec8))
+* **vmintegration:** allow the S3 host Docker Hub serves blobs from ([3fde769](https://github.com/seznam/jailoc/commit/3fde769612075891957e31e2e1a3e0351b1a30ca))
+* **vm:** keep inherited directory metadata and resolve image paths across layers ([6ded59b](https://github.com/seznam/jailoc/commit/6ded59b6710633b7b22242c38951247cc64836b0))
+
+
+### Documentation
+
+* drop claim that sudo does not grant root without idmapped mounts ([78bd3e6](https://github.com/seznam/jailoc/commit/78bd3e66e4c218648b143689cf9168761853d0a4))
+
 ## [2.5.0](https://github.com/seznam/jailoc/compare/v2.4.0...v2.5.0) (2026-11-13)
 
 
