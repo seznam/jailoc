@@ -370,8 +370,18 @@ func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetw
 			Allow: uniqueStrings(*allowedHosts),
 			Proto: config.RuleProtoAny,
 		})
+		// allowed_hosts opened private addresses its names resolved to; keep
+		// that by trusting the names for private answers.
+		zones, skipped := config.LegacyHostZones(*allowedHosts)
 		*allowedHosts = nil
 		m.changes = append(m.changes, fmt.Sprintf("%s: move allowed_hosts to %s", label, rulesName))
+		if added := newStrings(n.InternalZones, zones); len(added) > 0 {
+			n.InternalZones = append(n.InternalZones, added...)
+			m.changes = append(m.changes, fmt.Sprintf("%s: add allowed_hosts names to %s internal_zones (%s)", label, netName, strings.Join(added, ", ")))
+		}
+		if len(skipped) > 0 {
+			m.changes = append(m.changes, fmt.Sprintf("%s: %s cannot be internal zones; their names no longer resolve to private addresses", label, strings.Join(skipped, ", ")))
+		}
 	}
 	if len(*allowedNetworks) > 0 {
 		n := ensureTable()
@@ -441,6 +451,18 @@ func uniqueStrings(in []string) []string {
 	for _, s := range in {
 		if !seen[s] {
 			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// newStrings returns the entries of add that are not in have, without
+// duplicates.
+func newStrings(have, add []string) []string {
+	var out []string
+	for _, s := range add {
+		if !slices.Contains(have, s) && !slices.Contains(out, s) {
 			out = append(out, s)
 		}
 	}

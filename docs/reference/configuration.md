@@ -46,6 +46,29 @@ Host runtime of the workspace VMs. All fields are optional.
 | `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Ignored when `runner` is empty, including with a package-provided runtime, which always uses its own library directory. When empty with a configured `runner`, jailoc uses `/opt/homebrew/lib` on macOS if it exists, otherwise the system library path. This fallback applies only to a configured `runner`. Must be absolute; supports `~` expansion. |
 | `builder` | string | `"auto"` | Where workspace images are built: `"auto"` uses the host Docker daemon when it answers and runs Linux on the host's CPU architecture, otherwise the shared builder VM; `"docker"` requires the host daemon; `"vm"` always uses the shared builder VM. A workspace with `isolated_build = true` always uses its own builder VM. |
 
+### Internal zones
+
+A hostname rule opens a private address (RFC 1918, CGNAT, link-local, IPv6 unique local and the other [denied ranges](../explanation/network-isolation.md)) only for names in `internal_zones`. A zone only marks whose DNS answers are trusted; it opens nothing by itself, so the names still need an `allow` rule.
+
+- **DNS**: the broker drops `A` and `AAAA` records with a private address from an answer unless both the queried name and the record owner are in an internal zone. A public name with a `CNAME` into an internal zone is dropped too. Dropped addresses never reach the guest or the IP-to-name cache, and `jailoc traffic` shows them as `dropped <address>: private address outside internal_zones`.
+- **Connect time**: a hostname rule matches a private destination only through a cached name in an internal zone. Otherwise the flow is denied with `reason=not-internal-zone` and the name of the rule that matched.
+- IP and CIDR rules are unaffected, `deny` rules still win, and `"*"` never opens private addresses. Loopback and other hard-denied answers are left in DNS answers; the broker never connects to them.
+- **Validation**: a zone must be a domain name. `"*"`, top-level domains and other public suffixes (`com`, `co.uk`, `github.io`) and wildcard DNS services that resolve names to any address (`nip.io`, `sslip.io`, `xip.io`, `localtest.me`, `lvh.me`, `traefik.me`, `vcap.me`, `local.gd`) are rejected. Top-level names without a public registry, such as `internal`, `corp`, `lan`, and `home.arpa`, are allowed.
+- **Legacy `allowed_hosts`**: its hostnames are trusted as internal zones in memory, and `jailoc migrate` writes them to `internal_zones`, so they keep resolving to private addresses.
+
+```toml
+[defaults.network]
+internal_zones = ["internal.example.com"]
+
+[[workspaces.api.network.rules]]
+name = "gitlab"
+allow = ["gitlab.internal.example.com"]   # 10.20.5.10: opened
+
+[[workspaces.api.network.rules]]
+name = "saas"
+allow = ["*.vercel.app"]                   # a private answer is dropped
+```
+
 ### Example
 
 ```toml
@@ -87,7 +110,7 @@ Defaults applied to all workspaces.
 | `env_file` | string[] | `[]` | `.env` files loaded for all workspaces. Each file must exist at config load time. |
 | `mounts` | string[] | `[]` | Additional directory shares, `host:container[:mode]`. See [`mounts`](#mounts). |
 | `snapshots` | string[] | `[]` | Read-only snapshots of host files or directories. See [`snapshots`](#snapshots). |
-| `allowed_hosts` | string[] | `[]` | Hostnames whose A and AAAA records are allowed through the network broker even when they resolve to private addresses. |
+| `allowed_hosts` | string[] | `[]` | Hostnames whose A and AAAA records are allowed through the network broker even when they resolve to private addresses. Deprecated: its hostnames become an allow rule and [internal zones](#internal-zones). |
 | `allowed_networks` | string[] | `[]` | IPv4 and IPv6 CIDR ranges allowed through the network broker. |
 | `ports` | (int \| string)[] | `[]` | Guest ports published on host `127.0.0.1`. See [`ports`](#ports). |
 | `host_ports` | (int \| string)[] | `[]` | Host `127.0.0.1` ports or Unix sockets reachable from the guest. See [`host_ports`](#host_ports). |
@@ -135,6 +158,7 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `ipv6` | bool | `false` | Give the guest IPv6 (`fd00:127::2/64`) and let the broker allow IPv6 destinations by the [IPv6 policy](../explanation/network-isolation.md#ipv6). When off, the guest has IPv4 only and the broker denies every IPv6 flow. Changing it needs `jailoc restart`; `jailoc reload` turns it off at the broker right away, except in a VM started by a jailoc release without this setting: that VM keeps IPv6 until `jailoc restart`. |
 | `dns` | string | (host resolver) | Routable numeric IPv4 resolver used for permitted DNS queries. |
 | `rules` | table[] | `[]` | Allow and deny egress rules (`[[<scope>.network.rules]]`). Combined across `[defaults]` and the workspace; `deny` always wins over `allow`. |
+| `internal_zones` | string[] | `[]` | DNS zones whose names may resolve to private addresses. Each zone covers itself and every name under it (`corp.example` covers `gitlab.corp.example`; a leading `*.` is dropped). Combined across `[defaults]` and the workspace. See [Internal zones](#internal-zones). |
 
 ### `[[<scope>.network.rules]]`
 

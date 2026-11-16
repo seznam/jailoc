@@ -52,6 +52,21 @@ func TestDecideRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePolicy dot-quic: %v", err)
 	}
+	internalPol, err := ParsePolicy([]byte(`{
+		"ipv6": true,
+		"internal_zones": ["internal.example.com", "*.corp.example."],
+		"deny": [
+			{"name": "no-secret", "names": ["secret.corp.example"], "proto": "any"}
+		],
+		"allow": [
+			{"name": "gitlab", "names": ["gitlab.internal.example.com"], "proto": "tcp"},
+			{"name": "corp", "names": ["corp.example", "*.corp.example"], "proto": "tcp"},
+			{"name": "saas", "names": ["*.vercel.app"], "proto": "tcp"}
+		]
+	}`), "internal")
+	if err != nil {
+		t.Fatalf("ParsePolicy internal: %v", err)
+	}
 
 	baseEnv := Env{
 		Gateway:   netip.MustParseAddr("192.168.127.1"),
@@ -106,8 +121,45 @@ func TestDecideRules(t *testing.T) {
 			proto: ProtoTCP, dst: "10.20.5.10:5433", allow: false, reason: "denied-range",
 		},
 		{
-			name: "name rule opens private ip when dns cached", policy: pol, names: []string{"registry.npmjs.org"},
-			proto: ProtoTCP, dst: "10.20.5.11:443", allow: true, reason: "rule dev-deps", rule: "dev-deps",
+			name: "name rule does not open private ip outside internal zones", policy: pol, names: []string{"registry.npmjs.org"},
+			proto: ProtoTCP, dst: "10.20.5.11:443", allow: false, reason: "not-internal-zone", rule: "dev-deps",
+		},
+		{
+			name: "name rule opens private ip in internal zone", policy: internalPol, names: []string{"gitlab.internal.example.com"},
+			proto: ProtoTCP, dst: "10.20.5.11:443", allow: true, reason: "rule gitlab", rule: "gitlab",
+		},
+		{
+			name: "internal zone covers the zone apex", policy: internalPol, names: []string{"corp.example"},
+			proto: ProtoTCP, dst: "10.20.5.12:22", allow: true, reason: "rule corp", rule: "corp",
+		},
+		{
+			name: "internal ipv6 ula", policy: internalPol, names: []string{"gitlab.internal.example.com"},
+			proto: ProtoTCP, dst: "[fd12::5]:443", allow: true, reason: "rule gitlab", rule: "gitlab",
+		},
+		{
+			name: "public name rule private ip", policy: internalPol, names: []string{"app.vercel.app"},
+			proto: ProtoTCP, dst: "10.0.0.5:443", allow: false, reason: "not-internal-zone", rule: "saas",
+		},
+		{
+			name: "public name rule private ula", policy: internalPol, names: []string{"app.vercel.app"},
+			proto: ProtoTCP, dst: "[fd12::5]:443", allow: false, reason: "not-internal-zone", rule: "saas",
+		},
+		{
+			name: "public name rule public ip", policy: internalPol, names: []string{"app.vercel.app"},
+			proto: ProtoTCP, dst: "76.76.21.21:443", allow: true, reason: "rule saas", rule: "saas",
+		},
+		{
+			name: "private ip cached for both public and internal name", policy: internalPol,
+			names: []string{"app.vercel.app", "gitlab.internal.example.com"},
+			proto: ProtoTCP, dst: "10.20.5.11:443", allow: true, reason: "rule gitlab", rule: "gitlab",
+		},
+		{
+			name: "internal zone without allow rule", policy: internalPol, names: []string{"wiki.internal.example.com"},
+			proto: ProtoTCP, dst: "10.20.5.13:443", allow: false, reason: "denied-range",
+		},
+		{
+			name: "deny wins over internal zone", policy: internalPol, names: []string{"secret.corp.example"},
+			proto: ProtoTCP, dst: "10.20.5.14:443", allow: false, reason: "rule no-secret", rule: "no-secret",
 		},
 		{
 			name: "udp allowed by rule", policy: pol, names: []string{"time.example.com"},
@@ -587,7 +639,7 @@ func TestReviewFixes(t *testing.T) {
 				},
 			},
 		}).Pack()
-		b.logDNS("udp", q, resp, nil, netip.AddrPort{})
+		b.logDNS("udp", q, resp, nil, netip.AddrPort{}, nil)
 		ip := netip.MustParseAddr("93.184.216.34")
 		now = now.Add(5 * time.Second)
 		got := b.names.lookup(ip)
@@ -661,7 +713,7 @@ func TestReviewFixes(t *testing.T) {
 				},
 			},
 		}).Pack()
-		b.logDNS("udp", q, resp, nil, netip.AddrPort{})
+		b.logDNS("udp", q, resp, nil, netip.AddrPort{}, nil)
 		ip := netip.MustParseAddr("93.184.216.34")
 		now = now.Add(5 * time.Second)
 		got := b.names.lookup(ip)

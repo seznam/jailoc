@@ -32,7 +32,8 @@ func TestDecideDirectDNS(t *testing.T) {
 	byCIDR := parse(t, `{"ipv6":true,"allow":[
 		{"name":"internet","names":["*"],"proto":"any"},
 		{"name":"resolver","cidrs":["10.33.4.25","fd00:53::/64"],"proto":"any","ports":["53"]}]}`)
-	byName := parse(t, `{"allow":[{"name":"coredns","names":["*.lb.scif.cz"],"proto":"udp","ports":["53"]}]}`)
+	byName := parse(t, `{"internal_zones":["lb.scif.cz"],"allow":[{"name":"coredns","names":["*.lb.scif.cz"],"proto":"udp","ports":["53"]}]}`)
+	byNameOutside := parse(t, `{"allow":[{"name":"coredns","names":["*.lb.scif.cz"],"proto":"udp","ports":["53"]}]}`)
 	public := parse(t, `{"ipv6":true,"allow":[{"name":"public-dns","names":["*"],"proto":"any","ports":["53"]}]}`)
 	denied := parse(t, `{"allow":[{"name":"public-dns","names":["*"],"proto":"any","ports":["53"]}],
 		"deny":[{"name":"no-google","cidrs":["8.8.8.8"],"proto":"any"}]}`)
@@ -57,6 +58,7 @@ func TestDecideDirectDNS(t *testing.T) {
 		{"ipv6 wildcard without ports", byCIDR, env, ProtoUDP, "[2606:4700:4700::1111]:53", false, "dns-filtered"},
 		{"name rule", byName, lbEnv, ProtoUDP, "10.33.4.25:53", true, "rule coredns"},
 		{"name rule other proto", byName, lbEnv, ProtoTCP, "10.33.4.25:53", false, "dns-filtered"},
+		{"name rule outside internal zones", byNameOutside, lbEnv, ProtoUDP, "10.33.4.25:53", false, "dns-filtered"},
 		{"name rule unresolved", byName, env, ProtoUDP, "10.33.4.25:53", false, "dns-filtered"},
 		{"public wildcard with port 53", public, env, ProtoUDP, "8.8.8.8:53", true, "rule public-dns"},
 		{"public wildcard ipv6", public, env, ProtoTCP, "[2606:4700:4700::1111]:53", true, "rule public-dns"},

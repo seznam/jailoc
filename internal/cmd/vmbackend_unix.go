@@ -621,15 +621,17 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 	}
 
 	policy := struct {
-		DNS   string   `json:"dns,omitempty"`
-		Deny  []vmRule `json:"deny"`
-		Allow []vmRule `json:"allow"`
-		IPv6  bool     `json:"ipv6,omitempty"`
+		DNS           string   `json:"dns,omitempty"`
+		Deny          []vmRule `json:"deny"`
+		Allow         []vmRule `json:"allow"`
+		InternalZones []string `json:"internal_zones,omitempty"`
+		IPv6          bool     `json:"ipv6,omitempty"`
 	}{
-		DNS:   ws.DNSUpstream,
-		Deny:  deny,
-		Allow: allow,
-		IPv6:  ws.IPv6,
+		DNS:           ws.DNSUpstream,
+		Deny:          deny,
+		Allow:         allow,
+		InternalZones: ws.InternalZones,
+		IPv6:          ws.IPv6,
 	}
 	data, err := json.Marshal(policy)
 	if err != nil {

@@ -76,7 +76,11 @@ type Resolved struct {
 	// NetworkRules are the combined egress rules (defaults, workspace,
 	// migrated legacy settings, and implicit agent endpoints).
 	NetworkRules []config.NetworkRule
-	CABundle     config.CABundle
+	// InternalZones are the DNS zones whose answers may point to private
+	// addresses: [defaults.network] and workspace internal_zones and the names
+	// of legacy allowed_hosts, normalized.
+	InternalZones []string
+	CABundle      config.CABundle
 }
 
 type SecretKind int
@@ -212,6 +216,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
 	r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
 	r.NetworkRules = resolveNetworkRules(cfg, ws, r.AllowedHosts, r.AllowedNetworks, r.DNSBlockedZones, h)
+	r.InternalZones = resolveInternalZones(cfg.Defaults.Network.Get().InternalZones, ws.Network.Get().InternalZones, r.AllowedHosts)
 	snapshots, err := config.MergeSnapshots(cfg.Defaults.Snapshots, ws.Snapshots)
 	if err != nil {
 		return nil, fmt.Errorf("merge snapshots for workspace %s: %w", name, err)
@@ -297,6 +302,18 @@ func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, 
 		})
 	}
 	return rules
+}
+
+// resolveInternalZones merges the [defaults.network] and workspace
+// internal_zones with the names of legacy allowed_hosts (see
+// config.LegacyHostZones).
+func resolveInternalZones(defaults, workspace, allowedHosts []string) []string {
+	var zones []string
+	for _, z := range slices.Concat(defaults, workspace) {
+		zones = append(zones, config.NormalizeInternalZone(z))
+	}
+	legacy, _ := config.LegacyHostZones(allowedHosts) // skipped names only lose private answers
+	return mergeUnique(zones, legacy)
 }
 
 // mergeUnique returns a followed by the entries of b not already present.

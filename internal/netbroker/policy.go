@@ -234,8 +234,11 @@ type Policy struct {
 	dnsUpstreams []netip.AddrPort
 	blockedZones []string
 	denyAll      bool
-	ipv6         bool
-	source       string
+	// internalZones are the DNS zones trusted to answer with private
+	// addresses; see privateAnswerAllowed.
+	internalZones []string
+	ipv6          bool
+	source        string
 }
 
 type policyFile struct {
@@ -251,6 +254,10 @@ type policyFile struct {
 	// IPv6 allows guest flows to IPv6 destinations. Without it the guest
 	// network is IPv4 only and every IPv6 flow is denied.
 	IPv6 bool `json:"ipv6"`
+	// InternalZones are the DNS zones whose names may resolve to private
+	// addresses. The resolver drops any other private answer, and a name
+	// rule opens a private address only for a name in these zones.
+	InternalZones []string `json:"internal_zones"`
 }
 
 // ParsePolicy validates a JSON policy. Unknown fields are rejected so a typo
@@ -306,6 +313,13 @@ func ParsePolicy(data []byte, source string) (*Policy, error) {
 		}
 		p.blockedZones = append(p.blockedZones, z)
 	}
+	for _, z := range f.InternalZones {
+		z = strings.TrimPrefix(normalizeName(z), "*.")
+		if z == "" || strings.Contains(z, "*") {
+			return nil, fmt.Errorf("policy %s: invalid internal zone %q", source, z)
+		}
+		p.internalZones = append(p.internalZones, z)
+	}
 	if len(p.blockedZones) > 0 && len(p.dnsUpstreams) == 0 {
 		return nil, fmt.Errorf("policy %s: dns_blocked_zones requires dns_upstreams", source)
 	}
@@ -315,6 +329,70 @@ func ParsePolicy(data []byte, source string) (*Policy, error) {
 // normalizeName lowercases a DNS name and drops its trailing dot.
 func normalizeName(name string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+}
+
+// internal reports whether name is in one of the internal zones: the zone
+// itself or a name under it.
+func (p *Policy) internal(name string) bool {
+	if p == nil {
+		return false
+	}
+	name = normalizeName(name)
+	for _, z := range p.internalZones {
+		if name == z || strings.HasSuffix(name, "."+z) {
+			return true
+		}
+	}
+	return false
+}
+
+// allowNames returns the DNS names of a destination that an allow rule may
+// match by name. A public address keeps all of them. A private address keeps
+// only names in the internal zones, so a name outside them cannot open a
+// private address the guest learned from somewhere else.
+func (p *Policy) allowNames(names []string, isPublic bool) []string {
+	if isPublic || len(names) == 0 {
+		return names
+	}
+	var out []string
+	for _, n := range names {
+		if p.internal(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// privateAnswer reports whether a is an address DNS must not hand to the
+// guest from outside the internal zones: a private or other non-public
+// address that an allow rule could open. Hard-denied addresses never open,
+// and loopback stays inside the guest, so they are left in answers.
+func privateAnswer(a netip.Addr) bool {
+	a = a.WithZone("")
+	if a.Is4In6() {
+		a = a.Unmap()
+	}
+	if a.Is4() {
+		return inAny(a, deniedV4) && !inAny(a, hardDeniedV4)
+	}
+	for _, denied := range hardDeniedV6 {
+		if denied.prefix.Contains(a) {
+			return false
+		}
+	}
+	if embedded, ok := embeddedIPv4(a); ok {
+		return privateAnswer(embedded)
+	}
+	return a.IsPrivate()
+}
+
+// privateAnswerAllowed reports whether an answer to the question qname may
+// give the guest a private address owned by owner. Both names must be in
+// the internal zones: a CNAME from an allowed public name into an internal
+// zone would otherwise let whoever runs the public name reach internal
+// hosts the user never allowed.
+func (p *Policy) privateAnswerAllowed(qname, owner string) bool {
+	return p.internal(qname) && p.internal(owner)
 }
 
 // denied reports whether name is explicitly blocked by blockedZones or a
@@ -541,7 +619,7 @@ func decideDNS(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic bo
 		if allowed, ok = matchAddrRule(r, env.Names, proto, dst, isPublic); ok {
 			break
 		}
-		if allowed, ok = matchRule(r, env.Names, proto, dst, isPublic, true); ok {
+		if allowed, ok = matchRule(r, p.allowNames(env.Names, isPublic), proto, dst, isPublic, true); ok {
 			break
 		}
 	}
@@ -567,8 +645,9 @@ func decideRules(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic 
 			return d
 		}
 	}
+	names := p.allowNames(env.Names, isPublic)
 	for i := range p.allow {
-		if d, ok := matchRule(&p.allow[i], env.Names, proto, dst, isPublic, true); ok {
+		if d, ok := matchRule(&p.allow[i], names, proto, dst, isPublic, true); ok {
 			return d
 		}
 	}
@@ -578,6 +657,14 @@ func decideRules(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic 
 		}
 	}
 	if !isPublic {
+		if len(names) < len(env.Names) {
+			// Say why a name rule did not open the address.
+			for i := range p.allow {
+				if d, ok := matchRule(&p.allow[i], env.Names, proto, dst, isPublic, true); ok && d.byName {
+					return Decision{Reason: "not-internal-zone", Name: d.Name, Rule: d.Rule}
+				}
+			}
+		}
 		return Decision{Reason: privateDenyReason, Name: firstName(env.Names)}
 	}
 	return Decision{Reason: "default-deny", Name: firstName(env.Names)}

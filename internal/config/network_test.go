@@ -106,11 +106,57 @@ func TestNetworkRulesValidation(t *testing.T) {
 	}
 }
 
+func TestInternalZonesValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		zone      string
+		wantError string
+	}{
+		{zone: "internal.example.com"},
+		{zone: "Corp.Example."},
+		{zone: "*.corp.example"},
+		{zone: "internal"},
+		{zone: "lan"},
+		{zone: "home.arpa"},
+		{zone: "myapp.github.io"},
+		{zone: "seznam.cz"},
+		{zone: "*", wantError: "must be a domain name"},
+		{zone: "", wantError: "must be a domain name"},
+		{zone: "a.*.example.com", wantError: "must be a domain name"},
+		{zone: "-bad.example.com", wantError: "invalid domain label"},
+		{zone: "com", wantError: "is a public suffix"},
+		{zone: "co.uk", wantError: "is a public suffix"},
+		{zone: "github.io", wantError: "is a public suffix"},
+		{zone: "arpa", wantError: "is a public suffix"},
+		{zone: "nip.io", wantError: "wildcard DNS service"},
+		{zone: "*.sslip.io", wantError: "wildcard DNS service"},
+		{zone: "dev.localtest.me", wantError: "wildcard DNS service"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.zone, func(t *testing.T) {
+			t.Parallel()
+			for _, cfg := range []*Config{
+				{Defaults: Defaults{Network: &Network{InternalZones: []string{tc.zone}}}},
+				{Workspaces: map[string]Workspace{"api": {Paths: []string{"/data/api"}, Network: &Network{InternalZones: []string{tc.zone}}}}},
+			} {
+				err := Validate(cfg)
+				if tc.wantError == "" && err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+					t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadNetworkRulesTOML(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.toml")
 	writeFile(t, path, `[defaults.network]
 dns = "9.9.9.9"
+internal_zones = ["internal.example.com"]
 
 [[defaults.network.rules]]
 name = "dev-deps"
@@ -132,7 +178,7 @@ ports = [9090, "8000-8100"]
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if cfg.Defaults.Network.DNS != "9.9.9.9" || len(cfg.Defaults.Network.Rules) != 2 {
+	if cfg.Defaults.Network.DNS != "9.9.9.9" || len(cfg.Defaults.Network.Rules) != 2 || !slices.Equal(cfg.Defaults.Network.InternalZones, []string{"internal.example.com"}) {
 		t.Fatalf("defaults network = %+v", cfg.Defaults.Network)
 	}
 	r := cfg.Workspaces["api"].Network.Rules

@@ -88,8 +88,9 @@ func TestVMDockerDiskSize(t *testing.T) {
 func TestVMPolicy(t *testing.T) {
 	t.Parallel()
 	ws := &workspace.Resolved{
-		Name:        "w",
-		DNSUpstream: "9.9.9.9",
+		Name:          "w",
+		DNSUpstream:   "9.9.9.9",
+		InternalZones: []string{"internal.example.com"},
 		NetworkRules: []config.NetworkRule{
 			{Name: "no-paste", Deny: []string{"pastebin.com", "*.ngrok.io"}},
 			{Name: "db", Allow: []string{"10.1.0.5/16", "192.168.1.10"}, Proto: "tcp", Ports: []config.RulePort{" 5432 ", "8000 - 8100"}},
@@ -102,12 +103,16 @@ func TestVMPolicy(t *testing.T) {
 		t.Fatalf("vmPolicy: %v", err)
 	}
 	var got struct {
-		DNS   string   `json:"dns"`
-		Deny  []vmRule `json:"deny"`
-		Allow []vmRule `json:"allow"`
+		DNS           string   `json:"dns"`
+		Deny          []vmRule `json:"deny"`
+		Allow         []vmRule `json:"allow"`
+		InternalZones []string `json:"internal_zones"`
 	}
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", data, err)
+	}
+	if !slices.Equal(got.InternalZones, []string{"internal.example.com"}) {
+		t.Fatalf("internal_zones = %v, want [internal.example.com]", got.InternalZones)
 	}
 	if got.DNS != "9.9.9.9" {
 		t.Fatalf("dns = %q, want 9.9.9.9", got.DNS)

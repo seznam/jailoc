@@ -182,13 +182,13 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte, server n
 		lastErr = err
 	}
 	if resp == nil {
-		b.logDNS(network, q, nil, lastErr, server)
+		b.logDNS(network, q, nil, lastErr, server, nil)
 		return servfail(q)
 	}
 	if filtered {
 		blockedName, rule, ok := blockedAnswer(p, resp)
 		if !ok {
-			b.logDNS(network, q, resp, nil, server)
+			b.logDNS(network, q, resp, nil, server, nil)
 			return servfail(q)
 		}
 		if blockedName != "" {
@@ -201,10 +201,14 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte, server n
 			return nxdomain(q)
 		}
 	}
+	var dropped []string
+	if p != nil && p.rulesMode {
+		resp, dropped = dropPrivateAnswers(p, q, resp)
+	}
 	if p != nil && (p.rulesMode || len(p.deny) > 0) {
 		resp = stripHTTPSSVCB(resp)
 	}
-	b.logDNS(network, q, resp, nil, server)
+	b.logDNS(network, q, resp, nil, server, dropped)
 	return resp
 }
 
@@ -263,6 +267,51 @@ func stripHTTPSSVCB(resp []byte) []byte {
 		return resp
 	}
 	return packed
+}
+
+// dropPrivateAnswers removes A and AAAA records with a private address from
+// the answer resp to q unless the question and the record owner are both in
+// the policy's internal zones (privateAnswerAllowed), so a name outside them
+// cannot be pointed at the user's network. It returns the dropped addresses.
+// The question is taken from q, not from resp. A query or response that does
+// not parse gets SERVFAIL, so a malformed answer cannot slip a private
+// address past the filter.
+func dropPrivateAnswers(pol *Policy, q, resp []byte) ([]byte, []string) {
+	qname, _, ok := singleQuestion(q)
+	var msg dnsmessage.Message
+	if err := msg.Unpack(resp); !ok || err != nil {
+		return servfail(q), nil
+	}
+	var dropped []string
+	keep := func(rs []dnsmessage.Resource) []dnsmessage.Resource {
+		var out []dnsmessage.Resource
+		for _, r := range rs {
+			var addr netip.Addr
+			switch body := r.Body.(type) {
+			case *dnsmessage.AResource:
+				addr = netip.AddrFrom4(body.A)
+			case *dnsmessage.AAAAResource:
+				addr = netip.AddrFrom16(body.AAAA)
+			}
+			if addr.IsValid() && privateAnswer(addr) && !pol.privateAnswerAllowed(qname, r.Header.Name.String()) {
+				dropped = append(dropped, addr.String())
+				continue
+			}
+			out = append(out, r)
+		}
+		return out
+	}
+	answers, additionals := keep(msg.Answers), keep(msg.Additionals)
+	if len(dropped) == 0 {
+		return resp, nil
+	}
+	msg.Answers, msg.Additionals = answers, additionals
+	packed, err := msg.Pack()
+	if err != nil {
+		// Never hand out the private records when the reply cannot be rebuilt.
+		return servfail(q), dropped
+	}
+	return packed, dropped
 }
 
 // blockedAnswer returns the first blocked name and rule among the record
@@ -390,7 +439,7 @@ func dnsError(q []byte, rcode byte) []byte {
 // logDNS records the question and A/AAAA answers and, for queries to the
 // gateway resolver (server not valid), populates the broker's IP->name cache
 // for allowed answers.
-func (b *Broker) logDNS(network string, q, resp []byte, err error, server netip.AddrPort) {
+func (b *Broker) logDNS(network string, q, resp []byte, err error, server netip.AddrPort, dropped []string) {
 	entry := dnsEvent(network, server)
 	cache := !server.IsValid()
 	pol := b.policy.Load()
@@ -477,6 +526,9 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error, server netip.
 			}
 		}
 		entry["answers"] = answers
+		if len(dropped) > 0 {
+			entry["dropped"] = dropped
+		}
 	}
 	b.record(entry)
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -31,6 +32,7 @@ type trafficEvent struct {
 	Type          string    `json:"type"`
 	Answers       []string  `json:"answers"`
 	Blocked       bool      `json:"blocked"`
+	Dropped       []string  `json:"dropped"`
 	Error         string    `json:"error"`
 	Host          string    `json:"host"`
 	GuestPort     int       `json:"guest_port"`
@@ -89,6 +91,10 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 		label := e.Reason
 		if e.Rule != "" {
 			label = "rule=" + e.Rule
+			if e.Reason != "rule "+e.Rule {
+				// A rule matched but did not decide, e.g. not-internal-zone.
+				label = e.Reason + " " + label
+			}
 		}
 		detail := ""
 		if !e.Allow {
@@ -131,14 +137,22 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 			return fmt.Sprintf("%s  %s  dns  %s %s", ts, colDeny.Sprint("BLOCK"), name, colDeny.Sprint("→ NXDOMAIN ("+why+")"))
 		case e.Error != "":
 			return fmt.Sprintf("%s  %s  dns  %s %s %s", ts, colInfo.Sprint("DNS  "), name, escapeVisible(e.Type), colDeny.Sprint("→ "+escapeVisible(e.Error)))
-		case len(e.Answers) == 0:
+		case len(e.Answers) == 0 && len(e.Dropped) == 0:
 			return fmt.Sprintf("%s  %s  dns  %s %s %s", ts, colInfo.Sprint("DNS  "), name, escapeVisible(e.Type), colDim.Sprint("→ no records"))
 		default:
 			answers := make([]string, len(e.Answers))
 			for i, answer := range e.Answers {
 				answers[i] = escapeVisible(answer)
 			}
-			return fmt.Sprintf("%s  %s  dns  %s %s → %s", ts, colInfo.Sprint("DNS  "), name, escapeVisible(e.Type), strings.Join(answers, ", "))
+			line := fmt.Sprintf("%s  %s  dns  %s %s → %s", ts, colInfo.Sprint("DNS  "), name, escapeVisible(e.Type), cmp.Or(strings.Join(answers, ", "), colDim.Sprint("no records")))
+			if len(e.Dropped) > 0 {
+				dropped := make([]string, len(e.Dropped))
+				for i, d := range e.Dropped {
+					dropped[i] = escapeVisible(d)
+				}
+				line += " " + colDeny.Sprint("(dropped "+strings.Join(dropped, ", ")+": private address outside internal_zones)")
+			}
+			return line
 		}
 	case "dial-error":
 		return fmt.Sprintf("%s  %s  %-4s %-48s %s", ts, colDeny.Sprint("FAIL "), escapeVisible(e.Proto), f.dest(e.Dst), colDeny.Sprint(escapeVisible(e.Error)))

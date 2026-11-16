@@ -23,6 +23,21 @@ Rules from `[defaults.network.rules]` and the workspace are combined into one se
 
 The broker enforces hostname rules at DNS resolution, at connection time (using its TTL-bounded IP-to-name cache), and by inspecting the TLS ClientHello SNI or HTTP `Host` header before dialing upstream.
 
+## Reach internal hosts by name
+
+A hostname rule reaches a private address (for example `10.20.5.10`) only when the name is in an internal zone. List the DNS zones you control in `internal_zones`, then allow the hosts:
+
+```toml
+[defaults.network]
+internal_zones = ["internal.example.com"]
+
+[[workspaces.api.network.rules]]
+name = "gitlab"
+allow = ["gitlab.internal.example.com"]
+```
+
+A zone covers its subdomains. For any other name, the broker drops answers that point to a private address, so a public name can't be rebound to your network. `jailoc traffic` shows them as `dropped <address>: private address outside internal_zones`; add the zone if you trust its DNS. Public suffixes such as `com` or `github.io` and wildcard DNS services such as `nip.io` are rejected. See [Internal zones](../reference/configuration.md#internal-zones).
+
 ## Allow a private IP or CIDR range
 
 To open a private or reserved address or subnet directly by IP (without DNS resolution), add an IP or CIDR rule:
