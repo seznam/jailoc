@@ -603,6 +603,13 @@ func ruleCovers(denyProto *string, denyRanges []portRange, allowProto string, al
 // needsNameInspection reports whether a TCP flow to dst on port requires
 // reading the TLS SNI or HTTP Host header before dialing upstream.
 func (p *Policy) needsNameInspection(dst netip.AddrPort, byName bool) bool {
+	return p.needsNameForRules(dst, byName) || p.needsNameForHTTP(dst)
+}
+
+// needsNameForRules reports whether name rules alone require the SNI or Host
+// of a TCP flow to dst: the flow was allowed by a name, or a deny rule has
+// name patterns on its port. A flow without a name then fails closed.
+func (p *Policy) needsNameForRules(dst netip.AddrPort, byName bool) bool {
 	if p == nil || !p.rulesMode {
 		return false
 	}
@@ -618,7 +625,17 @@ func (p *Policy) needsNameInspection(dst netip.AddrPort, byName bool) bool {
 			return true
 		}
 	}
-	// An http rule is enforced per request, which needs the request's host.
+	return false
+}
+
+// needsNameForHTTP reports whether an http rule on dst's port requires the
+// SNI or Host of a TCP flow: an http rule is enforced per request, which
+// needs the request's host. A flow without a name is then only inspected when
+// an http rule covers its address (see httpScope).
+func (p *Policy) needsNameForHTTP(dst netip.AddrPort) bool {
+	if p == nil || !p.rulesMode {
+		return false
+	}
 	for i := range p.httpDeny {
 		if p.httpDeny[i].matchesProtoPort(ProtoTCP, dst.Port()) {
 			return true

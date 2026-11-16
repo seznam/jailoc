@@ -434,6 +434,9 @@ func sniffedPeerNameStrict(info map[string]any) (string, bool) {
 type enforceConn struct {
 	net.Conn
 	check func(peerName string) Decision
+	// allowNoName lets a TLS ClientHello or HTTP request without a name pass
+	// instead of failing with sni-required.
+	allowNoName bool
 	// closeUpstream closes the upstream side before the guest gets a deny
 	// reply; abort closes both sides and resets the guest.
 	closeUpstream func()
@@ -517,6 +520,8 @@ func (c *enforceConn) decide(info map[string]any) Decision {
 	switch {
 	case bad:
 		return Decision{Reason: "sni-mismatch"}
+	case name == "" && c.allowNoName:
+		return Decision{Allow: true}
 	case name == "":
 		return Decision{Reason: "sni-required"}
 	}

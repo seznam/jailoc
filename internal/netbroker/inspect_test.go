@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -833,4 +834,583 @@ func TestInspectUpgrade(t *testing.T) {
 
 func pemCert(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// serverCertIPs issues a TLS server certificate for IP addresses.
+func (ca *testCA) serverCertIPs(t *testing.T, ips ...string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	for _, s := range ips {
+		tmpl.IPAddresses = append(tmpl.IPAddresses, net.ParseIP(s))
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// h2cUpstream starts a cleartext server that speaks HTTP/1.1 and HTTP/2
+// with prior knowledge.
+func (e *l7Env) h2cUpstream(h http.Handler) {
+	e.t.Helper()
+	ts := httptest.NewUnstartedServer(h)
+	ts.Config.Protocols = new(http.Protocols)
+	ts.Config.Protocols.SetHTTP1(true)
+	ts.Config.Protocols.SetUnencryptedHTTP2(true)
+	quietServer(ts)
+	ts.Start()
+	e.t.Cleanup(ts.Close)
+	e.upstream = ts.Listener.Addr().String()
+}
+
+// h2cClient is an HTTP/2 prior-knowledge client in the guest.
+func (e *l7Env) h2cClient(port uint16) *http.Client {
+	tr := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) { return e.dialGuest(port) }}
+	tr.Protocols = new(http.Protocols)
+	tr.Protocols.SetUnencryptedHTTP2(true)
+	e.t.Cleanup(tr.CloseIdleConnections)
+	return &http.Client{Transport: tr, Timeout: 10 * time.Second}
+}
+
+// bareFlow is an inspected flow without a guest, served through its own
+// HTTP server, for tests of the per-request handling.
+func (e *l7Env) bareFlow(peerName string, h2c bool) *inspectFlow {
+	e.t.Helper()
+	dst := netip.MustParseAddrPort(l7IP + ":443")
+	p := e.broker.policy.Load()
+	return e.broker.newInspectFlow(p, e.broker.env(p, dst.Addr()), Decision{Allow: true}, httpScope{}, 1, dst, peerName, false, h2c)
+}
+
+// dialNoALPN completes a TLS handshake with the inspection CA that offers no
+// ALPN protocol.
+func dialNoALPN(t *testing.T, e *l7Env) *tls.Conn {
+	t.Helper()
+	c, err := e.dialGuest(443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	tc := tls.Client(c, &tls.Config{ServerName: "example.com", RootCAs: e.ca.pool, MinVersion: tls.VersionTLS12})
+	if err := tc.Handshake(); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	return tc
+}
+
+// waitEvent waits for an event to be logged.
+func (e *l7Env) waitEvent(event string, match map[string]any) map[string]any {
+	e.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if evs := e.find(event, match); len(evs) > 0 {
+			return evs[0]
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("no %s event matching %v:\n%s", event, match, e.log.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestInspectKeepAliveHostSwitch(t *testing.T) {
+	t.Parallel()
+	e := newL7Env(t)
+	var seen sync.Map
+	e.httpUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.Method+" "+r.URL.Path, true)
+		_, _ = io.WriteString(w, "plain ok")
+	}))
+	// A plain wildcard allow rule opens every host; example.com is narrowed by
+	// an http rule, other.test is not.
+	e.start(ruleWeb+","+ruleAPIRead, "", false)
+	c, err := e.dialGuest(80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	br := bufio.NewReader(c)
+
+	if _, err := io.WriteString(c, "GET /plain HTTP/1.1\r\nHost: other.test\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	if body := readBody(t, resp); resp.StatusCode != 200 || body != "plain ok" {
+		t.Fatalf("first request = %d %q, want 200", resp.StatusCode, body)
+	}
+	// The same connection now asks for the host the http rule narrows.
+	if _, err := io.WriteString(c, "POST /ok/a HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := http.ReadResponse(br, nil); err == nil {
+		t.Fatalf("second request answered %d, want the connection reset", resp.StatusCode)
+	}
+	if _, ok := seen.Load("POST /ok/a"); ok {
+		t.Fatal("POST to the http-restricted host reached upstream over the uninspected connection")
+	}
+}
+
+func TestInspectBoundsUpstreamConns(t *testing.T) {
+	t.Parallel()
+	e := newL7Env(t)
+	var accepted atomic.Int32
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	ts.TLS = &tls.Config{Certificates: []tls.Certificate{e.upCA.serverCert(t, "example.com")}, MinVersion: tls.VersionTLS12}
+	ts.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			accepted.Add(1)
+		}
+	}
+	quietServer(ts)
+	ts.StartTLS() // HTTP/1.1 only
+	t.Cleanup(ts.Close)
+	e.upstream = ts.Listener.Addr().String()
+	e.start(ruleWeb+","+ruleAPIRead, "", true)
+	client := e.client(true, 443)
+
+	// One guest HTTP/2 connection carries all the streams.
+	const streams = 64
+	var wg sync.WaitGroup
+	for i := range streams {
+		wg.Go(func() {
+			resp, err := client.Get(fmt.Sprintf("https://example.com/ok/%d", i))
+			if err != nil {
+				t.Errorf("GET %d: %v", i, err)
+				return
+			}
+			_ = readBody(t, resp)
+		})
+	}
+	wg.Wait()
+	if n := accepted.Load(); n > maxUpstreamConns {
+		t.Fatalf("upstream accepted %d connections for one flow, want at most %d", n, maxUpstreamConns)
+	}
+}
+
+func TestClassifyRequestLine(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want lineClass
+	}{
+		{"empty", "", lineMore},
+		{"get", "GET / HTTP/1.1\r\n", lineHTTP},
+		{"extension method", "PROPFIND /dav HTTP/1.1\r\nHost: x\r\n", lineHTTP},
+		{"lowercase method", "delete /x HTTP/1.1\r\n", lineHTTP},
+		{"bare LF", "GET / HTTP/1.0\n", lineHTTP},
+		{"absolute form", "GET http://example.com/ HTTP/1.1\r\n", lineHTTP},
+		{"h2 preface", h2Preface, lineHTTP},
+		{"method so far", "PROPFI", lineMore},
+		{"target so far", "GET /a/b", lineMore},
+		{"version so far", "GET / HTTP/1", lineMore},
+		{"line end so far", "GET / HTTP/1.1\r", lineMore},
+		{"not a line end", "GET / HTTP/1.1 \r\n", lineNotHTTP},
+		{"line without a version", "GET /\r\n", lineNotHTTP},
+		{"wrong version", "GET / HTTP/x.1\r\n", lineNotHTTP},
+		{"greeting", "HELLO\r\n", lineNotHTTP},
+		{"two words", "get foo\r\n", lineNotHTTP},
+		{"ssh banner", "SSH-2.0-OpenSSH_9.6\r\n", lineNotHTTP},
+		{"binary", "\x00\x01\x02", lineNotHTTP},
+		{"leading space", " GET / HTTP/1.1\r\n", lineNotHTTP},
+		{"control in target", "GET /\x01 HTTP/1.1\r\n", lineNotHTTP},
+		{"empty target", "GET  HTTP/1.1\r\n", lineNotHTTP},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := classifyRequestLine([]byte(tt.in)); got != tt.want {
+				t.Fatalf("classifyRequestLine(%q) = %d, want %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInspectNoALPNRequestLine(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{"extension method", "PROPFIND /ok/a HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+		{"lowercase method", "delete /ok/a HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newL7Env(t)
+			var hits atomic.Int32
+			e.httpsUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				_, _ = io.WriteString(w, "ok")
+			}))
+			e.start(ruleWeb+","+ruleAPIRead, "", true)
+			tc := dialNoALPN(t, e)
+			if _, err := io.WriteString(tc, tt.raw); err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.ReadResponse(bufio.NewReader(tc), nil)
+			if err != nil {
+				t.Fatalf("read response: %v", err)
+			}
+			if body := readBody(t, resp); resp.StatusCode != 403 || !strings.Contains(body, "http-no-match") {
+				t.Fatalf("response = %d %q, want 403 http-no-match from the http rules", resp.StatusCode, body)
+			}
+			if hits.Load() != 0 {
+				t.Fatal("request reached upstream")
+			}
+			if evs := e.find("inspect-error", map[string]any{"error": "not HTTP"}); len(evs) != 0 {
+				t.Fatalf("request was classified as not HTTP: %v", evs)
+			}
+		})
+	}
+	t.Run("a first line past the cap fails closed", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		e.httpsUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("upstream reached") }))
+		e.start(ruleWeb+","+ruleAPIRead, "", true)
+		tc := dialNoALPN(t, e)
+		_, _ = io.WriteString(tc, "GET /"+strings.Repeat("a", 2*maxRequestLine))
+		if n, err := tc.Read(make([]byte, 16)); err == nil {
+			t.Fatalf("read %d bytes, want the flow closed", n)
+		}
+		e.waitEvent("inspect-error", map[string]any{"reason": "inconclusive-request-line"})
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if len(e.dialed) != 0 {
+			t.Fatalf("upstream dialed for a closed flow: %v", e.dialed)
+		}
+	})
+}
+
+func TestInspectSilentNoALPN(t *testing.T) {
+	t.Parallel()
+	start := func(t *testing.T, e *l7Env) {
+		t.Helper()
+		e.start(ruleWebHost+","+ruleAPIRead, "", true)
+		e.broker.policy.Load().inspect.peekTimeout = 100 * time.Millisecond
+	}
+	t.Run("http after the peek timed out is closed unforwarded", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		got := make(chan []byte, 1)
+		e.rawUpstream(true, func(c net.Conn) {
+			b, _ := io.ReadAll(c)
+			got <- b
+		})
+		start(t, e)
+		tc := dialNoALPN(t, e)
+		time.Sleep(400 * time.Millisecond)
+		_, _ = io.WriteString(tc, "POST /ok/a HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n")
+		if n, err := tc.Read(make([]byte, 16)); err == nil {
+			t.Fatalf("read %d bytes, want the flow closed", n)
+		}
+		select {
+		case b := <-got:
+			if len(b) != 0 {
+				t.Fatalf("upstream received %q, want nothing", b)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("upstream connection never ended")
+		}
+		e.waitEvent("inspect-error", map[string]any{"reason": "http-after-silence"})
+	})
+	t.Run("server-first protocol is relayed", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		e.rawUpstream(true, func(c net.Conn) {
+			_, _ = io.WriteString(c, "220 ready\r\n")
+			b := make([]byte, 64)
+			n, _ := c.Read(b)
+			_, _ = c.Write(append([]byte("221 "), b[:n]...))
+		})
+		start(t, e)
+		tc := dialNoALPN(t, e)
+		br := bufio.NewReader(tc)
+		if line, err := br.ReadString('\n'); err != nil || line != "220 ready\r\n" {
+			t.Fatalf("greeting = %q, %v", line, err)
+		}
+		if _, err := io.WriteString(tc, "QUIT\r\n"); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]byte, len("221 QUIT\r\n"))
+		if _, err := io.ReadFull(br, got); err != nil || string(got) != "221 QUIT\r\n" {
+			t.Fatalf("reply = %q, %v", got, err)
+		}
+	})
+	t.Run("a partial first line at the timeout fails closed", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		e.rawUpstream(true, func(c net.Conn) { t.Error("upstream dialed for a closed flow") })
+		start(t, e)
+		tc := dialNoALPN(t, e)
+		_, _ = io.WriteString(tc, "GE")
+		if n, err := tc.Read(make([]byte, 16)); err == nil {
+			t.Fatalf("read %d bytes, want the flow closed", n)
+		}
+		e.waitEvent("inspect-error", map[string]any{"reason": "inconclusive-request-line"})
+	})
+}
+
+func TestInspectH2C(t *testing.T) {
+	t.Parallel()
+	const rules = ruleWebHost + `,{"name":"other","names":["other.example.net"]},` + ruleAPIRead
+	e := newL7Env(t)
+	var seen sync.Map
+	e.h2cUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.Method+" "+r.Host+r.URL.Path, r.ProtoMajor)
+		_, _ = io.WriteString(w, "h2c ok")
+	}))
+	e.start(rules, "", false)
+	client := e.h2cClient(80)
+
+	do := func(method, host, path string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, "http://example.com"+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s%s: %v", method, host, path, err)
+		}
+		return resp.StatusCode, readBody(t, resp)
+	}
+	if code, body := do("GET", "example.com", "/ok/a"); code != 200 || body != "h2c ok" {
+		t.Fatalf("GET = %d %q, want 200 through the h2c flow", code, body)
+	}
+	if v, ok := seen.Load("GET example.com/ok/a"); !ok || v != 2 {
+		t.Fatalf("upstream saw %v (found %v), want HTTP/2 prior knowledge", v, ok)
+	}
+	denied := []struct {
+		name, method, host, path, want string
+		code                           int
+	}{
+		{"method not allowed", "POST", "example.com", "/ok/a", "reason=http-no-match", 403},
+		{"authority is not allowed", "GET", "evil.example.org", "/ok/a", "reason=default-deny", 403},
+		{"authority does not resolve to the destination", "GET", "other.example.net", "/ok/a", "reason=sni-mismatch", 403},
+		{"authority is another address", "GET", "1.2.3.4", "/ok/a", "reason=host-mismatch", 421},
+	}
+	for _, tt := range denied {
+		if code, body := do(tt.method, tt.host, tt.path); code != tt.code || !strings.Contains(body, tt.want) {
+			t.Fatalf("%s: %s %s = %d %q, want %d %q", tt.name, tt.method, tt.host, code, body, tt.code, tt.want)
+		}
+	}
+	for _, k := range []string{"POST example.com/ok/a", "GET evil.example.org/ok/a", "GET other.example.net/ok/a", "GET 1.2.3.4/ok/a"} {
+		if _, ok := seen.Load(k); ok {
+			t.Fatalf("denied request %q reached upstream", k)
+		}
+	}
+	if evs := e.find("l7", map[string]any{"proto": "http", "method": "GET", "host": "example.com", "status": float64(200), "rule": "api-read"}); len(evs) != 1 {
+		t.Fatalf("allowed l7 events = %v\n%s", evs, e.log.String())
+	}
+	if evs := e.find("l7", map[string]any{"method": "GET", "host": "other.example.net", "status": float64(403), "denied": true, "reason": "sni-mismatch"}); len(evs) != 1 {
+		t.Fatalf("denied l7 events = %v\n%s", evs, e.log.String())
+	}
+
+	t.Run("a request without authority is denied", func(t *testing.T) {
+		t.Parallel()
+		f := e.bareFlow("", true)
+		t.Cleanup(f.close)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/ok/a", nil)
+		req.Host = ""
+		f.ServeHTTP(rec, req)
+		if rec.Code != 403 || !strings.Contains(rec.Body.String(), "reason=sni-required") {
+			t.Fatalf("response = %d %q, want 403 sni-required", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+func TestInspectTracksLiveUpstreamOnly(t *testing.T) {
+	t.Parallel()
+	e := newL7Env(t)
+	e.httpUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Connection", "close")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	e.start(ruleWeb, "", false)
+	f := e.bareFlow("example.com", false)
+	t.Cleanup(f.close)
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+
+	const requests = 40
+	for range requests {
+		req, err := http.NewRequest("GET", srv.URL+"/x", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = "example.com"
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = readBody(t, resp)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for f.trackedUpstream() > 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("flow tracks %d upstream connections after %d requests that each closed theirs", f.trackedUpstream(), requests)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestInspectWithoutName(t *testing.T) {
+	t.Parallel()
+	ipHello := func(t *testing.T) []byte { return clientHelloBytes(t, l7IP, nil) }
+	t.Run("plain CIDR allow is not broken by an unrelated name http rule", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		hello := ipHello(t)
+		got := make(chan []byte, 1)
+		e.rawUpstream(false, func(c net.Conn) {
+			b := make([]byte, len(hello))
+			_, _ = io.ReadFull(c, b)
+			got <- b
+			_, _ = c.Write([]byte("upstream-ok"))
+		})
+		e.start(`{"name":"net","cidrs":["93.184.216.0/24"]},{"name":"gh","names":["api.github.com"],"http":{"methods":["GET"]}}`, "", true)
+		c, err := e.dialGuest(443)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := c.Write(hello); err != nil {
+			t.Fatal(err)
+		}
+		reply, err := io.ReadAll(c)
+		if err != nil || string(reply) != "upstream-ok" {
+			t.Fatalf("reply = %x, %v; want the flow spliced to upstream", reply, err)
+		}
+		if !bytes.Equal(<-got, hello) {
+			t.Fatal("upstream did not receive the ClientHello unchanged")
+		}
+	})
+	t.Run("name rules still require a name", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		e.rawUpstream(false, func(c net.Conn) { t.Error("upstream dialed for a flow without a name") })
+		e.start(ruleWebHost+","+`{"name":"gh","names":["api.github.com"],"http":{"methods":["GET"]}}`, "", true)
+		c, err := e.dialGuest(443)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		_, _ = c.Write(ipHello(t))
+		reply, _ := io.ReadAll(c)
+		if len(reply) == 0 || reply[0] != 0x15 {
+			t.Fatalf("reply = %x, want an access_denied alert", reply)
+		}
+		e.waitEvent("flow", map[string]any{"reason": "sni-required"})
+	})
+	t.Run("address-scoped http rule inspects TLS under the IP", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		var seen sync.Map
+		ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen.Store(r.Method+" "+r.URL.Path, true)
+			_, _ = io.WriteString(w, "ip ok")
+		}))
+		ts.TLS = &tls.Config{Certificates: []tls.Certificate{e.upCA.serverCertIPs(t, l7IP)}, MinVersion: tls.VersionTLS12}
+		quietServer(ts)
+		ts.StartTLS()
+		t.Cleanup(ts.Close)
+		e.upstream = ts.Listener.Addr().String()
+		e.start(`{"name":"ip-read","cidrs":["`+l7IP+`"],"http":{"methods":["GET"]}}`, "", true)
+		client := e.client(false, 443)
+
+		resp, err := client.Get("https://" + l7IP + "/a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf := resp.TLS.PeerCertificates[0]
+		if leaf.Issuer.CommonName != e.ca.cert.Subject.CommonName || len(leaf.IPAddresses) != 1 || leaf.IPAddresses[0].String() != l7IP {
+			t.Fatalf("guest saw issuer=%q ips=%v, want an IP leaf from the inspection CA", leaf.Issuer.CommonName, leaf.IPAddresses)
+		}
+		if body := readBody(t, resp); resp.StatusCode != 200 || body != "ip ok" {
+			t.Fatalf("GET = %d %q", resp.StatusCode, body)
+		}
+		resp, err = client.Post("https://"+l7IP+"/a", "text/plain", strings.NewReader("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body := readBody(t, resp); resp.StatusCode != 403 || !strings.Contains(body, "http-no-match") {
+			t.Fatalf("POST = %d %q, want 403 http-no-match", resp.StatusCode, body)
+		}
+		if _, ok := seen.Load("POST /a"); ok {
+			t.Fatal("denied POST reached upstream")
+		}
+		// The request host must be the IP literal.
+		req, err := http.NewRequest("GET", "https://"+l7IP+"/a", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = "example.com"
+		resp, err = client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body := readBody(t, resp); resp.StatusCode != 421 || !strings.Contains(body, "host-mismatch") {
+			t.Fatalf("GET with another Host = %d %q, want 421 host-mismatch", resp.StatusCode, body)
+		}
+	})
+	t.Run("cleartext HTTP/1.0 without Host is evaluated under the IP", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		var seen sync.Map
+		e.httpUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen.Store(r.Method, true)
+			_, _ = io.WriteString(w, "ip ok")
+		}))
+		e.start(`{"name":"ip-read","cidrs":["`+l7IP+`"],"http":{"methods":["GET"]}}`, "", false)
+		do := func(method string) (int, string) {
+			t.Helper()
+			c, err := e.dialGuest(80)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = c.Close() }()
+			_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+			if _, err := io.WriteString(c, method+" / HTTP/1.0\r\n\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+			if err != nil {
+				t.Fatalf("%s: %v", method, err)
+			}
+			return resp.StatusCode, readBody(t, resp)
+		}
+		if code, body := do("GET"); code != 200 || body != "ip ok" {
+			t.Fatalf("GET = %d %q, want 200", code, body)
+		}
+		if code, body := do("POST"); code != 403 || !strings.Contains(body, "http-no-match") {
+			t.Fatalf("POST = %d %q, want 403 http-no-match", code, body)
+		}
+		if _, ok := seen.Load("POST"); ok {
+			t.Fatal("denied POST reached upstream")
+		}
+	})
 }

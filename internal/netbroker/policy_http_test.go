@@ -418,3 +418,38 @@ func TestHTTPCapable(t *testing.T) {
 		})
 	}
 }
+
+func TestHTTPNameRequirementSources(t *testing.T) {
+	t.Parallel()
+	dst := netip.MustParseAddrPort(l7IP + ":443")
+	tests := []struct {
+		name      string
+		rules     string
+		byName    bool
+		wantRules bool // name rules need a name
+		wantHTTP  bool // http rules need a name
+		wantScope bool // an http rule covers the address
+	}{
+		{"name http rule only", `{"allow":[{"names":["api.github.com"],"http":{}}]}`, false, false, true, false},
+		{"cidr http rule", `{"allow":[{"cidrs":["` + l7IP + `"],"http":{}}]}`, false, false, true, true},
+		{"wildcard http rule", `{"allow":[{"names":["*"],"http":{}}]}`, false, false, true, true},
+		{"http deny by name", `{"allow":[{"cidrs":["0.0.0.0/0"]}],"deny":[{"names":["example.com"],"http":{}}]}`, false, false, true, false},
+		{"flow allowed by name", `{"allow":[{"names":["example.com"]},{"names":["api.github.com"],"http":{}}]}`, true, true, true, false},
+		{"plain name deny rule", `{"allow":[{"cidrs":["0.0.0.0/0"]}],"deny":[{"names":["evil.test"]}]}`, false, true, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := httpTestPolicy(t, tt.rules)
+			if got := p.needsNameForRules(dst, tt.byName); got != tt.wantRules {
+				t.Fatalf("needsNameForRules = %v, want %v", got, tt.wantRules)
+			}
+			if got := p.needsNameForHTTP(dst); got != tt.wantHTTP {
+				t.Fatalf("needsNameForHTTP = %v, want %v", got, tt.wantHTTP)
+			}
+			if got := !p.httpScope("", dst).empty(); got != tt.wantScope {
+				t.Fatalf("address scope non-empty = %v, want %v", got, tt.wantScope)
+			}
+		})
+	}
+}

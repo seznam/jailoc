@@ -21,6 +21,10 @@ import (
 // maxEventPath caps the request path in an l7 event.
 const maxEventPath = 2048
 
+// maxUpstreamConns bounds the upstream sockets of one inspected flow, per
+// transport.
+const maxUpstreamConns = 16
+
 // httpScope is the http rules that apply to one flow: those whose target
 // matches the flow's peer name or destination address on tcp and its port.
 type httpScope struct {
@@ -30,7 +34,8 @@ type httpScope struct {
 func (s httpScope) empty() bool { return len(s.allow) == 0 && len(s.deny) == 0 }
 
 // httpScope returns the http rules covering a flow to dst whose TLS SNI or
-// HTTP Host is peerName.
+// HTTP Host is peerName. An empty peerName leaves the rules that match dst by
+// address (IP, CIDR or "*") alone.
 func (p *Policy) httpScope(peerName string, dst netip.AddrPort) httpScope {
 	var s httpScope
 	if p == nil || !p.hasHTTP() {
@@ -46,7 +51,7 @@ func (p *Policy) httpScope(peerName string, dst netip.AddrPort) httpScope {
 		isPublic = !addr.IsPrivate() && public6.Contains(addr)
 	}
 	covers := func(r *Rule) bool {
-		return r.matchesName(ProtoTCP, dst.Port(), peerName) || r.matchesAddr(ProtoTCP, dst, isPublic)
+		return (peerName != "" && r.matchesName(ProtoTCP, dst.Port(), peerName)) || r.matchesAddr(ProtoTCP, dst, isPublic)
 	}
 	for i := range p.allow {
 		if r := &p.allow[i]; r.HTTP != nil && covers(r) {
@@ -106,6 +111,12 @@ type inspectFlow struct {
 	peerName string
 	scheme   string // "https" or "http"
 	flowRule string // the plain rule that allowed the flow, if any
+	// byIP marks a flow that showed no name: peerName is the destination's IP
+	// literal and scope the rules that match the address.
+	byIP bool
+	// h2c marks a cleartext HTTP/2 prior-knowledge flow. It has no flow-level
+	// peer name: the :authority of each request is decided like one.
+	h2c bool
 
 	proxy *httputil.ReverseProxy
 	// h2 is the upstream transport for ordinary requests (HTTP/2 when the
@@ -114,25 +125,62 @@ type inspectFlow struct {
 
 	mu       sync.Mutex
 	closed   bool
-	upstream []net.Conn
+	upstream map[*upstreamConn]struct{}
 }
 
-func (b *Broker) newInspectFlow(p *Policy, env Env, d Decision, scope httpScope, conn uint64, dst netip.AddrPort, peerName string, tlsFlow bool) *inspectFlow {
+// upstreamConn is an upstream connection the flow tracks until it is closed,
+// so that closing the flow ends the live ones and closed ones do not pile up.
+type upstreamConn struct {
+	net.Conn
+	f    *inspectFlow
+	once sync.Once
+}
+
+func (c *upstreamConn) Close() error {
+	c.once.Do(func() {
+		c.f.mu.Lock()
+		delete(c.f.upstream, c)
+		c.f.mu.Unlock()
+	})
+	return c.Conn.Close()
+}
+
+func (c *upstreamConn) CloseWrite() error {
+	if cw, ok := c.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return c.Close()
+}
+
+// trackedUpstream counts the upstream connections still open.
+func (f *inspectFlow) trackedUpstream() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.upstream)
+}
+
+func (b *Broker) newInspectFlow(p *Policy, env Env, d Decision, scope httpScope, conn uint64, dst netip.AddrPort, peerName string, tlsFlow, h2c bool) *inspectFlow {
 	f := &inspectFlow{
 		b: b, p: p, env: env, insp: p.inspect, scope: scope, conn: conn, dst: dst,
-		peerName: peerName, scheme: "http", flowRule: d.Rule,
+		peerName: peerName, scheme: "http", flowRule: d.Rule, h2c: h2c,
+		upstream: map[*upstreamConn]struct{}{},
 	}
 	if tlsFlow {
 		f.scheme = "https"
 	}
-	f.h2 = f.newTransport([]string{"h2", "http/1.1"})
-	f.h1 = f.newTransport([]string{"http/1.1"})
+	// A prior-knowledge HTTP/2 guest gets prior-knowledge HTTP/2 upstream, so
+	// gRPC and trailers survive; Upgrade requests still go over HTTP/1.1.
+	f.h2 = f.newTransport([]string{"h2", "http/1.1"}, h2c)
+	f.h1 = f.newTransport([]string{"http/1.1"}, false)
 	f.proxy = &httputil.ReverseProxy{
 		// Rewrite, unlike Director, leaves out X-Forwarded-* headers and
 		// drops those the guest sent.
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = f.scheme
-			pr.Out.URL.Host = net.JoinHostPort(f.peerName, strconv.Itoa(int(f.dst.Port())))
+			pr.Out.URL.Host = f.dst.String()
+			if f.peerName != "" {
+				pr.Out.URL.Host = net.JoinHostPort(f.peerName, strconv.Itoa(int(f.dst.Port())))
+			}
 			pr.Out.Host = pr.In.Host
 		},
 		Transport: roundTripperFunc(f.roundTrip),
@@ -158,20 +206,29 @@ func (f *inspectFlow) roundTrip(r *http.Request) (*http.Response, error) {
 // newTransport builds an upstream transport that dials only the flow's
 // original destination, whatever address the request names, and verifies the
 // server certificate for the flow's peer name.
-func (f *inspectFlow) newTransport(protos []string) *http.Transport {
-	return &http.Transport{
+func (f *inspectFlow) newTransport(protos []string, h2c bool) *http.Transport {
+	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return f.dialTCP(ctx)
 		},
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return f.dialTLS(ctx, protos)
 		},
-		ForceAttemptHTTP2:     slices.Contains(protos, "h2"),
-		DisableCompression:    true, // pass Content-Encoding through untouched
-		MaxIdleConnsPerHost:   4,
+		ForceAttemptHTTP2:   slices.Contains(protos, "h2"),
+		DisableCompression:  true, // pass Content-Encoding through untouched
+		MaxIdleConnsPerHost: 4,
+		// A guest connection may open many HTTP/2 streams at once; without a
+		// cap each would get its own upstream socket and the flow would use
+		// far more than its one slot in the broker's flow limit.
+		MaxConnsPerHost:       maxUpstreamConns,
 		IdleConnTimeout:       upstreamIdleTimeout,
 		ExpectContinueTimeout: time.Second,
 	}
+	if h2c {
+		tr.Protocols = new(http.Protocols)
+		tr.Protocols.SetUnencryptedHTTP2(true)
+	}
+	return tr
 }
 
 // dialTCP opens the upstream connection to the flow's original destination.
@@ -189,8 +246,9 @@ func (f *inspectFlow) dialTCP(ctx context.Context) (net.Conn, error) {
 		_ = c.Close()
 		return nil, fmt.Errorf("dial %s: flow closed", f.dst)
 	}
-	f.upstream = append(f.upstream, c)
-	return c, nil
+	uc := &upstreamConn{Conn: c, f: f}
+	f.upstream[uc] = struct{}{}
+	return uc, nil
 }
 
 // dialTLS opens the upstream connection and verifies its certificate against
@@ -220,8 +278,10 @@ func (f *inspectFlow) dialTLS(ctx context.Context, protos []string) (net.Conn, e
 func (f *inspectFlow) close() {
 	f.mu.Lock()
 	f.closed = true
-	conns := f.upstream
-	f.upstream = nil
+	conns := make([]*upstreamConn, 0, len(f.upstream))
+	for c := range f.upstream {
+		conns = append(conns, c)
+	}
 	f.mu.Unlock()
 	f.h2.CloseIdleConnections()
 	f.h1.CloseIdleConnections()
@@ -233,7 +293,10 @@ func (f *inspectFlow) close() {
 // reqInfo travels in the request context to the proxy callbacks.
 type reqInfo struct {
 	method, path string
-	rule         string
+	// host is the name the request was decided for: the flow's peer name, or
+	// the authority of an h2c request.
+	host string
+	rule string
 }
 
 type reqInfoKey struct{}
@@ -246,11 +309,52 @@ func reqInfoOf(ctx context.Context) *reqInfo {
 	return info
 }
 
+// decideAuthority decides the authority of a prior-knowledge h2c request the
+// way the flow-level decision treats a peer name: a name rule only counts when
+// the guest resolved the name to the destination (see peerDecision), and an IP
+// literal must be the destination itself.
+func (f *inspectFlow) decideAuthority(name string) Decision {
+	if ip, err := netip.ParseAddr(name); err == nil && ip.Unmap() != f.dst.Addr().Unmap() {
+		return Decision{Reason: "host-mismatch", Name: name}
+	}
+	return f.b.peerDecision(f.p, f.env, f.dst, name)
+}
+
+// h2cAuthority normalizes the :authority of an h2c request to a bare host, or
+// returns "" for a missing or malformed one.
+func h2cAuthority(authority string) string {
+	host := normalizeAuthority(authority)
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	return host
+}
+
 // ServeHTTP applies the policy to one guest request and proxies it upstream.
 func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	escaped := r.URL.EscapedPath()
-	info := &reqInfo{method: r.Method, path: truncate(escaped, maxEventPath)}
-	if host := requestHost(r.Host); host != f.peerName {
+	info := &reqInfo{method: r.Method, path: truncate(escaped, maxEventPath), host: f.peerName}
+	scope, flowRule := f.scope, f.flowRule
+	if f.h2c {
+		// No flow-level name: decide the request's authority like one.
+		name := h2cAuthority(r.Host)
+		info.host = name
+		if name == "" {
+			f.reject(w, r, info, http.StatusForbidden, httpVerdict{reason: "sni-required"}, "")
+			return
+		}
+		d := f.decideAuthority(name)
+		if !d.Allow {
+			status := http.StatusForbidden
+			if d.Reason == "host-mismatch" {
+				status = http.StatusMisdirectedRequest
+			}
+			f.reject(w, r, info, status, httpVerdict{rule: d.Rule, reason: d.Reason}, "")
+			return
+		}
+		scope, flowRule = f.p.httpScope(name, f.dst), d.Rule
+	} else if host := requestHost(r.Host); host != f.peerName && (!f.byIP || r.Host != "") {
+		// An HTTP/1.0 request without Host belongs to the flow's address.
 		f.reject(w, r, info, http.StatusMisdirectedRequest, httpVerdict{reason: "host-mismatch"}, host)
 		return
 	}
@@ -263,7 +367,7 @@ func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.reject(w, r, info, http.StatusForbidden, httpVerdict{reason: "bad-path"}, "")
 		return
 	}
-	v := f.scope.evaluate(r.Method, segs, f.flowRule)
+	v := scope.evaluate(r.Method, segs, flowRule)
 	if !v.allow {
 		f.reject(w, r, info, http.StatusForbidden, v, "")
 		return
@@ -299,7 +403,7 @@ func (f *inspectFlow) reject(w http.ResponseWriter, r *http.Request, info *reqIn
 func (f *inspectFlow) l7Event(info *reqInfo) map[string]any {
 	return map[string]any{
 		"event": "l7", "conn": f.conn, "dst": f.dst.String(), "proto": f.scheme,
-		"method": info.method, "host": f.peerName, "path": info.path,
+		"method": info.method, "host": info.host, "path": info.path,
 	}
 }
 

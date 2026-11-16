@@ -226,6 +226,10 @@ The broker matches patterns against the percent-decoded segments of the request 
 
 The broker inspects a TCP connection when an `http` rule (allow or deny) matches its port and, after the TLS server name or HTTP `Host` is known, its name or address. These rules form the http scope of the connection. An empty scope leaves the connection to plain rules and undecrypted.
 
+A connection that shows no name (TLS without SNI, HTTP/1.0 without `Host`) is judged by the `http` rules that match its destination address (an IP or CIDR target, or `*`). Without such a rule it is handled as if no `http` rule existed. With one it is inspected under the destination's IP address as its name: the broker's certificate carries the IP as a subject alternative name, the upstream certificate must be valid for the IP, and every request's `Host` must be the IP (an HTTP/1.0 request without `Host` counts as such). Connections that name rules require a name for (a connection allowed by a name, a plain `deny` rule with names) still fail with `sni-required` without one.
+
+A connection that was not inspected stays checked: if a later request on it names a host that an `http` rule covers, the request is refused with reason `inspection-required`.
+
 An `http` allow rule narrows its host: when the scope has `http` allow rules, only they decide the requests, and plain `allow` rules matching the same host and port grant nothing for it. Each request is checked in this order:
 
 1. The request host (`Host` or `:authority`, port stripped) must equal the connection's server name, otherwise `421` with reason `host-mismatch`.
@@ -245,6 +249,7 @@ An `http` allow rule narrows its host: when the scope has `http` allow rules, on
 | `bad-path` | The request path failed [checking](#request-path-checking). |
 | `connect-denied` | The request is a `CONNECT` or an HTTP/2 extended `CONNECT`. |
 | `host-mismatch` | The request host differs from the TLS server name or `Host` of the connection. |
+| `inspection-required` | A request on an uninspected connection names a host that an `http` rule covers. |
 
 Protocol detection decides per connection whether HTTP is served:
 
@@ -252,8 +257,9 @@ Protocol detection decides per connection whether HTTP is served:
 |---------|----------|
 | TLS, ClientHello ALPN offers `h2` or `http/1.1` | Decrypted, HTTP served |
 | TLS, ALPN offered but neither is HTTP | Not decrypted; plain rules decide; spliced |
-| TLS, no ALPN | Decrypted; the first decrypted bytes (1 s) decide: an HTTP/1.1 request line or the HTTP/2 preface is served as HTTP, anything else is decided by plain rules and relayed (denied: closed, `inspect-error`) |
+| TLS, no ALPN | Decrypted; the first line decides: a request line (`method SP target SP HTTP/x.y`, any method token in any case) or the HTTP/2 preface is served as HTTP, anything else is decided by plain rules and relayed (denied: closed, `inspect-error`). A first line over 8 KiB that is no request line, or an undecided partial line when the 1 s peek ends, closes the connection. If the guest sends nothing for 1 s the connection is relayed (server-first protocols), but a request line or preface the guest sends later closes it before anything is forwarded |
 | Plain HTTP request | Checked per request, no TLS |
+| Cleartext HTTP/2 (prior knowledge, `h2c`) | Served per request: each `:authority` is decided like a server name (it must resolve to the destination, or be its IP), then the `http` scope of that name applies. A request without `:authority` is denied (`sni-required`). Requests are forwarded upstream as prior-knowledge HTTP/2, so the upstream must speak `h2c` |
 | No server name or Host (silent, server-first or other protocols) | Plain rules decide; `http` rules never open non-HTTP traffic; denied connections are reset |
 
 A WebSocket upgrade request is checked like any request. After the `101` response the connection passes through unfiltered; frames are not inspected.

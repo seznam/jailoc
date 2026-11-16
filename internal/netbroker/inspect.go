@@ -47,6 +47,9 @@ const (
 	// peekTimeout bounds how long the first decrypted bytes of a TLS flow
 	// without ALPN are awaited to tell HTTP from another protocol.
 	peekTimeout = time.Second
+	// maxRequestLine caps the first line read to tell HTTP from another
+	// protocol. A longer line without a valid request line fails closed.
+	maxRequestLine = 8 << 10
 
 	httpReadHeaderTimeout = 30 * time.Second
 	httpIdleTimeout       = 2 * time.Minute
@@ -75,6 +78,9 @@ type inspector struct {
 	leafKey  *ecdsa.PrivateKey
 	upstream *x509.CertPool
 	now      func() time.Time
+	// peekTimeout is how long a decrypted no-ALPN stream may stay silent
+	// before it is relayed under the first-line guard; tests shorten it.
+	peekTimeout time.Duration
 
 	mu     sync.Mutex
 	lru    *list.List // of *leafEntry, most recently used first
@@ -129,7 +135,7 @@ func loadInspector(f *inspectFile) (*inspector, error) {
 		}
 	}
 	return &inspector{
-		ca: ca, caKey: key, leafKey: leafKey, upstream: pool, now: time.Now,
+		ca: ca, caKey: key, leafKey: leafKey, upstream: pool, now: time.Now, peekTimeout: peekTimeout,
 		lru: list.New(), leaves: map[string]*list.Element{},
 	}, nil
 }
@@ -300,44 +306,183 @@ func (c *bufConn) CloseWrite() error {
 
 const h2Preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
-// classifyHTTP tells whether b starts an HTTP request line or the HTTP/2
-// client preface. more reports that more bytes could still decide.
-func classifyHTTP(b []byte) (isHTTP, more bool) {
-	s := string(b)
-	if strings.HasPrefix(h2Preface, s) {
-		if len(s) == len(h2Preface) {
-			return true, false
-		}
-		more = true
-	}
-	for _, m := range httpMethods {
-		line := m + " "
-		if strings.HasPrefix(s, line) {
-			return true, false
-		}
-		if strings.HasPrefix(line, s) {
-			more = true
-		}
-	}
-	return false, more
+// lineClass is the verdict on the first bytes of a stream.
+type lineClass int
+
+const (
+	// lineMore: the bytes so far could still become a request line.
+	lineMore lineClass = iota
+	// lineHTTP: a complete HTTP request line (the HTTP/2 preface starts with
+	// one, "PRI * HTTP/2.0").
+	lineHTTP
+	// lineNotHTTP: the bytes cannot be an HTTP request line.
+	lineNotHTTP
+)
+
+// isTchar reports whether c is an RFC 9110 token character.
+func isTchar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
 }
 
-// peekHTTP waits up to timeout for the first bytes on a decrypted stream and
-// reports whether they start HTTP. The bytes stay in br.
-func peekHTTP(c net.Conn, br *bufio.Reader, timeout time.Duration) bool {
-	_ = c.SetReadDeadline(time.Now().Add(timeout))
-	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
-	for n := 1; ; n++ {
-		b, err := br.Peek(n)
-		if isHTTP, more := classifyHTTP(b); isHTTP {
-			return true
-		} else if !more {
-			return false
+// classifyRequestLine tells whether b starts with an HTTP request line:
+// `token SP request-target SP HTTP/<d>.<d>` and a line end, with any
+// token (RFC 9110 tchar, any case, so PROPFIND and delete count) as the
+// method. Go's server also takes a bare LF as the line end, so it counts. It
+// decides on the first byte that cannot continue a request line, so another
+// protocol is told apart without waiting for its first line to end.
+func classifyRequestLine(b []byte) lineClass {
+	i := 0
+	for i < len(b) && isTchar(b[i]) {
+		i++
+	}
+	switch {
+	case i == len(b):
+		return lineMore
+	case i == 0 || b[i] != ' ':
+		return lineNotHTTP
+	}
+	i++
+	start := i
+	for i < len(b) && b[i] > ' ' && b[i] != 0x7f {
+		i++
+	}
+	switch {
+	case i == len(b):
+		return lineMore
+	case i == start || b[i] != ' ':
+		return lineNotHTTP
+	}
+	rest := b[i+1:]
+	const version = "HTTP/d.d"
+	for j := 0; j < len(version); j++ {
+		if j >= len(rest) {
+			return lineMore
 		}
-		if err != nil {
-			return false
+		c := rest[j]
+		if version[j] == 'd' && (c < '0' || c > '9') || version[j] != 'd' && c != version[j] {
+			return lineNotHTTP
 		}
 	}
+	rest = rest[len(version):]
+	switch {
+	case len(rest) == 0:
+		return lineMore
+	case rest[0] == '\n':
+		return lineHTTP
+	case rest[0] != '\r':
+		return lineNotHTTP
+	case len(rest) == 1:
+		return lineMore
+	case rest[1] == '\n':
+		return lineHTTP
+	}
+	return lineNotHTTP
+}
+
+// peekResult is what the first decrypted bytes of a stream say.
+type peekResult int
+
+const (
+	peekHTTP    peekResult = iota // a request line or the HTTP/2 preface
+	peekNotHTTP                   // another protocol
+	// peekSilent: nothing arrived before the deadline.
+	peekSilent
+	// peekInconclusive: bytes arrived, but the deadline, the end of the
+	// stream or the line cap came before the first line decided.
+	peekInconclusive
+	// peekClosed: the stream ended or failed without any byte.
+	peekClosed
+)
+
+// isTimeout reports whether err is a deadline expiring.
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// peekRequest waits up to timeout for the first line of a decrypted stream
+// and classifies it with classifyRequestLine. The bytes stay in br, which must
+// hold at least maxRequestLine.
+func peekRequest(c net.Conn, br *bufio.Reader, timeout time.Duration) peekResult {
+	_ = c.SetReadDeadline(time.Now().Add(timeout))
+	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
+	for n := 1; ; n = min(br.Buffered()+1, maxRequestLine) {
+		b, err := br.Peek(n)
+		switch classifyRequestLine(b) {
+		case lineHTTP:
+			return peekHTTP
+		case lineNotHTTP:
+			return peekNotHTTP
+		}
+		switch {
+		case len(b) >= maxRequestLine:
+			return peekInconclusive
+		case err == nil:
+		case len(b) > 0:
+			return peekInconclusive
+		case isTimeout(err):
+			return peekSilent
+		default:
+			return peekClosed
+		}
+	}
+}
+
+// firstLineGuard holds back the guest's first line on a relayed stream until
+// classifyRequestLine has decided it. HTTP closes the flow before a byte is
+// forwarded; anything else is forwarded as read. It is for streams that stayed
+// silent past the peek, which the http rules would otherwise not cover.
+type firstLineGuard struct {
+	net.Conn
+	// deny closes the flow; it gets whether the line was HTTP (false: the
+	// cap came first).
+	deny func(isHTTP bool)
+
+	pending []byte
+	decided bool
+	err     error
+}
+
+func (g *firstLineGuard) Read(p []byte) (int, error) {
+	buf := make([]byte, 4096)
+	for !g.decided {
+		n, err := g.Conn.Read(buf)
+		g.pending = append(g.pending, buf[:n]...)
+		switch classifyRequestLine(g.pending) {
+		case lineHTTP:
+			g.deny(true)
+			return 0, errPolicyDenied
+		case lineNotHTTP:
+			g.decided = true
+		default:
+			if len(g.pending) >= maxRequestLine {
+				g.deny(false)
+				return 0, errPolicyDenied
+			}
+		}
+		if err != nil {
+			// The stream ended inside a line that never became a request;
+			// forward what came and then the error.
+			g.decided, g.err = true, err
+		}
+	}
+	if len(g.pending) > 0 {
+		n := copy(p, g.pending)
+		g.pending = g.pending[n:]
+		return n, nil
+	}
+	if g.err != nil {
+		return 0, g.err
+	}
+	return g.Conn.Read(p)
+}
+
+func (g *firstLineGuard) CloseWrite() error {
+	if cw, ok := g.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return g.Close()
 }
 
 // serveInspected runs an inspected flow: terminate guest TLS (or read plain
@@ -356,12 +501,27 @@ func (f *inspectFlow) serveInspected(guest net.Conn) {
 		conn = tc
 		if tc.ConnectionState().NegotiatedProtocol == "" {
 			// No ALPN: tell HTTP from another protocol by the first bytes.
-			br := bufio.NewReaderSize(tc, 4096)
-			if !peekHTTP(tc, br, peekTimeout) {
-				f.relayNotHTTP(&bufConn{Conn: tc, r: br})
+			br := bufio.NewReaderSize(tc, maxRequestLine)
+			stream := &bufConn{Conn: tc, r: br}
+			switch peekRequest(tc, br, f.insp.peekTimeout) {
+			case peekHTTP:
+				conn = stream
+			case peekNotHTTP:
+				f.relayNotHTTP(stream, false)
+				return
+			case peekSilent:
+				// A server-first protocol stays silent, so relay it, but
+				// classify what the guest sends first: a request after a
+				// delay must not slip past the http rules.
+				f.relayNotHTTP(stream, true)
+				return
+			case peekInconclusive:
+				f.notHTTPDenied(tc, Decision{Reason: "inconclusive-request-line"}, "not HTTP: the first line did not decide")
+				return
+			default:
+				_ = tc.Close()
 				return
 			}
-			conn = &bufConn{Conn: tc, r: br}
 		}
 	}
 	var protos http.Protocols
@@ -404,21 +564,28 @@ func (f *inspectFlow) handshake(c net.Conn) (*tls.Conn, bool) {
 	return tc, true
 }
 
+// notHTTPDenied records a denied non-HTTP stream and closes it.
+func (f *inspectFlow) notHTTPDenied(guest net.Conn, d Decision, msg string) {
+	ev := map[string]any{
+		"event": "inspect-error", "conn": f.conn, "dst": f.dst.String(), "name": f.peerName,
+		"error": msg, "reason": d.Reason,
+	}
+	if d.Rule != "" {
+		ev["rule"] = d.Rule
+	}
+	f.b.record(ev)
+	_ = guest.Close()
+}
+
 // relayNotHTTP handles a TLS flow without ALPN whose decrypted bytes are not
 // HTTP. http rules never open such traffic, so the plain rules decide; an
-// allowed flow is relayed over a verified upstream TLS connection.
-func (f *inspectFlow) relayNotHTTP(guest net.Conn) {
+// allowed flow is relayed over a verified upstream TLS connection. With guard
+// set the guest has not sent anything yet, and its first line is checked on
+// the way (see firstLineGuard).
+func (f *inspectFlow) relayNotHTTP(guest net.Conn, guard bool) {
 	d := f.b.peerDecision(f.p.plain(), f.env, f.dst, f.peerName)
 	if !d.Allow {
-		ev := map[string]any{
-			"event": "inspect-error", "conn": f.conn, "dst": f.dst.String(), "name": f.peerName,
-			"error": "not HTTP", "reason": d.Reason,
-		}
-		if d.Rule != "" {
-			ev["rule"] = d.Rule
-		}
-		f.b.record(ev)
-		_ = guest.Close()
+		f.notHTTPDenied(guest, d, "not HTTP")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout+tlsHandshakeTimeout)
@@ -428,6 +595,20 @@ func (f *inspectFlow) relayNotHTTP(guest net.Conn) {
 		f.b.record(f.upstreamErrorEvent(nil, err))
 		_ = guest.Close()
 		return
+	}
+	if guard {
+		guest = &firstLineGuard{Conn: guest, deny: func(isHTTP bool) {
+			msg := "HTTP request after the inspection peek timed out"
+			if !isHTTP {
+				msg = "first line too long for a request line"
+			}
+			f.b.record(map[string]any{
+				"event": "inspect-error", "conn": f.conn, "dst": f.dst.String(), "name": f.peerName,
+				"error": msg, "reason": "http-after-silence",
+			})
+			_ = guest.Close()
+			_ = up.Close()
+		}}
 	}
 	splice(guest, up)
 }
