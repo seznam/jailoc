@@ -309,8 +309,14 @@ func TestInspectorLeaf(t *testing.T) {
 	if got := cert.NotBefore; !got.Equal(now.Add(-time.Hour).Truncate(time.Second)) {
 		t.Fatalf("NotBefore = %s, want now-1h", got)
 	}
-	if got := cert.NotAfter; !got.Equal(now.Add(24 * time.Hour).Truncate(time.Second)) {
-		t.Fatalf("NotAfter = %s, want now+24h", got)
+	// The test CA lives 24h from its creation, a moment before now, so the
+	// leaf is capped at the CA's expiry.
+	wantNotAfter := now.Add(24 * time.Hour)
+	if wantNotAfter.After(ca.cert.NotAfter) {
+		wantNotAfter = ca.cert.NotAfter
+	}
+	if got := cert.NotAfter; !got.Equal(wantNotAfter.Truncate(time.Second)) {
+		t.Fatalf("NotAfter = %s, want min(now+24h, CA expiry) = %s", got, wantNotAfter)
 	}
 	if cert.IsCA || cert.KeyUsage != x509.KeyUsageDigitalSignature || len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
 		t.Fatalf("leaf usage = ca:%v ku:%v eku:%v", cert.IsCA, cert.KeyUsage, cert.ExtKeyUsage)
@@ -329,6 +335,23 @@ func TestInspectorLeaf(t *testing.T) {
 			t.Fatal("certificate near expiry was reused")
 		}
 		insp.now = func() time.Time { return now }
+	})
+
+	t.Run("capped at the CA expiry", func(t *testing.T) {
+		late := ca.cert.NotAfter.Add(-2 * time.Hour)
+		insp.now = func() time.Time { return late }
+		defer func() { insp.now = func() time.Time { return now } }()
+		capped, err := insp.leaf("capped.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := x509.ParseCertificate(capped.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !c.NotAfter.Equal(ca.cert.NotAfter) {
+			t.Fatalf("NotAfter = %s, want the CA expiry %s", c.NotAfter, ca.cert.NotAfter)
+		}
 	})
 
 	t.Run("ip literal gets an IP SAN", func(t *testing.T) {

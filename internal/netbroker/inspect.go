@@ -2,6 +2,7 @@ package netbroker
 
 import (
 	"bufio"
+	"bytes"
 	"container/list"
 	"context"
 	"crypto"
@@ -317,6 +318,11 @@ const (
 	lineHTTP
 	// lineNotHTTP: the bytes cannot be an HTTP request line.
 	lineNotHTTP
+	// lineMalformed: the bytes are shaped like an HTTP request line (they
+	// start with a known method and whitespace, or the line ends in
+	// HTTP/<d>.<d>) but are not a valid one. A lenient server might still
+	// take it for a request, so it is never relayed.
+	lineMalformed
 )
 
 // isTchar reports whether c is an RFC 9110 token character.
@@ -330,8 +336,63 @@ func isTchar(c byte) bool {
 // token (RFC 9110 tchar, any case, so PROPFIND and delete count) as the
 // method. Go's server also takes a bare LF as the line end, so it counts. It
 // decides on the first byte that cannot continue a request line, so another
-// protocol is told apart without waiting for its first line to end.
+// protocol is told apart without waiting for its first line to end. Bytes
+// that are not a valid request line but look like one (see lineMalformed) are
+// told apart from another protocol.
 func classifyRequestLine(b []byte) lineClass {
+	if c := strictRequestLine(b); c != lineNotHTTP {
+		return c
+	}
+	return classifyHTTPShaped(b)
+}
+
+// classifyHTTPShaped refines a strict lineNotHTTP verdict: lineMalformed for
+// bytes that look like a request line, lineMore while leading whitespace
+// leaves open whether a method follows, lineNotHTTP otherwise.
+func classifyHTTPShaped(b []byte) lineClass {
+	line, complete := b, false
+	if i := bytes.IndexByte(b, '\n'); i >= 0 {
+		line, complete = b[:i], true
+	}
+	s := bytes.TrimLeft(line, " \t")
+	j := 0
+	for j < len(s) && isTchar(s[j]) {
+		j++
+	}
+	method := strings.ToUpper(string(s[:j]))
+	switch {
+	case j == len(s) && !complete && (j == 0 || isMethodPrefix(method)):
+		// Only whitespace or the start of a method so far.
+		return lineMore
+	case j < len(s) && (s[j] == ' ' || s[j] == '\t') && isMethod(method):
+		return lineMalformed
+	case complete && endsWithVersion(bytes.TrimRight(line, " \t\r")):
+		return lineMalformed
+	}
+	return lineNotHTTP
+}
+
+// endsWithVersion reports whether line ends in HTTP/<d>.<d>, in any case.
+func endsWithVersion(line []byte) bool {
+	const version = "HTTP/d.d"
+	if len(line) < len(version) {
+		return false
+	}
+	tail := line[len(line)-len(version):]
+	for j := 0; j < len(version); j++ {
+		if version[j] == 'd' {
+			if tail[j] < '0' || tail[j] > '9' {
+				return false
+			}
+		} else if !strings.EqualFold(string(tail[j]), string(version[j])) {
+			return false
+		}
+	}
+	return true
+}
+
+// strictRequestLine is the strict grammar of classifyRequestLine.
+func strictRequestLine(b []byte) lineClass {
 	i := 0
 	for i < len(b) && isTchar(b[i]) {
 		i++
@@ -386,6 +447,8 @@ type peekResult int
 const (
 	peekHTTP    peekResult = iota // a request line or the HTTP/2 preface
 	peekNotHTTP                   // another protocol
+	// peekMalformed: shaped like an HTTP request line but not a valid one.
+	peekMalformed
 	// peekSilent: nothing arrived before the deadline.
 	peekSilent
 	// peekInconclusive: bytes arrived, but the deadline, the end of the
@@ -414,6 +477,8 @@ func peekRequest(c net.Conn, br *bufio.Reader, timeout time.Duration) peekResult
 			return peekHTTP
 		case lineNotHTTP:
 			return peekNotHTTP
+		case lineMalformed:
+			return peekMalformed
 		}
 		switch {
 		case len(b) >= maxRequestLine:
@@ -435,9 +500,9 @@ func peekRequest(c net.Conn, br *bufio.Reader, timeout time.Duration) peekResult
 // silent past the peek, which the http rules would otherwise not cover.
 type firstLineGuard struct {
 	net.Conn
-	// deny closes the flow; it gets whether the line was HTTP (false: the
-	// cap came first).
-	deny func(isHTTP bool)
+	// deny closes the flow; it gets why: lineHTTP, lineMalformed, or lineMore
+	// when the line cap came first.
+	deny func(why lineClass)
 
 	pending []byte
 	decided bool
@@ -449,15 +514,15 @@ func (g *firstLineGuard) Read(p []byte) (int, error) {
 	for !g.decided {
 		n, err := g.Conn.Read(buf)
 		g.pending = append(g.pending, buf[:n]...)
-		switch classifyRequestLine(g.pending) {
-		case lineHTTP:
-			g.deny(true)
+		switch class := classifyRequestLine(g.pending); class {
+		case lineHTTP, lineMalformed:
+			g.deny(class)
 			return 0, errPolicyDenied
 		case lineNotHTTP:
 			g.decided = true
 		default:
 			if len(g.pending) >= maxRequestLine {
-				g.deny(false)
+				g.deny(lineMore)
 				return 0, errPolicyDenied
 			}
 		}
@@ -508,6 +573,9 @@ func (f *inspectFlow) serveInspected(guest net.Conn) {
 				conn = stream
 			case peekNotHTTP:
 				f.relayNotHTTP(stream, false)
+				return
+			case peekMalformed:
+				f.notHTTPDenied(tc, Decision{Reason: "malformed-request-line"}, "not HTTP: malformed request line")
 				return
 			case peekSilent:
 				// A server-first protocol stays silent, so relay it, but
@@ -597,14 +665,17 @@ func (f *inspectFlow) relayNotHTTP(guest net.Conn, guard bool) {
 		return
 	}
 	if guard {
-		guest = &firstLineGuard{Conn: guest, deny: func(isHTTP bool) {
-			msg := "HTTP request after the inspection peek timed out"
-			if !isHTTP {
+		guest = &firstLineGuard{Conn: guest, deny: func(why lineClass) {
+			msg, reason := "HTTP request after the inspection peek timed out", "http-after-silence"
+			switch why {
+			case lineMalformed:
+				msg, reason = "malformed request line after the inspection peek timed out", "malformed-request-line"
+			case lineMore:
 				msg = "first line too long for a request line"
 			}
 			f.b.record(map[string]any{
 				"event": "inspect-error", "conn": f.conn, "dst": f.dst.String(), "name": f.peerName,
-				"error": msg, "reason": "http-after-silence",
+				"error": msg, "reason": reason,
 			})
 			_ = guest.Close()
 			_ = up.Close()

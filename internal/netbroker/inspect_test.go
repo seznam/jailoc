@@ -832,6 +832,161 @@ func TestInspectUpgrade(t *testing.T) {
 	}
 }
 
+func TestInspectH2CUpgradeStripped(t *testing.T) {
+	t.Parallel()
+	e := newL7Env(t)
+	var mu sync.Mutex
+	var seen http.Header
+	e.httpsUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = r.Header.Clone()
+		mu.Unlock()
+		if r.Header.Get("Upgrade") == "h2c" {
+			// A server that took the upgrade would tunnel the connection.
+			conn, brw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n")
+			_ = brw.Flush()
+			return
+		}
+		_, _ = io.WriteString(w, "plain")
+	}))
+	e.start(ruleWeb+","+ruleAPIRead, "", true)
+
+	c, err := e.dialGuest(443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	tc := tls.Client(c, &tls.Config{ServerName: "example.com", RootCAs: e.ca.pool, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
+	req := "GET /ok/a HTTP/1.1\r\nHost: example.com\r\nConnection: Upgrade, HTTP2-Settings\r\nUpgrade: h2c\r\nHTTP2-Settings: AAMAAABkAAQCAAAAAAIAAAAA\r\n\r\n"
+	if _, err := io.WriteString(tc, req); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tc), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := readBody(t, resp); resp.StatusCode != 200 || body != "plain" {
+		t.Fatalf("h2c upgrade request = %d %q, want a plain 200", resp.StatusCode, body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, k := range []string{"Upgrade", "Http2-Settings"} {
+		if v := seen.Values(k); len(v) != 0 {
+			t.Errorf("upstream saw %s: %v", k, v)
+		}
+	}
+	if v := seen.Get("Connection"); strings.Contains(strings.ToLower(v), "upgrade") {
+		t.Errorf("upstream saw Connection: %q", v)
+	}
+}
+
+func TestStripH2CUpgrade(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   http.Header
+		want http.Header
+	}{
+		{"h2c only", http.Header{"Connection": {"Upgrade, HTTP2-Settings"}, "Upgrade": {"h2c"}, "Http2-Settings": {"x"}}, http.Header{}},
+		{"mixed case", http.Header{"Connection": {"upgrade"}, "Upgrade": {"H2C"}}, http.Header{}},
+		{"keeps other connection tokens", http.Header{"Connection": {"keep-alive, Upgrade, HTTP2-Settings"}, "Upgrade": {"h2c"}, "Http2-Settings": {"x"}}, http.Header{"Connection": {"keep-alive"}}},
+		{"comma list keeps websocket", http.Header{"Connection": {"Upgrade, HTTP2-Settings"}, "Upgrade": {"websocket, h2c"}, "Http2-Settings": {"x"}}, http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}}},
+		{"repeated headers", http.Header{"Connection": {"Upgrade", "HTTP2-Settings"}, "Upgrade": {"h2c", "websocket"}, "Http2-Settings": {"x"}}, http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}}},
+		{"websocket untouched", http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}}, http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}}},
+		{"no upgrade", http.Header{"Accept": {"*/*"}}, http.Header{"Accept": {"*/*"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			stripH2CUpgrade(tt.in)
+			if fmt.Sprint(tt.in) != fmt.Sprint(tt.want) {
+				t.Fatalf("headers = %v, want %v", tt.in, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthorityHosts(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, in, want string
+	}{
+		{"name", "Example.COM", "example.com"},
+		{"name and port", "example.com:8443", "example.com"},
+		{"trailing dot", "example.com.", "example.com"},
+		{"ipv4", "93.184.216.34", "93.184.216.34"},
+		{"ipv4 and port", "93.184.216.34:80", "93.184.216.34"},
+		{"bracketed ipv6", "[2606:4700:4700::1111]", "2606:4700:4700::1111"},
+		{"bracketed ipv6 and port", "[2606:4700:4700::1111]:443", "2606:4700:4700::1111"},
+		{"expanded ipv6", "[2606:4700:4700:0:0:0:0:1111]", "2606:4700:4700::1111"},
+		{"expanded ipv6 and port", "[2606:4700:4700:0000:0000:0000:0000:1111]:443", "2606:4700:4700::1111"},
+		{"uppercase ipv6", "[2606:4700:4700::ABCD]", "2606:4700:4700::abcd"},
+		{"v4-mapped ipv6", "[::ffff:93.184.216.34]:80", "93.184.216.34"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := requestHost(tt.in); got != tt.want {
+				t.Errorf("requestHost(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+			if got := normalizeAuthority(tt.in); got != tt.want {
+				t.Errorf("normalizeAuthority(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInspectIPv6Authority(t *testing.T) {
+	t.Parallel()
+	e := newL7Env(t)
+	var hits atomic.Int32
+	e.httpUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	e.start(ruleWeb+","+ruleAPIRead, "", false)
+	dst := netip.MustParseAddrPort("[2606:4700:4700::1111]:80")
+	p := e.broker.policy.Load()
+	f := e.broker.newInspectFlow(p, e.broker.env(p, dst.Addr()), Decision{Allow: true}, httpScope{}, 1, dst, dst.Addr().String(), false, false)
+	f.byIP = true
+	t.Cleanup(f.close)
+
+	tests := []struct {
+		name, host string
+		want       int
+	}{
+		{"compressed literal", "[2606:4700:4700::1111]", 200},
+		{"compressed literal and port", "[2606:4700:4700::1111]:80", 200},
+		{"expanded literal", "[2606:4700:4700:0:0:0:0:1111]", 200},
+		{"expanded literal and port", "[2606:4700:4700:0000:0000:0000:0000:1111]:80", 200},
+		{"uppercase literal", "[2606:4700:4700::1111]", 200},
+		{"another address", "[2606:4700:4700::1112]", 421},
+		{"another expanded address", "[2606:4700:4700:0:0:0:0:1112]:80", 421},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := hits.Load()
+			req := httptest.NewRequest(http.MethodGet, "/ok/a", nil)
+			req.Host = tt.host
+			rec := httptest.NewRecorder()
+			f.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("Host %q = %d %q, want %d", tt.host, rec.Code, rec.Body.String(), tt.want)
+			}
+			if reached := hits.Load() - before; (tt.want == 200) != (reached == 1) {
+				t.Fatalf("Host %q: upstream reached %d times for a %d answer", tt.host, reached, rec.Code)
+			}
+		})
+	}
+}
+
 func pemCert(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
@@ -1023,16 +1178,30 @@ func TestClassifyRequestLine(t *testing.T) {
 		{"target so far", "GET /a/b", lineMore},
 		{"version so far", "GET / HTTP/1", lineMore},
 		{"line end so far", "GET / HTTP/1.1\r", lineMore},
-		{"not a line end", "GET / HTTP/1.1 \r\n", lineNotHTTP},
-		{"line without a version", "GET /\r\n", lineNotHTTP},
-		{"wrong version", "GET / HTTP/x.1\r\n", lineNotHTTP},
+		{"not a line end", "GET / HTTP/1.1 \r\n", lineMalformed},
+		{"line without a version", "GET /\r\n", lineMalformed},
+		{"wrong version", "GET / HTTP/x.1\r\n", lineMalformed},
 		{"greeting", "HELLO\r\n", lineNotHTTP},
-		{"two words", "get foo\r\n", lineNotHTTP},
+		{"two words", "get foo\r\n", lineMalformed},
 		{"ssh banner", "SSH-2.0-OpenSSH_9.6\r\n", lineNotHTTP},
 		{"binary", "\x00\x01\x02", lineNotHTTP},
-		{"leading space", " GET / HTTP/1.1\r\n", lineNotHTTP},
-		{"control in target", "GET /\x01 HTTP/1.1\r\n", lineNotHTTP},
-		{"empty target", "GET  HTTP/1.1\r\n", lineNotHTTP},
+		{"leading space", " GET / HTTP/1.1\r\n", lineMalformed},
+		{"control in target", "GET /\x01 HTTP/1.1\r\n", lineMalformed},
+		{"empty target", "GET  HTTP/1.1\r\n", lineMalformed},
+		{"two spaces", "POST  /forbidden HTTP/1.1\r\n", lineMalformed},
+		{"two spaces before version", "POST /forbidden  HTTP/1.1\r\n", lineMalformed},
+		{"tab separator", "POST\t/forbidden HTTP/1.1\r\n", lineMalformed},
+		{"tab before the version", "POST /forbidden\tHTTP/1.1\r\n", lineMalformed},
+		{"lowercase method with two spaces", "post  /forbidden HTTP/1.1\r\n", lineMalformed},
+		{"trailing whitespace after the version", "POST /forbidden HTTP/1.1  \r\n", lineMalformed},
+		{"unknown method with an odd separator", "FOO\t/x HTTP/1.1\r\n", lineMalformed},
+		{"unknown method, version at the end", "FOO bar baz HTTP/1.1\r\n", lineMalformed},
+		{"lowercase version", "FOO /x\thttp/1.1\n", lineMalformed},
+		{"leading space so far", " ", lineMore},
+		{"leading space and method so far", "\t PO", lineMore},
+		{"leading space and non-method", " HELO x\r\n", lineNotHTTP},
+		{"smtp greeting", "HELO x\r\n", lineNotHTTP},
+		{"unknown method with a version-less line", "FOO /x\r\n", lineNotHTTP},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1101,6 +1270,66 @@ func TestInspectNoALPNRequestLine(t *testing.T) {
 	})
 }
 
+// malformedLines are request lines a lenient server could still take for a
+// request, but which are not valid ones.
+var malformedLines = []struct{ name, raw string }{
+	{"two spaces", "POST  /forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"tab separator", "POST\t/forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"leading space", " POST /forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"lowercase method with two spaces", "post  /forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"trailing whitespace after the version", "POST /forbidden HTTP/1.1 \r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+}
+
+func TestInspectNoALPNMalformedRequestLine(t *testing.T) {
+	t.Parallel()
+	for _, tt := range malformedLines {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newL7Env(t)
+			e.rawUpstream(true, func(c net.Conn) { t.Error("upstream reached by a malformed request line") })
+			e.start(ruleWeb+","+ruleAPIRead, "", true)
+			tc := dialNoALPN(t, e)
+			if _, err := io.WriteString(tc, tt.raw); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := tc.Read(make([]byte, 16)); err == nil {
+				t.Fatalf("read %d bytes, want the flow closed", n)
+			}
+			e.waitEvent("inspect-error", map[string]any{"reason": "malformed-request-line"})
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if len(e.dialed) != 0 {
+				t.Fatalf("upstream dialed for a closed flow: %v", e.dialed)
+			}
+		})
+	}
+	// Other protocols are still decided by the plain rules and relayed.
+	for _, tt := range []struct{ name, raw string }{
+		{"ssh banner", "SSH-2.0-OpenSSH_9.6\r\n"},
+		{"smtp greeting", "HELO x\r\n"},
+		{"binary", "\x00\x01\x02\x03\r\n"},
+	} {
+		t.Run("relays "+tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newL7Env(t)
+			e.rawUpstream(true, func(c net.Conn) {
+				b := make([]byte, 64)
+				n, _ := c.Read(b)
+				_, _ = c.Write(append([]byte("echo:"), b[:n]...))
+			})
+			e.start(ruleWeb+","+ruleAPIRead, "", true)
+			tc := dialNoALPN(t, e)
+			if _, err := io.WriteString(tc, tt.raw); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, len("echo:"+tt.raw))
+			if _, err := io.ReadFull(tc, got); err != nil || string(got) != "echo:"+tt.raw {
+				t.Fatalf("relayed reply = %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestInspectSilentNoALPN(t *testing.T) {
 	t.Parallel()
 	start := func(t *testing.T, e *l7Env) {
@@ -1133,6 +1362,33 @@ func TestInspectSilentNoALPN(t *testing.T) {
 		}
 		e.waitEvent("inspect-error", map[string]any{"reason": "http-after-silence"})
 	})
+	for _, tt := range malformedLines {
+		t.Run("malformed line after the peek timed out is closed unforwarded: "+tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newL7Env(t)
+			got := make(chan []byte, 1)
+			e.rawUpstream(true, func(c net.Conn) {
+				b, _ := io.ReadAll(c)
+				got <- b
+			})
+			start(t, e)
+			tc := dialNoALPN(t, e)
+			time.Sleep(400 * time.Millisecond)
+			_, _ = io.WriteString(tc, tt.raw)
+			if n, err := tc.Read(make([]byte, 16)); err == nil {
+				t.Fatalf("read %d bytes, want the flow closed", n)
+			}
+			select {
+			case b := <-got:
+				if len(b) != 0 {
+					t.Fatalf("upstream received %q, want nothing", b)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("upstream connection never ended")
+			}
+			e.waitEvent("inspect-error", map[string]any{"reason": "malformed-request-line"})
+		})
+	}
 	t.Run("server-first protocol is relayed", func(t *testing.T) {
 		t.Parallel()
 		e := newL7Env(t)
@@ -1306,6 +1562,68 @@ func TestInspectWithoutName(t *testing.T) {
 		}
 		if !bytes.Equal(<-got, hello) {
 			t.Fatal("upstream did not receive the ClientHello unchanged")
+		}
+	})
+	t.Run("non-HTTP ALPN without a name passes under a plain CIDR allow and an http rule", func(t *testing.T) {
+		t.Parallel()
+		for _, alpn := range []string{"imap", "xmpp-client"} {
+			t.Run(alpn, func(t *testing.T) {
+				t.Parallel()
+				e := newL7Env(t)
+				hello := clientHelloBytes(t, l7IP, []string{alpn})
+				got := make(chan []byte, 1)
+				e.rawUpstream(false, func(c net.Conn) {
+					b := make([]byte, len(hello))
+					_, _ = io.ReadFull(c, b)
+					got <- b
+					_, _ = c.Write([]byte("upstream-ok"))
+				})
+				e.start(`{"name":"net","cidrs":["93.184.216.0/24"]},{"name":"ip-read","cidrs":["`+l7IP+`"],"http":{"methods":["GET"]}}`, "", true)
+				c, err := e.dialGuest(443)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = c.Close() })
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+				if _, err := c.Write(hello); err != nil {
+					t.Fatal(err)
+				}
+				reply, err := io.ReadAll(c)
+				if err != nil || string(reply) != "upstream-ok" {
+					t.Fatalf("reply = %x, %v; want the flow spliced to upstream", reply, err)
+				}
+				if !bytes.Equal(<-got, hello) {
+					t.Fatal("upstream did not receive the ClientHello unchanged")
+				}
+				if evs := e.find("flow", map[string]any{"reason": "sni-required"}); len(evs) != 0 {
+					t.Fatalf("flow denied: %v", evs)
+				}
+			})
+		}
+	})
+	t.Run("HTTP-capable ALPN without a name is still inspected", func(t *testing.T) {
+		t.Parallel()
+		for name, alpn := range map[string][]string{"no ALPN": nil, "h2": {"h2"}, "http/1.1 and imap": {"imap", "http/1.1"}} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				e := newL7Env(t)
+				e.rawUpstream(false, func(c net.Conn) { t.Error("upstream dialed for an inspected flow without a request") })
+				e.start(`{"name":"net","cidrs":["93.184.216.0/24"]},{"name":"ip-read","cidrs":["`+l7IP+`"],"http":{"methods":["GET"]}}`, "", true)
+				c, err := e.dialGuest(443)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = c.Close() })
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+				if _, err := c.Write(clientHelloBytes(t, l7IP, alpn)); err != nil {
+					t.Fatal(err)
+				}
+				// The broker answers the ClientHello itself (a TLS handshake record).
+				first := make([]byte, 1)
+				if _, err := io.ReadFull(c, first); err != nil || first[0] != 0x16 {
+					t.Fatalf("first byte = %x, %v; want the broker's ServerHello", first, err)
+				}
+			})
 		}
 	})
 	t.Run("name rules still require a name", func(t *testing.T) {

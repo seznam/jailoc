@@ -83,6 +83,8 @@ A client that rejects the broker's certificate, because it pins certificates, ke
 
 ### What inspection doesn't cover
 
+The image build of an `isolated_build` workspace isn't inspected, because only the builder VM, not the containers of the `RUN` steps, trusts the inspection CA. Its rules still limit hosts and ports, but `http` method and path limits don't apply during the build, and jailoc prints a warning.
+
 A WebSocket upgrade request is checked like any request. After the `101` response the connection is relayed unfiltered, and the frames aren't inspected ([#397](https://github.com/seznam/jailoc/issues/397)). `CONNECT` requests are denied, so a client can't tunnel through an inspected host. Secret injection and masking of sensitive data in requests aren't part of inspection ([#93](https://github.com/seznam/jailoc/issues/93), [#94](https://github.com/seznam/jailoc/issues/94)).
 
 ## Private addresses and DNS rebinding

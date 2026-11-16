@@ -609,6 +609,19 @@ func resolvesPrivate(ctx context.Context, r legacyResolver, host string) bool {
 // vmPolicy builds the broker policy JSON from the workspace's resolved network
 // rules and DNS settings. @list references are expanded on the host.
 func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
+	return buildVMPolicy(ctx, ws, false)
+}
+
+// vmBuilderPolicy builds the broker policy of the isolated_build builder VM.
+// Only the builder VM trusts the inspection CA, not the containers of the
+// image build's RUN steps, so the builder does not inspect: http allow rules
+// open their targets like plain ones, http deny rules (which only deny single
+// requests) are left out, and there is no inspect section.
+func vmBuilderPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
+	return buildVMPolicy(ctx, ws, true)
+}
+
+func buildVMPolicy(ctx context.Context, ws *workspace.Resolved, builder bool) ([]byte, error) {
 	allow := []vmRule{}
 	deny := []vmRule{}
 
@@ -641,13 +654,24 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 	for _, w := range legacyAliasWarnings(ctx, hostResolver, ws.AllowedHosts, ws.InternalZones) {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
+	hasHTTP := slices.ContainsFunc(rules, func(r config.NetworkRule) bool { return r.HTTP != nil })
+	if builder && hasHTTP {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", "the isolated image build does not inspect HTTPS, so the http method and path limits of the network rules do not apply during the build; the rules still limit hosts and ports")
+	}
 	for _, r := range rules {
 		isAllow := len(r.Allow) > 0
 		targets := r.Allow
 		if !isAllow {
 			targets = r.Deny
 		}
-		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets, r.HTTP)
+		httpMatch := r.HTTP
+		if builder && httpMatch != nil {
+			if !isAllow {
+				continue
+			}
+			httpMatch = nil
+		}
+		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets, httpMatch)
 		if err != nil {
 			return nil, err
 		}
@@ -659,7 +683,7 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 	}
 
 	var inspect *vmInspect
-	if slices.ContainsFunc(rules, func(r config.NetworkRule) bool { return r.HTTP != nil }) {
+	if hasHTTP && !builder {
 		var err error
 		if inspect, err = vmInspectPolicy(ws); err != nil {
 			return nil, err

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -401,10 +402,29 @@ func normalizeAuthority(auth string) string {
 	if auth == "" || strings.ContainsAny(auth, " \t/@\\") {
 		return ""
 	}
+	return canonicalHost(hostOfAuthority(auth))
+}
+
+// hostOfAuthority returns the lowercased host of host[:port], without the
+// brackets of an IPv6 literal.
+func hostOfAuthority(auth string) string {
+	host := auth
 	if h, _, err := net.SplitHostPort(auth); err == nil {
-		return normalizeName(h)
+		host = h
+	} else if strings.HasPrefix(auth, "[") && strings.HasSuffix(auth, "]") {
+		host = auth[1 : len(auth)-1]
 	}
-	return normalizeName(auth)
+	return normalizeName(host)
+}
+
+// canonicalHost writes an IP literal in its one canonical form (compressed
+// IPv6, IPv4-mapped addresses as IPv4) so that equal addresses compare equal
+// as strings. Any other name is returned as is.
+func canonicalHost(host string) string {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip.Unmap().String()
+	}
+	return host
 }
 
 // sniffedPeerNameStrict extracts the normalized hostname from an l7 info map

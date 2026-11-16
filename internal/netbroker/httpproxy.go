@@ -162,7 +162,7 @@ func (f *inspectFlow) trackedUpstream() int {
 func (b *Broker) newInspectFlow(p *Policy, env Env, d Decision, scope httpScope, conn uint64, dst netip.AddrPort, peerName string, tlsFlow, h2c bool) *inspectFlow {
 	f := &inspectFlow{
 		b: b, p: p, env: env, insp: p.inspect, scope: scope, conn: conn, dst: dst,
-		peerName: peerName, scheme: "http", flowRule: d.Rule, h2c: h2c,
+		peerName: canonicalHost(peerName), scheme: "http", flowRule: d.Rule, h2c: h2c,
 		upstream: map[*upstreamConn]struct{}{},
 	}
 	if tlsFlow {
@@ -323,11 +323,7 @@ func (f *inspectFlow) decideAuthority(name string) Decision {
 // h2cAuthority normalizes the :authority of an h2c request to a bare host, or
 // returns "" for a missing or malformed one.
 func h2cAuthority(authority string) string {
-	host := normalizeAuthority(authority)
-	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		host = host[1 : len(host)-1]
-	}
-	return host
+	return normalizeAuthority(authority)
 }
 
 // ServeHTTP applies the policy to one guest request and proxies it upstream.
@@ -373,7 +369,59 @@ func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info.rule = v.rule
+	// An h2c upgrade would, on a 101, turn the connection into a raw tunnel
+	// whose HTTP/2 streams skip this check; send the request as plain HTTP/1.1.
+	stripH2CUpgrade(r.Header)
 	f.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), reqInfoKey{}, info)))
+}
+
+// headerTokens returns the comma-separated tokens of all the values of a
+// header, trimmed.
+func headerTokens(h http.Header, key string) []string {
+	var out []string
+	for _, v := range h.Values(key) {
+		for tok := range strings.SplitSeq(v, ",") {
+			if tok = strings.TrimSpace(tok); tok != "" {
+				out = append(out, tok)
+			}
+		}
+	}
+	return out
+}
+
+// dropConnectionTokens removes the named tokens (case-insensitive) from the
+// Connection header, and the header itself when none is left.
+func dropConnectionTokens(h http.Header, drop ...string) {
+	var kept []string
+	for _, tok := range headerTokens(h, "Connection") {
+		if !slices.ContainsFunc(drop, func(d string) bool { return strings.EqualFold(tok, d) }) {
+			kept = append(kept, tok)
+		}
+	}
+	if len(kept) == 0 {
+		h.Del("Connection")
+		return
+	}
+	h.Set("Connection", strings.Join(kept, ", "))
+}
+
+// stripH2CUpgrade removes an h2c upgrade offer (Upgrade: h2c and its
+// HTTP2-Settings) from a request. Other upgrades, such as WebSocket, stay;
+// when h2c was the only one, so does no Upgrade or Connection: Upgrade.
+func stripH2CUpgrade(h http.Header) {
+	toks := headerTokens(h, "Upgrade")
+	kept := slices.DeleteFunc(slices.Clone(toks), func(tok string) bool { return strings.EqualFold(tok, "h2c") })
+	if len(kept) == len(toks) {
+		return
+	}
+	h.Del("HTTP2-Settings")
+	if len(kept) > 0 {
+		h.Set("Upgrade", strings.Join(kept, ", "))
+		dropConnectionTokens(h, "http2-settings")
+		return
+	}
+	h.Del("Upgrade")
+	dropConnectionTokens(h, "upgrade", "http2-settings")
 }
 
 // reject answers a request the policy denies with the status and the
@@ -458,15 +506,10 @@ func (f *inspectFlow) upstreamErrorEvent(info *reqInfo, err error) map[string]an
 }
 
 // requestHost returns the normalized host of a Host header or :authority,
-// without its port.
+// without its port or the brackets of an IPv6 literal. An IP literal is in
+// canonical form.
 func requestHost(hostport string) string {
-	host := hostport
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		host = h
-	} else if strings.HasPrefix(hostport, "[") && strings.HasSuffix(hostport, "]") {
-		host = hostport[1 : len(hostport)-1]
-	}
-	return normalizeName(host)
+	return canonicalHost(hostOfAuthority(hostport))
 }
 
 func truncate(s string, n int) string {

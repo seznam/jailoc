@@ -291,8 +291,10 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		stream = &enforceConn{
 			Conn: replayed,
 			// Without http rules asking for it, a later request without a name
-			// is as welcome as before they existed.
-			allowNoName: httpOnly && addrScope.empty(),
+			// is as welcome as before they existed. So is a handshake that is
+			// conclusively not HTTP (TLS offering no HTTP protocol): http rules
+			// never apply to it, and the plain rules already decided it.
+			allowNoName: httpOnly && (addrScope.empty() || info != nil && !httpCapable(info)),
 			check: func(name string) Decision {
 				d := b.peerDecision(dp, env, dst, name)
 				if d.Allow && !p.httpScope(name, dst).empty() {
