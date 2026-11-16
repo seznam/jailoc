@@ -435,19 +435,21 @@ func TestInspectRejectsRequests(t *testing.T) {
 	}))
 	e.start(ruleWeb+`,{"name":"all","names":["example.com"],"http":{}}`, "", true)
 
-	conn, err := e.dialGuest(443)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	tc := tls.Client(conn, &tls.Config{ServerName: "example.com", RootCAs: e.ca.pool, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
-	if err := tc.Handshake(); err != nil {
-		t.Fatalf("handshake: %v", err)
-	}
-	br := bufio.NewReader(tc)
+	// Each request gets its own connection: net/http closes the connection
+	// after denying a CONNECT, so later requests cannot share it.
 	roundTrip := func(raw string) (int, string) {
 		t.Helper()
+		conn, err := e.dialGuest(443)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		tc := tls.Client(conn, &tls.Config{ServerName: "example.com", RootCAs: e.ca.pool, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
+		if err := tc.Handshake(); err != nil {
+			t.Fatalf("handshake: %v", err)
+		}
+		br := bufio.NewReader(tc)
 		if _, err := io.WriteString(tc, raw); err != nil {
 			t.Fatal(err)
 		}
