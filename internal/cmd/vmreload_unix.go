@@ -151,10 +151,19 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 // guest protocol 3, internal_zones before netbroker.PolicyVersion 1) cannot
 // be reloaded in place: the broker would reject the policy or enforce it
 // with older semantics, such as letting any allowed name resolve to private
-// addresses.
+// addresses. Only http rules (policy version 2) need the current broker, so
+// upgrading jailoc does not force a restart of workspaces without them.
+// policyVersionRules is the broker policy version that introduced
+// internal_zones, the newest feature a policy without http rules relies on.
+const policyVersionRules = 1
+
 func reloadPolicy(ctx context.Context, ws *workspace.Resolved, running vm.Spec) ([]byte, error) {
 	rules := len(ws.NetworkRules) > 0 || ws.DNSUpstream != "" || len(ws.InternalZones) > 0
-	if rules && (running.GuestProtocol < 3 || running.BrokerPolicy < netbroker.PolicyVersion) {
+	need := policyVersionRules
+	if ws.InspectsHTTP() {
+		need = netbroker.PolicyVersion
+	}
+	if rules && (running.GuestProtocol < 3 || running.BrokerPolicy < need) {
 		return nil, fmt.Errorf("workspace %q runs a network broker from an older jailoc version; run `jailoc restart %s` to apply the new network rules", ws.Name, ws.Name)
 	}
 	if ws.IPv6 && (running.GuestProtocol < 2 || running.Guest == nil || !running.Guest.IPv6) {

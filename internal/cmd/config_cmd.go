@@ -290,7 +290,17 @@ func printNetworkRules(rules []config.NetworkRule, indent string) {
 			}
 			ports = " ports=" + strings.Join(ps, ",")
 		}
-		_, _ = fmt.Fprintf(os.Stdout, "%s- %s%s %s (%s%s)\n", indent, prefix, action, strings.Join(targets, ", "), proto, ports)
+		httpMatch := ""
+		if r.HTTP != nil {
+			httpMatch = " http"
+			if len(r.HTTP.Methods) > 0 {
+				httpMatch += " methods=" + strings.Join(r.HTTP.Methods, ",")
+			}
+			if len(r.HTTP.Paths) > 0 {
+				httpMatch += " paths=" + strings.Join(r.HTTP.Paths, ",")
+			}
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "%s- %s%s %s (%s%s%s)\n", indent, prefix, action, strings.Join(targets, ", "), proto, ports, httpMatch)
 	}
 }
 

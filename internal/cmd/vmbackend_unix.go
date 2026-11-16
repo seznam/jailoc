@@ -536,6 +536,22 @@ type vmRule struct {
 	CIDRs []string `json:"cidrs,omitempty"`
 	Proto string   `json:"proto,omitempty"`
 	Ports []string `json:"ports,omitempty"`
+	HTTP  *vmHTTP  `json:"http,omitempty"`
+}
+
+// vmHTTP narrows a vmRule to HTTP requests. Empty methods or paths match any.
+type vmHTTP struct {
+	Methods []string `json:"methods,omitempty"`
+	Paths   []string `json:"paths,omitempty"`
+}
+
+// vmInspect locates the CA the broker signs inspected TLS connections with.
+// The key stays on the host; upstream_ca is the explicit ca_bundle appended to
+// the host trust roots for upstream verification.
+type vmInspect struct {
+	CACert     string `json:"ca_cert"`
+	CAKey      string `json:"ca_key"`
+	UpstreamCA string `json:"upstream_ca,omitempty"`
 }
 
 // legacyResolver looks up legacy allowed_hosts names on the host.
@@ -631,7 +647,7 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		if !isAllow {
 			targets = r.Deny
 		}
-		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets)
+		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets, r.HTTP)
 		if err != nil {
 			return nil, err
 		}
@@ -642,24 +658,51 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		}
 	}
 
+	var inspect *vmInspect
+	if slices.ContainsFunc(rules, func(r config.NetworkRule) bool { return r.HTTP != nil }) {
+		var err error
+		if inspect, err = vmInspectPolicy(ws); err != nil {
+			return nil, err
+		}
+	}
+
 	policy := struct {
-		DNS           string   `json:"dns,omitempty"`
-		Deny          []vmRule `json:"deny"`
-		Allow         []vmRule `json:"allow"`
-		InternalZones []string `json:"internal_zones,omitempty"`
-		IPv6          bool     `json:"ipv6,omitempty"`
+		DNS           string     `json:"dns,omitempty"`
+		Deny          []vmRule   `json:"deny"`
+		Allow         []vmRule   `json:"allow"`
+		InternalZones []string   `json:"internal_zones,omitempty"`
+		IPv6          bool       `json:"ipv6,omitempty"`
+		Inspect       *vmInspect `json:"inspect,omitempty"`
 	}{
 		DNS:           ws.DNSUpstream,
 		Deny:          deny,
 		Allow:         allow,
 		InternalZones: ws.InternalZones,
 		IPv6:          ws.IPv6,
+		Inspect:       inspect,
 	}
 	data, err := json.Marshal(policy)
 	if err != nil {
 		return nil, fmt.Errorf("encode broker policy: %w", err)
 	}
 	return data, nil
+}
+
+// vmInspectPolicy creates the workspace inspection CA if needed and describes
+// it for the broker. upstream_ca is the expanded explicit ca_bundle path; the
+// automatically forwarded bundle is already part of the host trust roots.
+func vmInspectPolicy(ws *workspace.Resolved) (*vmInspect, error) {
+	certPath, keyPath, _, err := ensureInspectCA(ws.Name)
+	if err != nil {
+		return nil, fmt.Errorf("prepare inspection CA for workspace %q: %w", ws.Name, err)
+	}
+	inspect := &vmInspect{CACert: certPath, CAKey: keyPath}
+	if path, custom := ws.CABundle.Path(); custom {
+		if inspect.UpstreamCA, err = expandCABundlePath(path); err != nil {
+			return nil, fmt.Errorf("expand ca_bundle path: %w", err)
+		}
+	}
+	return inspect, nil
 }
 
 var legacyPrivateV4 = []netip.Prefix{
@@ -692,7 +735,7 @@ func isPublicLegacyAddr(addr netip.Addr) bool {
 	return !addr.IsPrivate() && netip.MustParsePrefix("2000::/3").Contains(addr)
 }
 
-func compileVMRule(name, proto string, ports []config.RulePort, targets []string) (vmRule, error) {
+func compileVMRule(name, proto string, ports []config.RulePort, targets []string, httpMatch *config.HTTPMatch) (vmRule, error) {
 	if proto == "" {
 		proto = config.RuleProtoTCP
 	}
@@ -705,6 +748,13 @@ func compileVMRule(name, proto string, ports []config.RulePort, targets []string
 		portStrs = append(portStrs, canon)
 	}
 	out := vmRule{Name: name, Proto: proto, Ports: portStrs}
+	if httpMatch != nil {
+		h, err := compileVMHTTP(httpMatch)
+		if err != nil {
+			return vmRule{}, err
+		}
+		out.HTTP = h
+	}
 	seenNames := map[string]bool{}
 	seenCIDRs := map[string]bool{}
 	for _, t := range targets {
@@ -723,6 +773,34 @@ func compileVMRule(name, proto string, ports []config.RulePort, targets []string
 				seenNames[norm] = true
 				out.Names = append(out.Names, norm)
 			}
+		}
+	}
+	return out, nil
+}
+
+// compileVMHTTP validates an http table and normalizes its methods to upper
+// case without duplicates; "*" anywhere makes the list the single entry "*".
+func compileVMHTTP(m *config.HTTPMatch) (*vmHTTP, error) {
+	out := &vmHTTP{}
+	for _, method := range m.Methods {
+		norm, err := config.NormalizeHTTPMethod(method)
+		if err != nil {
+			return nil, err
+		}
+		if norm == "*" {
+			out.Methods = []string{"*"}
+			break
+		}
+		if !slices.Contains(out.Methods, norm) {
+			out.Methods = append(out.Methods, norm)
+		}
+	}
+	for _, p := range m.Paths {
+		if err := config.ValidateHTTPPathPattern(p); err != nil {
+			return nil, err
+		}
+		if !slices.Contains(out.Paths, p) {
+			out.Paths = append(out.Paths, p)
 		}
 	}
 	return out, nil

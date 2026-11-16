@@ -47,6 +47,8 @@ type trafficEvent struct {
 	PolicyError   string    `json:"policy_error"`
 	RuntimeErrors []string  `json:"runtime_errors"`
 	DenyAll       bool      `json:"deny_all"`
+	Denied        bool      `json:"denied"`
+	Hint          string    `json:"hint"`
 }
 
 // trafficFormatter renders broker events as aligned, human-readable lines.
@@ -88,14 +90,7 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 	switch e.Event {
 	case "flow":
 		verdict := colAllow.Sprint("ALLOW")
-		label := e.Reason
-		if e.Rule != "" {
-			label = "rule=" + e.Rule
-			if e.Reason != "rule "+e.Rule {
-				// A rule matched but did not decide, e.g. not-internal-zone.
-				label = e.Reason + " " + label
-			}
-		}
+		label := decisionLabel(e.Reason, e.Rule)
 		detail := ""
 		if !e.Allow {
 			verdict = colDeny.Sprint("DENY ")
@@ -122,7 +117,11 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 				parts = append(parts, strconv.Itoa(e.Status))
 			}
 		}
-		return fmt.Sprintf("%s  %s %-4s %s", ts, colDim.Sprint("      └"), escapeVisible(e.Proto), colInfo.Sprint(strings.Join(parts, "  ")))
+		line := fmt.Sprintf("%s  %s %-4s %s", ts, colDim.Sprint("      └"), escapeVisible(e.Proto), colInfo.Sprint(strings.Join(parts, "  ")))
+		if e.Proto == "tls" {
+			return line
+		}
+		return line + inspectedDetail(e)
 	case "dns":
 		name := escapeVisible(strings.TrimSuffix(e.Name, "."))
 		if e.Server != "" {
@@ -154,6 +153,13 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 			}
 			return line
 		}
+	case "inspect-error":
+		proto := cmp.Or(e.Proto, "tcp")
+		line := fmt.Sprintf("%s  %s  %-4s %-48s %s", ts, colDeny.Sprint("FAIL "), escapeVisible(proto), f.destWith(e.Dst, e.Name), colDeny.Sprint(escapeVisible(e.Error)))
+		if e.Hint != "" {
+			line += "  " + colDim.Sprint(escapeVisible(e.Hint))
+		}
+		return line
 	case "dial-error":
 		return fmt.Sprintf("%s  %s  %-4s %-48s %s", ts, colDeny.Sprint("FAIL "), escapeVisible(e.Proto), f.dest(e.Dst), colDeny.Sprint(escapeVisible(e.Error)))
 	case "flow-limit":
@@ -194,6 +200,39 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 		return fmt.Sprintf("%s  %s  %s %s", ts, colDim.Sprint("     "), escapeVisible(e.Event), colDim.Sprint(escapeVisible(string(data))))
 	}
 	return ""
+}
+
+// decisionLabel describes why a flow or request was decided: the broker's
+// reason, plus the matching rule when it did not itself decide, e.g.
+// not-internal-zone.
+func decisionLabel(reason, rule string) string {
+	if rule == "" {
+		return reason
+	}
+	if reason == "rule "+rule {
+		return "rule=" + rule
+	}
+	return reason + " rule=" + rule
+}
+
+// inspectedDetail renders what the broker added to an inspected HTTP request
+// event: the matching rule, the denial and its reason, or the upstream error
+// and hint. Passive l7 events carry none of these and render as before.
+func inspectedDetail(e trafficEvent) string {
+	var out string
+	switch {
+	case e.Denied:
+		out += "  " + colDeny.Sprint("DENY "+escapeVisible(decisionLabel(e.Reason, e.Rule)))
+	case e.Rule != "":
+		out += "  " + colDim.Sprint("rule="+escapeVisible(e.Rule))
+	}
+	if e.Error != "" {
+		out += "  " + colDeny.Sprint(escapeVisible(e.Error))
+	}
+	if e.Hint != "" {
+		out += "  " + colDim.Sprint(escapeVisible(e.Hint))
+	}
+	return out
 }
 
 // serviceTarget renders the host target of a gateway service event, or ""

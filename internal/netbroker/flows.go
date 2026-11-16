@@ -50,8 +50,12 @@ func (l *flowLimit) release() { l.n.Add(-1) }
 // destination; denied or unreachable destinations get a RST. When name rules
 // apply, the broker completes the guest handshake and inspects the TLS SNI or
 // HTTP Host before dialing upstream; a flow denied there gets a TLS alert or
-// HTTP 403 instead of a RST (see denyReply). Allowed DNS to another resolver is
-// answered by the broker itself (see serveDNSTCP).
+// HTTP 403 instead of a RST (see denyReply). When an http rule covers the
+// flow's host, the flow is inspected instead of spliced: the broker terminates
+// the guest's TLS with a certificate from the workspace inspection CA (or reads
+// plain HTTP) and applies the rules to every request (see inspectFlow); other
+// protocols to that host are decided by the plain rules alone. Allowed DNS to
+// another resolver is answered by the broker itself (see serveDNSTCP).
 func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
@@ -147,6 +151,13 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	}
 	replayed, info, incomplete := sniffBeforeDial(rawConn, timeout)
 	peerName, badAuthority := sniffedPeerNameStrict(info)
+	// dp decides the flow. A flow that cannot be HTTP (no HTTP or TLS bytes,
+	// or TLS with only non-HTTP ALPN) is decided without the http allow
+	// rules, so they never open other protocols.
+	dp := p
+	if p.hasHTTP() && !httpCapable(info) {
+		dp = p.plain()
+	}
 	switch {
 	case badAuthority:
 		d = Decision{Allow: false, Reason: "sni-mismatch", Name: d.Name}
@@ -162,7 +173,7 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		}
 		envWithPeer := env
 		envWithPeer.Names = []string{peerName}
-		dPeer := Decide(p, envWithPeer, ProtoTCP, dst)
+		dPeer := Decide(dp, envWithPeer, ProtoTCP, dst)
 		switch {
 		case !dPeer.Allow:
 			d = dPeer
@@ -171,7 +182,7 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 			// Check if an address/wildcard rule allows dst without any name.
 			envNoNames := env
 			envNoNames.Names = nil
-			if dAddr := Decide(p, envNoNames, ProtoTCP, dst); dAddr.Allow {
+			if dAddr := Decide(dp, envNoNames, ProtoTCP, dst); dAddr.Allow {
 				d = dAddr
 				d.Name = peerName
 			} else {
@@ -187,6 +198,10 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		// matched at L4, so a guest cannot wait out the 2s deadline and then
 		// send a denied SNI/Host over an unchecked splice.
 		d = Decision{Allow: false, Reason: "sni-required", Name: d.Name}
+	case dp != p:
+		// Nothing identified on a non-HTTP port: the earlier decision may
+		// rest on an http allow rule.
+		d = Decide(dp, env, ProtoTCP, dst)
 	}
 	b.recordFlow(conn, ProtoTCP, src, dst, d)
 	if info != nil {
@@ -203,6 +218,13 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		ep.Abort()
 		_ = rawConn.Close()
 		return
+	}
+	if info != nil && peerName != "" && httpCapable(info) {
+		if scope := p.httpScope(peerName, dst); !scope.empty() {
+			f := b.newInspectFlow(p, env, d, scope, conn, dst, peerName, info["proto"] == "tls")
+			f.serveInspected(replayed)
+			return
+		}
 	}
 	out, err := b.dialTCP("tcp", dst.String())
 	if err != nil {
@@ -223,7 +245,7 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		stream = &enforceConn{
 			Conn: replayed,
 			check: func(name string) Decision {
-				return b.peerDecision(p, env, dst, name)
+				return b.peerDecision(dp, env, dst, name)
 			},
 			closeUpstream: func() { _ = out.Close() },
 			abort: func() {

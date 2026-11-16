@@ -15,8 +15,10 @@ import (
 // Passive application-layer inspection of the first bytes a guest sends on
 // an allowed TCP connection. It never changes or delays the data; it only
 // records what the connection is for (TLS server name and ALPN, or the HTTP
-// request line and Host). A TLS-terminating proxy can later add request and
-// response details with the same "l7" event.
+// request line and Host). Flows to hosts that an http rule covers are not
+// spliced: they are terminated and proxied request by request (see
+// inspect.go and httpproxy.go), which emits the same "l7" event with the
+// method, path, status and rule of each request.
 
 const (
 	sniffMax   = 16 << 10

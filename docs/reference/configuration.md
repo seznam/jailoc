@@ -170,6 +170,98 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `proto` | string | `"tcp"` | `"tcp"`, `"udp"`, or `"any"`. |
 | `ports` | (int \| string)[] | (all) | Port numbers (`1`–`65535`) or `"a-b"` port ranges. |
 | `name` | string | `""` | Label shown in `jailoc traffic` (`rule=<name>`) and validation errors. |
+| `http` | table | (none) | Inspect HTTP requests to the matched destinations and apply `methods` and `paths` per request. Allowed on `allow` and `deny` rules; requires `proto = "tcp"`. See [HTTP rules](#http-rules). |
+
+#### HTTP rules
+
+A rule with an `http` table decides per HTTP request instead of per connection. The broker decrypts TLS for the flows such a rule covers (see [TLS inspection](../explanation/network-isolation.md#tls-inspection)). Rules without `http` are plain rules.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `http.methods` | string[] | (any) | Request methods. `"*"` matches any method. Values are normalized to upper case and must consist of RFC 9110 token characters. |
+| `http.paths` | string[] | (any) | Request path patterns, matched case-sensitively against the path without the query string. |
+
+- `http` takes any target an `allow` or `deny` rule takes: names, `*.wildcard`, `"*"`, IP addresses and CIDRs. Without `ports` it covers all ports.
+- `http` requires `proto = "tcp"` (the default). `proto = "udp"` or `"any"` with `http` fails config load.
+- An empty table (`http = {}`) is valid and matches every request.
+
+```toml
+[[workspaces.api.network.rules]]
+name = "github-readonly"
+allow = ["api.github.com"]
+http.methods = ["GET", "HEAD"]
+http.paths = ["/repos/seznam/*"]
+
+[[workspaces.api.network.rules]]
+name = "no-writes"
+deny = ["registry.example.com"]
+http.methods = ["DELETE", "POST", "PUT", "PATCH"]
+```
+
+##### Path patterns
+
+A pattern starts with `/` and is split into segments at `/`.
+
+| Segment | Matches |
+|---------|---------|
+| literal | exactly that segment |
+| `*` | exactly one non-empty segment |
+| `**` | zero or more remaining segments; allowed only as the last segment |
+
+`/repos/*` matches `/repos/a`, not `/repos`, `/repos/` or `/repos/a/b`. `/repos/**` matches `/repos`, `/repos/`, `/repos/a` and `/repos/a/b`. A trailing `/` is a trailing empty segment and matches literally.
+
+A pattern is rejected at config load when it does not start with `/`, has a partial wildcard (`foo*`), `**` anywhere but last, an empty segment in the middle (`//`), a `.` or `..` segment, or contains `?`, `#`, `%`, `\` or a control character. A method with a character outside the RFC 9110 token set and `http` with a `proto` other than `tcp` are rejected as well.
+
+##### Request path checking
+
+The broker matches patterns against the percent-decoded segments of the request path. A request is denied with reason `bad-path` when its path:
+
+- does not start with `/`, or contains `//` or `\`;
+- contains an encoded slash, backslash or NUL (`%2f`, `%5c`, `%00`, any case);
+- has a segment that fails percent-decoding, decodes to `.` or `..`, or contains a control character.
+
+##### Evaluation
+
+`deny` rules with `http` never deny a connection and never block DNS; they act on requests only. For every other decision step the rule counts like a plain rule: an `allow` rule with `http` lets the connection reach the TLS or HTTP stage, a plain `deny` rule denies it first.
+
+The broker inspects a TCP connection when an `http` rule (allow or deny) matches its port and, after the TLS server name or HTTP `Host` is known, its name or address. These rules form the http scope of the connection. An empty scope leaves the connection to plain rules and undecrypted.
+
+An `http` allow rule narrows its host: when the scope has `http` allow rules, only they decide the requests, and plain `allow` rules matching the same host and port grant nothing for it. Each request is checked in this order:
+
+1. The request host (`Host` or `:authority`, port stripped) must equal the connection's server name, otherwise `421` with reason `host-mismatch`.
+2. A bad path is denied with reason `bad-path`; `CONNECT` and HTTP/2 extended `CONNECT` with reason `connect-denied`.
+3. A matching `http` deny rule (method and path both match) denies the request with `rule=<name>`.
+4. If the scope has `http` allow rules, one must match both method and path, otherwise the request is denied with reason `http-no-match`. If the scope has none, a plain allow rule allowed the connection and the request passes.
+
+| Outcome | Status | Body |
+|---------|--------|------|
+| Denied request | `403 Forbidden` | `blocked by network policy (rule=<name>)` for a deny rule, `blocked by network policy (reason=<reason>)` otherwise |
+| Host does not match the server name | `421 Misdirected Request` | `blocked by network policy (reason=host-mismatch)` |
+| Upstream failure (connect or certificate verification) | `502 Bad Gateway` | the error |
+
+| Reason | Meaning |
+|--------|---------|
+| `http-no-match` | The scope has `http` allow rules and none matched the method and path. |
+| `bad-path` | The request path failed [checking](#request-path-checking). |
+| `connect-denied` | The request is a `CONNECT` or an HTTP/2 extended `CONNECT`. |
+| `host-mismatch` | The request host differs from the TLS server name or `Host` of the connection. |
+
+Protocol detection decides per connection whether HTTP is served:
+
+| Traffic | Handling |
+|---------|----------|
+| TLS, ClientHello ALPN offers `h2` or `http/1.1` | Decrypted, HTTP served |
+| TLS, ALPN offered but neither is HTTP | Not decrypted; plain rules decide; spliced |
+| TLS, no ALPN | Decrypted; the first decrypted bytes (1 s) decide: an HTTP/1.1 request line or the HTTP/2 preface is served as HTTP, anything else is decided by plain rules and relayed (denied: closed, `inspect-error`) |
+| Plain HTTP request | Checked per request, no TLS |
+| No server name or Host (silent, server-first or other protocols) | Plain rules decide; `http` rules never open non-HTTP traffic; denied connections are reset |
+
+A WebSocket upgrade request is checked like any request. After the `101` response the connection passes through unfiltered; frames are not inspected.
+
+The broker verifies the upstream certificate against the host's system roots plus the file named by [`ca_bundle`](#ca_bundle) when it is a path; a failure ends the request with `502`. The broker does not use `HTTP_PROXY` or another upstream proxy.
+
+!!! note
+    Inspection adds the workspace's inspection CA to the guest trust stores, also with `ca_bundle = false`. See [TLS inspection](../explanation/network-isolation.md#tls-inspection).
 
 #### Implicit rules and built-in broker behavior
 
@@ -496,6 +588,8 @@ When a bundle is forwarded, sessions get `NODE_USE_SYSTEM_CA=1` and these variab
 | `HEX_CACERTS_PATH` | Hex |
 
 A variable set by the workspace's `env`, `env_file` or an env secret takes precedence.
+
+When any network rule has an [`http` table](#http-rules), the workspace's inspection CA certificate is appended to the bundle, also with `ca_bundle = false` (the bundle then holds only that certificate), so the guest trusts it and the variables above are set. A `ca_bundle` path is also the extra trust anchor for the broker's upstream certificate checks.
 
 ### `enable_docker`
 
