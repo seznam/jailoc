@@ -449,7 +449,27 @@ With filtering on, an effective `allowed_hosts` entry equal to or under an effec
 - Non-empty string: custom bundle path, absolute or `~`. Symlinks are resolved; the target must be a readable regular file with at least one `CERTIFICATE` PEM block and no private-key PEM block.
 - Empty string or any other TOML type: rejected at config load.
 
-The bundle is added to the VM's system trust store, which its Docker daemon also uses, and to the builder VM's Docker daemon. Sessions get `NODE_USE_SYSTEM_CA=1` when a bundle is forwarded.
+The bundle is added to the VM's system trust store, which its Docker daemon also uses, and to the builder VM's Docker daemon. In the VM, `/etc/ssl/certs/ca-certificates.crt` then holds the image's roots plus the forwarded certificates, also when the image keeps its own bundle elsewhere. Each forwarded certificate is also written to `jailoc/` under `/usr/local/share/ca-certificates` or `/etc/pki/ca-trust/source/anchors`, if the image has that directory, so running `update-ca-certificates` or `update-ca-trust` in a session keeps it. When a reload removes or replaces these certificates, jailoc runs that tool, if the image has it, so stores it generated stop trusting the old ones.
+
+When a bundle is forwarded, sessions get `NODE_USE_SYSTEM_CA=1` and these variables set to `/etc/ssl/certs/ca-certificates.crt`, for clients that ship their own roots or read only a variable:
+
+| Variable | Read by |
+|---|---|
+| `NODE_EXTRA_CA_CERTS` | Node.js, Bun and the agents built on them |
+| `SSL_CERT_FILE` | OpenSSL, Go, uv, httpx |
+| `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` | Python requests, curl |
+| `PIP_CERT` | pip |
+| `AWS_CA_BUNDLE` | AWS CLI and SDKs |
+| `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` | Google Cloud CLI |
+| `HTTPLIB2_CA_CERTS` | httplib2 |
+| `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` | gRPC |
+| `CARGO_HTTP_CAINFO` | cargo |
+| `GIT_SSL_CAINFO` | git |
+| `NIX_SSL_CERT_FILE` | Nix |
+| `DENO_CERT` | Deno |
+| `HEX_CACERTS_PATH` | Hex |
+
+A variable set by the workspace's `env`, `env_file` or an env secret takes precedence.
 
 ### `enable_docker`
 

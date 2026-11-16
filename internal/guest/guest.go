@@ -52,6 +52,10 @@ const (
 	SecretsDir = "/run/secrets"
 	// EnvFile holds KEY=VALUE lines added to every agent session.
 	EnvFile = "/run/jailoc/env"
+	// SystemCABundle is the guest's system CA bundle. With a forwarded CA
+	// bundle it holds the image's roots plus the forwarded certificates, and
+	// the session CA variables name it.
+	SystemCABundle = "/etc/ssl/certs/ca-certificates.crt"
 	// MTU of the guest network interface. It matches the broker's MTU;
 	// large frames cut per-packet work in the broker roughly in half.
 	MTU = 65520

@@ -35,7 +35,6 @@ const (
 	tmpSizeMiB    = 1024
 	mountRetries  = 20
 	shutdownPoll  = 500 * time.Millisecond
-	systemCA      = "/etc/ssl/certs/ca-certificates.crt"
 	fallbackShell = "/bin/sh"
 )
 

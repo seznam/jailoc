@@ -173,11 +173,75 @@ func TestSecretsPayload(t *testing.T) {
 		t.Fatalf("secretsPayload: %v", err)
 	}
 	wantEnv := []string{"PLAIN=1", "SSH_AUTH_SOCK=" + guest.SSHAgentSocket, "NODE_USE_SYSTEM_CA=1", "TOKEN=env-value"}
+	wantEnv = append(wantEnv, caBundleEnv()...)
 	if !slices.Equal(got.Env, wantEnv) {
 		t.Errorf("Env = %q, want %q", got.Env, wantEnv)
 	}
 	if len(got.Files) != 1 || string(got.Files["netrc"]) != "file-value\n" {
 		t.Errorf("Files = %q, want only netrc with the command output", got.Files)
+	}
+}
+
+func TestSecretsPayloadCABundleEnv(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		env      []string
+		caBundle string
+		want     map[string]string
+		absent   []string
+	}{
+		{
+			name:     "no bundle",
+			absent:   append([]string{"NODE_USE_SYSTEM_CA"}, caBundleVars...),
+			caBundle: "",
+		},
+		{
+			name:     "bundle",
+			caBundle: "/etc/jailoc/ca-bundle.pem",
+			want: map[string]string{
+				"NODE_USE_SYSTEM_CA":  "1",
+				"NODE_EXTRA_CA_CERTS": guest.SystemCABundle,
+				"SSL_CERT_FILE":       guest.SystemCABundle,
+				"REQUESTS_CA_BUNDLE":  guest.SystemCABundle,
+				"GIT_SSL_CAINFO":      guest.SystemCABundle,
+			},
+		},
+		{
+			name:     "workspace env wins",
+			env:      []string{"REQUESTS_CA_BUNDLE=/custom.pem"},
+			caBundle: "/etc/jailoc/ca-bundle.pem",
+			want: map[string]string{
+				"REQUESTS_CA_BUNDLE": "/custom.pem",
+				"SSL_CERT_FILE":      guest.SystemCABundle,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ws := &workspace.Resolved{Name: "ws", Env: tt.env}
+			spec := vm.Spec{Guest: &guest.Config{CABundle: tt.caBundle}}
+			got, err := secretsPayload(context.Background(), ws, spec, false)
+			if err != nil {
+				t.Fatalf("secretsPayload: %v", err)
+			}
+			values := map[string][]string{}
+			for _, e := range got.Env {
+				k, v, _ := strings.Cut(e, "=")
+				values[k] = append(values[k], v)
+			}
+			for k, v := range tt.want {
+				if !slices.Equal(values[k], []string{v}) {
+					t.Errorf("%s = %q, want exactly %q", k, values[k], v)
+				}
+			}
+			for _, k := range tt.absent {
+				if _, ok := values[k]; ok {
+					t.Errorf("%s set without a CA bundle", k)
+				}
+			}
+		})
 	}
 }
 
