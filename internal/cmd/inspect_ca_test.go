@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -134,6 +135,48 @@ func TestEnsureInspectCAReusesExistingPair(t *testing.T) {
 	}
 	if bytes.Equal(first, other) {
 		t.Fatal("workspaces share a CA")
+	}
+}
+
+func TestEnsureInspectCAConcurrentCallsShareOnePair(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	const callers = 12
+	type result struct {
+		certPath, keyPath string
+		certPEM           []byte
+		err               error
+	}
+	results := make([]result, callers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			r := &results[i]
+			r.certPath, r.keyPath, r.certPEM, r.err = ensureInspectCA("api")
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, r := range results {
+		if r.err != nil {
+			t.Fatalf("caller %d: ensureInspectCA() error = %v", i, r.err)
+		}
+		if !bytes.Equal(r.certPEM, results[0].certPEM) {
+			t.Fatalf("caller %d got a different certificate than caller 0", i)
+		}
+	}
+	onDisk := readTestFile(t, results[0].certPath)
+	if !bytes.Equal(onDisk, results[0].certPEM) {
+		t.Fatal("certificate on disk differs from the one returned")
+	}
+	// loadInspectCA verifies that the key on disk matches the certificate.
+	if loaded, ok := loadInspectCA(results[0].certPath, results[0].keyPath); !ok || !bytes.Equal(loaded, onDisk) {
+		t.Fatal("files on disk are not a matching pair")
 	}
 }
 

@@ -346,27 +346,40 @@ func classifyRequestLine(b []byte) lineClass {
 	return classifyHTTPShaped(b)
 }
 
+// httpSpace is the whitespace RFC 9112 §3 lets a recipient split a request
+// line on (SP, HTAB, VT, FF, CR), plus LF; a lenient server also skips leading
+// empty lines (RFC 9112 §2.2).
+const httpSpace = " \t\v\f\r\n"
+
 // classifyHTTPShaped refines a strict lineNotHTTP verdict: lineMalformed for
-// bytes that look like a request line, lineMore while leading whitespace
-// leaves open whether a method follows, lineNotHTTP otherwise.
+// bytes that look like a request line, lineMore while the bytes leave open
+// whether a request line follows (only whitespace, a token that may become a
+// method, or a token and whitespace until the line ends), lineNotHTTP
+// otherwise. Leading whitespace and empty lines are skipped, as a lenient
+// server skips them.
 func classifyHTTPShaped(b []byte) lineClass {
-	line, complete := b, false
-	if i := bytes.IndexByte(b, '\n'); i >= 0 {
-		line, complete = b[:i], true
-	}
-	s := bytes.TrimLeft(line, " \t")
+	s := bytes.TrimLeft(b, httpSpace)
 	j := 0
 	for j < len(s) && isTchar(s[j]) {
 		j++
 	}
-	method := strings.ToUpper(string(s[:j]))
-	switch {
-	case j == len(s) && !complete && (j == 0 || isMethodPrefix(method)):
-		// Only whitespace or the start of a method so far.
+	if j == len(s) {
+		// Only whitespace or a token so far: a method and whitespace may
+		// still follow.
 		return lineMore
-	case j < len(s) && (s[j] == ' ' || s[j] == '\t') && isMethod(method):
+	}
+	line, complete := s, false
+	if i := bytes.IndexByte(s, '\n'); i >= 0 {
+		line, complete = s[:i], true
+	}
+	switch {
+	case j > 0 && (s[j] == ' ' || s[j] == '\t') && isMethod(strings.ToUpper(string(s[:j]))):
 		return lineMalformed
-	case complete && endsWithVersion(bytes.TrimRight(line, " \t\r")):
+	case j > 0 && strings.IndexByte(httpSpace, s[j]) >= 0 && !complete:
+		// A token and whitespace: any token may be an extension method that
+		// a lenient server splits on any whitespace, so the line end decides.
+		return lineMore
+	case complete && endsWithVersion(bytes.TrimRight(line, httpSpace)):
 		return lineMalformed
 	}
 	return lineNotHTTP
@@ -472,6 +485,11 @@ func peekRequest(c net.Conn, br *bufio.Reader, timeout time.Duration) peekResult
 	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
 	for n := 1; ; n = min(br.Buffered()+1, maxRequestLine) {
 		b, err := br.Peek(n)
+		if k := min(br.Buffered(), maxRequestLine); k > len(b) {
+			// Classify what has already arrived before waiting for one more
+			// byte: a request that came in one record decides at once.
+			b, _ = br.Peek(k)
+		}
 		switch classifyRequestLine(b) {
 		case lineHTTP:
 			return peekHTTP

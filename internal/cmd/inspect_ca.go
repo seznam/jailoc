@@ -41,20 +41,34 @@ func ensureInspectCA(wsName string) (certPath, keyPath string, certPEM []byte, e
 		return certPath, keyPath, certPEM, nil
 	}
 
-	certPEM, keyPEM, err := generateInspectCA(wsName)
+	// Concurrent callers (jailoc processes for the same workspace) must not
+	// interleave their key and certificate writes into a mismatched pair, so
+	// the pair is checked again under the lock before one is generated.
+	err = withInspectCALock(wsName, func() error {
+		if existing, ok := loadInspectCA(certPath, keyPath); ok {
+			certPEM = existing
+			return nil
+		}
+		generatedCert, keyPEM, err := generateInspectCA(wsName)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create inspection CA directory %q: %w", dir, err)
+		}
+		// The key first: a loader needs both files and a matching pair, so a
+		// partial write is regenerated rather than served.
+		if err := writeFileAtomically(keyPath, keyPEM, 0o600); err != nil {
+			return fmt.Errorf("write inspection CA key: %w", err)
+		}
+		if err := writeFileAtomically(certPath, generatedCert, 0o644); err != nil { //nolint:gosec // G302: the CA certificate is public and trusted in the guest
+			return fmt.Errorf("write inspection CA certificate: %w", err)
+		}
+		certPEM = generatedCert
+		return nil
+	})
 	if err != nil {
 		return "", "", nil, err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", "", nil, fmt.Errorf("create inspection CA directory %q: %w", dir, err)
-	}
-	// The key first: a loader needs both files and a matching pair, so a
-	// partial write is regenerated rather than served.
-	if err := writeFileAtomically(keyPath, keyPEM, 0o600); err != nil {
-		return "", "", nil, fmt.Errorf("write inspection CA key: %w", err)
-	}
-	if err := writeFileAtomically(certPath, certPEM, 0o644); err != nil { //nolint:gosec // G302: the CA certificate is public and trusted in the guest
-		return "", "", nil, fmt.Errorf("write inspection CA certificate: %w", err)
 	}
 	return certPath, keyPath, certPEM, nil
 }

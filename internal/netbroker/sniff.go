@@ -267,7 +267,24 @@ func identifyForPolicy(b []byte) (info map[string]any, more bool) {
 	return identifyHTTPForPolicy(b)
 }
 
+// identifyHTTPForPolicy parses an HTTP/1 request head. The first line is
+// first judged by classifyRequestLine, the definition shared with the
+// decrypted-stream detection: bytes shaped like a request line but not a valid
+// one (a tab or other odd separator, leading empty lines, extra words) yield a
+// bad_authority request so they are denied, and a line that is not decided yet
+// asks for more bytes, so neither is spliced unchecked while a lenient server
+// might still take it for a request.
 func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
+	switch classifyRequestLine(b) {
+	case lineMalformed:
+		return malformedRequestInfo(b), false
+	case lineMore:
+		if !isHTTPToken(string(b)) {
+			// Whitespace has been seen (or leads): the line end decides. A
+			// bare token run keeps the bound below.
+			return nil, true
+		}
+	}
 	s := string(b)
 	method, rest, found := strings.Cut(s, " ")
 	if !found {
@@ -346,6 +363,25 @@ func identifyHTTPForPolicy(b []byte) (map[string]any, bool) {
 		info["host"] = effective
 	}
 	return info, false
+}
+
+// malformedRequestInfo describes a request whose first line is shaped like a
+// request line but is not a valid one. Like a conflicting authority it is
+// never inspected or relayed.
+func malformedRequestInfo(b []byte) map[string]any {
+	info := map[string]any{"proto": "http", "bad_authority": true}
+	line := bytes.TrimLeft(b, httpSpace)
+	if i := bytes.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	words := strings.FieldsFunc(string(line), func(r rune) bool { return strings.ContainsRune(httpSpace, r) })
+	if len(words) > 0 && isHTTPToken(words[0]) {
+		info["method"] = words[0]
+		if len(words) > 1 {
+			info["path"] = stripQuery(words[1])
+		}
+	}
+	return info
 }
 
 // hasBareCRorLF reports whether b contains any '\n' not immediately preceded by
@@ -586,6 +622,11 @@ func (c *enforceConn) inspect(data []byte) bool {
 			}
 			continue
 		}
+		if !c.inHTTP && classifyRequestLine(c.buf) == lineMalformed {
+			// Shaped like a request line but not a valid one, possibly after
+			// empty lines that end a head early: deny, as the first sniff does.
+			return false
+		}
 		idx := bytes.Index(c.buf, []byte("\r\n\r\n"))
 		if idx < 0 {
 			if !c.inHTTP {
@@ -609,6 +650,10 @@ func (c *enforceConn) inspect(data []byte) bool {
 		info, _ := identifyHTTPForPolicy(block)
 		if info == nil {
 			if !c.inHTTP {
+				if classifyRequestLine(c.buf) == lineMore {
+					// Only empty lines so far: the request line is still to come.
+					return len(c.buf) <= sniffMax
+				}
 				c.doneTLS, c.buf = true, nil
 				return true
 			}

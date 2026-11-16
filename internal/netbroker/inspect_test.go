@@ -1202,6 +1202,25 @@ func TestClassifyRequestLine(t *testing.T) {
 		{"leading space and non-method", " HELO x\r\n", lineNotHTTP},
 		{"smtp greeting", "HELO x\r\n", lineNotHTTP},
 		{"unknown method with a version-less line", "FOO /x\r\n", lineNotHTTP},
+		{"extension method with a tab so far", "PROPFIND\t/forbidden HTTP/1.1", lineMore},
+		{"extension method and a tab", "PROPFIND\t", lineMore},
+		{"extension method with a tab", "PROPFIND\t/forbidden HTTP/1.1\r\n", lineMalformed},
+		{"extension method with a vertical tab", "PROPFIND\v/forbidden HTTP/1.1\r\n", lineMalformed},
+		{"extension method with a form feed so far", "PROPFIND\f/forbidden", lineMore},
+		{"extension method with a tab and no version", "FOO\t/x\r\n", lineNotHTTP},
+		{"leading form feed", "\fPOST /forbidden HTTP/1.1\r\n", lineMalformed},
+		{"leading vertical tab", "\vPOST /forbidden HTTP/1.1\r\n", lineMalformed},
+		{"leading carriage return", "\rPOST /forbidden HTTP/1.1\r\n", lineMalformed},
+		{"leading empty line", "\r\nPOST /forbidden HTTP/1.1\r\n", lineMalformed},
+		{"leading bare LF", "\nPOST /forbidden HTTP/1.1\r\n", lineMalformed},
+		{"leading empty line, extension method with a tab", "\r\nPROPFIND\t/forbidden HTTP/1.1\r\n", lineMalformed},
+		{"leading empty lines so far", "\r\n\r\n", lineMore},
+		{"leading empty line and a token so far", "\r\nPROPF", lineMore},
+		{"leading empty line, ssh banner", "\r\nSSH-2.0-OpenSSH_9.6\r\n", lineNotHTTP},
+		{"line-based protocol so far", "SET k v", lineMore},
+		{"line-based protocol without its line end", "SET k v\r", lineMore},
+		{"line-based protocol", "SET k v\r\n", lineNotHTTP},
+		{"token and a carriage return so far", "HELLO\r", lineMore},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1330,6 +1349,101 @@ func TestInspectNoALPNMalformedRequestLine(t *testing.T) {
 	}
 }
 
+// writeFragments sends raw in short pieces, so that a classifier sees the
+// first line grow. A write error is ignored: the broker may close the flow as
+// soon as the line is decided.
+func writeFragments(w io.Writer, raw string) {
+	for len(raw) > 0 {
+		n := min(3, len(raw))
+		if _, err := io.WriteString(w, raw[:n]); err != nil {
+			return
+		}
+		raw = raw[n:]
+		time.Sleep(3 * time.Millisecond)
+	}
+}
+
+// fragmentedMalformedLines are request lines that must be denied however the
+// guest splits them.
+var fragmentedMalformedLines = []struct{ name, raw string }{
+	{"extension method with a tab", "PROPFIND\t/forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"extension method with a vertical tab", "PROPFIND\v/forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"leading form feed", "\fPOST /forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"leading vertical tab", "\vPOST /forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"leading carriage return", "\rPOST /forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"leading empty line", "\r\nPOST /forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"leading bare LF", "\nPOST /forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+	{"leading empty lines, extension method with a tab", "\r\n\r\nPROPFIND\t/forbidden HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"},
+}
+
+// echoFirstLine answers a relayed stream's first line with "echo:" and the line.
+func echoFirstLine(c net.Conn) {
+	line, _ := bufio.NewReader(c).ReadString('\n')
+	_, _ = io.WriteString(c, "echo:"+line)
+}
+
+func TestInspectNoALPNFragmentedRequestLine(t *testing.T) {
+	t.Parallel()
+	for _, tt := range fragmentedMalformedLines {
+		t.Run("denied: "+tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newL7Env(t)
+			e.rawUpstream(true, func(c net.Conn) { t.Error("upstream reached by a fragmented malformed request line") })
+			e.start(ruleWeb+","+ruleAPIRead, "", true)
+			tc := dialNoALPN(t, e)
+			writeFragments(tc, tt.raw)
+			if n, err := tc.Read(make([]byte, 16)); err == nil {
+				t.Fatalf("read %d bytes, want the flow closed", n)
+			}
+			e.waitEvent("inspect-error", map[string]any{"reason": "malformed-request-line"})
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if len(e.dialed) != 0 {
+				t.Fatalf("upstream dialed for a closed flow: %v", e.dialed)
+			}
+		})
+	}
+	t.Run("a fragmented line-based protocol is relayed", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		e.rawUpstream(true, echoFirstLine)
+		e.start(ruleWeb+","+ruleAPIRead, "", true)
+		tc := dialNoALPN(t, e)
+		writeFragments(tc, "SET k v\r\n")
+		const want = "echo:SET k v\r\n"
+		got := make([]byte, len(want))
+		if _, err := io.ReadFull(tc, got); err != nil || string(got) != want {
+			t.Fatalf("relayed reply = %q, %v", got, err)
+		}
+	})
+}
+
+// TestInspectNoALPNRequestInOneRecord checks that a request that arrived whole
+// is classified at once instead of waiting out the peek timeout for one more
+// byte.
+func TestInspectNoALPNRequestInOneRecord(t *testing.T) {
+	t.Parallel()
+	e := newL7Env(t)
+	e.httpsUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("upstream reached") }))
+	e.start(ruleWeb+","+ruleAPIRead, "", true)
+	e.broker.policy.Load().inspect.peekTimeout = 5 * time.Second
+	tc := dialNoALPN(t, e)
+	begin := time.Now()
+	if _, err := io.WriteString(tc, "PROPFIND /ok/a HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tc), nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if body := readBody(t, resp); resp.StatusCode != 403 || !strings.Contains(body, "http-no-match") {
+		t.Fatalf("response = %d %q, want 403 http-no-match from the http rules", resp.StatusCode, body)
+	}
+	if took := time.Since(begin); took > 2*time.Second {
+		t.Fatalf("response took %v, want the request classified without waiting for the 5s peek timeout", took)
+	}
+}
+
 func TestInspectSilentNoALPN(t *testing.T) {
 	t.Parallel()
 	start := func(t *testing.T, e *l7Env) {
@@ -1389,6 +1503,47 @@ func TestInspectSilentNoALPN(t *testing.T) {
 			e.waitEvent("inspect-error", map[string]any{"reason": "malformed-request-line"})
 		})
 	}
+	for _, tt := range fragmentedMalformedLines {
+		t.Run("fragmented malformed line after the peek timed out is closed unforwarded: "+tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := newL7Env(t)
+			got := make(chan []byte, 1)
+			e.rawUpstream(true, func(c net.Conn) {
+				b, _ := io.ReadAll(c)
+				got <- b
+			})
+			start(t, e)
+			tc := dialNoALPN(t, e)
+			time.Sleep(400 * time.Millisecond)
+			writeFragments(tc, tt.raw)
+			if n, err := tc.Read(make([]byte, 16)); err == nil {
+				t.Fatalf("read %d bytes, want the flow closed", n)
+			}
+			select {
+			case b := <-got:
+				if len(b) != 0 {
+					t.Fatalf("upstream received %q, want nothing", b)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("upstream connection never ended")
+			}
+			e.waitEvent("inspect-error", map[string]any{"reason": "malformed-request-line"})
+		})
+	}
+	t.Run("a fragmented line-based protocol after the peek timed out is relayed", func(t *testing.T) {
+		t.Parallel()
+		e := newL7Env(t)
+		e.rawUpstream(true, echoFirstLine)
+		start(t, e)
+		tc := dialNoALPN(t, e)
+		time.Sleep(400 * time.Millisecond)
+		writeFragments(tc, "SET k v\r\n")
+		const want = "echo:SET k v\r\n"
+		got := make([]byte, len(want))
+		if _, err := io.ReadFull(tc, got); err != nil || string(got) != want {
+			t.Fatalf("relayed reply = %q, %v", got, err)
+		}
+	})
 	t.Run("server-first protocol is relayed", func(t *testing.T) {
 		t.Parallel()
 		e := newL7Env(t)
