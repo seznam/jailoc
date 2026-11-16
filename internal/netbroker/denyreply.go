@@ -26,8 +26,9 @@ const (
 
 // denyReply returns what the broker sends the guest before closing a flow it
 // denied after inspection: a fatal access_denied TLS alert when head is a TLS
-// ClientHello, a 403 when it is an HTTP request, and nil to reset the
-// connection otherwise.
+// ClientHello, a 403 when it is a well-formed HTTP request, and nil to reset
+// the connection otherwise. A malformed request (bad_authority: conflicting
+// or duplicate Host, broken header or body framing) is reset, not answered.
 func denyReply(head []byte, info map[string]any, d Decision) []byte {
 	switch proto, _ := info["proto"].(string); proto {
 	case "tls":
@@ -39,6 +40,9 @@ func denyReply(head []byte, info map[string]any, d Decision) []byte {
 		// version of the client's ClientHello record.
 		return []byte{0x15, head[1], head[2], 0x00, 0x02, 0x02, tlsAlertAccessDenied}
 	case "http":
+		if bad, _ := info["bad_authority"].(bool); bad {
+			return nil
+		}
 		return http403(info, d)
 	}
 	return nil

@@ -463,7 +463,7 @@ func (c *enforceConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// deny answers a request denied at a request boundary while the guest has
+// deny answers a denied first request or ClientHello while the guest has
 // received nothing from upstream yet, so the answer cannot end up inside an
 // upstream response. Any other denial resets the connection.
 func (c *enforceConn) deny() {
@@ -587,9 +587,15 @@ func (c *enforceConn) inspect(data []byte) bool {
 			}
 			return false
 		}
+		// Only the first request may be answered: a reply to a later one
+		// would be read as the response to an earlier request still waiting
+		// for upstream.
+		first := !c.inHTTP
 		c.inHTTP = true
 		if d := c.decide(info); !d.Allow {
-			c.reply = denyReply(block, info, d)
+			if first {
+				c.reply = denyReply(block, info, d)
+			}
 			return false
 		}
 		bodyLen, chunked, upgraded, ok := parseHTTPFraming(string(block[:idx]))

@@ -73,6 +73,11 @@ func TestDenyReply(t *testing.T) {
 				"blocked by network policy (rule=a??X-Evil: 1?" + strings.Repeat("b", 51) + ")\n",
 		},
 		{
+			name: "malformed http request resets",
+			info: map[string]any{"proto": "http", "method": "GET", "bad_authority": true},
+			d:    Decision{Reason: "sni-mismatch"},
+		},
+		{
 			name: "unidentified stream resets",
 			head: []byte("SSH-2.0-OpenSSH\r\n"),
 			d:    denied,
@@ -163,11 +168,29 @@ func TestEnforceConnDenyReply(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed request resets", func(t *testing.T) {
+	resets := []struct{ name, guestData string }{
+		{"allowed upgrade resets", "GET / HTTP/1.1\r\nHost: allowed.example.com\r\nUpgrade: websocket\r\n\r\n"},
+		{"duplicate host resets", "GET / HTTP/1.1\r\nHost: allowed.example.com\r\nHost: pastebin.com\r\n\r\n"},
+		{"invalid content-length resets", "POST / HTTP/1.1\r\nHost: pastebin.com\r\nContent-Length: x\r\n\r\n"},
+		// The allowed GET is forwarded upstream and has no response yet; a 403
+		// would be read as its response.
+		{"denied request pipelined after an allowed one resets", "GET / HTTP/1.1\r\nHost: allowed.example.com\r\n\r\nHEAD / HTTP/1.1\r\nHost: pastebin.com\r\n\r\n"},
+	}
+	for _, tt := range resets {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, aborted, closedUpstream, err := run(t, "", tt.guestData)
+			if !errors.Is(err, errPolicyDenied) || !aborted || closedUpstream || len(got) != 0 {
+				t.Fatalf("Read err=%v aborted=%v closedUpstream=%v got=%q, want reset", err, aborted, closedUpstream, got)
+			}
+		})
+	}
+
+	t.Run("upgrade with a denied host gets a 403", func(t *testing.T) {
 		t.Parallel()
-		_, aborted, closedUpstream, err := run(t, "", "GET / HTTP/1.1\r\nHost: allowed.example.com\r\nUpgrade: websocket\r\n\r\n")
-		if !errors.Is(err, errPolicyDenied) || !aborted || closedUpstream {
-			t.Fatalf("Read err=%v aborted=%v closedUpstream=%v, want reset", err, aborted, closedUpstream)
+		got, aborted, _, err := run(t, "", "GET / HTTP/1.1\r\nHost: pastebin.com\r\nUpgrade: websocket\r\n\r\n")
+		if !errors.Is(err, errPolicyDenied) || aborted || !bytes.HasPrefix(got, []byte("HTTP/1.1 403 Forbidden\r\n")) {
+			t.Fatalf("Read err=%v aborted=%v got=%q, want 403", err, aborted, got)
 		}
 	})
 
