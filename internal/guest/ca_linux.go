@@ -2,6 +2,8 @@ package guest
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -11,6 +13,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/stacklok/go-microvm/guest/reaper"
 )
 
 const (
@@ -62,20 +66,44 @@ func setCABundle(path string) error {
 	return installCABundle("/", path, runCATool)
 }
 
-// runCATool runs a distribution trust store tool from the image's PATH. An
-// image without the tool has no generated stores to refresh.
+// caToolPath is where runCATool finds a tool and the PATH it runs it with.
+// The image PATH can name directories the agent writes, such as
+// ~/.local/bin, and the tool runs as root.
+var caToolPath = []string{"/usr/sbin", "/usr/bin", "/sbin", "/bin"}
+
+// runCATool runs a distribution trust store tool from a system directory.
+// An image without the tool has no generated stores to refresh.
 func runCATool(args []string) error {
-	bin, err := exec.LookPath(args[0])
-	if errors.Is(err, exec.ErrNotFound) {
+	bin := findCATool(args[0])
+	if bin == "" {
 		return nil
 	}
+	var out bytes.Buffer
+	cmd := exec.Command(bin, args[1:]...) //nolint:gosec // G204: fixed tool from a system directory
+	cmd.Env = []string{"PATH=" + strings.Join(caToolPath, ":"), "LC_ALL=C"}
+	cmd.Stdout, cmd.Stderr = &out, &out
+	// The reaper must not collect the tool's exit status before Wait.
+	release, err := reaper.Track(cmd, cmd.Start)
 	if err != nil {
-		return fmt.Errorf("find %s: %w", args[0], err)
+		return fmt.Errorf("start %s: %w", args[0], err)
 	}
-	if out, err := exec.Command(bin, args[1:]...).CombinedOutput(); err != nil { //nolint:gosec // G204: fixed tool from the image PATH
-		return fmt.Errorf("%s: %w: %s", args[0], err, bytes.TrimSpace(out))
+	err = cmd.Wait()
+	release()
+	if err != nil {
+		return fmt.Errorf("%s: %w: %s", args[0], err, bytes.TrimSpace(out.Bytes()))
 	}
 	return nil
+}
+
+// findCATool returns the executable name in caToolPath, or "".
+func findCATool(name string) string {
+	for _, dir := range caToolPath {
+		path := filepath.Join(dir, name)
+		if fi, err := os.Stat(path); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+			return path
+		}
+	}
+	return ""
 }
 
 // installCABundle is setCABundle for the file system at root. It also keeps
@@ -286,9 +314,8 @@ func syncCASources(root string, certs [][]byte) ([]caSource, error) {
 	return stale, nil
 }
 
-// writeCASourceDir makes dir hold certs as jailoc-NNN.crt, or removes it
-// without certs. It reports whether a file dir held before was removed or
-// replaced.
+// writeCASourceDir makes dir hold certs, or removes it without certs. It
+// reports whether a file dir held before was removed or replaced.
 func writeCASourceDir(dir string, certs [][]byte) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -305,8 +332,8 @@ func writeCASourceDir(dir string, certs [][]byte) (bool, error) {
 	}
 	changed := false
 	names := make([]string, 0, len(certs))
-	for i, cert := range certs {
-		name := fmt.Sprintf("jailoc-%03d.crt", i)
+	for _, cert := range certs {
+		name := caCertFileName(cert)
 		names = append(names, name)
 		path := filepath.Join(dir, name)
 		current, err := os.ReadFile(path) //nolint:gosec // G304: path under a fixed guest directory
@@ -328,4 +355,12 @@ func writeCASourceDir(dir string, certs [][]byte) (bool, error) {
 		changed = true
 	}
 	return changed, nil
+}
+
+// caCertFileName names the source file of cert after its content, so the
+// distribution tools, which track certificates by file, see a replaced
+// certificate as a removal and an addition.
+func caCertFileName(cert []byte) string {
+	sum := sha256.Sum256(cert)
+	return "jailoc-" + hex.EncodeToString(sum[:8]) + ".crt"
 }

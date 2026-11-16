@@ -65,6 +65,11 @@ func noCATool(t *testing.T) func([]string) error {
 	return func([]string) error { return nil }
 }
 
+func sortedNames(names ...string) []string {
+	slices.Sort(names)
+	return names
+}
+
 func dirNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -98,11 +103,11 @@ func TestInstallCABundleDebianLayout(t *testing.T) {
 		t.Errorf("system bundle = %q, want %q", got, want)
 	}
 	local := filepath.Join(root, "/usr/local/share/ca-certificates/jailoc")
-	if got := dirNames(t, local); !slices.Equal(got, []string{"jailoc-000.crt", "jailoc-001.crt"}) {
+	if got, want := dirNames(t, local), sortedNames(caCertFileName(one), caCertFileName(two)); !slices.Equal(got, want) {
 		t.Errorf("local certificates = %q", got)
 	}
-	if got := readTestFile(t, filepath.Join(local, "jailoc-001.crt")); !bytes.Equal(got, two) {
-		t.Errorf("jailoc-001.crt = %q, want the second certificate", got)
+	if got := readTestFile(t, filepath.Join(local, caCertFileName(two))); !bytes.Equal(got, two) {
+		t.Errorf("file of the second certificate = %q, want the certificate", got)
 	}
 	if _, err := os.Stat(filepath.Join(root, "/etc/pki/ca-trust/source/anchors")); !os.IsNotExist(err) {
 		t.Errorf("anchors dir of another distribution was created: %v", err)
@@ -112,7 +117,7 @@ func TestInstallCABundleDebianLayout(t *testing.T) {
 	if err := installCABundle(root, bundle, noCATool(t)); err != nil {
 		t.Fatalf("installCABundle with one certificate: %v", err)
 	}
-	if got := dirNames(t, local); !slices.Equal(got, []string{"jailoc-000.crt"}) {
+	if got := dirNames(t, local); !slices.Equal(got, []string{caCertFileName(one)}) {
 		t.Errorf("local certificates after shrinking = %q", got)
 	}
 
@@ -147,7 +152,7 @@ func TestInstallCABundleFedoraLayout(t *testing.T) {
 		t.Errorf("system bundle = %q, want the image's bundle plus the workspace bundle", got)
 	}
 	anchors := filepath.Join(root, "/etc/pki/ca-trust/source/anchors/jailoc")
-	if got := dirNames(t, anchors); !slices.Equal(got, []string{"jailoc-000.crt"}) {
+	if got := dirNames(t, anchors); !slices.Equal(got, []string{caCertFileName(cert)}) {
 		t.Errorf("anchors = %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(root, "/usr/local/share/ca-certificates")); !os.IsNotExist(err) {
@@ -334,5 +339,74 @@ func TestInstallCABundleRetriesFailedRefresh(t *testing.T) {
 	}
 	if runs != 3 {
 		t.Errorf("tool runs = %d after nothing changed, want 3", runs)
+	}
+}
+
+func TestInstallCABundleRotationRenamesSourceFiles(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	local := filepath.Join(root, "/usr/local/share/ca-certificates")
+	if err := os.MkdirAll(local, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	links := filepath.Join(root, "/etc/ssl/certs")
+	// update-ca-certificates links each source file into /etc/ssl/certs and
+	// notices additions and removals by those links, not by content.
+	run := func(args []string) error {
+		if err := os.RemoveAll(links); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(links, 0o750); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(filepath.Join(local, caSourceSubdir))
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		for _, e := range entries {
+			if err := os.Symlink(filepath.Join(local, caSourceSubdir, e.Name()), filepath.Join(links, e.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	bundle := filepath.Join(t.TempDir(), "ca-bundle.pem")
+	old, rotated := testCertPEM(t, "old"), testCertPEM(t, "rotated")
+	writeTestFile(t, bundle, old)
+	if err := installCABundle(root, bundle, run); err != nil {
+		t.Fatalf("installCABundle: %v", err)
+	}
+	// The session generates the stores from the source files.
+	if err := run(nil); err != nil {
+		t.Fatalf("generate stores: %v", err)
+	}
+
+	writeTestFile(t, bundle, rotated)
+	if err := installCABundle(root, bundle, run); err != nil {
+		t.Fatalf("installCABundle after rotation: %v", err)
+	}
+	if got := dirNames(t, filepath.Join(local, caSourceSubdir)); !slices.Equal(got, []string{caCertFileName(rotated)}) {
+		t.Errorf("source files = %q, want only the rotated certificate", got)
+	}
+	names := dirNames(t, links)
+	if slices.Contains(names, caCertFileName(old)) || !slices.Contains(names, caCertFileName(rotated)) {
+		t.Errorf("generated links = %q, want the rotated certificate only", names)
+	}
+}
+
+func TestFindCAToolIgnoresAgentPath(t *testing.T) {
+	agentBin := t.TempDir()
+	writeTestFile(t, filepath.Join(agentBin, "update-ca-certificates"), []byte("#!/bin/sh\n"))
+	if err := os.Chmod(filepath.Join(agentBin, "update-ca-certificates"), 0o700); err != nil { //nolint:gosec // G302: test executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", agentBin+":"+os.Getenv("PATH"))
+	if got := findCATool("update-ca-certificates"); strings.HasPrefix(got, agentBin) {
+		t.Errorf("findCATool = %q, want a system directory, not PATH", got)
+	}
+	for _, dir := range caToolPath {
+		if strings.Contains(dir, "home") || strings.Contains(dir, "local") {
+			t.Errorf("caToolPath has %q, which the agent may write", dir)
+		}
 	}
 }
