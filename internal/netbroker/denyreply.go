@@ -51,7 +51,7 @@ func http403(info map[string]any, d Decision) []byte {
 	if d.Rule != "" {
 		label = "rule=" + replyText(d.Rule)
 	}
-	body := "blocked by jailoc network policy (" + label + ")\n"
+	body := "blocked by network policy (" + label + ")\n"
 	var b strings.Builder
 	b.WriteString("HTTP/1.1 403 Forbidden\r\n")
 	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")

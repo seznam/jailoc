@@ -49,28 +49,28 @@ func TestDenyReply(t *testing.T) {
 			name: "http names the rule",
 			info: map[string]any{"proto": "http", "method": "GET", "host": "pastebin.com"},
 			d:    denied,
-			want: "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 49\r\nConnection: close\r\n\r\n" +
-				"blocked by jailoc network policy (rule=no-paste)\n",
+			want: "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 42\r\nConnection: close\r\n\r\n" +
+				"blocked by network policy (rule=no-paste)\n",
 		},
 		{
 			name: "http without a rule names the reason",
 			info: map[string]any{"proto": "http", "method": "POST"},
 			d:    Decision{Reason: "sni-required"},
-			want: "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 55\r\nConnection: close\r\n\r\n" +
-				"blocked by jailoc network policy (reason=sni-required)\n",
+			want: "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 48\r\nConnection: close\r\n\r\n" +
+				"blocked by network policy (reason=sni-required)\n",
 		},
 		{
 			name: "head request gets no body",
 			info: map[string]any{"proto": "http", "method": "HEAD"},
 			d:    denied,
-			want: "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 49\r\nConnection: close\r\n\r\n",
+			want: "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 42\r\nConnection: close\r\n\r\n",
 		},
 		{
 			name: "rule name cannot break the response",
 			info: map[string]any{"proto": "http", "method": "GET"},
 			d:    Decision{Rule: "a\r\nX-Evil: 1\xff" + strings.Repeat("b", 80)},
-			want: "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 105\r\nConnection: close\r\n\r\n" +
-				"blocked by jailoc network policy (rule=a??X-Evil: 1?" + strings.Repeat("b", 51) + ")\n",
+			want: "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 98\r\nConnection: close\r\n\r\n" +
+				"blocked by network policy (rule=a??X-Evil: 1?" + strings.Repeat("b", 51) + ")\n",
 		},
 		{
 			name: "unidentified stream resets",

@@ -428,7 +428,7 @@ func TestDNSCacheAndNameEnforcement(t *testing.T) {
 	got, readErr := io.ReadAll(c)
 	_ = c.Close()
 	if readErr != nil || !strings.HasPrefix(string(got), "HTTP/1.1 403 Forbidden\r\n") ||
-		!strings.HasSuffix(string(got), "\r\n\r\nblocked by jailoc network policy (rule=no-paste)\n") {
+		!strings.HasSuffix(string(got), "\r\n\r\nblocked by network policy (rule=no-paste)\n") {
 		t.Fatalf("denied Host reply = %q, %v; want 403 naming rule no-paste", got, readErr)
 	}
 	select {
