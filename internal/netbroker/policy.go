@@ -395,6 +395,20 @@ func privateAnswer(a netip.Addr) bool {
 	return a.IsPrivate()
 }
 
+// trustsChain reports whether every name of a cached DNS chain is in the
+// internal zones. A name cached without a chain is not trusted.
+func (p *Policy) trustsChain(chain []string) bool {
+	if len(chain) == 0 {
+		return false
+	}
+	for _, name := range chain {
+		if !p.internal(name) {
+			return false
+		}
+	}
+	return true
+}
+
 // privateAnswerAllowed reports whether an answer to the question qname may
 // give the guest a private address owned by owner, reached through the CNAME
 // records chain (owner and target names). Every name on the way must be in

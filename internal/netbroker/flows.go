@@ -56,7 +56,7 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
 	conn := b.connSeq.Add(1)
 	p := b.policy.Load()
-	env := b.env(dst.Addr())
+	env := b.env(p, dst.Addr())
 	d := Decide(p, env, ProtoTCP, dst)
 	if !d.Allow {
 		b.recordFlow(conn, ProtoTCP, src, dst, d)

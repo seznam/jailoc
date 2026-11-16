@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -340,5 +341,150 @@ func TestExternalCNAMEHopCannotOpenInternalHost(t *testing.T) {
 	env := Env{Gateway: netip.MustParseAddr("192.168.127.1"), Subnet: netip.MustParsePrefix("192.168.127.0/24"), Names: names}
 	if d := Decide(pol, env, ProtoTCP, netip.AddrPortFrom(db, 5432)); d.Allow {
 		t.Fatalf("Decide(10.0.0.5:5432) = %+v, want denied", d)
+	}
+}
+
+func testBroker(t *testing.T, pol *Policy, exchange func() []byte) *Broker {
+	t.Helper()
+	b, err := New(Config{Subnet: netip.MustParsePrefix("192.168.127.0/24"), Gateway: netip.MustParseAddr("192.168.127.1"), GuestIP: netip.MustParseAddr("192.168.127.2")}, pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.exchange = func(context.Context, string, netip.AddrPort, []byte) ([]byte, error) { return exchange(), nil }
+	return b
+}
+
+// TestRemovedInternalZoneClosesCachedNames checks that removing an internal
+// zone by reload stops cached names whose DNS chain passed through it from
+// opening their private address, before the cached answer expires.
+func TestRemovedInternalZoneClosesCachedNames(t *testing.T) {
+	t.Parallel()
+	parse := func(zones string) *Policy {
+		t.Helper()
+		p, err := ParsePolicy([]byte(`{"dns": "10.99.1.53", "internal_zones": [`+zones+`],
+			"allow": [{"name": "api", "names": ["api.corp.example"], "proto": "tcp"}]}`), "zones")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	before, after := parse(`"corp.example", "vendor.example"`), parse(`"corp.example"`)
+	const qname = "api.corp.example."
+	b := testBroker(t, before, func() []byte {
+		return packAnswer(t, qname, []testRecord{
+			{owner: qname, cname: "edge.vendor.example."},
+			{owner: "edge.vendor.example.", addr: "10.0.0.5"},
+		})
+	})
+	b.resolve(t.Context(), "udp", packAnswer(t, qname, nil), netip.AddrPort{})
+	dst := netip.MustParseAddrPort("10.0.0.5:443")
+	if d := Decide(before, b.env(before, dst.Addr()), ProtoTCP, dst); !d.Allow {
+		t.Fatalf("Decide before reload = %+v, want allowed", d)
+	}
+	b.SetPolicy(after)
+	if d := Decide(after, b.env(after, dst.Addr()), ProtoTCP, dst); d.Allow {
+		t.Fatalf("Decide after removing vendor.example = %+v, want denied", d)
+	}
+}
+
+// TestMalformedReplyIsNotCached checks that a reply the filter rejects as
+// malformed leaves no records in the IP-to-name cache, including the valid
+// private answer before the malformed record.
+func TestMalformedReplyIsNotCached(t *testing.T) {
+	t.Parallel()
+	pol, err := ParsePolicy([]byte(`{"dns": "10.99.1.53", "allow": [{"name": "all", "names": ["*"], "proto": "tcp"}]}`), "malformed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const qname = "app.example.net."
+	name := dnsmessage.MustNewName(qname)
+	b := testBroker(t, pol, func() []byte {
+		msg := dnsmessage.Message{
+			Header:    dnsmessage.Header{ID: 7, Response: true},
+			Questions: []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+			Answers: []dnsmessage.Resource{{
+				Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
+				Body:   &dnsmessage.AResource{A: [4]byte{10, 0, 0, 5}},
+			}},
+			Additionals: []dnsmessage.Resource{{
+				Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60},
+				Body:   &dnsmessage.AResource{A: [4]byte{10, 0, 0, 6}},
+			}},
+		}
+		r, err := msg.Pack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r[:len(r)-2] // truncate the additional record
+	})
+	resp := b.resolve(t.Context(), "udp", packAnswer(t, qname, nil), netip.AddrPort{})
+	var out dnsmessage.Message
+	if err := out.Unpack(resp); err != nil || out.RCode != dnsmessage.RCodeServerFailure || len(out.Answers) != 0 {
+		t.Fatalf("reply = %+v (err %v), want SERVFAIL without answers", out, err)
+	}
+	if names := b.names.lookup(netip.MustParseAddr("10.0.0.5")); len(names) != 0 {
+		t.Fatalf("IP-to-name cache = %v, want empty", names)
+	}
+}
+
+// TestErrorRepliesDropGuestRecords checks that an error reply never reflects
+// records the guest put into its query, so a forged answer cannot reach the
+// IP-to-name cache through a SERVFAIL.
+func TestErrorRepliesDropGuestRecords(t *testing.T) {
+	t.Parallel()
+	pol, err := ParsePolicy([]byte(`{"dns": "10.99.1.53", "internal_zones": ["corp.example"],
+		"allow": [{"name": "api", "names": ["api.corp.example"], "proto": "tcp"}]}`), "forged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const qname = "api.corp.example."
+	forged := packAnswer(t, qname, []testRecord{{owner: qname, addr: "10.0.0.5"}})
+	forged[2] &^= 0x80 // a query, not a response
+	b := testBroker(t, pol, func() []byte {
+		// An A record whose data is one byte short at the end of the reply:
+		// the record walk skips it by length, but the full parse fails.
+		r := packAnswer(t, qname, []testRecord{{owner: qname, addr: "10.0.0.7"}})
+		r = r[:len(r)-1]
+		r[len(r)-5] = 3 // RDLENGTH 4 → 3
+		return r
+	})
+	resp := b.resolve(t.Context(), "udp", forged, netip.AddrPort{})
+	var out dnsmessage.Message
+	if err := out.Unpack(resp); err != nil || out.RCode != dnsmessage.RCodeServerFailure || len(out.Answers) != 0 || out.ID != 7 || len(out.Questions) != 1 {
+		t.Fatalf("reply = %+v (err %v), want SERVFAIL with the question and no answers", out, err)
+	}
+	if names := b.names.lookup(netip.MustParseAddr("10.0.0.5")); len(names) != 0 {
+		t.Fatalf("IP-to-name cache = %v, want the forged answer absent", names)
+	}
+	for _, rcode := range []byte{0x02, 0x03} {
+		var msg dnsmessage.Message
+		if err := msg.Unpack(dnsError(forged, rcode)); err != nil || len(msg.Answers) != 0 || len(msg.Questions) != 1 || !msg.Response {
+			t.Fatalf("dnsError(forged, %d) = %+v (err %v), want the question only", rcode, msg, err)
+		}
+	}
+}
+
+// TestLogDNSStopsAtMalformedRecord checks that logging a reply with a record
+// that cannot be parsed ends instead of spinning on the same record.
+func TestLogDNSStopsAtMalformedRecord(t *testing.T) {
+	t.Parallel()
+	pol, err := ParsePolicy([]byte(`{"dns": "10.99.1.53"}`), "malformed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := testBroker(t, pol, func() []byte { return nil })
+	const qname = "app.example.net."
+	for _, rec := range []testRecord{{owner: qname, addr: "192.0.2.1"}, {owner: qname, cname: "edge.example.net."}} {
+		r := packAnswer(t, qname, []testRecord{rec})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			b.logDNS("udp", packAnswer(t, qname, nil), r[:len(r)-2], nil, netip.AddrPort{}, nil)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("logDNS of a truncated %+v record did not return", rec)
+		}
 	}
 }

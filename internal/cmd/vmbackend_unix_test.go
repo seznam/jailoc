@@ -189,27 +189,30 @@ func (r *fakeResolver) LookupCNAME(_ context.Context, host string) (string, erro
 	return "", fmt.Errorf("no such host %s", host)
 }
 
-// TestVMPolicyLegacyHostsSkipUnsafeZones checks that legacy allowed_hosts
-// names that cannot be internal zones are not resolved on the host into
-// private CIDR rules. Not parallel: it replaces hostResolver.
-func TestVMPolicyLegacyHostsSkipUnsafeZones(t *testing.T) {
-	fake := &fakeResolver{ips: map[string]string{"10-0-0-5.nip.io": "10.0.0.5", "github.io": "10.0.0.5", "gitlab.corp.example": "10.0.0.5"}}
+// TestVMPolicyLegacyHostsOpenNoResolvedCIDRs checks that legacy
+// allowed_hosts names never become CIDR rules from host resolution, even when
+// an internal-looking name is an alias of a rebinding name: only explicit IPs
+// become CIDRs. Not parallel: it replaces hostResolver.
+func TestVMPolicyLegacyHostsOpenNoResolvedCIDRs(t *testing.T) {
+	fake := &fakeResolver{
+		ips:    map[string]string{"10-0-0-5.nip.io": "10.0.0.5", "dev.corp.example": "10.0.0.5"},
+		cnames: map[string]string{"dev.corp.example": "10-0-0-5.nip.io."},
+	}
 	orig := hostResolver
 	hostResolver = fake
 	t.Cleanup(func() { hostResolver = orig })
 	ws := &workspace.Resolved{
-		Name:         "w",
-		AllowedHosts: []string{"10-0-0-5.nip.io", "github.io", "gitlab.corp.example", "10.9.9.9"},
+		Name:          "w",
+		AllowedHosts:  []string{"10-0-0-5.nip.io", "dev.corp.example", "10.9.9.9"},
+		InternalZones: []string{"dev.corp.example"},
 	}
 	data, err := vmPolicy(context.Background(), ws)
 	if err != nil {
 		t.Fatalf("vmPolicy: %v", err)
 	}
-	if looked := slices.Compact(fake.looked); !slices.Equal(looked, []string{"gitlab.corp.example"}) {
-		t.Fatalf("resolved hosts = %v, want only gitlab.corp.example", looked)
-	}
 	var got struct {
-		Allow []vmRule `json:"allow"`
+		Allow         []vmRule `json:"allow"`
+		InternalZones []string `json:"internal_zones"`
 	}
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", data, err)
@@ -218,8 +221,11 @@ func TestVMPolicyLegacyHostsSkipUnsafeZones(t *testing.T) {
 	for _, r := range got.Allow {
 		cidrs = append(cidrs, r.CIDRs...)
 	}
-	if !slices.Equal(cidrs, []string{"10.9.9.9/32", "10.0.0.5/32"}) {
-		t.Fatalf("allow CIDRs = %v, want the explicit IP and the resolved internal host", cidrs)
+	if !slices.Equal(cidrs, []string{"10.9.9.9/32"}) {
+		t.Fatalf("allow CIDRs = %v, want only the explicit IP", cidrs)
+	}
+	if !slices.Equal(got.InternalZones, []string{"dev.corp.example"}) {
+		t.Fatalf("internal_zones = %v, want [dev.corp.example]", got.InternalZones)
 	}
 }
 

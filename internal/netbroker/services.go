@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -188,7 +189,9 @@ func (b *Broker) resolve(ctx context.Context, network string, q []byte, server n
 	if filtered {
 		blockedName, rule, ok := blockedAnswer(p, resp)
 		if !ok {
-			b.logDNS(network, q, resp, nil, server, nil)
+			// Log without the rejected reply, so none of its records reach
+			// the cache.
+			b.logDNS(network, q, nil, errMalformedDNSResponse, server, nil)
 			return servfail(q)
 		}
 		if blockedName != "" {
@@ -422,26 +425,32 @@ func exchange(ctx context.Context, network string, up netip.AddrPort, q []byte) 
 }
 
 // nxdomain answers q with NXDOMAIN and no records.
-func nxdomain(q []byte) []byte {
-	if len(q) < 12 {
-		return nil
-	}
-	r := append([]byte(nil), q...)
-	r[2] |= 0x80                // QR
-	r[3] = (r[3] & 0xf0) | 0x03 // RCODE NXDOMAIN
-	return r
-}
+func nxdomain(q []byte) []byte { return dnsError(q, 0x03) }
 
 func servfail(q []byte) []byte { return dnsError(q, 0x02) }
 
-// dnsError answers q with rcode and no records.
+// dnsError answers q with rcode, its header and its questions only: records
+// the guest put into the query are never reflected. When the questions do
+// not parse, the reply has none.
 func dnsError(q []byte, rcode byte) []byte {
 	if len(q) < 12 {
 		return nil
 	}
-	r := append([]byte(nil), q...)
-	r[2] |= 0x80                 // QR
-	r[3] = (r[3] & 0xf0) | rcode // RCODE
+	var p dnsmessage.Parser
+	if h, err := p.Start(q); err == nil {
+		if qs, err := p.AllQuestions(); err == nil {
+			h.Response = true
+			h.RCode = dnsmessage.RCode(rcode)
+			msg := dnsmessage.Message{Header: h, Questions: qs}
+			if r, err := msg.Pack(); err == nil {
+				return r
+			}
+		}
+	}
+	r := append([]byte(nil), q[:12]...)
+	r[2] |= 0x80                                                              // QR
+	r[3] = (r[3] & 0xf0) | rcode                                              // RCODE
+	r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11] = 0, 0, 0, 0, 0, 0, 0, 0 // no sections
 	return r
 }
 
@@ -465,71 +474,83 @@ func (b *Broker) logDNS(network string, q, resp []byte, err error, server netip.
 	} else {
 		var answers []string
 		var rp dnsmessage.Parser
-		if _, perr := rp.Start(resp); perr == nil {
+		if hdr, perr := rp.Start(resp); perr == nil {
+			// Only a successful answer enters the cache: an error reply may
+			// still carry records the broker did not filter.
+			cache = cache && hdr.RCode == dnsmessage.RCodeSuccess
 			_ = rp.SkipAllQuestions()
 			minCNAME := time.Duration(0)
 			hasCNAME := false
+			chain := []string{qname}
 			for {
 				h, perr := rp.AnswerHeader()
 				if perr != nil {
 					break
 				}
-				if h.Type == dnsmessage.TypeCNAME {
-					ttl := time.Duration(h.TTL) * time.Second
-					if !hasCNAME || ttl < minCNAME {
-						minCNAME = ttl
-						hasCNAME = true
+				if h.Type != dnsmessage.TypeCNAME {
+					// A record that cannot be skipped ends the walk; the
+					// parser would return its header again forever.
+					if perr := rp.SkipAnswer(); perr != nil {
+						break
 					}
+					continue
 				}
-				_ = rp.SkipAnswer()
+				ttl := time.Duration(h.TTL) * time.Second
+				if !hasCNAME || ttl < minCNAME {
+					minCNAME = ttl
+					hasCNAME = true
+				}
+				c, perr := rp.CNAMEResource()
+				if perr != nil {
+					break
+				}
+				chain = append(chain, h.Name.String(), c.CNAME.String())
 			}
 			var rp2 dnsmessage.Parser
 			if _, perr := rp2.Start(resp); perr == nil {
 				_ = rp2.SkipAllQuestions()
+			records:
 				for {
 					h, perr := rp2.AnswerHeader()
 					if perr != nil {
 						break
 					}
-					ttl := time.Duration(h.TTL) * time.Second
-					owner := h.Name.String()
+					var ip netip.Addr
 					switch h.Type {
 					case dnsmessage.TypeA:
-						if a, perr := rp2.AResource(); perr == nil {
-							ip := netip.AddrFrom4(a.A)
-							answers = append(answers, ip.String())
-							qTTL := ttl
-							if hasCNAME && minCNAME < qTTL {
-								qTTL = minCNAME
-							}
-							if cache {
-								b.names.record(ip, qname, qTTL)
-								if owner != qname {
-									if blocked, _ := pol.blocked(owner); !blocked {
-										b.names.record(ip, owner, ttl)
-									}
-								}
-							}
+						a, perr := rp2.AResource()
+						if perr != nil {
+							break records
 						}
+						ip = netip.AddrFrom4(a.A)
 					case dnsmessage.TypeAAAA:
-						if a, perr := rp2.AAAAResource(); perr == nil {
-							ip := netip.AddrFrom16(a.AAAA)
-							answers = append(answers, ip.String())
-							qTTL := ttl
-							if hasCNAME && minCNAME < qTTL {
-								qTTL = minCNAME
-							}
-							if cache {
-								b.names.record(ip, qname, qTTL)
-								if owner != qname {
-									if blocked, _ := pol.blocked(owner); !blocked {
-										b.names.record(ip, owner, ttl)
-									}
-								}
-							}
+						a, perr := rp2.AAAAResource()
+						if perr != nil {
+							break records
 						}
+						ip = netip.AddrFrom16(a.AAAA)
 					default:
-						_ = rp2.SkipAnswer()
+						if perr := rp2.SkipAnswer(); perr != nil {
+							break records
+						}
+						continue
+					}
+					answers = append(answers, ip.String())
+					if !cache {
+						continue
+					}
+					ttl := time.Duration(h.TTL) * time.Second
+					qTTL := ttl
+					if hasCNAME && minCNAME < qTTL {
+						qTTL = minCNAME
+					}
+					owner := h.Name.String()
+					ownerChain := append(slices.Clone(chain), owner)
+					b.names.recordChain(ip, qname, qTTL, ownerChain)
+					if owner != qname {
+						if blocked, _ := pol.blocked(owner); !blocked {
+							b.names.recordChain(ip, owner, ttl, ownerChain)
+						}
 					}
 				}
 			}

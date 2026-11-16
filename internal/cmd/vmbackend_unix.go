@@ -618,38 +618,10 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		}
 	}
 
-	// Legacy allowed_hosts could resolve to private/ULA addresses, which
-	// hostname rules alone do not open. Resolve them on the host and emit
-	// only non-public addresses as CIDRs so public hosts stay governed by
-	// hostname rules and SNI inspection. Names that cannot be internal zones
-	// (public suffixes, wildcard DNS services such as nip.io) are skipped, so
-	// they cannot open private addresses this way either.
-	var resolvedLegacyCIDRs []string
-	for _, h := range ws.AllowedHosts {
-		if net.ParseIP(h) != nil || strings.Contains(h, "/") || config.ValidateInternalZone(h) != nil {
-			continue
-		}
-		ips, err := hostResolver.LookupIP(ctx, "ip", h)
-		if err != nil {
-			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: cannot resolve allowed host %q: %v\n", h, err)
-			continue
-		}
-		for _, ip := range ips {
-			addr, ok := netip.AddrFromSlice(ip)
-			if !ok {
-				continue
-			}
-			addr = addr.Unmap()
-			if isPublicLegacyAddr(addr) {
-				continue
-			}
-			prefix := "/128"
-			if addr.Is4() {
-				prefix = "/32"
-			}
-			resolvedLegacyCIDRs = append(resolvedLegacyCIDRs, addr.String()+prefix)
-		}
-	}
+	// Legacy allowed_hosts names open private addresses through the broker's
+	// DNS: Resolve adds them to InternalZones, and their legacy allow rule
+	// matches the cached names. They are not resolved into CIDRs here, which
+	// would open an address an alias outside the internal zones points to.
 	for _, w := range legacyAliasWarnings(ctx, hostResolver, ws.AllowedHosts, ws.InternalZones) {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
@@ -668,13 +640,6 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		} else {
 			deny = append(deny, br)
 		}
-	}
-	if len(resolvedLegacyCIDRs) > 0 {
-		br, err := compileVMRule("legacy", config.RuleProtoAny, nil, resolvedLegacyCIDRs)
-		if err != nil {
-			return nil, err
-		}
-		allow = append(allow, br)
 	}
 
 	policy := struct {
