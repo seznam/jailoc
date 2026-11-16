@@ -449,7 +449,7 @@ With filtering on, an effective `allowed_hosts` entry equal to or under an effec
 - Non-empty string: custom bundle path, absolute or `~`. Symlinks are resolved; the target must be a readable regular file with at least one `CERTIFICATE` PEM block and no private-key PEM block.
 - Empty string or any other TOML type: rejected at config load.
 
-The bundle is added to the VM's system trust store, which its Docker daemon also uses, and to the builder VM's Docker daemon. In the VM, `/etc/ssl/certs/ca-certificates.crt` then holds the image's roots plus the forwarded certificates, also when the image keeps its own bundle elsewhere. Each forwarded certificate is also written to `jailoc/` under `/usr/local/share/ca-certificates` or `/etc/pki/ca-trust/source/anchors`, if the image has that directory, so running `update-ca-certificates` or `update-ca-trust` in a session keeps it.
+The bundle is added to the VM's system trust store, which its Docker daemon also uses, and to the builder VM's Docker daemon. In the VM, `/etc/ssl/certs/ca-certificates.crt` then holds the image's roots plus the forwarded certificates, also when the image keeps its own bundle elsewhere. Each forwarded certificate is also written to `jailoc/` under `/usr/local/share/ca-certificates` or `/etc/pki/ca-trust/source/anchors`, if the image has that directory, so running `update-ca-certificates` or `update-ca-trust` in a session keeps it. When a reload removes or replaces these certificates, jailoc runs that tool, if the image has it, so stores it generated stop trusting the old ones.
 
 When a bundle is forwarded, sessions get `NODE_USE_SYSTEM_CA=1` and these variables set to `/etc/ssl/certs/ca-certificates.crt`, for clients that ship their own roots or read only a variable:
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 )
@@ -33,26 +34,52 @@ var imageCABundles = []string{
 	"/etc/ssl/cert.pem",
 }
 
-// caSourceDirs are where the distribution tools that regenerate the system
-// bundle read local certificates: update-ca-certificates (Debian, Ubuntu,
-// Alpine) and update-ca-trust (Fedora, RHEL). Certificates kept there survive
-// a regeneration in a session.
-var caSourceDirs = []string{
-	"/usr/local/share/ca-certificates",
-	"/etc/pki/ca-trust/source/anchors",
+// caSource is a directory where a distribution tool that regenerates the
+// system trust stores reads local certificates. Certificates kept there
+// survive a regeneration in a session.
+type caSource struct {
+	dir string
+	// tool regenerates the stores from dir and the distribution roots.
+	tool []string
+}
+
+// caSources are the CA source directories of update-ca-certificates (Debian,
+// Ubuntu, Alpine) and update-ca-trust (Fedora, RHEL).
+var caSources = []caSource{
+	{dir: "/usr/local/share/ca-certificates", tool: []string{"update-ca-certificates"}},
+	{dir: "/etc/pki/ca-trust/source/anchors", tool: []string{"update-ca-trust", "extract"}},
 }
 
 // setCABundle makes the system CA bundle the image's original bundle plus
 // the workspace bundle at path, or the original alone when path is empty or
 // missing.
 func setCABundle(path string) error {
-	return installCABundle("/", path)
+	return installCABundle("/", path, runCATool)
+}
+
+// runCATool runs a distribution trust store tool from the image's PATH. An
+// image without the tool has no generated stores to refresh.
+func runCATool(args []string) error {
+	bin, err := exec.LookPath(args[0])
+	if errors.Is(err, exec.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("find %s: %w", args[0], err)
+	}
+	if out, err := exec.Command(bin, args[1:]...).CombinedOutput(); err != nil { //nolint:gosec // G204: fixed tool from the image PATH
+		return fmt.Errorf("%s: %w: %s", args[0], err, bytes.TrimSpace(out))
+	}
+	return nil
 }
 
 // installCABundle is setCABundle for the file system at root. It also keeps
 // one file per workspace certificate in each CA source directory of the
-// image.
-func installCABundle(root, path string) error {
+// image. When certificates there are removed or replaced, run regenerates
+// the distribution's stores, which a session may have generated from them,
+// so they stop trusting the old certificates. SystemCABundle is written
+// last and keeps its content.
+func installCABundle(root, path string, run func(args []string) error) error {
 	orig, err := originalCABundle(root)
 	if err != nil {
 		return err
@@ -65,10 +92,16 @@ func installCABundle(root, path string) error {
 	if len(extra) > 0 {
 		content = append(append(append([]byte{}, orig...), '\n'), extra...)
 	}
-	if err := writeSystemCABundle(root, content); err != nil {
+	stale, err := syncCASources(root, pemCertificates(extra))
+	if err != nil {
 		return err
 	}
-	return syncCASources(root, pemCertificates(extra))
+	for _, src := range stale {
+		if err := run(src.tool); err != nil {
+			return fmt.Errorf("refresh trust stores from %s: %w", src.dir, err)
+		}
+	}
+	return writeSystemCABundle(root, content)
 }
 
 // originalCABundle returns the image's CA bundle, saving it on the first
@@ -162,58 +195,69 @@ func pemCertificates(bundle []byte) [][]byte {
 
 // syncCASources makes the jailoc directory of each CA source directory
 // under root hold exactly certs, one per file. Source directories the image
-// lacks are skipped; without certs the jailoc directories are removed.
-func syncCASources(root string, certs [][]byte) error {
-	for _, d := range caSourceDirs {
-		base := filepath.Join(root, d)
+// lacks are skipped; without certs the jailoc directories are removed. It
+// returns the sources whose earlier certificates were removed or replaced.
+func syncCASources(root string, certs [][]byte) ([]caSource, error) {
+	stale := []caSource{}
+	for _, src := range caSources {
+		base := filepath.Join(root, src.dir)
 		if _, err := os.Stat(base); errors.Is(err, fs.ErrNotExist) {
 			continue
 		} else if err != nil {
-			return fmt.Errorf("stat %s: %w", d, err)
+			return nil, fmt.Errorf("stat %s: %w", src.dir, err)
 		}
 		dir := filepath.Join(base, caSourceSubdir)
-		if len(certs) == 0 {
-			if err := os.RemoveAll(dir); err != nil {
-				return fmt.Errorf("remove %s: %w", filepath.Join(d, caSourceSubdir), err)
-			}
-			continue
+		changed, err := writeCASourceDir(dir, certs)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", filepath.Join(src.dir, caSourceSubdir), err)
 		}
-		if err := writeCASourceDir(dir, certs); err != nil {
-			return fmt.Errorf("%s: %w", filepath.Join(d, caSourceSubdir), err)
+		if changed {
+			stale = append(stale, src)
 		}
 	}
-	return nil
+	return stale, nil
 }
 
-// writeCASourceDir writes certs to dir as jailoc-NNN.crt and removes the
-// files of an earlier, longer bundle.
-func writeCASourceDir(dir string, certs [][]byte) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: system directory
-		return fmt.Errorf("create: %w", err)
+// writeCASourceDir makes dir hold certs as jailoc-NNN.crt, or removes it
+// without certs. It reports whether a file dir held before was removed or
+// replaced.
+func writeCASourceDir(dir string, certs [][]byte) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("list: %w", err)
 	}
+	if len(certs) == 0 {
+		if err := os.RemoveAll(dir); err != nil {
+			return false, fmt.Errorf("remove: %w", err)
+		}
+		return len(entries) > 0, nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: system directory
+		return false, fmt.Errorf("create: %w", err)
+	}
+	changed := false
 	names := make([]string, 0, len(certs))
 	for i, cert := range certs {
 		name := fmt.Sprintf("jailoc-%03d.crt", i)
 		names = append(names, name)
 		path := filepath.Join(dir, name)
-		if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, cert) { //nolint:gosec // G304: path under a fixed guest directory
+		current, err := os.ReadFile(path) //nolint:gosec // G304: path under a fixed guest directory
+		if err == nil && bytes.Equal(current, cert) {
 			continue
 		}
+		changed = changed || err == nil
 		if err := os.WriteFile(path, cert, 0o644); err != nil { //nolint:gosec // G306: public certificates
-			return fmt.Errorf("write %s: %w", name, err)
+			return false, fmt.Errorf("write %s: %w", name, err)
 		}
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return fmt.Errorf("list: %w", err)
 	}
 	for _, e := range entries {
 		if slices.Contains(names, e.Name()) {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
-			return fmt.Errorf("remove %s: %w", e.Name(), err)
+			return false, fmt.Errorf("remove %s: %w", e.Name(), err)
 		}
+		changed = true
 	}
-	return nil
+	return changed, nil
 }

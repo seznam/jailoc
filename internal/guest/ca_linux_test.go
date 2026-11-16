@@ -8,10 +8,12 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -57,6 +59,12 @@ func readTestFile(t *testing.T, path string) []byte {
 	return b
 }
 
+// noCATool accepts any trust store tool run and ignores it.
+func noCATool(t *testing.T) func([]string) error {
+	t.Helper()
+	return func([]string) error { return nil }
+}
+
 func dirNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -82,7 +90,7 @@ func TestInstallCABundleDebianLayout(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "ca-bundle.pem")
 	writeTestFile(t, bundle, append(append([]byte{}, one...), two...))
 
-	if err := installCABundle(root, bundle); err != nil {
+	if err := installCABundle(root, bundle, noCATool(t)); err != nil {
 		t.Fatalf("installCABundle: %v", err)
 	}
 	want := append(append(append([]byte{}, orig...), '\n'), readTestFile(t, bundle)...)
@@ -101,14 +109,14 @@ func TestInstallCABundleDebianLayout(t *testing.T) {
 	}
 
 	writeTestFile(t, bundle, one)
-	if err := installCABundle(root, bundle); err != nil {
+	if err := installCABundle(root, bundle, noCATool(t)); err != nil {
 		t.Fatalf("installCABundle with one certificate: %v", err)
 	}
 	if got := dirNames(t, local); !slices.Equal(got, []string{"jailoc-000.crt"}) {
 		t.Errorf("local certificates after shrinking = %q", got)
 	}
 
-	if err := installCABundle(root, ""); err != nil {
+	if err := installCABundle(root, "", noCATool(t)); err != nil {
 		t.Fatalf("installCABundle without a bundle: %v", err)
 	}
 	if got := readTestFile(t, filepath.Join(root, SystemCABundle)); !bytes.Equal(got, orig) {
@@ -131,7 +139,7 @@ func TestInstallCABundleFedoraLayout(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "ca-bundle.pem")
 	writeTestFile(t, bundle, cert)
 
-	if err := installCABundle(root, bundle); err != nil {
+	if err := installCABundle(root, bundle, noCATool(t)); err != nil {
 		t.Fatalf("installCABundle: %v", err)
 	}
 	want := append(append(append([]byte{}, orig...), '\n'), cert...)
@@ -167,7 +175,7 @@ func TestInstallCABundleWithoutImageBundle(t *testing.T) {
 				path = filepath.Join(t.TempDir(), "ca-bundle.pem")
 				writeTestFile(t, path, tt.bundle)
 			}
-			if err := installCABundle(root, path); err != nil {
+			if err := installCABundle(root, path, noCATool(t)); err != nil {
 				t.Fatalf("installCABundle: %v", err)
 			}
 			got, err := os.ReadFile(filepath.Join(root, SystemCABundle)) //nolint:gosec // G304: test temp dir
@@ -195,12 +203,83 @@ func TestInstallCABundleKeepsOriginalAcrossReloads(t *testing.T) {
 	writeTestFile(t, second, []byte("-----SECOND-----\n"))
 
 	for _, p := range []string{first, second} {
-		if err := installCABundle(root, p); err != nil {
+		if err := installCABundle(root, p, noCATool(t)); err != nil {
 			t.Fatalf("installCABundle %s: %v", p, err)
 		}
 	}
 	want := []byte("-----ORIGINAL-----\n\n-----SECOND-----\n")
 	if got := readTestFile(t, filepath.Join(root, SystemCABundle)); !bytes.Equal(got, want) {
 		t.Errorf("system bundle = %q, want %q", got, want)
+	}
+}
+
+func TestInstallCABundleRefreshesGeneratedStores(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	orig := []byte("-----FEDORA-----\n")
+	writeTestFile(t, filepath.Join(root, "/etc/pki/tls/certs/ca-bundle.crt"), orig)
+	writeTestFile(t, filepath.Join(root, SystemCABundle), orig)
+	if err := os.MkdirAll(filepath.Join(root, "/etc/pki/ca-trust/source/anchors"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	runs := [][]string{}
+	run := func(args []string) error {
+		runs = append(runs, args)
+		// The tool regenerates the stores, including SystemCABundle.
+		writeTestFile(t, filepath.Join(root, SystemCABundle), []byte("-----REGENERATED-----\n"))
+		return nil
+	}
+	bundle := filepath.Join(t.TempDir(), "ca-bundle.pem")
+	old, rotated := testCertPEM(t, "old"), testCertPEM(t, "rotated")
+
+	steps := []struct {
+		name     string
+		bundle   []byte
+		wantRuns int
+		want     []byte
+	}{
+		{name: "add", bundle: old, wantRuns: 0, want: append(append(append([]byte{}, orig...), '\n'), old...)},
+		{name: "unchanged", bundle: old, wantRuns: 0, want: append(append(append([]byte{}, orig...), '\n'), old...)},
+		{name: "rotate", bundle: rotated, wantRuns: 1, want: append(append(append([]byte{}, orig...), '\n'), rotated...)},
+		{name: "remove", bundle: nil, wantRuns: 2, want: orig},
+	}
+	for _, step := range steps {
+		path := ""
+		if step.bundle != nil {
+			writeTestFile(t, bundle, step.bundle)
+			path = bundle
+		}
+		if err := installCABundle(root, path, run); err != nil {
+			t.Fatalf("%s: installCABundle: %v", step.name, err)
+		}
+		if len(runs) != step.wantRuns {
+			t.Errorf("%s: tool runs = %q, want %d", step.name, runs, step.wantRuns)
+		}
+		if got := readTestFile(t, filepath.Join(root, SystemCABundle)); !bytes.Equal(got, step.want) {
+			t.Errorf("%s: system bundle = %q, want %q", step.name, got, step.want)
+		}
+	}
+	for _, args := range runs {
+		if !slices.Equal(args, []string{"update-ca-trust", "extract"}) {
+			t.Errorf("tool run %q, want update-ca-trust extract", args)
+		}
+	}
+}
+
+func TestInstallCABundleRefreshFailure(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "/usr/local/share/ca-certificates"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(t.TempDir(), "ca-bundle.pem")
+	writeTestFile(t, bundle, testCertPEM(t, "corp"))
+	if err := installCABundle(root, bundle, noCATool(t)); err != nil {
+		t.Fatalf("installCABundle: %v", err)
+	}
+	fail := func([]string) error { return errors.New("boom") }
+	err := installCABundle(root, "", fail)
+	if err == nil || !strings.Contains(err.Error(), "/usr/local/share/ca-certificates: boom") {
+		t.Fatalf("installCABundle error = %v, want the tool failure", err)
 	}
 }
