@@ -357,15 +357,17 @@ func (p *Policy) internal(name string) bool {
 
 // allowNames returns the DNS names of a destination that an allow rule may
 // match by name. A public address keeps all of them. A private address keeps
-// only names in the internal zones, so a name outside them cannot open a
-// private address the guest learned from somewhere else.
-func (p *Policy) allowNames(names []string, isPublic bool) []string {
+// only names in the internal zones whose cached DNS chain is still trusted,
+// so a name outside them cannot open a private address the guest learned
+// from somewhere else.
+func (p *Policy) allowNames(env Env, isPublic bool) []string {
+	names := env.Names
 	if isPublic || len(names) == 0 {
 		return names
 	}
 	var out []string
 	for _, n := range names {
-		if p.internal(n) {
+		if p.internal(n) && !env.Untrusted[n] {
 			out = append(out, n)
 		}
 	}
@@ -570,6 +572,9 @@ type Env struct {
 	Subnet    netip.Prefix
 	HostAddrs map[netip.Addr]bool
 	Names     []string
+	// Untrusted holds cached Names whose DNS chain the policy no longer
+	// trusts: deny rules still match them, but they open no private address.
+	Untrusted map[string]bool
 }
 
 // Decision is the outcome for one new guest flow.
@@ -650,7 +655,7 @@ func decideDNS(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic bo
 		if allowed, ok = matchAddrRule(r, env.Names, proto, dst, isPublic); ok {
 			break
 		}
-		if allowed, ok = matchRule(r, p.allowNames(env.Names, isPublic), proto, dst, isPublic, true); ok {
+		if allowed, ok = matchRule(r, p.allowNames(env, isPublic), proto, dst, isPublic, true); ok {
 			break
 		}
 	}
@@ -676,7 +681,7 @@ func decideRules(p *Policy, env Env, proto string, dst netip.AddrPort, isPublic 
 			return d
 		}
 	}
-	names := p.allowNames(env.Names, isPublic)
+	names := p.allowNames(env, isPublic)
 	for i := range p.allow {
 		if d, ok := matchRule(&p.allow[i], names, proto, dst, isPublic, true); ok {
 			return d

@@ -180,20 +180,22 @@ func (b *Broker) SetPolicy(p *Policy) {
 	b.record(map[string]any{"event": "policy", "source": p.source, "deny_all": p.denyAll})
 }
 
-// env returns the decision environment for dst under policy p. Cached names
-// of a private address count only while p still trusts their whole DNS
-// chain, so removing an internal zone takes effect on the next connection,
-// not when the cached answer expires.
+// env returns the decision environment for dst under policy p. Every cached
+// name counts for deny rules. A cached name of a private address opens it
+// only while p still trusts its whole DNS chain, so removing an internal zone
+// takes effect on the next connection, not when the cached answer expires.
 func (b *Broker) env(p *Policy, dst netip.Addr) Env {
 	var trusted func(chain []string) bool
 	if privateAnswer(dst) {
 		trusted = p.trustsChain
 	}
+	names, untrusted := b.names.lookupTrusted(dst, trusted)
 	return Env{
 		Gateway:   b.cfg.Gateway,
 		Subnet:    b.cfg.Subnet,
 		HostAddrs: b.hosts.get(),
-		Names:     b.names.lookupTrusted(dst, trusted),
+		Names:     names,
+		Untrusted: untrusted,
 	}
 }
 

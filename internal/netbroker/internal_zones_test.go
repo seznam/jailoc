@@ -488,3 +488,52 @@ func TestLogDNSStopsAtMalformedRecord(t *testing.T) {
 		}
 	}
 }
+
+// TestUntrustedCachedNamesStillDenied checks that a cached name whose zone
+// was removed still matches deny rules, while it no longer opens the private
+// address through a hostname allow.
+func TestUntrustedCachedNamesStillDenied(t *testing.T) {
+	t.Parallel()
+	parse := func(zones string) *Policy {
+		t.Helper()
+		p, err := ParsePolicy([]byte(`{"dns": "10.99.1.53", "internal_zones": [`+zones+`],
+			"allow": [{"name": "lan", "cidrs": ["10.0.0.0/8"], "proto": "udp"},
+				{"name": "db", "names": ["db.corp.example"], "proto": "tcp"}],
+			"deny": [{"name": "ntp", "names": ["db.corp.example"], "proto": "udp", "ports": ["123"]}]}`), "zones")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	before, after := parse(`"corp.example"`), parse(``)
+	const qname = "db.corp.example."
+	b := testBroker(t, before, func() []byte {
+		return packAnswer(t, qname, []testRecord{{owner: qname, addr: "10.0.0.5"}})
+	})
+	b.resolve(t.Context(), "udp", packAnswer(t, qname, nil), netip.AddrPort{})
+	b.SetPolicy(after)
+	ntp, tls := netip.MustParseAddrPort("10.0.0.5:123"), netip.MustParseAddrPort("10.0.0.5:443")
+	if d := Decide(after, b.env(after, ntp.Addr()), ProtoUDP, ntp); d.Allow || d.Rule != "ntp" {
+		t.Fatalf("UDP/123 after removing corp.example = %+v, want denied by rule ntp", d)
+	}
+	if d := Decide(after, b.env(after, tls.Addr()), ProtoTCP, tls); d.Allow {
+		t.Fatalf("TCP/443 after removing corp.example = %+v, want denied", d)
+	}
+}
+
+// TestDNSCacheRefreshReplacesChainAndExpiry checks that a newer answer for a
+// cached name replaces its expiry together with its DNS chain, so a short
+// direct answer cannot extend the trust of an older, longer chained one.
+func TestDNSCacheRefreshReplacesChainAndExpiry(t *testing.T) {
+	t.Parallel()
+	c := newDNSCache()
+	now := time.Unix(1000, 0)
+	c.now = func() time.Time { return now }
+	ip := netip.MustParseAddr("10.0.0.5")
+	c.recordChain(ip, "api.corp.example", time.Hour, []string{"api.corp.example", "edge.vendor.example"})
+	c.recordChain(ip, "api.corp.example", time.Second, []string{"api.corp.example"})
+	now = now.Add(2 * time.Second)
+	if names := c.lookup(ip); len(names) != 0 {
+		t.Fatalf("lookup after the short answer expired = %v, want empty", names)
+	}
+}
