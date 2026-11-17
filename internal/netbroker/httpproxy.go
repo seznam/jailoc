@@ -73,14 +73,35 @@ type httpVerdict struct {
 	reason string
 }
 
+// needsPath reports whether the request path takes part in the decision for
+// method: some http rule in scope covers the method and lists path patterns.
+func (s httpScope) needsPath(method string) bool {
+	return slices.ContainsFunc(s.deny, func(r *Rule) bool { return r.HTTP.needsPath(method, true) }) ||
+		slices.ContainsFunc(s.allow, func(r *Rule) bool { return r.HTTP.needsPath(method, false) })
+}
+
 // evaluate decides a request: a matching http deny rule denies it; when the
 // scope has http allow rules one of them must match (plain allow rules for
 // the host are ignored, so an http rule narrows its host); without http allow
 // rules a plain rule allowed the flow, so the request is allowed. flowRule is
 // the plain rule that allowed the flow, for events.
-func (s httpScope) evaluate(method string, segs []string, flowRule string) httpVerdict {
+//
+// The escaped path is canonicalized, and refused as bad-path, only when a path
+// pattern takes part in the decision (see needsPath); otherwise it is not
+// evaluated at all. Allow rules match the raw segments; deny rules also match
+// the segments split again on decoded slashes, so an encoded slash cannot hide
+// a request from a deny pattern.
+func (s httpScope) evaluate(method, escapedPath, flowRule string) httpVerdict {
+	var segs, resplit []string
+	if s.needsPath(method) {
+		var ok bool
+		if segs, ok = canonicalPath(escapedPath); !ok {
+			return httpVerdict{reason: "bad-path"}
+		}
+		resplit = resplitPath(segs)
+	}
 	for _, r := range s.deny {
-		if r.HTTP.matches(method, segs, true) {
+		if r.HTTP.matches(method, segs, true) || (resplit != nil && r.HTTP.matches(method, resplit, true)) {
 			reason := "rule"
 			if r.Name != "" {
 				reason = "rule " + r.Name
@@ -358,12 +379,7 @@ func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.reject(w, r, info, http.StatusForbidden, httpVerdict{reason: "connect-denied"}, "")
 		return
 	}
-	segs, ok := canonicalPath(escaped)
-	if !ok {
-		f.reject(w, r, info, http.StatusForbidden, httpVerdict{reason: "bad-path"}, "")
-		return
-	}
-	v := scope.evaluate(r.Method, segs, flowRule)
+	v := scope.evaluate(r.Method, escaped, flowRule)
 	if !v.allow {
 		f.reject(w, r, info, http.StatusForbidden, v, "")
 		return

@@ -3,6 +3,7 @@ package netbroker
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -42,17 +43,31 @@ func (m *HTTPMatch) compile(kind, rule string) error {
 	return nil
 }
 
+// methodMatches reports whether the rule covers method. Allow rules compare
+// the method as sent; deny rules fold its case so a lowercase method cannot
+// slip past a deny rule to a lenient upstream.
+func (m *HTTPMatch) methodMatches(method string, foldMethod bool) bool {
+	if m.anyMethod {
+		return true
+	}
+	if foldMethod {
+		method = strings.ToUpper(method)
+	}
+	_, ok := m.methods[method]
+	return ok
+}
+
+// needsPath reports whether the request path takes part in the rule's decision
+// for method: the method matches and the rule lists path patterns.
+func (m *HTTPMatch) needsPath(method string, foldMethod bool) bool {
+	return len(m.paths) > 0 && m.methodMatches(method, foldMethod)
+}
+
 // matches reports whether a request with method and decoded path segments
-// is covered. Allow rules compare the method as sent; deny rules fold its case
-// so a lowercase method cannot slip past a deny rule to a lenient upstream.
+// is covered. segs may be nil when needsPath is false.
 func (m *HTTPMatch) matches(method string, segs []string, foldMethod bool) bool {
-	if !m.anyMethod {
-		if foldMethod {
-			method = strings.ToUpper(method)
-		}
-		if _, ok := m.methods[method]; !ok {
-			return false
-		}
+	if !m.methodMatches(method, foldMethod) {
+		return false
 	}
 	if len(m.paths) == 0 {
 		return true
@@ -138,24 +153,27 @@ func (pp pathPattern) match(segs []string) bool {
 	return true
 }
 
-// canonicalPath splits an escaped request path into decoded segments. It
-// reports false for a path the proxy refuses to match, because two parsers
-// could read it differently: no leading "/", "//", a backslash, an encoded
-// slash, backslash or NUL, a segment that does not decode, a "." or ".."
-// segment, or a control character in a segment.
+// canonicalPath splits an escaped request path into decoded segments. The raw
+// text between literal "/" is one segment, so an encoded slash stays inside
+// its segment: "/@s%2Fn/latest" is ["@s/n", "latest"]. It reports false for a
+// path the proxy refuses to match, because two parsers could read it
+// differently: no leading "/", "//", a backslash, an encoded backslash or NUL,
+// a segment that does not decode, a control character, a "." or ".." segment,
+// and a segment whose encoded slashes split it into a ".", ".." or empty piece
+// ("x%2F..%2Fa", "%2Fa", "a%2F", "a%2F%2Fb").
 func canonicalPath(escaped string) ([]string, bool) {
 	rest, ok := strings.CutPrefix(escaped, "/")
 	if !ok || strings.Contains(escaped, "//") || strings.Contains(escaped, "\\") {
 		return nil, false
 	}
 	lower := strings.ToLower(escaped)
-	if strings.Contains(lower, "%2f") || strings.Contains(lower, "%5c") || strings.Contains(lower, "%00") {
+	if strings.Contains(lower, "%5c") || strings.Contains(lower, "%00") {
 		return nil, false
 	}
 	segs := strings.Split(rest, "/")
 	for i, raw := range segs {
 		seg, err := url.PathUnescape(raw)
-		if err != nil || seg == "." || seg == ".." {
+		if err != nil {
 			return nil, false
 		}
 		for j := 0; j < len(seg); j++ {
@@ -163,7 +181,23 @@ func canonicalPath(escaped string) ([]string, bool) {
 				return nil, false
 			}
 		}
+		pieces := strings.Split(seg, "/")
+		for _, piece := range pieces {
+			if piece == "." || piece == ".." || (piece == "" && len(pieces) > 1) {
+				return nil, false
+			}
+		}
 		segs[i] = seg
 	}
 	return segs, true
+}
+
+// resplitPath splits the decoded segments again on "/", the way a server that
+// decodes an encoded slash before routing would see the path. It returns nil
+// when no segment holds a slash, as the split would change nothing.
+func resplitPath(segs []string) []string {
+	if !slices.ContainsFunc(segs, func(s string) bool { return strings.Contains(s, "/") }) {
+		return nil
+	}
+	return strings.Split(strings.Join(segs, "/"), "/")
 }
