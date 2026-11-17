@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/solid */
+import { writeNotification } from "./notify-core.mjs";
+import { watchOpenCode1 } from "./notify-opencode1.mjs";
 
 export default {
   id: "jailoc",
@@ -21,5 +23,7 @@ export default {
         },
       },
     });
+
+    api.lifecycle.onDispose(watchOpenCode1(api, (kind) => writeNotification(kind)));
   },
 };
