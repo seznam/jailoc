@@ -270,7 +270,7 @@ Protocol detection decides per connection whether HTTP is served:
 
 A WebSocket upgrade request is checked like any request. After the `101` response the connection passes through unfiltered; frames are not inspected. An `Upgrade: h2c` offer is removed from the request, which is then sent as plain HTTP/1.1, so a connection can't be switched to HTTP/2 past the per-request checks.
 
-Request bodies with a known length of up to 1 MiB are buffered in memory (64 MiB in total across a workspace's flows) so the broker can resend them on a new upstream connection, for example after an HTTP/2 `GOAWAY`; larger, chunked and `Expect: 100-continue` bodies stream through.
+Request bodies with a known length of up to 1 MiB are buffered in memory (64 MiB in total across a workspace's flows) so the broker can resend them on a new upstream connection, for example after an HTTP/2 `GOAWAY`; larger and chunked bodies stream through, and so do HTTP/1.1 bodies sent with `Expect: 100-continue`, which wait for the upstream's `100 Continue`. For HTTP/2 guests the broker answers `100 Continue` itself and does not pass `Expect` upstream.
 
 The broker verifies the upstream certificate against the host's system roots plus the file named by [`ca_bundle`](#ca_bundle) when it is a path; a failure ends the request with `502`. The broker does not use `HTTP_PROXY` or another upstream proxy.
 

@@ -126,10 +126,14 @@ func TestInspectReplaysBodyAfterGoAway(t *testing.T) {
 		name    string
 		guestH2 bool
 		body    string
+		expect  bool
 	}{
-		{"http/1.1 guest", false, `{"query":"{ viewer { login } }"}`},
-		{"h2 guest", true, `{"query":"{ viewer { login } }"}`},
-		{"h2 guest, large body", true, strings.Repeat("x", maxReplayBody)},
+		{"http/1.1 guest", false, `{"query":"{ viewer { login } }"}`, false},
+		{"h2 guest", true, `{"query":"{ viewer { login } }"}`, false},
+		{"h2 guest, large body", true, strings.Repeat("x", maxReplayBody), false},
+		// Go's HTTP/2 server drops Expect before the handler and answers
+		// 100 Continue itself, so the body is buffered like any other.
+		{"h2 guest, expect 100-continue", true, `{"query":"{ viewer { login } }"}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -145,7 +149,15 @@ func TestInspectReplaysBodyAfterGoAway(t *testing.T) {
 			}))
 			e.start(ruleWebHost+","+rulePostAny, "", true)
 
-			resp, err := e.client(tc.guestH2, 443).Post("https://example.com/graphql", "application/json", strings.NewReader(tc.body))
+			req, err := http.NewRequest(http.MethodPost, "https://example.com/graphql", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if tc.expect {
+				req.Header.Set("Expect", "100-continue")
+			}
+			resp, err := e.client(tc.guestH2, 443).Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,30 +202,50 @@ func TestInspectStreamsUnbufferedBodies(t *testing.T) {
 		guestH2 bool
 		body    func() io.Reader
 		size    int
+		expect  bool
 	}{
-		{"oversize", true, func() io.Reader { return strings.NewReader(strings.Repeat("y", maxReplayBody+1)) }, maxReplayBody + 1},
-		{"unknown length http/1.1", false, func() io.Reader { return io.MultiReader(strings.NewReader("ab"), strings.NewReader("cd")) }, 4},
-		{"unknown length h2", true, func() io.Reader { return io.MultiReader(strings.NewReader("ab"), strings.NewReader("cd")) }, 4},
+		{"oversize", true, func() io.Reader { return strings.NewReader(strings.Repeat("y", maxReplayBody+1)) }, maxReplayBody + 1, false},
+		{"unknown length http/1.1", false, func() io.Reader { return io.MultiReader(strings.NewReader("ab"), strings.NewReader("cd")) }, 4, false},
+		{"unknown length h2", true, func() io.Reader { return io.MultiReader(strings.NewReader("ab"), strings.NewReader("cd")) }, 4, false},
+		// HTTP/1.1 keeps Expect, so the upstream decides on the upload.
+		{"expect 100-continue http/1.1", false, func() io.Reader { return strings.NewReader("abcd") }, 4, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newL7Env(t)
-			got := make(chan int, 1)
+			type seen struct {
+				n    int
+				used int64
+			}
+			got := make(chan seen, 1)
 			e.httpsUpstream(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// The budget is held while the request runs if its body was buffered.
+				used := e.broker.replay.used.Load()
 				n, _ := io.Copy(io.Discard, r.Body)
-				got <- int(n)
+				got <- seen{int(n), used}
 				_, _ = io.WriteString(w, "ok")
 			}))
 			e.start(ruleWebHost+","+rulePostAny, "", true)
-			resp, err := e.client(tc.guestH2, 443).Post("https://example.com/up", "application/octet-stream", tc.body())
+			req, err := http.NewRequest(http.MethodPost, "https://example.com/up", tc.body())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.expect {
+				req.Header.Set("Expect", "100-continue")
+			}
+			resp, err := e.client(tc.guestH2, 443).Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if body := readBody(t, resp); body != "ok" || resp.StatusCode != http.StatusOK {
 				t.Fatalf("response = %d %q", resp.StatusCode, body)
 			}
-			if n := <-got; n != tc.size {
-				t.Errorf("upstream received %d bytes, want %d", n, tc.size)
+			s := <-got
+			if s.n != tc.size {
+				t.Errorf("upstream received %d bytes, want %d", s.n, tc.size)
+			}
+			if s.used != 0 {
+				t.Errorf("replay budget in use during the request = %d, want 0 (body buffered)", s.used)
 			}
 			if used := e.broker.replay.used.Load(); used != 0 {
 				t.Errorf("replay budget in use = %d, want 0", used)

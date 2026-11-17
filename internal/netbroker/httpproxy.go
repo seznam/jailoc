@@ -433,7 +433,10 @@ func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // replayable reports whether the body of r is worth buffering: a known,
 // small length, and a request that neither waits for a 100 Continue nor
-// upgrades the connection.
+// upgrades the connection. Only HTTP/1.x requests still carry Expect here: Go's
+// HTTP/2 server removes it before the handler and answers 100 Continue itself
+// on the first body read, so the expectation never reaches the upstream and
+// buffering such a body changes nothing.
 func replayable(r *http.Request) bool {
 	if r.Body == nil || r.Body == http.NoBody || r.ContentLength <= 0 || r.ContentLength > maxReplayBody {
 		return false
