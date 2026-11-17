@@ -1,5 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
+import { writeNotification } from "./notify-core.mjs";
+import { openCode2BuiltInNotifies, watchOpenCode2 } from "./notify-opencode2.mjs";
 
 export default Plugin.define({
   id: "jailoc",
@@ -8,7 +10,7 @@ export default Plugin.define({
 
     const workspace = process.env.JAILOC_WORKSPACE || "unknown";
 
-    return context.ui.slot({
+    const removeSlot = context.ui.slot({
       append: "sidebar.content",
       render: () => (
         <box flexDirection="column">
@@ -16,5 +18,14 @@ export default Plugin.define({
         </box>
       ),
     });
+    const stopNotifications = watchOpenCode2(context, {
+      emit: (kind) => writeNotification(kind),
+      builtInNotifies: () => openCode2BuiltInNotifies(),
+    });
+
+    return () => {
+      stopNotifications();
+      removeSlot();
+    };
   },
 });
