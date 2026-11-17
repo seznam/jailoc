@@ -402,3 +402,73 @@ func TestParseRuleTargetMappedIPv4(t *testing.T) {
 		t.Fatalf("ParseRuleTarget(::ffff:10.20.5.10) = %q, %q, %v; want cidr, 10.20.5.10/32, nil", kind, norm, err)
 	}
 }
+
+func TestLoadNetworkRuleLogTOML(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `[workspaces.api]
+paths = ["/data/api"]
+
+[[workspaces.api.network.rules]]
+name = "quiet-allow"
+allow = ["registry.example.com"]
+log = false
+
+[[workspaces.api.network.rules]]
+name = "quiet-deny-http"
+deny = ["telemetry.example.com"]
+http.methods = ["POST"]
+log = false
+
+[[workspaces.api.network.rules]]
+name = "explicit-log"
+allow = ["a.example.com"]
+log = true
+
+[[workspaces.api.network.rules]]
+name = "default-log"
+allow = ["b.example.com"]
+`)
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if u := cfg.UnknownKeys(); len(u) != 0 {
+		t.Fatalf("unknown keys = %v", u)
+	}
+	want := []struct {
+		name  string
+		set   bool
+		quiet bool
+	}{
+		{"quiet-allow", true, true},
+		{"quiet-deny-http", true, true},
+		{"explicit-log", true, false},
+		{"default-log", false, false},
+	}
+	rules := cfg.Workspaces["api"].Network.Rules
+	if len(rules) != len(want) {
+		t.Fatalf("rules = %+v", rules)
+	}
+	for i, w := range want {
+		r := rules[i]
+		if r.Name != w.name || (r.Log != nil) != w.set || r.Quiet() != w.quiet {
+			t.Errorf("rule %d = %+v (quiet %v), want %+v", i, r, r.Quiet(), w)
+		}
+	}
+}
+
+func TestLoadNetworkRuleLogInvalidType(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `[workspaces.api]
+paths = ["/data/api"]
+
+[[workspaces.api.network.rules]]
+allow = ["example.com"]
+log = "no"
+`)
+	if _, err := LoadFrom(path); err == nil {
+		t.Fatal("LoadFrom accepted a string log value")
+	}
+}

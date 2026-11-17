@@ -162,6 +162,24 @@ jailoc traffic -f
 
 Each line shows a connection with the DNS name, verdict, and the rule that decided it (`rule=no-paste`, `rule=dev-deps`, `rule=agent`, or `default-deny`). Requests to hosts covered by an [`http` rule](#restrict-http-methods-and-paths) get a line each. See [`jailoc traffic`](../reference/cli.md#jailoc-traffic).
 
+### Hide noisy rules
+
+Set `log = false` on a rule whose events bury the rest, for example a package registry or a telemetry host you deny:
+
+```toml
+[[workspaces.api.network.rules]]
+name = "registry"
+allow = ["registry.npmjs.org"]
+log = false
+
+[[workspaces.api.network.rules]]
+name = "no-telemetry"
+deny = ["telemetry.example.com"]
+log = false
+```
+
+`jailoc traffic` no longer prints what these rules decide. The rules still apply, and `jailoc traffic --all` shows their events. See [Quiet rules](../reference/configuration.md#quiet-rules).
+
 ## Reach IPv6 services
 
 IPv6 is off by default: the guest has IPv4 only and the broker denies every IPv6 flow. Turn it on per workspace or in `[defaults.network]`:

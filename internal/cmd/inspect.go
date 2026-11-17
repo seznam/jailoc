@@ -111,7 +111,7 @@ func init() {
 		c.Flags().BoolVar(&inspectJSON, "json", false, "print events as JSON lines")
 		rootCmd.AddCommand(c)
 	}
-	trafficCmd.Flags().BoolVar(&inspectAll, "all", false, "also show DHCP, NIC and gateway service events")
+	trafficCmd.Flags().BoolVar(&inspectAll, "all", false, "also show DHCP, NIC and gateway service events and events of rules with log = false")
 	straceCmd.Flags().BoolVar(&inspectAll, "all", false, "also show jailoc's own guest processes")
 	execCmd.Flags().SetInterspersed(false)
 	rootCmd.AddCommand(execCmd, shellCmd)

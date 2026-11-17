@@ -212,25 +212,36 @@ func TestReloadPolicyRejectsBrokerBeforeInternalZones(t *testing.T) {
 	}
 }
 
-func TestReloadPolicyRequiresCurrentBrokerOnlyForHTTPRules(t *testing.T) {
+func TestReloadPolicyRequiresBrokerForNewFeatures(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	v1 := vm.Spec{GuestProtocol: guest.Protocol, Guest: &guest.Config{}, BrokerPolicy: policyVersionRules}
-	plain := &workspace.Resolved{Name: "api", NetworkRules: []config.NetworkRule{{Name: "agent", Allow: []string{"api.anthropic.com"}}}}
-	if _, err := reloadPolicy(context.Background(), plain, v1); err != nil {
-		t.Fatalf("reloadPolicy without http rules on a version 1 broker: %v", err)
+	off := false
+	plain := []config.NetworkRule{{Name: "agent", Allow: []string{"api.anthropic.com"}}}
+	httpRule := config.NetworkRule{Name: "gh", Allow: []string{"api.github.com"}, HTTP: &config.HTTPMatch{Methods: []string{"GET"}}}
+	quietRule := config.NetworkRule{Name: "registry", Allow: []string{"registry.example.com"}, Log: &off}
+	tests := []struct {
+		name    string
+		rules   []config.NetworkRule
+		running int
+		wantErr bool
+	}{
+		{"plain rules on a version 1 broker", plain, policyVersionRules, false},
+		{"http rules on a version 1 broker", append(slices.Clone(plain), httpRule), policyVersionRules, true},
+		{"http rules on a version 2 broker", append(slices.Clone(plain), httpRule), policyVersionHTTP, false},
+		{"http rules on a current broker", append(slices.Clone(plain), httpRule), netbroker.PolicyVersion, false},
+		{"quiet rule on a version 1 broker", append(slices.Clone(plain), quietRule), policyVersionRules, true},
+		{"quiet rule on a version 2 broker", append(slices.Clone(plain), quietRule), policyVersionHTTP, true},
+		{"quiet rule on a current broker", append(slices.Clone(plain), quietRule), netbroker.PolicyVersion, false},
+		{"quiet and http rules on a version 2 broker", append(slices.Clone(plain), httpRule, quietRule), policyVersionHTTP, true},
 	}
-	inspected := &workspace.Resolved{Name: "api", NetworkRules: []config.NetworkRule{{
-		Name:  "gh",
-		Allow: []string{"api.github.com"},
-		HTTP:  &config.HTTPMatch{Methods: []string{"GET"}},
-	}}}
-	if _, err := reloadPolicy(context.Background(), inspected, v1); err == nil {
-		t.Fatal("reloadPolicy accepted http rules for a version 1 broker")
-	}
-	current := v1
-	current.BrokerPolicy = netbroker.PolicyVersion
-	if _, err := reloadPolicy(context.Background(), inspected, current); err != nil {
-		t.Fatalf("reloadPolicy with http rules on a current broker: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := &workspace.Resolved{Name: "api", NetworkRules: tt.rules}
+			running := vm.Spec{GuestProtocol: guest.Protocol, Guest: &guest.Config{}, BrokerPolicy: tt.running}
+			_, err := reloadPolicy(context.Background(), ws, running)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("reloadPolicy error = %v, want error %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 

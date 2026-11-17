@@ -75,8 +75,8 @@ func TestParsePolicyHTTP(t *testing.T) {
 
 func TestPolicyVersion(t *testing.T) {
 	t.Parallel()
-	if PolicyVersion != 2 {
-		t.Fatalf("PolicyVersion = %d, want 2", PolicyVersion)
+	if PolicyVersion != 3 {
+		t.Fatalf("PolicyVersion = %d, want 3", PolicyVersion)
 	}
 }
 
@@ -268,7 +268,7 @@ func TestHTTPScopeAndEvaluate(t *testing.T) {
 	for _, tt := range verdicts {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tt.scope.evaluate(tt.method, tt.path, "flow-rule"); got != tt.want {
+			if got := tt.scope.evaluate(tt.method, tt.path, "flow-rule", false); got != tt.want {
 				t.Fatalf("evaluate(%s %s) = %+v, want %+v", tt.method, tt.path, got, tt.want)
 			}
 		})
@@ -330,7 +330,7 @@ func TestHTTPEvaluatePaths(t *testing.T) {
 			if s.empty() {
 				t.Fatal("scope is empty")
 			}
-			if got := s.evaluate(tt.method, tt.path, "flow-rule"); got != tt.want {
+			if got := s.evaluate(tt.method, tt.path, "flow-rule", false); got != tt.want {
 				t.Fatalf("evaluate(%s %s) = %+v, want %+v", tt.method, tt.path, got, tt.want)
 			}
 		})

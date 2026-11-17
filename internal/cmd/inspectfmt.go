@@ -49,6 +49,8 @@ type trafficEvent struct {
 	DenyAll       bool      `json:"deny_all"`
 	Denied        bool      `json:"denied"`
 	Hint          string    `json:"hint"`
+	// Quiet marks an event decided by a rule with log = false.
+	Quiet bool `json:"quiet"`
 }
 
 // trafficFormatter renders broker events as aligned, human-readable lines.
@@ -56,7 +58,7 @@ type trafficEvent struct {
 // up instead of only the address.
 type trafficFormatter struct {
 	names map[string]string // IP → last DNS name that resolved to it
-	all   bool              // also show DHCP, NIC and service events
+	all   bool              // also show DHCP, NIC, service and quiet-rule events
 }
 
 func newTrafficFormatter(all bool) *trafficFormatter {
@@ -86,6 +88,9 @@ func (f *trafficFormatter) line(raw []byte) string {
 }
 
 func (f *trafficFormatter) render(e trafficEvent) string {
+	if e.Quiet && !f.all {
+		return "" // decided by a rule with log = false
+	}
 	ts := colDim.Sprint(e.Time.Local().Format("15:04:05"))
 	switch e.Event {
 	case "flow":

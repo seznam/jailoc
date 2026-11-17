@@ -231,7 +231,7 @@ jailoc traffic [workspace] [flags]
 | `--follow` | `-f` | Keep printing new events until interrupted. |
 | `--lines N` | `-n` | Number of past events to print. Default `100`; `0` prints none, `-1` all. |
 | `--json` | | Print the shown events as their JSON log lines, unchanged. |
-| `--all` | | Also show DHCP, NIC, SSH agent forwarding and jailoc's own SSH connections. |
+| `--all` | | Also show DHCP, NIC, SSH agent forwarding, jailoc's own SSH connections and the events of rules with [`log = false`](configuration.md#quiet-rules). |
 
 Without `--json`, control characters in logged values are escaped. TLS connections are identified from the unencrypted ClientHello only; their content is not decrypted, except for connections covered by a rule with an [`http` table](configuration.md#http-rules).
 

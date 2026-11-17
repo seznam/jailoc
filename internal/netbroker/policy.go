@@ -22,7 +22,8 @@ import (
 //
 // Version 1: internal_zones; private DNS answers outside them are dropped.
 // Version 2: http rules and TLS inspection.
-const PolicyVersion = 2
+// Version 3: per-rule quiet, which marks the events a rule decides.
+const PolicyVersion = 3
 
 // Protocol names used in policy exceptions and decisions.
 const (
@@ -124,6 +125,9 @@ type Rule struct {
 	// it requires proto tcp. An http allow rule narrows its hosts to the
 	// matching requests, and an http deny rule never denies a connection.
 	HTTP *HTTPMatch `json:"http,omitempty"`
+	// Quiet marks the events this rule decides (see Decision.Quiet). The
+	// broker still records them; only `jailoc traffic` hides them.
+	Quiet bool `json:"quiet,omitempty"`
 
 	nameSet  nameSet
 	prefixes []netip.Prefix
@@ -693,6 +697,9 @@ type Decision struct {
 	Reason string `json:"reason"`
 	Name   string `json:"name,omitempty"`
 	Rule   string `json:"rule,omitempty"`
+	// Quiet is set when the decision comes from a rule with quiet set. The
+	// events of the flow are marked, not dropped.
+	Quiet  bool `json:"-"`
 	byName bool
 }
 
@@ -823,11 +830,11 @@ func matchRule(r *Rule, names []string, proto string, dst netip.AddrPort, isPubl
 	}
 	for _, name := range names {
 		if r.matchesName(proto, dst.Port(), name) {
-			return Decision{Allow: allow, Reason: reason, Name: name, Rule: r.Name, byName: true}, true
+			return Decision{Allow: allow, Reason: reason, Name: name, Rule: r.Name, Quiet: r.Quiet, byName: true}, true
 		}
 	}
 	if r.matchesAddr(proto, dst, isPublic) {
-		return Decision{Allow: allow, Reason: reason, Name: firstName(names), Rule: r.Name}, true
+		return Decision{Allow: allow, Reason: reason, Name: firstName(names), Rule: r.Name, Quiet: r.Quiet}, true
 	}
 	return Decision{}, false
 }
@@ -840,7 +847,7 @@ func matchAddrRule(r *Rule, names []string, proto string, dst netip.AddrPort, is
 	if r.Name != "" {
 		reason = "rule " + r.Name
 	}
-	return Decision{Allow: true, Reason: reason, Name: firstName(names), Rule: r.Name}, true
+	return Decision{Allow: true, Reason: reason, Name: firstName(names), Rule: r.Name, Quiet: r.Quiet}, true
 }
 
 func firstName(names []string) string {

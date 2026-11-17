@@ -71,6 +71,9 @@ type httpVerdict struct {
 	allow  bool
 	rule   string
 	reason string
+	// quiet marks a verdict made by a rule with quiet set, never an error
+	// or a denial for another reason.
+	quiet bool
 }
 
 // needsPath reports whether the request path takes part in the decision for
@@ -91,7 +94,10 @@ func (s httpScope) needsPath(method string) bool {
 // evaluated at all. Allow rules match the raw segments; deny rules also match
 // the segments split again on decoded slashes, so an encoded slash cannot hide
 // a request from a deny pattern.
-func (s httpScope) evaluate(method, escapedPath, flowRule string) httpVerdict {
+//
+// flowRule names the plain rule that allowed the flow and flowQuiet is its
+// quiet flag; a request allowed by it is as quiet as the flow.
+func (s httpScope) evaluate(method, escapedPath, flowRule string, flowQuiet bool) httpVerdict {
 	var segs, resplit []string
 	if s.needsPath(method) {
 		var ok bool
@@ -106,15 +112,15 @@ func (s httpScope) evaluate(method, escapedPath, flowRule string) httpVerdict {
 			if r.Name != "" {
 				reason = "rule " + r.Name
 			}
-			return httpVerdict{rule: r.Name, reason: reason}
+			return httpVerdict{rule: r.Name, reason: reason, quiet: r.Quiet}
 		}
 	}
 	if len(s.allow) == 0 {
-		return httpVerdict{allow: true, rule: flowRule}
+		return httpVerdict{allow: true, rule: flowRule, quiet: flowQuiet}
 	}
 	for _, r := range s.allow {
 		if r.HTTP.matches(method, segs, false) {
-			return httpVerdict{allow: true, rule: r.Name}
+			return httpVerdict{allow: true, rule: r.Name, quiet: r.Quiet}
 		}
 	}
 	return httpVerdict{reason: "http-no-match"}
@@ -132,6 +138,8 @@ type inspectFlow struct {
 	peerName string
 	scheme   string // "https" or "http"
 	flowRule string // the plain rule that allowed the flow, if any
+	// flowQuiet is the quiet flag of flowRule.
+	flowQuiet bool
 	// byIP marks a flow that showed no name: peerName is the destination's IP
 	// literal and scope the rules that match the address.
 	byIP bool
@@ -183,7 +191,7 @@ func (f *inspectFlow) trackedUpstream() int {
 func (b *Broker) newInspectFlow(p *Policy, env Env, d Decision, scope httpScope, conn uint64, dst netip.AddrPort, peerName string, tlsFlow, h2c bool) *inspectFlow {
 	f := &inspectFlow{
 		b: b, p: p, env: env, insp: p.inspect, scope: scope, conn: conn, dst: dst,
-		peerName: canonicalHost(peerName), scheme: "http", flowRule: d.Rule, h2c: h2c,
+		peerName: canonicalHost(peerName), scheme: "http", flowRule: d.Rule, flowQuiet: d.Quiet, h2c: h2c,
 		upstream: map[*upstreamConn]struct{}{},
 	}
 	if tlsFlow {
@@ -318,6 +326,8 @@ type reqInfo struct {
 	// the authority of an h2c request.
 	host string
 	rule string
+	// quiet marks a request a rule with quiet set allowed.
+	quiet bool
 }
 
 type reqInfoKey struct{}
@@ -351,7 +361,7 @@ func h2cAuthority(authority string) string {
 func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	escaped := r.URL.EscapedPath()
 	info := &reqInfo{method: r.Method, path: truncate(escaped, maxEventPath), host: f.peerName}
-	scope, flowRule := f.scope, f.flowRule
+	scope, flowRule, flowQuiet := f.scope, f.flowRule, f.flowQuiet
 	if f.h2c {
 		// No flow-level name: decide the request's authority like one.
 		name := h2cAuthority(r.Host)
@@ -366,10 +376,10 @@ func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if d.Reason == "host-mismatch" {
 				status = http.StatusMisdirectedRequest
 			}
-			f.reject(w, r, info, status, httpVerdict{rule: d.Rule, reason: d.Reason}, "")
+			f.reject(w, r, info, status, httpVerdict{rule: d.Rule, reason: d.Reason, quiet: d.Quiet}, "")
 			return
 		}
-		scope, flowRule = f.p.httpScope(name, f.dst), d.Rule
+		scope, flowRule, flowQuiet = f.p.httpScope(name, f.dst), d.Rule, d.Quiet
 	} else if host := requestHost(r.Host); host != f.peerName && (!f.byIP || r.Host != "") {
 		// An HTTP/1.0 request without Host belongs to the flow's address.
 		f.reject(w, r, info, http.StatusMisdirectedRequest, httpVerdict{reason: "host-mismatch"}, host)
@@ -379,12 +389,12 @@ func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.reject(w, r, info, http.StatusForbidden, httpVerdict{reason: "connect-denied"}, "")
 		return
 	}
-	v := scope.evaluate(r.Method, escaped, flowRule)
+	v := scope.evaluate(r.Method, escaped, flowRule, flowQuiet)
 	if !v.allow {
 		f.reject(w, r, info, http.StatusForbidden, v, "")
 		return
 	}
-	info.rule = v.rule
+	info.rule, info.quiet = v.rule, v.quiet
 	// An h2c upgrade would, on a 101, turn the connection into a raw tunnel
 	// whose HTTP/2 streams skip this check; send the request as plain HTTP/1.1.
 	stripH2CUpgrade(r.Header)
@@ -452,6 +462,7 @@ func (f *inspectFlow) reject(w http.ResponseWriter, r *http.Request, info *reqIn
 	if v.rule != "" {
 		ev["rule"] = v.rule
 	}
+	markQuiet(ev, v.quiet)
 	f.b.record(ev)
 
 	body := denyBody(Decision{Reason: v.reason, Rule: v.rule})
@@ -480,6 +491,7 @@ func (f *inspectFlow) proxyResponse(res *http.Response) error {
 	if info.rule != "" {
 		ev["rule"] = info.rule
 	}
+	markQuiet(ev, info.quiet)
 	f.b.record(ev)
 	return nil
 }

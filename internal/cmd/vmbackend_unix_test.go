@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +20,7 @@ import (
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
+	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -1025,5 +1027,81 @@ func TestCompileVMRuleRejectsInvalidHTTP(t *testing.T) {
 		if _, err := compileVMRule("r", "tcp", nil, []string{"example.com"}, h); err == nil {
 			t.Errorf("compileVMRule(%+v) error = nil", h)
 		}
+	}
+}
+
+func TestVMPolicyQuiet(t *testing.T) {
+	t.Parallel()
+	off, on := false, true
+	ws := &workspace.Resolved{
+		Name: "w",
+		NetworkRules: []config.NetworkRule{
+			{Name: "quiet-allow", Allow: []string{"registry.example.com"}, Log: &off},
+			{Name: "explicit-log", Allow: []string{"a.example.com"}, Log: &on},
+			{Name: "default-log", Allow: []string{"b.example.com"}},
+			{Name: "quiet-deny", Deny: []string{"telemetry.example.com"}, Log: &off},
+		},
+	}
+	for name, build := range map[string]func(context.Context, *workspace.Resolved) ([]byte, error){"policy": vmPolicy, "builder": vmBuilderPolicy} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			data, err := build(context.Background(), ws)
+			if err != nil {
+				t.Fatalf("build policy: %v", err)
+			}
+			if n := strings.Count(string(data), `"quiet"`); n != 2 {
+				t.Fatalf("policy has %d quiet fields, want 2: %s", n, data)
+			}
+			assertContains(t, string(data), `"name":"quiet-allow","names":["registry.example.com"],"proto":"tcp","quiet":true`)
+			assertContains(t, string(data), `"name":"quiet-deny","names":["telemetry.example.com"],"proto":"tcp","quiet":true`)
+			assertContains(t, string(data), `"name":"explicit-log","names":["a.example.com"],"proto":"tcp"}`)
+			assertContains(t, string(data), `"name":"default-log","names":["b.example.com"],"proto":"tcp"}`)
+			p, err := netbroker.ParsePolicy(data, "test")
+			if err != nil {
+				t.Fatalf("broker rejects the policy: %v\n%s", err, data)
+			}
+			d := netbroker.Decide(p, netbroker.Env{
+				Gateway: netip.MustParseAddr("192.168.127.1"),
+				Subnet:  netip.MustParsePrefix("192.168.127.0/24"),
+				Names:   []string{"registry.example.com"},
+			}, netbroker.ProtoTCP, netip.MustParseAddrPort("93.184.216.34:443"))
+			if !d.Allow || !d.Quiet {
+				t.Fatalf("Decide = %+v, want allowed and quiet", d)
+			}
+		})
+	}
+}
+
+func TestVMPolicyQuietHTTPRule(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel: HOME decides where the
+	// inspection CA is stored.
+	t.Setenv("HOME", t.TempDir())
+	off := false
+	ws := &workspace.Resolved{
+		Name: "w",
+		NetworkRules: []config.NetworkRule{
+			{Name: "web", Allow: []string{"*"}},
+			{Name: "quiet-delete", Deny: []string{"example.com"}, HTTP: &config.HTTPMatch{Methods: []string{"delete"}}, Log: &off},
+		},
+	}
+	data, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	assertContains(t, string(data), `"name":"quiet-delete","names":["example.com"],"proto":"tcp","http":{"methods":["DELETE"]},"quiet":true`)
+	if _, err := netbroker.ParsePolicy(data, "test"); err != nil {
+		t.Fatalf("broker rejects the policy: %v\n%s", err, data)
+	}
+}
+
+func TestVMPolicyWithoutQuietRulesOmitsQuiet(t *testing.T) {
+	t.Parallel()
+	ws := &workspace.Resolved{Name: "w", NetworkRules: []config.NetworkRule{{Name: "r", Allow: []string{"example.com"}}}}
+	data, err := vmPolicy(context.Background(), ws)
+	if err != nil {
+		t.Fatalf("vmPolicy: %v", err)
+	}
+	if strings.Contains(string(data), "quiet") {
+		t.Fatalf("policy without log = false mentions quiet: %s", data)
 	}
 }

@@ -1955,3 +1955,55 @@ func TestResolveInternalZones(t *testing.T) {
 		t.Fatalf("InternalZones = %v, want %v", r.InternalZones, want)
 	}
 }
+
+func TestResolveNetworkRulesLog(t *testing.T) {
+	t.Parallel()
+	off, on := false, true
+	plain := &config.Config{Workspaces: map[string]config.Workspace{"api": {Paths: []string{"/data/api"}}}}
+	r, err := workspace.Resolve(plain, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.HasQuietRules() {
+		t.Fatalf("HasQuietRules() = true without log = false: %+v", r.NetworkRules)
+	}
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{Network: &config.Network{Rules: []config.NetworkRule{
+			{Name: "default-quiet", Allow: []string{"registry.example.com"}, Log: &off},
+		}}},
+		Workspaces: map[string]config.Workspace{"api": {
+			Paths: []string{"/data/api"},
+			Network: &config.Network{Rules: []config.NetworkRule{
+				{Name: "ws-loud", Allow: []string{"a.example.com"}, Log: &on},
+				{Name: "ws-quiet-deny", Deny: []string{"telemetry.example.com"}, HTTP: &config.HTTPMatch{}, Log: &off},
+				{Name: "ws-default", Allow: []string{"b.example.com"}},
+			}},
+		}},
+	}
+	r, err = workspace.Resolve(cfg, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !r.HasQuietRules() {
+		t.Fatal("HasQuietRules() = false with log = false rules")
+	}
+	quiet := map[string]bool{}
+	for _, rule := range r.NetworkRules {
+		quiet[rule.Name] = rule.Quiet()
+	}
+	for name, want := range map[string]bool{"default-quiet": true, "ws-loud": false, "ws-quiet-deny": true, "ws-default": false, "agent": false} {
+		if got, ok := quiet[name]; !ok || got != want {
+			t.Errorf("rule %q quiet = %v (present %v), want %v", name, got, ok, want)
+		}
+	}
+	// The resolved rules do not alias the loaded config.
+	for i := range r.NetworkRules {
+		if l := r.NetworkRules[i].Log; l != nil {
+			*l = !*l
+		}
+	}
+	if off || !on {
+		t.Fatalf("resolved rules alias the loaded config: off=%v on=%v", off, on)
+	}
+}

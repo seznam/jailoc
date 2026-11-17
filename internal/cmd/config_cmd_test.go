@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -177,5 +178,25 @@ profile = "work"
 	assertContains(t, outPartial, "    Profile Dir: "+wantPartial+"\n")
 	if _, err := os.Stat(filepath.Join(home, "custom-data")); !os.IsNotExist(err) {
 		t.Fatalf("config inspection must not create mount directories on disk: err=%v", err)
+	}
+}
+
+func TestPrintNetworkRulesShowsLogFalse(t *testing.T) {
+	// captureStdout swaps os.Stdout: do not run in parallel.
+	off, on := false, true
+	out := captureStdout(t, func() {
+		printNetworkRules([]config.NetworkRule{
+			{Name: "quiet", Allow: []string{"registry.example.com"}, Log: &off},
+			{Name: "quiet-http", Deny: []string{"example.com"}, HTTP: &config.HTTPMatch{Methods: []string{"POST"}}, Log: &off},
+			{Name: "loud", Allow: []string{"a.example.com"}, Log: &on},
+			{Name: "default", Allow: []string{"b.example.com"}},
+		}, "")
+	})
+	want := "- quiet: allow registry.example.com (tcp log=false)\n" +
+		"- quiet-http: deny example.com (tcp http methods=POST log=false)\n" +
+		"- loud: allow a.example.com (tcp)\n" +
+		"- default: allow b.example.com (tcp)\n"
+	if out != want {
+		t.Fatalf("output = %q, want %q", out, want)
 	}
 }
