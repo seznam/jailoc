@@ -34,7 +34,7 @@ Subagent sessions don't report. Claude Code, GitHub Copilot CLI, OmO and Antigra
 When OpenCode is configured to show notifications itself, the plugin reports nothing, so you don't get both:
 
 - OpenCode 1: `attention.enabled` and `attention.notifications` in the TUI configuration, with the built-in `internal:notifications` plugin active.
-- OpenCode 2: `attention.notifications = true` in `cli.json` or `OPENCODE_CLI_CONFIG_CONTENT`, with the built-in `opencode.notifications` plugin enabled.
+- OpenCode 2: `attention.notifications = true` in `cli.json` or `OPENCODE_CLI_CONFIG_CONTENT`, with the built-in `opencode.notifications` plugin enabled. When there's no `cli.json`, OpenCode 2 takes `attention`, `plugin` and `plugin_enabled` from `tui.json`, and so does the plugin. A `tui.json` without `attention.notifications = true` leaves OpenCode 2's notifications off.
 
 OpenCode's own notifications follow OpenCode's settings, not jailoc's focus gate, fixed text or interval. Turn OpenCode's off to get jailoc's.
 
