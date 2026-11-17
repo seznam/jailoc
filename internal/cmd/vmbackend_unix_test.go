@@ -773,6 +773,14 @@ func TestDanglingLinkWarningEscapesPaths(t *testing.T) {
 	assertContains(t, got, `"/p/evil\x1b]0;title\a"`)
 }
 
+func TestDanglingLinkWarningFix(t *testing.T) {
+	t.Parallel()
+	file := danglingLinkWarning("ws", shareLink{link: "/p/AGENTS.md", target: "/h/dotfiles/AGENTS.md", guest: "/h/dotfiles/AGENTS.md"})
+	assertContains(t, file, `snapshot its target at "/h/dotfiles/AGENTS.md", or mount the directory that contains it at "/h/dotfiles"`)
+	dir := danglingLinkWarning("ws", shareLink{link: "/p/skills", target: "/h/dotfiles/skills", guest: "/h/dotfiles/skills", dir: true})
+	assertContains(t, dir, `mount or snapshot its target at "/h/dotfiles/skills"`)
+}
+
 func TestReadRegular(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

@@ -457,12 +457,19 @@ func warnDanglingShareLinks(ws *workspace.Resolved, shares []vm.Share, snapshots
 // the workspace chooses the link names and targets, so they must not reach
 // the host terminal as raw control characters.
 func danglingLinkWarning(name string, l shareLink) string {
-	return fmt.Sprintf("WARNING: workspace %q: %q links to %q, which no share, mount or snapshot covers, so the link is dangling in the VM; mount its target at %q too", name, l.link, l.target, l.guest)
+	fix := fmt.Sprintf("mount or snapshot its target at %q", l.guest)
+	if !l.dir {
+		// Mounts share directories only.
+		fix = fmt.Sprintf("snapshot its target at %q, or mount the directory that contains it at %q", l.guest, filepath.Dir(l.guest))
+	}
+	return fmt.Sprintf("WARNING: workspace %q: %q links to %q, which no share, mount or snapshot covers, so the link is dangling in the VM; %s", name, l.link, l.target, fix)
 }
 
 // shareLink is a symbolic link in a share whose target the VM cannot see.
+// dir reports whether the target is a directory.
 type shareLink struct {
 	link, target, guest string
+	dir                 bool
 }
 
 // danglingShareLinks returns the symbolic links directly inside a share
@@ -503,7 +510,11 @@ func danglingShareLinks(shares []vm.Share, covered []string, home string) []shar
 			if err != nil || !pathWithin(real, home) {
 				continue
 			}
-			links = append(links, shareLink{link: link, target: real, guest: filepath.Clean(guest)})
+			info, err := os.Stat(real)
+			if err != nil {
+				continue
+			}
+			links = append(links, shareLink{link: link, target: real, guest: filepath.Clean(guest), dir: info.IsDir()})
 		}
 	}
 	return links
