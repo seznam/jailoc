@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
@@ -327,6 +328,9 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 		}
 		info, err := os.Stat(host)
 		switch {
+		case errors.Is(err, os.ErrNotExist) && m.Mode == "ro" && !isDefaultMount(ws.Agent, host, m.Container):
+			// An empty directory created here could never fill up from the guest.
+			return nil, fmt.Errorf("workspace %q: mount %q: source %q does not exist; create it or fix the path, jailoc only creates missing sources of read-write mounts", ws.Name, spec, host)
 		case errors.Is(err, os.ErrNotExist):
 			if err := os.MkdirAll(host, 0o750); err != nil {
 				return nil, fmt.Errorf("workspace %q: create mount source %q: %w", ws.Name, host, err)
@@ -379,6 +383,28 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 	return shares, nil
 }
 
+// isDefaultMount reports whether host:container is one of the harness's
+// built-in mounts (such as ~/.agents), whose missing source vmShares
+// creates even when read-only, so a host without it still boots.
+func isDefaultMount(h agent.Harness, host, container string) bool {
+	for _, spec := range h.DefaultMounts() {
+		// Built-in mounts are constants that parse and expand; one that
+		// doesn't is simply not a match.
+		m, err := config.ParseMount(spec)
+		if err != nil {
+			continue
+		}
+		expanded, err := config.ExpandPath(m.Host)
+		if err != nil {
+			continue
+		}
+		if filepath.Clean(expanded) == filepath.Clean(host) && filepath.Clean(m.Container) == filepath.Clean(container) {
+			return true
+		}
+	}
+	return false
+}
+
 // checkNestedShares rejects a share whose host path runs through a symbolic
 // link inside a read-write share. The workspace can replace such a link,
 // which would make the next start share a different host directory. The
@@ -405,6 +431,82 @@ func checkNestedShares(shares []vm.Share) error {
 		}
 	}
 	return nil
+}
+
+// warnDanglingShareLinks warns about the symbolic links danglingShareLinks
+// finds in the top level of the workspace shares.
+func warnDanglingShareLinks(ws *workspace.Resolved, shares []vm.Share) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	for _, l := range danglingShareLinks(shares, home) {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s links to %s, which no share or mount covers, so the link is dangling in the VM; mount its target at %s too\n", ws.Name, l.link, l.target, l.guest)
+	}
+}
+
+// shareLink is a symbolic link in a share whose target the VM cannot see.
+type shareLink struct {
+	link, target, guest string
+}
+
+// danglingShareLinks returns the symbolic links directly inside a share
+// that resolve on the host to a path under home but point, as seen from the
+// guest, outside every share, such as a dotfiles link to an instructions
+// file. Links into the image, links that are dangling on the host too and
+// deeper directories are not checked, which keeps the scan cheap.
+func danglingShareLinks(shares []vm.Share, home string) []shareLink {
+	home, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return nil
+	}
+	var links []shareLink
+	for _, s := range shares {
+		// A share that can't be listed fails the VM start on its own.
+		entries, err := os.ReadDir(s.HostPath)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.Type()&os.ModeSymlink == 0 {
+				continue
+			}
+			link := filepath.Join(s.HostPath, e.Name())
+			target, err := os.Readlink(link)
+			if err != nil {
+				continue
+			}
+			guest := target
+			if !filepath.IsAbs(guest) {
+				guest = filepath.Join(s.GuestPath, guest)
+			}
+			if guestShared(filepath.Clean(guest), shares) {
+				continue
+			}
+			real, err := filepath.EvalSymlinks(link)
+			if err != nil || !pathWithin(real, home) {
+				continue
+			}
+			links = append(links, shareLink{link: link, target: real, guest: filepath.Clean(guest)})
+		}
+	}
+	return links
+}
+
+// guestShared reports whether the guest path p lies in one of shares.
+func guestShared(p string, shares []vm.Share) bool {
+	for _, s := range shares {
+		if pathWithin(p, s.GuestPath) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathWithin reports whether p is dir or lies under it.
+func pathWithin(p, dir string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // maxLinkHops bounds the symbolic links linkInside follows.

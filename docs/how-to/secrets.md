@@ -104,9 +104,14 @@ ttl = "1h"
 
 [workspaces.my-project.secrets.file.npmrc]
 from_command = "security find-generic-password -s npmrc -w"
+
+[workspaces.my-project.secrets.env.ANTHROPIC_CUSTOM_HEADERS]
+from_command = "security find-generic-password -s anthropic-headers -w"
 ```
 
 jailoc runs each command with `/bin/sh -c` and `JAILOC_WORKSPACE` set to the workspace name at `jailoc up` and `jailoc reload`, before it boots or changes the VM. The command gets your terminal, so a password manager can ask you to unlock it. A command that exits non-zero, prints nothing or runs longer than two minutes stops the operation.
+
+On macOS, `security find-generic-password -s <service> -w` prints the password of a login keychain item. Store the whole value the variable needs, such as `Authorization: Bearer <token>` for `ANTHROPIC_CUSTOM_HEADERS`, so the command needs no formatting around it. `security add-generic-password -a "$USER" -s anthropic-headers -w` with `-w` last prompts for the value, which keeps it out of the shell history.
 
 Set `ttl` (for example `"15m"` or `"1h"`) to cache the command's output in the host system keychain (the login keychain on macOS, the kernel user keyring on Linux) so restarting or reloading the workspace within that window reuses the value without prompting again.
 ---

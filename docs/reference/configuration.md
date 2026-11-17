@@ -364,7 +364,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 |---|---|---|---|---|---|---|---|
 | `opencode2` | OpenCode 2 | `@opencode/cli` | `opencode --standalone --auto` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_CLI_CONFIG_CONTENT` |
 | `opencode1` | OpenCode 1 | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode`, `~/.omo` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
-| `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `CLAUDE_CODE_SANDBOXED=1`, `DISABLE_AUTOUPDATER=1` |
+| `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `CLAUDE_CODE_SANDBOXED=1`, `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
 | `omo` | OmO | `omo-ai` | `omo --permission-preset full-access --extension /etc/jailoc-tui-plugin/omo.js` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
 | `agy` | Antigravity CLI | GitHub release `google-antigravity/antigravity-cli` | `agy --dangerously-skip-permissions` | `--continue` | `--conversation ID` | `~/.gemini` | `AGY_CLI_DISABLE_AUTO_UPDATE=1` |
@@ -492,7 +492,7 @@ Each path is a separate virtio-fs share. A VM boots with at most 11 shares on li
 
 Format: `host:container[:mode]`, mode `ro` or `rw` (default `rw`). Mounts are virtio-fs directory shares.
 
-- `host`: absolute or `~` path. Must be a directory; a file mount fails at `jailoc up`. Use [`snapshots`](#snapshots) for files. An empty host (`":/home/agent/.agents"`) removes an inherited mount with that destination.
+- `host`: absolute or `~` path. Must be a directory; a file mount fails at `jailoc up`. Use [`snapshots`](#snapshots) for files. A missing host directory of a read-write mount is created; a missing host directory of a read-only mount fails `jailoc up` and `jailoc reload`, except for the built-in mounts of the agent's harness (see [Merge Semantics](#merge-semantics)), which are created. `jailoc up` and `jailoc reload` warn about a symbolic link directly inside a path or mount that resolves to a file under the home directory no path or mount shares; the link is dangling in the VM. An empty host (`":/home/agent/.agents"`) removes an inherited mount with that destination.
 - `container`: absolute, or `~/...`, where `~` stands for the guest home `/home/agent`. Rejected when equal to or under `/`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. Destinations under `/home/agent/...` are allowed.
 
 Host paths equal to or under these entries are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.config/jailoc`, `~/.cache/jailoc-vm`. Parents of the entries under `~` are rejected too, so `~`, `~/.config` and `~/.cache` cannot be shared whole. Entries under `~` are also compared after resolving symlinks, so a symlink to `~/.ssh`, or a dotfiles directory that `~/.ssh` links into, is rejected as well. The error explains why the matched entry is protected; for credential directories it shows SSH or GPG agent forwarding or a [file secret](#secrets) holding the one file a tool needs, and for `~/.config/jailoc` and `~/.cache/jailoc-vm` it suggests keeping shared directories outside them or using an [agent profile](#agent-profiles). See [Pass a credential file](../how-to/secrets.md#pass-a-credential-file).
@@ -627,7 +627,7 @@ With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an
 
 ### `env`
 
-Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_SANDBOXED`, `DISABLE_AUTOUPDATER`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`, `AGY_CLI_DISABLE_AUTO_UPDATE`.
+Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_SANDBOXED`, `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`, `AGY_CLI_DISABLE_AUTO_UPDATE`.
 
 ### `env_file`
 

@@ -122,6 +122,22 @@ mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 
 See [`import_agent_config`](../reference/configuration.md#import_agent_config).
 
+## Use agent configuration from a dotfiles repository
+
+To give the agent instructions, settings or plugins kept in a dotfiles checkout instead of its usual configuration directory, mount the directory read-only and point the agent at it with `args`. For Claude Code:
+
+```toml
+[defaults.agents.claude]
+mounts = ["~/dotfiles/claude:/home/agent/.claude-dotfiles:ro"]
+args = [
+  "--append-system-prompt-file", "/home/agent/.claude-dotfiles/system-prompt.md",
+  "--settings", "/home/agent/.claude-dotfiles/settings.json",
+  "--plugin-dir", "/home/agent/.claude-dotfiles/plugin",
+]
+```
+
+The mount is live: edits on the host apply to the next session without `jailoc reload`. A missing host directory of a read-only mount fails `jailoc up`, so a wrong path is reported instead of sharing an empty directory. A symlink inside the directory that points outside every share is dangling in the VM; `jailoc up` warns about it. Mount its target too, at the path the link names.
+
 ## Pass extra arguments
 
 `args` is appended to every session command line:

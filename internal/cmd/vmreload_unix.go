@@ -114,6 +114,7 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
+	warnDanglingShareLinks(ws, shares)
 	// Refreshes the configuration and cache copies the guest reads.
 	internal, err := vmGuestData(ws, cacheDir, shares, false)
 	if err != nil {
