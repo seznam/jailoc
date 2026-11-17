@@ -362,12 +362,12 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 				// a ticker cannot draw on the main screen after leaving the
 				// alternate screen.
 				status.stop()
-				// End a notification the terminal took only part of, so the
-				// resets below are not swallowed by it.
-				status.settle()
 				// The agent cannot turn its terminal features off when the
 				// session detaches or the VM dies, so reset them here.
 				if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
+					// End a notification the terminal took only part of, so
+					// the resets below are not swallowed by it.
+					status.settle()
 					resetSessionTerminalModes(os.Stdout, status.altScreen())
 				}
 				_ = term.Restore(fd, old)
