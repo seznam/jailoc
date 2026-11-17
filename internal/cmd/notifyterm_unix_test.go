@@ -179,6 +179,63 @@ func TestFocusOutputTracksGuestFocusReporting(t *testing.T) {
 	}
 }
 
+func TestFocusOutputMatchesModeNumerically(t *testing.T) {
+	t.Parallel()
+
+	const (
+		enable   = "\x1b[?1004h"
+		reassert = enable
+	)
+	zeros := strings.Repeat("0", 40)
+	long := strings.Repeat("2004;", 20)
+	tests := []struct {
+		name      string
+		stream    string
+		wantOut   string
+		wantGuest bool
+	}{
+		{name: "oversized combined disable", stream: enable + "\x1b[?1004;1000;1002;1003;1006;1015;2004l", wantOut: enable + "\x1b[?1004;1000;1002;1003;1006;1015;2004l" + reassert},
+		{name: "late in a long list", stream: enable + "\x1b[?" + long + "1004l", wantOut: enable + "\x1b[?" + long + "1004l" + reassert},
+		{name: "long enable", stream: "\x1b[?" + long + "1004h", wantOut: "\x1b[?" + long + "1004h", wantGuest: true},
+		{name: "padded enable", stream: "\x1b[?01004h", wantOut: "\x1b[?01004h", wantGuest: true},
+		{name: "padded disable", stream: enable + "\x1b[?01004l", wantOut: enable + "\x1b[?01004l" + reassert},
+		{name: "padded save and restore", stream: enable + "\x1b[?001004s\x1b[?0001004l\x1b[?00001004r", wantOut: enable + "\x1b[?001004s\x1b[?0001004l" + reassert + "\x1b[?00001004r" + reassert, wantGuest: true},
+		{name: "many leading zeros enable", stream: "\x1b[?" + zeros + "1004h", wantOut: "\x1b[?" + zeros + "1004h", wantGuest: true},
+		{name: "many leading zeros disable", stream: enable + "\x1b[?" + zeros + "1004l", wantOut: enable + "\x1b[?" + zeros + "1004l" + reassert},
+		{name: "padded in a list", stream: enable + "\x1b[?2004;0001004;1000l", wantOut: enable + "\x1b[?2004;0001004;1000l" + reassert},
+		{name: "value above the mode", stream: enable + "\x1b[?10040l\x1b[?1005l\x1b[?" + "1004" + zeros + "l", wantOut: enable + "\x1b[?10040l\x1b[?1005l\x1b[?" + "1004" + zeros + "l", wantGuest: true},
+		{name: "overflowing value", stream: enable + "\x1b[?4294968300l\x1b[?18446744073709552620l\x1b[?65536;1004" + zeros + "l", wantOut: enable + "\x1b[?4294968300l\x1b[?18446744073709552620l\x1b[?65536;1004" + zeros + "l", wantGuest: true},
+		{name: "other modes in a long list", stream: enable + "\x1b[?" + long + "2004l", wantOut: enable + "\x1b[?" + long + "2004l", wantGuest: true},
+		{name: "nonprivate", stream: enable + "\x1b[1004l\x1b[>1004l\x1b[=1004l\x1b[1004;2004l", wantOut: enable + "\x1b[1004l\x1b[>1004l\x1b[=1004l\x1b[1004;2004l", wantGuest: true},
+		{name: "malformed", stream: enable + "\x1b[?1004:1l\x1b[?1004!l\x1b[?1004?l\x1b[? 1004l\x1b[?>1004l\x1b[?1004 l", wantOut: enable + "\x1b[?1004:1l\x1b[?1004!l\x1b[?1004?l\x1b[? 1004l\x1b[?>1004l\x1b[?1004 l", wantGuest: true},
+		{name: "malformed list then valid", stream: enable + "\x1b[?1004:1l\x1b[?1004l", wantOut: enable + "\x1b[?1004:1l\x1b[?1004l" + reassert},
+		{name: "marker in the middle", stream: enable + "\x1b[?1000;?1004l", wantOut: enable + "\x1b[?1000;?1004l", wantGuest: true},
+		{name: "soft reset after long params", stream: enable + "\x1b[!p\x1b[?" + long + "!p", wantOut: enable + "\x1b[!p" + reassert + "\x1b[?" + long + "!p", wantGuest: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			run := func(chunks []string) {
+				t.Helper()
+				focus := &sessionFocus{}
+				o := focusOutput{focus: focus}
+				var out strings.Builder
+				for _, c := range chunks {
+					out.Write(o.feed([]byte(c)))
+				}
+				if out.String() != tt.wantOut || focus.guestReports() != tt.wantGuest {
+					t.Fatalf("feed(%q) = %q, guest %v; want %q, guest %v", chunks, out.String(), focus.guestReports(), tt.wantOut, tt.wantGuest)
+				}
+			}
+			run([]string{tt.stream})
+			for i := 1; i < len(tt.stream); i++ {
+				run([]string{tt.stream[:i], tt.stream[i:]})
+			}
+			run(strings.Split(tt.stream, ""))
+		})
+	}
+}
+
 func TestFocusInputTracksFocus(t *testing.T) {
 	t.Parallel()
 

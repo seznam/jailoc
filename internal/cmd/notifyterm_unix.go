@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -155,11 +154,13 @@ const enableFocusReports = "\x1b[?1004h"
 // reach the agent only while it wants them. Escape sequences may be split
 // across chunks.
 type focusOutput struct {
-	focus    *sessionFocus
-	state    escState
-	params   []byte
-	overflow bool // the current CSI sequence is longer than maxCSIParams
-	saved    bool // the agent's mode 1004 saved by CSI ? 1004 s
+	focus *sessionFocus
+	state escState
+	lead  byte   // first parameter byte of the current CSI sequence, 0 before it
+	bad   bool   // the current CSI sequence is not a mode list or DECSTR
+	mode  uint16 // the mode being read, at most 1005 so that it cannot overflow
+	found bool   // mode 1004 is in the current CSI sequence
+	saved bool   // the agent's mode 1004 saved by CSI ? 1004 s
 }
 
 // feed returns agent output p with enableFocusReports after each sequence
@@ -195,7 +196,7 @@ func (o *focusOutput) step(b byte) bool {
 		o.state = escGround
 		switch {
 		case b == '[':
-			o.state, o.params, o.overflow = escCSI, o.params[:0], false
+			o.state, o.lead, o.bad, o.mode, o.found = escCSI, 0, false, 0, false
 		case b == ']' || b == 'P' || b == 'X' || b == '^' || b == '_':
 			o.state = escString
 		case b == 0x1b:
@@ -221,10 +222,8 @@ func (o *focusOutput) step(b byte) bool {
 		case b >= 0x40 && b <= 0x7e:
 			o.state = escGround
 			return o.csi(b)
-		case b >= 0x20 && b <= 0x3f && len(o.params) < maxCSIParams:
-			o.params = append(o.params, b)
 		case b >= 0x20 && b <= 0x3f:
-			o.overflow = true
+			o.param(b)
 		}
 	case escString:
 		switch b {
@@ -244,25 +243,41 @@ func (o *focusOutput) step(b byte) bool {
 	return false
 }
 
+// param reads one parameter byte of a CSI sequence. Only a private mode list,
+// ? followed by numbers separated by ;, or DECSTR's ! is kept; anything else
+// makes the whole sequence bad. Mode numbers are compared as numbers, so
+// leading zeros do not matter and a list may be of any length.
+func (o *focusOutput) param(b byte) {
+	switch {
+	case o.bad:
+	case o.lead == 0:
+		o.lead = b
+		o.bad = b != '?' && b != '!'
+	case o.lead == '!':
+		o.bad = true
+	case b >= '0' && b <= '9':
+		o.mode = min(o.mode*10+uint16(b-'0'), 1005)
+	case b == ';':
+		o.found = o.found || o.mode == 1004
+		o.mode = 0
+	default:
+		o.bad = true
+	}
+}
+
 // csi handles the final byte of a CSI sequence: set, reset, save or restore
 // of private mode 1004, or a soft reset.
 func (o *focusOutput) csi(final byte) bool {
-	if o.overflow {
+	if o.bad {
 		return false
 	}
-	params := string(o.params)
-	if final == 'p' && params == "!" { // DECSTR
+	if final == 'p' && o.lead == '!' { // DECSTR
 		return true
 	}
-	modes, ok := strings.CutPrefix(params, "?")
-	if !ok || !strings.ContainsRune("hlsr", rune(final)) {
+	if o.lead != '?' || (final != 'h' && final != 'l' && final != 's' && final != 'r') {
 		return false
 	}
-	found := false
-	for m := range strings.SplitSeq(modes, ";") {
-		found = found || m == "1004"
-	}
-	if !found {
+	if !o.found && o.mode != 1004 {
 		return false
 	}
 	switch final {
