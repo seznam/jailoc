@@ -172,7 +172,10 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	ipInspect := false
 	// dp decides the flow. A flow that cannot be HTTP (no HTTP or TLS bytes,
 	// or TLS with only non-HTTP ALPN) is decided without the http allow
-	// rules, so they never open other protocols.
+	// rules, so they never open other protocols. TLS with only non-HTTP ALPN
+	// can still carry HTTP, so an http rule that covers it has the flow
+	// decrypted once the plain rules have allowed it (see below).
+	nonHTTP := nonHTTPALPN(info)
 	dp := p
 	if p.hasHTTP() && !httpCapable(info) {
 		dp = p.plain()
@@ -223,8 +226,11 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		// it under the destination's IP literal.
 		ipInspect = true
 	case httpOnly && info != nil:
-		// TLS offering no HTTP protocol: the plain rules decide.
+		// TLS offering no HTTP protocol: the plain rules decide. An http
+		// rule covers the address (the case above ruled out none), so an
+		// allowed flow is inspected under the IP, as one without ALPN.
 		d = Decide(dp, env, ProtoTCP, dst)
+		ipInspect = d.Allow
 	case incomplete || info != nil || isHTTPOrTLSPort(dst.Port()):
 		// Timed out waiting for TLS ClientHello / HTTP headers on an HTTP/TLS
 		// port (or after partial TLS/HTTP bytes), or received TLS/HTTP without
@@ -253,7 +259,7 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		_ = rawConn.Close()
 		return
 	}
-	if info != nil && httpCapable(info) {
+	if info != nil && (httpCapable(info) || nonHTTP) {
 		switch {
 		case h2c:
 			f := b.newInspectFlow(p, env, d, httpScope{}, conn, dst, "", false, true)
@@ -291,10 +297,10 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		stream = &enforceConn{
 			Conn: replayed,
 			// Without http rules asking for it, a later request without a name
-			// is as welcome as before they existed. So is a handshake that is
-			// conclusively not HTTP (TLS offering no HTTP protocol): http rules
-			// never apply to it, and the plain rules already decided it.
-			allowNoName: httpOnly && (addrScope.empty() || info != nil && !httpCapable(info)),
+			// is as welcome as before they existed. Where an http rule covers
+			// the address, TLS without a name is inspected (TLS offering no HTTP
+			// protocol included), so only a flow nothing identified gets here.
+			allowNoName: httpOnly && addrScope.empty(),
 			check: func(name string) Decision {
 				d := b.peerDecision(dp, env, dst, name)
 				if d.Allow && !p.httpScope(name, dst).empty() {
