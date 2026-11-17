@@ -449,8 +449,15 @@ func warnDanglingShareLinks(ws *workspace.Resolved, shares []vm.Share, snapshots
 		covered = append(covered, filepath.Clean(s.Container))
 	}
 	for _, l := range danglingShareLinks(shares, covered, home) {
-		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s links to %s, which no share, mount or snapshot covers, so the link is dangling in the VM; mount its target at %s too\n", ws.Name, l.link, l.target, l.guest)
+		_, _ = color.New(color.FgYellow).Fprintln(os.Stderr, danglingLinkWarning(ws.Name, l))
 	}
+}
+
+// danglingLinkWarning describes l of workspace name. The paths are quoted:
+// the workspace chooses the link names and targets, so they must not reach
+// the host terminal as raw control characters.
+func danglingLinkWarning(name string, l shareLink) string {
+	return fmt.Sprintf("WARNING: workspace %q: %q links to %q, which no share, mount or snapshot covers, so the link is dangling in the VM; mount its target at %q too", name, l.link, l.target, l.guest)
 }
 
 // shareLink is a symbolic link in a share whose target the VM cannot see.

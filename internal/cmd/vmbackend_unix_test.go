@@ -760,6 +760,19 @@ func TestDanglingShareLinks(t *testing.T) {
 	}
 }
 
+func TestDanglingLinkWarningEscapesPaths(t *testing.T) {
+	t.Parallel()
+	got := danglingLinkWarning("ws", shareLink{
+		link:   "/p/evil\x1b]0;title\x07",
+		target: "/home/u/\x1b[2Jx",
+		guest:  "/home/u/\x1b[2Jx",
+	})
+	if strings.ContainsAny(got, "\x1b\x07") {
+		t.Fatalf("danglingLinkWarning() = %q, contains raw control characters", got)
+	}
+	assertContains(t, got, `"/p/evil\x1b]0;title\a"`)
+}
+
 func TestReadRegular(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

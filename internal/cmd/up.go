@@ -204,8 +204,8 @@ const tuiPluginContainerDir = agent.PluginDir
 // .gitignore of a read-only config directory mount and the TUI plugin.
 func writeAgentFiles(ws *workspace.Resolved, cacheDir string) error {
 	h := ws.Agent
-	if hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, h.ConfigDir); ok && h.ConfigDir != "" {
-		if err := ensureConfigGitignore(hostPath, h.ConfigGitignore); err != nil {
+	if source, hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, h.ConfigDir); ok && h.ConfigDir != "" {
+		if err := ensureConfigGitignore(source, hostPath, h.ConfigGitignore); err != nil {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not pre-create .gitignore in %s: %v\n", hostPath, err)
 		}
 	}
@@ -479,10 +479,12 @@ func readConfigFile(hostPath string) ([]byte, error) {
 
 // ensureConfigGitignore creates hostDir/.gitignore with content unless it
 // exists: some agents write it into their config directory on startup and
-// fail when the directory is mounted read-only. A missing hostDir is left
-// alone, so vmShares reports the missing source of the read-only mount.
-func ensureConfigGitignore(hostDir, content string) error {
-	if _, err := os.Stat(hostDir); errors.Is(err, os.ErrNotExist) {
+// fail when the directory is mounted read-only. hostDir is source, the host
+// side of the read-only mount, or a directory under it. A missing source is
+// left alone, so vmShares reports it; a missing hostDir under an existing
+// source is created.
+func ensureConfigGitignore(source, hostDir, content string) error {
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	gitignorePath := filepath.Join(hostDir, ".gitignore")
@@ -492,6 +494,9 @@ func ensureConfigGitignore(hostDir, content string) error {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat %q: %w", gitignorePath, err)
+	}
+	if err := os.MkdirAll(hostDir, 0o755); err != nil { //nolint:gosec // 0o755: directory must be readable when bind-mounted
+		return fmt.Errorf("create directory %q: %w", hostDir, err)
 	}
 	if err := os.WriteFile(gitignorePath, []byte(content), 0o644); err != nil { //nolint:gosec // 0o644: standard file perms
 		return fmt.Errorf("write %q: %w", gitignorePath, err)
