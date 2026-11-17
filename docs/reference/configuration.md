@@ -171,6 +171,18 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `ports` | (int \| string)[] | (all) | Port numbers (`1`–`65535`) or `"a-b"` port ranges. |
 | `name` | string | `""` | Label shown in `jailoc traffic` (`rule=<name>`) and validation errors. |
 | `http` | table | (none) | Inspect HTTP requests to the matched destinations and apply `methods` and `paths` per request. Allowed on `allow` and `deny` rules; requires `proto = "tcp"`. See [HTTP rules](#http-rules). |
+| `log` | bool | `true` | `false` hides the events this rule decides from `jailoc traffic` unless `--all` is given. Valid on `allow` and `deny` rules, with or without `http`. See [Quiet rules](#quiet-rules). |
+
+#### Quiet rules
+
+`log = false` only changes what `jailoc traffic` shows: the broker still enforces the rule and records every event in its log, marked `"quiet": true`. `jailoc traffic --all` and `--json --all` show them. The mark covers the events the rule itself decides:
+
+- the connection (allowed or denied by the rule) and the TLS or HTTP line of that connection;
+- a request an `http` rule allows or denies, and a request allowed through a connection the rule allowed.
+
+Denials for any other reason stay visible, such as `http-no-match`, `bad-path`, `host-mismatch`, `sni-required` or `default-deny`, and so do failures: `inspect-error`, `502` upstream errors, and DNS events. A connection allowed by a quiet rule still shows a request that a different rule denies.
+
+A running workspace needs `jailoc restart` instead of `jailoc reload` to apply the first `log = false` rule when its network broker was started by an older jailoc.
 
 #### HTTP rules
 

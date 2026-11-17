@@ -74,7 +74,15 @@ type NetworkRule struct {
 	// inspects TLS and plain HTTP traffic to the targets and applies the rule
 	// per request. An empty table matches every request.
 	HTTP *HTTPMatch `toml:"http"`
+	// Log, when false, makes `jailoc traffic` hide the events this rule
+	// decides unless --all is given. The broker still records them. Unset
+	// means true.
+	Log *bool `toml:"log"`
 }
+
+// Quiet reports whether the rule's events are hidden from `jailoc traffic`
+// by default: log = false.
+func (r NetworkRule) Quiet() bool { return r.Log != nil && !*r.Log }
 
 // HTTPMatch is the http sub-table of a network rule. Empty Methods or Paths
 // match any method or path.

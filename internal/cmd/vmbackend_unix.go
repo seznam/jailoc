@@ -537,6 +537,9 @@ type vmRule struct {
 	Proto string   `json:"proto,omitempty"`
 	Ports []string `json:"ports,omitempty"`
 	HTTP  *vmHTTP  `json:"http,omitempty"`
+	// Quiet marks the events the rule decides (log = false); the broker
+	// still records them.
+	Quiet bool `json:"quiet,omitempty"`
 }
 
 // vmHTTP narrows a vmRule to HTTP requests. Empty methods or paths match any.
@@ -675,6 +678,7 @@ func buildVMPolicy(ctx context.Context, ws *workspace.Resolved, builder bool) ([
 		if err != nil {
 			return nil, err
 		}
+		br.Quiet = r.Quiet()
 		if isAllow {
 			allow = append(allow, br)
 		} else {
