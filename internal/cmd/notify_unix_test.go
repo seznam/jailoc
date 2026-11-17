@@ -207,6 +207,56 @@ func TestNotifierDropsQueuedAfterRefocus(t *testing.T) {
 	})
 }
 
+func TestNotifierDeliversFreshKindAfterRefocus(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		var r recorder
+		f := awayFocus()
+		n := newNotifier(notifyViaOSC, r.deliver, f, nil)
+		n.post(notifyCompleted)
+		synctest.Wait()
+		n.post(notifyInput) // queued while the interval runs; stale after the refocus
+		f.set(focusIn)
+		f.set(focusOut)
+		n.post(notifyInput) // fresh: must not be deduplicated against the stale one
+		time.Sleep(2 * notifyInterval)
+		synctest.Wait()
+		n.stop()
+		if got := r.got(); !slices.Equal(got, []notifyKind{notifyCompleted, notifyInput}) {
+			t.Fatalf("delivered %v, want completed, then the fresh input", got)
+		}
+	})
+}
+
+func TestNotifierPostWhileDrainingKeepsQueued(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		var r recorder
+		f := awayFocus()
+		n := newNotifier(notifyViaOSC, r.deliver, f, nil)
+		n.post(notifyCompleted)
+		synctest.Wait()
+		n.post(notifyInput) // queued while the interval runs; stale after the refocus
+		f.set(focusIn)
+		f.set(focusOut)
+		go n.drain(2 * notifyInterval)
+		synctest.Wait() // drain has set closing; the run loop still waits for the interval
+		n.post(notifyInput)
+		if queued, closing := n.pending(); !queued || !closing {
+			n.stop()
+			t.Fatalf("pending() = queued %v, closing %v after a post while draining, want both true", queued, closing)
+		}
+		time.Sleep(notifyInterval) // the run loop pops its item; must not panic on an empty queue
+		synctest.Wait()
+		n.stop()
+		if got := r.got(); !slices.Equal(got, []notifyKind{notifyCompleted}) {
+			t.Fatalf("delivered %v, want only completed: the stale input is dropped and no fresh one is accepted while draining", got)
+		}
+	})
+}
+
 func TestNotifierStopCancelsDelivery(t *testing.T) {
 	t.Parallel()
 

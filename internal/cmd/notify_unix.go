@@ -167,7 +167,13 @@ func (n *notifier) post(k notifyKind) {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.closing || slices.ContainsFunc(n.queue, func(it notifyItem) bool { return it.kind == k }) {
+	if n.closing {
+		return // the run loop pops what is queued; leave it be
+	}
+	// Items queued before a focus change are stale: run drops them, so they
+	// must not block a fresh notification of the same kind. Epochs only grow.
+	n.queue = slices.DeleteFunc(n.queue, func(it notifyItem) bool { return it.epoch < epoch })
+	if slices.ContainsFunc(n.queue, func(it notifyItem) bool { return it.kind == k }) {
 		return
 	}
 	n.queue = append(n.queue, notifyItem{kind: k, epoch: epoch})
