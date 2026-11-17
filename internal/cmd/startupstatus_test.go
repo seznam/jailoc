@@ -469,3 +469,49 @@ func TestStartupStatusTickEndsAnimationWhenAbortFails(t *testing.T) {
 		t.Fatalf("tick() after the failure wrote %d more times, output %q; want none", w.writes-writes, w.out.String())
 	}
 }
+
+func TestStartupStatusSettleCancelsUnfinishedSequence(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		in   string
+	}{
+		{name: "lone escape", in: "a\x1b"},
+		{name: "string", in: "a\x1b]777;jail"},
+		{name: "CSI", in: "a\x1b[3"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			s := newStartupStatus(&out, func() (int, int) { return 80, 24 })
+			if err := s.write([]byte(tt.in)); err != nil {
+				t.Fatal(err)
+			}
+			s.settle()
+			s.settle()
+			if got, want := out.String(), tt.in+notifyAbort; got != want {
+				t.Fatalf("output = %q, want the abort once: %q", got, want)
+			}
+			if err := s.writeBetween([]byte("<R>")); err != nil {
+				t.Fatalf("writeBetween() after settle = %v, want the escape state cleared", err)
+			}
+		})
+	}
+}
+
+func TestStartupStatusSettleAbortFailureIsNotRetried(t *testing.T) {
+	t.Parallel()
+
+	w := &failOnWriter{fail: notifyAbort}
+	s := newStartupStatus(w, func() (int, int) { return 80, 24 })
+	if err := s.write([]byte("\x1b]777;jail")); err != nil {
+		t.Fatal(err)
+	}
+	s.settle()
+	writes := w.writes
+	s.settle()
+	if w.writes != writes {
+		t.Fatalf("settle() retried the failed abort: %d writes, want %d", w.writes, writes)
+	}
+}

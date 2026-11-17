@@ -404,6 +404,34 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 	if raw && term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
 		notes, focusIn, focusOut = notify.start(status)
 	}
+	var tail []byte
+	const maxTail = 512
+	// forward passes agent output on to the terminal.
+	forward := func(payload []byte) {
+		if focusOut != nil {
+			payload = focusOut.feed(payload)
+		}
+		if clipboard != nil {
+			payload = clipboard.feed(payload)
+		}
+		tail = append(tail, payload...)
+		if len(tail) > maxTail {
+			tail = tail[len(tail)-maxTail:]
+		}
+		_ = status.write(payload)
+	}
+	// Whatever way the session ends, bytes held back as a possible start of
+	// a notification belong to the agent's output: pass them on. Registered
+	// after the clipboard queue and before the notifier's stop, so it runs
+	// after the notifier ended and before the clipboard closes and the
+	// terminal modes are reset. It stops the startup animation first, so a
+	// tick cannot draw next to the unfinished sequence.
+	defer func() {
+		if held := osc.finish(); len(held) > 0 {
+			status.stop()
+			forward(held)
+		}
+	}()
 	if notes != nil {
 		// Registered after the clipboard queue, so it runs before its close
 		// and before the terminal modes are reset. Notifications of an agent
@@ -449,8 +477,6 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 	}()
 
 	var created bool
-	var tail []byte
-	const maxTail = 512
 	for {
 		f, err := session.ReadFrame(out)
 		if err != nil {
@@ -480,17 +506,7 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 			if notify.plugin {
 				payload = osc.feed(payload, post)
 			}
-			if focusOut != nil {
-				payload = focusOut.feed(payload)
-			}
-			if clipboard != nil {
-				payload = clipboard.feed(payload)
-			}
-			tail = append(tail, payload...)
-			if len(tail) > maxTail {
-				tail = tail[len(tail)-maxTail:]
-			}
-			_ = status.write(payload)
+			forward(payload)
 		case session.FrameExit:
 			code, _ = session.ParseExit(f.Payload)
 			diagnose = (created && !status.visible()) || bytes.Contains(tail, []byte("Check server logs for details."))

@@ -121,6 +121,17 @@ func (f *notifyOSCFilter) feed(p []byte, emit func(notifyKind)) []byte {
 	return out
 }
 
+// finish returns what is still held back as a possible start of a
+// notification, for the end of the output, and forgets it.
+func (f *notifyOSCFilter) finish() []byte {
+	if len(f.held) == 0 {
+		return nil
+	}
+	held := bytes.Clone(f.held)
+	f.held = f.held[:0]
+	return held
+}
+
 // matchNotifySequence reports which sequence p is, or whether it starts one.
 func matchNotifySequence(p []byte) (kind notifyKind, prefix bool) {
 	for _, s := range notifySequences {

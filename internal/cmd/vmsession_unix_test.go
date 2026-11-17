@@ -255,3 +255,43 @@ func TestRelaySessionRemovesPluginNotifications(t *testing.T) {
 		})
 	}
 }
+
+func TestRelaySessionKeepsUndecidedPrefixOnEveryEnd(t *testing.T) {
+	const prefix = "\x1b]777;jailoc-no"
+	tests := []struct {
+		name        string
+		end         []session.Frame
+		interactive bool
+		plugin      bool
+		outcome     sessionOutcome
+	}{
+		{name: "exit", end: []session.Frame{session.ExitFrame(0)}, plugin: true, outcome: outcomeExited},
+		{name: "kicked", end: []session.Frame{{Type: session.FrameKicked}}, plugin: true, outcome: outcomeKicked},
+		{name: "lost stream", plugin: true, outcome: outcomeLost},
+		{name: "interactive without raw mode", end: []session.Frame{session.ExitFrame(0)}, interactive: true, plugin: true, outcome: outcomeExited},
+		{name: "plugin off", end: []session.Frame{session.ExitFrame(0)}, outcome: outcomeExited},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stream bytes.Buffer
+			frames := append([]session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s1")},
+				{Type: session.FrameData, Payload: []byte("a" + prefix)},
+			}, tt.end...)
+			for _, f := range frames {
+				if err := session.WriteFrame(&stream, f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var in bytes.Buffer
+			out := captureStdout(t, func() {
+				if _, outcome, _, _ := relaySession(-1, tt.interactive, nil, "Starting…", "OpenCode", sessionNotify{plugin: tt.plugin}, nopWriteCloser{&in}, &stream, 24, 80); outcome != tt.outcome {
+					t.Errorf("relaySession() outcome = %v, want %v", outcome, tt.outcome)
+				}
+			})
+			if want := "a" + prefix; out != want {
+				t.Fatalf("output = %q, want the undecided prefix kept: %q", out, want)
+			}
+		})
+	}
+}

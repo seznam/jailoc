@@ -203,12 +203,19 @@ func (s *startupStatus) writeBetween(p []byte) error {
 	return err
 }
 
-// settle ends a notification the terminal received only in part, before
-// jailoc writes to the terminal outside the session.
+// settle ends a notification the terminal received only in part and an
+// escape sequence of the agent's output that stops unfinished, before jailoc
+// writes to the terminal outside the session. Otherwise the sequence would
+// swallow what is written next.
 func (s *startupStatus) settle() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_ = s.abortCut() // best effort right before the terminal modes are reset, which fail the same way
+	if s.state == escGround {
+		return
+	}
+	s.state = escGround
+	_, _ = io.WriteString(s.w, notifyAbort) // best effort, as above
 }
 
 // abortCut writes notifyAbort after a notification the terminal received

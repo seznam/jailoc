@@ -104,6 +104,44 @@ func TestNotifyOSCFilterHoldsPrefixUntilDecided(t *testing.T) {
 	}
 }
 
+func TestNotifyOSCFilterFinishReturnsHeldPrefix(t *testing.T) {
+	t.Parallel()
+
+	var f notifyOSCFilter
+	var kinds []notifyKind
+	emit := func(k notifyKind) { kinds = append(kinds, k) }
+	if got := string(f.feed([]byte("x\x1b]777;jail"), emit)); got != "x" {
+		t.Fatalf("feed(prefix) = %q, want %q", got, "x")
+	}
+	if got := string(f.finish()); got != "\x1b]777;jail" {
+		t.Fatalf("finish() = %q, want the held prefix", got)
+	}
+	if got := f.finish(); len(got) != 0 {
+		t.Fatalf("second finish() = %q, want nothing", got)
+	}
+	// The filter is reusable after finishing; the flushed prefix is not
+	// completed by what follows.
+	if got := string(f.feed([]byte("oc-notify;completed\x07ab"+testNotifyInput), emit)); got != "oc-notify;completed\x07ab" {
+		t.Fatalf("feed() after finish = %q, want the text unchanged", got)
+	}
+	if !slices.Equal(kinds, []notifyKind{notifyInput}) {
+		t.Fatalf("notifications after finish = %v, want only the whole sequence", kinds)
+	}
+}
+
+func TestNotifyOSCFinishWithNothingHeld(t *testing.T) {
+	t.Parallel()
+
+	var f notifyOSCFilter
+	if got := f.finish(); len(got) != 0 {
+		t.Fatalf("finish() of a new filter = %q, want nothing", got)
+	}
+	f.feed([]byte("plain"), nil)
+	if got := f.finish(); len(got) != 0 {
+		t.Fatalf("finish() after plain output = %q, want nothing", got)
+	}
+}
+
 func TestFocusOutputTracksGuestFocusReporting(t *testing.T) {
 	t.Parallel()
 
