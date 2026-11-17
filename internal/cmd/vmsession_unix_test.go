@@ -191,7 +191,7 @@ func TestRelaySessionDiagnoseAndFormatError(t *testing.T) {
 				}
 			}
 			var in bytes.Buffer
-			_, outcome, code, diagnose := relaySession(-1, false, nil, "Starting…", tt.agent.Title, nopWriteCloser{&in}, &stream, 24, 80)
+			_, outcome, code, diagnose := relaySession(-1, false, nil, "Starting…", tt.agent.Title, sessionNotify{}, nopWriteCloser{&in}, &stream, 24, 80)
 			if outcome != outcomeExited || code != 1 || diagnose != tt.wantDiagnose {
 				t.Fatalf("relaySession() = outcome %v, code %d, diagnose %v; want %v, 1, %v", outcome, code, diagnose, outcomeExited, tt.wantDiagnose)
 			}
@@ -218,5 +218,40 @@ func TestFormatAgentExitErrorWithConfigFlag(t *testing.T) {
 	want := "run `jailoc --config '/tmp/my config.toml' -w szn exec -- opencode --print-logs` for details"
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("formatAgentExitError() = %v, want substring %q", err, want)
+	}
+}
+
+func TestRelaySessionRemovesPluginNotifications(t *testing.T) {
+	const seq = "\x1b]777;jailoc-notify;completed\x07"
+	for _, tt := range []struct {
+		name   string
+		plugin bool
+		want   string
+	}{
+		{name: "OpenCode plugin", plugin: true, want: "ab"},
+		{name: "other agents", plugin: false, want: "a" + seq + "b"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var stream bytes.Buffer
+			for _, f := range []session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s1")},
+				{Type: session.FrameData, Payload: []byte("a" + seq[:9])},
+				{Type: session.FrameData, Payload: []byte(seq[9:] + "b")},
+				session.ExitFrame(0),
+			} {
+				if err := session.WriteFrame(&stream, f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var in bytes.Buffer
+			out := captureStdout(t, func() {
+				if _, outcome, _, _ := relaySession(-1, false, nil, "Starting…", "OpenCode", sessionNotify{plugin: tt.plugin}, nopWriteCloser{&in}, &stream, 24, 80); outcome != outcomeExited {
+					t.Errorf("relaySession() outcome = %v, want %v", outcome, outcomeExited)
+				}
+			})
+			if out != tt.want {
+				t.Fatalf("output = %q, want %q", out, tt.want)
+			}
+		})
 	}
 }

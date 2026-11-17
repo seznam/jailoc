@@ -285,7 +285,8 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	logStep("open agent session", start, "workspace", ws.Name)
 
 	starting := fmt.Sprintf("Starting %s in workspace %s…", ws.Agent.Title, ws.Name)
-	id, outcome, code, diagnose := relaySession(fd, interactive, opts.detach, starting, ws.Agent.Title, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
+	notify := sessionNotifyFor(ws, interactive)
+	id, outcome, code, diagnose := relaySession(fd, interactive, opts.detach, starting, ws.Agent.Title, notify, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
 	// The guest command exits only after its input closes.
 	_ = stdin.Close()
 	_ = sess.Wait()
@@ -330,8 +331,9 @@ func formatAgentExitError(ws *workspace.Resolved, code int, diagnose bool) error
 // when the guest reports a newly started session, and keeps it, or the
 // plugins the agent title installs, with a spinner and the time elapsed on
 // the alternate screen until the agent draws, so the screen is not blank
-// while the agent boots.
-func relaySession(fd int, interactive bool, detachKeys []byte, starting, title string, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int, diagnose bool) {
+// while the agent boots. notify selects the notifications sent while the
+// terminal is unfocused.
+func relaySession(fd int, interactive bool, detachKeys []byte, starting, title string, notify sessionNotify, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int, diagnose bool) {
 	var writeMu sync.Mutex
 	send := func(f session.Frame) error {
 		writeMu.Lock()
@@ -350,14 +352,19 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 	})
 	defer status.stop()
 
+	raw := false
 	if interactive {
 		old, err := term.MakeRaw(fd)
 		if err == nil {
+			raw = true
 			defer func() {
 				// Stop the startup animator before resetting terminal modes so
 				// a ticker cannot draw on the main screen after leaving the
 				// alternate screen.
 				status.stop()
+				// End a notification the terminal took only part of, so the
+				// resets below are not swallowed by it.
+				status.settle()
 				// The agent cannot turn its terminal features off when the
 				// session detaches or the VM dies, so reset them here.
 				if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
@@ -378,6 +385,39 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 		}()
 	}
 
+	var clipboard *osc52Bridge
+	if interactive {
+		clipQueue := newHostClipboardQueue(copyToHostClipboard)
+		defer clipQueue.close()
+		clipboard = newOSC52Bridge(clipQueue.enqueue, os.Getenv("TMUX") != "")
+	}
+
+	osc := &notifyOSCFilter{}
+	var notes *notifier
+	post := func(k notifyKind) {
+		if notes != nil {
+			notes.post(k)
+		}
+	}
+	var focusIn *focusInput
+	var focusOut *focusOutput
+	if raw && term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
+		notes, focusIn, focusOut = notify.start(status)
+	}
+	if notes != nil {
+		// Registered after the clipboard queue, so it runs before its close
+		// and before the terminal modes are reset. Notifications of an agent
+		// that exited are still sent, briefly; a detached, taken over or lost
+		// session sends none.
+		defer func() {
+			if outcome == outcomeExited {
+				notes.drain(notifyDrain)
+			} else {
+				notes.stop()
+			}
+		}()
+	}
+
 	detached := make(chan struct{})
 	matcher := newDetachMatcher(detachKeys)
 	go func() {
@@ -386,6 +426,9 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
 				chunk, detach := append([]byte(nil), buf[:n]...), false
+				if focusIn != nil {
+					chunk = focusIn.feed(chunk)
+				}
 				if interactive && len(detachKeys) > 0 {
 					chunk, detach = matcher.feed(chunk)
 				}
@@ -405,12 +448,6 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 		}
 	}()
 
-	var clipboard *osc52Bridge
-	if interactive {
-		clipQueue := newHostClipboardQueue(copyToHostClipboard)
-		defer clipQueue.close()
-		clipboard = newOSC52Bridge(clipQueue.enqueue, os.Getenv("TMUX") != "")
-	}
 	var created bool
 	var tail []byte
 	const maxTail = 512
@@ -440,6 +477,12 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 			}
 		case session.FrameData:
 			payload := f.Payload
+			if notify.plugin {
+				payload = osc.feed(payload, post)
+			}
+			if focusOut != nil {
+				payload = focusOut.feed(payload)
+			}
 			if clipboard != nil {
 				payload = clipboard.feed(payload)
 			}
