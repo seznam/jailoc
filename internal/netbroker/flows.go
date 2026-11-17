@@ -134,6 +134,7 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	r.Complete(false)
 	guest := &sniffConn{Conn: gonet.NewTCPConn(&wq, ep), report: func(info map[string]any) {
 		info["event"], info["conn"], info["dst"] = "l7", conn, dst.String()
+		markQuiet(info, d.Quiet)
 		b.record(info)
 	}}
 	go func() {
@@ -240,6 +241,7 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	b.recordFlow(conn, ProtoTCP, src, dst, d)
 	if info != nil {
 		info["event"], info["conn"], info["dst"] = "l7", conn, dst.String()
+		markQuiet(info, d.Quiet)
 		b.record(info)
 	}
 	if !d.Allow {

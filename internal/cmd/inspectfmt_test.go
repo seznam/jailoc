@@ -456,3 +456,62 @@ func TestEscapeLines(t *testing.T) {
 		t.Fatalf("escapeLines = %q, want %q", got, want)
 	}
 }
+
+func TestTrafficFormatterQuiet(t *testing.T) {
+	t.Parallel()
+	const ts = `,"time":"2026-10-27T10:00:00Z"}`
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"allowed flow", `{"event":"flow","conn":1,"proto":"tcp","src":"192.168.127.2:4000","dst":"104.20.23.154:443","allow":true,"reason":"rule npm","rule":"npm","quiet":true` + ts},
+		{"denied flow", `{"event":"flow","conn":2,"proto":"tcp","src":"192.168.127.2:4001","dst":"104.20.23.154:443","allow":false,"reason":"rule telemetry","rule":"telemetry","quiet":true` + ts},
+		{"tls sniff", `{"event":"l7","conn":1,"proto":"tls","dst":"104.20.23.154:443","sni":"example.com","alpn":["h2"],"quiet":true` + ts},
+		{"inspected request", `{"event":"l7","conn":1,"proto":"https","dst":"104.20.23.154:443","method":"GET","host":"example.com","path":"/","status":200,"rule":"npm","quiet":true` + ts},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := newTrafficFormatter(false).line([]byte(tt.line)); got != "" {
+				t.Fatalf("quiet event shown without --all: %q", got)
+			}
+			if got := newTrafficFormatter(true).line([]byte(tt.line)); got == "" {
+				t.Fatal("quiet event hidden with --all")
+			}
+			loud := strings.Replace(tt.line, `"quiet":true,`, "", 1)
+			if got := newTrafficFormatter(false).line([]byte(loud)); got == "" {
+				t.Fatalf("event without quiet hidden: %s", loud)
+			}
+		})
+	}
+}
+
+func TestTrafficFormatterQuietJSON(t *testing.T) {
+	t.Parallel()
+	log := filepath.Join(t.TempDir(), "log")
+	quiet := `{"event":"flow","conn":1,"proto":"tcp","src":"192.168.127.2:4000","dst":"104.20.23.154:443","allow":true,"reason":"rule npm","rule":"npm","quiet":true,"time":"2026-10-27T10:00:00Z"}`
+	loud := `{"event":"flow","conn":2,"proto":"tcp","src":"192.168.127.2:4001","dst":"104.20.23.155:443","allow":true,"reason":"public","time":"2026-10-27T10:00:01Z"}`
+	if err := os.WriteFile(log, []byte(quiet+"\n"+loud+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		all  bool
+		want string
+	}{
+		{"default hides quiet", false, loud + "\n"},
+		{"all keeps quiet", true, quiet + "\n" + loud + "\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			f := newTrafficFormatter(tt.all)
+			if err := tailLog(context.Background(), &out, []logFile{{path: log}}, logView{lines: -1, json: true}, f.line); err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != tt.want {
+				t.Fatalf("json output = %q, want %q", out.String(), tt.want)
+			}
+		})
+	}
+}

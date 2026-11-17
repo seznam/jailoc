@@ -221,7 +221,16 @@ func (b *Broker) recordFlow(conn uint64, proto string, src, dst netip.AddrPort, 
 	if d.Rule != "" {
 		ev["rule"] = d.Rule
 	}
+	markQuiet(ev, d.Quiet)
 	b.record(ev)
+}
+
+// markQuiet flags an event decided by a rule with quiet set. The event is
+// still recorded; readers such as `jailoc traffic` decide whether to show it.
+func markQuiet(ev map[string]any, quiet bool) {
+	if quiet {
+		ev["quiet"] = true
+	}
 }
 
 func (b *Broker) record(v map[string]any) {

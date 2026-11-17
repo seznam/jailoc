@@ -312,6 +312,10 @@ func cloneNetworkRules(rules []config.NetworkRule) []config.NetworkRule {
 		if h := out[i].HTTP; h != nil {
 			out[i].HTTP = &config.HTTPMatch{Methods: slices.Clone(h.Methods), Paths: slices.Clone(h.Paths)}
 		}
+		if l := out[i].Log; l != nil {
+			out[i].Log = new(bool)
+			*out[i].Log = *l
+		}
 	}
 	return out
 }
@@ -321,6 +325,12 @@ func cloneNetworkRules(rules []config.NetworkRule) []config.NetworkRule {
 // CA.
 func (r *Resolved) InspectsHTTP() bool {
 	return slices.ContainsFunc(r.NetworkRules, func(rule config.NetworkRule) bool { return rule.HTTP != nil })
+}
+
+// HasQuietRules reports whether any network rule sets log = false, which
+// makes the broker mark the events the rule decides.
+func (r *Resolved) HasQuietRules() bool {
+	return slices.ContainsFunc(r.NetworkRules, func(rule config.NetworkRule) bool { return rule.Quiet() })
 }
 
 // resolveInternalZones merges the [defaults.network] and workspace
