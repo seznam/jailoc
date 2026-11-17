@@ -1904,3 +1904,34 @@ func TestResolveInternalZones(t *testing.T) {
 		t.Fatalf("InternalZones = %v, want %v", r.InternalZones, want)
 	}
 }
+
+func TestResolveNotifications(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		defaults  string
+		workspace string
+		want      string
+	}{
+		{name: "built-in default", want: config.NotificationsAuto},
+		{name: "inherits defaults", defaults: config.NotificationsOSC, want: config.NotificationsOSC},
+		{name: "workspace wins", defaults: config.NotificationsOff, workspace: config.NotificationsNative, want: config.NotificationsNative},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{
+				Defaults:   config.Defaults{Notifications: tt.defaults},
+				Workspaces: map[string]config.Workspace{"default": {Notifications: tt.workspace}},
+			}
+			resolved, err := workspace.Resolve(cfg, "default")
+			if err != nil {
+				t.Fatalf("Resolve() error: %v", err)
+			}
+			if resolved.Notifications != tt.want {
+				t.Fatalf("Notifications = %q, want %q", resolved.Notifications, tt.want)
+			}
+		})
+	}
+}
