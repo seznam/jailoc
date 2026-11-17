@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -456,13 +457,30 @@ func (f *inspectFlow) bufferBody(r *http.Request) (release func(), err error) {
 	}
 	n := r.ContentLength
 	buf := make([]byte, n)
-	if _, err := io.ReadFull(r.Body, buf); err != nil {
+	if err := readExactBody(r.Body, buf); err != nil {
 		f.b.replay.release(n)
-		return nil, fmt.Errorf("read request body: %w", err)
+		return nil, err
 	}
 	r.Body = io.NopCloser(bytes.NewReader(buf))
 	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(buf)), nil }
 	return func() { f.b.replay.release(n) }, nil
+}
+
+// readExactBody fills buf from body and checks the body ends there: a body that
+// sends more than its Content-Length, or fails at its end, is an error rather
+// than a request cut to the declared length.
+func readExactBody(body io.Reader, buf []byte) error {
+	if _, err := io.ReadFull(body, buf); err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+	var extra [1]byte
+	switch _, err := io.ReadFull(body, extra[:]); {
+	case err == nil:
+		return fmt.Errorf("read request body: longer than its Content-Length of %d bytes", len(buf))
+	case !errors.Is(err, io.EOF):
+		return fmt.Errorf("read request body end: %w", err)
+	}
+	return nil
 }
 
 // headerTokens returns the comma-separated tokens of all the values of a

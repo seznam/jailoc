@@ -40,6 +40,10 @@ func (e *l7Env) goawayUpstream(h http.Handler) *goawayUpstream {
 		e.t.Fatal(err)
 	}
 	ts := httptest.NewUnstartedServer(h)
+	// Swap in l; the server's own listener would stay open otherwise.
+	if err := ts.Listener.Close(); err != nil {
+		e.t.Fatal(err)
+	}
 	// The first connection is taken here, below the server's own TLS; the
 	// server gets the others.
 	ts.Listener = listenerFunc{Listener: l, accept: func() (net.Conn, error) {
@@ -294,6 +298,7 @@ func TestBufferBody(t *testing.T) {
 	}
 }
 
+// failingReader yields n bytes of 'a' and then fails.
 type failingReader struct{ n int }
 
 func (r *failingReader) Read(p []byte) (int, error) {
@@ -310,24 +315,38 @@ func (r *failingReader) Read(p []byte) (int, error) {
 
 func TestBufferBodyReadFailure(t *testing.T) {
 	t.Parallel()
-	f := &inspectFlow{b: &Broker{}}
-	r, err := http.NewRequest(http.MethodPost, "https://example.com/", strings.NewReader(""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Body, r.GetBody, r.ContentLength = io.NopCloser(&failingReader{n: 3}), nil, 10
-	release, err := f.bufferBody(r)
-	if err == nil || release != nil {
-		t.Fatalf("bufferBody = (%v, %v), want an error and no release", release != nil, err)
-	}
-	if !strings.Contains(err.Error(), "read request body") {
-		t.Errorf("error = %v, want read request body context", err)
-	}
-	if r.GetBody != nil {
-		t.Error("GetBody set after a failed read")
-	}
-	if used := f.b.replay.used.Load(); used != 0 {
-		t.Errorf("budget in use after a failed read = %d, want 0", used)
+	for _, tc := range []struct {
+		name    string
+		body    io.Reader
+		length  int64
+		wantErr string
+	}{
+		{name: "short body", body: &failingReader{n: 3}, length: 10, wantErr: "read request body"},
+		{name: "more than content-length", body: strings.NewReader("abcd"), length: 3, wantErr: "longer than its Content-Length"},
+		{name: "error after content-length", body: &failingReader{n: 3}, length: 3, wantErr: "read request body end"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := &inspectFlow{b: &Broker{}}
+			r, err := http.NewRequest(http.MethodPost, "https://example.com/", strings.NewReader(""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Body, r.GetBody, r.ContentLength = io.NopCloser(tc.body), nil, tc.length
+			release, err := f.bufferBody(r)
+			if err == nil || release != nil {
+				t.Fatalf("bufferBody = (%v, %v), want an error and no release", release != nil, err)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want %q", err, tc.wantErr)
+			}
+			if r.GetBody != nil {
+				t.Error("GetBody set after a failed read")
+			}
+			if used := f.b.replay.used.Load(); used != 0 {
+				t.Errorf("budget in use after a failed read = %d, want 0", used)
+			}
+		})
 	}
 }
 
