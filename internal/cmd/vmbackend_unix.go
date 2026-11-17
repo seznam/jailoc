@@ -434,14 +434,22 @@ func checkNestedShares(shares []vm.Share) error {
 }
 
 // warnDanglingShareLinks warns about the symbolic links danglingShareLinks
-// finds in the top level of the workspace shares.
-func warnDanglingShareLinks(ws *workspace.Resolved, shares []vm.Share) {
+// finds in the top level of the workspace shares, counting the snapshot
+// destinations as available in the VM.
+func warnDanglingShareLinks(ws *workspace.Resolved, shares []vm.Share, snapshots []snapshot) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
 	}
-	for _, l := range danglingShareLinks(shares, home) {
-		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s links to %s, which no share or mount covers, so the link is dangling in the VM; mount its target at %s too\n", ws.Name, l.link, l.target, l.guest)
+	covered := make([]string, 0, len(shares)+len(snapshots))
+	for _, s := range shares {
+		covered = append(covered, s.GuestPath)
+	}
+	for _, s := range snapshots {
+		covered = append(covered, filepath.Clean(s.Container))
+	}
+	for _, l := range danglingShareLinks(shares, covered, home) {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s links to %s, which no share, mount or snapshot covers, so the link is dangling in the VM; mount its target at %s too\n", ws.Name, l.link, l.target, l.guest)
 	}
 }
 
@@ -452,10 +460,11 @@ type shareLink struct {
 
 // danglingShareLinks returns the symbolic links directly inside a share
 // that resolve on the host to a path under home but point, as seen from the
-// guest, outside every share, such as a dotfiles link to an instructions
-// file. Links into the image, links that are dangling on the host too and
-// deeper directories are not checked, which keeps the scan cheap.
-func danglingShareLinks(shares []vm.Share, home string) []shareLink {
+// guest, outside every covered guest path, such as a dotfiles link to an
+// instructions file. Links into the image, links that are dangling on the
+// host too and deeper directories are not checked, which keeps the scan
+// cheap.
+func danglingShareLinks(shares []vm.Share, covered []string, home string) []shareLink {
 	home, err := filepath.EvalSymlinks(home)
 	if err != nil {
 		return nil
@@ -480,7 +489,7 @@ func danglingShareLinks(shares []vm.Share, home string) []shareLink {
 			if !filepath.IsAbs(guest) {
 				guest = filepath.Join(s.GuestPath, guest)
 			}
-			if guestShared(filepath.Clean(guest), shares) {
+			if guestCovered(filepath.Clean(guest), covered) {
 				continue
 			}
 			real, err := filepath.EvalSymlinks(link)
@@ -493,14 +502,9 @@ func danglingShareLinks(shares []vm.Share, home string) []shareLink {
 	return links
 }
 
-// guestShared reports whether the guest path p lies in one of shares.
-func guestShared(p string, shares []vm.Share) bool {
-	for _, s := range shares {
-		if pathWithin(p, s.GuestPath) {
-			return true
-		}
-	}
-	return false
+// guestCovered reports whether the guest path p lies in one of covered.
+func guestCovered(p string, covered []string) bool {
+	return slices.ContainsFunc(covered, func(dir string) bool { return pathWithin(p, dir) })
 }
 
 // pathWithin reports whether p is dir or lies under it.

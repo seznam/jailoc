@@ -87,7 +87,6 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if err != nil {
 		return err
 	}
-	warnDanglingShareLinks(ws, shares)
 	if err := claimProfile(ws); err != nil {
 		return fmt.Errorf("workspace %q: %w", ws.Name, err)
 	}
@@ -103,6 +102,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if err := checkSnapshots(ws, snapshots, shares); err != nil {
 		return err
 	}
+	warnDanglingShareLinks(ws, shares, snapshots)
 
 	start := time.Now()
 	rt, err := vmRuntime(cfg)

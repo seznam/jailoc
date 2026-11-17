@@ -479,8 +479,12 @@ func readConfigFile(hostPath string) ([]byte, error) {
 
 // ensureConfigGitignore creates hostDir/.gitignore with content unless it
 // exists: some agents write it into their config directory on startup and
-// fail when the directory is mounted read-only.
+// fail when the directory is mounted read-only. A missing hostDir is left
+// alone, so vmShares reports the missing source of the read-only mount.
 func ensureConfigGitignore(hostDir, content string) error {
+	if _, err := os.Stat(hostDir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	gitignorePath := filepath.Join(hostDir, ".gitignore")
 	_, err := os.Stat(gitignorePath)
 	if err == nil {
@@ -488,9 +492,6 @@ func ensureConfigGitignore(hostDir, content string) error {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat %q: %w", gitignorePath, err)
-	}
-	if err := os.MkdirAll(hostDir, 0o755); err != nil { //nolint:gosec // 0o755: directory must be readable when bind-mounted
-		return fmt.Errorf("create directory %q: %w", hostDir, err)
 	}
 	if err := os.WriteFile(gitignorePath, []byte(content), 0o644); err != nil { //nolint:gosec // 0o644: standard file perms
 		return fmt.Errorf("write %q: %w", gitignorePath, err)

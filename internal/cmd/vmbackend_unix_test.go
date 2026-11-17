@@ -732,19 +732,25 @@ func TestDanglingShareLinks(t *testing.T) {
 	dotfilesAtHostPath := vm.Share{HostPath: dotfiles, GuestPath: dotfiles, ReadOnly: true}
 	dotfilesRemapped := vm.Share{HostPath: dotfiles, GuestPath: "/home/agent/.dotfiles", ReadOnly: true}
 	tests := []struct {
-		name   string
-		shares []vm.Share
-		want   []string
+		name      string
+		shares    []vm.Share
+		snapshots []string
+		want      []string
 	}{
-		{"target not shared", []vm.Share{projectShare}, []string{filepath.Join(project, "AGENTS.md")}},
-		{"target shared at its host path", []vm.Share{projectShare, dotfilesAtHostPath}, nil},
-		{"absolute link in a remapped mount", []vm.Share{dotfilesRemapped}, []string{filepath.Join(dotfiles, "absolute")}},
+		{"target not shared", []vm.Share{projectShare}, nil, []string{filepath.Join(project, "AGENTS.md")}},
+		{"target shared at its host path", []vm.Share{projectShare, dotfilesAtHostPath}, nil, nil},
+		{"target snapshotted at its host path", []vm.Share{projectShare}, []string{instructions}, nil},
+		{"absolute link in a remapped mount", []vm.Share{dotfilesRemapped}, nil, []string{filepath.Join(dotfiles, "absolute")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			covered := slices.Clone(tt.snapshots)
+			for _, s := range tt.shares {
+				covered = append(covered, s.GuestPath)
+			}
 			var got []string
-			for _, l := range danglingShareLinks(tt.shares, home) {
+			for _, l := range danglingShareLinks(tt.shares, covered, home) {
 				got = append(got, l.link)
 			}
 			if !slices.Equal(got, tt.want) {

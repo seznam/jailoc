@@ -114,7 +114,6 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
-	warnDanglingShareLinks(ws, shares)
 	// Refreshes the configuration and cache copies the guest reads.
 	internal, err := vmGuestData(ws, cacheDir, shares, false)
 	if err != nil {
@@ -128,6 +127,8 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err := checkSnapshots(ws, snapshots, allShares); err != nil {
 		return vm.Spec{}, nil, err
 	}
+	// Paths and mounts change only on restart, so check the running shares.
+	warnDanglingShareLinks(ws, running.Shares, snapshots)
 	rt := vmRuntimeFiles{runner: running.RunnerPath, libDir: running.LibDir, guest: running.GuestBinary}
 	spec, err := workspaceSpec(ctx, ws, rt, running.Image, shares, nil)
 	if err != nil {

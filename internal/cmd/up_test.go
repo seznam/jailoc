@@ -194,9 +194,9 @@ func TestWriteTUIConfig(t *testing.T) {
 func TestEnsureConfigGitignore(t *testing.T) {
 	t.Parallel()
 
-	t.Run("creates directory and file when missing", func(t *testing.T) {
+	t.Run("creates file when missing", func(t *testing.T) {
 		t.Parallel()
-		dir := filepath.Join(t.TempDir(), "opencode")
+		dir := t.TempDir()
 		if err := ensureConfigGitignore(dir, "node_modules\n"); err != nil {
 			t.Fatalf("ensureConfigGitignore() = %v", err)
 		}
@@ -206,6 +206,17 @@ func TestEnsureConfigGitignore(t *testing.T) {
 		}
 		if string(data) != "node_modules\n" {
 			t.Fatalf("content = %q, want %q", data, "node_modules\n")
+		}
+	})
+
+	t.Run("leaves a missing directory alone", func(t *testing.T) {
+		t.Parallel()
+		dir := filepath.Join(t.TempDir(), "opencode")
+		if err := ensureConfigGitignore(dir, "node_modules\n"); err != nil {
+			t.Fatalf("ensureConfigGitignore() = %v", err)
+		}
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Stat(%s) = %v, want not exist", dir, err)
 		}
 	})
 

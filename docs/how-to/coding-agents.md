@@ -136,7 +136,7 @@ args = [
 ]
 ```
 
-The mount is live: edits on the host apply to the next session without `jailoc reload`. A missing host directory of a read-only mount fails `jailoc up`, so a wrong path is reported instead of sharing an empty directory. A symlink inside the directory that points outside every share is dangling in the VM; `jailoc up` warns about it. Mount its target too, at the path the link names.
+The mount is live: edits on the host apply to the next session without `jailoc reload`. A missing host directory of a read-only mount fails `jailoc up`, so a wrong path is reported instead of sharing an empty directory. A symlink inside the directory that points outside every share or snapshot is dangling in the VM; `jailoc up` warns about it. Mount its target too, at the path the link names.
 
 ## Pass extra arguments
 
