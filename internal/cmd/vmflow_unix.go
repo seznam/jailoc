@@ -102,6 +102,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if err := checkSnapshots(ws, snapshots, shares); err != nil {
 		return err
 	}
+	warnDanglingShareLinks(ws, shares, snapshots)
 
 	start := time.Now()
 	rt, err := vmRuntime(cfg)
@@ -205,7 +206,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	policy := []byte(`{}`)
 	label := "shared image builder VM"
 	if ws.IsolatedBuild {
-		if policy, err = vmPolicy(ctx, ws); err != nil {
+		if policy, err = vmBuilderPolicy(ctx, ws); err != nil {
 			return "", err
 		}
 		label = "image builder VM for workspace " + ws.Name

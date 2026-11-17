@@ -50,11 +50,7 @@ func denyReply(head []byte, info map[string]any, d Decision) []byte {
 // http403 builds a 403 response whose body names the rule or reason that
 // denied the request. It never reflects guest input such as the Host header.
 func http403(info map[string]any, d Decision) []byte {
-	label := "reason=" + replyText(d.Reason)
-	if d.Rule != "" {
-		label = "rule=" + replyText(d.Rule)
-	}
-	body := "blocked by network policy (" + label + ")\n"
+	body := denyBody(d)
 	var b strings.Builder
 	b.WriteString("HTTP/1.1 403 Forbidden\r\n")
 	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
@@ -64,6 +60,16 @@ func http403(info map[string]any, d Decision) []byte {
 		b.WriteString(body)
 	}
 	return []byte(b.String())
+}
+
+// denyBody is the text of a denial: it names the rule, or the reason when no
+// rule denied. The inspected-request denials use it too.
+func denyBody(d Decision) string {
+	label := "reason=" + replyText(d.Reason)
+	if d.Rule != "" {
+		label = "rule=" + replyText(d.Rule)
+	}
+	return "blocked by network policy (" + label + ")\n"
 }
 
 // replyText keeps printable ASCII and caps the length, so a rule name cannot

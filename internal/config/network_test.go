@@ -25,7 +25,100 @@ func TestNetworkRulesValidation(t *testing.T) {
 				{Name: "internal-dev", Allow: []string{"10.20.0.0/16", "fd42::/48"}, Ports: []RulePort{"9090", "8000-8100"}},
 				{Name: "ntp", Allow: []string{"time.example.com"}, Proto: "udp", Ports: []RulePort{"123"}},
 				{Name: "internet", Allow: []string{"*"}, Proto: "any"},
+				{Name: "gh-ro", Allow: []string{"api.github.com"}, HTTP: &HTTPMatch{Methods: []string{"GET", "head", "*", "M-SEARCH"}, Paths: []string{"/", "/repos/seznam/*", "/repos/**", "/a/*/b", "/dir/", "/**"}}},
+				{Name: "gh-deny", Deny: []string{"*"}, Proto: "tcp", HTTP: &HTTPMatch{Methods: []string{"DELETE"}}},
+				{Name: "any-http", Allow: []string{"10.0.0.0/8"}, HTTP: &HTTPMatch{}},
 			},
+		},
+		{
+			name:      "http with udp",
+			rules:     []NetworkRule{{Name: "u", Allow: []string{"example.com"}, Proto: "udp", HTTP: &HTTPMatch{}}},
+			wantError: `network rule "u": "http" requires proto "tcp"`,
+		},
+		{
+			name:      "http with any proto",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, Proto: "any", HTTP: &HTTPMatch{}}},
+			wantError: `"http" requires proto "tcp"`,
+		},
+		{
+			name:      "http empty method",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Methods: []string{""}}}},
+			wantError: "empty HTTP method",
+		},
+		{
+			name:      "http bad method token",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Methods: []string{"GET POST"}}}},
+			wantError: `invalid HTTP method "GET POST"`,
+		},
+		{
+			name:      "http bad method comma",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Methods: []string{"GET,POST"}}}},
+			wantError: `invalid HTTP method "GET,POST"`,
+		},
+		{
+			name:      "http path without slash",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"repos"}}}},
+			wantError: `must start with "/"`,
+		},
+		{
+			name:      "http path empty",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{""}}}},
+			wantError: `must start with "/"`,
+		},
+		{
+			name:      "http path partial wildcard",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/foo*"}}}},
+			wantError: "wildcards must be a whole segment",
+		},
+		{
+			name:      "http path double star in middle",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a/**/b"}}}},
+			wantError: `"**" is only allowed as the last segment`,
+		},
+		{
+			name:      "http path triple star",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a/***"}}}},
+			wantError: "wildcards must be a whole segment",
+		},
+		{
+			name:      "http path empty middle segment",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a//b"}}}},
+			wantError: "empty segment",
+		},
+		{
+			name:      "http path dot segment",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a/./b"}}}},
+			wantError: "segments are not allowed",
+		},
+		{
+			name:      "http path dotdot segment",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a/.."}}}},
+			wantError: "segments are not allowed",
+		},
+		{
+			name:      "http path query",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a?x=1"}}}},
+			wantError: "is not allowed",
+		},
+		{
+			name:      "http path fragment",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a#b"}}}},
+			wantError: "is not allowed",
+		},
+		{
+			name:      "http path percent",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a%2fb"}}}},
+			wantError: "is not allowed",
+		},
+		{
+			name:      "http path backslash",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{`/a\b`}}}},
+			wantError: "is not allowed",
+		},
+		{
+			name:      "http path control char",
+			rules:     []NetworkRule{{Allow: []string{"example.com"}, HTTP: &HTTPMatch{Paths: []string{"/a\x01"}}}},
+			wantError: "is not allowed",
 		},
 		{
 			name:      "neither allow nor deny",
@@ -187,6 +280,102 @@ ports = [9090, "8000-8100"]
 	}
 }
 
+func TestLoadNetworkRulesHTTPTOML(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `[workspaces.api]
+paths = ["/data/api"]
+
+[[workspaces.api.network.rules]]
+name = "github-readonly"
+allow = ["api.github.com"]
+http.methods = ["GET", "HEAD"]
+http.paths = ["/repos/seznam/*"]
+
+[[workspaces.api.network.rules]]
+name = "any-request"
+allow = ["example.com"]
+http = {}
+
+[[workspaces.api.network.rules]]
+name = "plain"
+allow = ["plain.example.com"]
+`)
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if u := cfg.UnknownKeys(); len(u) != 0 {
+		t.Fatalf("unknown keys = %v", u)
+	}
+	r := cfg.Workspaces["api"].Network.Rules
+	if len(r) != 3 {
+		t.Fatalf("rules = %+v", r)
+	}
+	if r[0].HTTP == nil || !slices.Equal(r[0].HTTP.Methods, []string{"GET", "HEAD"}) || !slices.Equal(r[0].HTTP.Paths, []string{"/repos/seznam/*"}) {
+		t.Fatalf("rule 0 http = %+v", r[0].HTTP)
+	}
+	if r[1].HTTP == nil || len(r[1].HTTP.Methods) != 0 || len(r[1].HTTP.Paths) != 0 {
+		t.Fatalf("rule 1 http = %+v, want empty non-nil table", r[1].HTTP)
+	}
+	if r[2].HTTP != nil {
+		t.Fatalf("rule 2 http = %+v, want nil", r[2].HTTP)
+	}
+}
+
+func TestDefaultConfigDocumentsHTTPRule(t *testing.T) {
+	t.Parallel()
+	_, after, ok := strings.Cut(defaultConfigContent, "# name = \"github-readonly\"\n")
+	if !ok {
+		t.Fatal("defaultConfigContent does not document an http rule")
+	}
+	// Uncommenting the example must give a valid rule.
+	body := "[[defaults.network.rules]]\nname = \"github-readonly\"\n"
+	for _, line := range strings.Split(after, "\n") {
+		rest, ok := strings.CutPrefix(line, "# ")
+		if !ok {
+			break
+		}
+		body += rest + "\n"
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, body)
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v\n%s", err, body)
+	}
+	r := cfg.Defaults.Network.Rules
+	if len(r) != 1 || r[0].HTTP == nil || len(r[0].HTTP.Methods) == 0 || len(r[0].HTTP.Paths) == 0 {
+		t.Fatalf("rules = %+v", r)
+	}
+}
+
+func TestNormalizeHTTPMethod(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		in, want string
+		wantErr  bool
+	}{
+		{in: "get", want: "GET"},
+		{in: "GET", want: "GET"},
+		{in: "*", want: "*"},
+		{in: "m-search", want: "M-SEARCH"},
+		{in: "", wantErr: true},
+		{in: "GET ", wantErr: true},
+		{in: "a/b", wantErr: true},
+		{in: "é", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			got, err := NormalizeHTTPMethod(tc.in)
+			if (err != nil) != tc.wantErr || got != tc.want {
+				t.Fatalf("NormalizeHTTPMethod(%q) = %q, %v; want %q, err=%v", tc.in, got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestDeprecationWarnings(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
@@ -211,5 +400,75 @@ func TestParseRuleTargetMappedIPv4(t *testing.T) {
 	kind, norm, err := ParseRuleTarget("::ffff:10.20.5.10")
 	if err != nil || kind != "cidr" || norm != "10.20.5.10/32" {
 		t.Fatalf("ParseRuleTarget(::ffff:10.20.5.10) = %q, %q, %v; want cidr, 10.20.5.10/32, nil", kind, norm, err)
+	}
+}
+
+func TestLoadNetworkRuleLogTOML(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `[workspaces.api]
+paths = ["/data/api"]
+
+[[workspaces.api.network.rules]]
+name = "quiet-allow"
+allow = ["registry.example.com"]
+log = false
+
+[[workspaces.api.network.rules]]
+name = "quiet-deny-http"
+deny = ["telemetry.example.com"]
+http.methods = ["POST"]
+log = false
+
+[[workspaces.api.network.rules]]
+name = "explicit-log"
+allow = ["a.example.com"]
+log = true
+
+[[workspaces.api.network.rules]]
+name = "default-log"
+allow = ["b.example.com"]
+`)
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if u := cfg.UnknownKeys(); len(u) != 0 {
+		t.Fatalf("unknown keys = %v", u)
+	}
+	want := []struct {
+		name  string
+		set   bool
+		quiet bool
+	}{
+		{"quiet-allow", true, true},
+		{"quiet-deny-http", true, true},
+		{"explicit-log", true, false},
+		{"default-log", false, false},
+	}
+	rules := cfg.Workspaces["api"].Network.Rules
+	if len(rules) != len(want) {
+		t.Fatalf("rules = %+v", rules)
+	}
+	for i, w := range want {
+		r := rules[i]
+		if r.Name != w.name || (r.Log != nil) != w.set || r.Quiet() != w.quiet {
+			t.Errorf("rule %d = %+v (quiet %v), want %+v", i, r, r.Quiet(), w)
+		}
+	}
+}
+
+func TestLoadNetworkRuleLogInvalidType(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, path, `[workspaces.api]
+paths = ["/data/api"]
+
+[[workspaces.api.network.rules]]
+allow = ["example.com"]
+log = "no"
+`)
+	if _, err := LoadFrom(path); err == nil {
+		t.Fatal("LoadFrom accepted a string log value")
 	}
 }

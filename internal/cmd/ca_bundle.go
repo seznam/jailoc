@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/seznam/jailoc/internal/config"
@@ -23,35 +24,69 @@ type caBundleSource struct {
 
 func materializeCABundle(ws *workspace.Resolved) error {
 	destination := filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)
-	if !ws.CABundle.Enabled() {
-		return removeCABundle(destination)
-	}
-
-	source, selected, err := selectCABundleSource(ws.CABundle)
+	content, selected, err := sourceCABundle(ws)
 	if err != nil {
 		return err
+	}
+	if ws.InspectsHTTP() {
+		// The broker signs inspected connections with the workspace CA, so
+		// the guest must trust it, also when no other bundle is forwarded.
+		_, _, caPEM, err := ensureInspectCA(ws.Name)
+		if err != nil {
+			return fmt.Errorf("prepare inspection CA: %w", err)
+		}
+		content = appendCABundle(content, caPEM)
+		selected = true
 	}
 	if !selected {
 		return removeCABundle(destination)
-	}
-
-	content, err := readCABundle(source)
-	if err != nil {
-		if ws.CABundle.Automatic() {
-			return fmt.Errorf("%w; set ca_bundle = false to disable automatic forwarding, or set ca_bundle to a valid bundle path", err)
-		}
-		return err
-	}
-	if err := validateCABundlePEM(content); err != nil {
-		if ws.CABundle.Automatic() {
-			return fmt.Errorf("validate CA bundle from %s %q: %w; set ca_bundle = false to disable automatic forwarding, or set ca_bundle to a valid bundle path", source.origin, source.path, err)
-		}
-		return fmt.Errorf("validate CA bundle from %s %q: %w", source.origin, source.path, err)
 	}
 	if err := writeCABundleAtomically(destination, content); err != nil {
 		return fmt.Errorf("materialize CA bundle: %w", err)
 	}
 	return nil
+}
+
+// sourceCABundle reads and validates the host CA bundle the workspace forwards
+// to the guest. It reports false when no bundle is forwarded.
+func sourceCABundle(ws *workspace.Resolved) ([]byte, bool, error) {
+	if !ws.CABundle.Enabled() {
+		return nil, false, nil
+	}
+	source, selected, err := selectCABundleSource(ws.CABundle)
+	if err != nil {
+		return nil, false, err
+	}
+	if !selected {
+		return nil, false, nil
+	}
+	content, err := readCABundle(source)
+	if err != nil {
+		if ws.CABundle.Automatic() {
+			return nil, false, fmt.Errorf("%w; set ca_bundle = false to disable automatic forwarding, or set ca_bundle to a valid bundle path", err)
+		}
+		return nil, false, err
+	}
+	if err := validateCABundlePEM(content); err != nil {
+		if ws.CABundle.Automatic() {
+			return nil, false, fmt.Errorf("validate CA bundle from %s %q: %w; set ca_bundle = false to disable automatic forwarding, or set ca_bundle to a valid bundle path", source.origin, source.path, err)
+		}
+		return nil, false, fmt.Errorf("validate CA bundle from %s %q: %w", source.origin, source.path, err)
+	}
+	return content, true, nil
+}
+
+// appendCABundle appends extra PEM certificates to bundle, separated by a
+// newline when bundle does not end in one.
+func appendCABundle(bundle, extra []byte) []byte {
+	if len(bundle) == 0 {
+		return slices.Clone(extra)
+	}
+	out := slices.Clone(bundle)
+	if out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	return append(out, extra...)
 }
 
 func selectCABundleSource(policy config.CABundle) (caBundleSource, bool, error) {

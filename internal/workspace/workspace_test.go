@@ -1881,6 +1881,57 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 	}
 }
 
+func TestResolveNetworkRulesHTTP(t *testing.T) {
+	t.Parallel()
+	plain := &config.Config{Workspaces: map[string]config.Workspace{"api": {Paths: []string{"/data/api"}}}}
+	r, err := workspace.Resolve(plain, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.InspectsHTTP() {
+		t.Fatalf("InspectsHTTP() = true without http rules: %+v", r.NetworkRules)
+	}
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{Network: &config.Network{Rules: []config.NetworkRule{
+			{Name: "default-http", Deny: []string{"example.com"}, HTTP: &config.HTTPMatch{Methods: []string{"DELETE"}}},
+		}}},
+		Workspaces: map[string]config.Workspace{"api": {
+			Paths: []string{"/data/api"},
+			Network: &config.Network{Rules: []config.NetworkRule{
+				{Name: "gh", Allow: []string{"api.github.com"}, HTTP: &config.HTTPMatch{Methods: []string{"GET"}, Paths: []string{"/repos/**"}}},
+				{Name: "empty", Allow: []string{"example.org"}, HTTP: &config.HTTPMatch{}},
+			}},
+		}},
+	}
+	r, err = workspace.Resolve(cfg, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !r.InspectsHTTP() {
+		t.Fatal("InspectsHTTP() = false with http rules")
+	}
+	byName := map[string]config.NetworkRule{}
+	for _, rule := range r.NetworkRules {
+		byName[rule.Name] = rule
+	}
+	gh := byName["gh"]
+	if gh.HTTP == nil || !slices.Equal(gh.HTTP.Methods, []string{"GET"}) || !slices.Equal(gh.HTTP.Paths, []string{"/repos/**"}) {
+		t.Fatalf("gh rule http = %+v", gh.HTTP)
+	}
+	if byName["default-http"].HTTP == nil || byName["empty"].HTTP == nil {
+		t.Fatalf("http tables lost: %+v", r.NetworkRules)
+	}
+	if byName["agent"].HTTP != nil {
+		t.Fatalf("implicit agent rule has http: %+v", byName["agent"])
+	}
+	// The resolved rule must not alias the loaded config.
+	gh.HTTP.Methods[0] = "POST"
+	if got := cfg.Workspaces["api"].Network.Rules[0].HTTP.Methods[0]; got != "GET" {
+		t.Fatalf("config mutated through resolved rule: %q", got)
+	}
+}
+
 func TestResolveInternalZones(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
@@ -1933,5 +1984,57 @@ func TestResolveNotifications(t *testing.T) {
 				t.Fatalf("Notifications = %q, want %q", resolved.Notifications, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveNetworkRulesLog(t *testing.T) {
+	t.Parallel()
+	off, on := false, true
+	plain := &config.Config{Workspaces: map[string]config.Workspace{"api": {Paths: []string{"/data/api"}}}}
+	r, err := workspace.Resolve(plain, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.HasQuietRules() {
+		t.Fatalf("HasQuietRules() = true without log = false: %+v", r.NetworkRules)
+	}
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{Network: &config.Network{Rules: []config.NetworkRule{
+			{Name: "default-quiet", Allow: []string{"registry.example.com"}, Log: &off},
+		}}},
+		Workspaces: map[string]config.Workspace{"api": {
+			Paths: []string{"/data/api"},
+			Network: &config.Network{Rules: []config.NetworkRule{
+				{Name: "ws-loud", Allow: []string{"a.example.com"}, Log: &on},
+				{Name: "ws-quiet-deny", Deny: []string{"telemetry.example.com"}, HTTP: &config.HTTPMatch{}, Log: &off},
+				{Name: "ws-default", Allow: []string{"b.example.com"}},
+			}},
+		}},
+	}
+	r, err = workspace.Resolve(cfg, "api")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !r.HasQuietRules() {
+		t.Fatal("HasQuietRules() = false with log = false rules")
+	}
+	quiet := map[string]bool{}
+	for _, rule := range r.NetworkRules {
+		quiet[rule.Name] = rule.Quiet()
+	}
+	for name, want := range map[string]bool{"default-quiet": true, "ws-loud": false, "ws-quiet-deny": true, "ws-default": false, "agent": false} {
+		if got, ok := quiet[name]; !ok || got != want {
+			t.Errorf("rule %q quiet = %v (present %v), want %v", name, got, ok, want)
+		}
+	}
+	// The resolved rules do not alias the loaded config.
+	for i := range r.NetworkRules {
+		if l := r.NetworkRules[i].Log; l != nil {
+			*l = !*l
+		}
+	}
+	if off || !on {
+		t.Fatalf("resolved rules alias the loaded config: off=%v on=%v", off, on)
 	}
 }

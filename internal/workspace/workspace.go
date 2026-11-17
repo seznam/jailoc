@@ -277,8 +277,8 @@ func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, confi
 func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, allowedNetworks, blockedZones []string, h agent.Harness) []config.NetworkRule {
 	dn, wn := cfg.Defaults.Network.Get(), ws.Network.Get()
 	var rules []config.NetworkRule
-	rules = append(rules, dn.Rules...)
-	rules = append(rules, wn.Rules...)
+	rules = append(rules, cloneNetworkRules(dn.Rules)...)
+	rules = append(rules, cloneNetworkRules(wn.Rules)...)
 	if len(allowedHosts) > 0 {
 		rules = append(rules, config.NetworkRule{Name: "legacy", Allow: slices.Clone(allowedHosts), Proto: config.RuleProtoAny})
 	}
@@ -306,6 +306,35 @@ func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, 
 		})
 	}
 	return rules
+}
+
+// cloneNetworkRules copies rules including their http tables, so a resolved
+// workspace never aliases the loaded config.
+func cloneNetworkRules(rules []config.NetworkRule) []config.NetworkRule {
+	out := slices.Clone(rules)
+	for i := range out {
+		if h := out[i].HTTP; h != nil {
+			out[i].HTTP = &config.HTTPMatch{Methods: slices.Clone(h.Methods), Paths: slices.Clone(h.Paths)}
+		}
+		if l := out[i].Log; l != nil {
+			out[i].Log = new(bool)
+			*out[i].Log = *l
+		}
+	}
+	return out
+}
+
+// InspectsHTTP reports whether any network rule has an http table, which
+// makes the broker decrypt matching TLS traffic with the workspace inspection
+// CA.
+func (r *Resolved) InspectsHTTP() bool {
+	return slices.ContainsFunc(r.NetworkRules, func(rule config.NetworkRule) bool { return rule.HTTP != nil })
+}
+
+// HasQuietRules reports whether any network rule sets log = false, which
+// makes the broker mark the events the rule decides.
+func (r *Resolved) HasQuietRules() bool {
+	return slices.ContainsFunc(r.NetworkRules, func(rule config.NetworkRule) bool { return rule.Quiet() })
 }
 
 // resolveInternalZones merges the [defaults.network] and workspace

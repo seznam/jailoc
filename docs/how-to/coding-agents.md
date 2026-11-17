@@ -122,6 +122,28 @@ mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 
 See [`import_agent_config`](../reference/configuration.md#import_agent_config).
 
+## Use agent configuration from a dotfiles repository
+
+To give the agent instructions, settings or plugins kept in a dotfiles checkout instead of its usual configuration directory, mount the directory read-only and point the agent at it with `args`. For Claude Code:
+
+```toml
+[defaults]
+snapshots = ["~/dotfiles/claude/settings.json:/home/agent/.claude/settings.json"]
+
+[defaults.agents.claude]
+mounts = ["~/dotfiles/claude:/home/agent/.claude-dotfiles:ro"]
+args = [
+  "--append-system-prompt-file", "/home/agent/.claude-dotfiles/system-prompt.md",
+  "--plugin-dir", "/home/agent/.claude-dotfiles/plugin",
+]
+```
+
+The mount is live: edits on the host apply to the next session without `jailoc reload`. A missing host directory of a read-only mount fails `jailoc up`, so a wrong path is reported instead of sharing an empty directory.
+
+Don't pass `--settings` in `args`: jailoc already passes `--settings` with its own file (the workspace indicator), and a second `--settings` replaces it instead of merging with it. Snapshot the settings file to `/home/agent/.claude/settings.json` instead, as above. The snapshot replaces the copy of your host `~/.claude/settings.json` that [`import_agent_config`](../reference/configuration.md#import_agent_config) makes, and a change to the file needs `jailoc reload`.
+
+A symlink inside a path or mount that points outside every share or snapshot is dangling in the VM; `jailoc up` warns about it. Snapshot its target at the path the link names, or mount the directory that contains the target at the matching directory in the VM; mounts share directories only.
+
 ## Pass extra arguments
 
 `args` is appended to every session command line:

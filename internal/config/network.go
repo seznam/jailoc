@@ -70,6 +70,103 @@ type NetworkRule struct {
 	Deny  []string   `toml:"deny,omitempty"`
 	Proto string     `toml:"proto,omitempty"`
 	Ports []RulePort `toml:"ports,omitempty"`
+	// HTTP, when set, narrows the rule to matching HTTP requests: the broker
+	// inspects TLS and plain HTTP traffic to the targets and applies the rule
+	// per request. An empty table matches every request.
+	HTTP *HTTPMatch `toml:"http"`
+	// Log, when false, makes `jailoc traffic` hide the events this rule
+	// decides unless --all is given. The broker still records them. Unset
+	// means true.
+	Log *bool `toml:"log"`
+}
+
+// Quiet reports whether the rule's events are hidden from `jailoc traffic`
+// by default: log = false.
+func (r NetworkRule) Quiet() bool { return r.Log != nil && !*r.Log }
+
+// HTTPMatch is the http sub-table of a network rule. Empty Methods or Paths
+// match any method or path.
+type HTTPMatch struct {
+	Methods []string `toml:"methods,omitempty"`
+	Paths   []string `toml:"paths,omitempty"`
+}
+
+// NormalizeHTTPMethod validates an HTTP method of an http rule and returns
+// it in upper case. "*" matches any method; anything else must be an RFC 9110
+// token.
+func NormalizeHTTPMethod(m string) (string, error) {
+	if m == "" {
+		return "", fmt.Errorf("empty HTTP method")
+	}
+	if m == "*" {
+		return m, nil
+	}
+	for i := 0; i < len(m); i++ {
+		if !isHTTPTokenChar(m[i]) {
+			return "", fmt.Errorf("invalid HTTP method %q: must be \"*\" or an RFC 9110 token", m)
+		}
+	}
+	return strings.ToUpper(m), nil
+}
+
+func isHTTPTokenChar(c byte) bool {
+	switch {
+	case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		return true
+	}
+	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
+}
+
+// ValidateHTTPPathPattern checks a path pattern of an http rule. It starts
+// with "/" and is split on "/" into segments; "*" matches exactly one
+// non-empty segment and "**" zero or more trailing segments (last segment
+// only). Partial wildcards, "?", "#", "%", "\\", control characters, "." and
+// ".." segments and empty middle segments are invalid; a trailing "/" is a
+// trailing empty segment matched literally.
+func ValidateHTTPPathPattern(p string) error {
+	if !strings.HasPrefix(p, "/") {
+		return fmt.Errorf("invalid HTTP path pattern %q: must start with \"/\"", p)
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c < 0x20 || c == 0x7f || strings.IndexByte("?#%\\", c) >= 0 {
+			return fmt.Errorf("invalid HTTP path pattern %q: character %q is not allowed", p, c)
+		}
+	}
+	segs := strings.Split(p[1:], "/")
+	for i, seg := range segs {
+		last := i == len(segs)-1
+		switch {
+		case seg == "**":
+			if !last {
+				return fmt.Errorf("invalid HTTP path pattern %q: \"**\" is only allowed as the last segment", p)
+			}
+		case seg == "." || seg == "..":
+			return fmt.Errorf("invalid HTTP path pattern %q: %q segments are not allowed", p, seg)
+		case strings.Contains(seg, "*") && seg != "*":
+			return fmt.Errorf("invalid HTTP path pattern %q: wildcards must be a whole segment", p)
+		case seg == "" && !last:
+			return fmt.Errorf("invalid HTTP path pattern %q: empty segment", p)
+		}
+	}
+	return nil
+}
+
+func validateHTTPMatch(m *HTTPMatch, proto string) error {
+	if proto != "" && proto != RuleProtoTCP {
+		return fmt.Errorf("\"http\" requires proto %q, got %q", RuleProtoTCP, proto)
+	}
+	for _, method := range m.Methods {
+		if _, err := NormalizeHTTPMethod(method); err != nil {
+			return err
+		}
+	}
+	for _, p := range m.Paths {
+		if err := ValidateHTTPPathPattern(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ParseRuleTarget classifies a target in a network rule's allow or deny list.
@@ -153,6 +250,11 @@ func validateNetworkRules(rules []NetworkRule, context string) error {
 		}
 		for _, p := range r.Ports {
 			if err := ValidateRulePort(p); err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+		}
+		if r.HTTP != nil {
+			if err := validateHTTPMatch(r.HTTP, r.Proto); err != nil {
 				return fmt.Errorf("%s: %w", label, err)
 			}
 		}

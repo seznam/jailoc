@@ -126,7 +126,7 @@ Defaults applied to all workspaces.
 | `notifications` | string | `"auto"` | How an attached OpenCode session tells you that the agent finished or needs input while its terminal is not focused: `"auto"`, `"native"`, `"osc"` or `"off"`. See [`notifications`](#notifications). |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 | `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, `core.hooksPath` and included config files read-only inside the VM for repositories under workspace `paths` and read-write `mounts`, including symlinked workspace roots. Disable `sudo` and Docker there. |
-| `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. |
+| `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. The build does not inspect HTTPS: `allow` rules with an [`http` table](#http-rules) open their hosts and ports for all methods and paths, and `deny` rules with `http` don't apply. |
 | `network` | table | `{}` | IPv6 and DNS settings of the network broker. See [`[defaults.network]`](#defaultsnetwork). |
 | `ca_bundle` | bool \| string | `true` | CA bundle added to the VM's system trust store. See [`ca_bundle`](#ca_bundle). |
 | `secrets` | table | `{}` | Secrets for all workspaces. See [`secrets`](#secrets). |
@@ -171,6 +171,124 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `proto` | string | `"tcp"` | `"tcp"`, `"udp"`, or `"any"`. |
 | `ports` | (int \| string)[] | (all) | Port numbers (`1`–`65535`) or `"a-b"` port ranges. |
 | `name` | string | `""` | Label shown in `jailoc traffic` (`rule=<name>`) and validation errors. |
+| `http` | table | (none) | Inspect HTTP requests to the matched destinations and apply `methods` and `paths` per request. Allowed on `allow` and `deny` rules; requires `proto = "tcp"`. See [HTTP rules](#http-rules). |
+| `log` | bool | `true` | `false` hides the events this rule decides from `jailoc traffic` unless `--all` is given. Valid on `allow` and `deny` rules, with or without `http`. See [Quiet rules](#quiet-rules). |
+
+#### Quiet rules
+
+`log = false` only changes what `jailoc traffic` shows: the broker still enforces the rule and records every event in its log, marked `"quiet": true`. `jailoc traffic --all` and `--json --all` show them. The mark covers the events the rule itself decides:
+
+- the connection (allowed or denied by the rule) and the TLS or HTTP line of that connection;
+- a request an `http` rule allows or denies, and a request allowed through a connection the rule allowed.
+
+Denials for any other reason stay visible, such as `http-no-match`, `bad-path`, `host-mismatch`, `sni-required` or `default-deny`, and so do failures: `inspect-error`, `502` upstream errors, and DNS events. A connection allowed by a quiet rule still shows a request that a different rule denies.
+
+A running workspace needs `jailoc restart` instead of `jailoc reload` to apply the first `log = false` rule when its network broker was started by an older jailoc.
+
+#### HTTP rules
+
+A rule with an `http` table decides per HTTP request instead of per connection. The broker decrypts TLS for the flows such a rule covers (see [TLS inspection](../explanation/network-isolation.md#tls-inspection)). Rules without `http` are plain rules.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `http.methods` | string[] | (any) | Request methods. `"*"` matches any method. Values are normalized to upper case and must consist of RFC 9110 token characters. |
+| `http.paths` | string[] | (any) | Request path patterns, matched case-sensitively against the path without the query string. |
+
+- `http` takes any target an `allow` or `deny` rule takes: names, `*.wildcard`, `"*"`, IP addresses and CIDRs. Without `ports` it covers all ports.
+- `http` requires `proto = "tcp"` (the default). `proto = "udp"` or `"any"` with `http` fails config load.
+- An empty table (`http = {}`) is valid and matches every request.
+
+```toml
+[[workspaces.api.network.rules]]
+name = "github-readonly"
+allow = ["api.github.com"]
+http.methods = ["GET", "HEAD"]
+http.paths = ["/repos/seznam/*"]
+
+[[workspaces.api.network.rules]]
+name = "no-writes"
+deny = ["registry.example.com"]
+http.methods = ["DELETE", "POST", "PUT", "PATCH"]
+```
+
+##### Path patterns
+
+A pattern starts with `/` and is split into segments at `/`.
+
+| Segment | Matches |
+|---------|---------|
+| literal | exactly that segment |
+| `*` | exactly one non-empty segment |
+| `**` | zero or more remaining segments; allowed only as the last segment |
+
+`/repos/*` matches `/repos/a`, not `/repos`, `/repos/` or `/repos/a/b`. `/repos/**` matches `/repos`, `/repos/`, `/repos/a` and `/repos/a/b`. A trailing `/` is a trailing empty segment and matches literally.
+
+A pattern is rejected at config load when it does not start with `/`, has a partial wildcard (`foo*`), `**` anywhere but last, an empty segment in the middle (`//`), a `.` or `..` segment, or contains `?`, `#`, `%`, `\` or a control character. A method with a character outside the RFC 9110 token set and `http` with a `proto` other than `tcp` are rejected as well.
+
+##### Request path checking
+
+The broker checks and matches the path only when a path pattern takes part in the decision: some `http` rule in the connection's scope (allow or deny) lists `paths` and covers the request's method. Otherwise the path is not evaluated, and an odd path such as `//x` or `/a%5Cb` is never denied as `bad-path`.
+
+When patterns apply, the broker matches them against the percent-decoded segments of the request path, taken between literal `/`. An encoded slash does not split a segment: `*` matches `@scope%2Fname` (decoded `@scope/name`) as one segment, a literal never does, because a pattern segment cannot contain `/`. A request is denied with reason `bad-path` when its path:
+
+- does not start with `/`, or contains `//` or `\`;
+- contains an encoded backslash or NUL (`%5c`, `%00`, any case);
+- has a segment that fails percent-decoding, or contains a control character;
+- has a segment that is, or after splitting on its encoded slashes contains, a `.` or `..` piece (`..`, `%2e%2e`, `x%2F..%2Fadmin`) or an empty piece (`%2Fadmin`, `a%2F`, `a%2F%2Fb`).
+
+`deny` patterns also see the path with encoded slashes decoded and split again, so `/a/b` denies `/a%2Fb` as well as `/a/b`. `allow` patterns match the raw segments only. A server that decodes `%2F` before routing sees more segments than an `allow` pattern's `*` matched; use `deny` rules for paths that must stay unreachable.
+
+##### Evaluation
+
+`deny` rules with `http` never deny a connection and never block DNS; they act on requests only. For every other decision step the rule counts like a plain rule: an `allow` rule with `http` lets the connection reach the TLS or HTTP stage, a plain `deny` rule denies it first.
+
+The broker inspects a TCP connection when an `http` rule (allow or deny) matches its port and, after the TLS server name or HTTP `Host` is known, its name or address. These rules form the http scope of the connection. An empty scope leaves the connection to plain rules and undecrypted.
+
+A connection that shows no name (TLS without SNI, HTTP/1.0 without `Host`) is judged by the `http` rules that match its destination address (an IP or CIDR target, or `*`). Without such a rule it is handled as if no `http` rule existed. With one it is inspected under the destination's IP address as its name: the broker's certificate carries the IP as a subject alternative name, the upstream certificate must be valid for the IP, and every request's `Host` must be the IP (an HTTP/1.0 request without `Host` counts as such). A connection without a name whose TLS offers no HTTP protocol in ALPN is handled like one with a name (see the table below): the plain rules decide, and it is inspected under the IP only when an `http` rule matches the address. IPv6 literals in `Host` or `:authority` are compared by address, so the compressed and expanded forms are the same host. Connections that name rules require a name for (a connection allowed by a name, a plain `deny` rule with names) still fail with `sni-required` without one.
+
+A connection that was not inspected stays checked: if a later request on it names a host that an `http` rule covers, the request is refused with reason `inspection-required`.
+
+An `http` allow rule narrows its host: when the scope has `http` allow rules, only they decide the requests, and plain `allow` rules matching the same host and port grant nothing for it. Each request is checked in this order:
+
+1. The request host (`Host` or `:authority`, port stripped) must equal the connection's server name, otherwise `421` with reason `host-mismatch`.
+2. `CONNECT` and HTTP/2 extended `CONNECT` are denied with reason `connect-denied`.
+3. When a path pattern applies to the method (see [request path checking](#request-path-checking)), a bad path is denied with reason `bad-path`.
+4. A matching `http` deny rule (method and path both match) denies the request with `rule=<name>`.
+5. If the scope has `http` allow rules, one must match both method and path, otherwise the request is denied with reason `http-no-match`. If the scope has none, a plain allow rule allowed the connection and the request passes.
+
+| Outcome | Status | Body |
+|---------|--------|------|
+| Denied request | `403 Forbidden` | `blocked by network policy (rule=<name>)` for a deny rule, `blocked by network policy (reason=<reason>)` otherwise |
+| Host does not match the server name | `421 Misdirected Request` | `blocked by network policy (reason=host-mismatch)` |
+| Upstream failure (connect or certificate verification) | `502 Bad Gateway` | the error |
+
+| Reason | Meaning |
+|--------|---------|
+| `http-no-match` | The scope has `http` allow rules and none matched the method and path. |
+| `bad-path` | The request path failed [checking](#request-path-checking). |
+| `connect-denied` | The request is a `CONNECT` or an HTTP/2 extended `CONNECT`. |
+| `host-mismatch` | The request host differs from the TLS server name or `Host` of the connection. |
+| `inspection-required` | A request on an uninspected connection names a host that an `http` rule covers. |
+
+Protocol detection decides per connection whether HTTP is served:
+
+| Traffic | Handling |
+|---------|----------|
+| TLS, ClientHello ALPN offers `h2` or `http/1.1` | Decrypted, HTTP served |
+| TLS, ALPN offered but neither is HTTP | Plain rules decide; an `http` rule alone never opens it. Allowed and covered by an `http` rule (by name, or by address when there is no name): decrypted, offering the guest's ALPN list, and handled like TLS without ALPN: HTTP inside is checked by the `http` rules, anything else is relayed to a verified upstream connection that is offered the negotiated protocol, so the client must trust the inspection CA. Allowed and covered by no `http` rule: not decrypted, spliced |
+| TLS, no ALPN | Decrypted; the first line decides: a request line (`method SP target SP HTTP/x.y`, any method token in any case) or the HTTP/2 preface is served as HTTP, anything else is decided by plain rules and relayed (denied: closed, `inspect-error`). A first line that looks like a request but is not valid (a method followed by two spaces or any other whitespace, leading whitespace or empty lines, trailing whitespace after the version, any line ending in `HTTP/x.y`) closes the connection with reason `malformed-request-line`, also when it comes after the 1 s peek. A first line that starts with a word and whitespace is read to its line end before it is judged, because a lenient server accepts any whitespace as a separator. A first line over 8 KiB that is no request line, or an undecided partial line when the 1 s peek ends, closes the connection. If the guest sends nothing for 1 s the connection is relayed (server-first protocols), but a request line or preface the guest sends later closes it before anything is forwarded |
+| Plain HTTP request | Checked per request, no TLS. A request line that is not valid but looks like one (any whitespace separator, leading empty lines, extra words) is denied, not relayed |
+| Cleartext HTTP/2 (prior knowledge, `h2c`) | Served per request: each `:authority` is decided like a server name (it must resolve to the destination, or be its IP), then the `http` scope of that name applies. A request without `:authority` is denied (`sni-required`). Requests are forwarded upstream as prior-knowledge HTTP/2, so the upstream must speak `h2c` |
+| No server name or Host (silent, server-first or other protocols) | Plain rules decide; `http` rules never open non-HTTP traffic; denied connections are reset |
+
+A WebSocket upgrade request is checked like any request. After the `101` response the connection passes through unfiltered; frames are not inspected. An `Upgrade: h2c` offer is removed from the request, which is then sent as plain HTTP/1.1, so a connection can't be switched to HTTP/2 past the per-request checks.
+
+Request bodies with a known length of up to 1 MiB are buffered in memory (64 MiB in total across a workspace's flows) so the broker can resend them on a new upstream connection, for example after an HTTP/2 `GOAWAY`; larger and chunked bodies stream through, and so do HTTP/1.1 bodies sent with `Expect: 100-continue`, which wait for the upstream's `100 Continue`. For HTTP/2 guests the broker answers `100 Continue` itself and does not pass `Expect` upstream.
+
+The broker verifies the upstream certificate against the host's system roots plus the file named by [`ca_bundle`](#ca_bundle) when it is a path; a failure ends the request with `502`. The broker does not use `HTTP_PROXY` or another upstream proxy.
+
+!!! note
+    Inspection adds the workspace's inspection CA to the guest trust stores, also with `ca_bundle = false`. See [TLS inspection](../explanation/network-isolation.md#tls-inspection).
 
 #### Implicit rules and built-in broker behavior
 
@@ -261,7 +379,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 |---|---|---|---|---|---|---|---|
 | `opencode2` | OpenCode 2 | `@opencode/cli` | `opencode --standalone --auto` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_CLI_CONFIG_CONTENT` |
 | `opencode1` | OpenCode 1 | `opencode-ai` | `opencode` | `--continue` | `--session ID` | `~/.local/share/opencode`, `~/.local/state/opencode`, `~/.omo` | `OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_TUI_CONFIG` |
-| `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `CLAUDE_CODE_SANDBOXED=1`, `DISABLE_AUTOUPDATER=1` |
+| `claude` | Claude Code | `@anthropic-ai/claude-code` | `claude --dangerously-skip-permissions --settings /etc/jailoc-tui-plugin/claude-settings.json` | `--continue` | `--resume ID` | `~/.claude` | `CLAUDE_CONFIG_DIR=/home/agent/.claude`, `CLAUDE_CODE_SANDBOXED=1`, `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
 | `copilot` | GitHub Copilot CLI | `@github/copilot` | `copilot --allow-all` | `--continue` | `--resume ID` | `~/.copilot` | `COPILOT_AUTO_UPDATE=false` |
 | `omo` | OmO | `omo-ai` | `omo --permission-preset full-access --extension /etc/jailoc-tui-plugin/omo.js` | `--continue` | `--session ID` | `~/.omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
 | `agy` | Antigravity CLI | GitHub release `google-antigravity/antigravity-cli` | `agy --dangerously-skip-permissions` | `--continue` | `--conversation ID` | `~/.gemini` | `AGY_CLI_DISABLE_AUTO_UPDATE=1` |
@@ -389,7 +507,7 @@ Each path is a separate virtio-fs share. A VM boots with at most 11 shares on li
 
 Format: `host:container[:mode]`, mode `ro` or `rw` (default `rw`). Mounts are virtio-fs directory shares.
 
-- `host`: absolute or `~` path. Must be a directory; a file mount fails at `jailoc up`. Use [`snapshots`](#snapshots) for files. An empty host (`":/home/agent/.agents"`) removes an inherited mount with that destination.
+- `host`: absolute or `~` path. Must be a directory; a file mount fails at `jailoc up`. Use [`snapshots`](#snapshots) for files. A missing host directory of a read-write mount is created; a missing host directory of a read-only mount fails `jailoc up` and `jailoc reload`, except for the built-in mounts of the agent's harness (see [Merge Semantics](#merge-semantics)), which are created. `jailoc up` and `jailoc reload` warn about a symbolic link directly inside a path or mount that resolves to a file under the home directory that no path, mount or snapshot makes available at the path the link names; the link is dangling in the VM. `jailoc reload` checks the paths and mounts the VM runs with, which change only on restart. An empty host (`":/home/agent/.agents"`) removes an inherited mount with that destination.
 - `container`: absolute, or `~/...`, where `~` stands for the guest home `/home/agent`. Rejected when equal to or under `/`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`. Destinations under `/home/agent/...` are allowed.
 
 Host paths equal to or under these entries are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.config/jailoc`, `~/.cache/jailoc-vm`. Parents of the entries under `~` are rejected too, so `~`, `~/.config` and `~/.cache` cannot be shared whole. Entries under `~` are also compared after resolving symlinks, so a symlink to `~/.ssh`, or a dotfiles directory that `~/.ssh` links into, is rejected as well. The error explains why the matched entry is protected; for credential directories it shows SSH or GPG agent forwarding or a [file secret](#secrets) holding the one file a tool needs, and for `~/.config/jailoc` and `~/.cache/jailoc-vm` it suggests keeping shared directories outside them or using an [agent profile](#agent-profiles). See [Pass a credential file](../how-to/secrets.md#pass-a-credential-file).
@@ -500,6 +618,8 @@ When a bundle is forwarded, sessions get `NODE_USE_SYSTEM_CA=1` and these variab
 
 A variable set by the workspace's `env`, `env_file` or an env secret takes precedence.
 
+When any network rule has an [`http` table](#http-rules), the workspace's inspection CA certificate is appended to the bundle, also with `ca_bundle = false` (the bundle then holds only that certificate), so the guest trusts it and the variables above are set. A `ca_bundle` path is also the extra trust anchor for the broker's upstream certificate checks.
+
 ### `enable_docker`
 
 With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an image without `dockerd` fails `jailoc up`. `enable_docker = true` together with `protect_git = true` is rejected, because Docker access is root access inside the VM; `protect_git` alone turns Docker off. In the images jailoc builds, Docker is installed only when `enable_docker` is on; see [Docker layer](image-resolution.md#docker-layer-steps-2-4-and-5).
@@ -543,7 +663,7 @@ A detected native command does not guarantee a visible notification: macOS notif
 
 ### `env`
 
-Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_SANDBOXED`, `DISABLE_AUTOUPDATER`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`, `AGY_CLI_DISABLE_AUTO_UPDATE`.
+Each entry must be `KEY=VALUE` with a non-empty key. Reserved keys, which jailoc sets itself: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK`, and the agent variables listed in [Coding agents](#coding-agents) for every agent: `OPENCODE_DISABLE_AUTOUPDATE`, `OPENCODE_TUI_CONFIG`, `OPENCODE_CLI_CONFIG_CONTENT`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_SANDBOXED`, `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `COPILOT_AUTO_UPDATE`, `PI_SKIP_VERSION_CHECK`, `OMO_RUNTIME`, `AGY_CLI_DISABLE_AUTO_UPDATE`.
 
 ### `env_file`
 

@@ -109,6 +109,15 @@ allow = [
 # name = "no-paste"
 # deny = ["pastebin.com", "gist.github.com", "*.ngrok.io"]
 
+# An http table narrows a rule to matching requests. The broker then decrypts
+# TLS to these hosts with a per-workspace CA that the VM trusts (agents that
+# pin certificates or bring their own CA store break; leave those hosts out).
+# [[defaults.network.rules]]
+# name = "github-readonly"
+# allow = ["api.github.com"]
+# http.methods = ["GET", "HEAD"]   # "*" or omitted = any method
+# http.paths = ["/repos/seznam/*"]   # "*" = one segment, "**" = the rest; omitted = any path
+
 # [defaults.secrets.env.MY_TOKEN]
 #   from_env = "HOST_ENV_VAR"   # exported in the VM as env var MY_TOKEN
 # [defaults.secrets.file.MY_FILE]

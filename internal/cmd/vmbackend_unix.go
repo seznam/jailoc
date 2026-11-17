@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guestbin"
 	"github.com/seznam/jailoc/internal/vm"
@@ -327,6 +328,9 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 		}
 		info, err := os.Stat(host)
 		switch {
+		case errors.Is(err, os.ErrNotExist) && m.Mode == "ro" && !isDefaultMount(ws.Agent, host, m.Container):
+			// An empty directory created here could never fill up from the guest.
+			return nil, fmt.Errorf("workspace %q: mount %q: source %q does not exist; create it or fix the path, jailoc only creates missing sources of read-write mounts", ws.Name, spec, host)
 		case errors.Is(err, os.ErrNotExist):
 			if err := os.MkdirAll(host, 0o750); err != nil {
 				return nil, fmt.Errorf("workspace %q: create mount source %q: %w", ws.Name, host, err)
@@ -379,6 +383,28 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 	return shares, nil
 }
 
+// isDefaultMount reports whether host:container is one of the harness's
+// built-in mounts (such as ~/.agents), whose missing source vmShares
+// creates even when read-only, so a host without it still boots.
+func isDefaultMount(h agent.Harness, host, container string) bool {
+	for _, spec := range h.DefaultMounts() {
+		// Built-in mounts are constants that parse and expand; one that
+		// doesn't is simply not a match.
+		m, err := config.ParseMount(spec)
+		if err != nil {
+			continue
+		}
+		expanded, err := config.ExpandPath(m.Host)
+		if err != nil {
+			continue
+		}
+		if filepath.Clean(expanded) == filepath.Clean(host) && filepath.Clean(m.Container) == filepath.Clean(container) {
+			return true
+		}
+	}
+	return false
+}
+
 // checkNestedShares rejects a share whose host path runs through a symbolic
 // link inside a read-write share. The workspace can replace such a link,
 // which would make the next start share a different host directory. The
@@ -405,6 +431,104 @@ func checkNestedShares(shares []vm.Share) error {
 		}
 	}
 	return nil
+}
+
+// warnDanglingShareLinks warns about the symbolic links danglingShareLinks
+// finds in the top level of the workspace shares, counting the snapshot
+// destinations as available in the VM.
+func warnDanglingShareLinks(ws *workspace.Resolved, shares []vm.Share, snapshots []snapshot) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	covered := make([]string, 0, len(shares)+len(snapshots))
+	for _, s := range shares {
+		covered = append(covered, s.GuestPath)
+	}
+	for _, s := range snapshots {
+		covered = append(covered, filepath.Clean(s.Container))
+	}
+	for _, l := range danglingShareLinks(shares, covered, home) {
+		_, _ = color.New(color.FgYellow).Fprintln(os.Stderr, danglingLinkWarning(ws.Name, l))
+	}
+}
+
+// danglingLinkWarning describes l of workspace name. The paths are quoted:
+// the workspace chooses the link names and targets, so they must not reach
+// the host terminal as raw control characters.
+func danglingLinkWarning(name string, l shareLink) string {
+	fix := fmt.Sprintf("mount or snapshot its target at %q", l.guest)
+	if !l.dir {
+		// Mounts share directories only.
+		fix = fmt.Sprintf("snapshot its target at %q, or mount the directory that contains it at %q", l.guest, filepath.Dir(l.guest))
+	}
+	return fmt.Sprintf("WARNING: workspace %q: %q links to %q, which no share, mount or snapshot covers, so the link is dangling in the VM; %s", name, l.link, l.target, fix)
+}
+
+// shareLink is a symbolic link in a share whose target the VM cannot see.
+// dir reports whether the target is a directory.
+type shareLink struct {
+	link, target, guest string
+	dir                 bool
+}
+
+// danglingShareLinks returns the symbolic links directly inside a share
+// that resolve on the host to a path under home but point, as seen from the
+// guest, outside every covered guest path, such as a dotfiles link to an
+// instructions file. Links into the image, links that are dangling on the
+// host too and deeper directories are not checked, which keeps the scan
+// cheap.
+func danglingShareLinks(shares []vm.Share, covered []string, home string) []shareLink {
+	home, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return nil
+	}
+	var links []shareLink
+	for _, s := range shares {
+		// A share that can't be listed fails the VM start on its own.
+		entries, err := os.ReadDir(s.HostPath)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.Type()&os.ModeSymlink == 0 {
+				continue
+			}
+			link := filepath.Join(s.HostPath, e.Name())
+			target, err := os.Readlink(link)
+			if err != nil {
+				continue
+			}
+			guest := target
+			if !filepath.IsAbs(guest) {
+				guest = filepath.Join(s.GuestPath, guest)
+			}
+			if guestCovered(filepath.Clean(guest), covered) {
+				continue
+			}
+			real, err := filepath.EvalSymlinks(link)
+			if err != nil || !pathWithin(real, home) {
+				continue
+			}
+			info, err := os.Stat(real)
+			if err != nil {
+				continue
+			}
+			links = append(links, shareLink{link: link, target: real, guest: filepath.Clean(guest), dir: info.IsDir()})
+		}
+	}
+	return links
+}
+
+// guestCovered reports whether the guest path p lies in one of covered.
+func guestCovered(p string, covered []string) bool {
+	return slices.ContainsFunc(covered, func(dir string) bool { return pathWithin(p, dir) })
+}
+
+// pathWithin reports whether p is dir or lies under it.
+func pathWithin(p, dir string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // maxLinkHops bounds the symbolic links linkInside follows.
@@ -536,6 +660,25 @@ type vmRule struct {
 	CIDRs []string `json:"cidrs,omitempty"`
 	Proto string   `json:"proto,omitempty"`
 	Ports []string `json:"ports,omitempty"`
+	HTTP  *vmHTTP  `json:"http,omitempty"`
+	// Quiet marks the events the rule decides (log = false); the broker
+	// still records them.
+	Quiet bool `json:"quiet,omitempty"`
+}
+
+// vmHTTP narrows a vmRule to HTTP requests. Empty methods or paths match any.
+type vmHTTP struct {
+	Methods []string `json:"methods,omitempty"`
+	Paths   []string `json:"paths,omitempty"`
+}
+
+// vmInspect locates the CA the broker signs inspected TLS connections with.
+// The key stays on the host; upstream_ca is the explicit ca_bundle appended to
+// the host trust roots for upstream verification.
+type vmInspect struct {
+	CACert     string `json:"ca_cert"`
+	CAKey      string `json:"ca_key"`
+	UpstreamCA string `json:"upstream_ca,omitempty"`
 }
 
 // legacyResolver looks up legacy allowed_hosts names on the host.
@@ -593,6 +736,19 @@ func resolvesPrivate(ctx context.Context, r legacyResolver, host string) bool {
 // vmPolicy builds the broker policy JSON from the workspace's resolved network
 // rules and DNS settings. @list references are expanded on the host.
 func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
+	return buildVMPolicy(ctx, ws, false)
+}
+
+// vmBuilderPolicy builds the broker policy of the isolated_build builder VM.
+// Only the builder VM trusts the inspection CA, not the containers of the
+// image build's RUN steps, so the builder does not inspect: http allow rules
+// open their targets like plain ones, http deny rules (which only deny single
+// requests) are left out, and there is no inspect section.
+func vmBuilderPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
+	return buildVMPolicy(ctx, ws, true)
+}
+
+func buildVMPolicy(ctx context.Context, ws *workspace.Resolved, builder bool) ([]byte, error) {
 	allow := []vmRule{}
 	deny := []vmRule{}
 
@@ -625,16 +781,28 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 	for _, w := range legacyAliasWarnings(ctx, hostResolver, ws.AllowedHosts, ws.InternalZones) {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
+	hasHTTP := slices.ContainsFunc(rules, func(r config.NetworkRule) bool { return r.HTTP != nil })
+	if builder && hasHTTP {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", "the isolated image build does not inspect HTTPS, so the http method and path limits of the network rules do not apply during the build; the rules still limit hosts and ports")
+	}
 	for _, r := range rules {
 		isAllow := len(r.Allow) > 0
 		targets := r.Allow
 		if !isAllow {
 			targets = r.Deny
 		}
-		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets)
+		httpMatch := r.HTTP
+		if builder && httpMatch != nil {
+			if !isAllow {
+				continue
+			}
+			httpMatch = nil
+		}
+		br, err := compileVMRule(r.Name, r.Proto, r.Ports, targets, httpMatch)
 		if err != nil {
 			return nil, err
 		}
+		br.Quiet = r.Quiet()
 		if isAllow {
 			allow = append(allow, br)
 		} else {
@@ -642,24 +810,51 @@ func vmPolicy(ctx context.Context, ws *workspace.Resolved) ([]byte, error) {
 		}
 	}
 
+	var inspect *vmInspect
+	if hasHTTP && !builder {
+		var err error
+		if inspect, err = vmInspectPolicy(ws); err != nil {
+			return nil, err
+		}
+	}
+
 	policy := struct {
-		DNS           string   `json:"dns,omitempty"`
-		Deny          []vmRule `json:"deny"`
-		Allow         []vmRule `json:"allow"`
-		InternalZones []string `json:"internal_zones,omitempty"`
-		IPv6          bool     `json:"ipv6,omitempty"`
+		DNS           string     `json:"dns,omitempty"`
+		Deny          []vmRule   `json:"deny"`
+		Allow         []vmRule   `json:"allow"`
+		InternalZones []string   `json:"internal_zones,omitempty"`
+		IPv6          bool       `json:"ipv6,omitempty"`
+		Inspect       *vmInspect `json:"inspect,omitempty"`
 	}{
 		DNS:           ws.DNSUpstream,
 		Deny:          deny,
 		Allow:         allow,
 		InternalZones: ws.InternalZones,
 		IPv6:          ws.IPv6,
+		Inspect:       inspect,
 	}
 	data, err := json.Marshal(policy)
 	if err != nil {
 		return nil, fmt.Errorf("encode broker policy: %w", err)
 	}
 	return data, nil
+}
+
+// vmInspectPolicy creates the workspace inspection CA if needed and describes
+// it for the broker. upstream_ca is the expanded explicit ca_bundle path; the
+// automatically forwarded bundle is already part of the host trust roots.
+func vmInspectPolicy(ws *workspace.Resolved) (*vmInspect, error) {
+	certPath, keyPath, _, err := ensureInspectCA(ws.Name)
+	if err != nil {
+		return nil, fmt.Errorf("prepare inspection CA for workspace %q: %w", ws.Name, err)
+	}
+	inspect := &vmInspect{CACert: certPath, CAKey: keyPath}
+	if path, custom := ws.CABundle.Path(); custom {
+		if inspect.UpstreamCA, err = expandCABundlePath(path); err != nil {
+			return nil, fmt.Errorf("expand ca_bundle path: %w", err)
+		}
+	}
+	return inspect, nil
 }
 
 var legacyPrivateV4 = []netip.Prefix{
@@ -692,7 +887,7 @@ func isPublicLegacyAddr(addr netip.Addr) bool {
 	return !addr.IsPrivate() && netip.MustParsePrefix("2000::/3").Contains(addr)
 }
 
-func compileVMRule(name, proto string, ports []config.RulePort, targets []string) (vmRule, error) {
+func compileVMRule(name, proto string, ports []config.RulePort, targets []string, httpMatch *config.HTTPMatch) (vmRule, error) {
 	if proto == "" {
 		proto = config.RuleProtoTCP
 	}
@@ -705,6 +900,13 @@ func compileVMRule(name, proto string, ports []config.RulePort, targets []string
 		portStrs = append(portStrs, canon)
 	}
 	out := vmRule{Name: name, Proto: proto, Ports: portStrs}
+	if httpMatch != nil {
+		h, err := compileVMHTTP(httpMatch)
+		if err != nil {
+			return vmRule{}, err
+		}
+		out.HTTP = h
+	}
 	seenNames := map[string]bool{}
 	seenCIDRs := map[string]bool{}
 	for _, t := range targets {
@@ -723,6 +925,34 @@ func compileVMRule(name, proto string, ports []config.RulePort, targets []string
 				seenNames[norm] = true
 				out.Names = append(out.Names, norm)
 			}
+		}
+	}
+	return out, nil
+}
+
+// compileVMHTTP validates an http table and normalizes its methods to upper
+// case without duplicates; "*" anywhere makes the list the single entry "*".
+func compileVMHTTP(m *config.HTTPMatch) (*vmHTTP, error) {
+	out := &vmHTTP{}
+	for _, method := range m.Methods {
+		norm, err := config.NormalizeHTTPMethod(method)
+		if err != nil {
+			return nil, err
+		}
+		if norm == "*" {
+			out.Methods = []string{"*"}
+			break
+		}
+		if !slices.Contains(out.Methods, norm) {
+			out.Methods = append(out.Methods, norm)
+		}
+	}
+	for _, p := range m.Paths {
+		if err := config.ValidateHTTPPathPattern(p); err != nil {
+			return nil, err
+		}
+		if !slices.Contains(out.Paths, p) {
+			out.Paths = append(out.Paths, p)
 		}
 	}
 	return out, nil

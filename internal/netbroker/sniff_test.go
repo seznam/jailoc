@@ -97,3 +97,112 @@ func TestSniffConnAcrossReads(t *testing.T) {
 		t.Fatalf("reports = %v, want one with sni split.example", got)
 	}
 }
+
+func TestIdentifyForPolicyRequestLine(t *testing.T) {
+	t.Parallel()
+	const hdr = "Host: example.com\r\n\r\n"
+	tests := []struct {
+		name     string
+		in       string
+		wantInfo bool
+		wantBad  bool
+		wantMore bool
+	}{
+		{name: "valid request", in: "POST /x HTTP/1.1\r\n" + hdr, wantInfo: true},
+		{name: "extension method with a tab", in: "PROPFIND\t/forbidden HTTP/1.1\r\n" + hdr, wantInfo: true, wantBad: true},
+		{name: "extension method with a tab, line only", in: "PROPFIND\t/forbidden HTTP/1.1\r\n", wantInfo: true, wantBad: true},
+		{name: "extension method with a tab, no line end yet", in: "PROPFIND\t/forbidden HTTP/1.1", wantMore: true},
+		{name: "extension method and a tab so far", in: "PROPFIND\t", wantMore: true},
+		{name: "known method with a tab", in: "POST\t/x HTTP/1.1\r\n" + hdr, wantInfo: true, wantBad: true},
+		{name: "leading form feed", in: "\fPOST /x HTTP/1.1\r\n" + hdr, wantInfo: true, wantBad: true},
+		{name: "leading empty lines", in: "\r\n\r\nPOST /x HTTP/1.1\r\n" + hdr, wantInfo: true, wantBad: true},
+		{name: "leading empty lines so far", in: "\r\n\r\n", wantMore: true},
+		{name: "extra word in the line", in: "GET /a b HTTP/1.1\r\n" + hdr, wantInfo: true, wantBad: true},
+		{name: "line-based protocol", in: "SET k v\r\n"},
+		{name: "line-based protocol so far", in: "SET k v", wantMore: true},
+		{name: "ssh banner", in: "SSH-2.0-OpenSSH_9.6\r\n"},
+		{name: "binary", in: "\x00\x01\x02\x03\r\n"},
+		{name: "partial method", in: "GE", wantMore: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			info, more := identifyForPolicy([]byte(tt.in))
+			if (info != nil) != tt.wantInfo || more != tt.wantMore {
+				t.Fatalf("identifyForPolicy(%q) = %v, more=%v; want info=%v more=%v", tt.in, info, more, tt.wantInfo, tt.wantMore)
+			}
+			if _, bad := sniffedPeerNameStrict(info); bad != tt.wantBad {
+				t.Fatalf("identifyForPolicy(%q) bad authority = %v, want %v (info %v)", tt.in, bad, tt.wantBad, info)
+			}
+		})
+	}
+}
+
+func TestEnforceConnRequestLine(t *testing.T) {
+	t.Parallel()
+	const tail = "Host: allowed.example.com\r\n\r\n"
+	tests := []struct {
+		name   string
+		chunks []string
+		// want is the verdict on each chunk: true while the stream may go on.
+		want []bool
+	}{
+		{"extension method with a tab", []string{"PROPFIND\t/forbidden HTTP/1.1\r\n" + tail}, []bool{false}},
+		{"extension method with a tab, fragmented", []string{"PROPFIND\t/forb", "idden HTTP/1.1\r\n" + tail}, []bool{true, false}},
+		{"leading empty lines", []string{"\r\n\r\nPOST /x HTTP/1.1\r\n" + tail}, []bool{false}},
+		{"leading empty lines, fragmented", []string{"\r\n\r\n", "POST /x HTTP/1.1\r\n" + tail}, []bool{true, false}},
+		{"leading form feed", []string{"\fPOST /x HTTP/1.1\r\n" + tail}, []bool{false}},
+		{"valid request", []string{"POST /x HTTP/1.1\r\n" + tail}, []bool{true}},
+		{"line-based protocol, fragmented", []string{"SE", "T k v\r", "\n", "anything\r\n\r\n"}, []bool{true, true, true, true}},
+		{"ssh banner", []string{"SSH-2.0-OpenSSH_9.6\r\n", "POST\t/x HTTP/1.1\r\n" + tail}, []bool{true, true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ec := &enforceConn{check: allowOnly("allowed.example.com"), abort: func() {}}
+			for i, chunk := range tt.chunks {
+				if got := ec.inspect([]byte(chunk)); got != tt.want[i] {
+					t.Fatalf("inspect(chunk %d %q) = %v, want %v", i, chunk, got, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestSniffBeforeDialRequestLine(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		chunks   []string
+		wantBad  bool
+		wantInfo bool
+	}{
+		{"extension method with a tab", []string{"PROPFIND\t/forbidden HTTP/1.1\r\nHost: example.com\r\n\r\n"}, true, true},
+		{"extension method with a tab, fragmented", []string{"PROPFIND\t/forb", "idden HTTP/1.1\r\nHost: example.com\r\n\r\n"}, true, true},
+		{"leading empty lines, fragmented", []string{"\r\n", "\r\nPOST /x HTTP/1.1\r\nHost: example.com\r\n\r\n"}, true, true},
+		{"valid request", []string{"POST /x HTTP/1.1\r\nHost: example.com\r\n\r\n"}, false, true},
+		{"line-based protocol, fragmented", []string{"SE", "T k v\r", "\n"}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+			go func() {
+				for _, chunk := range tt.chunks {
+					if _, err := client.Write([]byte(chunk)); err != nil {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}()
+			_, info, _ := sniffBeforeDial(server, 2*time.Second)
+			if (info != nil) != tt.wantInfo {
+				t.Fatalf("info = %v, want info %v", info, tt.wantInfo)
+			}
+			if _, bad := sniffedPeerNameStrict(info); bad != tt.wantBad {
+				t.Fatalf("bad authority = %v, want %v (info %v)", bad, tt.wantBad, info)
+			}
+		})
+	}
+}

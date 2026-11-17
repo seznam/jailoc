@@ -58,6 +58,8 @@ All guest traffic, IPv4 and opt-in IPv6 (`network.ipv6`), goes through the host-
 
 Public internet egress stays open, since the agent needs it to work. Data can still leave through it: the broker keeps a manipulated agent away from internal infrastructure, it doesn't stop exfiltration to the internet.
 
+Rules with an `http` table narrow egress to chosen methods and paths, for example read-only access to one organization on a code host. For the hosts they match, the broker terminates TLS with a per-workspace CA that the guest trusts, so it reads the decrypted requests and responses of those hosts. The CA key stays on the host. Hosts not matched by an `http` rule aren't decrypted. A request-level rule limits what the agent can do at an allowed host; it doesn't make the host trustworthy, and traffic that the broker can't parse as HTTP is decided by plain rules only. WebSocket frames aren't inspected after the upgrade. See [TLS inspection](network-isolation.md#tls-inspection).
+
 ### Limiting private data access
 
 The agent sees only the directories shared through `paths` and `mounts`, the files staged through `snapshots`, and the secrets configured for the workspace. Host credentials, SSH keys and unrelated projects aren't in the VM. The SSH agent, when forwarded, signs on the host and never hands keys to the guest, but anything in the guest can ask it to sign while it is forwarded. Each `host_ports` entry opens one host service to the guest outside the network policy; the agent can do with it whatever a local host process can, which for a browser debugging port or a container runtime socket means controlling the browser or the host.

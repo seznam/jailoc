@@ -102,6 +102,10 @@ type Broker struct {
 	// connSeq numbers guest flows so l7 events refer to their flow event.
 	connSeq atomic.Uint64
 
+	// replay is the request body bytes the inspected flows hold in memory so
+	// the bodies can be resent on a new upstream connection.
+	replay byteBudget
+
 	tcpFlows, udpFlows flowLimit
 	// dnsQueries and dnsConns hold the in-flight UDP DNS queries and open
 	// DNS-over-TCP connections of the gateway resolver and direct DNS.
@@ -221,7 +225,16 @@ func (b *Broker) recordFlow(conn uint64, proto string, src, dst netip.AddrPort, 
 	if d.Rule != "" {
 		ev["rule"] = d.Rule
 	}
+	markQuiet(ev, d.Quiet)
 	b.record(ev)
+}
+
+// markQuiet flags an event decided by a rule with quiet set. The event is
+// still recorded; readers such as `jailoc traffic` decide whether to show it.
+func markQuiet(ev map[string]any, quiet bool) {
+	if quiet {
+		ev["quiet"] = true
+	}
 }
 
 func (b *Broker) record(v map[string]any) {

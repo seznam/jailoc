@@ -26,6 +26,7 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 | `guest/` | The internal share the guest can write: control files and persistent home directories (`guest/home`) |
 | `guest-ro/` | The read-only internal share: configuration copies and staged snapshots |
 | `state.json` | Supervisor PID and readiness |
+| `inspect-ca.pem`, `inspect-ca.key` | The workspace's TLS inspection CA, created when a network rule has `http`; the key stays on the host and is deleted by `jailoc down --purge` |
 
 Print `up.log`, `supervisor.log` and the console log with:
 
@@ -162,6 +163,25 @@ jailoc reload myproject
 ```
 
 `jailoc traffic` shows every denied connection with its reason. On macOS, local-network hosts also need the Local Network permission. See [How to allow specific hosts or networks](network-access.md).
+
+## Request denied with `http-no-match`
+
+**Symptom:** a client gets `403 Forbidden` with `blocked by network policy (reason=http-no-match)` for a host that is allowed.
+
+**Cause:** a rule with an `http` table matches the host. Once one does, only `http` allow rules decide its requests; a plain `allow` rule for the same host and port doesn't grant them. The method or path of the request matches none of them.
+
+**Fix:** find the request with `jailoc traffic` (method, host, path, status, reason), then add the method or path to the `http` rule, or add `http.methods = ["*"]` or `http.paths = ["/**"]` to a more permissive rule for that host. Where an `http` rule with `paths` applies to the method, a path with `//`, `\`, `%5c`, `.` or `..` segments, or an encoded slash that forms a `..` or empty piece, is denied as `bad-path` instead; without `paths` the path is not checked. Apply with `jailoc reload`. See [Restrict HTTP methods and paths](network-access.md#restrict-http-methods-and-paths).
+
+## Certificate error on an inspected host
+
+**Symptom:** a client fails with a certificate or TLS handshake error for a host covered by a rule with an `http` table, and `jailoc traffic` shows an `inspect-error` line whose hint says the client doesn't trust the workspace inspection CA.
+
+**Cause:** the broker decrypts these hosts with a certificate signed by the workspace's inspection CA. Clients that pin certificates, use their own CA store (certifi, a Java keystore, Firefox NSS) or authenticate with a client certificate (mTLS) don't accept it.
+
+**Fix:** point the client at `/etc/ssl/certs/ca-certificates.crt`, or add the CA from there to its store. If that isn't possible, remove the `http` table from every rule matching the host; the connection is then passed through undecrypted. The CA is created again after `jailoc down --purge`, and clients that trusted the old one need the new certificate.
+
+A `502` with a certificate hint is the other direction: the broker rejected the upstream certificate because it trusts only the host system roots and the `ca_bundle` path. Add the issuing CA to the host's trust store or set `ca_bundle` to a bundle that contains it.
+
 
 ## Image build fails
 

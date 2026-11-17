@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestMaterializeCABundleSelectsAutomaticSource(t *testing.T) {
@@ -241,6 +242,113 @@ func TestMaterializeCABundleLeavesExistingFileUntouchedOnValidationFailure(t *te
 	got := readTestFile(t, path)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("materialized data = %q, want existing data %q", got, want)
+	}
+}
+
+func inspectingWorkspace(policy config.CABundle) *workspace.Resolved {
+	ws := resolvedWorkspace(true, policy)
+	ws.NetworkRules = []config.NetworkRule{{Name: "gh", Allow: []string{"api.github.com"}, HTTP: &config.HTTPMatch{}}}
+	return ws
+}
+
+func TestMaterializeCABundleAppendsInspectionCA(t *testing.T) {
+	tests := []struct {
+		name string
+		// source returns the CA bundle policy and the expected source bytes.
+		source func(t *testing.T) (config.CABundle, []byte)
+	}{
+		{"custom bundle", func(t *testing.T) (config.CABundle, []byte) {
+			b := writeTestCABundle(t, filepath.Join(t.TempDir(), "company.pem"), "company")
+			return config.CustomCABundle(b.path), b.data
+		}},
+		{"custom bundle without trailing newline", func(t *testing.T) (config.CABundle, []byte) {
+			data := bytes.TrimRight(newTestCertificate(t, "company"), "\n")
+			return config.CustomCABundle(writeTestFile(t, filepath.Join(t.TempDir(), "company.pem"), data)), append(data, '\n')
+		}},
+		{"automatic bundle", func(t *testing.T) (config.CABundle, []byte) {
+			b := writeTestCABundle(t, filepath.Join(t.TempDir(), "ssl.pem"), "ssl")
+			t.Setenv("SSL_CERT_FILE", b.path)
+			return config.AutomaticCABundle(), b.data
+		}},
+		{"automatic without source", func(*testing.T) (config.CABundle, []byte) { return config.AutomaticCABundle(), nil }},
+		{"disabled", func(*testing.T) (config.CABundle, []byte) { return config.DisabledCABundle(), nil }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("SSL_CERT_FILE", "")
+			t.Setenv("NIX_SSL_CERT_FILE", "")
+			policy, source := tc.source(t)
+
+			if err := materializeCABundle(inspectingWorkspace(policy)); err != nil {
+				t.Fatalf("materializeCABundle() error = %v", err)
+			}
+			_, keyPath, caPEM, err := ensureInspectCA("test")
+			if err != nil {
+				t.Fatalf("ensureInspectCA() error = %v", err)
+			}
+			got := readTestFile(t, materializedBundlePath(home))
+			if want := append(append([]byte{}, source...), caPEM...); !bytes.Equal(got, want) {
+				t.Fatalf("bundle = %q, want source + inspection CA", got)
+			}
+			if err := validateCABundlePEM(got); err != nil {
+				t.Fatalf("bundle does not validate: %v", err)
+			}
+			if bytes.Contains(got, readTestFile(t, keyPath)) || strings.Contains(string(got), "PRIVATE KEY") {
+				t.Fatal("bundle contains the CA private key")
+			}
+			if workspaceCABundlePath := materializedBundlePath(home); filepath.Dir(workspaceCABundlePath) == filepath.Dir(keyPath) {
+				t.Fatal("inspection CA key is stored next to the guest-synced bundle")
+			}
+		})
+	}
+}
+
+func TestMaterializeCABundleInspectionCAStaysStable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("NIX_SSL_CERT_FILE", "")
+	ws := inspectingWorkspace(config.DisabledCABundle())
+	if err := materializeCABundle(ws); err != nil {
+		t.Fatalf("first materializeCABundle() error = %v", err)
+	}
+	first := readTestFile(t, materializedBundlePath(home))
+	if err := materializeCABundle(ws); err != nil {
+		t.Fatalf("second materializeCABundle() error = %v", err)
+	}
+	if !bytes.Equal(first, readTestFile(t, materializedBundlePath(home))) {
+		t.Fatal("bundle changed between runs")
+	}
+
+	// Dropping the http rules removes the CA from the bundle again.
+	if err := materializeCABundle(resolvedWorkspace(true, config.DisabledCABundle())); err != nil {
+		t.Fatalf("materializeCABundle() without http error = %v", err)
+	}
+	assertNoMaterializedBundle(t, home)
+}
+
+func TestMaterializeCABundleWithoutHTTPRulesCreatesNoCA(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bundle := writeTestCABundle(t, filepath.Join(t.TempDir(), "company.pem"), "company")
+	ws := resolvedWorkspace(true, config.CustomCABundle(bundle.path))
+	ws.NetworkRules = []config.NetworkRule{{Name: "plain", Allow: []string{"example.com"}}}
+	if err := materializeCABundle(ws); err != nil {
+		t.Fatalf("materializeCABundle() error = %v", err)
+	}
+	assertMaterializedBundle(t, home, bundle.data)
+	if _, err := os.Stat(filepath.Join(home, ".cache", "jailoc-vm")); !os.IsNotExist(err) {
+		t.Fatalf("VM state was created without http rules: %v", err)
+	}
+}
+
+func TestMaterializeCABundleInspectionStillValidatesSource(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	err := materializeCABundle(inspectingWorkspace(config.CustomCABundle("relative.pem")))
+	if err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("materializeCABundle() error = %v, want source validation error", err)
 	}
 }
 

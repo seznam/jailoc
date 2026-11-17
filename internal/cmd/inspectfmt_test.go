@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/fatih/color"
 )
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -34,6 +36,8 @@ func TestTrafficFormatter(t *testing.T) {
 		`{"event":"flow","conn":10,"proto":"tcp","src":"192.168.127.2:4002","dst":"93.184.216.34:443","name":"pastebin.com","allow":false,"reason":"rule no-paste","rule":"no-paste","time":"2026-10-27T10:00:05Z"}`,
 		`{"event":"dns","network":"udp","name":"10-0-0-5.nip.io.","type":"TypeA","answers":null,"dropped":["10.0.0.5"],"time":"2026-10-27T10:00:05Z"}`,
 		`{"event":"dns","network":"udp","name":"app.example.net.","type":"TypeA","answers":["1.2.3.4"],"dropped":["172.16.0.9"],"time":"2026-10-27T10:00:05Z"}`,
+		`{"event":"dns","network":"udp","name":"registry.npmjs.org.","type":"TypeA","answers":["104.16.2.34","104.16.1.34","104.16.10.34","104.16.8.34","104.16.11.34","104.16.4.34","104.16.0.34","104.16.6.34","104.16.7.34","104.16.5.34","104.16.9.34","104.16.3.34"],"time":"2026-10-27T10:00:05Z"}`,
+		`{"event":"flow","conn":13,"proto":"tcp","src":"192.168.127.2:4004","dst":"104.16.7.34:443","allow":true,"reason":"public","time":"2026-10-27T10:00:05Z"}`,
 		`{"event":"flow","conn":11,"proto":"tcp","src":"192.168.127.2:4003","dst":"10.0.0.5:443","name":"x.vercel.app","allow":false,"reason":"not-internal-zone","rule":"saas","time":"2026-10-27T10:00:05Z"}`,
 		`{"event":"future-event","time":"2026-10-27T10:00:06Z"}`,
 		`{"event":"ingress","host":"/state/ssh.sock","guest_port":22,"time":"2026-10-27T10:00:07Z"}`,
@@ -64,6 +68,8 @@ func TestTrafficFormatter(t *testing.T) {
 		"DENY tcp pastebin.com:443 [93.184.216.34] rule=no-paste",
 		"DNS dns 10-0-0-5.nip.io TypeA → no records (dropped 10.0.0.5: private address outside internal_zones)",
 		"DNS dns app.example.net TypeA → 1.2.3.4 (dropped 172.16.0.9: private address outside internal_zones)",
+		"DNS dns registry.npmjs.org TypeA → 104.16.{0-11}.34",
+		"ALLOW tcp registry.npmjs.org:443 [104.16.7.34]",
 		"DENY tcp x.vercel.app:443 [10.0.0.5] not-internal-zone rule=saas",
 		"IN tcp 127.0.0.1:18080 → guest port 8080",
 		"HOST tcp gateway port 9222 → 127.0.0.1:9222",
@@ -74,6 +80,83 @@ func TestTrafficFormatter(t *testing.T) {
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+}
+
+func TestTrafficFormatterInspectedHTTP(t *testing.T) {
+	t.Parallel()
+	hint := "upstream certificate failed verification; the broker only trusts the host system roots and ca_bundle"
+	tests := []struct {
+		name string
+		line string
+		want string
+	}{
+		{
+			name: "allowed https request",
+			line: `{"event":"l7","conn":3,"dst":"140.82.121.6:443","proto":"https","method":"GET","host":"api.github.com","path":"/repos/seznam/jailoc","status":200,"rule":"github-readonly","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https GET api.github.com/repos/seznam/jailoc 200 rule=github-readonly",
+		},
+		{
+			name: "allowed plain http request",
+			line: `{"event":"l7","conn":4,"dst":"1.2.3.4:80","proto":"http","method":"HEAD","host":"plain.example","path":"/","status":204,"time":"2026-10-27T10:00:00Z"}`,
+			want: "└ http HEAD plain.example/ 204",
+		},
+		{
+			name: "denied by rule",
+			line: `{"event":"l7","conn":5,"dst":"140.82.121.6:443","proto":"https","method":"DELETE","host":"api.github.com","path":"/repos/x","status":403,"denied":true,"reason":"rule no-delete","rule":"no-delete","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https DELETE api.github.com/repos/x 403 DENY rule=no-delete",
+		},
+		{
+			name: "denied without matching allow",
+			line: `{"event":"l7","conn":6,"dst":"140.82.121.6:443","proto":"https","method":"GET","host":"api.github.com","path":"/user","status":403,"denied":true,"reason":"http-no-match","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https GET api.github.com/user 403 DENY http-no-match",
+		},
+		{
+			name: "host mismatch",
+			line: `{"event":"l7","conn":7,"dst":"140.82.121.6:443","proto":"https","method":"GET","host":"evil.example","path":"/","status":421,"denied":true,"reason":"host-mismatch","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https GET evil.example/ 421 DENY host-mismatch",
+		},
+		{
+			name: "upstream error with hint",
+			line: `{"event":"l7","conn":8,"dst":"140.82.121.6:443","proto":"https","method":"GET","host":"api.github.com","path":"/","status":502,"error":"x509: certificate signed by unknown authority","hint":"` + hint + `","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ https GET api.github.com/ 502 x509: certificate signed by unknown authority " + hint,
+		},
+		{
+			name: "passive tls event is unchanged",
+			line: `{"event":"l7","conn":9,"proto":"tls","dst":"104.20.23.154:443","sni":"example.com","alpn":["h2"],"rule":"r","time":"2026-10-27T10:00:00Z"}`,
+			want: "└ tls example.com h2",
+		},
+		{
+			name: "inspect error",
+			line: `{"event":"inspect-error","conn":10,"dst":"140.82.121.6:443","name":"api.github.com","error":"remote error: tls: bad certificate","hint":"the client does not trust the workspace inspection CA","time":"2026-10-27T10:00:00Z"}`,
+			want: "FAIL tcp api.github.com:443 [140.82.121.6] remote error: tls: bad certificate the client does not trust the workspace inspection CA",
+		},
+		{
+			name: "inspect error without hint",
+			line: `{"event":"inspect-error","conn":11,"dst":"1.2.3.4:443","error":"not HTTP","time":"2026-10-27T10:00:00Z"}`,
+			want: "FAIL tcp 1.2.3.4:443 not HTTP",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := newTrafficFormatter(false).line([]byte(tc.line))
+			if got := plain(out)[9:]; got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTrafficFormatterInspectedHTTPColors(t *testing.T) {
+	// color.NoColor is process-global: do not run in parallel.
+	prev := color.NoColor
+	color.NoColor = false
+	t.Cleanup(func() { color.NoColor = prev })
+	denied := newTrafficFormatter(false).line([]byte(`{"event":"l7","proto":"https","method":"GET","host":"h","path":"/","status":403,"denied":true,"reason":"http-no-match","time":"2026-10-27T10:00:00Z"}`))
+	assertContains(t, denied, colDeny.Sprint("DENY http-no-match"))
+	failed := newTrafficFormatter(false).line([]byte(`{"event":"inspect-error","dst":"1.2.3.4:443","error":"boom","time":"2026-10-27T10:00:00Z"}`))
+	assertContains(t, failed, colDeny.Sprint("FAIL "))
+	assertContains(t, failed, colDeny.Sprint("boom"))
 }
 
 func TestExecFormatter(t *testing.T) {
@@ -150,6 +233,9 @@ func TestTrafficFormatterEscapesGuestFields(t *testing.T) {
 		{"flow", trafficEvent{Event: "flow", Proto: attack, Dst: attack, Reason: attack}},
 		{"tls", trafficEvent{Event: "l7", Proto: "tls", SNI: attack, ALPN: []string{attack}}},
 		{"http", trafficEvent{Event: "l7", Proto: "http", Method: attack, Host: attack, Path: attack}},
+		{"inspected denied", trafficEvent{Event: "l7", Proto: "https", Method: "GET", Host: "h", Path: "/", Denied: true, Reason: attack, Rule: attack}},
+		{"inspected error", trafficEvent{Event: "l7", Proto: "https", Method: "GET", Host: "h", Path: "/", Error: attack, Hint: attack}},
+		{"inspect error", trafficEvent{Event: "inspect-error", Dst: attack, Name: attack, Error: attack, Hint: attack}},
 		{"dns answer", trafficEvent{Event: "dns", Name: attack, Type: attack, Answers: []string{attack}}},
 		{"dns error", trafficEvent{Event: "dns", Name: attack, Type: attack, Error: attack}},
 		{"dns blocked", trafficEvent{Event: "dns", Name: attack, Blocked: true}},
@@ -372,5 +458,64 @@ func TestEscapeLines(t *testing.T) {
 	got := escapeLines("first \x1b]52;c;aGk=\x07\nsecond\r")
 	if want := `first \x1b]52;c;aGk=\a` + "\n" + `second\r`; got != want {
 		t.Fatalf("escapeLines = %q, want %q", got, want)
+	}
+}
+
+func TestTrafficFormatterQuiet(t *testing.T) {
+	t.Parallel()
+	const ts = `,"time":"2026-10-27T10:00:00Z"}`
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"allowed flow", `{"event":"flow","conn":1,"proto":"tcp","src":"192.168.127.2:4000","dst":"104.20.23.154:443","allow":true,"reason":"rule npm","rule":"npm","quiet":true` + ts},
+		{"denied flow", `{"event":"flow","conn":2,"proto":"tcp","src":"192.168.127.2:4001","dst":"104.20.23.154:443","allow":false,"reason":"rule telemetry","rule":"telemetry","quiet":true` + ts},
+		{"tls sniff", `{"event":"l7","conn":1,"proto":"tls","dst":"104.20.23.154:443","sni":"example.com","alpn":["h2"],"quiet":true` + ts},
+		{"inspected request", `{"event":"l7","conn":1,"proto":"https","dst":"104.20.23.154:443","method":"GET","host":"example.com","path":"/","status":200,"rule":"npm","quiet":true` + ts},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := newTrafficFormatter(false).line([]byte(tt.line)); got != "" {
+				t.Fatalf("quiet event shown without --all: %q", got)
+			}
+			if got := newTrafficFormatter(true).line([]byte(tt.line)); got == "" {
+				t.Fatal("quiet event hidden with --all")
+			}
+			loud := strings.Replace(tt.line, `"quiet":true,`, "", 1)
+			if got := newTrafficFormatter(false).line([]byte(loud)); got == "" {
+				t.Fatalf("event without quiet hidden: %s", loud)
+			}
+		})
+	}
+}
+
+func TestTrafficFormatterQuietJSON(t *testing.T) {
+	t.Parallel()
+	log := filepath.Join(t.TempDir(), "log")
+	quiet := `{"event":"flow","conn":1,"proto":"tcp","src":"192.168.127.2:4000","dst":"104.20.23.154:443","allow":true,"reason":"rule npm","rule":"npm","quiet":true,"time":"2026-10-27T10:00:00Z"}`
+	loud := `{"event":"flow","conn":2,"proto":"tcp","src":"192.168.127.2:4001","dst":"104.20.23.155:443","allow":true,"reason":"public","time":"2026-10-27T10:00:01Z"}`
+	if err := os.WriteFile(log, []byte(quiet+"\n"+loud+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		all  bool
+		want string
+	}{
+		{"default hides quiet", false, loud + "\n"},
+		{"all keeps quiet", true, quiet + "\n" + loud + "\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			f := newTrafficFormatter(tt.all)
+			if err := tailLog(context.Background(), &out, []logFile{{path: log}}, logView{lines: -1, json: true}, f.line); err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != tt.want {
+				t.Fatalf("json output = %q, want %q", out.String(), tt.want)
+			}
+		})
 	}
 }

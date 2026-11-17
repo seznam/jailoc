@@ -194,10 +194,38 @@ func TestWriteTUIConfig(t *testing.T) {
 func TestEnsureConfigGitignore(t *testing.T) {
 	t.Parallel()
 
-	t.Run("creates directory and file when missing", func(t *testing.T) {
+	t.Run("creates file when missing", func(t *testing.T) {
 		t.Parallel()
-		dir := filepath.Join(t.TempDir(), "opencode")
-		if err := ensureConfigGitignore(dir, "node_modules\n"); err != nil {
+		dir := t.TempDir()
+		if err := ensureConfigGitignore(dir, dir, "node_modules\n"); err != nil {
+			t.Fatalf("ensureConfigGitignore() = %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, ".gitignore")) //nolint:gosec // test path
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if string(data) != "node_modules\n" {
+			t.Fatalf("content = %q, want %q", data, "node_modules\n")
+		}
+	})
+
+	t.Run("leaves a missing mount source alone", func(t *testing.T) {
+		t.Parallel()
+		source := filepath.Join(t.TempDir(), "config")
+		dir := filepath.Join(source, "opencode")
+		if err := ensureConfigGitignore(source, dir, "node_modules\n"); err != nil {
+			t.Fatalf("ensureConfigGitignore() = %v", err)
+		}
+		if _, err := os.Stat(source); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Stat(%s) = %v, want not exist", source, err)
+		}
+	})
+
+	t.Run("creates a missing directory under an existing mount source", func(t *testing.T) {
+		t.Parallel()
+		source := t.TempDir()
+		dir := filepath.Join(source, "opencode")
+		if err := ensureConfigGitignore(source, dir, "node_modules\n"); err != nil {
 			t.Fatalf("ensureConfigGitignore() = %v", err)
 		}
 		data, err := os.ReadFile(filepath.Join(dir, ".gitignore")) //nolint:gosec // test path
@@ -216,7 +244,7 @@ func TestEnsureConfigGitignore(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644); err != nil { //nolint:gosec // test
 			t.Fatalf("WriteFile: %v", err)
 		}
-		if err := ensureConfigGitignore(dir, "node_modules\n"); err != nil {
+		if err := ensureConfigGitignore(dir, dir, "node_modules\n"); err != nil {
 			t.Fatalf("ensureConfigGitignore() = %v", err)
 		}
 		data, err := os.ReadFile(filepath.Join(dir, ".gitignore")) //nolint:gosec // test path

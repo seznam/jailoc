@@ -71,6 +71,62 @@ allow = ["*"]
 
 `*` matches any public address on the rule's protocol (excluding DoT port 853 and QUIC UDP port 443 unless listed explicitly in `ports`). It never opens private or reserved ranges.
 
+## Restrict HTTP methods and paths
+
+Add an `http` table to a rule to decide per request instead of per connection. This allows read-only access to one organization on GitHub:
+
+```toml
+[[workspaces.api.network.rules]]
+name = "github-readonly"
+allow = ["api.github.com"]
+http.methods = ["GET", "HEAD"]
+http.paths = ["/repos/seznam/*"]
+```
+
+Other methods or paths on `api.github.com` get `403` with `blocked by network policy (reason=http-no-match)`. A plain `allow` rule for the same host and port doesn't override it: once an `http` allow rule matches a host, only `http` allow rules decide its requests. Omit `methods` or `paths` to match any. In a path, `*` stands for exactly one segment and `**` for any number of trailing segments (`/repos/seznam/**`).
+
+To block methods instead, use a `deny` rule. It acts per request and leaves other requests to the allow rules:
+
+```toml
+[[workspaces.api.network.rules]]
+name = "no-writes"
+deny = ["registry.example.com"]
+http.methods = ["DELETE", "POST", "PUT", "PATCH"]
+```
+
+A denied request gets `403` with `blocked by network policy (rule=no-writes)`. DNS and the connection itself stay open.
+
+To loosen one host under a broad `http` rule, add a more permissive `http` allow rule for it. Any matching `http` allow rule lets a request through:
+
+```toml
+[[workspaces.api.network.rules]]
+name = "web-readonly"
+allow = ["*"]
+http.methods = ["GET", "HEAD"]
+
+[[workspaces.api.network.rules]]
+name = "registry-full"
+allow = ["registry.example.com"]
+http.methods = ["*"]
+```
+
+To list the requests, run `jailoc traffic -f`. Inspected requests show method, host, path, status and the deciding rule; denied ones show the reason. A request that never reaches the upstream, for example because its certificate failed verification, shows status `502` and the error.
+
+`http` works with `proto = "tcp"` only. Run `jailoc reload api` to apply a change. See [HTTP rules](../reference/configuration.md#http-rules) for the pattern grammar and every outcome.
+
+!!! warning
+    Rules with `http` make the broker decrypt TLS for the matching hosts, and the guest trusts a workspace CA for that. See [TLS inspection](../explanation/network-isolation.md#tls-inspection).
+
+### Fix certificate errors on inspected hosts
+
+A client that rejects the broker's certificate for an inspected host fails with a certificate error, and `jailoc traffic` shows an `inspect-error` line with a hint. The client doesn't trust the workspace CA. The usual causes are:
+
+- the client pins the server certificate or key;
+- the client reads its own CA store instead of the system one (certifi, a Java keystore, Firefox NSS);
+- the server requires a client certificate (mTLS).
+
+Trust the CA in that client's store, or pass the host through uninspected by removing the `http` table from every rule that matches it. The CA certificate is in the guest's `/etc/ssl/certs/ca-certificates.crt`. See [Troubleshooting](troubleshooting.md#certificate-error-on-an-inspected-host).
+
 ## Configure upstream DNS and default rules
 
 Set an optional upstream DNS resolver with `dns` and shared rules under `[defaults.network]`:
@@ -104,7 +160,25 @@ ports = [53]
 jailoc traffic -f
 ```
 
-Each line shows a connection with the DNS name, verdict, and the rule that decided it (`rule=no-paste`, `rule=dev-deps`, `rule=agent`, or `default-deny`). See [`jailoc traffic`](../reference/cli.md#jailoc-traffic).
+Each line shows a connection with the DNS name, verdict, and the rule that decided it (`rule=no-paste`, `rule=dev-deps`, `rule=agent`, or `default-deny`). Requests to hosts covered by an [`http` rule](#restrict-http-methods-and-paths) get a line each. See [`jailoc traffic`](../reference/cli.md#jailoc-traffic).
+
+### Hide noisy rules
+
+Set `log = false` on a rule whose events bury the rest, for example a package registry or a telemetry host you deny:
+
+```toml
+[[workspaces.api.network.rules]]
+name = "registry"
+allow = ["registry.npmjs.org"]
+log = false
+
+[[workspaces.api.network.rules]]
+name = "no-telemetry"
+deny = ["telemetry.example.com"]
+log = false
+```
+
+`jailoc traffic` no longer prints what these rules decide. The rules still apply, and `jailoc traffic --all` shows their events. See [Quiet rules](../reference/configuration.md#quiet-rules).
 
 ## Reach IPv6 services
 

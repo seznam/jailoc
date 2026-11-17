@@ -97,7 +97,7 @@ Shuts down the workspace VM and its network broker. All agent sessions end. The 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Stop every configured workspace. Combined with `--purge`, purges every workspace. |
-| `--purge` | | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM, any cached `from_command` secrets in the system keychain (the command fails if an entry can't be deleted; the next purge retries it) and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
+| `--purge` | | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM, any cached `from_command` secrets in the system keychain (the command fails if an entry can't be deleted; the next purge retries it), the workspace's [inspection CA](../explanation/network-isolation.md#the-inspection-ca) (the next start creates a new one) and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
 
 ---
 
@@ -231,9 +231,15 @@ jailoc traffic [workspace] [flags]
 | `--follow` | `-f` | Keep printing new events until interrupted. |
 | `--lines N` | `-n` | Number of past events to print. Default `100`; `0` prints none, `-1` all. |
 | `--json` | | Print the shown events as their JSON log lines, unchanged. |
-| `--all` | | Also show DHCP, NIC, SSH agent forwarding and jailoc's own SSH connections. |
+| `--all` | | Also show DHCP, NIC, SSH agent forwarding, jailoc's own SSH connections and the events of rules with [`log = false`](configuration.md#quiet-rules). |
 
-Without `--json`, control characters in logged values are escaped. TLS connections are identified from the unencrypted ClientHello only; their content is not decrypted.
+Without `--json`, control characters in logged values are escaped. TLS connections are identified from the unencrypted ClientHello only; their content is not decrypted, except for connections covered by a rule with an [`http` table](configuration.md#http-rules).
+
+Without `--json`, DNS answers are sorted and deduplicated. Consecutive addresses that fill exactly one aligned block print as a CIDR prefix (`1.2.3.4/30`), and IPv4 addresses that differ only in one octet print as a pattern listing the values of that octet (`104.16.{0-11}.34`, `10.0.0.{1,3,5-9}`). Both forms stand for exactly the answered addresses; `--json` keeps the original list.
+
+For those connections `jailoc traffic` prints one line per request, after the response status is known, or when the request is denied (JSON event `l7`): protocol (`https` or `http`), method, host, path without query string, status and the deciding rule. A denied request adds the reason (`http-no-match`, `bad-path`, `connect-denied`, `host-mismatch`, or `rule <name>`) and has status `403` or `421`. A request the broker could not forward has status `502` and the error; for a failed upstream certificate check a hint says that the broker trusts only the host system roots and `ca_bundle`.
+
+`inspect-error` lines report a TLS handshake the guest rejected, or traffic denied after decryption because it isn't HTTP. They carry the connection, destination, server name, error and a hint. For a rejected handshake the hint says that the client doesn't trust the workspace inspection CA and that removing the `http` table from the rules matching the host passes the connection through undecrypted. See [Certificate error on an inspected host](../how-to/troubleshooting.md#certificate-error-on-an-inspected-host).
 
 ---
 
