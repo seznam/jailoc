@@ -136,6 +136,12 @@ func (s *startupStatus) tick() bool {
 	// Between chunks the agent may be inside an escape sequence; drawing
 	// there would corrupt it.
 	if s.alt && s.state == escGround {
+		// A notification the terminal took only in part would swallow the
+		// frame.
+		if err := s.abortCut(); err != nil {
+			s.pending = false
+			return false
+		}
 		if _, err := s.w.Write(s.draw()); err != nil {
 			s.pending = false
 			return false

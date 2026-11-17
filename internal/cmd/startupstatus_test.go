@@ -400,3 +400,72 @@ func TestStartupStatusWriteBetween(t *testing.T) {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
+
+// failOnWriter fails the write of exactly the bytes in fail and counts the
+// writes it was given.
+type failOnWriter struct {
+	out    bytes.Buffer
+	fail   string
+	writes int
+}
+
+func (w *failOnWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if string(p) == w.fail {
+		return 0, errors.New("write failed")
+	}
+	return w.out.Write(p)
+}
+
+func TestStartupStatusTickAbortsCutNotificationOnce(t *testing.T) {
+	t.Parallel()
+
+	const (
+		alt  = "\x1b[?1049h"
+		draw = "\x1b7" + resetAttrs + "\x1b[12;1H\x1b[2K\x1b[12;38H\x1b[2m⠋ S 0s\x1b8"
+	)
+	var out bytes.Buffer
+	now, size := time.Unix(0, 0), [2]int{80, 24}
+	s := testStatus(&out, &now, &size)
+	if err := s.write([]byte(alt)); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	part := &termSink{out: &out, take: 1}
+	if err := s.tryWriteBetween([]byte("<N>"), part.write, func() bool { return true }); !errors.Is(err, errNotifyDropped) {
+		t.Fatalf("tryWriteBetween() = %v, want it dropped", err)
+	}
+	for i := range 2 {
+		if !s.tick() {
+			t.Fatalf("tick() #%d = false, want the status still shown", i+1)
+		}
+	}
+	if got, want := out.String(), "<"+notifyAbort+draw+draw; got != want {
+		t.Fatalf("output = %q, want the abort once before the first frame: %q", got, want)
+	}
+}
+
+func TestStartupStatusTickEndsAnimationWhenAbortFails(t *testing.T) {
+	t.Parallel()
+
+	w := &failOnWriter{fail: notifyAbort}
+	now, size := time.Unix(0, 0), [2]int{80, 24}
+	s := newStartupStatus(w, func() (int, int) { return size[0], size[1] })
+	s.now = func() time.Time { return now }
+	s.start("S")
+	if err := s.write([]byte("\x1b[?1049h")); err != nil {
+		t.Fatal(err)
+	}
+	part := &termSink{out: &w.out, take: 1}
+	if err := s.tryWriteBetween([]byte("<N>"), part.write, func() bool { return true }); !errors.Is(err, errNotifyDropped) {
+		t.Fatalf("tryWriteBetween() = %v, want it dropped", err)
+	}
+	before := w.out.String()
+	if s.tick() {
+		t.Fatal("tick() = true after the abort failed, want the animation ended")
+	}
+	writes := w.writes
+	if s.tick() || w.writes != writes || w.out.String() != before {
+		t.Fatalf("tick() after the failure wrote %d more times, output %q; want none", w.writes-writes, w.out.String())
+	}
+}
