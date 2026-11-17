@@ -231,16 +231,29 @@ func (i *inspector) leaf(name string) (*tls.Certificate, error) {
 // httpCapable reports whether a sniffed flow can carry HTTP, so that http
 // rules may apply to it: plain HTTP, or TLS that offers h2 or http/1.1 or no
 // ALPN at all. Other TLS (an ALPN list without HTTP) is decided by the plain
-// rules alone.
+// rules alone; see nonHTTPALPN for when it is still decrypted.
 func httpCapable(info map[string]any) bool {
 	switch proto, _ := info["proto"].(string); proto {
 	case "http":
 		return true
 	case "tls":
 		alpn, _ := info["alpn"].([]string)
-		return len(alpn) == 0 || slices.Contains(alpn, "h2") || slices.Contains(alpn, "http/1.1")
+		return len(alpn) == 0 || offersHTTP(alpn)
 	}
 	return false
+}
+
+// offersHTTP reports whether an ALPN list names h2 or http/1.1.
+func offersHTTP(alpn []string) bool {
+	return slices.Contains(alpn, "h2") || slices.Contains(alpn, "http/1.1")
+}
+
+// nonHTTPALPN reports whether a sniffed flow is TLS whose ALPN list offers
+// protocols but neither h2 nor http/1.1. Its flow-level decision rests on the
+// plain rules alone, yet HTTP can still run inside it, so it is decrypted
+// when an http rule covers the destination.
+func nonHTTPALPN(info map[string]any) bool {
+	return info != nil && info["proto"] == "tls" && !httpCapable(info)
 }
 
 // closeNotifyConn reports when the connection is closed, whoever closes it
@@ -582,15 +595,17 @@ func (f *inspectFlow) serveInspected(guest net.Conn) {
 			return
 		}
 		conn = tc
-		if tc.ConnectionState().NegotiatedProtocol == "" {
-			// No ALPN: tell HTTP from another protocol by the first bytes.
+		// h2 and http/1.1 are HTTP by their name. Anything else, a guest
+		// without ALPN or one that offered only other protocols, may still
+		// run HTTP in it: tell HTTP from another protocol by the first bytes.
+		if proto := tc.ConnectionState().NegotiatedProtocol; proto != "h2" && proto != "http/1.1" {
 			br := bufio.NewReaderSize(tc, maxRequestLine)
 			stream := &bufConn{Conn: tc, r: br}
 			switch peekRequest(tc, br, f.insp.peekTimeout) {
 			case peekHTTP:
 				conn = stream
 			case peekNotHTTP:
-				f.relayNotHTTP(stream, false)
+				f.relayNotHTTP(stream, false, proto)
 				return
 			case peekMalformed:
 				f.notHTTPDenied(tc, Decision{Reason: "malformed-request-line"}, "not HTTP: malformed request line")
@@ -599,7 +614,7 @@ func (f *inspectFlow) serveInspected(guest net.Conn) {
 				// A server-first protocol stays silent, so relay it, but
 				// classify what the guest sends first: a request after a
 				// delay must not slip past the http rules.
-				f.relayNotHTTP(stream, true)
+				f.relayNotHTTP(stream, true, proto)
 				return
 			case peekInconclusive:
 				f.notHTTPDenied(tc, Decision{Reason: "inconclusive-request-line"}, "not HTTP: the first line did not decide")
@@ -629,13 +644,27 @@ func (f *inspectFlow) serveInspected(guest net.Conn) {
 // handshake completes the guest TLS handshake with a certificate for the
 // flow's name. A client that rejects the certificate is reported.
 func (f *inspectFlow) handshake(c net.Conn) (*tls.Conn, bool) {
-	tc := tls.Server(c, &tls.Config{
+	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"h2", "http/1.1"},
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return f.insp.leaf(f.peerName)
 		},
-	})
+	}
+	// A hello that offers only other protocols would fail with
+	// no_application_protocol: answer with its own list, which names neither
+	// h2 nor http/1.1, so the guest's first choice is negotiated and the
+	// HTTP/2 server path is never entered through it.
+	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		if len(hello.SupportedProtos) == 0 || offersHTTP(hello.SupportedProtos) {
+			return nil, nil
+		}
+		own := cfg.Clone()
+		own.GetConfigForClient = nil
+		own.NextProtos = slices.Clone(hello.SupportedProtos)
+		return own, nil
+	}
+	tc := tls.Server(c, cfg)
 	_ = tc.SetDeadline(time.Now().Add(tlsHandshakeTimeout))
 	err := tc.Handshake()
 	_ = tc.SetDeadline(time.Time{})
@@ -663,12 +692,13 @@ func (f *inspectFlow) notHTTPDenied(guest net.Conn, d Decision, msg string) {
 	_ = guest.Close()
 }
 
-// relayNotHTTP handles a TLS flow without ALPN whose decrypted bytes are not
-// HTTP. http rules never open such traffic, so the plain rules decide; an
-// allowed flow is relayed over a verified upstream TLS connection. With guard
-// set the guest has not sent anything yet, and its first line is checked on
-// the way (see firstLineGuard).
-func (f *inspectFlow) relayNotHTTP(guest net.Conn, guard bool) {
+// relayNotHTTP handles a TLS flow whose decrypted bytes are not HTTP, with no
+// ALPN or with proto, a protocol other than h2 and http/1.1, negotiated.
+// http rules never open such traffic, so the plain rules decide; an allowed
+// flow is relayed over a verified upstream TLS connection that is offered
+// proto. With guard set the guest has not sent anything yet, and its first
+// line is checked on the way (see firstLineGuard).
+func (f *inspectFlow) relayNotHTTP(guest net.Conn, guard bool, proto string) {
 	d := f.b.peerDecision(f.p.plain(), f.env, f.dst, f.peerName)
 	if !d.Allow {
 		f.notHTTPDenied(guest, d, "not HTTP")
@@ -676,7 +706,11 @@ func (f *inspectFlow) relayNotHTTP(guest net.Conn, guard bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout+tlsHandshakeTimeout)
 	defer cancel()
-	up, err := f.dialTLS(ctx, nil)
+	var protos []string
+	if proto != "" {
+		protos = []string{proto}
+	}
+	up, err := f.dialTLS(ctx, protos)
 	if err != nil {
 		f.b.record(f.upstreamErrorEvent(nil, err))
 		_ = guest.Close()
