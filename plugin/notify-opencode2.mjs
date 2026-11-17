@@ -103,27 +103,71 @@ function openCode2PluginEnabled(plugins, id) {
   return enabled;
 }
 
+// openCode2LegacyValid checks the tui.json fields that decide notifications
+// against OpenCode 2's v1 TUI schema, which rejects the whole file when one
+// of them has the wrong type.
+function openCode2LegacyValid(legacy) {
+  const { attention, plugin, plugin_enabled: pluginEnabled } = legacy;
+  const optional = (value, valid) => value === undefined || valid(value);
+  const boolean = (value) => typeof value === "boolean";
+  const pluginSpec = (spec) =>
+    typeof spec === "string" || (Array.isArray(spec) && spec.length === 2 && typeof spec[0] === "string" && isRecord(spec[1]));
+  return (
+    optional(attention, (value) => isRecord(value) && optional(value.notifications, boolean)) &&
+    optional(plugin, (value) => Array.isArray(value) && value.every(pluginSpec)) &&
+    optional(pluginEnabled, (value) => isRecord(value) && Object.values(value).every(boolean))
+  );
+}
+
+// openCode2LegacySettings returns the notification settings OpenCode 2.2.5
+// migrates from tui.json when there is no cli.json: the attention settings
+// as they are, and the plugin entries followed by one directive for each
+// plugin_enabled entry.
+function openCode2LegacySettings(text) {
+  const legacy = typeof text === "string" ? parseJsonc(text) : undefined;
+  if (!isRecord(legacy) || !openCode2LegacyValid(legacy)) return {};
+  const plugins = [
+    ...(legacy.plugin ?? []).map((spec) => (typeof spec === "string" ? spec : { package: spec[0], options: spec[1] })),
+    ...Object.entries(legacy.plugin_enabled ?? {}).map(([id, enabled]) => (enabled ? id : `-${id}`)),
+  ];
+  return {
+    ...(plugins.length ? { plugins } : {}),
+    ...(legacy.attention === undefined ? {} : { attention: { ...legacy.attention } }),
+  };
+}
+
+// readOpenCode2File returns the text of path, null when it does not exist, or
+// undefined when it exists but can't be read. OpenCode 2 reads an unreadable
+// file as no file (orElseSucceed), but migrates tui.json only when cli.json
+// does not exist.
+function readOpenCode2File(readFile, path) {
+  try {
+    return readFile(path);
+  } catch (error) {
+    return error?.code === "ENOENT" ? null : undefined;
+  }
+}
+
 // openCode2BuiltInNotifies reports whether OpenCode 2 raises its own system
 // notifications. It evaluates the effective CLI config the way OpenCode 2.2.5
-// loads it: cli.json in OPENCODE_CONFIG_DIR, else $XDG_CONFIG_HOME/opencode,
-// else ~/.config/opencode, deep-merged with OPENCODE_CLI_CONFIG_CONTENT; then
-// attention.notifications must be true and the opencode.notifications plugin
-// enabled by the plugin directives.
+// loads it, without writing anything: cli.json in OPENCODE_CONFIG_DIR, else
+// $XDG_CONFIG_HOME/opencode, else ~/.config/opencode, or the tui.json
+// settings OpenCode migrates from that directory when there is no cli.json,
+// deep-merged with OPENCODE_CLI_CONFIG_CONTENT; then attention.notifications
+// must be true and the opencode.notifications plugin enabled by the plugin
+// directives.
 export function openCode2BuiltInNotifies({
   env = process.env,
   readFile = (path) => readFileSync(path, "utf8"),
   homedir: home = homedir,
 } = {}) {
   const dir = env.OPENCODE_CONFIG_DIR || join(env.XDG_CONFIG_HOME || join(home(), ".config"), "opencode");
-  let text;
-  try {
-    text = readFile(join(dir, "cli.json"));
-  } catch {
-    // OpenCode 2 reads an unreadable cli.json as no file (orElseSucceed), so
-    // the effective config has no file settings either.
-    text = undefined;
-  }
-  const config = mergeRecords(openCode2ConfigRecord(text), openCode2ConfigRecord(env.OPENCODE_CLI_CONFIG_CONTENT));
+  const text = readOpenCode2File(readFile, join(dir, "cli.json"));
+  const file =
+    text === null
+      ? openCode2LegacySettings(readOpenCode2File(readFile, join(dir, "tui.json")))
+      : openCode2ConfigRecord(text);
+  const config = mergeRecords(file, openCode2ConfigRecord(env.OPENCODE_CLI_CONFIG_CONTENT));
   if (!isRecord(config.attention) || config.attention.notifications !== true) return false;
   return openCode2PluginEnabled(config.plugins, openCode2NotificationsPlugin);
 }
