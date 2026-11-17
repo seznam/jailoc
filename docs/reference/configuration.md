@@ -519,7 +519,7 @@ With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an
 | Value | Transport |
 |---|---|
 | `"auto"` | `"native"` when the host can show desktop notifications and neither `SSH_CONNECTION` nor `SSH_TTY` is set, otherwise `"osc"` |
-| `"native"` | A desktop notification from a host command: `/usr/bin/osascript` on macOS, `notify-send` on `PATH` on Linux with `WAYLAND_DISPLAY` or `DISPLAY` set. Without that command, notifications are off and jailoc warns |
+| `"native"` | A desktop notification from a host command: `/usr/bin/osascript` on macOS, `notify-send` on `PATH` on Linux with `WAYLAND_DISPLAY`, `DISPLAY` or `DBUS_SESSION_BUS_ADDRESS` set. Without that command, notifications are off and jailoc warns |
 | `"osc"` | An OSC 777 `notify` sequence written to the terminal, inside a tmux passthrough sequence when `TMUX` is set. Only terminals that implement OSC 777 show it |
 | `"off"` | None |
 

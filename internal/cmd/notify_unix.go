@@ -49,7 +49,7 @@ func chooseNotifyTransport(mode, goos string, getenv func(string) string, lookPa
 	case "darwin":
 		native, _ = lookPath(macNotifyCommand)
 	case "linux":
-		if getenv("WAYLAND_DISPLAY") != "" || getenv("DISPLAY") != "" {
+		if getenv("WAYLAND_DISPLAY") != "" || getenv("DISPLAY") != "" || getenv("DBUS_SESSION_BUS_ADDRESS") != "" {
 			native, _ = lookPath("notify-send")
 		}
 	}
