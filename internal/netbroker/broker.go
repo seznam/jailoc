@@ -102,6 +102,10 @@ type Broker struct {
 	// connSeq numbers guest flows so l7 events refer to their flow event.
 	connSeq atomic.Uint64
 
+	// replay is the request body bytes the inspected flows hold in memory so
+	// the bodies can be resent on a new upstream connection.
+	replay byteBudget
+
 	tcpFlows, udpFlows flowLimit
 	// dnsQueries and dnsConns hold the in-flight UDP DNS queries and open
 	// DNS-over-TCP connections of the gateway resolver and direct DNS.

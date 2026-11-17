@@ -1,8 +1,10 @@
 package netbroker
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +27,36 @@ const maxEventPath = 2048
 // maxUpstreamConns bounds the upstream sockets of one inspected flow, per
 // transport.
 const maxUpstreamConns = 16
+
+// maxReplayBody is the largest request body, by Content-Length, that is
+// buffered so the upstream transport can replay it on a new connection, for
+// instance after an HTTP/2 GOAWAY. maxReplayBudget bounds all the bodies
+// buffered at once across the broker's inspected flows.
+const (
+	maxReplayBody   = 1 << 20
+	maxReplayBudget = 64 << 20
+)
+
+// byteBudget is a shared count of bytes in use. The zero value is empty.
+type byteBudget struct {
+	used atomic.Int64
+}
+
+// acquire takes n bytes if they fit under limit, and reports whether it did.
+func (b *byteBudget) acquire(n, limit int64) bool {
+	for {
+		cur := b.used.Load()
+		if cur+n > limit {
+			return false
+		}
+		if b.used.CompareAndSwap(cur, cur+n) {
+			return true
+		}
+	}
+}
+
+// release returns n bytes taken by acquire.
+func (b *byteBudget) release(n int64) { b.used.Add(-n) }
 
 // httpScope is the http rules that apply to one flow: those whose target
 // matches the flow's peer name or destination address on tcp and its port.
@@ -398,7 +431,69 @@ func (f *inspectFlow) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// An h2c upgrade would, on a 101, turn the connection into a raw tunnel
 	// whose HTTP/2 streams skip this check; send the request as plain HTTP/1.1.
 	stripH2CUpgrade(r.Header)
+	release, err := f.bufferBody(r)
+	if err != nil {
+		// The guest gave up on the request: nothing reached the upstream.
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	defer release()
 	f.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), reqInfoKey{}, info)))
+}
+
+// replayable reports whether the body of r is worth buffering: a known,
+// small length, and a request that neither waits for a 100 Continue nor
+// upgrades the connection. Only HTTP/1.x requests still carry Expect here: Go's
+// HTTP/2 server removes it before the handler and answers 100 Continue itself
+// on the first body read, so the expectation never reaches the upstream and
+// buffering such a body changes nothing.
+func replayable(r *http.Request) bool {
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength <= 0 || r.ContentLength > maxReplayBody {
+		return false
+	}
+	if r.Header.Get("Upgrade") != "" {
+		return false
+	}
+	return !slices.ContainsFunc(headerTokens(r.Header, "Expect"), func(tok string) bool {
+		return strings.EqualFold(tok, "100-continue")
+	})
+}
+
+// bufferBody reads a small request body into memory and gives r a GetBody, so
+// the upstream transport can resend it on a new connection when one goes away
+// before answering (an HTTP/2 GOAWAY); a one-shot body cannot be replayed. Other
+// bodies, and those that do not fit the broker's budget, stay streamed. The
+// returned release gives the budget back when the request is done.
+func (f *inspectFlow) bufferBody(r *http.Request) (release func(), err error) {
+	if !replayable(r) || !f.b.replay.acquire(r.ContentLength, maxReplayBudget) {
+		return func() {}, nil
+	}
+	n := r.ContentLength
+	buf := make([]byte, n)
+	if err := readExactBody(r.Body, buf); err != nil {
+		f.b.replay.release(n)
+		return nil, err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(buf))
+	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(buf)), nil }
+	return func() { f.b.replay.release(n) }, nil
+}
+
+// readExactBody fills buf from body and checks the body ends there: a body that
+// sends more than its Content-Length, or fails at its end, is an error rather
+// than a request cut to the declared length.
+func readExactBody(body io.Reader, buf []byte) error {
+	if _, err := io.ReadFull(body, buf); err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+	var extra [1]byte
+	switch _, err := io.ReadFull(body, extra[:]); {
+	case err == nil:
+		return fmt.Errorf("read request body: longer than its Content-Length of %d bytes", len(buf))
+	case !errors.Is(err, io.EOF):
+		return fmt.Errorf("read request body end: %w", err)
+	}
+	return nil
 }
 
 // headerTokens returns the comma-separated tokens of all the values of a
