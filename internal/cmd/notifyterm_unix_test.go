@@ -354,3 +354,104 @@ func TestNotifyTerminalWriteError(t *testing.T) {
 		t.Fatalf("write() to a bad descriptor = %v, want a failure that is not a drop", err)
 	}
 }
+
+// focusStreamChunks returns the stream whole, split in two at every offset and
+// split byte by byte.
+func focusStreamChunks(stream string) [][]string {
+	chunks := [][]string{{stream}}
+	for i := 1; i < len(stream); i++ {
+		chunks = append(chunks, []string{stream[:i], stream[i:]})
+	}
+	return append(chunks, strings.Split(stream, ""))
+}
+
+func TestFocusOutputTmuxWrapper(t *testing.T) {
+	t.Parallel()
+
+	const enable = "\x1b[?1004h"
+	const reassert = enable
+	wrap := func(inner string) string { return string(tmuxPassthrough([]byte(inner))) }
+	long := strings.Repeat("2004;", 20)
+	zeros := strings.Repeat("0", 40)
+	tests := []struct {
+		name      string
+		stream    string
+		wantOut   string
+		wantGuest bool
+	}{
+		{name: "wrapped reset", stream: enable + wrap("\x1b[?1004l") + "z", wantOut: enable + wrap("\x1b[?1004l") + reassert + "z"},
+		{name: "wrapped reset literal bytes", stream: enable + "\x1bPtmux;\x1b\x1b[?1004l\x1b\\z", wantOut: enable + "\x1bPtmux;\x1b\x1b[?1004l\x1b\\" + reassert + "z"},
+		{name: "wrapped enable", stream: wrap("\x1b[?1004h"), wantOut: wrap("\x1b[?1004h"), wantGuest: true},
+		{name: "wrapped padded disable", stream: enable + wrap("\x1b[?"+zeros+"1004l"), wantOut: enable + wrap("\x1b[?"+zeros+"1004l") + reassert},
+		{name: "wrapped long disable", stream: enable + wrap("\x1b[?"+long+"1004l"), wantOut: enable + wrap("\x1b[?"+long+"1004l") + reassert},
+		{name: "wrapped other mode", stream: enable + wrap("\x1b[?"+long+"2004l"), wantOut: enable + wrap("\x1b[?"+long+"2004l"), wantGuest: true},
+		{name: "wrapped RIS", stream: enable + wrap("\x1bc") + "z", wantOut: enable + wrap("\x1bc") + reassert + "z"},
+		{name: "wrapped DECSTR", stream: enable + wrap("\x1b[!p") + "z", wantOut: enable + wrap("\x1b[!p") + reassert + "z", wantGuest: true},
+		{name: "wrapped save and restore", stream: enable + wrap("\x1b[?1004s\x1b[?1004l\x1b[?1004r"), wantOut: enable + wrap("\x1b[?1004s\x1b[?1004l\x1b[?1004r") + reassert, wantGuest: true},
+		{name: "save and restore in separate wrappers", stream: enable + wrap("\x1b[?1004s") + wrap("\x1b[?1004l") + wrap("\x1b[?1004r"), wantOut: enable + wrap("\x1b[?1004s") + wrap("\x1b[?1004l") + reassert + wrap("\x1b[?1004r") + reassert, wantGuest: true},
+		{name: "multiple resets in one wrapper", stream: enable + wrap("\x1b[?1004l\x1bc\x1b[?1004l") + "z", wantOut: enable + wrap("\x1b[?1004l\x1bc\x1b[?1004l") + reassert + "z"},
+		{name: "wrapped OSC 52", stream: enable + wrap("\x1b]52;c;aGVsbG8=\x07"), wantOut: enable + wrap("\x1b]52;c;aGVsbG8=\x07"), wantGuest: true},
+		{name: "wrapped OSC string holds reset text", stream: enable + wrap("\x1b]0;[?1004l\x07"), wantOut: enable + wrap("\x1b]0;[?1004l\x07"), wantGuest: true},
+		{name: "BEL does not close the wrapper", stream: enable + wrap("\x1b]0;t\x07\x1b[?1004l") + "z", wantOut: enable + wrap("\x1b]0;t\x07\x1b[?1004l") + reassert + "z"},
+		{name: "escaped inner ST does not close the wrapper", stream: enable + wrap("\x1b]0;t\x1b\\\x1b[?1004l") + "z", wantOut: enable + wrap("\x1b]0;t\x1b\\\x1b[?1004l") + reassert + "z"},
+		{name: "literal backslash is payload", stream: enable + wrap("\\\x1b[?1004l"), wantOut: enable + wrap("\\\x1b[?1004l") + reassert},
+		{name: "escape before other byte is dropped", stream: enable + "\x1bPtmux;\x1b[?1004l\x1b\\", wantOut: enable + "\x1bPtmux;\x1b[?1004l\x1b\\", wantGuest: true},
+		{name: "non tmux DCS", stream: enable + "\x1bP1$r[?1004l\x1b\\" + "\x1b[?1004l", wantOut: enable + "\x1bP1$r[?1004l\x1b\\" + "\x1b[?1004l" + reassert},
+		{name: "near tmux prefix", stream: enable + "\x1bPtmux\x1b\\\x1bPtmuy;x\x1b\\\x1bPtmux:x\x1b\\", wantOut: enable + "\x1bPtmux\x1b\\\x1bPtmuy;x\x1b\\\x1bPtmux:x\x1b\\", wantGuest: true},
+		{name: "unwrapped reset after wrapper", stream: enable + wrap("\x1b[?1004l") + "\x1b[?1004l", wantOut: enable + wrap("\x1b[?1004l") + reassert + "\x1b[?1004l" + reassert},
+		{name: "next wrapper does not inherit", stream: enable + wrap("\x1b[?1004l") + wrap("\x1b]52;c;eA==\x07"), wantOut: enable + wrap("\x1b[?1004l") + reassert + wrap("\x1b]52;c;eA==\x07")},
+		{name: "inner sequence cut by the wrapper end", stream: enable + wrap("\x1b[?1004") + "l", wantOut: enable + wrap("\x1b[?1004") + "l", wantGuest: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, chunks := range focusStreamChunks(tt.stream) {
+				focus := &sessionFocus{}
+				o := focusOutput{focus: focus}
+				var out strings.Builder
+				for _, c := range chunks {
+					out.Write(o.feed([]byte(c)))
+				}
+				if out.String() != tt.wantOut || focus.guestReports() != tt.wantGuest {
+					t.Fatalf("feed(%q) = %q, guest %v; want %q, guest %v", chunks, out.String(), focus.guestReports(), tt.wantOut, tt.wantGuest)
+				}
+			}
+		})
+	}
+}
+
+func TestFocusOutputTmuxWrapperReassertsOnlyAfterTerminator(t *testing.T) {
+	t.Parallel()
+
+	const enable = "\x1b[?1004h"
+	wrapper := string(tmuxPassthrough([]byte("\x1b[?1004l")))
+	body := wrapper[:len(wrapper)-2]
+	o := focusOutput{focus: &sessionFocus{}}
+	feed := func(s string) string { return string(o.feed([]byte(s))) }
+
+	if got := feed(enable + body); got != enable+body {
+		t.Fatalf("feed(wrapper without terminator) = %q, want it unchanged", got)
+	}
+	if got := feed("\x1b"); got != "\x1b" {
+		t.Fatalf("feed(ESC of terminator) = %q, want no insertion before completion", got)
+	}
+	if got := feed("\\"); got != "\\"+enable {
+		t.Fatalf("feed(backslash of terminator) = %q, want it followed by exactly one reassertion", got)
+	}
+	if got := feed("z"); got != "z" {
+		t.Fatalf("feed(after wrapper) = %q, want no further insertion", got)
+	}
+}
+
+func TestFocusOutputIncompleteTmuxWrapperDoesNotReassert(t *testing.T) {
+	t.Parallel()
+
+	const enable = "\x1b[?1004h"
+	wrapper := string(tmuxPassthrough([]byte("\x1b[?1004l\x1bc")))
+	for _, cut := range []int{len(wrapper) - 2, len(wrapper) - 1} {
+		o := focusOutput{focus: &sessionFocus{}}
+		if got := string(o.feed([]byte(enable + wrapper[:cut]))); got != enable+wrapper[:cut] {
+			t.Fatalf("feed(wrapper cut at %d) = %q, want it unchanged", cut, got)
+		}
+	}
+}

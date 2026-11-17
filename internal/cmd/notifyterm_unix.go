@@ -161,7 +161,20 @@ type focusOutput struct {
 	mode  uint16 // the mode being read, at most 1005 so that it cannot overflow
 	found bool   // mode 1004 is in the current CSI sequence
 	saved bool   // the agent's mode 1004 saved by CSI ? 1004 s
+
+	// A tmux passthrough wrapper, ESC P tmux; payload ESC \, carries
+	// the agent's own output with each ESC doubled. Its payload is scanned
+	// as if unwrapped, but jailoc must not write into the wrapper, so the
+	// reassertion waits for the outer terminator.
+	matching bool  // the DCS string so far is a prefix of tmuxWrapperPrefix
+	prefix   uint8 // how much of tmuxWrapperPrefix the DCS string has matched
+	wrapped  bool  // inside a tmux wrapper
+	wrapEsc  bool  // an ESC of the wrapper payload is pending
+	pending  bool  // the wrapper payload turned focus reporting off
 }
+
+// tmuxWrapperPrefix is what follows ESC P in a tmux passthrough wrapper.
+const tmuxWrapperPrefix = "tmux;"
 
 // feed returns agent output p with enableFocusReports after each sequence
 // that turns focus reporting off.
@@ -187,6 +200,41 @@ func (o *focusOutput) feed(p []byte) []byte {
 // step scans one byte and reports whether it ended a sequence that may have
 // turned focus reporting off.
 func (o *focusOutput) step(b byte) bool {
+	if o.wrapped {
+		return o.wrapStep(b)
+	}
+	return o.scan(b, true)
+}
+
+// wrapStep scans one byte of a tmux wrapper. Like tmux it reads ESC ESC as an
+// ESC of the payload and ESC \ as the end of the wrapper; any other byte after
+// an ESC is payload and the ESC is dropped. The payload goes to scan, which
+// does not look for wrappers, so none nest. It reports true only for the
+// byte that ends a wrapper whose payload turned focus reporting off, however
+// many times.
+func (o *focusOutput) wrapStep(b byte) bool {
+	switch {
+	case o.wrapEsc && b == '\\':
+		pending := o.pending
+		o.wrapped, o.wrapEsc, o.pending, o.state = false, false, false, escGround
+		return pending
+	case o.wrapEsc:
+		o.wrapEsc = false
+	case b == 0x1b:
+		o.wrapEsc = true
+		return false
+	}
+	if o.scan(b, false) {
+		o.pending = true
+	}
+	return false
+}
+
+// scan scans one byte of unwrapped output, or of a wrapper's payload when
+// detect is false, and reports whether it ended a sequence that may have
+// turned focus reporting off. With detect it also finds the start of a tmux
+// wrapper.
+func (o *focusOutput) scan(b byte, detect bool) bool {
 	switch o.state {
 	case escGround:
 		if b == 0x1b {
@@ -199,6 +247,7 @@ func (o *focusOutput) step(b byte) bool {
 			o.state, o.lead, o.bad, o.mode, o.found = escCSI, 0, false, 0, false
 		case b == ']' || b == 'P' || b == 'X' || b == '^' || b == '_':
 			o.state = escString
+			o.matching, o.prefix = detect && b == 'P', 0
 		case b == 0x1b:
 			o.state = escStart
 		case b >= 0x20 && b <= 0x2f:
@@ -226,6 +275,15 @@ func (o *focusOutput) step(b byte) bool {
 			o.param(b)
 		}
 	case escString:
+		if o.matching {
+			if b != tmuxWrapperPrefix[o.prefix] {
+				o.matching = false
+			} else if o.prefix++; int(o.prefix) == len(tmuxWrapperPrefix) {
+				o.matching = false
+				o.wrapped, o.wrapEsc, o.pending, o.state = true, false, false, escGround
+				return false
+			}
+		}
 		switch b {
 		case 0x07:
 			o.state = escGround
@@ -238,7 +296,7 @@ func (o *focusOutput) step(b byte) bool {
 			return false
 		}
 		o.state = escStart
-		return o.step(b)
+		return o.scan(b, detect)
 	}
 	return false
 }
