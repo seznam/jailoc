@@ -40,6 +40,7 @@ type startupStatus struct {
 	state   escState
 	osc     bool   // the current string is an OSC string, which BEL ends
 	params  []byte // parameters of the current CSI sequence
+	cut     bool   // a notification reached the terminal only in part; notifyAbort must come first
 }
 
 type escState int
@@ -143,6 +144,78 @@ func (s *startupStatus) tick() bool {
 	return true
 }
 
+// notifyAbort ends a notification the terminal received only in part, so it
+// shows nothing and the output after it is not swallowed: CAN aborts the
+// OSC string, and ST ends a tmux passthrough, which forwards the CAN to the
+// outer terminal. Outside a sequence a terminal ignores both.
+const notifyAbort = "\x18\x1b\\"
+
+// tryWriteBetween writes p, a whole escape sequence of jailoc's own such as a
+// notification, with write, a non-blocking writer of the same terminal, and
+// never waits. p is dropped, with an error wrapping errNotifyDropped, when
+// agent output is being written right now, possibly blocked by a terminal
+// that stopped reading, when the output written so far ends inside an
+// escape sequence, or when current, checked right before the write, no
+// longer holds. Nothing is kept for later. When the terminal takes only part
+// of p, the next output starts with notifyAbort.
+func (s *startupStatus) tryWriteBetween(p []byte, write func([]byte) (int, error), current func() bool) error {
+	if !s.mu.TryLock() {
+		return fmt.Errorf("%w: agent output is being written", errNotifyDropped)
+	}
+	defer s.mu.Unlock()
+	switch {
+	case s.cut:
+		return fmt.Errorf("%w: the terminal has not taken the previous notification", errNotifyDropped)
+	case s.state != escGround:
+		return fmt.Errorf("%w: agent output is inside an escape sequence", errNotifyDropped)
+	case !current():
+		return fmt.Errorf("%w: the terminal is focused again or the session ended", errNotifyDropped)
+	}
+	n, err := write(p)
+	if n > 0 && n < len(p) {
+		s.cut = true
+	}
+	if err == nil && n < len(p) {
+		err = fmt.Errorf("%w: the terminal took %d of %d bytes", errNotifyDropped, n, len(p))
+	}
+	return err
+}
+
+// writeBetween writes p, a whole escape sequence of jailoc's own, to the
+// terminal agent output goes to, unless the output written so far ends
+// inside an escape sequence.
+func (s *startupStatus) writeBetween(p []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != escGround {
+		return fmt.Errorf("agent output is inside an escape sequence")
+	}
+	if err := s.abortCut(); err != nil {
+		return err
+	}
+	_, err := s.w.Write(p)
+	return err
+}
+
+// settle ends a notification the terminal received only in part, before
+// jailoc writes to the terminal outside the session.
+func (s *startupStatus) settle() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.abortCut() // best effort right before the terminal modes are reset, which fail the same way
+}
+
+// abortCut writes notifyAbort after a notification the terminal received
+// only in part. s.mu must be held.
+func (s *startupStatus) abortCut() error {
+	if !s.cut {
+		return nil
+	}
+	s.cut = false
+	_, err := io.WriteString(s.w, notifyAbort)
+	return err
+}
+
 // write writes p, agent output, and keeps the status line on the alternate
 // screen until the agent draws its first visible character. It continues
 // scanning after the status line stops so altScreen and visible stay accurate
@@ -150,6 +223,13 @@ func (s *startupStatus) tick() bool {
 func (s *startupStatus) write(p []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.abortCut(); err != nil {
+		return err
+	}
+	return s.writeAgent(p)
+}
+
+func (s *startupStatus) writeAgent(p []byte) error {
 	if !s.pending {
 		for _, b := range p {
 			if s.scan(b) == scanVisible {

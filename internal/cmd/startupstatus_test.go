@@ -4,6 +4,8 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -241,5 +243,160 @@ func TestResetSessionTerminalModes(t *testing.T) {
 	}
 	if bytes.Contains(onMain.Bytes(), []byte("\x1b[?1049l")) {
 		t.Errorf("resetSessionTerminalModes(alt=false) = %q, must not contain \\x1b[?1049l", onMain.String())
+	}
+}
+
+// termSink takes the bytes of a notification writer into out, the buffer
+// agent output goes to, so their order shows; take bounds the bytes one
+// write takes, a negative take takes all.
+type termSink struct {
+	out  *bytes.Buffer
+	take int
+	err  error
+}
+
+func (k *termSink) write(p []byte) (int, error) {
+	if k.err != nil {
+		return 0, k.err
+	}
+	n := len(p)
+	if k.take >= 0 {
+		n = min(n, k.take)
+	}
+	k.out.Write(p[:n])
+	return n, nil
+}
+
+func TestStartupStatusTryWriteBetween(t *testing.T) {
+	t.Parallel()
+
+	errWrite := errors.New("write failed")
+	full := fmt.Errorf("%w: the terminal is not reading", errNotifyDropped)
+	tests := []struct {
+		name        string
+		before      []string
+		after       []string
+		take        int
+		writeErr    error
+		refocused   bool
+		want        string
+		wantErr     error
+		wantDropped bool
+	}{
+		{name: "between chunks", before: []string{"a\x1b[1m"}, after: []string{"b"}, take: -1, want: "a\x1b[1m<N>b"},
+		{name: "inside a CSI sequence is dropped, not kept", before: []string{"\x1b[3"}, after: []string{"1", "m", "x"}, take: -1, want: "\x1b[31mx", wantDropped: true},
+		{name: "inside a string is dropped, not kept", before: []string{"\x1b]0;ti"}, after: []string{"tle\x1b", "\\"}, take: -1, want: "\x1b]0;title\x1b\\", wantDropped: true},
+		{name: "focused again", before: []string{"a"}, after: []string{"b"}, take: -1, refocused: true, want: "ab", wantDropped: true},
+		{name: "terminal not reading", before: []string{"a"}, after: []string{"b"}, writeErr: full, want: "ab", wantDropped: true},
+		{name: "part taken is aborted", before: []string{"a"}, after: []string{"b"}, take: 2, want: "a<N" + notifyAbort + "b", wantDropped: true},
+		{name: "write error", before: []string{"a"}, after: []string{"b"}, writeErr: errWrite, want: "ab", wantErr: errWrite},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			s := newStartupStatus(&out, func() (int, int) { return 80, 24 })
+			for _, c := range tt.before {
+				if err := s.write([]byte(c)); err != nil {
+					t.Fatalf("write(%q): %v", c, err)
+				}
+			}
+			sink := &termSink{out: &out, take: tt.take, err: tt.writeErr}
+			err := s.tryWriteBetween([]byte("<N>"), sink.write, func() bool { return !tt.refocused })
+			switch {
+			case tt.wantDropped && !errors.Is(err, errNotifyDropped):
+				t.Fatalf("tryWriteBetween() = %v, want it dropped", err)
+			case tt.wantErr != nil && (!errors.Is(err, tt.wantErr) || errors.Is(err, errNotifyDropped)):
+				t.Fatalf("tryWriteBetween() = %v, want %v", err, tt.wantErr)
+			case !tt.wantDropped && tt.wantErr == nil && err != nil:
+				t.Fatalf("tryWriteBetween() = %v, want nil", err)
+			}
+			for _, c := range tt.after {
+				if err := s.write([]byte(c)); err != nil {
+					t.Fatalf("write(%q): %v", c, err)
+				}
+			}
+			if got := out.String(); got != tt.want {
+				t.Errorf("output = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStartupStatusTryWriteBetweenAfterCut(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := newStartupStatus(&out, func() (int, int) { return 80, 24 })
+	cut := &termSink{out: &out, take: 1}
+	if err := s.tryWriteBetween([]byte("<N>"), cut.write, func() bool { return true }); !errors.Is(err, errNotifyDropped) {
+		t.Fatalf("cut tryWriteBetween() = %v, want it dropped", err)
+	}
+	all := &termSink{out: &out, take: -1}
+	if err := s.tryWriteBetween([]byte("<M>"), all.write, func() bool { return true }); !errors.Is(err, errNotifyDropped) {
+		t.Fatalf("tryWriteBetween() after a cut = %v, want it dropped", err)
+	}
+	s.settle()
+	s.settle()
+	if got, want := out.String(), "<"+notifyAbort; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+// blockingWriter blocks every write until release is closed, like a
+// terminal that stopped reading.
+type blockingWriter struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (w blockingWriter) Write(p []byte) (int, error) {
+	w.entered <- struct{}{}
+	<-w.release
+	return len(p), nil
+}
+
+func TestStartupStatusTryWriteBetweenDoesNotWaitForBlockedOutput(t *testing.T) {
+	t.Parallel()
+
+	w := blockingWriter{entered: make(chan struct{}), release: make(chan struct{})}
+	s := newStartupStatus(w, func() (int, int) { return 80, 24 })
+	wrote := make(chan error)
+	go func() { wrote <- s.write([]byte("agent output")) }()
+	<-w.entered
+
+	called := false
+	sink := func(p []byte) (int, error) { called = true; return len(p), nil }
+	start := time.Now()
+	err := s.tryWriteBetween([]byte("<N>"), sink, func() bool { return true })
+	took := time.Since(start)
+	close(w.release)
+	if werr := <-wrote; werr != nil {
+		t.Fatalf("write: %v", werr)
+	}
+	if !errors.Is(err, errNotifyDropped) || called {
+		t.Fatalf("tryWriteBetween() = %v, wrote %v; want it dropped without writing", err, called)
+	}
+	if took > time.Second {
+		t.Fatalf("tryWriteBetween() took %v while agent output was blocked, want no wait", took)
+	}
+}
+
+func TestStartupStatusWriteBetween(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	s := newStartupStatus(&out, func() (int, int) { return 80, 24 })
+	if err := s.writeBetween([]byte("<E>")); err != nil {
+		t.Fatalf("writeBetween() = %v", err)
+	}
+	if err := s.write([]byte("\x1b[3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.writeBetween([]byte("<F>")); err == nil {
+		t.Fatal("writeBetween() inside an escape sequence = nil, want an error")
+	}
+	if got, want := out.String(), "<E>\x1b[3"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
