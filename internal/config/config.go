@@ -50,6 +50,7 @@ const (
 # memory = "4g"  # RAM limit per workspace VM
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
+# notifications = "auto"  # attached OpenCode sessions: auto, native, osc or off
 
 # [defaults.network]
 # ipv6 = false  # true: give the VM IPv6 connectivity (public destinations only)
@@ -150,6 +151,7 @@ paths = []
 # memory = "4g"  # RAM limit per workspace VM
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
+# notifications = "auto"  # attached OpenCode sessions: auto, native, osc or off
 
 # [workspaces.default.network]
 # ipv6 = false
@@ -421,9 +423,12 @@ type Defaults struct {
 	Memory            *string                  `toml:"memory,omitempty"`
 	DockerDisk        *string                  `toml:"docker_disk,omitempty"`
 	TimeZone          *string                  `toml:"timezone,omitempty"`
-	ExposePort        *bool                    `toml:"expose_port,omitempty"`
-	EnableDocker      *bool                    `toml:"enable_docker,omitempty"`
-	Network           *Network                 `toml:"network,omitempty"`
+	// Notifications is how attached sessions notify about the agent: one of
+	// the Notifications* values; empty means NotificationsAuto.
+	Notifications string   `toml:"notifications,omitempty"`
+	ExposePort    *bool    `toml:"expose_port,omitempty"`
+	EnableDocker  *bool    `toml:"enable_docker,omitempty"`
+	Network       *Network `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
 	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`
@@ -458,9 +463,11 @@ type Workspace struct {
 	Memory            *string                  `toml:"memory,omitempty"`
 	DockerDisk        *string                  `toml:"docker_disk,omitempty"`
 	TimeZone          *string                  `toml:"timezone,omitempty"`
-	ExposePort        *bool                    `toml:"expose_port,omitempty"`
-	EnableDocker      *bool                    `toml:"enable_docker,omitempty"`
-	Network           *Network                 `toml:"network,omitempty"`
+	// Notifications overrides the [defaults] notifications when set.
+	Notifications string   `toml:"notifications,omitempty"`
+	ExposePort    *bool    `toml:"expose_port,omitempty"`
+	EnableDocker  *bool    `toml:"enable_docker,omitempty"`
+	Network       *Network `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
 	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`
@@ -1288,6 +1295,9 @@ func Validate(cfg *Config) error {
 	if cfg.Defaults.TimeZone != nil && !validTimeZone.MatchString(*cfg.Defaults.TimeZone) {
 		return fmt.Errorf("defaults: invalid timezone %q: must be a time zone name such as \"UTC\" or \"Europe/Prague\"", *cfg.Defaults.TimeZone)
 	}
+	if err := validateNotifications(cfg.Defaults.Notifications); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
 	if err := movedToNetwork("[defaults]", cfg.Defaults.LegacyFilteredDNS, cfg.Defaults.LegacyDNSUpstream, cfg.Defaults.LegacyDNSBlockedZones); err != nil {
 		return err
 	}
@@ -1399,6 +1409,9 @@ func Validate(cfg *Config) error {
 		}
 		if ws.TimeZone != nil && !validTimeZone.MatchString(*ws.TimeZone) {
 			return fmt.Errorf("workspace %q: invalid timezone %q: must be a time zone name such as \"UTC\" or \"Europe/Prague\"", name, *ws.TimeZone)
+		}
+		if err := validateNotifications(ws.Notifications); err != nil {
+			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if err := movedToNetwork(fmt.Sprintf("[workspaces.%s]", name), ws.LegacyFilteredDNS, ws.LegacyDNSUpstream, ws.LegacyDNSBlockedZones); err != nil {
 			return err

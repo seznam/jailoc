@@ -5,8 +5,12 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/creack/pty"
+	"golang.org/x/term"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/guest"
@@ -191,7 +195,7 @@ func TestRelaySessionDiagnoseAndFormatError(t *testing.T) {
 				}
 			}
 			var in bytes.Buffer
-			_, outcome, code, diagnose := relaySession(-1, false, nil, "Starting…", tt.agent.Title, nopWriteCloser{&in}, &stream, 24, 80)
+			_, outcome, code, diagnose := relaySession(-1, false, nil, "Starting…", tt.agent.Title, sessionNotify{}, nopWriteCloser{&in}, &stream, 24, 80)
 			if outcome != outcomeExited || code != 1 || diagnose != tt.wantDiagnose {
 				t.Fatalf("relaySession() = outcome %v, code %d, diagnose %v; want %v, 1, %v", outcome, code, diagnose, outcomeExited, tt.wantDiagnose)
 			}
@@ -218,5 +222,135 @@ func TestFormatAgentExitErrorWithConfigFlag(t *testing.T) {
 	want := "run `jailoc --config '/tmp/my config.toml' -w szn exec -- opencode --print-logs` for details"
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("formatAgentExitError() = %v, want substring %q", err, want)
+	}
+}
+
+func TestRelaySessionRemovesPluginNotifications(t *testing.T) {
+	const seq = "\x1b]777;jailoc-notify;completed\x07"
+	for _, tt := range []struct {
+		name   string
+		plugin bool
+		want   string
+	}{
+		{name: "OpenCode plugin", plugin: true, want: "ab"},
+		{name: "other agents", plugin: false, want: "a" + seq + "b"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var stream bytes.Buffer
+			for _, f := range []session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s1")},
+				{Type: session.FrameData, Payload: []byte("a" + seq[:9])},
+				{Type: session.FrameData, Payload: []byte(seq[9:] + "b")},
+				session.ExitFrame(0),
+			} {
+				if err := session.WriteFrame(&stream, f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var in bytes.Buffer
+			out := captureStdout(t, func() {
+				if _, outcome, _, _ := relaySession(-1, false, nil, "Starting…", "OpenCode", sessionNotify{plugin: tt.plugin}, nopWriteCloser{&in}, &stream, 24, 80); outcome != outcomeExited {
+					t.Errorf("relaySession() outcome = %v, want %v", outcome, outcomeExited)
+				}
+			})
+			if out != tt.want {
+				t.Fatalf("output = %q, want %q", out, tt.want)
+			}
+		})
+	}
+}
+
+func TestRelaySessionKeepsUndecidedPrefixOnEveryEnd(t *testing.T) {
+	const prefix = "\x1b]777;jailoc-no"
+	tests := []struct {
+		name        string
+		end         []session.Frame
+		interactive bool
+		plugin      bool
+		outcome     sessionOutcome
+	}{
+		{name: "exit", end: []session.Frame{session.ExitFrame(0)}, plugin: true, outcome: outcomeExited},
+		{name: "kicked", end: []session.Frame{{Type: session.FrameKicked}}, plugin: true, outcome: outcomeKicked},
+		{name: "lost stream", plugin: true, outcome: outcomeLost},
+		{name: "interactive without raw mode", end: []session.Frame{session.ExitFrame(0)}, interactive: true, plugin: true, outcome: outcomeExited},
+		{name: "plugin off", end: []session.Frame{session.ExitFrame(0)}, outcome: outcomeExited},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stream bytes.Buffer
+			frames := append([]session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s1")},
+				{Type: session.FrameData, Payload: []byte("a" + prefix)},
+			}, tt.end...)
+			for _, f := range frames {
+				if err := session.WriteFrame(&stream, f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var in bytes.Buffer
+			out := captureStdout(t, func() {
+				if _, outcome, _, _ := relaySession(-1, tt.interactive, nil, "Starting…", "OpenCode", sessionNotify{plugin: tt.plugin}, nopWriteCloser{&in}, &stream, 24, 80); outcome != tt.outcome {
+					t.Errorf("relaySession() outcome = %v, want %v", outcome, tt.outcome)
+				}
+			})
+			if want := "a" + prefix; out != want {
+				t.Fatalf("output = %q, want the undecided prefix kept: %q", out, want)
+			}
+		})
+	}
+}
+
+// A terminal on stdin with a redirected stdout must not get the cleanup of
+// the terminal modes: the notification abort and the mode resets belong to the
+// terminal on stdout, and would corrupt the output file or pipe.
+func TestRelaySessionRedirectedStdoutGetsNoCleanup(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "partial CSI", data: "a\x1b[1"},
+		{name: "partial OSC", data: "a\x1b]0;ti"},
+		{name: "private prefix", data: "a\x1b]777;jailoc-no"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ptmx, tty, err := pty.Open()
+			if err != nil {
+				t.Skipf("no pty: %v", err)
+			}
+			t.Cleanup(func() { _ = tty.Close(); _ = ptmx.Close() })
+			fd := int(tty.Fd()) //nolint:gosec // G115: file descriptors fit in int
+			before, err := term.GetState(fd)
+			if err != nil {
+				t.Fatalf("GetState() before: %v", err)
+			}
+
+			var stream bytes.Buffer
+			for _, f := range []session.Frame{
+				{Type: session.FrameInfo, Payload: []byte("s1")},
+				{Type: session.FrameData, Payload: []byte(tt.data)},
+				session.ExitFrame(0),
+			} {
+				if err := session.WriteFrame(&stream, f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var in bytes.Buffer
+			out := captureStdout(t, func() {
+				if _, outcome, _, _ := relaySession(fd, true, nil, "Starting…", "OpenCode", sessionNotify{plugin: true}, nopWriteCloser{&in}, &stream, 24, 80); outcome != outcomeExited {
+					t.Errorf("relaySession() outcome = %v, want %v", outcome, outcomeExited)
+				}
+			})
+			if out != tt.data {
+				t.Fatalf("redirected output = %q, want only the agent output %q", out, tt.data)
+			}
+			after, err := term.GetState(fd)
+			if err != nil {
+				t.Fatalf("GetState() after: %v", err)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("terminal state after relaySession() = %+v, want restored %+v", after, before)
+			}
+		})
 	}
 }

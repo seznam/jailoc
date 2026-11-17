@@ -123,6 +123,7 @@ Defaults applied to all workspaces.
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
 | `timezone` | string | (host zone) | Time zone of the workspace VM, an IANA name such as `"UTC"` or `"Europe/Prague"`. Omitted: the host's local zone. See [`timezone`](#timezone). |
+| `notifications` | string | `"auto"` | How an attached OpenCode session tells you that the agent finished or needs input while its terminal is not focused: `"auto"`, `"native"`, `"osc"` or `"off"`. See [`notifications`](#notifications). |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 | `protect_git` | bool | `false` | Make `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, `core.hooksPath` and included config files read-only inside the VM for repositories under workspace `paths` and read-write `mounts`, including symlinked workspace roots. Disable `sudo` and Docker there. |
 | `isolated_build` | bool | `false` | Build the workspace image in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM. The build does not inspect HTTPS: `allow` rules with an [`http` table](#http-rules) open their hosts and ports for all methods and paths, and `deny` rules with `http` don't apply. |
@@ -355,7 +356,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
 | `network` | table | `{}` | Same fields as [`[defaults.network]`](#defaultsnetwork); a set field wins. |
-| `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
+| `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle` | | (inherit) | Same meaning as in `[defaults]`; the workspace value wins. |
 
 ### Example
 
@@ -631,6 +632,27 @@ With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an
 
 `timezone` must match `^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$`; absolute paths and POSIX `TZ` rules are rejected. Without it, the VM takes the host's zone from `TZ` when set, otherwise from `/etc/localtime`. `jailoc-guest` points `/etc/localtime` at the zone in the image's `/usr/share/zoneinfo`, or copies the host's data for that zone when the image lacks it, and writes the name to `/etc/timezone`. A zone that neither the image nor the host has leaves the image's zone in place. [`jailoc reload`](cli.md#jailoc-reload) applies a changed `timezone` to a running VM.
 
+### `notifications`
+
+`notifications` must be `"auto"`, `"native"`, `"osc"` or `"off"`. jailoc reads it on the host each time a session attaches, so a change applies at the next attach, without `jailoc reload` or `jailoc restart`.
+
+| Value | Transport |
+|---|---|
+| `"auto"` | `"native"` when the host can show desktop notifications and neither `SSH_CONNECTION` nor `SSH_TTY` is set, otherwise `"osc"` |
+| `"native"` | A desktop notification from a host command: `/usr/bin/osascript` on macOS, `notify-send` on `PATH` on Linux with `WAYLAND_DISPLAY`, `DISPLAY` or `DBUS_SESSION_BUS_ADDRESS` set. Without that command, notifications are off and jailoc warns |
+| `"osc"` | An OSC 777 `notify` sequence written to the terminal, inside a tmux passthrough sequence when `TMUX` is set. Only terminals that implement OSC 777 show it |
+| `"off"` | None |
+
+Notifications are sent only when all of these hold:
+
+- The agent is `opencode`, `opencode1`, `opencode2` or a custom agent derived from one of them; their [TUI plugin](../how-to/tui-plugin.md#get-notifications-from-opencode) reports the agent's state. Other agents send none.
+- The session is attached interactively: standard input and output are terminals.
+- The terminal reported through focus reporting (DEC mode 1004) that it lost focus, and has not regained it before the notification goes out. While the focus is unknown, such as in a terminal without focus reporting, nothing is sent.
+
+The title is `jailoc / <workspace>` and the body is either `The agent finished.` or `The agent needs your input.`; neither contains session content. jailoc sends at most one notification every 3 seconds and queues each kind at most once. A native notification command gets 5 seconds. A terminal notification is written between two chunks of agent output and only when it does not wait: when the terminal is not reading, agent output is being written or it ends inside an escape sequence, the notification is dropped, not kept for later. After the agent exits, queued notifications are sent for at most 2 seconds; detaching, a takeover from another terminal or a lost connection drops them. Dropped and failed notifications are recorded in `~/.cache/jailoc/jailoc.log`.
+
+A detected native command does not guarantee a visible notification: macOS notification permissions and Focus settings, or the Linux desktop's notification service and D-Bus session, still control display. A failed native delivery is not retried through OSC.
+
 ### `image`, `dockerfile`, `build_context`
 
 `image` cannot be combined with `dockerfile` or `build_context`, and must not be whitespace-only. `dockerfile` accepts absolute paths, `~` paths and `http`/`https` URLs with a non-empty host (`http:///path` is rejected). Relative paths and other schemes are rejected.
@@ -696,7 +718,7 @@ The agent's configuration is copied instead of mounted; see [`import_agent_confi
 
 `secrets` merges by name. A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`. An inherited default secret can't be unset in a workspace.
 
-Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+Scalar settings (`agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns`) take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default. The same applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)). `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent. An empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
 
 ---
 

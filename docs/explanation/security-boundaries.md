@@ -82,8 +82,11 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | Inspection CA | Host to guest | Trust certificates the broker signs for hosts matched by `http` rules, which lets the broker read their traffic | `network.rules` with `http` |
 | Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `network` |
 | SSH session | Host to guest | Accept sessions only from jailoc, which authenticates with a per-workspace key and pins the guest host key generated at each start | fixed |
+| Session notifications | Guest to host | Make jailoc show its fixed notification, `jailoc / <workspace>` with `The agent finished.` or `The agent needs your input.`, at most every 3 seconds and only while the terminal reports it is unfocused; never choose its text | `notifications` |
 
 `host_ports` deserves the most care. A Chrome DevTools port or a container runtime socket gives the guest control of the browser or the host; jailoc warns about both.
+
+Session output is untrusted. Any process in the guest that writes to the session terminal can send the private reports of the OpenCode plugin, so the notifications prove nothing about what the agent did; jailoc decides only whether, when and with which fixed text and workspace name they appear. The same process can also write terminal sequences of its own, including OSC 777 notifications with any text, which jailoc passes to the terminal like other agent output, whatever `notifications` says. A desktop notification from `"native"` comes from the host and can't be forged this way; with `"osc"`, a forged terminal notification looks like jailoc's.
 
 ## Outside the boundaries
 
@@ -96,6 +99,7 @@ jailoc doesn't protect against:
 - **Bugs in the hypervisor, libkrun, the VMM process or the broker.** These run on the host as your user.
 - **virtio-fs confinement on macOS**, and metadata operations on host files outside the shares on Linux, for a guest kernel under the agent's control.
 - **Prompt injection itself.** jailoc limits what a manipulated agent can reach, not whether it gets manipulated.
+- **Notifications OpenCode shows itself.** When OpenCode's own notifications are on, jailoc sends none, and OpenCode's follow its settings, not jailoc's focus check, fixed text or interval.
 - **Resource exhaustion inside the VM.** `cpu` and `memory` cap the whole VM; nothing limits processes inside it.
 
 ## Release integrity

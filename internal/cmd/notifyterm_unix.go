@@ -1,0 +1,354 @@
+//go:build darwin || linux
+
+package cmd
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+
+	"golang.org/x/sys/unix"
+)
+
+// errNotifyDropped marks a notification left out on purpose: the terminal
+// was busy, not reading or focused again. Such drops are expected and not
+// failures of the transport.
+var errNotifyDropped = errors.New("notification dropped")
+
+// notifyTerminal writes notifications to the user's terminal through a file
+// description of its own that does not block, so a write never waits for a
+// terminal that stopped reading and needs no goroutine to give up on: it
+// takes what fits, or nothing. Agent output keeps its blocking standard
+// output, whose file description other processes may share.
+type notifyTerminal struct {
+	fd int
+}
+
+// openNotifyTerminal opens the controlling terminal for notifications after
+// checking that standard output, fd stdout, is that terminal.
+func openNotifyTerminal(stdout int) (*notifyTerminal, error) {
+	if _, err := unix.IoctlGetInt(stdout, unix.TIOCGPGRP); err != nil {
+		return nil, fmt.Errorf("standard output is not the controlling terminal: %w", err)
+	}
+	fd, err := unix.Open("/dev/tty", unix.O_WRONLY|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open /dev/tty: %w", err)
+	}
+	return &notifyTerminal{fd: fd}, nil
+}
+
+// write writes p without waiting. A terminal with no room fails it with an
+// error wrapping errNotifyDropped; one with room for less takes part of p.
+func (t *notifyTerminal) write(p []byte) (int, error) {
+	for {
+		n, err := unix.Write(t.fd, p)
+		switch {
+		case errors.Is(err, unix.EINTR):
+			continue
+		case errors.Is(err, unix.EAGAIN):
+			return 0, fmt.Errorf("%w: the terminal is not reading", errNotifyDropped)
+		case err != nil:
+			return 0, fmt.Errorf("write terminal notification: %w", err)
+		}
+		return n, nil
+	}
+}
+
+func (t *notifyTerminal) close() error {
+	if err := unix.Close(t.fd); err != nil {
+		return fmt.Errorf("close /dev/tty: %w", err)
+	}
+	return nil
+}
+
+// notifyKind is what the jailoc TUI plugin reports about the agent.
+type notifyKind uint8
+
+const (
+	notifyCompleted notifyKind = iota + 1 // the agent finished its work
+	notifyInput                           // the agent waits for the user
+)
+
+// notifySequences are the private OSC sequences the jailoc TUI plugin writes
+// to report the agent's state. Only these exact bytes are recognized.
+var notifySequences = []struct {
+	seq  []byte
+	kind notifyKind
+}{
+	{[]byte("\x1b]777;jailoc-notify;completed\x07"), notifyCompleted},
+	{[]byte("\x1b]777;jailoc-notify;input\x07"), notifyInput},
+}
+
+// notifyOSCFilter removes the notifySequences from agent output. A possible
+// start of one is held back, also across chunks, until it either completes or
+// differs; at most the length of the longest sequence is held.
+type notifyOSCFilter struct {
+	held []byte
+}
+
+// feed returns p without the notifySequences and calls emit for each one.
+func (f *notifyOSCFilter) feed(p []byte, emit func(notifyKind)) []byte {
+	if len(f.held) == 0 && bytes.IndexByte(p, 0x1b) < 0 {
+		return p
+	}
+	out := make([]byte, 0, len(f.held)+len(p))
+	for _, b := range p {
+		if len(f.held) == 0 && b != 0x1b {
+			out = append(out, b)
+			continue
+		}
+		f.held = append(f.held, b)
+		kind, prefix := matchNotifySequence(f.held)
+		switch {
+		case kind != 0:
+			f.held = f.held[:0]
+			if emit != nil {
+				emit(kind)
+			}
+		case prefix:
+		default:
+			// Not a notification: pass on what was held and look at b anew.
+			out = append(out, f.held[:len(f.held)-1]...)
+			f.held = f.held[:0]
+			if b == 0x1b {
+				f.held = append(f.held, b)
+			} else {
+				out = append(out, b)
+			}
+		}
+	}
+	return out
+}
+
+// finish returns what is still held back as a possible start of a
+// notification, for the end of the output, and forgets it.
+func (f *notifyOSCFilter) finish() []byte {
+	if len(f.held) == 0 {
+		return nil
+	}
+	held := bytes.Clone(f.held)
+	f.held = f.held[:0]
+	return held
+}
+
+// matchNotifySequence reports which sequence p is, or whether it starts one.
+func matchNotifySequence(p []byte) (kind notifyKind, prefix bool) {
+	for _, s := range notifySequences {
+		if bytes.HasPrefix(s.seq, p) {
+			if len(p) == len(s.seq) {
+				return s.kind, false
+			}
+			prefix = true
+		}
+	}
+	return 0, prefix
+}
+
+// enableFocusReports turns on focus reporting (DEC mode 1004) in the user's
+// terminal.
+const enableFocusReports = "\x1b[?1004h"
+
+// focusOutput follows whether the agent wants focus reports by scanning its
+// output. jailoc needs the reports itself while it sends notifications, so
+// after a sequence that turns them off, it turns them on again; the reports
+// reach the agent only while it wants them. Escape sequences may be split
+// across chunks.
+type focusOutput struct {
+	focus *sessionFocus
+	state escState
+	lead  byte   // first parameter byte of the current CSI sequence, 0 before it
+	bad   bool   // the current CSI sequence is not a mode list or DECSTR
+	mode  uint16 // the mode being read, at most 1005 so that it cannot overflow
+	found bool   // mode 1004 is in the current CSI sequence
+	saved bool   // the agent's mode 1004 saved by CSI ? 1004 s
+
+	// A tmux passthrough wrapper, ESC P tmux; payload ESC \, carries
+	// the agent's own output with each ESC doubled. Its payload is scanned
+	// as if unwrapped, but jailoc must not write into the wrapper, so the
+	// reassertion waits for the outer terminator.
+	matching bool  // the DCS string so far is a prefix of tmuxWrapperPrefix
+	prefix   uint8 // how much of tmuxWrapperPrefix the DCS string has matched
+	wrapped  bool  // inside a tmux wrapper
+	wrapEsc  bool  // an ESC of the wrapper payload is pending
+	pending  bool  // the wrapper payload turned focus reporting off
+}
+
+// tmuxWrapperPrefix is what follows ESC P in a tmux passthrough wrapper.
+const tmuxWrapperPrefix = "tmux;"
+
+// feed returns agent output p with enableFocusReports after each sequence
+// that turns focus reporting off.
+func (o *focusOutput) feed(p []byte) []byte {
+	var out []byte
+	last := 0
+	for i, b := range p {
+		if !o.step(b) {
+			continue
+		}
+		if out == nil {
+			out = make([]byte, 0, len(p)+len(enableFocusReports))
+		}
+		out = append(append(out, p[last:i+1]...), enableFocusReports...)
+		last = i + 1
+	}
+	if out == nil {
+		return p
+	}
+	return append(out, p[last:]...)
+}
+
+// step scans one byte and reports whether it ended a sequence that may have
+// turned focus reporting off.
+func (o *focusOutput) step(b byte) bool {
+	if o.wrapped {
+		return o.wrapStep(b)
+	}
+	return o.scan(b, true)
+}
+
+// wrapStep scans one byte of a tmux wrapper. Like tmux it reads ESC ESC as an
+// ESC of the payload and ESC \ as the end of the wrapper; any other byte after
+// an ESC is payload and the ESC is dropped. The payload goes to scan, which
+// does not look for wrappers, so none nest. It reports true only for the
+// byte that ends a wrapper whose payload turned focus reporting off, however
+// many times.
+func (o *focusOutput) wrapStep(b byte) bool {
+	switch {
+	case o.wrapEsc && b == '\\':
+		pending := o.pending
+		o.wrapped, o.wrapEsc, o.pending, o.state = false, false, false, escGround
+		return pending
+	case o.wrapEsc:
+		o.wrapEsc = false
+	case b == 0x1b:
+		o.wrapEsc = true
+		return false
+	}
+	if o.scan(b, false) {
+		o.pending = true
+	}
+	return false
+}
+
+// scan scans one byte of unwrapped output, or of a wrapper's payload when
+// detect is false, and reports whether it ended a sequence that may have
+// turned focus reporting off. With detect it also finds the start of a tmux
+// wrapper.
+func (o *focusOutput) scan(b byte, detect bool) bool {
+	switch o.state {
+	case escGround:
+		if b == 0x1b {
+			o.state = escStart
+		}
+	case escStart:
+		o.state = escGround
+		switch {
+		case b == '[':
+			o.state, o.lead, o.bad, o.mode, o.found = escCSI, 0, false, 0, false
+		case b == ']' || b == 'P' || b == 'X' || b == '^' || b == '_':
+			o.state = escString
+			o.matching, o.prefix = detect && b == 'P', 0
+		case b == 0x1b:
+			o.state = escStart
+		case b >= 0x20 && b <= 0x2f:
+			o.state = escInter
+		case b == 'c': // RIS resets every mode
+			o.focus.setGuestReports(false)
+			o.saved = false
+			return true
+		}
+	case escInter:
+		switch {
+		case b == 0x1b:
+			o.state = escStart
+		case b < 0x20 || b > 0x2f:
+			o.state = escGround
+		}
+	case escCSI:
+		switch {
+		case b == 0x1b:
+			o.state = escStart
+		case b >= 0x40 && b <= 0x7e:
+			o.state = escGround
+			return o.csi(b)
+		case b >= 0x20 && b <= 0x3f:
+			o.param(b)
+		}
+	case escString:
+		if o.matching {
+			if b != tmuxWrapperPrefix[o.prefix] {
+				o.matching = false
+			} else if o.prefix++; int(o.prefix) == len(tmuxWrapperPrefix) {
+				o.matching = false
+				o.wrapped, o.wrapEsc, o.pending, o.state = true, false, false, escGround
+				return false
+			}
+		}
+		switch b {
+		case 0x07:
+			o.state = escGround
+		case 0x1b:
+			o.state = escStringEnd
+		}
+	case escStringEnd:
+		if b == '\\' {
+			o.state = escGround
+			return false
+		}
+		o.state = escStart
+		return o.scan(b, detect)
+	}
+	return false
+}
+
+// param reads one parameter byte of a CSI sequence. Only a private mode list,
+// ? followed by numbers separated by ;, or DECSTR's ! is kept; anything else
+// makes the whole sequence bad. Mode numbers are compared as numbers, so
+// leading zeros do not matter and a list may be of any length.
+func (o *focusOutput) param(b byte) {
+	switch {
+	case o.bad:
+	case o.lead == 0:
+		o.lead = b
+		o.bad = b != '?' && b != '!'
+	case o.lead == '!':
+		o.bad = true
+	case b >= '0' && b <= '9':
+		o.mode = min(o.mode*10+uint16(b-'0'), 1005)
+	case b == ';':
+		o.found = o.found || o.mode == 1004
+		o.mode = 0
+	default:
+		o.bad = true
+	}
+}
+
+// csi handles the final byte of a CSI sequence: set, reset, save or restore
+// of private mode 1004, or a soft reset.
+func (o *focusOutput) csi(final byte) bool {
+	if o.bad {
+		return false
+	}
+	if final == 'p' && o.lead == '!' { // DECSTR
+		return true
+	}
+	if o.lead != '?' || (final != 'h' && final != 'l' && final != 's' && final != 'r') {
+		return false
+	}
+	if !o.found && o.mode != 1004 {
+		return false
+	}
+	switch final {
+	case 'h':
+		o.focus.setGuestReports(true)
+	case 'l':
+		o.focus.setGuestReports(false)
+		return true
+	case 's':
+		o.saved = o.focus.guestReports()
+	case 'r':
+		o.focus.setGuestReports(o.saved)
+		return true
+	}
+	return false
+}

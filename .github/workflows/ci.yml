@@ -55,6 +55,7 @@ jobs:
         with:
           node-version: "24"
       - run: npm ci
+      - run: node --test plugin/*.test.mjs
       - run: npm run build
       - run: diff dist/tui-opencode1.js internal/embed/assets/tui-opencode1.js
       - run: diff dist/tui-opencode2.js internal/embed/assets/tui-opencode2.js

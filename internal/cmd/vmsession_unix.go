@@ -285,7 +285,8 @@ func runSessionVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolve
 	logStep("open agent session", start, "workspace", ws.Name)
 
 	starting := fmt.Sprintf("Starting %s in workspace %s…", ws.Agent.Title, ws.Name)
-	id, outcome, code, diagnose := relaySession(fd, interactive, opts.detach, starting, ws.Agent.Title, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
+	notify := sessionNotifyFor(ws, interactive)
+	id, outcome, code, diagnose := relaySession(fd, interactive, opts.detach, starting, ws.Agent.Title, notify, stdin, stdout, uint16(min(rows, 0xffff)), uint16(min(cols, 0xffff))) //nolint:gosec // G115: clamped
 	// The guest command exits only after its input closes.
 	_ = stdin.Close()
 	_ = sess.Wait()
@@ -330,8 +331,9 @@ func formatAgentExitError(ws *workspace.Resolved, code int, diagnose bool) error
 // when the guest reports a newly started session, and keeps it, or the
 // plugins the agent title installs, with a spinner and the time elapsed on
 // the alternate screen until the agent draws, so the screen is not blank
-// while the agent boots.
-func relaySession(fd int, interactive bool, detachKeys []byte, starting, title string, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int, diagnose bool) {
+// while the agent boots. notify selects the notifications sent while the
+// terminal is unfocused.
+func relaySession(fd int, interactive bool, detachKeys []byte, starting, title string, notify sessionNotify, in io.WriteCloser, out io.Reader, rows, cols uint16) (id string, outcome sessionOutcome, code int, diagnose bool) {
 	var writeMu sync.Mutex
 	send := func(f session.Frame) error {
 		writeMu.Lock()
@@ -350,9 +352,11 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 	})
 	defer status.stop()
 
+	raw := false
 	if interactive {
 		old, err := term.MakeRaw(fd)
 		if err == nil {
+			raw = true
 			defer func() {
 				// Stop the startup animator before resetting terminal modes so
 				// a ticker cannot draw on the main screen after leaving the
@@ -361,6 +365,9 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 				// The agent cannot turn its terminal features off when the
 				// session detaches or the VM dies, so reset them here.
 				if term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
+					// End a notification the terminal took only part of, so
+					// the resets below are not swallowed by it.
+					status.settle()
 					resetSessionTerminalModes(os.Stdout, status.altScreen())
 				}
 				_ = term.Restore(fd, old)
@@ -378,6 +385,67 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 		}()
 	}
 
+	var clipboard *osc52Bridge
+	if interactive {
+		clipQueue := newHostClipboardQueue(copyToHostClipboard)
+		defer clipQueue.close()
+		clipboard = newOSC52Bridge(clipQueue.enqueue, os.Getenv("TMUX") != "")
+	}
+
+	osc := &notifyOSCFilter{}
+	var notes *notifier
+	post := func(k notifyKind) {
+		if notes != nil {
+			notes.post(k)
+		}
+	}
+	var focusIn *focusInput
+	var focusOut *focusOutput
+	if raw && term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115: file descriptors fit in int
+		notes, focusIn, focusOut = notify.start(status)
+	}
+	var tail []byte
+	const maxTail = 512
+	// forward passes agent output on to the terminal.
+	forward := func(payload []byte) {
+		if focusOut != nil {
+			payload = focusOut.feed(payload)
+		}
+		if clipboard != nil {
+			payload = clipboard.feed(payload)
+		}
+		tail = append(tail, payload...)
+		if len(tail) > maxTail {
+			tail = tail[len(tail)-maxTail:]
+		}
+		_ = status.write(payload)
+	}
+	// Whatever way the session ends, bytes held back as a possible start of
+	// a notification belong to the agent's output: pass them on. Registered
+	// after the clipboard queue and before the notifier's stop, so it runs
+	// after the notifier ended and before the clipboard closes and the
+	// terminal modes are reset. It stops the startup animation first, so a
+	// tick cannot draw next to the unfinished sequence.
+	defer func() {
+		if held := osc.finish(); len(held) > 0 {
+			status.stop()
+			forward(held)
+		}
+	}()
+	if notes != nil {
+		// Registered after the clipboard queue, so it runs before its close
+		// and before the terminal modes are reset. Notifications of an agent
+		// that exited are still sent, briefly; a detached, taken over or lost
+		// session sends none.
+		defer func() {
+			if outcome == outcomeExited {
+				notes.drain(notifyDrain)
+			} else {
+				notes.stop()
+			}
+		}()
+	}
+
 	detached := make(chan struct{})
 	matcher := newDetachMatcher(detachKeys)
 	go func() {
@@ -386,6 +454,9 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
 				chunk, detach := append([]byte(nil), buf[:n]...), false
+				if focusIn != nil {
+					chunk = focusIn.feed(chunk)
+				}
 				if interactive && len(detachKeys) > 0 {
 					chunk, detach = matcher.feed(chunk)
 				}
@@ -405,15 +476,7 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 		}
 	}()
 
-	var clipboard *osc52Bridge
-	if interactive {
-		clipQueue := newHostClipboardQueue(copyToHostClipboard)
-		defer clipQueue.close()
-		clipboard = newOSC52Bridge(clipQueue.enqueue, os.Getenv("TMUX") != "")
-	}
 	var created bool
-	var tail []byte
-	const maxTail = 512
 	for {
 		f, err := session.ReadFrame(out)
 		if err != nil {
@@ -440,14 +503,10 @@ func relaySession(fd int, interactive bool, detachKeys []byte, starting, title s
 			}
 		case session.FrameData:
 			payload := f.Payload
-			if clipboard != nil {
-				payload = clipboard.feed(payload)
+			if notify.plugin {
+				payload = osc.feed(payload, post)
 			}
-			tail = append(tail, payload...)
-			if len(tail) > maxTail {
-				tail = tail[len(tail)-maxTail:]
-			}
-			_ = status.write(payload)
+			forward(payload)
 		case session.FrameExit:
 			code, _ = session.ParseExit(f.Payload)
 			diagnose = (created && !status.visible()) || bytes.Contains(tail, []byte("Check server logs for details."))

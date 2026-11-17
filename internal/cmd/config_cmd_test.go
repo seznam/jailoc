@@ -31,6 +31,7 @@ env = ["DEFAULT_VAR=1", "SHARED=from_defaults"]
 cpu = 4.0
 memory = "8g"
 timezone = "Europe/Prague"
+notifications = "off"
 
 [defaults.agents.claude]
 profile = "work"
@@ -49,6 +50,7 @@ ports = ["8080:80"]
 host_ports = [5432]
 ssh_auth_sock = true
 protect_git = true
+notifications = "osc"
 `
 	configFile := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configFile, []byte(content), 0o600); err != nil {
@@ -86,6 +88,7 @@ protect_git = true
 	assertContains(t, out, "  Time Zone: Europe/Prague\n")
 	assertContains(t, out, "  SSH Agent: true\n")
 	assertContains(t, out, "  Protect Git: true\n")
+	assertContains(t, out, "  Notifications: osc\n")
 	assertContains(t, out, "  Computed Paths:\n")
 	assertContains(t, out, "    Config File: "+configFile+"\n")
 	assertContains(t, out, "    Workspace Config Dir: "+filepath.Join(configDir, "workspaces", "myproject")+"\n")

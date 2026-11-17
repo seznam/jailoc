@@ -45,6 +45,29 @@ jailoc --detach-keys 'ctrl-\'
 
 See [`detach_keys`](../reference/configuration.md#top-level-fields) for the key syntax.
 
+## Get notified when the agent needs you
+
+With OpenCode (`opencode`, `opencode1`, `opencode2`), an attached session notifies you when the agent finishes or asks for input while you are in another window. To choose how, or to turn it off, set `notifications` in `~/.config/jailoc/config.toml`:
+
+```toml
+[defaults]
+notifications = "osc"  # auto, native, osc or off
+
+[workspaces.my-project]
+notifications = "off"
+```
+
+Re-attach with `jailoc` to apply it; the VM keeps running. `auto`, the default, shows a desktop notification on the host when it can (`osascript` on macOS, `notify-send` on a Linux desktop) and otherwise, as over SSH, asks the terminal to show one with OSC 777 (`osc`), which only some terminals support. See [`notifications`](../reference/configuration.md#notifications) for every value.
+
+Notifications need a terminal that reports focus changes, because jailoc notifies only while the terminal is unfocused. In tmux, turn on focus events and, for `osc`, passthrough:
+
+```bash
+tmux set -g focus-events on
+tmux set -g allow-passthrough on
+```
+
+If OpenCode itself is configured to show notifications, jailoc sends none; see [Get notifications from OpenCode](tui-plugin.md#get-notifications-from-opencode).
+
 ## Start another session
 
 ```bash

@@ -1,0 +1,457 @@
+//go:build darwin || linux
+
+package cmd
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"syscall"
+	"testing"
+)
+
+const (
+	testNotifyCompleted = "\x1b]777;jailoc-notify;completed\x07"
+	testNotifyInput     = "\x1b]777;jailoc-notify;input\x07"
+)
+
+// feedNotifyOSC feeds chunks through a new filter and returns the output and
+// the notifications it recognized.
+func feedNotifyOSC(chunks []string) (string, []notifyKind) {
+	var f notifyOSCFilter
+	var out strings.Builder
+	var kinds []notifyKind
+	for _, c := range chunks {
+		out.Write(f.feed([]byte(c), func(k notifyKind) { kinds = append(kinds, k) }))
+	}
+	return out.String(), kinds
+}
+
+func TestNotifyOSCFilterConsumesPrivateSequences(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		chunks    []string
+		wantOut   string
+		wantKinds []notifyKind
+	}{
+		{name: "completed", chunks: []string{"a" + testNotifyCompleted + "b"}, wantOut: "ab", wantKinds: []notifyKind{notifyCompleted}},
+		{name: "input", chunks: []string{testNotifyInput}, wantOut: "", wantKinds: []notifyKind{notifyInput}},
+		{name: "both in one chunk", chunks: []string{testNotifyInput + "x" + testNotifyCompleted}, wantOut: "x", wantKinds: []notifyKind{notifyInput, notifyCompleted}},
+		{name: "escape before sequence", chunks: []string{"\x1b" + testNotifyInput}, wantOut: "\x1b", wantKinds: []notifyKind{notifyInput}},
+		{name: "byte by byte", chunks: strings.Split("<"+testNotifyCompleted+">", ""), wantOut: "<>", wantKinds: []notifyKind{notifyCompleted}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			out, kinds := feedNotifyOSC(tt.chunks)
+			if out != tt.wantOut || !slices.Equal(kinds, tt.wantKinds) {
+				t.Fatalf("feed() = %q, %v; want %q, %v", out, kinds, tt.wantOut, tt.wantKinds)
+			}
+		})
+	}
+}
+
+func TestNotifyOSCFilterConsumesAtEverySplit(t *testing.T) {
+	t.Parallel()
+
+	stream := "a" + testNotifyCompleted + "b" + testNotifyInput + "c"
+	for i := range len(stream) + 1 {
+		for j := i; j <= len(stream); j++ {
+			out, kinds := feedNotifyOSC([]string{stream[:i], stream[i:j], stream[j:]})
+			if out != "abc" || !slices.Equal(kinds, []notifyKind{notifyCompleted, notifyInput}) {
+				t.Fatalf("split at %d, %d: feed() = %q, %v", i, j, out, kinds)
+			}
+		}
+	}
+}
+
+func TestNotifyOSCFilterPreservesOtherOutput(t *testing.T) {
+	t.Parallel()
+
+	for _, stream := range []string{
+		"\x1b]777;notify;title;body\x07",
+		"\x1b]777;jailoc-notify;other\x07",
+		"\x1b]777;jailoc-notify;completed\x1b\\",
+		"\x1b]777;jailoc-notify;completedx\x07",
+		"\x1b]0;window title\x07\x1b[?1049h\x1b[2Jhello",
+		"\x1b\x1b\x1b[A",
+		"\x1b]52;c;aGVsbG8=\x07",
+	} {
+		t.Run(strings.ReplaceAll(stream, "\x1b", "ESC"), func(t *testing.T) {
+			t.Parallel()
+			// A trailing newline ends any held prefix.
+			for i := range len(stream) + 1 {
+				out, kinds := feedNotifyOSC([]string{stream[:i], stream[i:], "\n"})
+				if out != stream+"\n" || len(kinds) != 0 {
+					t.Fatalf("split at %d: feed() = %q, %v; want %q unchanged", i, out, kinds, stream+"\n")
+				}
+			}
+		})
+	}
+}
+
+func TestNotifyOSCFilterHoldsPrefixUntilDecided(t *testing.T) {
+	t.Parallel()
+
+	var f notifyOSCFilter
+	if got := string(f.feed([]byte("x\x1b]777;jail"), nil)); got != "x" {
+		t.Fatalf("feed(prefix) = %q, want %q", got, "x")
+	}
+	if got := string(f.feed([]byte("ly"), nil)); got != "\x1b]777;jailly" {
+		t.Fatalf("feed(mismatch) = %q, want the held prefix back", got)
+	}
+}
+
+func TestNotifyOSCFilterFinishReturnsHeldPrefix(t *testing.T) {
+	t.Parallel()
+
+	var f notifyOSCFilter
+	var kinds []notifyKind
+	emit := func(k notifyKind) { kinds = append(kinds, k) }
+	if got := string(f.feed([]byte("x\x1b]777;jail"), emit)); got != "x" {
+		t.Fatalf("feed(prefix) = %q, want %q", got, "x")
+	}
+	if got := string(f.finish()); got != "\x1b]777;jail" {
+		t.Fatalf("finish() = %q, want the held prefix", got)
+	}
+	if got := f.finish(); len(got) != 0 {
+		t.Fatalf("second finish() = %q, want nothing", got)
+	}
+	// The filter is reusable after finishing; the flushed prefix is not
+	// completed by what follows.
+	if got := string(f.feed([]byte("oc-notify;completed\x07ab"+testNotifyInput), emit)); got != "oc-notify;completed\x07ab" {
+		t.Fatalf("feed() after finish = %q, want the text unchanged", got)
+	}
+	if !slices.Equal(kinds, []notifyKind{notifyInput}) {
+		t.Fatalf("notifications after finish = %v, want only the whole sequence", kinds)
+	}
+}
+
+func TestNotifyOSCFinishWithNothingHeld(t *testing.T) {
+	t.Parallel()
+
+	var f notifyOSCFilter
+	if got := f.finish(); len(got) != 0 {
+		t.Fatalf("finish() of a new filter = %q, want nothing", got)
+	}
+	f.feed([]byte("plain"), nil)
+	if got := f.finish(); len(got) != 0 {
+		t.Fatalf("finish() after plain output = %q, want nothing", got)
+	}
+}
+
+func TestFocusOutputTracksGuestFocusReporting(t *testing.T) {
+	t.Parallel()
+
+	const reassert = "\x1b[?1004h"
+	tests := []struct {
+		name      string
+		chunks    []string
+		wantOut   string
+		wantGuest bool
+	}{
+		{name: "enable", chunks: []string{"\x1b[?1004h"}, wantOut: "\x1b[?1004h", wantGuest: true},
+		{name: "disable reasserts", chunks: []string{"\x1b[?1004h", "a\x1b[?1004lb"}, wantOut: "\x1b[?1004ha\x1b[?1004l" + reassert + "b"},
+		{name: "disable in a mode list", chunks: []string{"\x1b[?1004h\x1b[?2004;1004l"}, wantOut: "\x1b[?1004h\x1b[?2004;1004l" + reassert},
+		{name: "fragmented disable", chunks: []string{"\x1b[?1004h\x1b[?10", "04", "l."}, wantOut: "\x1b[?1004h\x1b[?1004l" + reassert + "."},
+		{name: "full reset", chunks: []string{"\x1b[?1004h\x1bcz"}, wantOut: "\x1b[?1004h\x1bc" + reassert + "z"},
+		{name: "soft reset", chunks: []string{"\x1b[?1004h\x1b[!p"}, wantOut: "\x1b[?1004h\x1b[!p" + reassert, wantGuest: true},
+		{name: "save and restore", chunks: []string{"\x1b[?1004h\x1b[?1004s\x1b[?1004l\x1b[?1004r"}, wantOut: "\x1b[?1004h\x1b[?1004s\x1b[?1004l" + reassert + "\x1b[?1004r" + reassert, wantGuest: true},
+		{name: "other modes", chunks: []string{"\x1b[?1004h\x1b[?2004l\x1b[1004l\x1b[?10045l"}, wantOut: "\x1b[?1004h\x1b[?2004l\x1b[1004l\x1b[?10045l", wantGuest: true},
+		{name: "inside a string", chunks: []string{"\x1b[?1004h\x1b]0;[?1004l\x07"}, wantOut: "\x1b[?1004h\x1b]0;[?1004l\x07", wantGuest: true},
+		{name: "after a string", chunks: []string{"\x1b[?1004h\x1b]0;t\x1b\\\x1b[?1004l"}, wantOut: "\x1b[?1004h\x1b]0;t\x1b\\\x1b[?1004l" + reassert},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			focus := &sessionFocus{}
+			o := focusOutput{focus: focus}
+			var out strings.Builder
+			for _, c := range tt.chunks {
+				out.Write(o.feed([]byte(c)))
+			}
+			if out.String() != tt.wantOut || focus.guestReports() != tt.wantGuest {
+				t.Fatalf("feed() = %q, guest %v; want %q, guest %v", out.String(), focus.guestReports(), tt.wantOut, tt.wantGuest)
+			}
+		})
+	}
+}
+
+func TestFocusOutputMatchesModeNumerically(t *testing.T) {
+	t.Parallel()
+
+	const (
+		enable   = "\x1b[?1004h"
+		reassert = enable
+	)
+	zeros := strings.Repeat("0", 40)
+	long := strings.Repeat("2004;", 20)
+	tests := []struct {
+		name      string
+		stream    string
+		wantOut   string
+		wantGuest bool
+	}{
+		{name: "oversized combined disable", stream: enable + "\x1b[?1004;1000;1002;1003;1006;1015;2004l", wantOut: enable + "\x1b[?1004;1000;1002;1003;1006;1015;2004l" + reassert},
+		{name: "late in a long list", stream: enable + "\x1b[?" + long + "1004l", wantOut: enable + "\x1b[?" + long + "1004l" + reassert},
+		{name: "long enable", stream: "\x1b[?" + long + "1004h", wantOut: "\x1b[?" + long + "1004h", wantGuest: true},
+		{name: "padded enable", stream: "\x1b[?01004h", wantOut: "\x1b[?01004h", wantGuest: true},
+		{name: "padded disable", stream: enable + "\x1b[?01004l", wantOut: enable + "\x1b[?01004l" + reassert},
+		{name: "padded save and restore", stream: enable + "\x1b[?001004s\x1b[?0001004l\x1b[?00001004r", wantOut: enable + "\x1b[?001004s\x1b[?0001004l" + reassert + "\x1b[?00001004r" + reassert, wantGuest: true},
+		{name: "many leading zeros enable", stream: "\x1b[?" + zeros + "1004h", wantOut: "\x1b[?" + zeros + "1004h", wantGuest: true},
+		{name: "many leading zeros disable", stream: enable + "\x1b[?" + zeros + "1004l", wantOut: enable + "\x1b[?" + zeros + "1004l" + reassert},
+		{name: "padded in a list", stream: enable + "\x1b[?2004;0001004;1000l", wantOut: enable + "\x1b[?2004;0001004;1000l" + reassert},
+		{name: "value above the mode", stream: enable + "\x1b[?10040l\x1b[?1005l\x1b[?" + "1004" + zeros + "l", wantOut: enable + "\x1b[?10040l\x1b[?1005l\x1b[?" + "1004" + zeros + "l", wantGuest: true},
+		{name: "overflowing value", stream: enable + "\x1b[?4294968300l\x1b[?18446744073709552620l\x1b[?65536;1004" + zeros + "l", wantOut: enable + "\x1b[?4294968300l\x1b[?18446744073709552620l\x1b[?65536;1004" + zeros + "l", wantGuest: true},
+		{name: "other modes in a long list", stream: enable + "\x1b[?" + long + "2004l", wantOut: enable + "\x1b[?" + long + "2004l", wantGuest: true},
+		{name: "nonprivate", stream: enable + "\x1b[1004l\x1b[>1004l\x1b[=1004l\x1b[1004;2004l", wantOut: enable + "\x1b[1004l\x1b[>1004l\x1b[=1004l\x1b[1004;2004l", wantGuest: true},
+		{name: "malformed", stream: enable + "\x1b[?1004:1l\x1b[?1004!l\x1b[?1004?l\x1b[? 1004l\x1b[?>1004l\x1b[?1004 l", wantOut: enable + "\x1b[?1004:1l\x1b[?1004!l\x1b[?1004?l\x1b[? 1004l\x1b[?>1004l\x1b[?1004 l", wantGuest: true},
+		{name: "malformed list then valid", stream: enable + "\x1b[?1004:1l\x1b[?1004l", wantOut: enable + "\x1b[?1004:1l\x1b[?1004l" + reassert},
+		{name: "marker in the middle", stream: enable + "\x1b[?1000;?1004l", wantOut: enable + "\x1b[?1000;?1004l", wantGuest: true},
+		{name: "soft reset after long params", stream: enable + "\x1b[!p\x1b[?" + long + "!p", wantOut: enable + "\x1b[!p" + reassert + "\x1b[?" + long + "!p", wantGuest: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			run := func(chunks []string) {
+				t.Helper()
+				focus := &sessionFocus{}
+				o := focusOutput{focus: focus}
+				var out strings.Builder
+				for _, c := range chunks {
+					out.Write(o.feed([]byte(c)))
+				}
+				if out.String() != tt.wantOut || focus.guestReports() != tt.wantGuest {
+					t.Fatalf("feed(%q) = %q, guest %v; want %q, guest %v", chunks, out.String(), focus.guestReports(), tt.wantOut, tt.wantGuest)
+				}
+			}
+			run([]string{tt.stream})
+			for i := 1; i < len(tt.stream); i++ {
+				run([]string{tt.stream[:i], tt.stream[i:]})
+			}
+			run(strings.Split(tt.stream, ""))
+		})
+	}
+}
+
+func TestFocusInputTracksFocus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		guest    bool
+		chunks   []string
+		wantOut  string
+		wantAway bool
+	}{
+		{name: "focus out dropped", chunks: []string{"\x1b[O"}, wantOut: "", wantAway: true},
+		{name: "focus in dropped", chunks: []string{"\x1b[O", "\x1b[I"}, wantOut: ""},
+		{name: "forwarded to a reporting guest", guest: true, chunks: []string{"a\x1b[Ob"}, wantOut: "a\x1b[Ob"},
+		{name: "forwarded focus out leaves away", guest: true, chunks: []string{"\x1b[O"}, wantOut: "\x1b[O", wantAway: true},
+		{name: "typing returns", chunks: []string{"\x1b[O", "a"}, wantOut: "a"},
+		{name: "arrow key returns", chunks: []string{"\x1b[O", "\x1b[A"}, wantOut: "\x1b[A"},
+		{name: "SS3 key returns", chunks: []string{"\x1b[O", "\x1bOP"}, wantOut: "\x1bOP"},
+		{name: "alt key returns", chunks: []string{"\x1b[O", "\x1bx"}, wantOut: "\x1bx"},
+		{name: "SGR mouse stays away", chunks: []string{"\x1b[O", "\x1b[<35;10;5M"}, wantOut: "\x1b[<35;10;5M", wantAway: true},
+		{name: "X10 mouse stays away", chunks: []string{"\x1b[O", "\x1b[M #!"}, wantOut: "\x1b[M #!", wantAway: true},
+		{name: "OSC reply stays away", chunks: []string{"\x1b[O", "\x1b]11;rgb:0000/0000/0000\x1b\\"}, wantOut: "\x1b]11;rgb:0000/0000/0000\x1b\\", wantAway: true},
+		{name: "BEL reply stays away", chunks: []string{"\x1b[O", "\x1b]10;rgb:ffff/ffff/ffff\x07"}, wantOut: "\x1b]10;rgb:ffff/ffff/ffff\x07", wantAway: true},
+		{name: "DA reply stays away", chunks: []string{"\x1b[O", "\x1b[?62;22c\x1b[>1;10;0c"}, wantOut: "\x1b[?62;22c\x1b[>1;10;0c", wantAway: true},
+		{name: "kitty flags reply stays away", chunks: []string{"\x1b[O", "\x1b[?1u"}, wantOut: "\x1b[?1u", wantAway: true},
+		{name: "paste returns and is not parsed", chunks: []string{"\x1b[O", "\x1b[200~a\x1b[Ob\x1b[201~"}, wantOut: "\x1b[200~a\x1b[Ob\x1b[201~"},
+		{name: "focus after paste", chunks: []string{"\x1b[200~a\x1b[201~\x1b[O"}, wantOut: "\x1b[200~a\x1b[201~", wantAway: true},
+		{name: "fragmented paste end", chunks: []string{"\x1b[200~a\x1b[2", "01~\x1b[O"}, wantOut: "\x1b[200~a\x1b[201~", wantAway: true},
+		{name: "report split after escape is recognized", chunks: []string{"\x1b[I", "\x1b", "[O"}, wantOut: "\x1b[O", wantAway: true},
+		{name: "focus in split after escape is recognized", chunks: []string{"\x1b[O", "\x1b", "[I"}, wantOut: "\x1b[I"},
+		{name: "report split after CSI is recognized", chunks: []string{"\x1b[", "O"}, wantOut: "\x1b[O", wantAway: true},
+		{name: "split prefix is unknown until it completes", chunks: []string{"\x1b[O", "\x1b["}, wantOut: "\x1b["},
+		{name: "split mouse report stays unknown", chunks: []string{"\x1b[O", "\x1b", "[<35;10;5M"}, wantOut: "\x1b[<35;10;5M"},
+		{name: "split reply stays unknown", chunks: []string{"\x1b[O", "\x1b", "]11;rgb:0000/0000/0000\x07"}, wantOut: "\x1b]11;rgb:0000/0000/0000\x07"},
+		{name: "focus out after split", chunks: []string{"\x1b", "[O", "\x1b[O"}, wantOut: "\x1b[O", wantAway: true},
+		{name: "trailing escape is unknown", chunks: []string{"\x1b[O", "\x1b"}, wantOut: "\x1b"},
+		{name: "escape key returns", chunks: []string{"\x1b[O", "\x1b", "\x1b[O", "\x1b\x1b"}, wantOut: "\x1b\x1b\x1b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			focus := &sessionFocus{}
+			focus.setGuestReports(tt.guest)
+			in := focusInput{focus: focus}
+			var out strings.Builder
+			for _, c := range tt.chunks {
+				out.Write(in.feed([]byte(c)))
+			}
+			if away, _ := focus.away(); out.String() != tt.wantOut || away != tt.wantAway {
+				t.Fatalf("feed() = %q, away %v; want %q, away %v", out.String(), away, tt.wantOut, tt.wantAway)
+			}
+		})
+	}
+}
+
+func TestSessionFocusEpochChangesWithState(t *testing.T) {
+	t.Parallel()
+
+	var f sessionFocus
+	if away, _ := f.away(); away {
+		t.Fatal("new focus is away; want unknown, which is not away")
+	}
+	f.set(focusOut)
+	_, e1 := f.away()
+	f.set(focusOut)
+	if _, e := f.away(); e != e1 {
+		t.Fatalf("epoch changed without a state change: %d -> %d", e1, e)
+	}
+	f.set(focusIn)
+	f.set(focusOut)
+	if away, e := f.away(); !away || e == e1 {
+		t.Fatalf("away() = %v, epoch %d; want away with an epoch other than %d", away, e, e1)
+	}
+}
+
+func TestNotifyTerminalWriteDoesNotBlock(t *testing.T) {
+	t.Parallel()
+
+	var fds [2]int
+	if err := syscall.Pipe(fds[:]); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Close(fds[0])
+		_ = syscall.Close(fds[1])
+	})
+	if err := syscall.SetNonblock(fds[1], true); err != nil {
+		t.Fatal(err)
+	}
+	// Fill the pipe like a terminal that stopped reading.
+	chunk := make([]byte, 4096)
+	for {
+		if _, err := syscall.Write(fds[1], chunk); err != nil {
+			if !errors.Is(err, syscall.EAGAIN) {
+				t.Fatalf("fill pipe: %v", err)
+			}
+			break
+		}
+	}
+	tty := &notifyTerminal{fd: fds[1]}
+	if n, err := tty.write([]byte(testNotifyInput)); n != 0 || !errors.Is(err, errNotifyDropped) {
+		t.Fatalf("write() to a full terminal = %d, %v; want 0 and a drop", n, err)
+	}
+	if _, err := syscall.Read(fds[0], make([]byte, 64<<10)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := tty.write([]byte(testNotifyInput)); n != len(testNotifyInput) || err != nil {
+		t.Fatalf("write() with room = %d, %v; want %d, nil", n, err, len(testNotifyInput))
+	}
+}
+
+func TestNotifyTerminalWriteError(t *testing.T) {
+	t.Parallel()
+
+	tty := &notifyTerminal{fd: -1}
+	if _, err := tty.write([]byte("x")); err == nil || errors.Is(err, errNotifyDropped) {
+		t.Fatalf("write() to a bad descriptor = %v, want a failure that is not a drop", err)
+	}
+}
+
+// focusStreamChunks returns the stream whole, split in two at every offset and
+// split byte by byte.
+func focusStreamChunks(stream string) [][]string {
+	chunks := [][]string{{stream}}
+	for i := 1; i < len(stream); i++ {
+		chunks = append(chunks, []string{stream[:i], stream[i:]})
+	}
+	return append(chunks, strings.Split(stream, ""))
+}
+
+func TestFocusOutputTmuxWrapper(t *testing.T) {
+	t.Parallel()
+
+	const enable = "\x1b[?1004h"
+	const reassert = enable
+	wrap := func(inner string) string { return string(tmuxPassthrough([]byte(inner))) }
+	long := strings.Repeat("2004;", 20)
+	zeros := strings.Repeat("0", 40)
+	tests := []struct {
+		name      string
+		stream    string
+		wantOut   string
+		wantGuest bool
+	}{
+		{name: "wrapped reset", stream: enable + wrap("\x1b[?1004l") + "z", wantOut: enable + wrap("\x1b[?1004l") + reassert + "z"},
+		{name: "wrapped reset literal bytes", stream: enable + "\x1bPtmux;\x1b\x1b[?1004l\x1b\\z", wantOut: enable + "\x1bPtmux;\x1b\x1b[?1004l\x1b\\" + reassert + "z"},
+		{name: "wrapped enable", stream: wrap("\x1b[?1004h"), wantOut: wrap("\x1b[?1004h"), wantGuest: true},
+		{name: "wrapped padded disable", stream: enable + wrap("\x1b[?"+zeros+"1004l"), wantOut: enable + wrap("\x1b[?"+zeros+"1004l") + reassert},
+		{name: "wrapped long disable", stream: enable + wrap("\x1b[?"+long+"1004l"), wantOut: enable + wrap("\x1b[?"+long+"1004l") + reassert},
+		{name: "wrapped other mode", stream: enable + wrap("\x1b[?"+long+"2004l"), wantOut: enable + wrap("\x1b[?"+long+"2004l"), wantGuest: true},
+		{name: "wrapped RIS", stream: enable + wrap("\x1bc") + "z", wantOut: enable + wrap("\x1bc") + reassert + "z"},
+		{name: "wrapped DECSTR", stream: enable + wrap("\x1b[!p") + "z", wantOut: enable + wrap("\x1b[!p") + reassert + "z", wantGuest: true},
+		{name: "wrapped save and restore", stream: enable + wrap("\x1b[?1004s\x1b[?1004l\x1b[?1004r"), wantOut: enable + wrap("\x1b[?1004s\x1b[?1004l\x1b[?1004r") + reassert, wantGuest: true},
+		{name: "save and restore in separate wrappers", stream: enable + wrap("\x1b[?1004s") + wrap("\x1b[?1004l") + wrap("\x1b[?1004r"), wantOut: enable + wrap("\x1b[?1004s") + wrap("\x1b[?1004l") + reassert + wrap("\x1b[?1004r") + reassert, wantGuest: true},
+		{name: "multiple resets in one wrapper", stream: enable + wrap("\x1b[?1004l\x1bc\x1b[?1004l") + "z", wantOut: enable + wrap("\x1b[?1004l\x1bc\x1b[?1004l") + reassert + "z"},
+		{name: "wrapped OSC 52", stream: enable + wrap("\x1b]52;c;aGVsbG8=\x07"), wantOut: enable + wrap("\x1b]52;c;aGVsbG8=\x07"), wantGuest: true},
+		{name: "wrapped OSC string holds reset text", stream: enable + wrap("\x1b]0;[?1004l\x07"), wantOut: enable + wrap("\x1b]0;[?1004l\x07"), wantGuest: true},
+		{name: "BEL does not close the wrapper", stream: enable + wrap("\x1b]0;t\x07\x1b[?1004l") + "z", wantOut: enable + wrap("\x1b]0;t\x07\x1b[?1004l") + reassert + "z"},
+		{name: "escaped inner ST does not close the wrapper", stream: enable + wrap("\x1b]0;t\x1b\\\x1b[?1004l") + "z", wantOut: enable + wrap("\x1b]0;t\x1b\\\x1b[?1004l") + reassert + "z"},
+		{name: "literal backslash is payload", stream: enable + wrap("\\\x1b[?1004l"), wantOut: enable + wrap("\\\x1b[?1004l") + reassert},
+		{name: "escape before other byte is dropped", stream: enable + "\x1bPtmux;\x1b[?1004l\x1b\\", wantOut: enable + "\x1bPtmux;\x1b[?1004l\x1b\\", wantGuest: true},
+		{name: "non tmux DCS", stream: enable + "\x1bP1$r[?1004l\x1b\\" + "\x1b[?1004l", wantOut: enable + "\x1bP1$r[?1004l\x1b\\" + "\x1b[?1004l" + reassert},
+		{name: "near tmux prefix", stream: enable + "\x1bPtmux\x1b\\\x1bPtmuy;x\x1b\\\x1bPtmux:x\x1b\\", wantOut: enable + "\x1bPtmux\x1b\\\x1bPtmuy;x\x1b\\\x1bPtmux:x\x1b\\", wantGuest: true},
+		{name: "unwrapped reset after wrapper", stream: enable + wrap("\x1b[?1004l") + "\x1b[?1004l", wantOut: enable + wrap("\x1b[?1004l") + reassert + "\x1b[?1004l" + reassert},
+		{name: "next wrapper does not inherit", stream: enable + wrap("\x1b[?1004l") + wrap("\x1b]52;c;eA==\x07"), wantOut: enable + wrap("\x1b[?1004l") + reassert + wrap("\x1b]52;c;eA==\x07")},
+		{name: "inner sequence cut by the wrapper end", stream: enable + wrap("\x1b[?1004") + "l", wantOut: enable + wrap("\x1b[?1004") + "l", wantGuest: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, chunks := range focusStreamChunks(tt.stream) {
+				focus := &sessionFocus{}
+				o := focusOutput{focus: focus}
+				var out strings.Builder
+				for _, c := range chunks {
+					out.Write(o.feed([]byte(c)))
+				}
+				if out.String() != tt.wantOut || focus.guestReports() != tt.wantGuest {
+					t.Fatalf("feed(%q) = %q, guest %v; want %q, guest %v", chunks, out.String(), focus.guestReports(), tt.wantOut, tt.wantGuest)
+				}
+			}
+		})
+	}
+}
+
+func TestFocusOutputTmuxWrapperReassertsOnlyAfterTerminator(t *testing.T) {
+	t.Parallel()
+
+	const enable = "\x1b[?1004h"
+	wrapper := string(tmuxPassthrough([]byte("\x1b[?1004l")))
+	body := wrapper[:len(wrapper)-2]
+	o := focusOutput{focus: &sessionFocus{}}
+	feed := func(s string) string { return string(o.feed([]byte(s))) }
+
+	if got := feed(enable + body); got != enable+body {
+		t.Fatalf("feed(wrapper without terminator) = %q, want it unchanged", got)
+	}
+	if got := feed("\x1b"); got != "\x1b" {
+		t.Fatalf("feed(ESC of terminator) = %q, want no insertion before completion", got)
+	}
+	if got := feed("\\"); got != "\\"+enable {
+		t.Fatalf("feed(backslash of terminator) = %q, want it followed by exactly one reassertion", got)
+	}
+	if got := feed("z"); got != "z" {
+		t.Fatalf("feed(after wrapper) = %q, want no further insertion", got)
+	}
+}
+
+func TestFocusOutputIncompleteTmuxWrapperDoesNotReassert(t *testing.T) {
+	t.Parallel()
+
+	const enable = "\x1b[?1004h"
+	wrapper := string(tmuxPassthrough([]byte("\x1b[?1004l\x1bc")))
+	for _, cut := range []int{len(wrapper) - 2, len(wrapper) - 1} {
+		o := focusOutput{focus: &sessionFocus{}}
+		if got := string(o.feed([]byte(enable + wrapper[:cut]))); got != enable+wrapper[:cut] {
+			t.Fatalf("feed(wrapper cut at %d) = %q, want it unchanged", cut, got)
+		}
+	}
+}

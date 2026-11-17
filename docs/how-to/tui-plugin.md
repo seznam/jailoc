@@ -20,6 +20,26 @@ The indicator is bundled with jailoc and needs no configuration. At `jailoc up`,
 - GitHub Copilot CLI: Copilot reads a status line only from its user settings, so jailoc adds one to `settings.json` in the agent's persistent state directory when the file sets none. If you set your own `statusLine` there, jailoc leaves it alone and Copilot shows yours instead; it only replaces the Node.js status line of an older jailoc. jailoc doesn't touch the file when you mount `~/.copilot` from the host.
 - Antigravity CLI: the same as GitHub Copilot CLI, with `antigravity-cli/settings.json` in the agent's state directory (`~/.gemini`). `/statusline <command>` sets your own status line there, and `/statusline delete` removes it, so jailoc adds its own again at the next start.
 
+## Get notifications from OpenCode
+
+The OpenCode 1 and OpenCode 2 plugins also report when the agent finishes or needs input, and jailoc turns the reports into [session notifications](sessions.md#get-notified-when-the-agent-needs-you). The reports are private terminal sequences that jailoc removes from the session output, so they never reach your terminal as they are.
+
+| Report | OpenCode 1 | OpenCode 2 |
+|---|---|---|
+| Finished | A top-level session's turn ends with a completed reply, without an error or an abort | A top-level session's run succeeds; while its subagents still run, the report waits for them, at most 3 seconds after the last one ends |
+| Needs input | A top-level session asks for a permission or asks a question | A top-level session asks for a permission or opens a form |
+
+Subagent sessions don't report. Claude Code, GitHub Copilot CLI, OmO and Antigravity CLI don't report either, so jailoc sends no notifications for them.
+
+When OpenCode is configured to show notifications itself, the plugin reports nothing, so you don't get both:
+
+- OpenCode 1: `attention.enabled` and `attention.notifications` in the TUI configuration, with the built-in `internal:notifications` plugin active.
+- OpenCode 2: `attention.notifications = true` in `cli.json` or `OPENCODE_CLI_CONFIG_CONTENT`, with the built-in `opencode.notifications` plugin enabled. When there's no `cli.json`, OpenCode 2 takes `attention`, `plugin` and `plugin_enabled` from `tui.json`, and so does the plugin. A `tui.json` without `attention.notifications = true` leaves OpenCode 2's notifications off.
+
+OpenCode's own notifications follow OpenCode's settings, not jailoc's focus gate, fixed text or interval. Turn OpenCode's off to get jailoc's.
+
+The reports come with the plugin, so after upgrading jailoc, [update the indicator](#update-the-indicator).
+
 ## Update the indicator
 
 The indicator files are written at `jailoc up`. After upgrading jailoc, restart the workspace:
