@@ -81,6 +81,7 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  Enable Docker: %t\n", ws.EnableDocker)
 	_, _ = cyan.Fprintf(os.Stdout, "  Protect Git: %t\n", ws.ProtectGit)
 	_, _ = cyan.Fprintf(os.Stdout, "  Isolated Build: %t\n", ws.IsolatedBuild)
+	_, _ = cyan.Fprintf(os.Stdout, "  Notifications: %s\n", ws.Notifications)
 	_, _ = cyan.Fprintf(os.Stdout, "  Computed Paths:\n")
 	_, _ = cyan.Fprintf(os.Stdout, "    Config File: %s\n", config.ConfigPath())
 	_, _ = cyan.Fprintf(os.Stdout, "    Workspace Config Dir: %s\n", filepath.Join(config.ConfigDir(), "workspaces", ws.Name))
