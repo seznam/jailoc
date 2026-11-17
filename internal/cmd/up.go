@@ -204,8 +204,8 @@ const tuiPluginContainerDir = agent.PluginDir
 // .gitignore of a read-only config directory mount and the TUI plugin.
 func writeAgentFiles(ws *workspace.Resolved, cacheDir string) error {
 	h := ws.Agent
-	if hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, h.ConfigDir); ok && h.ConfigDir != "" {
-		if err := ensureConfigGitignore(hostPath, h.ConfigGitignore); err != nil {
+	if source, hostPath, ok := config.ReadOnlyMountCoversPath(ws.Mounts, h.ConfigDir); ok && h.ConfigDir != "" {
+		if err := ensureConfigGitignore(source, hostPath, h.ConfigGitignore); err != nil {
 			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not pre-create .gitignore in %s: %v\n", hostPath, err)
 		}
 	}
@@ -479,8 +479,14 @@ func readConfigFile(hostPath string) ([]byte, error) {
 
 // ensureConfigGitignore creates hostDir/.gitignore with content unless it
 // exists: some agents write it into their config directory on startup and
-// fail when the directory is mounted read-only.
-func ensureConfigGitignore(hostDir, content string) error {
+// fail when the directory is mounted read-only. hostDir is source, the host
+// side of the read-only mount, or a directory under it. A missing source is
+// left alone, so vmShares reports it; a missing hostDir under an existing
+// source is created.
+func ensureConfigGitignore(source, hostDir, content string) error {
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	gitignorePath := filepath.Join(hostDir, ".gitignore")
 	_, err := os.Stat(gitignorePath)
 	if err == nil {

@@ -113,6 +113,8 @@ mounts = [":/home/agent/.config/ai-instructions"]
 !!! warning
     Mounts share directories only. A mount whose host side is a file fails `jailoc up` with `shares directories only; use snapshots`. Use [`snapshots`](#snapshot-files-into-the-workspace) for single files.
 
+A read-write mount whose host directory is missing gets it created. A read-only mount whose host directory is missing fails `jailoc up` with `does not exist`, so a typo in a path to a dotfiles directory doesn't leave an empty share.
+
 !!! note
     Dangerous host paths are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.config/jailoc`, `~/.cache/jailoc-vm`, and directories that contain one of the home entries, such as `~`, `~/.config` or `~/.cache`. To give the agent one credential from such a directory, use a [file secret](secrets.md#pass-a-credential-file); the error message shows the entry to add. Guest destinations under `/home/agent/...` are allowed; other system directories are rejected. On the guest side, `~` stands for `/home/agent`: `~/.config/ai-instructions` and `/home/agent/.config/ai-instructions` are the same destination.
 

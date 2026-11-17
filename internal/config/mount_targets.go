@@ -12,12 +12,14 @@ func MountsContainTarget(mounts []string, target string) bool {
 	return false
 }
 
-func ReadOnlyMountCoversPath(mounts []string, target string) (string, bool) {
+// ReadOnlyMountCoversPath returns the host source of the read-only mount in
+// mounts that covers target and the host path target is backed by.
+func ReadOnlyMountCoversPath(mounts []string, target string) (source, hostPath string, ok bool) {
 	best := coveringMount(mounts, target)
 	if best.Mode != "ro" {
-		return "", false
+		return "", "", false
 	}
-	return best.Host + strings.TrimPrefix(target, best.Container), true
+	return best.Host, best.Host + strings.TrimPrefix(target, best.Container), true
 }
 
 // MountHostPath returns the host path that target is backed by in mounts.

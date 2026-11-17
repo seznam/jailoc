@@ -475,6 +475,25 @@ func TestVMShares(t *testing.T) {
 	if _, err := vmShares(ws); err == nil {
 		t.Fatal("vmShares accepted a file mount")
 	}
+
+	// A missing read-only source would share an empty directory.
+	missing := filepath.Join(home, "missing")
+	ws.Mounts = []string{missing + ":/opt/missing:ro"}
+	if _, err := vmShares(ws); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("vmShares with a missing read-only source: err = %v, want does not exist", err)
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing read-only source created: %v", err)
+	}
+	// The built-in ~/.agents mount is read-only, but its missing source is
+	// still created so a host without ~/.agents boots.
+	ws.Mounts = []string{filepath.Join(home, ".agents") + ":/home/agent/.agents:ro"}
+	if _, err := vmShares(ws); err != nil {
+		t.Fatalf("vmShares with a missing default mount source: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(home, ".agents")); err != nil || !info.IsDir() {
+		t.Fatalf("default mount source not created: %v", err)
+	}
 }
 
 func TestVMAgentProfile(t *testing.T) {
@@ -679,6 +698,87 @@ func TestCheckNestedShares(t *testing.T) {
 			assertContains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+func TestDanglingShareLinks(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dotfiles := filepath.Join(home, "dotfiles")
+	project := filepath.Join(home, "project")
+	for _, d := range []string{dotfiles, filepath.Join(project, "sub")} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	instructions := filepath.Join(dotfiles, "AGENTS.md")
+	if err := os.WriteFile(instructions, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		filepath.Join(project, "AGENTS.md"): instructions,
+		filepath.Join(project, "local"):     "sub",
+		filepath.Join(project, "system"):    "/bin",
+		filepath.Join(project, "broken"):    filepath.Join(home, "missing"),
+		filepath.Join(dotfiles, "relative"): "AGENTS.md",
+		filepath.Join(dotfiles, "absolute"): instructions,
+	}
+	for link, target := range links {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	projectShare := vm.Share{HostPath: project, GuestPath: project}
+	dotfilesAtHostPath := vm.Share{HostPath: dotfiles, GuestPath: dotfiles, ReadOnly: true}
+	dotfilesRemapped := vm.Share{HostPath: dotfiles, GuestPath: "/home/agent/.dotfiles", ReadOnly: true}
+	tests := []struct {
+		name      string
+		shares    []vm.Share
+		snapshots []string
+		want      []string
+	}{
+		{"target not shared", []vm.Share{projectShare}, nil, []string{filepath.Join(project, "AGENTS.md")}},
+		{"target shared at its host path", []vm.Share{projectShare, dotfilesAtHostPath}, nil, nil},
+		{"target snapshotted at its host path", []vm.Share{projectShare}, []string{instructions}, nil},
+		{"absolute link in a remapped mount", []vm.Share{dotfilesRemapped}, nil, []string{filepath.Join(dotfiles, "absolute")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			covered := slices.Clone(tt.snapshots)
+			for _, s := range tt.shares {
+				covered = append(covered, s.GuestPath)
+			}
+			var got []string
+			for _, l := range danglingShareLinks(tt.shares, covered, home) {
+				got = append(got, l.link)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("danglingShareLinks() links = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDanglingLinkWarningEscapesPaths(t *testing.T) {
+	t.Parallel()
+	got := danglingLinkWarning("ws", shareLink{
+		link:   "/p/evil\x1b]0;title\x07",
+		target: "/home/u/\x1b[2Jx",
+		guest:  "/home/u/\x1b[2Jx",
+	})
+	if strings.ContainsAny(got, "\x1b\x07") {
+		t.Fatalf("danglingLinkWarning() = %q, contains raw control characters", got)
+	}
+	assertContains(t, got, `"/p/evil\x1b]0;title\a"`)
+}
+
+func TestDanglingLinkWarningFix(t *testing.T) {
+	t.Parallel()
+	file := danglingLinkWarning("ws", shareLink{link: "/p/AGENTS.md", target: "/h/dotfiles/AGENTS.md", guest: "/h/dotfiles/AGENTS.md"})
+	assertContains(t, file, `snapshot its target at "/h/dotfiles/AGENTS.md", or mount the directory that contains it at "/h/dotfiles"`)
+	dir := danglingLinkWarning("ws", shareLink{link: "/p/skills", target: "/h/dotfiles/skills", guest: "/h/dotfiles/skills", dir: true})
+	assertContains(t, dir, `mount or snapshot its target at "/h/dotfiles/skills"`)
 }
 
 func TestReadRegular(t *testing.T) {
