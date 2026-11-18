@@ -136,7 +136,7 @@ Updated live:
 - `env`, `env_file` and secrets
 - `timezone`, or the host's current zone when it is unset
 
-Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets. Files opened before a reload keep their old snapshot content.
+Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets. Files opened before a reload keep their old snapshot content. Concurrent reloads of one workspace, including those `jailoc up` starts, wait for each other and run one at a time.
 
 Changes to the following need a new VM. `jailoc reload` lists them, and [`jailoc restart`](#jailoc-restart) applies them:
 
@@ -371,7 +371,7 @@ A workspace counts as a jailoc v1 Docker workspace unless its effective `backend
 - Moves `allowed_hosts`, `allowed_networks`, `dns_upstream` and `dns_blocked_zones` of `[defaults]` and of every workspace into `network.dns` and `[[*.network.rules]]`, removes `filtered_dns`, and adds `allow = ["*"]` when the configuration had no `network.rules`. A value already set in the new field wins and the old one is removed.
 - Asks for every `mounts` entry of `[defaults]` and of each Docker workspace whether it stays a directory share (default for directories), becomes a read-only [snapshot](configuration.md#snapshots) (default for files), or is dropped. Files cannot stay mounts.
 
-For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories, unless a mount covers those paths or VM data already exists there. The volumes are left in place. Without a reachable Docker daemon, these steps are skipped after confirmation.
+For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories, unless a mount covers those paths or VM data already exists there. The volumes are left in place. The copy keeps symbolic links, but skips device nodes, FIFOs and additional hard-link names of a file. Without a reachable Docker daemon, these steps are skipped after confirmation.
 
 The previous configuration is saved as `config.toml.pre-vm-migration` next to it. Comments are not carried over to the rewritten file. See [Migrate from jailoc v1](../how-to/migrate-from-v1.md).
 
