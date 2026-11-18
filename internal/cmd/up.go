@@ -162,29 +162,67 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 	}
 }
 
-// workspaceLayers adds the layers jailoc builds for ws on top of the last
-// image of chain: Docker when enable_docker is on, then the agent. It returns
-// chain with the images it built appended.
-func workspaceLayers(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, chain []string) ([]string, error) {
+// workspaceLayer is one image layer jailoc builds on top of the workspace
+// image.
+type workspaceLayer struct {
+	name  string
+	build func(ctx context.Context, base string) (string, error)
+}
+
+// workspaceLayerPlan lists the layers jailoc builds for ws, in build order:
+// Docker when enable_docker is on, the desktop when enable_desktop is on,
+// then the agent.
+func workspaceLayerPlan(cfg *config.Config, ws *workspace.Resolved) []workspaceLayer {
+	var plan []workspaceLayer
+	var mirror string
+	if cfg != nil {
+		mirror = cfg.Base.UbuntuMirror
+	}
 	if ws.EnableDocker {
+		plan = append(plan, workspaceLayer{"docker", func(ctx context.Context, base string) (string, error) {
+			image, err := docker.BuildDockerImage(ctx, base, mirror)
+			if err != nil {
+				return "", fmt.Errorf("add Docker to the workspace image: %w", err)
+			}
+			return image, nil
+		}})
+	}
+	if ws.EnableDesktop {
+		plan = append(plan, workspaceLayer{"desktop", func(ctx context.Context, base string) (string, error) {
+			image, err := docker.BuildDesktopImage(ctx, base)
+			if err != nil {
+				return "", fmt.Errorf("add the desktop to the workspace image: %w", err)
+			}
+			return image, nil
+		}})
+	}
+	if ws.AgentInstall {
+		plan = append(plan, workspaceLayer{"agent", func(ctx context.Context, base string) (string, error) {
+			image, err := docker.BuildAgentImage(ctx, base, ws.Agent)
+			if err != nil {
+				return "", fmt.Errorf("install %s into the workspace image: %w", ws.Agent.Title, err)
+			}
+			return image, nil
+		}})
+	}
+	return plan
+}
+
+// workspaceLayers adds the layers jailoc builds for ws on top of the last
+// image of chain: Docker when enable_docker is on, the desktop when
+// enable_desktop is on, then the agent. It returns chain with the images it
+// built appended.
+func workspaceLayers(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, chain []string) ([]string, error) {
+	for _, layer := range workspaceLayerPlan(cfg, ws) {
 		start := time.Now()
-		image, err := docker.BuildDockerImage(ctx, chain[len(chain)-1], cfg.Base.UbuntuMirror)
+		image, err := layer.build(ctx, chain[len(chain)-1])
 		if err != nil {
-			return nil, fmt.Errorf("add Docker to the workspace image: %w", err)
+			return nil, err
 		}
-		logStep("build Docker layer", start, "image", image)
+		logStep("build "+layer.name+" layer", start, "image", image)
 		chain = append(chain, image)
 	}
-	if !ws.AgentInstall {
-		return chain, nil
-	}
-	start := time.Now()
-	image, err := docker.BuildAgentImage(ctx, chain[len(chain)-1], ws.Agent)
-	if err != nil {
-		return nil, fmt.Errorf("install %s into the workspace image: %w", ws.Agent.Title, err)
-	}
-	logStep("build agent layer", start, "image", image)
-	return append(chain, image), nil
+	return chain, nil
 }
 
 // logStep logs how long the step that began at start took, for finding

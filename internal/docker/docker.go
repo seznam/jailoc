@@ -321,7 +321,7 @@ func BuildDockerImage(ctx context.Context, base, mirror string) (string, error) 
 // websockify, Openbox) on top of base and returns the tag of the result. The
 // base image must be Debian or Ubuntu based.
 func BuildDesktopImage(ctx context.Context, base string) (string, error) {
-	return buildLayerImage(ctx, base, "jailoc-desktop", "desktop", func(user string) []byte {
+	return buildLayerImage(ctx, base, "jailoc-desktop", "desktop", proxyBuildArgs(), func(user string) []byte {
 		return desktopLayerDockerfile(embed.DesktopLayer(), user)
 	})
 }
