@@ -99,11 +99,13 @@ On Linux (x86_64, aarch64), the package builds the VM runtime (go-microvm runner
 
 Every release publishes archives for macOS (arm64) and Linux (amd64, arm64). Each contains `jailoc`, the `jl` alias, `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES`. Download the archive for your platform:
 
-<a class="md-button md-button--primary" href="https://github.com/seznam/jailoc/releases/download/v2.6.0/jailoc_2.6.0_darwin_arm64.tar.gz">Download v2.6.0 for macOS on Apple Silicon</a>
-<a class="md-button" href="https://github.com/seznam/jailoc/releases/download/v2.6.0/jailoc_2.6.0_linux_amd64.tar.gz">Download v2.6.0 for Linux amd64</a>
-<a class="md-button" href="https://github.com/seznam/jailoc/releases/download/v2.6.0/jailoc_2.6.0_linux_arm64.tar.gz">Download v2.6.0 for Linux arm64 (experimental)</a>
+{% set version = version or ('v' ~ release['.']) %}
 
-These downloads are pinned to v2.6.0; check them against its [SHA-256 checksums](https://github.com/seznam/jailoc/releases/download/v2.6.0/checksums.txt). A newer release may be available:
+<a class="md-button md-button--primary" href="https://github.com/seznam/jailoc/releases/download/{{ version }}/jailoc_{{ version[1:] }}_darwin_arm64.tar.gz">Download {{ version }} for macOS on Apple Silicon</a>
+<a class="md-button" href="https://github.com/seznam/jailoc/releases/download/{{ version }}/jailoc_{{ version[1:] }}_linux_amd64.tar.gz">Download {{ version }} for Linux amd64</a>
+<a class="md-button" href="https://github.com/seznam/jailoc/releases/download/{{ version }}/jailoc_{{ version[1:] }}_linux_arm64.tar.gz">Download {{ version }} for Linux arm64 (experimental)</a>
+
+These archives are for {{ version }}; verify them against its [SHA-256 checksums](https://github.com/seznam/jailoc/releases/download/{{ version }}/checksums.txt). Other releases are on GitHub:
 
 <a class="md-button" href="https://github.com/seznam/jailoc/releases/latest">Open the latest release on GitHub</a>
 
