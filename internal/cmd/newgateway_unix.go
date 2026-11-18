@@ -376,13 +376,12 @@ func newGatewayInstance(parent context.Context, t gatewayTarget, errw io.Writer)
 	return &gatewayInstance{target: t, ctx: ctx, cancel: cancel, errw: errw, read: readVMIdentity, dial: vm.DialWeb}
 }
 
-// routes returns the gateway routes of the instance, one per web route, each
-// with its own context derived from the instance's.
+// routes returns the gateway routes of the instance, one per web route. Routes
+// share the instance context, so ending the instance fails them all.
 func (i *gatewayInstance) routes() []webgateway.Route {
 	out := make([]webgateway.Route, 0, len(i.target.ws.Web))
 	for _, r := range i.target.ws.Web {
-		route := &gatewayRoute{inst: i, port: uint16(r.Port)} //nolint:gosec // G115: validated to 1-65535
-		route.ctx, route.cancel = context.WithCancel(i.ctx)
+		route := &gatewayRoute{inst: i, port: uint16(r.Port), ctx: i.ctx} //nolint:gosec // G115: validated to 1-65535
 		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext, StartPath: gatewayStartPath(r.Name)})
 	}
 	return out
@@ -430,10 +429,9 @@ func (i *gatewayInstance) watch(interval time.Duration) {
 
 // gatewayRoute dials one guest port of an instance.
 type gatewayRoute struct {
-	inst   *gatewayInstance
-	port   uint16
-	ctx    context.Context
-	cancel context.CancelFunc
+	inst *gatewayInstance
+	port uint16
+	ctx  context.Context
 }
 
 // dialContext connects to the guest port through the web relay of the VM the
