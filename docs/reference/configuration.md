@@ -242,7 +242,7 @@ When patterns apply, the broker matches them against the percent-decoded segment
 
 `deny` rules with `http` never deny a connection and never block DNS; they act on requests only. For every other decision step the rule counts like a plain rule: an `allow` rule with `http` lets the connection reach the TLS or HTTP stage, a plain `deny` rule denies it first.
 
-The broker inspects a TCP connection when an `http` rule (allow or deny) matches its port and, after the TLS server name or HTTP `Host` is known, its name or address. These rules form the http scope of the connection. An empty scope leaves the connection to plain rules and undecrypted.
+The broker inspects a TCP connection when an `http` rule (allow or deny) matches its port and, after the TLS server name or HTTP `Host` is known, its name or address. These rules form the http scope of the connection: the `http` rules that match the server name together with those that match the destination address. An empty scope leaves the connection to plain rules and undecrypted.
 
 A connection that shows no name (TLS without SNI, HTTP/1.0 without `Host`) is judged by the `http` rules that match its destination address (an IP or CIDR target, or `*`). Without such a rule it is handled as if no `http` rule existed. With one it is inspected under the destination's IP address as its name: the broker's certificate carries the IP as a subject alternative name, the upstream certificate must be valid for the IP, and every request's `Host` must be the IP (an HTTP/1.0 request without `Host` counts as such). A connection without a name whose TLS offers no HTTP protocol in ALPN is handled like one with a name (see the table below): the plain rules decide, and it is inspected under the IP only when an `http` rule matches the address. IPv6 literals in `Host` or `:authority` are compared by address, so the compressed and expanded forms are the same host. Connections that name rules require a name for (a connection allowed by a name, a plain `deny` rule with names) still fail with `sni-required` without one.
 
@@ -255,6 +255,9 @@ An `http` allow rule narrows its host: when the scope has `http` allow rules, on
 3. When a path pattern applies to the method (see [request path checking](#request-path-checking)), a bad path is denied with reason `bad-path`.
 4. A matching `http` deny rule (method and path both match) denies the request with `rule=<name>`.
 5. If the scope has `http` allow rules, one must match both method and path, otherwise the request is denied with reason `http-no-match`. If the scope has none, a plain allow rule allowed the connection and the request passes.
+
+!!! warning
+    The `http` allow rules of the scope are a union, whether they match by name or by address, and any one of them can allow a request. An `http` allow rule on an IP or CIDR (for example `GET` only) is not a ceiling when the connection presents a name that another `http` allow rule (for example `POST`) matches: the address authorizes the connection, so the presented name doesn't have to resolve to the destination, and the request can use the named rule's methods and paths. Use an `http` `deny` rule, which is checked before the allow rules, as a hard cap.
 
 | Outcome | Status | Body |
 |---------|--------|------|
@@ -738,7 +741,7 @@ Sessions get these variables, so download caches that tools keep outside `~/.cac
 | `NUGET_PACKAGES` | `~/.cache/nuget/packages` | NuGet global packages (default `~/.nuget/packages`) |
 | `NUGET_HTTP_CACHE_PATH` | `~/.cache/nuget/v3-cache` | NuGet HTTP cache (default `~/.local/share/NuGet/v3-cache`) |
 
-A variable the image sets is kept; for npm, which reads its variables case-insensitively, either `NPM_CONFIG_CACHE` or `npm_config_cache` counts. A variable set by the workspace's `env`, `env_file` or an env secret takes precedence. The variables also take precedence over the tools' own configuration files, such as a `cache` setting in `.npmrc` or `bunfig.toml`; set the variable in the workspace's `env` to choose another location.
+A variable the image sets is kept; for npm, which reads its variables case-insensitively, either `NPM_CONFIG_CACHE` or `npm_config_cache` counts. A variable set by the workspace's `env`, `env_file` or an env secret takes precedence; when both npm spellings occur in the merged environment delivered to the guest, the last entry wins. The variables also take precedence over the tools' own configuration files, such as a `cache` setting in `.npmrc` or `bunfig.toml`; set the variable in the workspace's `env` to choose another location.
 
 ---
 

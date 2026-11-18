@@ -110,6 +110,9 @@ allow = ["registry.example.com"]
 http.methods = ["*"]
 ```
 
+!!! warning
+    `http` allow rules are a union across names and addresses. A `GET`-only `http` allow rule on an IP or CIDR is not a ceiling when the request presents a name that another `http` allow rule (for example `POST`) matches: the request can use the named rule's methods and paths even if that name resolves elsewhere. Use an `http` `deny` rule as a hard cap. See [Evaluation](../reference/configuration.md#evaluation).
+
 To list the requests, run `jailoc traffic -f`. Inspected requests show method, host, path, status and the deciding rule; denied ones show the reason. A request that never reaches the upstream, for example because its certificate failed verification, shows status `502` and the error.
 
 `http` works with `proto = "tcp"` only. Run `jailoc reload api` to apply a change. See [HTTP rules](../reference/configuration.md#http-rules) for the pattern grammar and every outcome.
