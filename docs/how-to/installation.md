@@ -1,6 +1,9 @@
 # How to install jailoc
 
-Check your platform first, then install with [Homebrew](#install-with-homebrew), [Nix](#install-with-nix), a [pre-built binary](#install-a-pre-built-binary) or [from source](#build-from-source).
+jailoc runs on macOS on Apple Silicon and on Linux amd64 (arm64 experimental) with KVM and Landlock. [Check your platform](#check-your-platform) first, then install with Homebrew, a pre-built binary, [Nix](#install-with-nix) or [from source](#build-from-source).
+
+<a class="md-button md-button--primary" href="#install-with-homebrew">Install with Homebrew</a>
+<a class="md-button" href="#install-a-pre-built-binary">Choose a pre-built binary</a>
 
 ## Check your platform
 
@@ -54,6 +57,9 @@ Without a usable host daemon, `"auto"` builds images in a builder VM. A workspac
 
 ## Install with Homebrew
 
+!!! note "Unsigned binary"
+    jailoc binaries are not signed or notarized by Apple. The cask removes the `com.apple.quarantine` attribute from `jailoc` after installation so that Gatekeeper does not block it.
+
 On macOS and Linux, install the latest release from the [seznam/homebrew-tap](https://github.com/seznam/homebrew-tap) tap:
 
 ```bash
@@ -61,9 +67,6 @@ brew install --cask seznam/tap/jailoc
 ```
 
 Upgrade with `brew upgrade --cask jailoc`. The tap carries stable releases only; install release candidates from the [GitHub Releases page](https://github.com/seznam/jailoc/releases). The cask installs both `jailoc` and the `jl` alias on your `PATH`.
-
-!!! note "Unsigned binary"
-    jailoc binaries are not signed or notarized by Apple. The cask removes the `com.apple.quarantine` attribute from `jailoc` after installation so that Gatekeeper does not block it.
 
 ## Install with Nix
 
@@ -94,7 +97,20 @@ On Linux (x86_64, aarch64), the package builds the VM runtime (go-microvm runner
 
 ## Install a pre-built binary
 
-Every release publishes archives for macOS (arm64) and Linux (amd64, arm64). Download yours from the [GitHub Releases page](https://github.com/seznam/jailoc/releases), extract it, and place the binary on your `PATH`.
+Every release publishes archives for macOS (arm64) and Linux (amd64, arm64). Each contains `jailoc`, the `jl` alias, `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES`. Download the archive for your platform:
+
+<a class="md-button md-button--primary" href="https://github.com/seznam/jailoc/releases/download/v2.6.0/jailoc_2.6.0_darwin_arm64.tar.gz">Download v2.6.0 for macOS on Apple Silicon</a>
+<a class="md-button" href="https://github.com/seznam/jailoc/releases/download/v2.6.0/jailoc_2.6.0_linux_amd64.tar.gz">Download v2.6.0 for Linux amd64</a>
+<a class="md-button" href="https://github.com/seznam/jailoc/releases/download/v2.6.0/jailoc_2.6.0_linux_arm64.tar.gz">Download v2.6.0 for Linux arm64 (experimental)</a>
+
+These downloads are pinned to v2.6.0; check them against its [SHA-256 checksums](https://github.com/seznam/jailoc/releases/download/v2.6.0/checksums.txt). A newer release may be available:
+
+<a class="md-button" href="https://github.com/seznam/jailoc/releases/latest">Open the latest release on GitHub</a>
+
+Extract the archive and place `jailoc` (and `jl`, if you want the alias) on your `PATH`.
+
+!!! note "Gatekeeper on macOS"
+    The binary isn't signed or notarized by Apple, so Gatekeeper can block a `jailoc` downloaded with a browser. Remove the quarantine attribute, as the Homebrew cask does: `xattr -d com.apple.quarantine jailoc`.
 
 ## Build from source
 
