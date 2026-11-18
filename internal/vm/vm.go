@@ -257,13 +257,11 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	otel.SetTracerProvider(stepTracer{})
 	workspace := spec.Kind == KindWorkspace
 	st := State{PID: os.Getpid()}
-	sockets := []string{nicSocket(spec.StateDir)}
+	sockets := supervisorSockets(spec)
 	if workspace {
 		st.SSHSocket = SSHSocket(spec.StateDir)
-		sockets = append(sockets, st.SSHSocket)
 	} else {
 		st.DockerSocket = DockerSocket(spec.StateDir)
-		sockets = append(sockets, st.DockerSocket)
 	}
 	defer func() {
 		st.Ready = false
@@ -379,10 +377,29 @@ func imageRef(spec Spec) string {
 	return DefaultImage
 }
 
-func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc.Process, error) {
-	if len(spec.Broker) == 0 {
-		return nil, errors.New("no broker command")
+// webRelayEnabled reports whether the guest serves the web relay, whose
+// private host socket the broker then publishes.
+func webRelayEnabled(spec Spec) bool {
+	return spec.Kind == KindWorkspace && spec.Guest != nil && spec.Guest.WebRelay != nil && len(spec.Guest.WebRelay.Ports) > 0
+}
+
+// supervisorSockets lists the unix sockets the VM creates in its state
+// directory, whose paths must fit sun_path.
+func supervisorSockets(spec Spec) []string {
+	sockets := []string{nicSocket(spec.StateDir)}
+	if spec.Kind == KindWorkspace {
+		sockets = append(sockets, SSHSocket(spec.StateDir))
+	} else {
+		sockets = append(sockets, DockerSocket(spec.StateDir))
 	}
+	if webRelayEnabled(spec) {
+		sockets = append(sockets, WebSocket(spec.StateDir))
+	}
+	return sockets
+}
+
+// brokerArgs are the command line arguments of the network broker process.
+func brokerArgs(spec Spec, policyPath string) []string {
 	args := append(append([]string{}, spec.Broker[1:]...),
 		"-socket", nicSocket(spec.StateDir),
 		"-policy", policyPath,
@@ -396,6 +413,17 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 	} else {
 		args = append(args, "-forward-unix", DockerSocket(spec.StateDir)+"="+strconv.Itoa(DockerPort))
 	}
+	if webRelayEnabled(spec) {
+		args = append(args, "-forward-unix", WebSocket(spec.StateDir)+"="+strconv.Itoa(guest.WebRelayPort))
+	}
+	return args
+}
+
+func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc.Process, error) {
+	if len(spec.Broker) == 0 {
+		return nil, errors.New("no broker command")
+	}
+	args := brokerArgs(spec, policyPath)
 	bp, err := brokerproc.Start(ctx, brokerproc.Options{
 		Binary: spec.Broker[0], Args: args, ReadyTimeout: 10 * time.Second,
 		Stdout: spec.Log, Stderr: spec.Log,

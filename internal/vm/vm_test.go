@@ -4,9 +4,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/seznam/jailoc/internal/guest"
 )
 
 func TestEnsureDisk(t *testing.T) {
@@ -77,5 +81,63 @@ func TestWriteControlNudgesSSHSocket(t *testing.T) {
 	got, err := ReadControl(stateDir, "shutdown")
 	if err != nil || string(got) != "now" {
 		t.Fatalf("ReadControl = %q, %v; want %q", got, err, "now")
+	}
+}
+
+func TestBrokerArgsWebForward(t *testing.T) {
+	t.Parallel()
+	web := func(stateDir string) string {
+		return WebSocket(stateDir) + "=" + strconv.Itoa(guest.WebRelayPort)
+	}
+	tests := []struct {
+		name  string
+		spec  Spec
+		wantW bool
+	}{
+		{"workspace without web relay", Spec{Kind: KindWorkspace, Guest: &guest.Config{}}, false},
+		{"workspace with empty ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{WebRelay: &guest.WebRelay{}}}, false},
+		{"workspace with ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}}, true},
+		{"workspace without guest config", Spec{Kind: KindWorkspace}, false},
+		{"builder ignores web relay", Spec{Kind: KindBuilder, Guest: &guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.spec.StateDir = "/state"
+			tt.spec.Broker = []string{"jailoc", "netbroker"}
+			args := brokerArgs(tt.spec, "/state/policy.json")
+			var forwards []string
+			for i, a := range args {
+				if a == "-forward-unix" && i+1 < len(args) {
+					forwards = append(forwards, args[i+1])
+				}
+			}
+			var gotW int
+			for _, f := range forwards {
+				if f == web("/state") {
+					gotW++
+				}
+			}
+			if tt.wantW && gotW != 1 || !tt.wantW && gotW != 0 {
+				t.Fatalf("web forwards = %d in %v, want web=%v", gotW, forwards, tt.wantW)
+			}
+			if len(forwards) != 1+gotW {
+				t.Fatalf("forwards = %v, want the primary forward plus optional web", forwards)
+			}
+		})
+	}
+}
+
+func TestSocketPathsIncludeWeb(t *testing.T) {
+	t.Parallel()
+	spec := Spec{Kind: KindWorkspace, StateDir: "/state", Guest: &guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}}
+	got := supervisorSockets(spec)
+	want := []string{nicSocket("/state"), SSHSocket("/state"), WebSocket("/state")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("sockets = %v, want %v", got, want)
+	}
+	spec.Guest = nil
+	if got := supervisorSockets(spec); len(got) != 2 {
+		t.Fatalf("sockets without web relay = %v", got)
 	}
 }
