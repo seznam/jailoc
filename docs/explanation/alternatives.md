@@ -61,9 +61,28 @@ Containers share the host kernel, so a kernel bug, a mounted Docker socket or `-
 
 ### agent-sandbox
 
-[agent-sandbox](https://github.com/jurca/agent-sandbox) runs Claude Code or Copilot CLI in a container per workspace on Linux, with rootless Docker as the tested engine. Its threat model is accidents and prompt injection, and it leaves kernel and runtime escapes to a VM. The workspace is mounted at its host path. `.git` is read-only, and so are agent and editor configuration directories such as `.claude`, `.vscode` and `.devcontainer`. Dependency directories such as `.venv` and `node_modules` get per-workspace volumes, so the agent cannot plant code in the dependency trees that host tools run. The rest of the workspace stays writable, so build scripts, tests and CI workflows can still carry code that later runs outside the container. Every change to the project's sandbox configuration needs approval on the host before it takes effect.
+[agent-sandbox](https://github.com/jurca/agent-sandbox) runs Claude Code or Copilot CLI in a container per workspace on Linux, with rootless Docker as the tested engine. Its threat model is accidents and prompt injection, and it leaves kernel and runtime escapes to a VM.
 
-Egress has two tiers. The container's only route out is a tinyproxy container that forwards HTTP and HTTPS to listed hostnames, model APIs by default, and limits CONNECT tunnels to port 443 by default. A timed `net` session adds more hosts or opens everything except localhost, private IP literals and the host's `NO_PROXY` entries, unless one of them is listed, and shows the hosts it blocked. Allowed names are not checked against the addresses they resolve to, so a listed name that resolves to a private address stays reachable. Before anything starts, it refuses `.env` files in the workspace unless they are symlinks into the `secrets/` directory of agent-sandbox's own configuration directory and ignored by a tracked `.gitignore`. Docker inside the sandbox is not supported, and the agent does not get root. jailoc boots a separate kernel, enforces IP and DNS policy and allows the public internet by default.
+**Files:**
+
+- The workspace is mounted at its host path.
+- `.git` is read-only, and so are agent and editor configuration directories such as `.claude`, `.vscode` and `.devcontainer`.
+- Dependency directories such as `.venv` and `node_modules` get per-workspace volumes, so the agent cannot plant code in the dependency trees that host tools run.
+- The rest of the workspace stays writable, so build scripts, tests and CI workflows can still carry code that later runs outside the container.
+- Every change to the project's sandbox configuration needs approval on the host before it takes effect.
+
+**Egress** has two tiers:
+
+- The container's only route out is a tinyproxy container that forwards HTTP and HTTPS to listed hostnames, model APIs by default, and limits CONNECT tunnels to port 443 by default.
+- A timed `net` session adds more hosts or opens everything except localhost, private IP literals and the host's `NO_PROXY` entries, unless one of them is listed, and shows the hosts it blocked.
+- Allowed names are not checked against the addresses they resolve to, so a listed name that resolves to a private address stays reachable.
+
+**Other behaviour:**
+
+- Before anything starts, it refuses `.env` files in the workspace unless they are symlinks into the `secrets/` directory of agent-sandbox's own configuration directory and ignored by a tracked `.gitignore`.
+- Docker inside the sandbox is not supported, and the agent does not get root.
+
+jailoc boots a separate kernel, enforces IP and DNS policy and allows the public internet by default.
 
 ### systemd-nspawn
 
@@ -105,7 +124,14 @@ Seatbelt (`sandbox-exec`) is the macOS kernel sandbox, deprecated and undocument
 
 ### Built-in agent sandboxes
 
-Claude Code and Codex CLI run commands under Seatbelt on macOS and bubblewrap on Linux, with a host proxy that allows listed domains; Gemini CLI uses Seatbelt, a container or gVisor. They are cheap and integrated, but share the host kernel, cover tool calls rather than the whole agent (Claude Code's file tools, MCP servers and hooks run outside), and differ per agent. A domain allowlist also says nothing about what a domain resolves to, so private addresses behind an allowed name stay reachable. They can run inside a jailoc workspace.
+Claude Code and Codex CLI run commands under Seatbelt on macOS and bubblewrap on Linux, with a host proxy that allows listed domains; Gemini CLI uses Seatbelt, a container or gVisor. They are cheap and integrated, with these limits:
+
+- They share the host kernel.
+- They cover tool calls rather than the whole agent (Claude Code's file tools, MCP servers and hooks run outside).
+- They differ per agent.
+- A domain allowlist says nothing about what a domain resolves to, so private addresses behind an allowed name stay reachable.
+
+They can run inside a jailoc workspace.
 
 ### Microsoft MXC
 
@@ -139,7 +165,14 @@ Apple's [`container`](https://github.com/apple/container) runs each container in
 
 ### Docker Sandboxes
 
-[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`) run each agent in a micro-VM with its own Docker daemon, sync the workspace in, and filter traffic through a host HTTP(S) proxy that can inject credentials. It is the closest product to jailoc. jailoc instead filters every TCP and UDP flow by destination address, denies private networks regardless of names, filters DNS, enforces read-only virtio-fs shares, protects Git hooks and builds images from plain Dockerfiles.
+[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`) run each agent in a micro-VM with its own Docker daemon, sync the workspace in, and filter traffic through a host HTTP(S) proxy that can inject credentials. It is the closest product to jailoc. jailoc instead:
+
+- filters every TCP and UDP flow by destination address,
+- denies private networks regardless of names,
+- filters DNS,
+- enforces read-only virtio-fs shares,
+- protects Git hooks,
+- builds images from plain Dockerfiles.
 
 ### microsandbox
 
@@ -161,7 +194,14 @@ Most local sandboxes that filter traffic either run a firewall inside the sandbo
 - **Host firewall rules** (iptables, nftables, pf) need root on the host, differ between Linux and macOS, and are shared state that VPN clients, Docker and other tools also modify.
 - **An HTTP proxy** sees only traffic that is sent to it and decides by domain name. Raw TCP, UDP, SSH and DNS need separate handling, and a domain says nothing about the address it resolves to.
 
-The guest's only network device is connected to a per-workspace broker process, which runs a full TCP/IP stack in userspace and opens a host socket only for flows its policy allows. It needs no privileges, behaves the same on macOS and Linux, judges every flow by its real destination address, and stops the VM when it exits, so there is no path around it. See [Network Isolation](network-isolation.md) for the policy itself.
+The guest's only network device is connected to a per-workspace broker process, which runs a full TCP/IP stack in userspace and opens a host socket only for flows its policy allows. The broker:
+
+- needs no privileges,
+- behaves the same on macOS and Linux,
+- judges every flow by its real destination address,
+- stops the VM when it exits, so there is no path around it.
+
+See [Network Isolation](network-isolation.md) for the policy itself.
 
 ## When another tool fits better
 
