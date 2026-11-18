@@ -48,7 +48,7 @@ lib_dir = "/opt/libkrun/lib"
 The workspace VMs don't use Docker. You need Docker Engine on the host only for:
 
 - building workspace images when `[vm] builder` is `"docker"`, or `"auto"` (the default) with a usable daemon (see [How to use a custom image](custom-images.md) and the [`builder` field](../reference/configuration.md));
-- `jailoc migrate`, which copies OpenCode data out of jailoc v1 Docker volumes (see [Migrate from jailoc v1](migrate-from-v1.md)).
+- copying existing Docker-volume data with [`jailoc migrate`](migrate-from-v1.md).
 
 Without a usable host daemon, `"auto"` builds images in a builder VM. A workspace with `isolated_build = true` always builds in its own builder VM.
 

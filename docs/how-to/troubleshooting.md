@@ -4,7 +4,7 @@ Find the symptom, then apply the fix. Start with [Find the logs](#find-the-logs)
 
 | Symptom | Section |
 |---------|---------|
-| Command fails on a v1 setting | [Config rejects a jailoc v1 setting](#config-rejects-a-jailoc-v1-setting) |
+| Command fails on an unsupported setting | [Unsupported configuration](#unsupported-configuration) |
 | No VM runtime for this build | [VM runtime is missing](#vm-runtime-is-missing) |
 | `/dev/kvm` unavailable | [VM can't open /dev/kvm](#vm-cant-open-devkvm) |
 | Landlock confinement error | [VM process can't be confined](#vm-process-cant-be-confined) |
@@ -66,24 +66,13 @@ jailoc shell                 # a shell as the agent user
 jailoc exec -- ps aux        # one command
 ```
 
-## Config rejects a jailoc v1 setting
+<a id="config-rejects-a-jailoc-v1-setting"></a>
 
-**Symptom:** any command fails with:
+## Unsupported configuration
 
-```text
-mode is a jailoc v1 setting; run `jailoc migrate` to update the config
-```
+**Symptom:** any command fails with an error that names an unsupported setting.
 
-The same error appears for `backend = "docker"`, `password_mode` and `expose_port`.
-
-**Fix:** run the migration, which rewrites these settings and carries over v1 Docker workspaces:
-
-```bash
-jailoc migrate --dry-run   # preview
-jailoc migrate
-```
-
-See [Migrate from jailoc v1](migrate-from-v1.md).
+**Fix:** see [Upgrade an existing installation](migrate-from-v1.md#recognize-a-v1-configuration).
 
 ## VM runtime is missing
 
