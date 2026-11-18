@@ -232,4 +232,4 @@ After editing the config, apply it without restarting:
 jailoc reload myproject
 ```
 
-Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets apply live. Running sessions keep their old environment. Other changes, such as `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git` and the image, need a new VM. `jailoc reload` lists them; apply them with `jailoc restart`, which ends running sessions.
+Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets apply live. Running sessions keep their old environment. Other changes, such as `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git` and the image, need a new VM. `jailoc reload` lists them; apply them with `jailoc restart`, which ends running sessions. Concurrent reloads of one workspace run one at a time.

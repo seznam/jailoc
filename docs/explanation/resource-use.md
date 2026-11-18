@@ -48,7 +48,7 @@ When the VM still runs out of memory, the kernel's OOM killer picks a victim. `j
 
 Since the VM mounts the cached layer files, starting a VM doesn't copy the image either; the only per-VM root file system is a small boot root with `jailoc-guest` and its configuration.
 
-After every import, jailoc prunes the cache: workspace image directories that no workspace uses any more and that are older than one hour, and layer files that no remaining image links to. go-microvm's directory cache, which holds the builder VM image and workspace images unpacked by older jailoc releases, is pruned as well: unpacked trees nothing references, and layers unused for two weeks. Running VMs from older releases keep using their unpacked image until they restart.
+After every import, jailoc prunes its EROFS image cache under the current home directory: workspace image directories that no workspace uses any more and that are older than one hour, and layer files that no remaining image links to. go-microvm's directory cache, which holds the builder VM image and workspace images unpacked by older jailoc releases, is pruned as well: unpacked trees nothing references, and layers unused for two weeks. Running VMs from older releases keep using their unpacked image until they restart. Unused images in a Docker daemon (the host's or the builder VM's) are not pruned automatically; cleaning them up is the owner's job, see [Converting for the VM](../reference/image-resolution.md#converting-for-the-vm).
 
 ### Data disks
 

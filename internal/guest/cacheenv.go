@@ -50,3 +50,32 @@ func cacheEnv(cacheDir string, env []string) []string {
 	}
 	return out
 }
+
+// programLastWins applies lastWins to env, and also lets a later spelling of a
+// cacheVars alias group (NPM_CONFIG_CACHE, npm_config_cache) override earlier
+// entries of the group, whichever spelling they use. Other variables keep the
+// exact-name semantics of lastWins.
+func programLastWins(env []string) []string {
+	group := make(map[string]string, len(cacheVars))
+	for _, v := range cacheVars {
+		for _, n := range append([]string{v.name}, v.aliases...) {
+			group[n] = v.name
+		}
+	}
+	last := make(map[string]int, len(cacheVars))
+	for i, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		if g, ok := group[key]; ok {
+			last[g] = i
+		}
+	}
+	out := make([]string, 0, len(env))
+	for i, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		if g, ok := group[key]; ok && last[g] != i {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return lastWins(out)
+}

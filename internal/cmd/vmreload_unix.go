@@ -31,6 +31,15 @@ const reloadTimeout = 15 * time.Second
 // the CA bundle, snapshots, the time zone, environment and secrets. Settings
 // that need a new VM are reported, not applied.
 func reloadVM(ctx context.Context, ws *workspace.Resolved, purgeCache bool) error {
+	return withReloadLock(ctx, ws.Name, func() error {
+		return reloadVMLocked(ctx, ws, purgeCache)
+	})
+}
+
+// reloadVMLocked is the reload transaction; callers hold the workspace's
+// reload lock so concurrent reloads cannot overwrite each other's reload
+// request and acknowledgment files.
+func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool) error {
 	stateDir := vmStateDir(ws.Name)
 	st, err := runningVM(stateDir)
 	if err != nil {
