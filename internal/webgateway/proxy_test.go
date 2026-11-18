@@ -2,9 +2,7 @@ package webgateway
 
 import (
 	"bufio"
-	"crypto/sha1"
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -15,16 +13,27 @@ import (
 	"time"
 )
 
+// RFC 6455 section 1.3 sample key and its Sec-WebSocket-Accept value, so the
+// test upstream needs no SHA-1 to complete the handshake.
+const (
+	testSecWebSocketKey    = "dGhlIHNhbXBsZSBub25jZQ=="
+	testSecWebSocketAccept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+)
+
 // The test upstream speaks one real RFC 6455 masked text frame and echoes it.
 func websocketEcho(w http.ResponseWriter, r *http.Request) {
 	conn, rw, err := w.(http.Hijacker).Hijack()
 	if err != nil {
 		return
 	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")) //nolint:gosec // RFC 6455 handshake, not a cryptographic signature.
-	_, err = fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\nSet-Cookie: __Host-jailoc=forged; Secure; Path=/\r\n\r\n", base64.StdEncoding.EncodeToString(sum[:]))
+	defer func() { _ = conn.Close() }() // the gateway may already have closed the hijacked connection
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		return
+	}
+	if r.Header.Get("Sec-WebSocket-Key") != testSecWebSocketKey {
+		return
+	}
+	_, err = fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\nSet-Cookie: __Host-jailoc=forged; Secure; Path=/\r\n\r\n", testSecWebSocketAccept)
 	if err != nil {
 		return
 	}
@@ -54,9 +63,11 @@ func openWebsocket(t *testing.T, x *testGateway, cookie *http.Cookie) (net.Conn,
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.Close() })
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	_, err = fmt.Fprintf(conn, "GET /ws HTTP/1.1\r\nHost: %s\r\nOrigin: https://%s\r\nCookie: %s=%s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n", hostA, hostA, cookie.Name, cookie.Value)
+	t.Cleanup(func() { _ = conn.Close() }) // the gateway may already have closed the connection
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(conn, "GET /ws HTTP/1.1\r\nHost: %s\r\nOrigin: https://%s\r\nCookie: %s=%s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: %s\r\n\r\n", hostA, hostA, cookie.Name, cookie.Value, testSecWebSocketKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +76,7 @@ func openWebsocket(t *testing.T, x *testGateway, cookie *http.Cookie) (net.Conn,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.StatusCode != 101 || res.Header.Get("Sec-WebSocket-Accept") != "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" || len(res.Cookies()) != 0 {
+	if res.StatusCode != 101 || res.Header.Get("Sec-WebSocket-Accept") != testSecWebSocketAccept || len(res.Cookies()) != 0 {
 		t.Fatalf("upgrade: %d %+v", res.StatusCode, res.Header)
 	}
 	if _, err := conn.Write([]byte{0x81, 0x82, 1, 2, 3, 4, 'h' ^ 1, 'i' ^ 2}); err != nil {
@@ -103,7 +114,9 @@ func TestWebsocketRevocation(t *testing.T) {
 				x.cancel()
 			case "expiry": // The fixed deadline must actively close an idle upgrade.
 			}
-			conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := rd.ReadByte(); err == nil {
 				t.Fatal("revoked websocket remains open")
 			} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
@@ -127,7 +140,7 @@ func TestUnsafeRequestIsNeverReplayed(t *testing.T) {
 		if err != nil {
 			return
 		}
-		conn.Close()
+		_ = conn.Close() // the connection is dropped on purpose; the close error is irrelevant
 	}), nil)
 	cookie := loginCookie(t, x, hostA)
 	r := newRequest(t, "POST", hostA, "/action?secret=not-for-logs")
@@ -156,13 +169,13 @@ func TestLogoutClosesActiveHTTPConnection(t *testing.T) {
 	r := newRequest(t, "GET", hostA, "/slow")
 	r.AddCookie(cookie)
 	client := x.client(t, hostA)
-	done := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		res, err := client.Do(r)
-		if err == nil {
-			res.Body.Close()
+		defer close(done)
+		// Only the return of the revoked request matters, not its outcome.
+		if res, err := client.Do(r); err == nil {
+			_ = res.Body.Close()
 		}
-		done <- err
 	}()
 	select {
 	case <-entered:

@@ -110,7 +110,7 @@ func request(t *testing.T, client *http.Client, req *http.Request, status int) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { res.Body.Close() })
+	t.Cleanup(func() { _ = res.Body.Close() }) // the body is already drained or abandoned by the test
 	if res.StatusCode != status {
 		t.Fatalf("%s %s: status %d, want %d", req.Method, req.URL.Path, res.StatusCode, status)
 	}
@@ -220,7 +220,9 @@ func TestTLSAndHostBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.Close()
-		conn.SetDeadline(time.Now().Add(time.Second))
+		if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
 		c := tls.Client(conn, &tls.Config{RootCAs: x.pool, ServerName: hostA, MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11}) //nolint:gosec // Deliberately obsolete client tests the server's TLS floor.
 		if err := c.Handshake(); err == nil {
 			t.Fatal("obsolete TLS accepted")
@@ -233,7 +235,9 @@ func TestTLSAndHostBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer conn.Close()
-			conn.SetDeadline(time.Now().Add(time.Second))
+			if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
 			// Server rejection is under test, not client hostname verification.
 			c := tls.Client(conn, &tls.Config{InsecureSkipVerify: true, ServerName: sni, MinVersion: tls.VersionTLS12}) //nolint:gosec
 			if err := c.Handshake(); err == nil {
@@ -271,12 +275,20 @@ func TestServeRequiresLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	t.Cleanup(func() { _ = inner.Close() }) // Serve rejects the listener without closing it
+	// Serve only inspects the listener address, so a loopback socket that
+	// reports the wildcard address stands in for a real all-interfaces bind.
+	ln := wildcardListener{Listener: inner}
 	if err := g.Serve(t.Context(), ln); err == nil {
 		t.Fatal("wildcard listener accepted")
 	}
 }
+
+// wildcardListener reports the IPv4 wildcard address for a loopback socket.
+type wildcardListener struct{ net.Listener }
+
+func (wildcardListener) Addr() net.Addr { return &net.TCPAddr{IP: net.IPv4zero} }
