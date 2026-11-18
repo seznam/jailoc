@@ -26,7 +26,7 @@ jailoc can't remove the untrusted content, because processing it is the agent's 
 
 ### How-to guides
 
-- Set up: [Installation](how-to/installation.md), [Migrate from jailoc v1](how-to/migrate-from-v1.md)
+- Set up: [Installation](how-to/installation.md), [Upgrade an existing installation](how-to/migrate-from-v1.md)
 - Configure a workspace: [Workspace Configuration](how-to/workspace-configuration.md), [Custom Images](how-to/custom-images.md), [Network Access](how-to/network-access.md), [Secrets](how-to/secrets.md), [SSH & Git Passthrough](how-to/ssh-git-passthrough.md)
 - Work with agents: [Sessions](how-to/sessions.md), [Coding Agents](how-to/coding-agents.md), [Workspace Indicator](how-to/tui-plugin.md)
 - Fix problems: [Troubleshooting](how-to/troubleshooting.md)
