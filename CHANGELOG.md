@@ -1,5 +1,130 @@
 # Changelog
 
+## [2.7.0](https://github.com/seznam/jailoc/compare/v2.6.0...v2.7.0) (2026-11-18)
+
+
+### Features
+
+* **cmd:** add bounded focus-aware notification transport ([b10a652](https://github.com/seznam/jailoc/commit/b10a6526ccf4ef7d3f2eb4d62f2e71efa28b195e))
+* **cmd:** fail on missing read-only mount sources and warn on dangling share links ([ec23554](https://github.com/seznam/jailoc/commit/ec23554a81f2b335cdd42d86e03f61a9ccbd7342))
+* **cmd:** fail on missing read-only mount sources, warn on dangling share links, disable Claude nonessential traffic ([bddc7a9](https://github.com/seznam/jailoc/commit/bddc7a95f1ad3549c1442d27237adaa78dcc6bef))
+* **cmd:** notify from attached OpenCode sessions ([dfe6d04](https://github.com/seznam/jailoc/commit/dfe6d04ee7f2a0b01dc0f97b6d75ca2c9386f0c2))
+* **cmd:** serialize terminal notifications without deferral ([d42e87d](https://github.com/seznam/jailoc/commit/d42e87d766dc852995eac2ead94621e2d728a258))
+* **cmd:** show resolved notification delivery ([0b54cc5](https://github.com/seznam/jailoc/commit/0b54cc525880eed9ac175caab250c0d1e03069f3))
+* **config:** add notification delivery settings ([b2ef831](https://github.com/seznam/jailoc/commit/b2ef8317d23b201c965dfc430d3cf3bcb1d76ad5))
+* **guest:** keep tool download caches in the persistent cache ([616bc2a](https://github.com/seznam/jailoc/commit/616bc2aaf3380b8f5c47eb47ca8f7118cfb3eb80))
+* **guest:** keep tool download caches in the persistent cache ([1f26d45](https://github.com/seznam/jailoc/commit/1f26d457c6623f1434f1f145e55ed31ceec1f11c))
+* **netbroker:** answer flows denied after SNI/Host inspection with a TLS alert or HTTP 403 ([23e207c](https://github.com/seznam/jailoc/commit/23e207cefcead810897f8511fdb1e799fa009e86))
+* **netbroker:** answer flows denied after SNI/Host inspection with a TLS alert or HTTP 403 ([ff4b867](https://github.com/seznam/jailoc/commit/ff4b867e70dfdf9fa443f8683c260a37d3d4c089))
+* **netbroker:** inspect HTTPS and decide http rules per request by method and path ([d24598f](https://github.com/seznam/jailoc/commit/d24598f36fead09465c0cc281f7222b391b5bafa))
+* **netbroker:** inspect HTTPS and decide http rules per request by method and path ([b1554c2](https://github.com/seznam/jailoc/commit/b1554c2c54d9e3952f472ff78ccf610566e80439))
+* **network:** hide events of rules with log = false from jailoc traffic ([0715eb2](https://github.com/seznam/jailoc/commit/0715eb2534b93a017055409b9853ceba50fea058))
+* **network:** hide events of rules with log = false from jailoc traffic ([420be74](https://github.com/seznam/jailoc/commit/420be7436495840a3762b43b466cd2adf69c23c5))
+* **network:** resolve names to private addresses only in internal zones ([2c5875a](https://github.com/seznam/jailoc/commit/2c5875ad30324b37e3c58b9ffad2a02c17afa6e5))
+* **network:** resolve names to private addresses only in internal zones ([527b833](https://github.com/seznam/jailoc/commit/527b8332fe2155d9cbc593b9d52f46f2911d5090))
+* **notifications:** notify from attached OpenCode sessions ([63c3490](https://github.com/seznam/jailoc/commit/63c34908660a083f0aedb39794ef097bf53cda7e))
+* **plugin:** define bounded private notification reports ([3d3355f](https://github.com/seznam/jailoc/commit/3d3355fe716a863db5c83f20f0f0212459afd3cf))
+* **plugin:** report OpenCode 2 completion after child activity ([0631fe5](https://github.com/seznam/jailoc/commit/0631fe5f97f52a2b83da4bae9bca301ad7564aa6))
+* **plugin:** report successful OpenCode 1 turns and input requests ([5dbf8d2](https://github.com/seznam/jailoc/commit/5dbf8d25984c8be9b5a92fb40fbaf12e6462d35f))
+* **traffic:** collapse DNS answers into CIDR prefixes and octet patterns ([dd5d85f](https://github.com/seznam/jailoc/commit/dd5d85fbc32108c2d655181b995375fb663f7b27))
+* **traffic:** collapse DNS answers into CIDR prefixes and octet patterns ([467a495](https://github.com/seznam/jailoc/commit/467a4952139fa9bbb3066ba2e5d21815366bad1e))
+* **workspace:** resolve inherited notification delivery ([f8b0c20](https://github.com/seznam/jailoc/commit/f8b0c20c8fe4efe2d07ad94bb1515bf5cc0af292))
+
+
+### Bug Fixes
+
+* **agent:** let Claude Code start background sessions when switching sessions ([725fdcf](https://github.com/seznam/jailoc/commit/725fdcf2fc021765083262f726a6b64d288e28c9))
+* **agent:** let Claude Code start background sessions when switching sessions ([7633a2d](https://github.com/seznam/jailoc/commit/7633a2d5d2456e846dc415c39243f578059dc96a))
+* **cmd:** keep missing read-only config sources missing, count snapshots and running shares in the link check ([a7ae869](https://github.com/seznam/jailoc/commit/a7ae8697d80fba475322153e517779f9d8c8c27c))
+* **cmd:** prepare config directories under existing read-only mount sources, quote paths in the dangling link warning ([a7fa9d1](https://github.com/seznam/jailoc/commit/a7fa9d11679d26b119101db92728b5d717453666))
+* **cmd:** replace the agent state file through a temporary file ([04755f7](https://github.com/seznam/jailoc/commit/04755f779e062037716333664bfef41ae8a540a6))
+* **cmd:** suggest snapshots for dangling file links, keep the harness settings in the dotfiles recipe ([e98cd23](https://github.com/seznam/jailoc/commit/e98cd2354c256965df4c25406808f92736b3537f))
+* **docs:** clarify skipped Docker migration recovery ([1f9ba2f](https://github.com/seznam/jailoc/commit/1f9ba2feacdd745e9c7173d9a36d4dff2cad2c78))
+* **guest:** honor npm cache environment aliases ([2ed9eac](https://github.com/seznam/jailoc/commit/2ed9eacd670eeb4d18c7bc0c513a29e32e6ee4fb))
+* **images:** retain shared Docker daemon caches ([c15cd71](https://github.com/seznam/jailoc/commit/c15cd714d976cd50ea614d9705d672f2f777b1e9))
+* **netbroker:** buffer small inspected request bodies so they are resent after an upstream GOAWAY ([3ce5f7a](https://github.com/seznam/jailoc/commit/3ce5f7a6c549dca2fa2e42498b9162e86eadc8b0))
+* **netbroker:** check request paths only when a path pattern applies ([a657d84](https://github.com/seznam/jailoc/commit/a657d84eed6d213a3cb15a9c5cc50b6dff3bf0a8))
+* **netbroker:** check request paths only when a path pattern applies, keep encoded slashes inside one segment ([2c2e768](https://github.com/seznam/jailoc/commit/2c2e768beaf47b515394996186da31c11f54eb4d))
+* **netbroker:** close http rule bypasses on spliced, silent and no-ALPN flows, add cleartext h2c and IP-literal inspection ([7ddd9a0](https://github.com/seznam/jailoc/commit/7ddd9a0ec1c1ec3ad20dc19031596e82d47c8338))
+* **netbroker:** deny whitespace-split and blank-line-prefixed request lines, classify buffered bytes at once, lock inspection CA creation ([83a17f2](https://github.com/seznam/jailoc/commit/83a17f2b91487f080df040edbe7cb9bc7f88b37d))
+* **netbroker:** document that only HTTP/1.1 Expect bodies stream, test HTTP/2 Expect replay ([36ccc65](https://github.com/seznam/jailoc/commit/36ccc65e6bc2827c710d0e36b963efae28e4bddc))
+* **netbroker:** drain a denied upload until the guest closes or the linger ends ([4b59399](https://github.com/seznam/jailoc/commit/4b59399f313a24bb37e4c5691c1f0f6411d155be))
+* **netbroker:** inspect non-HTTP ALPN TLS covered by http rules ([575aab3](https://github.com/seznam/jailoc/commit/575aab3d68ef5038419a1f8a6c7e7937d22e5078))
+* **netbroker:** inspect non-HTTP ALPN TLS covered by http rules ([c421315](https://github.com/seznam/jailoc/commit/c42131563a487c0a5f6e35e3a6d0ccc2de70f93a))
+* **netbroker:** keep the product name out of the 403 body the guest sees ([0f65b5a](https://github.com/seznam/jailoc/commit/0f65b5a29b1870bec073ccf2759628f4978a40b2))
+* **netbroker:** reject buffered bodies that run past their Content-Length, close the replaced test listener ([ca1c164](https://github.com/seznam/jailoc/commit/ca1c164899fc11fd59542c975a7e781f4ae3af71))
+* **netbroker:** resend small inspected request bodies after an upstream GOAWAY ([331df43](https://github.com/seznam/jailoc/commit/331df43f9fa6b1dcd9f7a81d4e8454b6fdabb5f7))
+* **netbroker:** reset malformed and pipelined denied requests instead of answering them ([8ad07a5](https://github.com/seznam/jailoc/commit/8ad07a53fa6451cb0ad18b3d45173250e0481c4c))
+* **netbroker:** strip h2c upgrades, reject malformed request lines, canonicalize IPv6 hosts, skip inspection in isolated builds ([0ef0ffa](https://github.com/seznam/jailoc/commit/0ef0ffa1a8aa6f2db354d8d17531d4dfcd1c2442))
+* **network:** keep untrusted cached names for deny rules and refresh their chain with the expiry ([83bd09c](https://github.com/seznam/jailoc/commit/83bd09c914a6b06093e89ff97edf897135d47963))
+* **network:** require a broker restart for internal zones and close legacy and authority bypasses ([97f2416](https://github.com/seznam/jailoc/commit/97f24169fba2bf32f57bbe063ec96d623043de53))
+* **network:** require internal CNAME chains, keep zone-only tables and warn about legacy aliases ([a42ba0a](https://github.com/seznam/jailoc/commit/a42ba0af2bc7ea1c732dbee09ac7326b29c23c2e))
+* **network:** revalidate cached internal names, drop host-resolved legacy CIDRs, never cache error replies ([c66f014](https://github.com/seznam/jailoc/commit/c66f0145a519e954b1250abf4f4cbd6a432b0ac7))
+* **notifications:** abort partial output before startup animation ([ffa2755](https://github.com/seznam/jailoc/commit/ffa2755aa83c6c22c653e2e1c19960fd390bd6b4))
+* **notifications:** detect Linux native delivery from D-Bus ([ae250fe](https://github.com/seznam/jailoc/commit/ae250fe39422d937253771a1419159235aefc94b))
+* **notifications:** honor OpenCode 2 legacy notification settings ([9d24c93](https://github.com/seznam/jailoc/commit/9d24c93621d2e8eabab24b1b7ca73a475f13bad5))
+* **notifications:** match focus mode in long and padded lists ([08abd5a](https://github.com/seznam/jailoc/commit/08abd5a001254dd2ed092999ce5232c8c2d2db14))
+* **notifications:** preserve buffered output when sessions end ([8efca4d](https://github.com/seznam/jailoc/commit/8efca4de27b8606fc92077690aa8409703881b10))
+* **notifications:** preserve fresh requests after refocusing ([28185e1](https://github.com/seznam/jailoc/commit/28185e17d8d6d9129b28165ecad2a34e79dff61d))
+* **notifications:** reassert focus reports after tmux passthrough ([7f857e3](https://github.com/seznam/jailoc/commit/7f857e364669eea848b84538cd7486316308959f))
+* **release:** deploy docs after publishing assets ([d882293](https://github.com/seznam/jailoc/commit/d882293396e4d0db0b7398502137ef432c045c4c))
+* **reload:** serialize workspace reload transactions ([eab0fe4](https://github.com/seznam/jailoc/commit/eab0fe45f1da8119d755c7643280ae8239494062))
+* **session:** preserve redirected output during terminal cleanup ([79235c0](https://github.com/seznam/jailoc/commit/79235c0f82e966eb1640ca833749ff5aadf29e76))
+* **validation:** address host testing findings ([caa8250](https://github.com/seznam/jailoc/commit/caa8250e97f4e06119126cd558069a38940b6c99))
+* **vm-runtime:** prevent macOS FIFO unlink from stalling virtio-fs ([1cda825](https://github.com/seznam/jailoc/commit/1cda8250d823ade31cd7b60ae52ff06b30e40f2f))
+* **vm-runtime:** prevent macOS FIFO unlink from stalling virtio-fs ([16fe949](https://github.com/seznam/jailoc/commit/16fe949199b0b6553c19d0e10542db4b1683efee))
+
+
+### Code Refactoring
+
+* **guest:** set the npm cache as NPM_CONFIG_CACHE ([d8c994d](https://github.com/seznam/jailoc/commit/d8c994d74159599e36c73831e0ae67ab0026302b))
+
+
+### Documentation
+
+* add the edit button and fix the network example rendered as a heading ([b14f2ec](https://github.com/seznam/jailoc/commit/b14f2ecbfbbab521cf93d46c1fc3792c3d325600))
+* **agents:** clarify image and agent configuration choices ([d336aa8](https://github.com/seznam/jailoc/commit/d336aa82f230312cfadfdc49bec52a1d5742abba))
+* **architecture:** make workspace lifecycle and resources easier to follow ([b1ee01b](https://github.com/seznam/jailoc/commit/b1ee01bae11cd66d7fa1210e4ad3a2422279e07d))
+* **blog:** add jailoc 2.7 release post ([67fba63](https://github.com/seznam/jailoc/commit/67fba63cf8dc4ae69fb3f797f1ca9c3cc9099c56))
+* **blog:** add jailoc 2.7 release post ([7beb26f](https://github.com/seznam/jailoc/commit/7beb26f56ae41e31d13fc7b5c940f00c462712b2))
+* **blog:** register jailoc 2.7 post in docs navigation ([bfdaa1d](https://github.com/seznam/jailoc/commit/bfdaa1d6f89fb8ebc857046852b454ae2f1fd71c))
+* **cli:** restructure command details for lookup ([28636fe](https://github.com/seznam/jailoc/commit/28636fed72ce6a33c9f034d61cbe211daa046801))
+* **configuration:** separate workspace recipes from Git protection reference ([2c49812](https://github.com/seznam/jailoc/commit/2c498124a5395f70b07c4d53f005a997781d7995))
+* **docs:** streamline user-facing documentation ([07fb32c](https://github.com/seznam/jailoc/commit/07fb32cad3b0087e201cbcb51ad98b1adf62f69d))
+* **guides:** keep upgrade history in the migration guide ([8452716](https://github.com/seznam/jailoc/commit/84527163006ce14054de12ec909e5037c941b068))
+* **home:** focus the documentation entrypoint ([16b2fe7](https://github.com/seznam/jailoc/commit/16b2fe79e62ded8a3d10a6ba0eba698a67fd1e1a))
+* **images:** document manual Docker cache cleanup ([3d80971](https://github.com/seznam/jailoc/commit/3d80971d841665f1648d099d753f1ef4c64908fa))
+* **images:** organize image resolution and compatibility reference ([b34abbb](https://github.com/seznam/jailoc/commit/b34abbb299860a2614fd2e1dab85893dcbf2ccf1))
+* **installation:** add platform download actions ([52fb623](https://github.com/seznam/jailoc/commit/52fb623b5479bb46d9098726cd11533214d9eb3c))
+* **installation:** template downloads from the release tag ([13c693d](https://github.com/seznam/jailoc/commit/13c693d2bf7c6d779cbc2016aefc5aa918a8de5b))
+* **isolation:** structure network, secret and alternative explanations ([151f01c](https://github.com/seznam/jailoc/commit/151f01cd336bd5e1cc237ffaa2bfaa967191e964))
+* **migrate:** consolidate upgrade guidance and recovery ([506ccec](https://github.com/seznam/jailoc/commit/506cceca29c6da75385f4bfe0858c30e585b7e6e))
+* **migrate:** describe skipped hard-link names ([ca7e7c3](https://github.com/seznam/jailoc/commit/ca7e7c35bff1d8e62a5690401219f81b7bbdf0d9))
+* **navigation:** use neutral upgrade links ([50aad4b](https://github.com/seznam/jailoc/commit/50aad4b057b9b95ce47f280f1bf4cf84548656f4))
+* **network:** clarify HTTP name and address rule composition ([9b0d16f](https://github.com/seznam/jailoc/commit/9b0d16f74f6f139610d6f9203cad79e3896ecaf0))
+* **network:** describe inspection of non-HTTP ALPN connections ([071b32e](https://github.com/seznam/jailoc/commit/071b32e424ced06fae622b894ceeb9e5dabb90b1))
+* **notifications:** describe OpenCode 2 legacy config precedence ([e4b3e57](https://github.com/seznam/jailoc/commit/e4b3e578505af68db61bfa1c82b8620d4a6c48b4))
+* **notifications:** explain attached-session delivery and trust limits ([dcb2f64](https://github.com/seznam/jailoc/commit/dcb2f643fcfad626c2356ee57ee84fdd7eb2084d))
+* **onboarding:** put the first workspace run before internals ([8d00a18](https://github.com/seznam/jailoc/commit/8d00a18e8674a7e66a169a00cda6fef9c7e1266e))
+* **operations:** organize network, session and troubleshooting tasks ([b6c894c](https://github.com/seznam/jailoc/commit/b6c894cb737b0b03a813adaf973ed62c4ffb1b24))
+* **overview:** remove scattered legacy backend history ([c9ba381](https://github.com/seznam/jailoc/commit/c9ba3816851053b98357b4f5d2f2cafb834cd165))
+* **readme:** sharpen the repository introduction ([c649ccd](https://github.com/seznam/jailoc/commit/c649ccd51ab0c3ffd7590aa4f69ebb9640cb21a8))
+* **reference:** route legacy configuration details to migration ([9f6cbb0](https://github.com/seznam/jailoc/commit/9f6cbb04fdee232f9badf2a219bc36ed4e425676))
+* **reload:** explain concurrent workspace reloads ([52d0752](https://github.com/seznam/jailoc/commit/52d0752f86f744d02cf1e6f4f04bdbad62e4cd96))
+* **secrets:** put credential capabilities beside setup steps ([f007669](https://github.com/seznam/jailoc/commit/f0076698fc94be649a1dcfeee253c6452a2e541c))
+* **security:** separate threat and boundary mechanisms for scanning ([42877ae](https://github.com/seznam/jailoc/commit/42877aece96d6ea6181d5d0fb15696a275520fa7))
+* **setup:** make installation and migration steps easier to scan ([e7ddcad](https://github.com/seznam/jailoc/commit/e7ddcade6aa86a544283424907e89e9d6e793608))
+* **skills:** add docs-editing skill ([104f72d](https://github.com/seznam/jailoc/commit/104f72d85a7244c8f2c764365cd75de7eefef6fd))
+* **skills:** add task-first documentation editing workflow ([9324cf5](https://github.com/seznam/jailoc/commit/9324cf5bd5b7a371af3f491f3b21bb903b642026))
+* **skills:** harden docs-editing scope, anchor and build checks ([9d29b06](https://github.com/seznam/jailoc/commit/9d29b069a710b973a59df42b7d10860892450ddc))
+* **skills:** include the release manifest in scratch builds ([b849787](https://github.com/seznam/jailoc/commit/b8497873737ff00b3ec2f42eb215a99d4073c767))
+
+
+### Tests
+
+* **netbroker:** open a connection per rejected request, as Go closes it after a denied CONNECT ([5661c6f](https://github.com/seznam/jailoc/commit/5661c6f76d20aefe5c61301e1407ccccafc7120d))
+* **plugin:** exercise shipped notification bundles in CI ([0aa1eb5](https://github.com/seznam/jailoc/commit/0aa1eb5a6546c0ed4be8a2d8421d5843f411705b))
+
 ## [2.6.0](https://github.com/seznam/jailoc/compare/v2.5.0...v2.6.0) (2026-11-16)
 
 
