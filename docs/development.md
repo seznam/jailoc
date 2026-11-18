@@ -51,7 +51,7 @@ The pipeline runs on GitHub Actions. Most workflows trigger on every branch and 
 |----------|---------|---------|
 | CI | Pushes and pull requests to `main` | Unit tests (`go test`), golangci-lint, and a check that the embedded TUI plugin matches its source |
 | Release | Tags matching `v*` — runs on `push` with `v*` ref | GoReleaser publishes static binaries, generates a GitHub Release with changelog and updates the Homebrew cask in `seznam/homebrew-tap` |
-| Docs | Tags matching `v*` — runs on `push` with `v*` ref | Builds documentation with MkDocs and deploys to GitHub Pages |
+| Docs | Release Please creates a release and the GoReleaser job succeeds | Builds documentation with Zensical (`zensical build --strict`) and deploys to GitHub Pages |
 | Pre-release | Manual (`workflow_dispatch`) with a ref and a version such as `1.20.0-rc.1` | Tags the ref and publishes GoReleaser binaries as a GitHub pre-release; no docs deploy, no release-please involvement |
 | VM Integration | PRs and pushes to `main` touching VM code, manual | Builds the go-microvm runner and libkrun from the pinned revision and boots real workspace VMs on a GitHub-hosted x64 Linux runner with KVM (`go test -tags vmintegration ./internal/vmintegration/`) |
 | Nix | Pushes and pull requests to `main` | Formatting check (`nix fmt`) and `nix flake check --all-systems`, plus `nix build .#jailoc` and `nix run . -- --help` on x86_64 and aarch64 Linux runners |
