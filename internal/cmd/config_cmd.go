@@ -79,6 +79,9 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  Import Agent Config: %t\n", ws.ImportAgentConfig)
 	_, _ = cyan.Fprintf(os.Stdout, "  CA Bundle: %s\n", caBundleLabel(ws.CABundle))
 	_, _ = cyan.Fprintf(os.Stdout, "  Enable Docker: %t\n", ws.EnableDocker)
+	_, _ = cyan.Fprintf(os.Stdout, "  Enable Desktop: %t\n", ws.EnableDesktop)
+	_, _ = cyan.Fprintf(os.Stdout, "  Web:\n")
+	printWebRoutes(ws.Name, ws.Web, "    ")
 	_, _ = cyan.Fprintf(os.Stdout, "  Protect Git: %t\n", ws.ProtectGit)
 	_, _ = cyan.Fprintf(os.Stdout, "  Isolated Build: %t\n", ws.IsolatedBuild)
 	_, _ = cyan.Fprintf(os.Stdout, "  Notifications: %s\n", ws.Notifications)
@@ -251,6 +254,20 @@ func printHostPortTargets(ports []config.HostPortTarget, indent string) {
 			target = p.Socket
 		}
 		_, _ = fmt.Fprintf(os.Stdout, "%s- %d -> %s\n", indent, p.Guest, target)
+	}
+}
+
+// webHostSuffix is the DNS zone of the workspace web routes: a route is served
+// at https://<route>.<workspace>.jailoc.local.
+const webHostSuffix = "jailoc.local"
+
+func printWebRoutes(name string, routes []workspace.WebRoute, indent string) {
+	if len(routes) == 0 {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
+		return
+	}
+	for _, r := range routes {
+		_, _ = fmt.Fprintf(os.Stdout, "%s- https://%s.%s.%s -> %d\n", indent, r.Name, name, webHostSuffix, r.Port)
 	}
 }
 
