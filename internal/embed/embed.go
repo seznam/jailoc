@@ -9,6 +9,9 @@ var dockerfileBytes []byte
 //go:embed assets/docker.Dockerfile
 var dockerLayerBytes []byte
 
+//go:embed assets/desktop.Dockerfile
+var desktopLayerBytes []byte
+
 //go:embed assets/tui-opencode1.js
 var tuiPluginOpenCode1JS []byte
 
@@ -30,6 +33,10 @@ func Dockerfile() []byte { return dockerfileBytes }
 // DockerLayer returns the stages of the embedded Docker layer Dockerfile;
 // they leave the files to copy onto the base image in the docker stage's /out.
 func DockerLayer() []byte { return dockerLayerBytes }
+
+// DesktopLayer returns the embedded desktop layer: a RUN fragment that installs
+// the VNC desktop packages as root on a Debian or Ubuntu base image.
+func DesktopLayer() []byte { return desktopLayerBytes }
 
 // TUIPluginOpenCode1JS returns the embedded TUI plugin JavaScript for
 // OpenCode 1.
