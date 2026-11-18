@@ -75,8 +75,9 @@ contributors; they stay as they are.
    - run examples through a safe surface; for anything that boots a workspace VM, use the
      [host-validation](../host-validation/SKILL.md) skill and ask before running it
    - build twice in scratch directories outside the repo (a build inside it leaves untracked
-     `.cache/`, `.venv/` or `uv.lock`): once from `git archive HEAD docs mkdocs.yml` (baseline),
-     once from a copy of the edited `docs/` and `mkdocs.yml`; in each run
+     `.cache/`, `.venv/` or `uv.lock`): once from `git archive HEAD docs mkdocs.yml .release-please-manifest.json`
+     (baseline), once from a copy of the edited `docs/`, `mkdocs.yml` and
+     `.release-please-manifest.json` (the `macros` plugin loads it); in each run
      `uvx --with mkdocs-macros-plugin zensical build --clean`
    - the build exits 0 on warnings; any `Warning:` line absent from the baseline fails
    - check nav and `docs/llms.txt` against the docs/AGENTS.md checklist
