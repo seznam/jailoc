@@ -135,8 +135,22 @@ jailoc migrate
 
 **Symptom:** `jailoc migrate` prints `Docker is not reachable`, or the copy prints `<workspace>: <path> already has VM data; keeping it`.
 
-**Cause:** without a reachable Docker daemon, running workspaces aren't checked and the OpenCode data in Docker volumes isn't copied. The question `Continue without Docker?` defaults to yes, so `-y` continues. Existing VM data is never overwritten.
+**Cause:** without a reachable Docker daemon, running workspaces aren't checked and the OpenCode data in Docker volumes isn't copied. The question `Continue without Docker?` defaults to yes, so `-y` continues. The copy skips any destination that already exists, on every run, and never overwrites it.
 
-**Fix:** answer no to `Continue without Docker?`, which cancels before the configuration is written. Start Docker and run `jailoc migrate` again.
+!!! warning
+    Don't purge or delete existing VM data to make a retry copy. While the restored v1 config is in place, don't run `jailoc down`: it loads the config and fails validation on the v1 settings. Stop VMs before you restore it.
+
+**Fix:** pick the case that matches.
+
+1. **The `Continue without Docker?` question is still open.** Answer no. That cancels before the configuration is written. Start Docker and run `jailoc migrate` again.
+
+2. **The migration already completed without Docker** (you answered yes, or passed `-y`). The converted config no longer selects the old Docker workspaces, so a plain `jailoc migrate` finds nothing to migrate and copies nothing. To copy the data:
+    1. Stop each affected running VM with `jailoc down <workspace>` while the converted config is still in place. Don't pass `--purge`.
+    2. Preserve the current `config.toml`, and any VM data the workspace already has, somewhere outside the jailoc directories. If a copy destination listed in case 3 already exists, follow case 3 instead; a retry doesn't replace it.
+    3. Restore the pre-migration config named in the completion output (`Migrated config.toml (previous version: <path>)`). Copy that exact file back over `config.toml`; don't guess the name, because a timestamp is appended when an earlier backup exists.
+    4. Start Docker, preview with `jailoc migrate --dry-run`, then run `jailoc migrate`.
+    5. Re-apply deliberately any edits you made to the converted config after the first migration; the restored file doesn't contain them.
+
+3. **The copy prints `already has VM data; keeping it`.** The destination exists, so the copy skips it without asking, on every retry. jailoc has no merge. The destinations are `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home/opencode-data` and `.../guest/home/cache`. Stop the affected VM with `jailoc down <workspace>` before you copy or reconcile anything, and keep the current config, the VM data and the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>`, which the migration leaves in place. Decide which data to keep and reconcile it by hand; don't delete or overwrite the existing data to force a retry.
 
 If something else fails, see [Troubleshooting](troubleshooting.md).
