@@ -463,7 +463,7 @@ jailoc wizard [path] [flags]
 
 ### `jailoc migrate`
 
-Rewrite an older `config.toml` (jailoc v1, or deprecated network settings) for the current format.
+Update an existing configuration to the current format.
 
 ```text
 jailoc migrate [flags]
@@ -474,21 +474,7 @@ jailoc migrate [flags]
 | `--dry-run` | | Print the planned changes and the resulting `config.toml` without changing anything. |
 | `--yes` | `-y` | Accept the default answer to every question. Required when standard input is not a terminal. |
 
-A workspace counts as a jailoc v1 Docker workspace unless its effective `backend` is `"vm"`. `jailoc migrate` rewrites the configuration file:
-
-- Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
-- Lists the jailoc v1 settings `mode`, `password_mode` and `expose_port` per scope and removes them after confirmation. Declining stops the migration.
-- Moves `allowed_hosts`, `allowed_networks`, `dns_upstream` and `dns_blocked_zones` of `[defaults]` and of every workspace into `network.dns` and `[[*.network.rules]]`, removes `filtered_dns`, and adds `allow = ["*"]` when the configuration had no `network.rules`. A value already set in the new field wins and the old one is removed.
-- Asks for every `mounts` entry of `[defaults]` and of each Docker workspace whether it stays a directory share (default for directories), becomes a read-only [snapshot](configuration.md#snapshots) (default for files), or is dropped. Files cannot stay mounts.
-
-For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories.
-
-- The copy is skipped when a mount covers those paths or VM data already exists there.
-- The volumes are left in place.
-- The copy keeps symbolic links, but skips device nodes, FIFOs and additional hard-link names of a file.
-- Without a reachable Docker daemon, these steps are skipped after confirmation.
-
-The previous configuration is saved as `config.toml.pre-vm-migration` next to it. Comments are not carried over to the rewritten file. See [Migrate from jailoc v1](../how-to/migrate-from-v1.md).
+For configuration changes, data transfer and migration troubleshooting, see [Upgrade an existing installation](../how-to/migrate-from-v1.md).
 
 ---
 

@@ -15,7 +15,7 @@ Every `config.toml` field with its type, default, validation rule and merge beha
 - Per-workspace files, such as the CA bundle copied by [`ca_bundle`](#ca_bundle), live in `workspaces/<name>/` next to the configuration file.
 - VM state under `~/.cache/jailoc-vm/` is keyed by workspace name only and is shared by all configuration files: workspaces with the same name in two files control the same VM.
 - All fields are optional unless noted.
-- jailoc ignores settings it does not know and prints a warning naming each of them. [`jailoc migrate`](cli.md#jailoc-migrate) removes them when it rewrites the file.
+- jailoc ignores settings it does not know and prints a warning naming each of them. For a config-load error naming a rejected setting, see [Upgrade an existing installation](../how-to/migrate-from-v1.md#recognize-a-v1-configuration).
 
 ---
 
@@ -45,8 +45,6 @@ Behavior while a session is attached:
 ```toml
 detach_keys = "ctrl-a,d"
 ```
-
-The jailoc v1 settings `mode` and `password_mode` are rejected at config load time. See [jailoc v1 settings](#jailoc-v1-settings).
 
 ---
 
@@ -124,7 +122,7 @@ Defaults applied to all workspaces. A workspace can override or extend them; see
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `"vm"` | Accepted values: `"vm"` or empty. `"docker"` is rejected as a jailoc v1 setting. |
+| `backend` | string | `"vm"` | Accepted values: `"vm"` or empty. All other values are rejected. |
 | `agent` | string | `"opencode"` | Coding agent of the workspaces. Values below. See [Coding agents](#coding-agents). |
 | `agents` | table | `{}` | Settings per coding agent and custom agent definitions, keyed by agent name. See [`agents`](#agents). |
 | `image` | string | (none) | Pre-built image used as the base for workspace Dockerfile builds, or used directly when no workspace `dockerfile` is set. |
@@ -577,7 +575,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | (inherit) | `"vm"` or empty. `"docker"` is rejected as a jailoc v1 setting. |
+| `backend` | string | (inherit) | `"vm"` or empty. All other values are rejected. |
 | `agent` | string | (inherit) | Coding agent of the workspace. See [Coding agents](#coding-agents). |
 | `agents` | table | `{}` | Settings per coding agent; a set field overrides `[defaults.agents.<name>]`. See [`agents`](#agents). |
 | `image` | string | (none) | Pre-built image used directly, bypassing all build steps. Cannot be combined with `dockerfile` or `build_context`. |
@@ -800,15 +798,11 @@ profile = "opencode-legacy"
 
 Rules checked at config load or at `jailoc up` and `jailoc reload`, per setting.
 
-### jailoc v1 settings
+<a id="jailoc-v1-settings"></a>
 
-These settings fail config load with ``<setting> is a jailoc v1 setting; run `jailoc migrate` to update the config``:
+### Unsupported configuration
 
-- `backend = "docker"` in `[defaults]` or a workspace
-- top-level `mode` and `password_mode`
-- `expose_port` in `[defaults]` or a workspace
-
-Any `backend` value other than `"vm"` and empty is rejected. See [Migrate from jailoc v1](../how-to/migrate-from-v1.md).
+Any `backend` value other than `"vm"` and empty is rejected. For a config-load error naming a rejected setting, see [Upgrade an existing installation](../how-to/migrate-from-v1.md#recognize-a-v1-configuration).
 
 ### Moved network settings
 
