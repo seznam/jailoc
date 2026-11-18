@@ -219,7 +219,7 @@ func TestTLSAndHostBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }() // the rejected handshake may already have closed the connection
 		if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
 			t.Fatal(err)
 		}
@@ -234,7 +234,7 @@ func TestTLSAndHostBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }() // the rejected handshake may already have closed the connection
 			if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
 				t.Fatal(err)
 			}
