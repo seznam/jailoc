@@ -28,11 +28,11 @@ In v1 an unset `backend` meant Docker, so `jailoc migrate` treats every workspac
 
 ## Preview the migration
 
+Run the dry run first. It prints the planned changes and the resulting config without touching anything:
+
 ```bash
 jailoc migrate --dry-run
 ```
-
-This prints the planned changes and the resulting config without touching anything.
 
 ## Run the migration
 
@@ -48,8 +48,10 @@ For each Docker workspace, jailoc:
     - `drop`: remove it.
 2. Asks to confirm removing the v1 settings listed above.
 3. Stops the running v1 workspace.
-4. Copies its `opencode-data` and `opencode-cache` Docker volumes into the VM's persistent home directory, so sessions and logins carry over to OpenCode 1. The copy keeps symbolic links, but skips device nodes, FIFOs and additional hard-link names of a file; of hard-linked names, only one keeps its content. The default agent is OpenCode 2, which keeps its sessions separately; set `agent = "opencode1"` to keep working with them (see [Choose a coding agent](coding-agents.md#select-the-agent)).
+4. Copies its `opencode-data` and `opencode-cache` Docker volumes into the VM's persistent home directory, so sessions and logins carry over to OpenCode 1. The copy keeps symbolic links, but skips device nodes, FIFOs and additional hard-link names of a file; of hard-linked names, only one keeps its content.
 5. Sets `backend = "vm"`.
+
+The default agent is OpenCode 2, which keeps its sessions separately; set `agent = "opencode1"` to keep working with the copied ones (see [Choose a coding agent](coding-agents.md#select-the-agent)).
 
 The previous config is kept as `config.toml.pre-vm-migration` next to `config.toml` (a timestamp is appended if that file already exists). Comments in the old file aren't carried over.
 
@@ -79,6 +81,4 @@ The first start builds the image and boots the VM; later starts reuse the build 
 | `git_config` live mount | Read-only snapshot taken at VM start. See [SSH and Git passthrough](ssh-git-passthrough.md). |
 | Secret files bind-mounted from the host | Pushed over SSH to `/run/secrets`. See [Secrets](secrets.md). |
 
-After migrating, Docker is needed on the host only for building workspace images, and not even for that with `isolated_build`. See [Custom images](custom-images.md).
-
-If something fails, see [Troubleshooting](troubleshooting.md). For all `migrate` flags, see the [CLI reference](../reference/cli.md).
+After migrating, Docker is needed on the host only for building workspace images, and not even for that with `isolated_build`. See [Custom images](custom-images.md). If something fails, see [Troubleshooting](troubleshooting.md).
