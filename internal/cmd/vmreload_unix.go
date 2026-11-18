@@ -60,6 +60,9 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	if err != nil {
 		return err
 	}
+	if err := checkReloadWebCollision(ws.Name, running, want); err != nil {
+		return err
+	}
 	payload, err := secretsPayload(ctx, ws, want, purgeCache)
 	if err != nil {
 		return err
@@ -77,13 +80,7 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	next.SSHAgent = want.SSHAgent
 	next.GPGAgent = want.GPGAgent
 	next.HostServices = want.HostServices
-	g := *running.Guest
-	g.CABundle = want.Guest.CABundle
-	g.SSHAgent = want.Guest.SSHAgent
-	g.GPGAgent = want.Guest.GPGAgent
-	g.HostPorts = want.Guest.HostPorts
-	g.Snapshots = binds
-	g.TimeZone = want.Guest.TimeZone
+	g := reloadedGuest(*running.Guest, *want.Guest, binds)
 	next.Guest = &g
 
 	if err := reloadBroker(next, st.BrokerPID); err != nil {
@@ -103,6 +100,74 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 		_, _ = color.New(color.FgYellow).Printf("Changes to %s apply after `jailoc restart %s` (this ends running sessions)\n", joinList(changed), ws.Name)
 	}
 	return nil
+}
+
+// runningWebPorts are the guest ports the running VM reserves for the web
+// relay and the desktop: its immutable relay allowlist, the relay port
+// itself, and the desktop's websockify and VNC ports. They stay reserved
+// whatever the configuration now says, until a restart.
+func runningWebPorts(g *guest.Config) map[int]string {
+	reserved := map[int]string{}
+	if g == nil {
+		return reserved
+	}
+	if g.WebRelay != nil {
+		reserved[guest.WebRelayPort] = "the web relay"
+		for _, p := range g.WebRelay.Ports {
+			reserved[int(p)] = "a web route of the running VM"
+		}
+	}
+	if g.Desktop != nil {
+		reserved[guest.DesktopPort] = "the desktop"
+		reserved[guest.VNCPort] = "the desktop"
+	}
+	return reserved
+}
+
+// checkReloadWebCollision fails a reload that would publish or mirror, as a
+// host port or a published port, a guest port that the running VM still
+// serves through its immutable web relay allowlist or its desktop. The
+// configuration may have dropped web or enable_desktop since the VM
+// started, so config validation does not catch it, and the guest keeps
+// serving those ports until a restart.
+func checkReloadWebCollision(name string, running, want vm.Spec) error {
+	reserved := runningWebPorts(running.Guest)
+	if len(reserved) == 0 {
+		return nil
+	}
+	var asked []int
+	for _, s := range want.HostServices {
+		asked = append(asked, int(s.GuestPort))
+	}
+	if want.Guest != nil {
+		for _, p := range want.Guest.HostPorts {
+			asked = append(asked, int(p))
+		}
+	}
+	for _, f := range want.Forwards {
+		asked = append(asked, f.GuestPort)
+	}
+	slices.Sort(asked)
+	for _, port := range slices.Compact(asked) {
+		if what, ok := reserved[port]; ok {
+			return fmt.Errorf("workspace %q: host_ports or ports use guest port %d, which the running VM serves as %s; run `jailoc restart %s` to apply it (this ends running sessions)", name, port, what, name)
+		}
+	}
+	return nil
+}
+
+// reloadedGuest is the guest configuration of a reloaded VM: running with the
+// reloadable settings of want. The desktop and the web relay allowlist stay
+// those of the running VM; only a restart changes them.
+func reloadedGuest(running, want guest.Config, binds []guest.Snapshot) guest.Config {
+	g := running
+	g.CABundle = want.CABundle
+	g.SSHAgent = want.SSHAgent
+	g.GPGAgent = want.GPGAgent
+	g.HostPorts = want.HostPorts
+	g.Snapshots = binds
+	g.TimeZone = want.TimeZone
+	return g
 }
 
 // reloadSpec computes the workspace spec for the current configuration
@@ -239,6 +304,12 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	}
 	if guestIPv6(running) != want.Guest.IPv6 {
 		out = append(out, "network.ipv6")
+	}
+	if (running.Guest.Desktop != nil) != (want.Guest.Desktop != nil) {
+		out = append(out, "enable_desktop")
+	}
+	if !slices.Equal(guestWebPorts(running.Guest), guestWebPorts(want.Guest)) {
+		out = append(out, "web")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
 	agentChanged := cmp.Or(running.Agent, agent.Default) != want.Agent
