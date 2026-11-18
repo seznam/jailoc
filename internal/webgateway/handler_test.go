@@ -3,7 +3,9 @@ package webgateway
 import (
 	"io"
 	"net/http"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -210,5 +212,148 @@ func TestProxyHeadersAndCookies(t *testing.T) {
 	}
 	if len(res.Cookies()) != 1 || res.Cookies()[0].Name != "app" || res.Header.Get("Access-Control-Allow-Origin") != "" || res.Header.Get("Alt-Svc") != "" {
 		t.Fatalf("upstream response filtering: %+v", res.Header)
+	}
+}
+
+const gatewayWorkerPolicy = "worker-src 'none'"
+
+func countPolicy(h http.Header) int {
+	n := 0
+	for _, v := range h.Values("Content-Security-Policy") {
+		if v == gatewayWorkerPolicy {
+			n++
+		}
+	}
+	return n
+}
+
+func TestServiceWorkerScriptFetchRejected(t *testing.T) {
+	t.Parallel()
+	var upstream atomic.Int32
+	x := startGateway(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstream.Add(1)
+		w.WriteHeader(200)
+	}), nil)
+	cookie := loginCookie(t, x, hostA)
+	for _, tt := range []struct {
+		name, path string
+		headers    [][2]string
+		auth       bool
+	}{
+		{name: "authenticated Service-Worker script", path: "/sw.js", headers: [][2]string{{"Service-Worker", "script"}}, auth: true},
+		{name: "authenticated Sec-Fetch-Dest", path: "/sw.js", headers: [][2]string{{"Sec-Fetch-Dest", "serviceworker"}}, auth: true},
+		{name: "mixed case values", path: "/sw.js", headers: [][2]string{{"service-worker", " Script "}, {"sec-fetch-dest", "ServiceWorker"}}, auth: true},
+		{name: "second header value", path: "/sw.js", headers: [][2]string{{"Sec-Fetch-Dest", "empty"}, {"Sec-Fetch-Dest", "serviceworker"}}, auth: true},
+		{name: "unauthenticated", path: "/sw.js", headers: [][2]string{{"Service-Worker", "script"}}},
+		{name: "login path", path: "/.jailoc/login", headers: [][2]string{{"Service-Worker", "script"}}},
+		{name: "login page", path: "/.jailoc/login", headers: [][2]string{{"Sec-Fetch-Dest", "serviceworker"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRequest(t, "GET", hostA, tt.path)
+			if tt.auth {
+				r.AddCookie(cookie)
+			}
+			for _, h := range tt.headers {
+				r.Header.Add(h[0], h[1])
+			}
+			res := request(t, x.client(t, hostA), r, 403)
+			if countPolicy(res.Header) != 1 {
+				t.Fatalf("worker policy: %v", res.Header.Values("Content-Security-Policy"))
+			}
+		})
+	}
+	if n := upstream.Load(); n != 0 {
+		t.Fatalf("upstream dialed %d times", n)
+	}
+	// Ordinary destinations are unaffected.
+	r := newRequest(t, "GET", hostA, "/asset.js")
+	r.AddCookie(cookie)
+	r.Header.Set("Sec-Fetch-Dest", "script")
+	request(t, x.client(t, hostA), r, 200)
+}
+
+func TestGatewayWorkerPolicyOnEveryResponse(t *testing.T) {
+	t.Parallel()
+	x := startGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A hostile upstream tries to loosen or replace the policy.
+		w.Header().Add("Content-Security-Policy", "worker-src *; default-src *")
+		w.Header().Add("Content-Security-Policy", gatewayWorkerPolicy)
+		switch r.URL.Path {
+		case "/redirect":
+			w.Header().Set("Location", "/elsewhere")
+			w.WriteHeader(302)
+		default:
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, "<html></html>")
+		}
+	}), nil)
+	cookie := loginCookie(t, x, hostA)
+	check := func(t *testing.T, name string, res *http.Response, upstreamPolicy bool) {
+		t.Helper()
+		vals := res.Header.Values("Content-Security-Policy")
+		ours := 0
+		for _, v := range vals {
+			if v == gatewayWorkerPolicy {
+				ours++
+			}
+		}
+		if ours == 0 {
+			t.Fatalf("%s: gateway policy missing: %v", name, vals)
+		}
+		if upstreamPolicy && !slices.Contains(vals, "worker-src *; default-src *") {
+			t.Fatalf("%s: upstream policy dropped: %v", name, vals)
+		}
+	}
+	for _, tt := range []struct {
+		name, method, path string
+		auth               bool
+		status             int
+		upstream           bool
+	}{
+		{"proxied html", "GET", "/page.html", true, 200, true},
+		{"proxied redirect", "GET", "/redirect", true, 302, true},
+		{"proxied 404 path", "GET", "/missing", true, 200, true},
+		{"login redirect", "GET", "/page.html", false, 303, false},
+		{"login page", "GET", "/.jailoc/login", false, 200, false},
+		{"login failure", "POST", "/.jailoc/login", false, 403, false},
+		{"unknown gateway path", "GET", "/.jailoc/unknown", true, 404, false},
+		{"origin forbidden", "GET", "/page.html", true, 403, false},
+		{"unauthenticated POST", "POST", "/page.html", false, 401, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRequest(t, tt.method, hostA, tt.path)
+			if tt.auth {
+				r.AddCookie(cookie)
+			}
+			if tt.name == "origin forbidden" {
+				r.Header.Set("Origin", "https://example.com")
+			}
+			if tt.name == "unauthenticated POST" {
+				r.Header.Set("Origin", "https://"+hostA)
+			}
+			res := request(t, x.client(t, hostA), r, tt.status)
+			check(t, tt.name, res, tt.upstream)
+			if n := countPolicy(res.Header); n != 1 && !tt.upstream {
+				t.Fatalf("duplicate gateway policy: %v", res.Header.Values("Content-Security-Policy"))
+			}
+		})
+	}
+	// Misdirected and invalid-authority responses carry the policy too.
+	r := newRequest(t, "GET", hostA, "/")
+	r.Host = "unknown.example"
+	res := request(t, x.client(t, hostA), r, 421)
+	check(t, "misdirected", res, false)
+}
+
+func TestLoginPageKeepsGatewayWorkerPolicy(t *testing.T) {
+	t.Parallel()
+	x := startGateway(t, http.NotFoundHandler(), nil)
+	res := request(t, x.client(t, hostA), newRequest(t, "GET", hostA, "/.jailoc/login"), 200)
+	vals := res.Header.Values("Content-Security-Policy")
+	if !slices.Contains(vals, gatewayWorkerPolicy) || !slices.ContainsFunc(vals, func(v string) bool { return strings.HasPrefix(v, "default-src 'none'") }) {
+		t.Fatalf("login policies: %v", vals)
+	}
+	if countPolicy(res.Header) != 1 {
+		t.Fatalf("duplicate gateway policy: %v", vals)
 	}
 }

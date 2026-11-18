@@ -80,6 +80,20 @@ The `desktop` route serves the noVNC client, which has no `index.html`: its root
 
 A code works once and expires 10 minutes after the gateway starts. A successful login sets a `__Host-` cookie that lasts 8 hours. Every request must carry the route's `Host` and a matching TLS server name. A `GET` or `HEAD` needs no `Origin` header, but one that is present must be exactly the route's origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`; cross-site requests are refused. Open the route without a port, or with `:443`; `:8443` is rejected.
 
+### Service workers and origin reuse
+
+The gateway doesn't support service workers. It answers every service worker script fetch with `403` and adds `worker-src 'none'` to every response, next to any policy the guest sends, so a page can't install or update a worker through the gateway.
+
+That can't undo a worker that is already installed. A route name such as `foo.demo.jailoc.local` is stable: a later VM, or a different guest service, can be served on the same origin. A root-scoped service worker that an earlier guest installed on that origin, for example over plain HTTP or through another proxy, stays registered in your browser and can intercept requests to the gateway, including the `/.jailoc/login` form post. The gateway can't stop a worker that already controls the page.
+
+Before you use the gateway on a development origin you have used before:
+
+1. Unregister every service worker for the origin, in the browser's developer tools under Application, Service Workers.
+2. Clear the site data for the origin (storage, caches and cookies).
+3. Treat an origin you can't clean the same way as an untrusted one, and use a new route name.
+
+jailoc doesn't clear browser state for you. Browser behaviour across restarts and VM replacement hasn't been checked in a real browser yet; that check must pass before this feature is merged.
+
 The gateway reaches the guest through a private socket (`web.sock`) on the host and the guest's web relay; nothing is published on the host except the listener you chose. See [Security Boundaries](../explanation/security-boundaries.md#web-gateway).
 
 ## Set up the host
@@ -297,6 +311,7 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 | Login code rejected | A code works once and expires 10 minutes after the gateway starts. Restart `jailoc gateway` for a new one. |
 | Gateway refuses the workspace | The running VM doesn't match the configured desktop or web ports. Run `jailoc restart <workspace>`. |
 | Route fails after the VM stopped or was replaced | Restart `jailoc gateway`. |
+| Login post or pages behave oddly on a reused route name | An old service worker may control the origin. Unregister it and clear the site data; see [Service workers and origin reuse](#service-workers-and-origin-reuse). |
 | `jailoc up` names missing desktop programs | The explicit `image` lacks them; see [Images](#images). |
 | Validation error on `ports` or `host_ports` | Guest ports 6081, and 6080 and 5901 with the desktop, are reserved. |
 
