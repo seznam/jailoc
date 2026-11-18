@@ -13,36 +13,32 @@ The workspace indicator shows `🔒 jailoc / <name>` in the agent's interface, s
 
 ## Load the indicator
 
-The indicator is bundled with jailoc and needs no configuration. At `jailoc up`, jailoc writes the agent's indicator files to its cache directory and shares them read-only into the VM at `/etc/jailoc-tui-plugin`. The status line of Claude Code is a Node.js script, so it needs `node` on `PATH`; the status line of GitHub Copilot CLI and Antigravity CLI is a `printf` command run by the shell.
+The indicator is bundled with jailoc and needs no configuration. At `jailoc up`, jailoc writes the agent's indicator files to its cache directory and shares them read-only into the VM at `/etc/jailoc-tui-plugin`. Where you have your own configuration, it interacts like this:
 
-- OpenCode 2: `OPENCODE_CLI_CONFIG_CONTENT` lists the plugins of `cli.json` in your OpenCode config directory (or of `tui.json` when there's no `cli.json`) followed by the jailoc plugin. The list replaces the plugins of `cli.json`; its other settings still apply. Both files may contain comments and trailing commas. jailoc reads the file when the VM starts, so run `jailoc restart <name>` after changing the plugins; `jailoc reload` reports the change but doesn't apply it. If the file can't be parsed, jailoc warns and doesn't load its plugin, leaving your configuration as it is.
-- Claude Code: the `--settings` file replaces the status line of your settings. The jailoc status line runs the `statusLine` command of your settings (`.claude/settings.local.json` or `.claude/settings.json` in the project, then `settings.json` in the Claude config directory) and puts the workspace before its first line.
-- GitHub Copilot CLI: Copilot reads a status line only from its user settings, so jailoc adds one to `settings.json` in the agent's persistent state directory when the file sets none. If you set your own `statusLine` there, jailoc leaves it alone and Copilot shows yours instead; it only replaces the Node.js status line of an older jailoc. jailoc doesn't touch the file when you mount `~/.copilot` from the host.
-- Antigravity CLI: the same as GitHub Copilot CLI, with `antigravity-cli/settings.json` in the agent's state directory (`~/.gemini`). `/statusline <command>` sets your own status line there, and `/statusline delete` removes it, so jailoc adds its own again at the next start.
+- **OpenCode 2**: `OPENCODE_CLI_CONFIG_CONTENT` lists the plugins of `cli.json` in your OpenCode config directory (or of `tui.json` when there's no `cli.json`) followed by the jailoc plugin. The list replaces the plugins of `cli.json`; its other settings still apply. Both files may contain comments and trailing commas. jailoc reads the file when the VM starts, so run `jailoc restart <name>` after changing the plugins; `jailoc reload` reports the change but doesn't apply it. If the file can't be parsed, jailoc warns and doesn't load its plugin, leaving your configuration as it is.
+- **Claude Code**: the `--settings` file replaces the status line of your settings. The jailoc status line runs the `statusLine` command of your settings (`.claude/settings.local.json` or `.claude/settings.json` in the project, then `settings.json` in the Claude config directory) and puts the workspace before its first line. The status line is a Node.js script, so it needs `node` on `PATH`.
+- **GitHub Copilot CLI**: Copilot reads a status line only from its user settings, so jailoc adds a `printf` status line to `settings.json` in the agent's persistent state directory when the file sets none. If you set your own `statusLine` there, jailoc leaves it alone and Copilot shows yours instead; it only replaces the Node.js status line of an older jailoc. jailoc doesn't touch the file when you mount `~/.copilot` from the host.
+- **Antigravity CLI**: the same as GitHub Copilot CLI, with `antigravity-cli/settings.json` in the agent's state directory (`~/.gemini`). `/statusline <command>` sets your own status line there, and `/statusline delete` removes it, so jailoc adds its own again at the next start.
 
 ## Get notifications from OpenCode
 
-The OpenCode 1 and OpenCode 2 plugins also report when the agent finishes or needs input, and jailoc turns the reports into [session notifications](sessions.md#get-notified-when-the-agent-needs-you). The reports are private terminal sequences that jailoc removes from the session output, so they never reach your terminal as they are.
+The OpenCode 1 and OpenCode 2 plugins also report when the agent finishes or needs input, and jailoc turns the reports into [session notifications](sessions.md#get-notified-when-the-agent-needs-you). The reports are private terminal sequences that jailoc removes from the session output, so they never reach your terminal as they are. Subagent sessions don't report. Claude Code, GitHub Copilot CLI, OmO and Antigravity CLI don't report either, so jailoc sends no notifications for them.
 
 | Report | OpenCode 1 | OpenCode 2 |
 |---|---|---|
 | Finished | A top-level session's turn ends with a completed reply, without an error or an abort | A top-level session's run succeeds; while its subagents still run, the report waits for them, at most 3 seconds after the last one ends |
 | Needs input | A top-level session asks for a permission or asks a question | A top-level session asks for a permission or opens a form |
 
-Subagent sessions don't report. Claude Code, GitHub Copilot CLI, OmO and Antigravity CLI don't report either, so jailoc sends no notifications for them.
-
 When OpenCode is configured to show notifications itself, the plugin reports nothing, so you don't get both:
 
-- OpenCode 1: `attention.enabled` and `attention.notifications` in the TUI configuration, with the built-in `internal:notifications` plugin active.
-- OpenCode 2: `attention.notifications = true` in `cli.json` or `OPENCODE_CLI_CONFIG_CONTENT`, with the built-in `opencode.notifications` plugin enabled. When there's no `cli.json`, OpenCode 2 takes `attention`, `plugin` and `plugin_enabled` from `tui.json`, and so does the plugin. A `tui.json` without `attention.notifications = true` leaves OpenCode 2's notifications off.
+- **OpenCode 1**: `attention.enabled` and `attention.notifications` in the TUI configuration, with the built-in `internal:notifications` plugin active.
+- **OpenCode 2**: `attention.notifications = true` in `cli.json` or `OPENCODE_CLI_CONFIG_CONTENT`, with the built-in `opencode.notifications` plugin enabled. When there's no `cli.json`, OpenCode 2 takes `attention`, `plugin` and `plugin_enabled` from `tui.json`, and so does the plugin. A `tui.json` without `attention.notifications = true` leaves OpenCode 2's notifications off.
 
 OpenCode's own notifications follow OpenCode's settings, not jailoc's focus gate, fixed text or interval. Turn OpenCode's off to get jailoc's.
 
-The reports come with the plugin, so after upgrading jailoc, [update the indicator](#update-the-indicator).
-
 ## Update the indicator
 
-The indicator files are written at `jailoc up`. After upgrading jailoc, restart the workspace:
+The indicator files, including the notification reports, are written at `jailoc up`. After upgrading jailoc, restart the workspace:
 
 ```bash
 jailoc restart <name>
@@ -58,7 +54,13 @@ Check the environment inside a session:
 env | grep -E 'JAILOC|OPENCODE_TUI_CONFIG|OPENCODE_CLI_CONFIG_CONTENT'
 ```
 
-You should see `JAILOC=1` and `JAILOC_WORKSPACE=<name>`; the OpenCode plugins and the OmO extension render nothing without `JAILOC`. For OpenCode 1 you should also see `OPENCODE_TUI_CONFIG=/etc/jailoc-cache/tui-container.json`, and for OpenCode 2 `OPENCODE_CLI_CONFIG_CONTENT` with `file:///etc/jailoc-tui-plugin` among its `plugins`. OpenCode 2 shows the sidebar inside a session, not on the home screen. Claude Code shows no status line until you trust the workspace folder, or when your settings set `disableAllHooks`.
+You should see:
+
+- `JAILOC=1` and `JAILOC_WORKSPACE=<name>`; the OpenCode plugins and the OmO extension render nothing without `JAILOC`;
+- OpenCode 1: `OPENCODE_TUI_CONFIG=/etc/jailoc-cache/tui-container.json`;
+- OpenCode 2: `OPENCODE_CLI_CONFIG_CONTENT` with `file:///etc/jailoc-tui-plugin` among its `plugins`. OpenCode 2 shows the sidebar inside a session, not on the home screen.
+
+Claude Code shows no status line until you trust the workspace folder, or when your settings set `disableAllHooks`.
 
 ### The indicator files are missing
 

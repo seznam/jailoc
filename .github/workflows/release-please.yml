@@ -27,7 +27,7 @@ jobs:
 
   docs:
     name: Docs
-    needs: release-please
+    needs: [release-please, goreleaser]
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -47,12 +47,10 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install .
-      - name: Substitute version
-        env:
-          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
-        run: find docs -name '*.md' -exec sed -i "s|{{ version }}|${TAG_NAME}|g" {} +
       - name: Build docs
-        run: zensical build --clean
+        env:
+          JAILOC_DOCS_VERSION: ${{ needs.release-please.outputs.tag_name }}
+        run: zensical build --clean --strict
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
@@ -73,7 +71,7 @@ jobs:
 
   goreleaser:
     name: GoReleaser
-    needs: [release-please, docs, vm-runtime]
+    needs: [release-please, vm-runtime]
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     # HOMEBREW_TAP_DEPLOY_KEY lives in this environment, limited to main and v* tags.

@@ -1,6 +1,9 @@
 # How to install jailoc
 
-This guide covers the supported platforms, prerequisites and installation methods.
+jailoc runs on macOS on Apple Silicon and on Linux amd64 (arm64 experimental) with KVM and Landlock. [Check your platform](#check-your-platform) first, then install with Homebrew, a pre-built binary, [Nix](#install-with-nix) or [from source](#build-from-source).
+
+<a class="md-button md-button--primary" href="#install-with-homebrew">Install with Homebrew</a>
+<a class="md-button" href="#install-a-pre-built-binary">Choose a pre-built binary</a>
 
 ## Check your platform
 
@@ -47,12 +50,15 @@ lib_dir = "/opt/libkrun/lib"
 
 The workspace VMs don't use Docker. You need Docker Engine on the host only for:
 
-- building workspace images when `[vm] builder` is `"docker"`, or `"auto"` with a usable daemon (see [How to use a custom image](custom-images.md));
-- `jailoc migrate`, which copies OpenCode data out of jailoc v1 Docker volumes (see [Migrate from jailoc v1](migrate-from-v1.md)).
+- building workspace images when `[vm] builder` is `"docker"`, or `"auto"` (the default) with a usable daemon (see [How to use a custom image](custom-images.md) and the [`builder` field](../reference/configuration.md));
+- copying existing Docker-volume data with [`jailoc migrate`](migrate-from-v1.md).
 
-Without a usable host daemon, `"auto"` builds images in a builder VM.
+Without a usable host daemon, `"auto"` builds images in a builder VM. A workspace with `isolated_build = true` always builds in its own builder VM.
 
 ## Install with Homebrew
+
+!!! note "Unsigned binary"
+    jailoc binaries are not signed or notarized by Apple. The cask removes the `com.apple.quarantine` attribute from `jailoc` after installation so that Gatekeeper does not block it.
 
 On macOS and Linux, install the latest release from the [seznam/homebrew-tap](https://github.com/seznam/homebrew-tap) tap:
 
@@ -61,9 +67,6 @@ brew install --cask seznam/tap/jailoc
 ```
 
 Upgrade with `brew upgrade --cask jailoc`. The tap carries stable releases only; install release candidates from the [GitHub Releases page](https://github.com/seznam/jailoc/releases). The cask installs both `jailoc` and the `jl` alias on your `PATH`.
-
-!!! note "Unsigned binary"
-    jailoc binaries are not signed or notarized by Apple. The cask removes the `com.apple.quarantine` attribute from `jailoc` after installation so that Gatekeeper does not block it.
 
 ## Install with Nix
 
@@ -92,11 +95,24 @@ On Linux (x86_64, aarch64), the package builds the VM runtime (go-microvm runner
 !!! note "aarch64-darwin"
     On macOS the Nix package has no VM runtime. Set `runner` and `lib_dir` in the [`[vm]` section](../reference/configuration.md) as shown in [Check your platform](#check-your-platform), or install with [Homebrew](#install-with-homebrew) instead.
 
-The Nix package doesn't change when you need host Docker, see [Know when Docker is needed](#know-when-docker-is-needed).
-
 ## Install a pre-built binary
 
-Pre-built archives for macOS (arm64) and Linux (amd64, arm64) are published with every release. Download the one matching your platform from the [GitHub Releases page](https://github.com/seznam/jailoc/releases), extract it, and place the binary on your `PATH`.
+Every release publishes archives for macOS (arm64) and Linux (amd64, arm64). Each contains `jailoc`, the `jl` alias, `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES`. Download the archive for your platform:
+
+{% set version = version or ('v' ~ release['.']) %}
+
+<a class="md-button md-button--primary" href="https://github.com/seznam/jailoc/releases/download/{{ version }}/jailoc_{{ version[1:] }}_darwin_arm64.tar.gz">Download {{ version }} for macOS on Apple Silicon</a>
+<a class="md-button" href="https://github.com/seznam/jailoc/releases/download/{{ version }}/jailoc_{{ version[1:] }}_linux_amd64.tar.gz">Download {{ version }} for Linux amd64</a>
+<a class="md-button" href="https://github.com/seznam/jailoc/releases/download/{{ version }}/jailoc_{{ version[1:] }}_linux_arm64.tar.gz">Download {{ version }} for Linux arm64 (experimental)</a>
+
+These archives are for {{ version }}; verify them against its [SHA-256 checksums](https://github.com/seznam/jailoc/releases/download/{{ version }}/checksums.txt). Other releases are on GitHub:
+
+<a class="md-button" href="https://github.com/seznam/jailoc/releases/latest">Open the latest release on GitHub</a>
+
+Extract the archive and place `jailoc` (and `jl`, if you want the alias) on your `PATH`.
+
+!!! note "Gatekeeper on macOS"
+    The binary isn't signed or notarized by Apple, so Gatekeeper can block a `jailoc` downloaded with a browser. Remove the quarantine attribute, as the Homebrew cask does: `xattr -d com.apple.quarantine jailoc`.
 
 ## Build from source
 
@@ -115,13 +131,13 @@ A source build doesn't include the VM runtime (the `jailoc-vm-runner` process, l
 
 ## Know where the VM runtime lives
 
-Release binaries embed the VM runtime for their platform. The first `jailoc up` unpacks it into `~/.cache/jailoc-vm/runtime/`; later starts reuse it. Nothing is downloaded.
+Release binaries embed the VM runtime for their platform. The first `jailoc up` unpacks it into `~/.cache/jailoc-vm/runtime/` and later starts reuse it; nothing is downloaded. On Linux, the [Nix package](#install-with-nix) references its runtime in the Nix store instead.
 
-On Linux, the [Nix package](#install-with-nix) references its runtime directly in the Nix store instead of unpacking it into `~/.cache/jailoc-vm/runtime/`. The licenses below apply to the Nix-built components too.
+To use your own libkrunfw build, point `lib_dir` in the [`[vm]` section](../reference/configuration.md) at a directory with your `libkrun` and `libkrunfw` libraries and set `runner` to a matching `jailoc-vm-runner` (or `go-microvm-runner`).
 
 ### Check the runtime licenses
 
-jailoc itself is MIT-licensed. The embedded runtime carries its own licenses:
+jailoc itself is MIT-licensed. The embedded runtime, and the Nix-built components, carry their own licenses:
 
 | Component | License | Notes |
 |-----------|---------|-------|
@@ -130,17 +146,14 @@ jailoc itself is MIT-licensed. The embedded runtime carries its own licenses:
 | musl libc | MIT | Statically linked into libkrun's guest init |
 | libkrunfw | LGPL-2.1-only (library), GPL-2.0-only (bundled Linux kernel) | |
 
-Every release archive contains `THIRD_PARTY_NOTICES` with the license texts of all bundled Go modules, Rust crates and runtime libraries. Each unpacked runtime directory contains `LICENSE`, `NOTICE`, the libkrunfw license texts and a `SOURCE` file.
+Each release provides these compliance artifacts:
 
-The complete corresponding source of libkrunfw, including the Linux kernel tarball and the build scripts, is attached to every [GitHub Release](https://github.com/seznam/jailoc/releases) as `jailoc_<version>_vm-runtime-source.tar`.
-
-Every release also has SPDX SBOMs, generated by [syft](https://github.com/anchore/syft): `<archive>.sbom.json` lists the Go modules in jailoc, and `jailoc_<version>_vm-runtime_<os>_<arch>.sbom.json` lists the Go modules in the embedded `jailoc-vm-runner` and the Rust crates in libkrun (built with [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable)). syft can't detect libkrunfw, so `THIRD_PARTY_NOTICES` remains the complete list.
-
-Release assets carry [build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations). To check that a file was built by the jailoc release workflow:
+- **Notices:** every release archive contains `THIRD_PARTY_NOTICES` with the license texts of all bundled Go modules, Rust crates and runtime libraries. Each unpacked runtime directory contains `LICENSE`, `NOTICE`, the libkrunfw license texts and a `SOURCE` file.
+- **Corresponding source:** every [GitHub Release](https://github.com/seznam/jailoc/releases) attaches the complete corresponding source of libkrunfw, including the Linux kernel tarball and build scripts, as `jailoc_<version>_vm-runtime-source.tar`.
+- **SBOMs:** every release has SPDX SBOMs, generated by [syft](https://github.com/anchore/syft). `<archive>.sbom.json` lists the Go modules in jailoc, and `jailoc_<version>_vm-runtime_<os>_<arch>.sbom.json` lists the Go modules in the embedded `jailoc-vm-runner` and the Rust crates in libkrun (built with [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable)). syft can't detect libkrunfw, so `THIRD_PARTY_NOTICES` remains the complete list.
+- **Attestations:** release assets carry [build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations). Check that the jailoc release workflow built a file:
 
 ```bash
 gh attestation verify jailoc_<version>_linux_amd64.tar.gz --repo seznam/jailoc
 ```
-
-To use your own libkrunfw build, point `lib_dir` in the [`[vm]` section](../reference/configuration.md) at a directory with your `libkrun` and `libkrunfw` libraries and set `runner` to a matching `jailoc-vm-runner` (or `go-microvm-runner`).
 

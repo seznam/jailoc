@@ -42,7 +42,11 @@ theme:
     - search.suggest
 
 plugins:
-  - macros
+  - macros:
+      include_yaml:
+        release: .release-please-manifest.json
+      on_error_fail: true
+      on_undefined: strict
 
 markdown_extensions:
   - admonition
@@ -56,7 +60,7 @@ markdown_extensions:
 copyright: Made with ❤️ in <a href="https://o-seznam.cz/kariera/it/">Seznam.cz</a>
 
 extra:
-  version: !ENV [GITHUB_REF_NAME, "latest"]
+  version: !ENV [JAILOC_DOCS_VERSION, ""]
 
 extra_javascript:
   - javascripts/favicon-switch.js
@@ -78,7 +82,7 @@ nav:
     - Sessions: how-to/sessions.md
     - Coding Agents: how-to/coding-agents.md
     - Workspace Indicator: how-to/tui-plugin.md
-    - Migrate from jailoc v1: how-to/migrate-from-v1.md
+    - Upgrade an existing installation: how-to/migrate-from-v1.md
     - Troubleshooting: how-to/troubleshooting.md
   - Reference:
     - CLI: reference/cli.md

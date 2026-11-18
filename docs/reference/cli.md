@@ -2,7 +2,7 @@
 
 ## Synopsis
 
-```
+```text
 jailoc [path] [flags]
 jailoc [command] [flags]
 ```
@@ -26,9 +26,10 @@ Commands pick the workspace in this order:
 3. The workspace whose `paths` entry is the longest prefix of the current directory. If several workspaces tie on the deepest match, the command fails and asks for `-w`.
 4. `default`.
 
-With `--all` (`-A`), `up`, `down`, `restart`, `reload` and `status` act on every configured workspace one after another, in name order, and do not take a `[workspace]` argument or `--workspace`. A failure in one workspace does not stop the others; the command reports all failures and exits non-zero.
+Exceptions:
 
-`jailoc add` matches the path being added instead of the current directory. With `--workspace`, the added path must lie under one of that workspace's paths.
+- **`--all` (`-A`)**: `up`, `down`, `restart`, `reload` and `status` act on every configured workspace one after another, in name order, and do not take a `[workspace]` argument or `--workspace`. A failure in one workspace does not stop the others; the command reports all failures and exits non-zero.
+- **`jailoc add`**: matches the path being added instead of the current directory. With `--workspace`, the added path must lie under one of that workspace's paths.
 
 ---
 
@@ -38,9 +39,20 @@ With `--all` (`-A`), `up`, `down`, `restart`, `reload` and `status` act on every
 
 Open a session of the workspace's coding agent in the workspace VM.
 
-```
+```text
 jailoc [path] [flags]
 ```
+
+- The target directory is `path` (`~` is expanded) or the current working directory, and must be a directory.
+- Without `--workspace`, the workspace is resolved from the target directory.
+- When the directory is not under any path of the workspace, jailoc asks whether to add it.
+- When several workspaces match the directory at the same depth, jailoc fails and asks for `--workspace`.
+- If the workspace VM is not running, jailoc starts it as [`jailoc up`](#jailoc-up) does.
+- It checks that the agent binary is on `PATH` in the VM and runs the agent (see [Coding agents](configuration.md#coding-agents)) over SSH, in a detachable session whose working directory is the target directory.
+- Without flags, it attaches to the session already running in the target directory, or starts one.
+- `--session` and `--continue` always start a new session.
+- The detach keys (`Ctrl-b`, then `d`, by default) or closing the terminal detach; the agent keeps running. Typing `Ctrl-b` twice sends one `Ctrl-b` to the agent.
+- Attaching from a second terminal takes the session over and detaches the first one.
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -51,16 +63,11 @@ jailoc [path] [flags]
 | `--detach-keys KEYS` | | Key sequence that detaches from the session, for example `ctrl-a,d`. Overrides [`detach_keys`](configuration.md#top-level-fields). Default `ctrl-b,d`. |
 | `--version` | `-v` | Print the jailoc version. |
 
-Mutually exclusive: `--session` with `--continue`, `--new` with `--attach`, `--attach` with `--session` or `--continue`.
+Mutually exclusive flags:
 
-The target directory is `path` (`~` is expanded) or the current working directory, and must be a directory. Without `--workspace`, the workspace is resolved from the target directory. When the directory is not under any path of the workspace, jailoc asks whether to add it. When several workspaces match the directory at the same depth, jailoc fails and asks for `--workspace`.
-
-If the workspace VM is not running, jailoc starts it as [`jailoc up`](#jailoc-up) does. It checks that the agent binary is on `PATH` in the VM and runs the agent (see [Coding agents](configuration.md#coding-agents)) over SSH, in a detachable session whose working directory is the target directory:
-
-- Without flags, attaches to the session already running in the target directory, or starts one.
-- `--session` and `--continue` always start a new session.
-- The detach keys (`Ctrl-b`, then `d`, by default) or closing the terminal detach; the agent keeps running. Typing `Ctrl-b` twice sends one `Ctrl-b` to the agent.
-- Attaching from a second terminal takes the session over and detaches the first one.
+- `--session` with `--continue`
+- `--new` with `--attach`
+- `--attach` with `--session` or `--continue`
 
 See the [sessions how-to](../how-to/sessions.md).
 
@@ -70,11 +77,15 @@ See the [sessions how-to](../how-to/sessions.md).
 
 Start a workspace VM.
 
-```
+```text
 jailoc up [workspace] [flags]
 ```
 
-Validates secret sources on the host, builds the workspace image with the host Docker daemon or in a builder VM (see [Image Resolution](image-resolution.md)), converts its layers into read-only EROFS images in the VM image cache, boots them as the root file system of the workspace VM behind the host-side network broker, and delivers `env` and secrets to the guest.
+1. Validates secret sources on the host.
+2. Builds the workspace image with the host Docker daemon or in a builder VM (see [Image Resolution](image-resolution.md)).
+3. Converts its layers into read-only EROFS images in the VM image cache.
+4. Boots them as the root file system of the workspace VM behind the host-side network broker.
+5. Delivers `env` and secrets to the guest.
 
 When the VM already runs, `jailoc up` does what [`jailoc reload`](#jailoc-reload) does.
 
@@ -88,16 +99,28 @@ When the VM already runs, `jailoc up` does what [`jailoc reload`](#jailoc-reload
 
 Stop a workspace VM.
 
-```
+```text
 jailoc down [workspace] [flags]
 ```
 
-Shuts down the workspace VM and its network broker. All agent sessions end. The persistent home directories (the [agent's state directories](configuration.md#coding-agents) and `~/.cache`) are kept.
+- Shuts down the workspace VM and its network broker. All agent sessions end.
+- Keeps the persistent home directories (the [agent's state directories](configuration.md#coding-agents) and `~/.cache`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Stop every configured workspace. Combined with `--purge`, purges every workspace. |
-| `--purge` | | Also delete the VM state, the persistent home directories, the Docker data disk of the workspace VM, any cached `from_command` secrets in the system keychain (the command fails if an entry can't be deleted; the next purge retries it), the workspace's [inspection CA](../explanation/network-isolation.md#the-inspection-ca) (the next start creates a new one) and, with `isolated_build`, the workspace's builder VM and build cache. Named agent [profiles](configuration.md#agent-profiles) are kept. |
+| `--purge` | | Also delete the workspace state listed below. |
+
+**`--purge` deletes**
+
+- The VM state.
+- The persistent home directories.
+- The Docker data disk of the workspace VM.
+- Any cached `from_command` secrets in the system keychain. The command fails if an entry can't be deleted; the next purge retries it.
+- The workspace's [inspection CA](../explanation/network-isolation.md#the-inspection-ca). The next start creates a new one.
+- With `isolated_build`, the workspace's builder VM and build cache.
+
+**`--purge` keeps** named agent [profiles](configuration.md#agent-profiles).
 
 ---
 
@@ -105,11 +128,12 @@ Shuts down the workspace VM and its network broker. All agent sessions end. The 
 
 Stop and start a workspace VM with the current configuration.
 
-```
+```text
 jailoc restart [workspace] [flags]
 ```
 
-Equivalent to `jailoc down` followed by `jailoc up`: rebuilds the workspace image and ends running sessions. If the workspace is not running, starts it.
+- Equivalent to `jailoc down` followed by `jailoc up`: rebuilds the workspace image and ends running sessions.
+- If the workspace is not running, starts it.
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -121,11 +145,11 @@ Equivalent to `jailoc down` followed by `jailoc up`: rebuilds the workspace imag
 
 Apply configuration changes to a running workspace VM without restarting it.
 
-```
+```text
 jailoc reload [workspace] [flags]
 ```
 
-Updated live:
+**Updated live**
 
 - Network policy: `allowed_hosts`, `allowed_networks`, `network.filtered_dns`, `network.dns_upstream`, `network.dns_blocked_zones`, and turning `network.ipv6` off (turning it on needs `jailoc restart`)
 - Published `ports`
@@ -136,9 +160,9 @@ Updated live:
 - `env`, `env_file` and secrets
 - `timezone`, or the host's current zone when it is unset
 
-Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets. Files opened before a reload keep their old snapshot content. Concurrent reloads of one workspace, including those `jailoc up` starts, wait for each other and run one at a time.
+**Needs a new VM**
 
-Changes to the following need a new VM. `jailoc reload` lists them, and [`jailoc restart`](#jailoc-restart) applies them:
+`jailoc reload` lists these changes, and [`jailoc restart`](#jailoc-restart) applies them:
 
 - `paths` and `mounts`, including `agents.<name>.mounts`
 - the agent's `profile`
@@ -147,12 +171,17 @@ Changes to the following need a new VM. `jailoc reload` lists them, and [`jailoc
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest
 
-Fails when the workspace is not running.
-
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Reload every running workspace. Stopped workspaces are skipped. |
 | `--purge-cache` | | Evict cached `from_command` secrets with a `ttl` from the system keychain and run their commands again. Fails if an entry can't be deleted; the next purge retries it. |
+
+**Caveats**
+
+- Fails when the workspace is not running.
+- Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets.
+- Files opened before a reload keep their old snapshot content.
+- Concurrent reloads of one workspace, including those `jailoc up` starts, wait for each other and run one at a time.
 
 ---
 
@@ -160,17 +189,28 @@ Fails when the workspace is not running.
 
 Show the agent of the workspace (with the package version jailoc installs and extra `args`) and whether its VM is running.
 
-For a running VM it also shows the uptime, CPUs, memory and Docker disk, where the agent's persistent home directories live (the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`), the number of agent sessions, and whether the VM runs the current configuration: `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `agent`, `profile`, `enable_docker`, `protect_git`, or a jailoc upgrade that changed the guest protocol), `jailoc reload` when the configuration file changed after the VM started or was last reloaded. For a stopped VM it shows when it stopped and the last error. `Data` is the VM state directory on the host.
-
-```
+```text
 jailoc status [workspace] [flags]
 ```
+
+**Shown for a running VM**
+
+- Uptime, CPUs, memory and Docker disk.
+- Where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
+- The number of agent sessions.
+- Whether the VM runs the current configuration:
+    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `agent`, `profile`, `enable_docker`, `protect_git`, or a jailoc upgrade that changed the guest protocol).
+    - `jailoc reload` is needed when the configuration file changed after the VM started or was last reloaded.
+
+**Shown for a stopped VM**: when it stopped and the last error.
+
+`Data` is the VM state directory on the host.
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Show the status of every configured workspace. |
 
-```
+```text
 Workspace: myproject
 Backend:   vm
 Agent:     claude (@anthropic-ai/claude-code@2.1.318)
@@ -187,13 +227,17 @@ Data:      ~/.cache/jailoc-vm/workspaces/myproject
 
 ### `jailoc list`
 
-List every configured workspace with its agent, whether its VM is running, the agent sessions of a running VM (and how many have a terminal attached) and its paths. `*` marks the workspace of the current directory. Alias: `jailoc ls`.
+List every configured workspace.
 
-```
+```bash
 jailoc list
 ```
 
-```
+Alias: `jailoc ls`.
+
+Columns: workspace and its agent, whether its VM is running, the agent sessions of a running VM (and how many have a terminal attached), and its paths. `*` marks the workspace of the current directory.
+
+```text
   WORKSPACE  AGENT      STATE    SESSIONS        PATHS
   default    opencode   running  0               ~/projects
 * myproject  claude     running  2 (1 attached)  ~/projects/myproject
@@ -206,25 +250,48 @@ jailoc list
 
 ### `jailoc logs`
 
-Print the log of the workspace's last `jailoc up` (`up.log`: its steps with their durations, Docker pulls, builds and build steps, image size and conversion), the VM supervisor log and the guest console log, in that order. When `jailoc up` failed before the VM started, only its log is printed, ending with the error. `--follow` keeps printing what is added to all three logs, from a running `jailoc up` and its image build through the VM boot; a log that the next `jailoc up` or VM start begins afresh is printed again from its start.
+Print the logs of a workspace.
 
-```
+```text
 jailoc logs [workspace] [flags]
 ```
+
+Prints three logs, in this order:
+
+1. The log of the workspace's last `jailoc up` (`up.log`): its steps with their durations, Docker pulls, builds and build steps, image size and conversion.
+2. The VM supervisor log.
+3. The guest console log.
+
+When `jailoc up` failed before the VM started, only its log is printed, ending with the error.
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--follow` | `-f` | Follow log output until interrupted. |
 
+With `--follow`:
+
+- It keeps printing what is added to all three logs, from a running `jailoc up` and its image build through the VM boot.
+- A log that the next `jailoc up` or VM start begins afresh is printed again from its start.
+
 ---
 
 ### `jailoc traffic`
 
-Print the network activity of a workspace VM from the network broker's log: allowed and denied connections with the DNS name they were looked up by, the TLS server name and ALPN or the HTTP method, host and path (without query string) of allowed TCP connections, DNS answers, names blocked by `network.filtered_dns`, failed dials, connections to published ports and connections relayed to `host_ports` with their host target. The log persists after the VM stops.
+Print the network activity of a workspace VM from the network broker's log. The log persists after the VM stops.
 
-```
+```text
 jailoc traffic [workspace] [flags]
 ```
+
+The output covers:
+
+- Allowed and denied connections, with the DNS name they were looked up by.
+- For allowed TCP connections: the TLS server name and ALPN, or the HTTP method, host and path (without query string).
+- DNS answers.
+- Names blocked by `network.filtered_dns`.
+- Failed dials.
+- Connections to published ports.
+- Connections relayed to `host_ports`, with their host target.
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -233,23 +300,44 @@ jailoc traffic [workspace] [flags]
 | `--json` | | Print the shown events as their JSON log lines, unchanged. |
 | `--all` | | Also show DHCP, NIC, SSH agent forwarding, jailoc's own SSH connections and the events of rules with [`log = false`](configuration.md#quiet-rules). |
 
-Without `--json`, control characters in logged values are escaped. TLS connections are identified from the unencrypted ClientHello only; their content is not decrypted, except for connections covered by a rule with an [`http` table](configuration.md#http-rules).
+**Output without `--json`**
 
-Without `--json`, DNS answers are sorted and deduplicated. Consecutive addresses that fill exactly one aligned block print as a CIDR prefix (`1.2.3.4/30`), and IPv4 addresses that differ only in one octet print as a pattern listing the values of that octet (`104.16.{0-11}.34`, `10.0.0.{1,3,5-9}`). Both forms stand for exactly the answered addresses; `--json` keeps the original list.
+- Control characters in logged values are escaped.
+- DNS answers are sorted and deduplicated.
+- Consecutive addresses that fill exactly one aligned block print as a CIDR prefix (`1.2.3.4/30`).
+- IPv4 addresses that differ only in one octet print as a pattern listing the values of that octet (`104.16.{0-11}.34`, `10.0.0.{1,3,5-9}`).
+- Both compact forms stand for exactly the answered addresses; `--json` keeps the original list.
 
-For those connections `jailoc traffic` prints one line per request, after the response status is known, or when the request is denied (JSON event `l7`): protocol (`https` or `http`), method, host, path without query string, status and the deciding rule. A denied request adds the reason (`http-no-match`, `bad-path`, `connect-denied`, `host-mismatch`, or `rule <name>`) and has status `403` or `421`. A request the broker could not forward has status `502` and the error; for a failed upstream certificate check a hint says that the broker trusts only the host system roots and `ca_bundle`.
+**TLS and HTTP inspection**
 
-`inspect-error` lines report a TLS handshake the guest rejected, or traffic denied after decryption because it isn't HTTP. They carry the connection, destination, server name, error and a hint. For a rejected handshake the hint says that the client doesn't trust the workspace inspection CA and that removing the `http` table from the rules matching the host passes the connection through undecrypted. See [Certificate error on an inspected host](../how-to/troubleshooting.md#certificate-error-on-an-inspected-host).
+- TLS connections are identified from the unencrypted ClientHello only. Their content is not decrypted, except for connections covered by a rule with an [`http` table](configuration.md#http-rules).
+- For those connections `jailoc traffic` prints one line per request, after the response status is known, or when the request is denied (JSON event `l7`). The line shows protocol (`https` or `http`), method, host, path without query string, status and the deciding rule.
+- A denied request adds the reason and has status `403` or `421`. Reasons: `http-no-match`, `bad-path`, `connect-denied`, `host-mismatch`, or `rule <name>`.
+- A request the broker could not forward has status `502` and the error. For a failed upstream certificate check a hint says that the broker trusts only the host system roots and `ca_bundle`.
+
+**`inspect-error` lines**
+
+- They report a TLS handshake the guest rejected, or traffic denied after decryption because it isn't HTTP.
+- They carry the connection, destination, server name, error and a hint.
+- For a rejected handshake the hint says that the client doesn't trust the workspace inspection CA and that removing the `http` table from the rules matching the host passes the connection through undecrypted.
+- See [Certificate error on an inspected host](../how-to/troubleshooting.md#certificate-error-on-an-inspected-host).
 
 ---
 
 ### `jailoc strace`
 
-Print the processes started in a workspace VM: time, PID, parent PID, user, working directory and command line, and the processes that failed: time, PID, exit status (`exit N`) or the signal that killed them, and command line. The guest records every process start from boot and the exit of each recorded process; the log of the previous boot is kept as `exec.prev.jsonl` in the VM state directory.
+Print the processes started in a workspace VM.
 
-```
+```text
 jailoc strace [workspace] [flags]
 ```
+
+The output has two kinds of records:
+
+- Started processes: time, PID, parent PID, user, working directory and command line.
+- Failed processes: time, PID, exit status (`exit N`) or the signal that killed them, and command line.
+
+The guest records every process start from boot and the exit of each recorded process. The log of the previous boot is kept as `exec.prev.jsonl` in the VM state directory.
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -258,7 +346,10 @@ jailoc strace [workspace] [flags]
 | `--json` | | Print the shown records as JSON lines, unchanged. |
 | `--all` | | Also show jailoc's own guest processes and processes that exit with status 0. |
 
-Without `--json`, control characters in logged values are escaped. The record is written inside the VM: root in the VM (`sudo`) can stop or alter it. Processes that exit before the guest reads their details show only their name. When the guest misses process events during a burst, failures of the processes running at that moment are not recorded.
+- Without `--json`, control characters in logged values are escaped.
+- The record is written inside the VM: root in the VM (`sudo`) can stop or alter it.
+- Processes that exit before the guest reads their details show only their name.
+- When the guest misses process events during a burst, failures of the processes running at that moment are not recorded.
 
 ---
 
@@ -266,21 +357,29 @@ Without `--json`, control characters in logged values are escaped. The record is
 
 Run a command as the agent user in a running workspace VM.
 
-```
+```text
 jailoc exec [flags] -- COMMAND [ARG...]
 ```
 
-The command runs with the session environment and secrets, in the current directory when a workspace path contains it, otherwise in the first workspace path. When standard input is a terminal, the command gets one, including window size changes. The command's exit status becomes jailoc's exit status. Flags must come before the command.
+- The command runs with the session environment and secrets.
+- Its working directory is the current directory when a workspace path contains it, otherwise the first workspace path.
+- When standard input is a terminal, the command gets one, including window size changes.
+- The command's exit status becomes jailoc's exit status.
+
+Flags must come before the command.
 
 ---
 
 ### `jailoc shell`
 
-Open a login shell as the agent user in a running workspace VM, in the same directory as `jailoc exec`. The shell is not a detachable session: closing the terminal ends it.
+Open a login shell as the agent user in a running workspace VM.
 
-```
+```text
 jailoc shell [workspace] [flags]
 ```
+
+- The shell starts in the same directory as `jailoc exec`.
+- It is not a detachable session: closing the terminal ends it.
 
 ---
 
@@ -288,12 +387,14 @@ jailoc shell [workspace] [flags]
 
 List the agent sessions running in a workspace VM, or stop one.
 
-```
+```text
 jailoc sessions [flags]
 jailoc sessions stop ID [flags]
 ```
 
-Prints each session's ID, state (`attached` or `detached`), start time, directory and command, most recently attached first. `stop` ends the session's agent; an attached terminal is disconnected. Sessions end when the workspace VM stops.
+- Lists each session's ID, state (`attached` or `detached`), start time, directory and command, most recently attached first.
+- `stop` ends the session's agent; an attached terminal is disconnected.
+- Sessions end when the workspace VM stops.
 
 ---
 
@@ -301,28 +402,37 @@ Prints each session's ID, state (`attached` or `detached`), start time, director
 
 Print the resolved configuration of a workspace.
 
-```
+```text
 jailoc config [workspace] [flags]
 ```
+
+<a id="reads-the-configuration-file-resolves-defaults-agent-settings-and-expansions-for-the-selected-workspace-from-the-argument-workspace-or-the-current-working-directory-and-prints-the-effective-workspace-configuration-together-with-its-computed-paths-config-file-workspace-config-dir-workspace-cache-dir-vm-state-dir-and-profile-dir-secrets-are-listed-under-secrets-as-name-destination-from_source-reference-for-example-gh_token-env-from_env-host_github_token-npm_token-env-from_command-op-read-opdevnpmtoken-ttl-1h0m0s-or-db_cert-file-from_file-homeyouconfigdbpem-only-the-source-reference-is-printed-secret-values-are-never-read-commands-are-never-run"></a>
+
+- Reads the configuration file and resolves `[defaults]`, agent settings and `~` expansions for the selected workspace (from the argument, `--workspace`, or the current working directory).
+- Prints the effective workspace configuration together with its `Computed Paths`: `Config File`, `Workspace Config Dir`, `Workspace Cache Dir`, `VM State Dir`, and `Profile Dir`.
+- Lists secrets under `Secrets:` as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)` or `db_cert (file from_file /home/you/.config/db.pem)`.
+- Prints only the source reference: secret values are never read, commands are never run.
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Show the resolved configuration of every configured workspace. |
 
-Reads the configuration file, resolves `[defaults]`, agent settings and `~` expansions for the selected workspace (from the argument, `--workspace`, or the current working directory), and prints the effective workspace configuration together with its `Computed Paths` (`Config File`, `Workspace Config Dir`, `Workspace Cache Dir`, `VM State Dir`, and `Profile Dir`). Secrets are listed under `Secrets:` as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)` or `db_cert (file from_file /home/you/.config/db.pem)`. Only the source reference is printed; secret values are never read, commands are never run.
 ---
 
 ### `jailoc add`
 
 Add a directory to a workspace's `paths` list.
 
-```
+```text
 jailoc add [path] [flags]
 ```
 
-Appends `path` (default: the current working directory) to `workspaces.<name>.paths` in the configuration file. The path must not be under a forbidden system prefix; see the [configuration reference](configuration.md#paths). Secret sources of the target workspace are validated before the configuration changes. If the workspace VM is running, it is restarted so the new share takes effect.
-
-Without `--workspace`, the workspace is resolved from the path being added (longest prefix). If `--workspace` is set and the path is not under any configured path of that workspace, `jailoc add` returns an error.
+- Appends `path` (default: the current working directory) to `workspaces.<name>.paths` in the configuration file.
+- The path must not be under a forbidden system prefix; see the [configuration reference](configuration.md#paths).
+- Secret sources of the target workspace are validated before the configuration changes.
+- If the workspace VM is running, it is restarted so the new share takes effect.
+- Without `--workspace`, the workspace is resolved from the path being added (longest prefix).
+- If `--workspace` is set and the path is not under any configured path of that workspace, `jailoc add` returns an error.
 
 ---
 
@@ -330,7 +440,7 @@ Without `--workspace`, the workspace is resolved from the path being added (long
 
 Interactive onboarding and workspace setup wizard (`jailoc wizard` is an alias).
 
-```
+```text
 jailoc setup [path] [flags]
 jailoc wizard [path] [flags]
 ```
@@ -342,20 +452,20 @@ jailoc wizard [path] [flags]
 
 `jailoc setup` operates in two modes depending on the state of `config.toml`:
 
-- **First-time onboarding** (when `config.toml` does not exist or still matches the unmodified default template): asks for `[defaults]` settings (`agent`, `git_config`, `ssh_auth_sock`, `gpg_agent`, network egress policy `dev-deps` vs `internet` plus optional extra hostnames/CIDRs, `enable_docker`, `cpu` and `memory`) and configures the initial workspace for `path` (default: the current working directory).
+- **First-time onboarding** (when `config.toml` does not exist or still matches the unmodified default template): asks for `[defaults]` settings and configures the initial workspace for `path` (default: the current working directory). The settings are `agent`, `git_config`, `ssh_auth_sock`, `gpg_agent`, network egress policy `dev-deps` vs `internet` plus optional extra hostnames/CIDRs, `enable_docker`, `cpu` and `memory`.
 - **Add-workspace mode** (when a customized `config.toml` already exists): asks for a workspace name (default: sanitized basename of `path` or `--workspace`), workspace directory path, optional agent override, Docker inside the VM, and workspace network rules, then patches `[workspaces.<name>]` while preserving existing comments in `config.toml`. Answering `inherit` removes the workspace's own `agent`, `enable_docker` or `network.rules`.
 
-A workspace directory of `/` or the home directory needs explicit confirmation; with `--yes` it is refused.
-
-When standard input and standard output are terminals and `config.toml` is missing or unmodified default, running `jailoc` or `jailoc up` offers to run `jailoc setup` first. `jailoc up <workspace>` uses `<workspace>` as the default workspace name, and the command then starts the workspace the wizard created.
+- A workspace directory of `/` or the home directory needs explicit confirmation; with `--yes` it is refused.
+- When standard input and standard output are terminals and `config.toml` is missing or unmodified default, running `jailoc` or `jailoc up` offers to run `jailoc setup` first.
+- `jailoc up <workspace>` uses `<workspace>` as the default workspace name, and the command then starts the workspace the wizard created.
 
 ---
 
 ### `jailoc migrate`
 
-Rewrite an older `config.toml` (jailoc v1, or deprecated network settings) for the current format.
+Update an existing configuration to the current format.
 
-```
+```text
 jailoc migrate [flags]
 ```
 
@@ -364,16 +474,7 @@ jailoc migrate [flags]
 | `--dry-run` | | Print the planned changes and the resulting `config.toml` without changing anything. |
 | `--yes` | `-y` | Accept the default answer to every question. Required when standard input is not a terminal. |
 
-A workspace counts as a jailoc v1 Docker workspace unless its effective `backend` is `"vm"`. `jailoc migrate` rewrites the configuration file:
-
-- Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
-- Lists the jailoc v1 settings `mode`, `password_mode` and `expose_port` per scope and removes them after confirmation. Declining stops the migration.
-- Moves `allowed_hosts`, `allowed_networks`, `dns_upstream` and `dns_blocked_zones` of `[defaults]` and of every workspace into `network.dns` and `[[*.network.rules]]`, removes `filtered_dns`, and adds `allow = ["*"]` when the configuration had no `network.rules`. A value already set in the new field wins and the old one is removed.
-- Asks for every `mounts` entry of `[defaults]` and of each Docker workspace whether it stays a directory share (default for directories), becomes a read-only [snapshot](configuration.md#snapshots) (default for files), or is dropped. Files cannot stay mounts.
-
-For Docker workspaces it then stops running ones after confirmation and copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directories, unless a mount covers those paths or VM data already exists there. The volumes are left in place. The copy keeps symbolic links, but skips device nodes, FIFOs and additional hard-link names of a file. Without a reachable Docker daemon, these steps are skipped after confirmation.
-
-The previous configuration is saved as `config.toml.pre-vm-migration` next to it. Comments are not carried over to the rewritten file. See [Migrate from jailoc v1](../how-to/migrate-from-v1.md).
+For configuration changes, data transfer and migration troubleshooting, see [Upgrade an existing installation](../how-to/migrate-from-v1.md).
 
 ---
 
@@ -381,7 +482,7 @@ The previous configuration is saved as `config.toml.pre-vm-migration` next to it
 
 Generate a shell completion script.
 
-```
+```text
 jailoc completion bash|fish|powershell|zsh
 ```
 

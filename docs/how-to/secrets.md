@@ -1,10 +1,11 @@
 # How to pass secrets to a workspace
 
-This guide shows how to pass sensitive values, such as API keys, tokens or credential files, into a workspace VM. For how secrets are delivered and protected, see [Secrets explanation](../explanation/secrets.md).
+This guide shows how to pass sensitive values, such as API keys, tokens or credential files, into a workspace VM. For how secrets are delivered and protected, see [Secrets explanation](../explanation/secrets.md). For every field and validation rule, see [`secrets`](../reference/configuration.md#secrets).
+
+!!! warning
+    The agent can read every secret configured for its workspace. Configure only the secrets it needs, and prefer short-lived, narrowly scoped tokens.
 
 jailoc reads every secret on the host at `jailoc up` and `jailoc reload` and sends it to the guest over SSH. Environment secrets reach sessions as environment variables only. File secrets land in `/run/secrets/<NAME>`, a tmpfs, with mode `0400` and owned by the `agent` user. jailoc never writes secret values to host disk.
-
----
 
 ## Pass an API key or token via environment variable
 
@@ -31,8 +32,6 @@ jailoc reads every secret on the host at `jailoc up` and `jailoc reload` and sen
     ```
 
 Sessions see the value as the `MCP_SERVER_TOKEN` environment variable.
-
----
 
 ## Pass a credential file
 
@@ -68,14 +67,19 @@ from_file = "~/.kube/config"
 | Google Cloud SDKs | `gcloud-credentials` | `~/.config/gcloud/application_default_credentials.json` | `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcloud-credentials` |
 | Go, Python `requests` | `netrc` | `~/.netrc` | `NETRC=/run/secrets/netrc` |
 
-A kubeconfig that references certificate or key files by path needs those files embedded (`kubectl config view --raw --flatten`) or passed as file secrets too. Docker reads `config.json` from a directory, so copy the secret there inside the VM (`mkdir -p ~/.docker && cp -f /run/secrets/docker-config ~/.docker/config.json`). `~/.docker` is not a persistent home directory, so the copy lives in VM memory and is gone after the VM stops: repeat it after every VM start, and after `jailoc reload` to pick up a rotated secret. For the GitHub CLI, pass a token instead of `~/.config/gh`:
+- **kubectl:** a kubeconfig that references certificate or key files by path needs those files embedded (`kubectl config view --raw --flatten`) or passed as file secrets too.
+- **Docker:** it reads `config.json` from a directory, so copy the secret there inside the VM after every VM start, and after `jailoc reload` to pick up a rotated secret. `~/.docker` is not a persistent home directory, so the copy lives in VM memory and is gone after the VM stops.
 
-```toml
-[workspaces.my-project.secrets.env.GH_TOKEN]
-from_command = "gh auth token"
-```
+    ```bash
+    mkdir -p ~/.docker && cp -f /run/secrets/docker-config ~/.docker/config.json
+    ```
 
----
+- **GitHub CLI:** pass a token instead of `~/.config/gh`:
+
+    ```toml
+    [workspaces.my-project.secrets.env.GH_TOKEN]
+    from_command = "gh auth token"
+    ```
 
 ## Load a host file into an environment variable
 
@@ -86,9 +90,7 @@ Use `from_file` under `secrets.env.<NAME>`:
 from_file = "~/.secrets/api_key.txt"
 ```
 
-Sessions get the file contents as `API_KEY`, with the trailing line break stripped. The value must fit on one line; use a file secret for multi-line content such as a PEM key.
-
----
+Sessions get the file contents as `API_KEY`, with the trailing line break stripped. An environment secret must fit on one line: a value with line breaks or NUL fails with `value spans several lines or contains NUL; use a file secret`. Use a file secret for multi-line content such as a PEM key.
 
 ## Read a secret from a password manager or keychain
 
@@ -109,12 +111,13 @@ from_command = "security find-generic-password -s npmrc -w"
 from_command = "security find-generic-password -s anthropic-headers -w"
 ```
 
-jailoc runs each command with `/bin/sh -c` and `JAILOC_WORKSPACE` set to the workspace name at `jailoc up` and `jailoc reload`, before it boots or changes the VM. The command gets your terminal, so a password manager can ask you to unlock it. A command that exits non-zero, prints nothing or runs longer than two minutes stops the operation.
+At `jailoc up` and `jailoc reload`, before it boots or changes the VM, jailoc runs each command with `/bin/sh -c` and `JAILOC_WORKSPACE` set to the workspace name. The command gets your terminal, so a password manager can ask you to unlock it. A command that exits non-zero, prints nothing or runs longer than two minutes stops the operation.
 
-On macOS, `security find-generic-password -s <service> -w` prints the password of a login keychain item. Store the whole value the variable needs, such as `Authorization: Bearer <token>` for `ANTHROPIC_CUSTOM_HEADERS`, so the command needs no formatting around it. `security add-generic-password -a "$USER" -s anthropic-headers -w` with `-w` last prompts for the value, which keeps it out of the shell history.
+On macOS, `security find-generic-password -s <service> -w` prints the password of a login keychain item. Store the whole value the variable needs, such as `Authorization: Bearer <token>` for `ANTHROPIC_CUSTOM_HEADERS`. `security add-generic-password -a "$USER" -s anthropic-headers -w` with `-w` last prompts for the value, which keeps it out of the shell history.
 
-Set `ttl` (for example `"15m"` or `"1h"`) to cache the command's output in the host system keychain (the login keychain on macOS, the kernel user keyring on Linux) so restarting or reloading the workspace within that window reuses the value without prompting again.
----
+<a id="set-ttl-for-example-15m-or-1h-to-cache-the-commands-output-in-the-host-system-keychain-the-login-keychain-on-macos-the-kernel-user-keyring-on-linux-so-restarting-or-reloading-the-workspace-within-that-window-reuses-the-value-without-prompting-again"></a>
+
+Set `ttl` (for example `"15m"` or `"1h"`) to cache the command's output in the host system keychain (the login keychain on macOS, the kernel user keyring on Linux). Restarting or reloading the workspace within that window reuses the value without prompting again.
 
 ## Set global default secrets
 
@@ -131,8 +134,6 @@ ttl = "1h"
 
 A workspace secret with the same name replaces the default entry completely.
 
----
-
 ## Rotate or remove a secret
 
 Edit the config or the host source, then push the change to the running VM:
@@ -141,7 +142,7 @@ Edit the config or the host source, then push the change to the running VM:
 jailoc reload my-project
 ```
 
-jailoc reads every source again, rewrites `/run/secrets` and removes files of secrets that aren't configured any more. To force `from_command` secrets with a `ttl` to run again before their TTL expires, pass `--purge-cache`:
+jailoc reads every source again, rewrites `/run/secrets` and removes files of secrets that aren't configured any more. To run `from_command` secrets with a `ttl` again before the TTL expires, pass `--purge-cache`:
 
 ```bash
 jailoc reload --purge-cache my-project
@@ -151,6 +152,3 @@ New sessions get the updated environment. Processes that read `/run/secrets/<NAM
 
 !!! note
     Running sessions keep the environment they started with. Open a new session with `jailoc --new` to pick up changed environment secrets. See [Sessions](sessions.md).
-
-!!! warning
-    The agent can read every secret configured for its workspace. Configure only the secrets it needs, and prefer short-lived, narrowly scoped tokens.

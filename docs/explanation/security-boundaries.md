@@ -25,15 +25,42 @@ The hypervisor (KVM on Linux, Hypervisor.framework on macOS) separates the guest
 - One virtio-net interface whose only peer is the workspace's network broker.
 - Unix sockets on the host that the broker forwards: the guest SSH server for jailoc, the host SSH agent with `ssh_auth_sock`, the host gpg-agent extra socket with `gpg_agent`, and `host_ports` targets.
 
-libkrun's virtio-fs server doesn't confine file requests to the shared directories by itself. On Linux, jailoc runs the VMM process under Landlock with access only to the VM runtime, `/dev/kvm` and the null and random devices, the VM's root filesystem, data directory and disks, the image's EROFS layer files (read-only) and the declared shares, and refuses to start a VM when the kernel lacks Landlock. Landlock doesn't cover metadata operations such as `stat`, `chmod` or extended attributes. On macOS the VMM process runs without equivalent confinement.
+#### Confining the VMM process
 
-The host trusts nothing it reads back from the guest. The read-write internal share is writable by the guest, so it never holds keys or the VM specification, and jailoc accesses it only in ways that can't follow a link out of it. Per-workspace state directories on the host are created with mode `0700`.
+libkrun's virtio-fs server doesn't confine file requests to the shared directories by itself.
+
+- **Linux.** jailoc runs the VMM process under Landlock with access only to:
+    - the VM runtime,
+    - `/dev/kvm` and the null and random devices,
+    - the VM's root filesystem, data directory and disks,
+    - the image's EROFS layer files (read-only),
+    - the declared shares.
+
+    jailoc refuses to start a VM when the kernel lacks Landlock. Landlock doesn't cover metadata operations such as `stat`, `chmod` or extended attributes.
+
+- **macOS.** The VMM process runs without equivalent confinement.
+
+#### What the host does with guest-written data
+
+The host trusts nothing it reads back from the guest.
+
+- The read-write internal share is writable by the guest, so it never holds keys or the VM specification.
+- jailoc accesses that share only in ways that can't follow a link out of it.
+- Per-workspace state directories on the host are created with mode `0700`.
 
 ### Guest and network
 
 The network broker runs on the host, so nothing in the guest can change its policy. It terminates every guest connection in a userspace TCP/IP stack and opens a host socket only for destinations the policy allows: public addresses are allowed, private and reserved ranges are denied unless `allowed_networks` or a resolved `allowed_hosts` address opens them, and loopback, multicast, cloud metadata endpoints and special IPv6 ranges stay denied regardless. The guest has no network when the broker isn't running, and the VM stops when the broker exits. Containers from the in-VM Docker daemon go through the same broker. See [Network Isolation](network-isolation.md).
 
-With rules that have an `http` table, the broker also terminates TLS for the hosts they match. It signs certificates with a per-workspace CA whose key stays on the host, outside every share, and which the guest trusts, so the broker can read the decrypted traffic of those hosts. The upstream side is verified against the host's trust roots, not the guest's. WebSocket frames after an upgrade aren't inspected. See [TLS inspection](network-isolation.md#tls-inspection).
+#### TLS inspection
+
+With rules that have an `http` table, the broker also terminates TLS for the hosts they match.
+
+- It signs certificates with a per-workspace CA whose key stays on the host, outside every share, and which the guest trusts, so the broker can read the decrypted traffic of those hosts.
+- The upstream side is verified against the host's trust roots, not the guest's.
+- WebSocket frames after an upgrade aren't inspected.
+
+See [TLS inspection](network-isolation.md#tls-inspection).
 
 ### Workspace and workspace
 
@@ -50,7 +77,13 @@ Workspaces that share a profile, a writable configuration mount or a directory s
 
 ### Agent and guest root
 
-Inside the VM the agent runs as `agent` (UID 1000) and can use `sudo` from the image. Guest root is not a boundary jailoc relies on, with one exception: `protect_git` sets `no_new_privs` in `jailoc-guest`, which every session inherits, binds `.git/hooks`, `.git/config` and the Git files they point to of repositories in the read-write `paths` and `mounts` read-only, and rejects `enable_docker`, because Docker access is root access in the VM. Without `protect_git`, the agent can rewrite Git hooks and configuration in shared repositories, and they run on the host the next time you use Git there.
+Inside the VM the agent runs as `agent` (UID 1000) and can use `sudo` from the image. Guest root is not a boundary jailoc relies on, with one exception: `protect_git`. It does three things:
+
+- sets `no_new_privs` in `jailoc-guest`, which every session inherits,
+- binds `.git/hooks`, `.git/config` and the Git files they point to of repositories in the read-write `paths` and `mounts` read-only,
+- rejects `enable_docker`, because Docker access is root access in the VM.
+
+Without `protect_git`, the agent can rewrite Git hooks and configuration in shared repositories, and they run on the host the next time you use Git there.
 
 ### Image builds and host
 
@@ -84,9 +117,18 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | SSH session | Host to guest | Accept sessions only from jailoc, which authenticates with a per-workspace key and pins the guest host key generated at each start | fixed |
 | Session notifications | Guest to host | Make jailoc show its fixed notification, `jailoc / <workspace>` with `The agent finished.` or `The agent needs your input.`, at most every 3 seconds and only while the terminal reports it is unfocused; never choose its text | `notifications` |
 
-`host_ports` deserves the most care. A Chrome DevTools port or a container runtime socket gives the guest control of the browser or the host; jailoc warns about both.
+### host_ports needs the most care
 
-Session output is untrusted. Any process in the guest that writes to the session terminal can send the private reports of the OpenCode plugin, so the notifications prove nothing about what the agent did; jailoc decides only whether, when and with which fixed text and workspace name they appear. The same process can also write terminal sequences of its own, including OSC 777 notifications with any text, which jailoc passes to the terminal like other agent output, whatever `notifications` says. A desktop notification from `"native"` comes from the host and can't be forged this way; with `"osc"`, a forged terminal notification looks like jailoc's.
+A Chrome DevTools port or a container runtime socket gives the guest control of the browser or the host; jailoc warns about both.
+
+### Session output is untrusted
+
+Any process in the guest that writes to the session terminal can send the private reports of the OpenCode plugin, so the notifications prove nothing about what the agent did. jailoc decides only whether, when and with which fixed text and workspace name they appear.
+
+The same process can also write terminal sequences of its own, including OSC 777 notifications with any text, which jailoc passes to the terminal like other agent output, whatever `notifications` says. How to tell a forged notification from a real one:
+
+- A desktop notification from `"native"` comes from the host and can't be forged this way.
+- With `"osc"`, a forged terminal notification looks like jailoc's.
 
 ## Outside the boundaries
 

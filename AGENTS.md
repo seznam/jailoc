@@ -128,7 +128,7 @@ GitHub Actions workflows:
 - **Nix** (`.github/workflows/nix.yml`): push/PR to main — `nix fmt` check and `nix flake check --all-systems`, plus `nix build .#jailoc` on an x86_64 Linux runner
 - **Nix vendorHash** (`.github/workflows/nix-vendor-hash.yml`): `go.mod`/`go.sum` pushes to main, Dependabot PRs, manual — recomputes `vendorHash` in `nix/jailoc.nix` in a cache-free read-only job and commits it from a separate write job
 - **Re-release** (`.github/workflows/release.yml`): manual `workflow_dispatch` fallback — re-runs GoReleaser for an existing tag
-- **Docs** (`.github/workflows/release-please.yml`): runs as part of the release process — zensical + mkdocs-macros-plugin → GitHub Pages
+- **Docs** (`.github/workflows/release-please.yml`): runs as part of the release process after GoReleaser publishes the release assets — `zensical build --strict` (reads `mkdocs.yml`; native Jinja `macros` plugin) → GitHub Pages
 
 ## Before committing
 

@@ -2,19 +2,11 @@
 
 The workspace's coding agent (OpenCode unless `agent` selects another, see [Choose a coding agent](coding-agents.md)) runs in a session inside the workspace VM, reached over SSH. Sessions outlive your terminal: you can detach, re-attach, run several at once and stop them from outside.
 
-![jailoc on the host reaches the session over SSH through the Unix socket the network broker forwards into the VM; the SSH server in jailoc-guest hands the connection to a session holder that owns the agent's terminal, so the agent keeps working after you detach](img/sessions.svg)
-
 ## Start or attach to a session
 
-From a directory inside a workspace path, run:
+From a directory inside a workspace path, run `jailoc`. It picks the workspace that contains the current directory, starts the VM if needed and opens the agent in that directory. If a session is already running there, `jailoc` attaches to it and redraws the screen.
 
-```bash
-jailoc
-```
-
-jailoc picks the workspace that contains the current directory, starts the VM if needed and opens the agent in that directory. If a session is already running, `jailoc` attaches to it and redraws the screen. If the directory belongs to several workspaces equally, jailoc asks you to pick one with `-w`.
-
-To name the workspace or directory explicitly:
+If the directory belongs to several workspaces equally, jailoc asks you to pick one with `-w`. To name the workspace or directory explicitly:
 
 ```bash
 jailoc -w my-project
@@ -47,7 +39,9 @@ See [`detach_keys`](../reference/configuration.md#top-level-fields) for the key 
 
 ## Get notified when the agent needs you
 
-With OpenCode (`opencode`, `opencode1`, `opencode2`), an attached session notifies you when the agent finishes or asks for input while you are in another window. To choose how, or to turn it off, set `notifications` in `~/.config/jailoc/config.toml`:
+With OpenCode (`opencode`, `opencode1`, `opencode2`), an attached session notifies you when the agent finishes or asks for input while you are in another window.
+
+To choose how, or to turn it off, set `notifications` in `~/.config/jailoc/config.toml` and re-attach with `jailoc` to apply it; the VM keeps running:
 
 ```toml
 [defaults]
@@ -57,7 +51,7 @@ notifications = "osc"  # auto, native, osc or off
 notifications = "off"
 ```
 
-Re-attach with `jailoc` to apply it; the VM keeps running. `auto`, the default, shows a desktop notification on the host when it can (`osascript` on macOS, `notify-send` on a Linux desktop) and otherwise, as over SSH, asks the terminal to show one with OSC 777 (`osc`), which only some terminals support. See [`notifications`](../reference/configuration.md#notifications) for every value.
+`auto`, the default, shows a desktop notification on the host when it can (`osascript` on macOS, `notify-send` on a Linux desktop). Otherwise, as over SSH, it asks the terminal to show one with OSC 777 (`osc`), which only some terminals support. See [`notifications`](../reference/configuration.md#notifications) for every value.
 
 Notifications need a terminal that reports focus changes, because jailoc notifies only while the terminal is unfocused. In tmux, turn on focus events and, for `osc`, passthrough:
 
@@ -74,7 +68,7 @@ If OpenCode itself is configured to show notifications, jailoc sends none; see [
 jailoc --new
 ```
 
-This opens a second session next to the running one, for example to run a dev server while the agent works.
+This opens a second session next to the running one, for example to run a dev server while the agent works. A new session gets the environment of the last `jailoc reload`; running sessions keep the environment they started with. `jailoc restart` and `jailoc down` end every session of the workspace.
 
 ## Continue an earlier agent conversation
 
@@ -83,7 +77,12 @@ jailoc -c              # continue the last conversation
 jailoc -s <session-id> # continue a specific conversation
 ```
 
-These flags are passed to the agent (for example `--continue` and `--resume <id>` for Claude Code) and refer to its conversations, not to running jailoc sessions.
+Both flags start a new session. They are passed to the agent (for example `--continue` and `--resume <id>` for Claude Code) and refer to its conversations, not to running jailoc sessions.
+
+| ID | Identifies | Used with |
+|----|------------|-----------|
+| Agent conversation ID | A conversation stored by the agent | `jailoc -s <session-id>` |
+| jailoc session ID, listed by `jailoc sessions` | A running session in the VM | `jailoc --attach <ID>`, `jailoc sessions stop <ID>` |
 
 ## List and attach to running sessions
 
@@ -106,6 +105,8 @@ jailoc sessions stop <ID> -w my-project
 ```
 
 `jailoc down` ends every session of the workspace.
+
+![jailoc on the host reaches the session over SSH through the Unix socket the network broker forwards into the VM; the SSH server in jailoc-guest hands the connection to a session holder that owns the agent's terminal, so the agent keeps working after you detach](img/sessions.svg)
 
 ## Read workspace logs
 

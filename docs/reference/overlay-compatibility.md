@@ -18,13 +18,21 @@ jailoc builds the workspace image with Docker and converts its layers into read-
 
 ## User account
 
-jailoc-guest looks for the user with UID 1000 in the image's `/etc/passwd` and uses its name, group, home directory and shell. When the image has no such user, jailoc-guest adds `agent` (UID and GID 1000, home `/home/agent`, shell `/bin/bash` if present, otherwise `/bin/sh`).
-
-The image keeps its own numeric owners, modes and extended attributes on every host: `/etc/shadow` keeps its `shadow` group, `sudo` stays setuid root, and files the image gives UID 1000 belong to the agent. The agent cannot create files outside its home, the shares, `/tmp` and `/var/tmp`: use `sudo` or bake changes into the image.
-
-If the guest kernel cannot idmap (possible only with a custom `[vm] runner` or `lib_dir` runtime), the agent runs as the host user's UID and GID, and jailoc-guest idmaps the image layers so that the agent's files in the image appear as the host user's.
+- jailoc-guest looks for the user with UID 1000 in the image's `/etc/passwd` and uses its name, group, home directory and shell.
+- When the image has no such user, jailoc-guest adds `agent` (UID and GID 1000, home `/home/agent`, shell `/bin/bash` if present, otherwise `/bin/sh`).
+- The image keeps its own numeric owners, modes and extended attributes on every host: `/etc/shadow` keeps its `shadow` group, `sudo` stays setuid root, and files the image gives UID 1000 belong to the agent.
+- The agent cannot create files outside its home, the shares, `/tmp` and `/var/tmp`: use `sudo` or bake changes into the image.
+- If the guest kernel cannot idmap (possible only with a custom `[vm] runner` or `lib_dir` runtime), the agent runs as the host user's UID and GID, and jailoc-guest idmaps the image layers so that the agent's files in the image appear as the host user's.
 
 ## Incompatible changes
+
+Severities:
+
+| Severity | Meaning |
+|----------|---------|
+| Fatal | The VM or the session does not start |
+| Breaking | The VM starts but core functionality is unavailable |
+| Degraded | The VM starts; partial functionality is lost |
 
 | Action | Severity | Effect |
 |--------|----------|--------|
@@ -37,14 +45,6 @@ If the guest kernel cannot idmap (possible only with a custom `[vm] runner` or `
 | Remove `sudo` | Degraded | The agent cannot install packages at runtime |
 | Remove `gpg` while `gpg_agent` is on | Degraded | The public keys are not imported and GPG signing is unavailable |
 | Build for a CPU architecture other than the host's | Fatal | The VM cannot run the image |
-
-**Severity definitions:**
-
-| Severity | Meaning |
-|----------|---------|
-| Fatal | The VM or the session does not start |
-| Breaking | The VM starts but core functionality is unavailable |
-| Degraded | The VM starts; partial functionality is lost |
 
 ## Related pages
 

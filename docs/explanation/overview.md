@@ -1,6 +1,10 @@
 # How jailoc Works
 
-jailoc is a CLI tool that runs coding agents ([OpenCode](https://opencode.ai), Claude Code, GitHub Copilot CLI, OmO or Antigravity CLI, one per workspace) inside per-workspace micro-VMs. Each workspace boots its own libkrun virtual machine with its own kernel, sees only the host directories shared with it, and reaches the network only through a host-side broker that blocks private infrastructure while leaving the public internet open.
+jailoc is a CLI tool that runs coding agents ([OpenCode](https://opencode.ai), Claude Code, GitHub Copilot CLI, OmO or Antigravity CLI, one per workspace) inside per-workspace micro-VMs. Each workspace boots its own libkrun virtual machine, and that VM has three properties:
+
+- **Its own kernel.** The agent's processes never run on the host kernel.
+- **Only the directories you share.** The VM sees the host directories shared with it and nothing else on the host.
+- **Network only through a host-side broker.** The broker blocks private infrastructure while leaving the public internet open.
 
 The problem it solves is simple to state. An autonomous coding agent running directly on a machine can read any file the user can read, call any network endpoint, and change anything the user can touch. jailoc draws a hardware-virtualization boundary around it. Inside the VM the agent can do what it likes, including becoming root. Outside it, the agent has only what the workspace configuration grants.
 
@@ -10,23 +14,39 @@ The problem it solves is simple to state. An autonomous coding agent running dir
 
 ![jailoc up on the host: load the config, resolve the workspace, unpack the VM runtime, build and export the image, then start the supervisor, network broker and jailoc-vm-runner. The runner boots the guest kernel with jailoc-guest as init, which mounts the shares and starts SSH; jailoc then delivers secrets and environment over SSH and the coding agent runs in sessions.](img/startup.svg)
 
-**1. Config loading.** jailoc reads `~/.config/jailoc/config.toml`, writing a default one on first run, and validates it.
+1. **Config loading.** jailoc reads `~/.config/jailoc/config.toml`, writing a default one on first run, and validates it.
+2. **Workspace resolution.** The workspace name becomes a resolved description: shared paths and mounts, snapshots, allowed hosts and networks, secrets, CPU and memory.
+3. **Runtime check.** On first use jailoc unpacks the VM runtime embedded in its binary (`jailoc-vm-runner`, libkrun and the libkrunfw guest kernel) into its cache. Supported hosts are Apple Silicon Macs (Hypervisor.framework) and Linux on amd64 or, experimentally, arm64 (KVM).
+4. **Image build and export.** The workspace image is built with Docker, either on the host daemon or inside a builder VM, then exported and converted into read-only EROFS layer images in a local image cache. See [Image Resolution](../reference/image-resolution.md).
+5. **VM start.** The VM comes up in four moves:
+    - A detached supervisor starts the network broker and boots the VM from a small root file system that holds `jailoc-guest`.
+    - The cached image layers are shared into the VM read-only. Writes to the root file system stay in VM memory.
+    - `jailoc-guest`, the VM's init process, mounts the layers as an overlay over the boot root, mounts the shares, prepares the `agent` user and starts an SSH server.
+    - jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
 
-**2. Workspace resolution.** The workspace name becomes a resolved description: shared paths and mounts, snapshots, allowed hosts and networks, secrets, CPU and memory.
-
-**3. Runtime check.** On first use jailoc unpacks the VM runtime embedded in its binary (`jailoc-vm-runner`, libkrun and the libkrunfw guest kernel) into its cache. Supported hosts are Apple Silicon Macs (Hypervisor.framework) and Linux on amd64 or, experimentally, arm64 (KVM).
-
-**4. Image build and export.** The workspace image is built with Docker, either on the host daemon or inside a builder VM, then exported and converted into read-only EROFS layer images in a local image cache. See [Image Resolution](../reference/image-resolution.md).
-
-**5. VM start.** A detached supervisor starts the network broker and boots the VM from a small root file system that holds `jailoc-guest`; the cached image layers are shared into the VM read-only and writes to the root file system stay in VM memory. `jailoc-guest`, the VM's init process, mounts the layers as an overlay over the boot root, mounts the shares, prepares the `agent` user and starts an SSH server. jailoc then pushes secrets and environment, read on the host before the boot, over SSH.
+### Sessions
 
 Sessions run over SSH: `jailoc` attaches to a running agent session or starts a new one. The host publishes no agent port, so nothing outside jailoc can reach the agent. See [Manage sessions](../how-to/sessions.md).
 
-`jailoc reload` applies network policy, published ports, the SSH agent, the CA bundle, snapshots, environment and secrets to a running VM. Changes to shares, CPU, memory, `enable_docker` or `protect_git` take effect after `jailoc restart`.
+### Applying changes to a running VM
+
+| Command | What it applies |
+|---------|-----------------|
+| `jailoc reload` | Network policy, published ports, the SSH agent, the CA bundle, snapshots, environment and secrets, to the running VM |
+| `jailoc restart` | Changes to shares, CPU, memory, `enable_docker` or `protect_git`, which take effect only after a restart |
 
 ## Why a VM?
 
-A container shares the host kernel, so a kernel exploit or a misconfigured privilege ends on the host. A VM has its own kernel, and the host exposes only a narrow set of devices to it: virtio-fs shares, one virtio-net interface whose only peer is the broker, and a few Unix sockets the broker forwards. That boundary lets jailoc give the agent root and `sudo` inside the guest without giving it anything on the host. It also lets the agent run its own Docker daemon (`enable_docker`) without touching the host's.
+A container shares the host kernel, so a kernel exploit or a misconfigured privilege ends on the host. A VM has its own kernel, and the host exposes only a narrow set of devices to it:
+
+- virtio-fs shares,
+- one virtio-net interface whose only peer is the broker,
+- a few Unix sockets the broker forwards.
+
+That boundary has two consequences:
+
+- jailoc can give the agent root and `sudo` inside the guest without giving it anything on the host.
+- The agent can run its own Docker daemon (`enable_docker`) without touching the host's.
 
 Docker on the host is used only to build images (unless the builder VM does it) and by `jailoc migrate`. Workspaces never run on it.
 

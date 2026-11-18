@@ -3,11 +3,11 @@
 ## Documentation Stack
 
 - **Framework**: [Diátaxis](https://diataxis.fr/) — four documentation modes, each with distinct purpose and voice
-- **Generator**: MkDocs with Material theme (`mkdocs.yml`)
-- **Plugins**: `macros` (template variables like `{{ version }}`)
+- **Generator**: Zensical, reading the MkDocs-compatible configuration in `mkdocs.yml` (Material theme)
+- **Plugins**: `macros` (native Jinja: `{{ version }}` and the `release` mapping from `include_yaml` of `.release-please-manifest.json`)
 - **Extensions**: `admonition`, `pymdownx.details`, `pymdownx.superfences` (with Mermaid custom fence)
 - **Custom CSS**: `stylesheets/extra.css` — hero image, code block, table, and typography overrides
-- **Build**: `zensical` + `mkdocs-macros-plugin` → GitHub Pages on `v*` tags
+- **Build**: `zensical build --strict` → GitHub Pages after a successful GoReleaser job on release
 
 ## Diátaxis Structure
 
@@ -80,8 +80,8 @@ docs/
 - Internal cross-references use relative paths: `[text](../how-to/network-access.md)`
 
 ### Template variables
-- `{{ version }}` expands to `$GITHUB_REF_NAME` or `"latest"` — use it in install commands
-- Provided by the `macros` plugin via `extra.version` in `mkdocs.yml`
+- `{{ version }}` is the release tag (for example `v2.6.0`). `extra.version` in `mkdocs.yml` reads it from the `JAILOC_DOCS_VERSION` environment variable, which the release workflow sets to the Release Please `tag_name` output. Local builds leave it empty; pages fall back with `{% set version = version or ('v' ~ release['.']) %}`, where `release` is `.release-please-manifest.json` loaded by the `macros` plugin (`include_yaml`)
+- Release asset file names use the version without the leading `v` (`{{ version[1:] }}`); tags and download URL paths keep it. The `macros` plugin runs with `on_error_fail` and `on_undefined: strict`, and the release build uses `zensical build --strict`, so a missing variable fails the build instead of rendering a broken URL
 
 ### Adding a new page
 1. Create the `.md` file in the correct Diátaxis directory
