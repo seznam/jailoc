@@ -2,7 +2,7 @@
 
 This guide shows how to define and tune workspaces in jailoc's configuration file. For every field, its type and its validation rules, see the [Configuration reference](../reference/configuration.md).
 
-Separate guides cover [network access](network-access.md) (`allowed_hosts`, `allowed_networks`), [custom images](custom-images.md) (`image`, `dockerfile`, `build_context`), [SSH and Git passthrough](ssh-git-passthrough.md) (`ssh_auth_sock`, `gpg_agent`) and [coding agents](coding-agents.md) (`agent`, `agents`).
+Separate guides cover [network access](network-access.md) (`allowed_hosts`, `allowed_networks`), [custom images](custom-images.md) (`image`, `dockerfile`, `build_context`), [SSH and Git passthrough](ssh-git-passthrough.md) (`ssh_auth_sock`, `gpg_agent`) and [coding agents](coding-agents.md) (`agent`, `agents`) and the [desktop and web routes](desktop-and-web.md) (`enable_desktop`, `web`).
 
 ## Find the config file
 
@@ -244,6 +244,6 @@ jailoc reload myproject
 
 These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets. Running sessions keep their old environment.
 
-Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
+Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `enable_desktop`, the set of guest ports used by `web` (see [desktop and web](desktop-and-web.md#apply-changes)), `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
 
 Concurrent reloads of one workspace run one at a time.

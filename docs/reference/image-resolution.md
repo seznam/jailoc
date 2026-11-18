@@ -34,7 +34,7 @@ The first step that applies wins; later steps are skipped.
 | [4](#step-4-base-dockerfile) | `[base] dockerfile`, no workspace or default `image` | Built: `jailoc-base:preset-<content-hash>` |
 | [5](#step-5-embedded-dockerfile) | none of the above | Built: `jailoc-base:embedded` |
 
-Steps 2, 4 and 5 add the Docker layer, agent layer and workspace overlay below; their tags are in [Image Tag Summary](#image-tag-summary).
+Steps 2, 4 and 5 add the Docker layer, desktop layer, agent layer and workspace overlay below; their tags are in [Image Tag Summary](#image-tag-summary).
 
 ![Image resolution cascade: 1, a workspace image is used as is; 2, defaults.image with a workspace Dockerfile is built into jailoc-<workspace>:<hash> with the Docker layer, agent layer and workspace Dockerfile; 3, defaults.image is used as is; 4, base.dockerfile is built into jailoc-base:preset-<hash> with the Docker and agent layers; 5, otherwise jailoc-base:embedded is built with the Docker and agent layers. Every result is pulled if missing, exported with docker save and converted into EROFS layer images in the VM image cache.](img/image-resolution.svg)
 
@@ -90,10 +90,20 @@ Added when `enable_docker` is on:
 
 Skipped when `enable_docker = false` or `protect_git = true`. Images used directly (steps 1 and 3) get no Docker layer and must contain `dockerd` for Docker in the VM.
 
+### Desktop layer (steps 2, 4 and 5)
+
+Added when `enable_desktop` is on:
+
+- The stock `apt` packages `tigervnc-standalone-server`, `novnc`, `websockify`, `openbox`, `dbus-x11`, `xterm`, `fonts-dejavu-core`, `x11-utils` and `xauth` are installed as root in a layer on top of the Docker layer (or the base image when it is skipped). The layer is tagged `jailoc-desktop:<content-hash>`, and its hash also covers the base image ID.
+- The base image must be Debian or Ubuntu based; the build fails when `apt-get` is missing.
+- No browser is installed.
+
+Skipped when `enable_desktop = false`. Images used directly (steps 1 and 3) get no desktop layer. Before the VM boots, `jailoc up` looks in the image on the host for `Xtigervnc`, `websockify`, `openbox`, `dbus-run-session` and noVNC's `vnc.html` (`/usr/share/novnc/vnc.html`), and fails naming the missing ones. Such an image must contain them, as it must contain `dockerd` for Docker in the VM. See [Default Image](default-image.md#desktop-layer).
+
 ### Agent layer (steps 2, 4 and 5)
 
 - The workspace's [coding agent](configuration.md#coding-agents) is installed with `npm install -g` of its pinned package (Antigravity CLI: its checksum-verified GitHub release binary).
-- The layer sits on top of the Docker layer (or the base image when it is skipped) and is tagged `jailoc-agent-<agent>:<content-hash>`.
+- The layer sits on top of the desktop layer, or the Docker layer, or the base image, whichever is the topmost that applies, and is tagged `jailoc-agent-<agent>:<content-hash>`.
 - The base image needs `npm` on `PATH` (Antigravity CLI: `curl`, `tar` and `sha256sum`).
 
 Skipped with `agents.<agent>.install = false`. Images used directly (steps 1 and 3) get no agent layer and must contain the agent binary.
@@ -107,7 +117,7 @@ After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (
 ## Build details
 
 - `<content-hash>` is derived from the SHA-256 of the Dockerfile content: 8 hex characters for workspace overlays, 16 for `[base] dockerfile` presets.
-- The Docker and agent layer hashes also cover the base image ID, and a layer whose tag already exists is not built again.
+- The Docker, desktop and agent layer hashes also cover the base image ID, and a layer whose tag already exists is not built again.
 - Host proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY` and lowercase variants) are passed as build arguments to every build.
 - Overlay build context: `build_context` when set; otherwise the Dockerfile's parent directory for a local path, or an empty temporary directory for a URL.
 - Images from steps 1 and 3 are pulled for `linux/<host architecture>` when the daemon does not have them.
@@ -202,6 +212,7 @@ The image's `ENTRYPOINT`, `CMD`, `USER`, `WORKDIR` and `EXPOSE` are not used; se
 | `[base] dockerfile` | `jailoc-base:preset-<content-hash>` |
 | Embedded Dockerfile | `jailoc-base:embedded` |
 | Docker layer on step 2, 4 or 5 | `jailoc-docker:<content-hash>` |
+| Desktop layer on step 2, 4 or 5 | `jailoc-desktop:<content-hash>` |
 | Agent layer on step 2, 4 or 5 | `jailoc-agent-<agent>:<content-hash>` |
 | Workspace overlay on step 4 or 5 | `jailoc-<workspace>:<content-hash>` |
 

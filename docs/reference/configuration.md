@@ -178,6 +178,7 @@ Defaults applied to all workspaces. A workspace can override or extend them; see
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
+| `enable_desktop` | bool | `false` | Run a desktop in the workspace VM, served by the `desktop` web route. See [`enable_desktop` and `web`](#enable_desktop-and-web). |
 
 ### Git protection and build fields
 
@@ -566,6 +567,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `paths` | string[] | `[]` | Host directories shared into the VM over virtio-fs at their original absolute paths. See [`paths`](#paths). |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to an overlay Dockerfile built on top of the base image. |
 | `build_context` | string | (none) | Build context of the overlay build. |
+| `web` | table | `{}` | Web routes: route name to guest port, served at `https://<name>.<workspace>.jailoc.local`. Not merged with `[defaults]`. See [`enable_desktop` and `web`](#enable_desktop-and-web). |
 
 - `paths`: the first path is the working directory; with no paths, the working directory is `/home/agent`.
 - `dockerfile`: build failure is fatal. Maximum file size for HTTP sources: 1 MiB.
@@ -585,7 +587,7 @@ Fields with the same meaning as in [`[defaults]`](#defaults); the workspace valu
 
 - `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`
 - `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`
-- `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`
+- `enable_docker`, `enable_desktop`, `protect_git`, `isolated_build`, `ca_bundle`
 
 ### Merged fields
 
@@ -1046,6 +1048,30 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 - `enable_docker = true` together with `protect_git = true` is rejected, because Docker access is root access inside the VM. `protect_git` alone turns Docker off.
 - In the images jailoc builds, Docker is installed only when `enable_docker` is on; see [Docker layer](image-resolution.md#docker-layer-steps-2-4-and-5).
 
+### `enable_desktop` and `web`
+
+`enable_desktop = true` runs a native desktop in the workspace VM; `web` serves guest ports to a browser on the host. Both are reached through [`jailoc gateway`](cli.md#jailoc-gateway); see the [how-to](../how-to/desktop-and-web.md).
+
+| Item | Guest side |
+|------|------------|
+| Desktop | `Xtigervnc` on display `:1` (VNC on loopback port 5901, no X11 over TCP), Openbox with D-Bus, noVNC served by websockify on loopback port 6080 |
+| `desktop` route | Reserved. Exists only with `enable_desktop = true` and always serves guest port 6080 |
+| Web relay | Guest NIC port 6081, forwarding to the loopback port of each route |
+| Session environment | `DISPLAY=:1` while the desktop is on |
+| Desktop environment | A snapshot taken at boot, without the `env` and secrets delivered afterwards; programs an agent session launches inherit that session's environment |
+
+Validation:
+
+- `web` keys are lowercase DNS labels (1 to 63 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`); `desktop` is rejected as a key.
+- `web` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` also lists as a guest port.
+- With the desktop or any `web` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
+- `ports` and `host_ports` can't use guest port 6081, and with `enable_desktop` also 6080 and 5901.
+- A web route is not a published port: nothing listens on the host except `jailoc gateway`.
+
+Changing `enable_desktop` or the set of guest ports the `web` routes use takes effect after `jailoc restart` and a restart of `jailoc gateway`; `jailoc gateway` refuses a running VM that doesn't match. Renaming a route, or adding one on a guest port already in that set, needs only a restart of `jailoc gateway`.
+
+A running VM keeps its desktop ports (6080, 5901), the relay port 6081 and the guest ports of its `web` routes reserved until it restarts, even after the configuration drops `enable_desktop` or `web`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`. In the images jailoc builds, the desktop packages are installed only with `enable_desktop`; see [Desktop layer](image-resolution.md#desktop-layer-steps-2-4-and-5). Software rendering needs CPU: `cpu = 4` and `memory = "6g"` are a reasonable start. The VM has no GPU and no audio device.
+
 ### `protect_git`
 
 Workspace paths are shared read-write, including `.git`. Git on the host runs hooks and commands named in `.git/config` (such as `core.fsmonitor`), so an agent that writes there can run code on the host. `protect_git = true` makes the hooks and configuration listed below read-only inside the VM.
@@ -1245,7 +1271,7 @@ See the [secrets how-to](../how-to/secrets.md).
 - A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`.
 - An inherited default secret can't be unset in a workspace.
 
-**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
+**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`, `enable_docker`, `enable_desktop`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
 
 **`agents.<name>`**:
 
