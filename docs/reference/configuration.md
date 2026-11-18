@@ -1117,7 +1117,7 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 Validation:
 
 - `web` keys are lowercase DNS labels (1 to 63 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`); `desktop` is rejected as a key.
-- `web` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` also lists as a guest port.
+- `web` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `web` port is fine; only the guest side counts.
 - With the desktop or any `web` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
 - `ports` and `host_ports` can't use guest port 6081, and with `enable_desktop` also 6080 and 5901.
 - A web route is not a published port: nothing listens on the host except `jailoc gateway`.

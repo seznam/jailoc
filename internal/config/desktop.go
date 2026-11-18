@@ -67,11 +67,17 @@ func validateDesktopWeb(cfg *Config, name string, ws Workspace) error {
 			return fmt.Errorf("workspace %q: web route %q: port %d is also a host_ports guest port", name, route, port)
 		}
 	}
+	published := MergePorts(cfg.Defaults.Ports, ws.Ports)
+	for _, route := range routes {
+		port := ws.Web[route]
+		if slices.ContainsFunc(published, func(f PortForward) bool { return f.Guest == port }) {
+			return fmt.Errorf("workspace %q: web route %q: port %d is also a ports guest port", name, route, port)
+		}
+	}
 	builtins := []int{WebRelayPort}
 	if desktop {
 		builtins = append(builtins, DesktopWebPort, DesktopVNCPort)
 	}
-	published := MergePorts(cfg.Defaults.Ports, ws.Ports)
 	for _, port := range builtins {
 		if hostGuest[port] {
 			return fmt.Errorf("workspace %q: host_ports guest port %d is reserved by the desktop and web routes", name, port)
