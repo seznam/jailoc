@@ -9,104 +9,57 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/seznam/jailoc)](go.mod)
 [![License](https://img.shields.io/github/license/seznam/jailoc)](LICENSE)
 
-Run coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO, Antigravity CLI) in sandboxed micro-VMs.
+Give your coding agent its own computer, not your whole host. jailoc runs OpenCode, Claude Code, GitHub Copilot CLI, OmO or Antigravity CLI in a libkrun micro-VM per workspace, with only the directories you share and only the network your rules allow.
 
 📖 **[Full documentation](https://seznam.github.io/jailoc/)**
 
 ## What is this?
 
-`jailoc` runs coding agents such as OpenCode, Claude Code, GitHub Copilot CLI, OmO and Antigravity CLI in isolated libkrun micro-VMs so they can work autonomously, isolated from your host system except for the directories you share. Each workspace boots its own VM with a network policy that blocks private networks by default, letting you control exactly which internal services the agent can reach. You configure which directories to share, which hosts to allowlist, and the agent runs inside the VM in detachable sessions you attach to over SSH.
+Each workspace boots its own VM with its own kernel. Your project directories are shared into it, a network broker on the host decides every connection it makes, and the agent runs in detachable sessions you attach to over SSH. Run `jailoc` in a project directory and you're talking to the agent.
 
 ## Why jailoc
 
-- 📁 **File isolation**: each workspace is a separate VM with its own kernel. The agent only sees directories you explicitly share and files you copy in. SSH keys, browser profiles, and other projects are invisible.
-- 🌐 **Network isolation**: all VM traffic goes through a host-side network broker that blocks private and reserved IPv4 and IPv6 ranges by default. You allowlist only what the agent needs. No pivoting to internal infrastructure.
-- 🐳 **Sandboxed Docker**: opt in with `enable_docker = true` and the Docker daemon runs inside the workspace VM. No host socket mounting.
-- ⚡ **Zero config to start**: `jailoc` unpacks its embedded VM runtime, builds the image, boots the VM and attaches you to the agent.
+- 📁 **Only the files you share**: the agent sees the directories you share and read-only snapshots of files you list. Your SSH keys, browser profiles and other projects aren't in the VM.
+- 🌐 **Egress by rule**: destinations no allow rule matches are denied, apart from the coding agent's own endpoints. Private and reserved IPv4 and IPv6 ranges stay closed unless a rule opens them, so the agent can't wander into your internal network.
+- 🐳 **Docker stays inside**: with `enable_docker = true` the Docker daemon runs in the workspace VM. No host socket mounting.
+- ⚡ **One command to start**: `jailoc` unpacks its embedded VM runtime, builds the image, boots the VM and attaches you to the agent.
+
+> [!WARNING]
+> Shared directories are read-write: the agent's edits land on your host at once, including Git hooks that run the next time you use Git there; [`protect_git`](https://seznam.github.io/jailoc/reference/configuration/#protect_git) covers only the repositories it applies to. Anything the agent can read can leave through the destinations your rules allow. [Security boundaries](https://seznam.github.io/jailoc/explanation/security-boundaries/#outside-the-boundaries) lists the exact limits, including the VMM confinement gaps on Linux and macOS.
 
 ## Installation
 
-**Requirements:** macOS on Apple Silicon, or Linux amd64 (arm64 experimental) with KVM (`/dev/kvm` access) and Landlock (Linux 5.19 or later). Docker Engine must be running on the host to build workspace images. For an existing installation, see [upgrade guide](https://seznam.github.io/jailoc/how-to/migrate-from-v1/).
+**Requirements:** macOS on Apple Silicon, or Linux amd64 (arm64 experimental) with read-write access to `/dev/kvm` and Landlock (Linux 5.19 or later). Docker Engine is optional: by default jailoc builds images with it when it's running and in a builder VM otherwise. Upgrading an existing installation? See the [upgrade guide](https://seznam.github.io/jailoc/how-to/migrate-from-v1/).
 
 ### Homebrew
 
-On macOS and Linux:
+On macOS with Apple Silicon (the cask works on Linux too). The binary isn't notarized by Apple, so the cask removes its quarantine attribute to keep Gatekeeper from blocking it:
 
 ```bash
 brew install --cask seznam/tap/jailoc
 ```
 
-The binary is not notarized by Apple; the cask removes the quarantine attribute so Gatekeeper does not block it.
+Then run `jailoc` in your project directory; [Getting Started](https://seznam.github.io/jailoc/tutorials/getting-started/) walks through the first run.
 
-### Build from source
+Other ways to install:
 
-`go install …@latest` produces a binary without the embedded VM init (`jailoc-guest`), so build from a checkout:
-
-```bash
-git clone https://github.com/seznam/jailoc.git && cd jailoc
-go generate ./internal/guestbin
-go install ./cmd/jailoc
-```
-
-Make sure `$GOPATH/bin` (default `$HOME/go/bin`) is on your `PATH`. Source builds don't embed the VM runtime; set `[vm] runner` and `lib_dir` or build the runtime first, see [installation](https://seznam.github.io/jailoc/how-to/installation/#build-from-source).
-
-### Nix
-
-Run without installing:
-
-```bash
-nix run github:seznam/jailoc
-```
-
-Or add to your flake inputs:
-
-```nix
-{
-  inputs.jailoc.url = "github:seznam/jailoc";
-}
-```
-
-and include the package in your `environment.systemPackages` or `home.packages`:
-
-```nix
-inputs.jailoc.packages."${pkgs.stdenv.hostPlatform.system}".jailoc
-```
-
-On Linux (x86_64, aarch64), the Nix package builds the VM runtime (go-microvm runner, patched libkrun, libkrunfw) from source and points jailoc at it, so no `[vm]` configuration is needed. Without a binary cache, the first build compiles these components, including a Linux kernel for libkrunfw, which takes a while. On aarch64-darwin the Nix package has no runtime: set `[vm] runner` and `lib_dir` as described in [installation](https://seznam.github.io/jailoc/how-to/installation/#install-with-nix), or use the Homebrew cask instead.
-
-### Pre-built binaries
-
-Download the archive for your platform from [GitHub Releases](https://github.com/seznam/jailoc/releases) (macOS arm64, Linux amd64/arm64), extract, and place the `jailoc` binary on your `PATH`.
+- <a id="pre-built-binaries"></a>**Pre-built binaries** for macOS arm64 and Linux amd64/arm64: [download an archive](https://seznam.github.io/jailoc/how-to/installation/#install-a-pre-built-binary).
+- <a id="nix"></a>**Nix**: `nix run github:seznam/jailoc`, or add the flake; on Linux it builds the VM runtime from source, on aarch64-darwin you provide one. See [Install with Nix](https://seznam.github.io/jailoc/how-to/installation/#install-with-nix).
+- <a id="build-from-source"></a>**From source**: `go install …@latest` can't start workspaces; build from a checkout and provide the VM runtime as in [Build from source](https://seznam.github.io/jailoc/how-to/installation/#build-from-source).
 
 ## 🛠️ Development
 
 ```bash
-# Build from source (embeds the jailoc-guest VM init)
-go generate ./internal/guestbin
+go generate ./internal/guestbin   # embed the jailoc-guest VM init
 go build ./cmd/jailoc
-
-# Run unit tests
 go test ./...
-
-# Run VM integration tests (requires KVM or macOS and a go-microvm runtime)
-JAILOC_VM_RUNNER=/path/to/go-microvm-runner JAILOC_VM_LIBDIR=/path/to/libs \
-  go test -tags vmintegration -count=1 -timeout 50m ./internal/vmintegration/
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community guidelines.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers VM integration tests, linting and commit style; [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) sets the community guidelines.
 
 ## 📦 What's in the default image
 
-The default base image (Ubuntu 24.04) ships with:
-
-| Category | Tools |
-|----------|-------|
-| Runtimes | Node.js, Python 3 |
-| Package managers | npm |
-| Language servers | typescript-language-server, pyright, yaml-language-server, bash-language-server |
-| CLI tools | rg (ripgrep), fdfind, jq, git, gpg, openssh-client, curl, sudo |
-
-jailoc installs the workspace's coding agent and, with `enable_docker`, Docker on top of it. Exact versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile). See the [default image reference](https://seznam.github.io/jailoc/reference/default-image/) for the full list of installed tools.
+Ubuntu 24.04 with Node.js, Python 3, npm, four language servers (TypeScript, Pyright, YAML, Bash) and everyday CLI tools such as `rg`, `fdfind`, `jq`, `git`, `gpg`, `ssh` and `curl`. jailoc adds the workspace's coding agent and, with `enable_docker`, Docker on top. Versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile); the [default image reference](https://seznam.github.io/jailoc/reference/default-image/) lists every tool.
 
 ## Security
 
