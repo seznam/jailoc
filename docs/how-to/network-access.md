@@ -1,10 +1,12 @@
 # How to configure network access
 
-All guest traffic leaves through jailoc's network broker on the host. By default, destinations not matched by an allow rule are denied, except for the configured coding agent's API and authentication endpoints (`rule=agent`). New configurations include a `dev-deps` rule in `[defaults.network.rules]` listing common package registries, GitHub, container registries and OS mirrors directly in `config.toml`. For the model behind it, see [Network isolation](../explanation/network-isolation.md).
+All guest traffic leaves through jailoc's network broker on the host. Add rules to `~/.config/jailoc/config.toml`, apply them with `jailoc reload <workspace>` and check the result with `jailoc traffic -f`. For the model behind the rules, see [Network isolation](../explanation/network-isolation.md).
+
+Defaults: a destination that no allow rule matches is denied (`default-deny`), except the configured coding agent's API and authentication endpoints (`rule=agent`). New configurations include a `dev-deps` rule in `[defaults.network.rules]` that lists common package registries, GitHub, container registries and OS mirrors. A `deny` rule always wins over an `allow` rule, whatever the order; rules from `[defaults.network.rules]` and the workspace form one set.
 
 ## Allow or deny hostnames
 
-Add `[[workspaces.<name>.network.rules]]` entries with `allow` or `deny`:
+Add `[[workspaces.<name>.network.rules]]` entries with `allow` or `deny`, then run `jailoc reload api`:
 
 ```toml
 [workspaces.api]
@@ -19,15 +21,17 @@ name = "no-paste"
 deny = ["pastebin.com", "gist.github.com", "*.ngrok.io"]
 ```
 
-Rules from `[defaults.network.rules]` and the workspace are combined into one set. Deny rules always win over allow rules regardless of order.
+`jailoc traffic -f` names the deciding rule (`rule=gitlab`, `rule=no-paste`). The broker enforces hostname rules at DNS resolution, at connection time and on the TLS SNI or HTTP `Host` header; see [Enforcement by name](../explanation/network-isolation.md#enforcement-by-name). A denial looks like this to the agent:
 
-The broker enforces hostname rules at DNS resolution, at connection time (using its TTL-bounded IP-to-name cache), and by inspecting the TLS ClientHello SNI or HTTP `Host` header before dialing upstream.
-
-A denied name gets NXDOMAIN at DNS. When the agent reaches an allowed address with a denied name in the SNI or `Host` header, as on a CDN address shared with an allowed site, the client reports `tlsv1 alert access denied` for HTTPS or a `403 Forbidden` that names the rule for plain HTTP.
+| Where | Result |
+|-------|--------|
+| DNS lookup of a denied name | `NXDOMAIN` |
+| Allowed address, denied name in the SNI or `Host` header (for example a CDN address shared with an allowed site), HTTPS | `tlsv1 alert access denied` |
+| Same, plain HTTP | `403 Forbidden` that names the rule |
 
 ## Reach internal hosts by name
 
-A hostname rule reaches a private address (for example `10.20.5.10`) only when the name is in an internal zone. List the DNS zones you control in `internal_zones`, then allow the hosts:
+A hostname rule reaches a private address (for example `10.20.5.10`) only when the name is in an internal zone. List the DNS zones you control in `internal_zones`, allow the hosts and run `jailoc reload api`:
 
 ```toml
 [defaults.network]
@@ -38,7 +42,7 @@ name = "gitlab"
 allow = ["gitlab.internal.example.com"]
 ```
 
-A zone covers its subdomains. For any other name, the broker drops answers that point to a private address, so a public name can't be rebound to your network. `jailoc traffic` shows them as `dropped <address>: private address outside internal_zones`; add the zone if you trust its DNS. Public suffixes such as `com` or `github.io` and wildcard DNS services such as `nip.io` are rejected. See [Internal zones](../reference/configuration.md#internal-zones).
+A zone covers its subdomains. For any other name, the broker drops answers that point to a private address, so a public name can't be rebound to your network. An answer is also dropped when a `CNAME` in its chain is outside the internal zones. `jailoc traffic` shows dropped answers as `dropped <address>: private address outside internal_zones`; add the zone if you trust its DNS. Public suffixes such as `com` or `github.io` and wildcard DNS services such as `nip.io` are rejected as zones. See [Internal zones](../reference/configuration.md#internal-zones).
 
 ## Allow a private IP or CIDR range
 
@@ -57,7 +61,7 @@ allow = ["10.20.0.0/16", "fd12:3456:789a::/48"]
 ports = [9090, "8000-8100"]
 ```
 
-`proto` defaults to `"tcp"` (`"tcp"`, `"udp"`, or `"any"`). `ports` accepts integers or `"a-b"` ranges and defaults to all ports.
+`proto` is `"tcp"` (default), `"udp"` or `"any"`. `ports` takes integers or `"a-b"` ranges and defaults to all ports.
 
 ## Allow the public internet
 
@@ -69,7 +73,7 @@ name = "internet"
 allow = ["*"]
 ```
 
-`*` matches any public address on the rule's protocol (excluding DoT port 853 and QUIC UDP port 443 unless listed explicitly in `ports`). It never opens private or reserved ranges.
+`*` matches any public address on the rule's protocol. It never opens private or reserved ranges, and it excludes DoT port 853 and QUIC UDP port 443 unless you list them explicitly in `ports`.
 
 ## Restrict HTTP methods and paths
 
@@ -83,9 +87,14 @@ http.methods = ["GET", "HEAD"]
 http.paths = ["/repos/seznam/*"]
 ```
 
-Other methods or paths on `api.github.com` get `403` with `blocked by network policy (reason=http-no-match)`. A plain `allow` rule for the same host and port doesn't override it: once an `http` allow rule matches a host, only `http` allow rules decide its requests. Omit `methods` or `paths` to match any. In a path, `*` stands for exactly one segment and `**` for any number of trailing segments (`/repos/seznam/**`).
+Run `jailoc reload api` to apply the change. Other methods or paths on `api.github.com` get `403` with `blocked by network policy (reason=http-no-match)`. A plain `allow` rule for the same host and port doesn't override it: once an `http` allow rule matches a host, only `http` allow rules decide its requests. Omit `methods` or `paths` to match any; `http` works with `proto = "tcp"` only. In a path, `*` stands for exactly one segment and `**` for any number of trailing segments. See [HTTP rules](../reference/configuration.md#http-rules) for the full pattern grammar and every outcome.
 
-To block methods instead, use a `deny` rule. It acts per request and leaves other requests to the allow rules:
+!!! warning
+    Rules with `http` make the broker decrypt TLS for the matching hosts, and the guest trusts a workspace CA for that. See [TLS inspection](../explanation/network-isolation.md#tls-inspection).
+
+### Block methods instead
+
+A `deny` rule with `http` acts per request and leaves other requests to the allow rules:
 
 ```toml
 [[workspaces.api.network.rules]]
@@ -96,7 +105,9 @@ http.methods = ["DELETE", "POST", "PUT", "PATCH"]
 
 A denied request gets `403` with `blocked by network policy (rule=no-writes)`. DNS and the connection itself stay open.
 
-To loosen one host under a broad `http` rule, add a more permissive `http` allow rule for it. Any matching `http` allow rule lets a request through:
+### Loosen one host under a broad rule
+
+Add a more permissive `http` allow rule for the host. Any matching `http` allow rule lets a request through:
 
 ```toml
 [[workspaces.api.network.rules]]
@@ -113,22 +124,9 @@ http.methods = ["*"]
 !!! warning
     `http` allow rules are a union across names and addresses. A `GET`-only `http` allow rule on an IP or CIDR is not a ceiling when the request presents a name that another `http` allow rule (for example `POST`) matches: the request can use the named rule's methods and paths even if that name resolves elsewhere. Use an `http` `deny` rule as a hard cap. See [Evaluation](../reference/configuration.md#evaluation).
 
-To list the requests, run `jailoc traffic -f`. Inspected requests show method, host, path, status and the deciding rule; denied ones show the reason. A request that never reaches the upstream, for example because its certificate failed verification, shows status `502` and the error.
-
-`http` works with `proto = "tcp"` only. Run `jailoc reload api` to apply a change. See [HTTP rules](../reference/configuration.md#http-rules) for the pattern grammar and every outcome.
-
-!!! warning
-    Rules with `http` make the broker decrypt TLS for the matching hosts, and the guest trusts a workspace CA for that. See [TLS inspection](../explanation/network-isolation.md#tls-inspection).
-
 ### Fix certificate errors on inspected hosts
 
-A client that rejects the broker's certificate for an inspected host fails with a certificate error, and `jailoc traffic` shows an `inspect-error` line with a hint. The client doesn't trust the workspace CA. The usual causes are:
-
-- the client pins the server certificate or key;
-- the client reads its own CA store instead of the system one (certifi, a Java keystore, Firefox NSS);
-- the server requires a client certificate (mTLS).
-
-Trust the CA in that client's store, or pass the host through uninspected by removing the `http` table from every rule that matches it. The CA certificate is in the guest's `/etc/ssl/certs/ca-certificates.crt`. See [Troubleshooting](troubleshooting.md#certificate-error-on-an-inspected-host).
+A client that pins the certificate, reads its own CA store (certifi, a Java keystore, Firefox NSS) or needs mTLS rejects the broker's certificate, and `jailoc traffic` shows an `inspect-error` line with a hint. Trust the CA from the guest's `/etc/ssl/certs/ca-certificates.crt` in that client, or remove the `http` table from every rule that matches the host to pass it through uninspected. See [Troubleshooting](troubleshooting.md#certificate-error-on-an-inspected-host).
 
 ## Configure upstream DNS and default rules
 
@@ -145,7 +143,7 @@ allow = ["github.com", "api.github.com", "*.githubusercontent.com", "registry.np
 
 ## Query another DNS server directly
 
-The guest resolves through the gateway (`192.168.127.1`), and port 53 to any other server is denied (`dns-filtered`). To let tools such as `dig @10.33.4.25` query a specific resolver, allow it with an explicit port 53:
+The guest resolves through the gateway (`192.168.127.1`), and port 53 to any other server is denied (`dns-filtered`). To let tools such as `dig @10.33.4.25` query a specific resolver, allow it with an explicit port 53 and run `jailoc reload api`:
 
 ```toml
 [[workspaces.api.network.rules]]
@@ -163,7 +161,7 @@ ports = [53]
 jailoc traffic -f
 ```
 
-Each line shows a connection with the DNS name, verdict, and the rule that decided it (`rule=no-paste`, `rule=dev-deps`, `rule=agent`, or `default-deny`). Requests to hosts covered by an [`http` rule](#restrict-http-methods-and-paths) get a line each. See [`jailoc traffic`](../reference/cli.md#jailoc-traffic).
+Each line shows a connection with the DNS name, the verdict and the rule that decided it (`rule=no-paste`, `rule=dev-deps`, `rule=agent`, or `default-deny`). Requests to hosts covered by an [`http` rule](#restrict-http-methods-and-paths) get a line each with method, host, path, status and the deciding rule; denied ones show the reason. A request that never reaches the upstream, for example because its certificate failed verification, shows status `502` and the error. See [`jailoc traffic`](../reference/cli.md#jailoc-traffic).
 
 ### Hide noisy rules
 
@@ -181,18 +179,18 @@ deny = ["telemetry.example.com"]
 log = false
 ```
 
-`jailoc traffic` no longer prints what these rules decide. The rules still apply, and `jailoc traffic --all` shows their events. See [Quiet rules](../reference/configuration.md#quiet-rules).
+`jailoc traffic` hides what these rules decide. The rules still apply, and `jailoc traffic --all` shows their events. See [Quiet rules](../reference/configuration.md#quiet-rules).
 
 ## Reach IPv6 services
 
-IPv6 is off by default: the guest has IPv4 only and the broker denies every IPv6 flow. Turn it on per workspace or in `[defaults.network]`:
+IPv6 is off by default: the guest has IPv4 only and the broker denies every IPv6 flow. Turn it on per workspace or in `[defaults.network]`, then run `jailoc restart api`:
 
 ```toml
 [workspaces.api.network]
 ipv6 = true
 ```
 
-Run `jailoc restart api` to apply it. The guest then has IPv6 (`fd00:127::2/64`). Global IPv6 addresses follow the same allow and deny rules as public IPv4 ones. Unique local addresses (`fc00::/7`) count as private and require an explicit IPv6 CIDR rule.
+The guest then has IPv6 (`fd00:127::2/64`). Global IPv6 addresses follow the same allow and deny rules as public IPv4 ones. Unique local addresses (`fc00::/7`) count as private and require an explicit IPv6 CIDR rule.
 
 !!! warning
     Some ranges stay blocked whatever you allow: loopback, link-local, multicast, documentation and other reserved IPv6 ranges, Teredo, cloud metadata endpoints, host addresses and the broker gateway. To reach a service on the host, use [`host_ports`](workspace-configuration.md#reach-host-services). IPv4 embedded in IPv6 (IPv4-mapped, NAT64 `64:ff9b::/96`, 6to4) follows the IPv4 rules for the embedded address.
@@ -207,7 +205,7 @@ New connections and DNS lookups follow the updated rules immediately. Running se
 
 ## Allow an HTTP proxy on a private network
 
-If your traffic goes through a proxy on a private address, allow the proxy's IP/CIDR and pass its URL to sessions:
+If your traffic goes through a proxy on a private address, allow the proxy's IP or CIDR and pass its URL to sessions:
 
 ```toml
 [workspaces.api]
@@ -232,9 +230,7 @@ On macOS, reaching hosts on your local network needs the macOS Local Network per
 
 ## Forward a CA bundle
 
-If your host trusts a private CA (a corporate TLS proxy or an internal registry), the guest needs the same trust. By default, `ca_bundle` is unset, which means automatic discovery: jailoc forwards the bundle named by `SSL_CERT_FILE`, falling back to `NIX_SSL_CERT_FILE`. Nothing is forwarded when neither is set.
-
-Point at a specific bundle, or turn forwarding off:
+If your host trusts a private CA (a corporate TLS proxy or an internal registry), the guest needs the same trust. By default, `ca_bundle` is unset, which means automatic discovery: jailoc forwards the bundle named by `SSL_CERT_FILE`, falling back to `NIX_SSL_CERT_FILE`. Nothing is forwarded when neither is set. Point at a specific bundle, or turn forwarding off, then run `jailoc reload`:
 
 ```toml
 [defaults]
@@ -245,7 +241,7 @@ paths = ["/home/you/projects/public-only"]
 ca_bundle = false
 ```
 
-`ca_bundle = true` requests automatic discovery explicitly. The bundle is added to the guest's system trust store, and sessions get `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and similar variables pointing at it, so Node.js, Python, curl, git and the coding agents trust it too; see [`ca_bundle`](../reference/configuration.md#ca_bundle) for the full list. `jailoc reload` updates the store live, but processes that already loaded it, including the guest Docker daemon, keep the old one until they restart, and running sessions keep their old environment.
+`ca_bundle = true` requests automatic discovery explicitly. The bundle is added to the guest's system trust store, and sessions get `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and similar variables pointing at it, so Node.js, Python, curl, git and the coding agents trust it too; see [`ca_bundle`](../reference/configuration.md#ca_bundle) for the full list. A reload updates the store live, but processes that already loaded it, including the guest Docker daemon, keep the old one until they restart, and running sessions keep their old environment.
 
 !!! note
     If the selected variable points at an invalid PEM bundle, `jailoc up` fails instead of falling through to the next variable. Set `ca_bundle = false` or a valid path to fix it.
