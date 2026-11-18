@@ -1,10 +1,11 @@
 # Default Image Contents
 
-The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below. This image is used when no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile). jailoc converts its layers into read-only EROFS images in the VM image cache and boots them as the root file system of the workspace VM.
+The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below.
 
-Core tool versions (Node.js, the npm language servers) are pinned as `ARG` declarations at the top of the Dockerfile.
-
-The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of the VM and starts sessions over SSH.
+- **Used when** no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile).
+- **Runs as** the root file system of the workspace VM: jailoc converts its layers into read-only EROFS images in the VM image cache and boots them.
+- **Versions**: core tool versions (Node.js, the npm language servers) are pinned as `ARG` declarations at the top of the Dockerfile.
+- **No process settings**: the image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of the VM and starts sessions over SSH.
 
 ---
 
@@ -41,7 +42,12 @@ The image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of th
 
 ## Docker layer
 
-The base image contains no Docker. For workspaces with `enable_docker = true` (off by default), jailoc adds a separate layer with Docker CE static binaries, checksum-verified, and `nftables`, the firewall backend of `dockerd`; see [Image Resolution](image-resolution.md#docker-layer-steps-2-4-and-5). jailoc-guest starts `dockerd` from these binaries inside the workspace VM. Versions are pinned in the embedded [`docker.Dockerfile`](https://github.com/seznam/jailoc/blob/main/internal/embed/assets/docker.Dockerfile).
+The base image contains no Docker. For workspaces with `enable_docker = true` (off by default), jailoc adds a separate layer; see [Image Resolution](image-resolution.md#docker-layer-steps-2-4-and-5).
+
+- Docker CE static binaries, checksum-verified.
+- `nftables`, the firewall backend of `dockerd`.
+- jailoc-guest starts `dockerd` from these binaries inside the workspace VM.
+- Versions are pinned in the embedded [`docker.Dockerfile`](https://github.com/seznam/jailoc/blob/main/internal/embed/assets/docker.Dockerfile).
 
 | Tool | Source | Binary |
 |------|--------|--------|

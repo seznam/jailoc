@@ -15,7 +15,10 @@ During `jailoc up` and `jailoc restart`, jailoc resolves the workspace image wit
 
 `jailoc down --purge` deletes the workspace's builder VM and its build cache.
 
-jailoc builds with BuildKit when the daemon reports it as its default builder, and with the classic builder otherwise. With BuildKit, the embedded Dockerfile, the agent layer and the Docker layer keep apt and npm downloads in BuildKit cache mounts, which survive image pruning; the classic builder gets the same Dockerfiles without the cache mounts. Preset and overlay Dockerfiles are built as written.
+- jailoc builds with BuildKit when the daemon reports it as its default builder, and with the classic builder otherwise.
+- With BuildKit, the embedded Dockerfile, the agent layer and the Docker layer keep apt and npm downloads in BuildKit cache mounts, which survive image pruning.
+- The classic builder gets the same Dockerfiles without the cache mounts.
+- Preset and overlay Dockerfiles are built as written.
 
 ---
 
@@ -23,26 +26,38 @@ jailoc builds with BuildKit when the daemon reports it as its default builder, a
 
 The first step that applies wins; later steps are skipped.
 
+| Step | Trigger | Result |
+|------|---------|--------|
+| [1](#step-1-workspace-image) | `image` in `[workspaces.<name>]` | Used as is |
+| [2](#step-2-defaults-image-with-workspace-overlay) | `[defaults] image` and workspace `dockerfile` | Built: `jailoc-<workspace>:<content-hash>` |
+| [3](#step-3-defaults-image) | `[defaults] image`, no workspace `dockerfile` | Used as is |
+| [4](#step-4-base-dockerfile) | `[base] dockerfile`, no workspace or default `image` | Built: `jailoc-base:preset-<content-hash>` |
+| [5](#step-5-embedded-dockerfile) | none of the above | Built: `jailoc-base:embedded` |
+
+Steps 2, 4 and 5 add the Docker layer, agent layer and workspace overlay below; their tags are in [Image Tag Summary](#image-tag-summary).
+
 ![Image resolution cascade: 1, a workspace image is used as is; 2, defaults.image with a workspace Dockerfile is built into jailoc-<workspace>:<hash> with the Docker layer, agent layer and workspace Dockerfile; 3, defaults.image is used as is; 4, base.dockerfile is built into jailoc-base:preset-<hash> with the Docker and agent layers; 5, otherwise jailoc-base:embedded is built with the Docker and agent layers. Every result is pulled if missing, exported with docker save and converted into EROFS layer images in the VM image cache.](img/image-resolution.svg)
 
 ### Step 1: Workspace image
 
 **Trigger:** `image` is set in `[workspaces.<name>]`.
 
-No build runs; `dockerfile` and `build_context` are not consulted (combining them with `image` is a validation error).
+- No build runs.
+- `dockerfile` and `build_context` are not consulted; combining them with `image` is a validation error.
 
 ### Step 2: Defaults image with workspace overlay
 
 **Trigger:** `[defaults] image` and workspace `dockerfile` are both set.
 
-The [Docker layer](#docker-layer-steps-2-4-and-5) and the [agent layer](#agent-layer-steps-2-4-and-5) are built on top of `defaults.image`, then the workspace Dockerfile on top of that, passed as the `BASE` build argument. The Dockerfile must start with:
+- The [Docker layer](#docker-layer-steps-2-4-and-5) and the [agent layer](#agent-layer-steps-2-4-and-5) are built on top of `defaults.image`, then the workspace Dockerfile on top of that, passed as the `BASE` build argument.
+- Build failure is fatal.
+
+The workspace Dockerfile must start with:
 
 ```dockerfile
 ARG BASE
 FROM ${BASE}
 ```
-
-The result is tagged `jailoc-<workspace>:<content-hash>`. Build failure is fatal.
 
 ### Step 3: Defaults image
 
@@ -54,44 +69,124 @@ No build runs.
 
 **Trigger:** `[base] dockerfile` is set and no workspace or default `image` is set.
 
-The Dockerfile is loaded from a local path or HTTP(S) URL (maximum 1 MiB) and built as `jailoc-base:preset-<content-hash>`. Load or build failure is fatal; there is no fallback to the embedded image.
+- The Dockerfile is loaded from a local path or HTTP(S) URL (maximum 1 MiB) and built.
+- Load or build failure is fatal; there is no fallback to the embedded image.
 
 ### Step 5: Embedded Dockerfile
 
 **Trigger:** none of the above apply.
 
-The Dockerfile embedded in the jailoc binary is built as `jailoc-base:embedded`, unless that image was already built from the same Dockerfile and build arguments. Updates of its `ubuntu:24.04` base reach the image only after `docker rmi jailoc-base:embedded`. See [Default Image](default-image.md).
+- The Dockerfile embedded in the jailoc binary is built as `jailoc-base:embedded`, unless that image was already built from the same Dockerfile and build arguments.
+- Updates of its `ubuntu:24.04` base reach the image only after `docker rmi jailoc-base:embedded`.
+- See [Default Image](default-image.md).
 
 ### Docker layer (steps 2, 4 and 5)
 
-With `enable_docker` on, Docker CE, the buildx and compose plugins and `nftables` are added in a layer on top of the base image, tagged `jailoc-docker:<content-hash>`. The binaries are pinned and checksum-verified in the embedded `docker.Dockerfile` and copied to `/usr/local/bin` and `/usr/local/lib/docker/cli-plugins`. `nftables` is installed with `apt-get` unless `nft` is on `PATH`. With `enable_docker = false` or `protect_git = true`, the layer is skipped. Images used directly (steps 1 and 3) get no Docker layer and must contain `dockerd` for Docker in the VM.
+Added when `enable_docker` is on:
+
+- Docker CE, the buildx and compose plugins and `nftables` are added in a layer on top of the base image, tagged `jailoc-docker:<content-hash>`.
+- The binaries are pinned and checksum-verified in the embedded `docker.Dockerfile` and copied to `/usr/local/bin` and `/usr/local/lib/docker/cli-plugins`.
+- `nftables` is installed with `apt-get` unless `nft` is on `PATH`.
+
+Skipped when `enable_docker = false` or `protect_git = true`. Images used directly (steps 1 and 3) get no Docker layer and must contain `dockerd` for Docker in the VM.
 
 ### Agent layer (steps 2, 4 and 5)
 
-The workspace's [coding agent](configuration.md#coding-agents) is installed with `npm install -g` of its pinned package (Antigravity CLI: its checksum-verified GitHub release binary) in a layer on top of the Docker layer (or the base image when it is skipped), tagged `jailoc-agent-<agent>:<content-hash>`. The base image needs `npm` on `PATH` (Antigravity CLI: `curl`, `tar` and `sha256sum`). The layer is skipped with `agents.<agent>.install = false`. Images used directly (steps 1 and 3) get no agent layer and must contain the agent binary.
+- The workspace's [coding agent](configuration.md#coding-agents) is installed with `npm install -g` of its pinned package (Antigravity CLI: its checksum-verified GitHub release binary).
+- The layer sits on top of the Docker layer (or the base image when it is skipped) and is tagged `jailoc-agent-<agent>:<content-hash>`.
+- The base image needs `npm` on `PATH` (Antigravity CLI: `curl`, `tar` and `sha256sum`).
+
+Skipped with `agents.<agent>.install = false`. Images used directly (steps 1 and 3) get no agent layer and must contain the agent binary.
 
 ### Workspace overlay (steps 4 and 5)
 
-After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (or the base image when it is skipped) with `BASE` set to it, and tagged `jailoc-<workspace>:<content-hash>`.
+After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (or the base image when it is skipped) with `BASE` set to it.
 
 ---
 
 ## Build details
 
-- `<content-hash>` is derived from the SHA-256 of the Dockerfile content: 8 hex characters for workspace overlays, 16 for `[base] dockerfile` presets. The Docker and agent layer hashes also cover the base image ID, and a layer whose tag already exists is not built again.
+- `<content-hash>` is derived from the SHA-256 of the Dockerfile content: 8 hex characters for workspace overlays, 16 for `[base] dockerfile` presets.
+- The Docker and agent layer hashes also cover the base image ID, and a layer whose tag already exists is not built again.
 - Host proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY` and lowercase variants) are passed as build arguments to every build.
 - Overlay build context: `build_context` when set; otherwise the Dockerfile's parent directory for a local path, or an empty temporary directory for a URL.
 - Images from steps 1 and 3 are pulled for `linux/<host architecture>` when the daemon does not have them.
 
 ## Converting for the VM
 
-jailoc exports the final image with `docker save` and converts each layer it does not have yet into one read-only EROFS image file, `~/.cache/jailoc-vm/images/erofs/layers/<DiffID>.erofs`. A workspace image is the directory `~/.cache/jailoc-vm/images/erofs/images/<image ID>/` (reference `jailoc.local/erofs:<image ID>`). It holds hard links `000.erofs`, `001.erofs`, … to the image's layers, bottom layer first, and an `image.json` with the layer order and the image's `ENV`. No host directory tree is extracted. An image ID already in the cache is not converted again, layers shared by images are stored once, and a rebuild that changes only the top layer converts only that layer.
+jailoc exports the final image with `docker save` and converts each layer it does not have yet into one read-only EROFS image file.
 
-The layer images keep the image's own numeric owners, modes (setuid, setgid, sticky), extended attributes (including file capabilities), hard links and device nodes, on Linux and macOS hosts alike. File names stay case-sensitive on case-insensitive macOS volumes. OCI whiteouts become overlayfs whiteouts (0/0 character devices) and opaque directories (`trusted.overlay.opaque`), so deletions in upper layers hide lower content as in Docker. overlayfs ignores an opaque mark on a layer's root, so when a layer's root is opaque, the image directory starts with that layer and leaves out the layers below it. A layer can add entries to a directory without an entry for the directory itself. The layer image then has a placeholder directory, owned by root with mode 0755, that would cover the lower layer's directory. jailoc marks such placeholders, and for an image that has them it adds one more file to the image directory: a layer of only directories, mounted above the others, that gives each such directory its owner, mode, time stamp and extended attributes from the layers below. AUFS hard link targets (`.wh..wh.plnk`) and other AUFS metadata entries are left out, as in Docker; hard links to the targets keep their data. PAX global headers are skipped, and old GNU sparse files are stored with their holes filled in. An import converts at most 30 GiB of file data, counting sparse files at their full size, and at most one million entries per layer; larger images fail to import.
+### Cache layout
 
-After every import, jailoc removes workspace image directories of its own cache (under the current home directory) that no workspace uses any more and that are older than one hour, and layer files that no remaining image links to. The builder VM image stays in go-microvm's directory image cache; only workspace VMs use EROFS images. `jailoc up` prints `Converting image <name> for the workspace VM...`, `Converting image layers (n/m)…` and `Linking image layers…` while it works. Before it converts an image, it warns when the workspace Dockerfile adds more than 20 layers or more than 5 GiB, as Docker reports the sizes, since the conversion takes a while and each layer slows down file lookups in the VM; fewer `RUN` steps or a multi-stage build help. The base image and the Docker and agent layers jailoc adds do not count; an image used as is (`image`, or `defaults.image` without a workspace `dockerfile`) counts in full. `docker save` must write an OCI image layout, which requires Docker Engine 25 or later; with an older host daemon, `"auto"` builds in the shared builder VM and `"docker"` fails.
+| Item | Location or content |
+|------|---------------------|
+| Layer image | `~/.cache/jailoc-vm/images/erofs/layers/<DiffID>.erofs`, one file per layer |
+| Workspace image | Directory `~/.cache/jailoc-vm/images/erofs/images/<image ID>/` (reference `jailoc.local/erofs:<image ID>`) |
+| Image directory content | Hard links `000.erofs`, `001.erofs`, … to the image's layers, bottom layer first, and an `image.json` with the layer order and the image's `ENV` |
 
-jailoc labels the images it builds with `com.github.seznam.jailoc`. It does not automatically prune unused images from the host or builder VM Docker daemon, because a daemon can be shared with other users and other jailoc home directories. Unused images stay until their owner removes them; list them with `docker images --filter label=com.github.seznam.jailoc` and remove chosen ones with `docker image rm <image>`.
+- No host directory tree is extracted.
+- An image ID already in the cache is not converted again.
+- Layers shared by images are stored once.
+- A rebuild that changes only the top layer converts only that layer.
+
+### Preserved metadata
+
+The layer images keep these on Linux and macOS hosts alike:
+
+- The image's own numeric owners.
+- Modes (setuid, setgid, sticky).
+- Extended attributes (including file capabilities).
+- Hard links and device nodes.
+
+File names stay case-sensitive on case-insensitive macOS volumes.
+
+### Whiteouts, opaque directories and placeholders
+
+- OCI whiteouts become overlayfs whiteouts (0/0 character devices) and opaque directories (`trusted.overlay.opaque`), so deletions in upper layers hide lower content as in Docker.
+- overlayfs ignores an opaque mark on a layer's root. When a layer's root is opaque, the image directory starts with that layer and leaves out the layers below it.
+- A layer can add entries to a directory without an entry for the directory itself. The layer image then has a placeholder directory, owned by root with mode 0755, that would cover the lower layer's directory. jailoc marks such placeholders, and for an image that has them it adds one more file to the image directory: a layer of only directories, mounted above the others, that gives each such directory its owner, mode, time stamp and extended attributes from the layers below.
+
+### Entries left out or rewritten
+
+- AUFS hard link targets (`.wh..wh.plnk`) and other AUFS metadata entries are left out, as in Docker; hard links to the targets keep their data.
+- PAX global headers are skipped.
+- Old GNU sparse files are stored with their holes filled in.
+
+### Import limits
+
+An import converts at most:
+
+- 30 GiB of file data, counting sparse files at their full size.
+- One million entries per layer.
+
+Larger images fail to import.
+
+### Cache pruning
+
+After every import, jailoc removes:
+
+- Workspace image directories of its own cache (under the current home directory) that no workspace uses any more and that are older than one hour.
+- Layer files that no remaining image links to.
+
+The builder VM image stays in go-microvm's directory image cache; only workspace VMs use EROFS images.
+
+### Progress output and size warning
+
+- `jailoc up` prints `Converting image <name> for the workspace VM...`, `Converting image layers (n/m)…` and `Linking image layers…` while it works.
+- Before it converts an image, it warns when the workspace Dockerfile adds more than 20 layers or more than 5 GiB, as Docker reports the sizes, since the conversion takes a while and each layer slows down file lookups in the VM. Fewer `RUN` steps or a multi-stage build help.
+- The base image and the Docker and agent layers jailoc adds do not count. An image used as is (`image`, or `defaults.image` without a workspace `dockerfile`) counts in full.
+
+### Docker Engine requirement
+
+`docker save` must write an OCI image layout, which requires Docker Engine 25 or later. With an older host daemon, `"auto"` builds in the shared builder VM and `"docker"` fails.
+
+### Image labels and unused images
+
+- jailoc labels the images it builds with `com.github.seznam.jailoc`.
+- It does not automatically prune unused images from the host or builder VM Docker daemon, because a daemon can be shared with other users and other jailoc home directories. Unused images stay until their owner removes them.
+- List them with `docker images --filter label=com.github.seznam.jailoc` and remove chosen ones with `docker image rm <image>`.
+
+### Ignored image settings
 
 The image's `ENTRYPOINT`, `CMD`, `USER`, `WORKDIR` and `EXPOSE` are not used; see [Overlay Compatibility](overlay-compatibility.md).
 
