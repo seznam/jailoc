@@ -142,7 +142,12 @@ func TestRunDesktopStopKillsProcessGroups(t *testing.T) {
 	}
 	pids := []int{d.procs[0].pid, d.procs[1].pid}
 	waitFor(t, func() bool { _, err := os.Stat(childPID); return err == nil })
-	b, err := os.ReadFile(childPID)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := root.ReadFile("child.pid")
+	_ = root.Close() // read-only root; the read error is checked below
 	if err != nil {
 		t.Fatal(err)
 	}
