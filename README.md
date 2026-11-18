@@ -26,7 +26,7 @@ Run coding agents (OpenCode, Claude Code, GitHub Copilot CLI, OmO, Antigravity C
 
 ## Installation
 
-**Requirements:** macOS on Apple Silicon, or Linux amd64 (arm64 experimental) with KVM (`/dev/kvm` access) and Landlock (Linux 5.19 or later). Docker Engine must be running on the host to build workspace images. Upgrading from jailoc v1? Run `jailoc migrate`.
+**Requirements:** macOS on Apple Silicon, or Linux amd64 (arm64 experimental) with KVM (`/dev/kvm` access) and Landlock (Linux 5.19 or later). Docker Engine must be running on the host to build workspace images. For an existing installation, see [upgrade guide](https://seznam.github.io/jailoc/how-to/migrate-from-v1/).
 
 ### Homebrew
 

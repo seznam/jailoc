@@ -49,7 +49,7 @@ No single alternative below meets all five out of the box. Some meet more of the
 
 ### Docker and Podman
 
-Containers share the host kernel, so a kernel bug, a mounted Docker socket or `--privileged` is enough to escape; giving the agent its own Docker daemon needs exactly that. Networking is all or nothing, with the host's LAN, VPN and cloud metadata reachable by default. On macOS, all containers share one Linux VM that mounts much of the home directory. jailoc uses Docker only to build images; its v1 ran agents in containers.
+Containers share the host kernel, so a kernel bug, a mounted Docker socket or `--privileged` is enough to escape; giving the agent its own Docker daemon needs exactly that. Networking is all or nothing, with the host's LAN, VPN and cloud metadata reachable by default. On macOS, all containers share one Linux VM that mounts much of the home directory. jailoc uses Docker only to build images.
 
 ### Dev Containers
 
