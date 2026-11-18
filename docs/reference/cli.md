@@ -168,7 +168,7 @@ jailoc reload [workspace] [flags]
 - `paths` and `mounts`, including `agents.<name>.mounts`
 - the agent's `profile`
 - `cpu`, `memory`
-- `enable_docker`, `protect_git`
+- `enable_docker`, `enable_desktop`, the set of guest ports the `web` routes use (renaming a route, or adding one on a port already in the set, needs only a restart of [`jailoc gateway`](#jailoc-gateway)), `protect_git`
 - `tmp_storage`, `tmp_size`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest
@@ -184,6 +184,7 @@ jailoc reload [workspace] [flags]
 - Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets.
 - Files opened before a reload keep their old snapshot content.
 - Concurrent reloads of one workspace, including those `jailoc up` starts, wait for each other and run one at a time.
+- A running VM keeps its desktop ports (6080, 5901) and the guest ports of its `web` routes reserved until a restart, even when the configuration dropped `enable_desktop` or `web`. A reload whose `host_ports` or `ports` use one of them fails and asks for [`jailoc restart`](#jailoc-restart).
 
 ---
 
@@ -202,7 +203,7 @@ jailoc status [workspace] [flags]
 - Where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
 - The number of agent sessions.
 - Whether the VM runs the current configuration:
-    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, `protect_git`, or a jailoc upgrade that changed the guest protocol).
+    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, `enable_desktop`, the set of `web` guest ports, `protect_git`, or a jailoc upgrade that changed the guest protocol).
     - `jailoc reload` is needed when the configuration file changed after the VM started or was last reloaded.
 **Shown for a stopped VM**: when it stopped and the last error.
 
@@ -399,6 +400,45 @@ jailoc sessions stop ID [flags]
 - Lists each session's ID, state (`attached` or `detached`), start time, directory and command, most recently attached first.
 - `stop` ends the session's agent; an attached terminal is disconnected.
 - Sessions end when the workspace VM stops.
+
+---
+
+### `jailoc gateway`
+
+Serve the web routes and the desktop of running workspaces to a browser on the host over HTTPS.
+
+```text
+jailoc gateway [workspace...] --tls-cert <path> --tls-key <path> [--listen 127.0.0.1:8443]
+```
+
+- Runs in the foreground until interrupted.
+- With no `workspace` argument it serves every running configured workspace that has routes (the `web` entries and, with `enable_desktop`, the `desktop` route) and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
+- A running VM whose desktop or web guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
+- Prints the URL (`https://<name>.<workspace>.jailoc.local/`) and a login code for each route.
+- The built-in `desktop` route redirects its root and its login to `/vnc.html?autoconnect=1`, the noVNC client page; other routes serve `/` unchanged.
+- Serves the VM boots it started with. Routes close when a workspace VM stops or is replaced, and the gateway exits when every served VM is gone. Restart the gateway to serve a new VM.
+- Reads the configuration at start. Adding or renaming a route that uses a guest port already in the set of the running VM needs only a gateway restart; changing `enable_desktop` or the set of guest ports needs `jailoc restart` and a gateway restart.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tls-cert PATH` | (required) | PEM certificate chain that covers every route host, for example with `*.<workspace>.jailoc.local` in `subjectAltName`. |
+| `--tls-key PATH` | (required) | PEM private key of the certificate. |
+| `--listen ADDRESS` | `127.0.0.1:8443` | Loopback IP address and port of the HTTPS listener, for example `127.0.0.1:8443` or `[::1]:8443`. Host names and non-loopback addresses are refused; port 0 picks a free port. |
+
+**Authentication**
+
+- Open `<origin>/.jailoc/login` and enter the code; the form posts to the same origin.
+- A code works once and expires 10 minutes after the gateway starts.
+- A login sets a `__Host-` cookie that lasts 8 hours.
+- Every request must carry the route's `Host` and a matching TLS server name.
+- A `GET` or `HEAD` without an `Origin` header is accepted; if `Origin` is present it must be exactly the route's origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`. Cross-site requests are refused.
+- The external host is the route name without a port, or with port 443. Access through `:8443` is rejected, so the host redirects `127.0.0.1` port 443 to the listener; see the [how-to](../how-to/desktop-and-web.md).
+
+**Transport**
+
+- The gateway talks to each workspace over a private Unix socket, `web.sock` (mode `0600`), in the workspace's VM state directory (mode `0700`).
+- The broker relays it to the guest NIC on port 6081, an allowlisted relay that forwards to the route's loopback port in the guest.
+- jailoc changes no host DNS, trust store or firewall; the [how-to](../how-to/desktop-and-web.md) lists the manual setup.
 
 ---
 

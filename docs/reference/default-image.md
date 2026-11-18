@@ -59,6 +59,10 @@ The base image contains no Docker. For workspaces with `enable_docker = true` (o
 | Docker Buildx | `docker/buildx` GitHub release | `docker buildx` (CLI plugin) |
 | Docker Compose | `docker/compose` GitHub release | `docker compose` (CLI plugin) |
 
+## Desktop layer
+
+The base image contains no desktop and no browser. For workspaces with `enable_desktop = true` (off by default), jailoc adds a separate layer of stock `apt` packages: TigerVNC (`Xtigervnc`), Openbox, D-Bus, noVNC and websockify, plus `xterm`, fonts and small X tools; see [Image Resolution](image-resolution.md#desktop-layer-steps-2-4-and-5). The agent installs a browser itself; see [Desktop and Web](../how-to/desktop-and-web.md#run-a-browser-in-the-desktop).
+
 ## Coding agent
 
 The base image contains no coding agent. jailoc installs the workspace's agent (OpenCode by default) in a separate layer on top of it; see [Coding agents](configuration.md#coding-agents) and [Image Resolution](image-resolution.md#agent-layer-steps-2-4-and-5).

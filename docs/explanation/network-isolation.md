@@ -22,6 +22,8 @@ The gateway serves:
 
 Everything else the guest sends is a new flow the broker has to decide on.
 
+The opposite direction, host to guest, is separate from this policy: `web` routes and the desktop reach the guest through `jailoc gateway`, a private socket on the host and an allowlisted relay on guest NIC port 6081 that forwards to the route's guest loopback port. It carries only connections that the gateway opens from the host. See [Security Boundaries](security-boundaries.md#web-gateway).
+
 ## The policy
 
 Every new TCP connection and UDP flow gets one decision. The broker evaluates rules in order:

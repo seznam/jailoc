@@ -122,7 +122,9 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
 | OAuth loopback callbacks | Host to guest | Register a single-shot HTTP `GET` forwarder on host `127.0.0.1:<port>` (ports 1024–65535, max 8 concurrent, 3-minute TTL) pinned to the exact `redirect_uri` path and requiring `code=` or `error=`, stripping browser request headers and answering the browser with a fixed confirmation; triggered via `xdg-open` / `$BROWSER` when a guest loopback listener already exists, never from terminal output | fixed |
+| Web routes and desktop | Host to guest | Serve a guest port, or the desktop, to a browser that holds a login code, through `jailoc gateway` | `web`, `enable_desktop` |
 | CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |
+| Ingress CA | Host to browser | Not a jailoc channel: a CA you create and trust by hand, for the gateway's certificate | manual, see [Web gateway](#web-gateway) |
 | Inspection CA | Host to guest | Trust certificates the broker signs for hosts matched by `http` rules, which lets the broker read their traffic | `network.rules` with `http` |
 | Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `network` |
 | SSH session | Host to guest | Accept sessions only from jailoc, which authenticates with a per-workspace key and pins the guest host key generated at each start | fixed |
@@ -131,6 +133,25 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 ### host_ports needs the most care
 
 A Chrome DevTools port or a container runtime socket gives the guest control of the browser or the host; jailoc warns about both.
+
+### Web gateway
+
+`jailoc gateway` exposes guest web services and the desktop to a browser on the host. The path has these properties:
+
+- The gateway listens on the address you give it, normally host loopback, and serves only the routes of workspaces you name. It reaches a VM through a private Unix socket (`web.sock`, mode `0600`, in a state directory with mode `0700`), and the broker relays that to a fixed guest NIC port (6081). The relay forwards only to the loopback ports of configured routes, and no port is published on the host.
+- A route is never open: access needs a one-time login code, printed by the gateway process, that expires 10 minutes after the gateway starts. The session cookie is `__Host-` prefixed and lasts 8 hours. Every request must match the route's `Host` and TLS server name exactly. A `GET` or `HEAD` needs no `Origin` header, but one that is present must be exactly the route's origin; every other method, and every WebSocket upgrade, requires it. Cross-site requests are refused.
+- The browser can do whatever the service in the guest lets it do. The desktop gives whoever holds the login the agent's screen, keyboard and any program on it, which includes the agent's session and secrets in its environment. Treat a login as agent-level access.
+- `web` routes can't target a `host_ports` guest port, so a route can't be used to reach a host service.
+- Programs the desktop starts at boot get a snapshot of the environment without later secrets; programs an agent session launches onto the desktop inherit that session's environment, secrets included.
+
+jailoc changes no host DNS, trust store or firewall. Setting up names, trust and the 443 redirect is manual, and it extends your host's trust:
+
+- The ingress CA must be a dedicated one, separate from the network broker's inspection CA. Don't rely on a name constraint to limit it to `jailoc.local`: clients may ignore constraints on trust anchors, so a leaked CA key can mint certificates for any domain in every client that trusts the CA.
+- The CA and leaf keys must stay outside every workspace `paths`, `mounts` and `snapshots` source. An agent that can read the CA key can issue certificates your browser accepts, for any domain where constraints are ignored.
+- Redirect rules should match only `127.0.0.1` port 443, and DNS entries only the route names or `jailoc.local`. Browsers with a separate trust store, such as Firefox, need their own trust setup, and a browser with secure DNS may bypass the resolution configured on the host.
+- A gateway serves the VM boots it started with. When a VM stops or is replaced, its routes close and a new gateway process must start.
+
+The [how-to](../how-to/desktop-and-web.md) gives the commands and their cleanup.
 
 ### Session output is untrusted
 
