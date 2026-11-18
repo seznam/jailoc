@@ -1,6 +1,7 @@
 package webgateway
 
 import (
+	"html"
 	"io"
 	"net/http"
 	"slices"
@@ -52,7 +53,7 @@ func TestStartPathLanding(t *testing.T) {
 	t.Parallel()
 	const start = "/vnc.html?autoconnect=1"
 	x := startGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "upstream "+r.URL.RequestURI())
+		_, _ = io.WriteString(w, "upstream "+html.EscapeString(r.URL.RequestURI())) // the test paths contain no escapable characters
 	}), func(g *Gateway) {
 		route := g.routes[hostA]
 		route.StartPath = start
@@ -198,7 +199,7 @@ func TestProxyHeadersAndCookies(t *testing.T) {
 	r := newRequest(t, "GET", hostA, "/asset.js?x=1")
 	r.Host = hostA + ":443"
 	r.AddCookie(cookie)
-	r.AddCookie(&http.Cookie{Name: "app", Value: "ok"})
+	r.AddCookie(&http.Cookie{Name: "app", Value: "ok", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Evil"} {
 		r.Header.Set(h, "attacker")
 	}
