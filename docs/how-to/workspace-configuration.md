@@ -6,13 +6,13 @@ Separate guides cover [network access](network-access.md) (`allowed_hosts`, `all
 
 ## Find the config file
 
-jailoc stores its configuration at:
+jailoc reads:
 
-```
+```text
 ~/.config/jailoc/config.toml
 ```
 
-The file is created on first run with a `default` workspace already in place. Edit it with any text editor.
+The file is created on first run with a `default` workspace in place. Edit it with any text editor.
 
 To use another file, pass `--config` or set `JAILOC_CONFIG`:
 
@@ -35,7 +35,10 @@ paths = ["/home/you/projects"]
 paths = ["/home/you/projects/api"]
 ```
 
-Running `jailoc up` from `/home/you/projects/api/src` selects `specific`. Running it from `/home/you/projects/other` selects `broad`. To pick a workspace explicitly, pass its name:
+- `jailoc up` from `/home/you/projects/api/src` selects `specific`.
+- `jailoc up` from `/home/you/projects/other` selects `broad`.
+
+To pick a workspace explicitly, pass its name:
 
 ```bash
 jailoc up api
@@ -46,7 +49,7 @@ See [Workspace resolution](../reference/cli.md#workspace-resolution) for the exa
 
 ## Define a workspace
 
-Each workspace is a `[workspaces.<name>]` section. Most workspaces set `paths`; the first path is the working directory. A workspace without `paths` starts in `/home/agent`:
+Each workspace is a `[workspaces.<name>]` section. Most workspaces set `paths`; the first path is the working directory. A workspace without `paths` starts in `/home/agent`.
 
 ```toml
 [workspaces.default]
@@ -56,7 +59,7 @@ paths = ["/home/you/projects/myproject"]
 Each path is shared into the VM read-write at its original absolute path, so `/home/you/projects/myproject` has the same path inside the guest. Files the agent creates there belong to your host user.
 
 !!! note
-    `~` expands to your home directory. Paths under system directories (`/usr`, `/etc`, `/var`, `/home/agent`, `/tmp` and similar) are rejected.
+    `~` expands to your home directory. System directories such as `/usr`, `/etc`, `/var`, `/home/agent` and `/tmp` are rejected; see [`paths`](../reference/configuration.md#paths).
 
 ## Give a workspace several paths
 
@@ -74,7 +77,7 @@ Each workspace gets its own VM. Define as many `[workspaces.<name>]` sections as
 
 ## Set environment variables
 
-Pass variables to agent sessions with `env`, or load them from files with `env_file`. Env files must exist at config load time and use `.env` format (`KEY=VALUE`, `#` comments, quoted values):
+Pass variables to agent sessions with `env`, or load them from files with `env_file`. Env files must exist at config load time and use `.env` format (`KEY=VALUE`, `#` comments, quoted values).
 
 ```toml
 [defaults]
@@ -89,13 +92,13 @@ env = ["LOG_LEVEL=debug"]
 `env` entries override `env_file` entries with the same key.
 
 !!! note
-    Keys jailoc sets itself are rejected: `JAILOC`, `JAILOC_WORKSPACE`, `NODE_USE_SYSTEM_CA`, `SSH_AUTH_SOCK` and the agent variables listed in [Coding agents](../reference/configuration.md#coding-agents).
+    Keys jailoc sets itself, such as `JAILOC_WORKSPACE` and `SSH_AUTH_SOCK`, are rejected. See [`env`](../reference/configuration.md#env) for the list.
 
 For tokens and passwords, use [secrets](secrets.md) instead of `env`.
 
 ## Share extra directories with mounts
 
-`mounts` are live, two-way shares. Each entry has the form `host:guest[:mode]`, where `mode` is `ro` or `rw` (the default):
+`mounts` are live, two-way shares of directories. Each entry has the form `host:guest[:mode]`, where `mode` is `ro` or `rw` (the default). On the guest side, `~` stands for `/home/agent`.
 
 ```toml
 [defaults]
@@ -113,10 +116,10 @@ mounts = [":/home/agent/.config/ai-instructions"]
 !!! warning
     Mounts share directories only. A mount whose host side is a file fails `jailoc up` with `shares directories only; use snapshots`. Use [`snapshots`](#snapshot-files-into-the-workspace) for single files.
 
-A read-write mount whose host directory is missing gets it created. A read-only mount whose host directory is missing fails `jailoc up` with `does not exist`, so a typo in a path to a dotfiles directory doesn't leave an empty share.
+A read-write mount creates a missing host directory. A read-only mount with a missing host directory fails `jailoc up` with `does not exist`, so a typo in a path doesn't leave an empty share.
 
 !!! note
-    Dangerous host paths are rejected: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/.netrc`, `~/.config/jailoc`, `~/.cache/jailoc-vm`, and directories that contain one of the home entries, such as `~`, `~/.config` or `~/.cache`. To give the agent one credential from such a directory, use a [file secret](secrets.md#pass-a-credential-file); the error message shows the entry to add. Guest destinations under `/home/agent/...` are allowed; other system directories are rejected. On the guest side, `~` stands for `/home/agent`: `~/.config/ai-instructions` and `/home/agent/.config/ai-instructions` are the same destination.
+    System directories and credential directories such as `~/.ssh`, `~/.gnupg`, `~/.aws` and `~/.kube` are rejected as host paths, and so are directories that contain them (`~`, `~/.config`, `~/.cache`). To give the agent one credential from such a directory, use a [file secret](secrets.md#pass-a-credential-file). The full list and the guest destination rules are in [`mounts`](../reference/configuration.md#mounts).
 
 ## Snapshot files into the workspace
 
@@ -131,7 +134,10 @@ snapshots = [
 ]
 ```
 
-Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original. A symlink given as the snapshot source is resolved; symlinks inside a snapshotted directory are copied as symlinks. A snapshot destination can't overlap a shared path, so it can't point into a workspace path or a `mounts` destination. To pick up host edits, or added and removed entries, run `jailoc reload`. Credential directories such as `~/.config/gh` can't be snapshotted; for the GitHub CLI, pass a token as an env secret instead (see [Pass a credential file](secrets.md#pass-a-credential-file)).
+- Each snapshot is copied when the VM starts and is read-only inside the guest, even for root. Nothing the workspace does reaches the host original.
+- Run `jailoc reload` to pick up host edits and added or removed entries.
+- A destination can't overlap a shared path (a workspace path or a `mounts` destination). Symlink handling and the other rules are in [`snapshots`](../reference/configuration.md#snapshots).
+- Credential directories such as `~/.config/gh` can't be snapshotted. For the GitHub CLI, pass a token as an env secret instead (see [Pass a credential file](secrets.md#pass-a-credential-file)).
 
 ## Publish ports
 
@@ -142,22 +148,23 @@ To reach a service in the VM from the host, publish its port:
 ports = [3000, "8080:80"]
 ```
 
-`3000` makes guest port 3000 available on host `127.0.0.1:3000`. `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. The service must listen on `0.0.0.0` (or the guest address `192.168.127.2`), not on `127.0.0.1`. Containers started with `docker run -p` inside the guest are reachable the same way.
+`3000` makes guest port 3000 available on host `127.0.0.1:3000`; `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. The service must listen on `0.0.0.0` (or the guest address `192.168.127.2`), not on `127.0.0.1`. Containers started with `docker run -p` inside the guest are reachable the same way.
 
 ## Reach host services
 
-The network broker blocks the guest from the host. To let the agent use a service that listens on the host, such as a local MCP server or a browser started with `--remote-debugging-port`, list it in `host_ports`:
+The network broker blocks the guest from the host. `host_ports` opens a hole for one host service, such as a local MCP server or a browser started with `--remote-debugging-port`.
+
+!!! warning
+    Each entry gives the agent the same access to that service as a local process on the host. A browser debugging port controls the browser with all its logins, and a container runtime socket is root on the host. jailoc warns about both. Add only services you would let the agent use.
 
 ```toml
 [workspaces.myproject]
 host_ports = [9222, "8931:3845", "7100:~/.cache/mcp.sock"]
 ```
 
-`9222` relays guest port 9222 to host `127.0.0.1:9222`. `"8931:3845"` relays guest port 8931 to host `127.0.0.1:3845`. `"7100:~/.cache/mcp.sock"` relays guest port 7100 to a host Unix socket. In the guest, connect to any of:
+`9222` relays guest port 9222 to host `127.0.0.1:9222`. `"8931:3845"` relays guest port 8931 to host `127.0.0.1:3845`. `"7100:~/.cache/mcp.sock"` relays guest port 7100 to a host Unix socket. The host service must listen on `127.0.0.1` (or the socket path).
 
-- `localhost:9222` (unless a guest process already listens on that port)
-- `host.jailoc.internal:9222` or `host.docker.internal:9222`
-- `192.168.127.1:9222`
+In the guest, connect to `localhost:9222` (unless a guest process already listens on that port), `host.jailoc.internal:9222`, `host.docker.internal:9222` or `192.168.127.1:9222`. See [`host_ports`](../reference/configuration.md#host_ports) for reserved guest ports and merging.
 
 For example, attach Playwright MCP to a host Chrome:
 
@@ -168,24 +175,24 @@ google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.cache/jailoc-
 npx @playwright/mcp --cdp-endpoint http://localhost:9222
 ```
 
-The host service must listen on `127.0.0.1` (or the socket path). Remove an entry and run `jailoc reload` to cut access; open connections are closed.
-
-!!! warning
-    Each entry gives the agent the same access to that service as a local process on the host. A browser debugging port controls the browser with all its logins, and a container runtime socket is root on the host. jailoc warns about both.
+To cut access, remove the entry and run `jailoc reload`. Open connections are closed.
 
 ## Protect Git hooks and configuration
 
-Workspace paths are shared read-write, including `.git`. Git on the host runs hooks and commands named in `.git/config` (such as `core.fsmonitor`), so an agent that writes there can run code on your host. Prevent it with:
+Workspace paths are shared read-write, including `.git`. Git on the host runs hooks and commands named in `.git/config` (such as `core.fsmonitor`), so an agent that writes there can run code on your host. `protect_git` prevents it:
 
 ```toml
 [workspaces.myproject]
 protect_git = true
 ```
 
-At every `jailoc up`, jailoc finds the repositories, including bare ones, under the workspace paths and read-write `mounts`, including symlinked workspace roots. Inside the VM, it makes `.git/hooks`, `.git/config`, `config.worktree`, linked worktree `commondir` pointers, every `core.hooksPath` directory and files named by `include.path` or `includeIf` read-only, whether or not the `includeIf` condition matches, including metadata of submodules, worktrees and separate git directories reached through `.git` files. A relative `core.hooksPath` is protected both below the working tree and below the git directory. `core.hooksPath` values from the host's system and global Git configuration count too, so a host-wide hooks directory inside a share is protected. A repository visible at several paths in the VM is protected at each of them; one hidden under a read-only mount is skipped. A missing `.git/config` or `config.worktree` is created empty so that it can be protected. `jailoc up` fails if the path to one of these files runs through a symbolic link inside a share, because the link itself could be redirected, and also if a protected file or hook has another hard link, a configuration file is not a regular file or is larger than 1 MiB, a configuration includes more than 256 files, a hook links to a missing file, a hooks directory has more than 1024 entries, or a `commondir` points at another linked git directory. These git directories and their parents cannot be renamed or removed. `sudo` and Docker are disabled in that workspace, and `enable_docker = true` together with `protect_git = true` is rejected.
+!!! warning
+    `protect_git = true` disables `sudo` and Docker in that workspace. Combining it with `enable_docker = true` is rejected.
 
 !!! warning
-    Only repositories that exist at `jailoc up` are covered. Repositories the agent creates or clones later aren't protected until the next restart, and repositories inside `node_modules`, `.venv`, `venv`, `__pycache__`, `.tox`, `.terraform`, `.next`, `.gradle` and `.cache` aren't searched. Files that tools run from the working tree, such as `Makefile` or `package.json` scripts, aren't covered either. The protection is enforced inside the guest; it holds against the agent, not against an exploit of the guest kernel.
+    Only repositories that exist at `jailoc up` are covered. Repositories the agent creates or clones later aren't protected until the next restart, and repositories inside dependency and cache directories such as `node_modules`, `.venv` and `.cache` aren't searched. Files that tools run from the working tree, such as `Makefile` or `package.json` scripts, aren't covered either. The protection is enforced inside the guest; it holds against the agent, not against an exploit of the guest kernel.
+
+At every `jailoc up`, jailoc finds the repositories under the workspace paths and read-write `mounts` and makes their hooks and Git configuration read-only inside the VM. A missing `.git/config` is created empty, and these git directories can't be renamed or removed. `jailoc up` fails when it can't protect a file safely, for example because of a symbolic link on the path, an extra hard link or an oversized configuration. The complete list of protected files, skipped directories and failure conditions is in [`protect_git`](../reference/configuration.md#protect_git).
 
 ## Use Docker inside the VM
 
@@ -196,7 +203,12 @@ Docker is off by default. Turn it on for a workspace, or for all of them in `[de
 enable_docker = true
 ```
 
-The guest then runs its own Docker daemon. In the images it builds, jailoc adds Docker CE with the `buildx` and `compose` plugins; changing `enable_docker` takes effect after `jailoc restart`, which rebuilds the image. Images, containers and volumes live on a data disk that survives `jailoc down`; `jailoc down --purge` deletes it. The disk is 20 GiB unless you set `docker_disk`:
+!!! warning
+    `enable_docker = true` together with `protect_git = true` is rejected. An image used directly (`image`) must contain `dockerd`; otherwise `enable_docker = true` fails `jailoc up`.
+
+Changing `enable_docker` takes effect after `jailoc restart`, which rebuilds the image. In the images it builds, jailoc adds Docker CE with the `buildx` and `compose` plugins. The guest then runs its own Docker daemon.
+
+Images, containers and volumes live on a data disk that survives `jailoc down`; `jailoc down --purge` deletes it. The disk is 20 GiB unless you set `docker_disk`:
 
 ```toml
 [workspaces.myproject]
@@ -204,9 +216,7 @@ enable_docker = true
 docker_disk = "100g"
 ```
 
-The disk is a sparse file, so it takes host space only for data written to it. Raising `docker_disk` grows the disk and its file system after `jailoc restart`; the disk can't shrink, so to make it smaller, delete it with `jailoc down --purge`. With `isolated_build`, the workspace's builder VM gets a data disk of the same size.
-
-An image used directly (`image`) must contain `dockerd`; otherwise `enable_docker = true` fails `jailoc up`.
+The disk is a sparse file, so it takes host space only for data written to it. Raising `docker_disk` grows the disk and its file system after `jailoc restart`. The disk can't shrink; to make it smaller, delete it with `jailoc down --purge`. With `isolated_build`, the workspace's builder VM gets a data disk of the same size.
 
 ## Set CPU and memory
 
@@ -220,7 +230,7 @@ cpu = 8.0
 memory = "16g"
 ```
 
-Workspace values override defaults. Without either, the VM gets 2 vCPUs and `4g`. `cpu` is rounded up to whole vCPUs. `memory` is a positive integer optionally followed by `k`, `m` or `g`, and must be at least `512m`. The limits apply to the whole VM, including its Docker daemon.
+Workspace values override defaults. Without either, the VM gets 2 vCPUs and `4g`. `cpu` is rounded up to whole vCPUs. `memory` must be at least `512m`; see [`cpu`, `memory` and `docker_disk`](../reference/configuration.md#cpu-memory-and-docker_disk) for the format. The limits apply to the whole VM, including its Docker daemon.
 
 Inside the VM, jailoc swaps to compressed memory (zram, half of `memory`) and trims part of the file cache every minute; freed pages are reported to the host through the balloon device. See [Resource use](../explanation/resource-use.md).
 
@@ -232,4 +242,8 @@ After editing the config, apply it without restarting:
 jailoc reload myproject
 ```
 
-Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets apply live. Running sessions keep their old environment. Other changes, such as `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git` and the image, need a new VM. `jailoc reload` lists them; apply them with `jailoc restart`, which ends running sessions. Concurrent reloads of one workspace run one at a time.
+These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets. Running sessions keep their old environment.
+
+Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
+
+Concurrent reloads of one workspace run one at a time.
