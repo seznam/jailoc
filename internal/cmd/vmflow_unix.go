@@ -138,13 +138,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 		spec.Guest.Pins = pins
 		spec.Guest.ReadOnly = readOnly
 		spec.Guest.NoPrivilegeEscalation = true
-		repos := 0
-		for _, p := range readOnly {
-			if filepath.Base(p) == "hooks" {
-				repos++
-			}
-		}
-		_, _ = color.New(color.FgCyan).Printf("Protecting Git hooks and config of %d repositories; sudo and Docker are disabled\n", repos)
+		_, _ = color.New(color.FgCyan).Println("Protecting Git hooks and config; sudo and Docker are disabled")
 	}
 	payload, err := secretsPayload(ctx, ws, spec, false)
 	if err != nil {
@@ -275,11 +269,6 @@ func useHostDocker(builder string, isolated bool, hostErr error) (bool, error) {
 // Docker daemon selected by DOCKER_HOST and converts it into the VM image
 // cache.
 func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (string, error) {
-	lock, err := lockDockerImages()
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = lock.Close() }()
 	_, _ = color.New(color.FgCyan).Printf("Resolving image for workspace %s...\n", ws.Name)
 	finalImage, chain, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
 	if err != nil {
@@ -328,7 +317,6 @@ func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace
 	logStep("import image into VM cache", start, "ref", ref, "cached", phases.converting.IsZero())
 	start = time.Now()
 	pruneImageCache(ref)
-	pruneDockerImages(ctx, lock, ws.Name, chain)
 	logStep("prune images", start)
 	return ref, nil
 }
@@ -569,94 +557,6 @@ func truncateImportProgress(line string, width int) string {
 		return "…"
 	}
 	return string(runes[:width-1]) + "…"
-}
-
-// lockDockerImages returns the host-wide lock on the Docker images jailoc
-// builds, held shared: every `jailoc up` holds it while it builds, exports
-// and records its images, and pruning needs it exclusively.
-func lockDockerImages() (*os.File, error) {
-	if err := os.MkdirAll(vmRootDir(), 0o750); err != nil {
-		return nil, fmt.Errorf("create VM state dir: %w", err)
-	}
-	f, err := os.OpenFile(filepath.Join(vmRootDir(), "docker-images.lock"), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: jailoc-owned state path
-	if err != nil {
-		return nil, fmt.Errorf("open Docker image lock: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil { //nolint:gosec // G115: file descriptors fit in int
-		_ = f.Close()
-		return nil, fmt.Errorf("lock Docker images: %w", err)
-	}
-	return f, nil
-}
-
-// dockerImagesFile records, per workspace, the IDs of the Docker images its
-// last image build used.
-const dockerImagesFile = "docker-images.json"
-
-// pruneDockerImages records the images in chain as used by workspace and
-// removes the images jailoc built that no workspace records, from the
-// daemon that built them. lock is the shared lockDockerImages lock; pruning
-// is skipped while another `jailoc up` holds it, since its images are not
-// recorded yet, and left to the last one to finish. Failures only warn:
-// removal frees disk space and a removed image is rebuilt on demand.
-func pruneDockerImages(ctx context.Context, lock *os.File, workspace string, chain []string) {
-	warn := func(err error) {
-		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: prune Docker images: %v\n", err)
-	}
-	ids := make([]string, 0, len(chain))
-	for _, ref := range chain {
-		id, err := docker.ImageID(ctx, ref)
-		if err != nil {
-			warn(err)
-			return
-		}
-		ids = append(ids, id)
-	}
-	data, err := json.Marshal(ids)
-	if err != nil {
-		warn(fmt.Errorf("encode image IDs: %w", err))
-		return
-	}
-	if err := os.MkdirAll(vmStateDir(workspace), 0o700); err != nil {
-		warn(fmt.Errorf("create workspace state dir: %w", err))
-		return
-	}
-	if err := os.WriteFile(filepath.Join(vmStateDir(workspace), dockerImagesFile), data, 0o600); err != nil {
-		warn(fmt.Errorf("record workspace images: %w", err))
-		return
-	}
-
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { //nolint:gosec // G115: file descriptors fit in int
-		slog.Debug("Docker image pruning skipped", "reason", err)
-		return
-	}
-
-	keep := map[string]bool{}
-	files, _ := filepath.Glob(filepath.Join(vmRootDir(), "workspaces", "*", dockerImagesFile))
-	for _, path := range files {
-		data, err := os.ReadFile(path) //nolint:gosec // G304: jailoc-owned state path
-		if err != nil {
-			warn(fmt.Errorf("read %s: %w", path, err))
-			return
-		}
-		var recorded []string
-		if err := json.Unmarshal(data, &recorded); err != nil {
-			warn(fmt.Errorf("parse %s: %w", path, err))
-			return
-		}
-		for _, id := range recorded {
-			keep[id] = true
-		}
-	}
-	// The grace period spares images built outside jailoc's lock, e.g. by
-	// an older jailoc.
-	removed, err := docker.PruneImages(ctx, keep, time.Hour)
-	if err != nil {
-		warn(err)
-	}
-	if removed > 0 {
-		_, _ = color.New(color.FgCyan).Printf("Removed %d unused jailoc image(s) from Docker\n", removed)
-	}
 }
 
 // pruneImageCache removes workspace images that no workspace or
