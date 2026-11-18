@@ -2,12 +2,26 @@ package webgateway
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 )
 
+// workerPolicy is added to every gateway response. Browsers enforce every
+// Content-Security-Policy header, so an upstream policy cannot weaken it.
+const workerPolicy = "worker-src 'none'"
+
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w = &policyWriter{ResponseWriter: w}
+	addWorkerPolicy(w.Header())
+	// A guest-installed root-scoped worker can outlive its VM. Refuse to serve
+	// any worker script so no new one is installed or updated.
+	if isServiceWorkerFetch(r.Header) {
+		http.Error(w, "service workers are not supported", http.StatusForbidden)
+		return
+	}
 	if r.Method == http.MethodConnect || r.Method == http.MethodTrace {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -110,4 +124,47 @@ func sameOriginRequest(r *http.Request, host string) bool {
 	default:
 		return exact
 	}
+}
+
+// isServiceWorkerFetch matches the headers browsers set on service worker
+// script fetches. Clients that omit them are not browsers' service workers.
+func isServiceWorkerFetch(h http.Header) bool {
+	return headerHasToken(h, "Service-Worker", "script") || headerHasToken(h, "Sec-Fetch-Dest", "serviceworker")
+}
+
+func headerHasToken(h http.Header, name, want string) bool {
+	for _, v := range h.Values(name) {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func addWorkerPolicy(h http.Header) {
+	if !slices.Contains(h.Values("Content-Security-Policy"), workerPolicy) {
+		h.Add("Content-Security-Policy", workerPolicy)
+	}
+}
+
+// policyWriter re-adds the gateway policy at every WriteHeader, including
+// informational responses, if a handler replaced the header.
+type policyWriter struct{ http.ResponseWriter }
+
+func (w *policyWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *policyWriter) WriteHeader(status int) {
+	addWorkerPolicy(w.Header())
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *policyWriter) Write(p []byte) (int, error) {
+	addWorkerPolicy(w.Header())
+	n, err := w.ResponseWriter.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write gateway response: %w", err)
+	}
+	return n, nil
 }
