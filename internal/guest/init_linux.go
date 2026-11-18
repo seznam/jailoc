@@ -835,7 +835,7 @@ func programEnv(extraEnv []string) []string {
 			}
 		}
 	}
-	return lastWins(append(env, extraEnv...))
+	return programLastWins(append(env, extraEnv...))
 }
 
 // Exec replaces the process with args run in dir, adding the entries of

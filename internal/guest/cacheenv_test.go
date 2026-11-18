@@ -52,3 +52,53 @@ func TestCacheEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestProgramLastWins(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		env  []string
+		want []string
+	}{
+		{name: "empty"},
+		{
+			name: "lowercase overrides injected uppercase",
+			env:  []string{"PATH=/bin", "NPM_CONFIG_CACHE=/c/npm", "HOME=/h", "npm_config_cache=/ws/npm"},
+			want: []string{"PATH=/bin", "HOME=/h", "npm_config_cache=/ws/npm"},
+		},
+		{
+			name: "uppercase overrides earlier lowercase",
+			env:  []string{"npm_config_cache=/a", "NPM_CONFIG_CACHE=/b"},
+			want: []string{"NPM_CONFIG_CACHE=/b"},
+		},
+		{
+			name: "mixed sequence keeps only the last of the group",
+			env:  []string{"NPM_CONFIG_CACHE=/1", "npm_config_cache=/2", "NPM_CONFIG_CACHE=/3", "npm_config_cache=/4", "X=1"},
+			want: []string{"npm_config_cache=/4", "X=1"},
+		},
+		{
+			name: "later empty value wins",
+			env:  []string{"NPM_CONFIG_CACHE=/c/npm", "npm_config_cache="},
+			want: []string{"npm_config_cache="},
+		},
+		{
+			name: "single spelling is untouched",
+			env:  []string{"NPM_CONFIG_CACHE=/c/npm", "GOMODCACHE=/c/go-mod"},
+			want: []string{"NPM_CONFIG_CACHE=/c/npm", "GOMODCACHE=/c/go-mod"},
+		},
+		{
+			name: "unrelated variables keep exact-name semantics",
+			env:  []string{"A=1", "a=2", "A=3", "Npm_Config_Cache=/x", "NPM_CONFIG_CACHE=/y", "GOMODCACHE=/1", "gomodcache=/2", "B"},
+			want: []string{"a=2", "A=3", "Npm_Config_Cache=/x", "NPM_CONFIG_CACHE=/y", "GOMODCACHE=/1", "gomodcache=/2", "B"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := programLastWins(tt.env); !slices.Equal(got, tt.want) {
+				t.Fatalf("programLastWins(%q) = %q, want %q", tt.env, got, tt.want)
+			}
+		})
+	}
+}
