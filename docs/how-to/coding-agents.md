@@ -4,7 +4,7 @@ Each workspace runs one coding agent: OpenCode by default, or Claude Code, GitHu
 
 ## Select the agent
 
-Set `agent` on the workspace:
+Set `agent` on the workspace, or in `[defaults]` for every workspace, then start the workspace and open a session:
 
 ```toml
 [workspaces.my-project]
@@ -12,7 +12,12 @@ paths = ["~/projects/my-project"]
 agent = "claude"
 ```
 
-Values: `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo`, `agy`. Set `agent` in `[defaults]` to change it for every workspace.
+```bash
+jailoc up my-project
+jailoc -w my-project
+```
+
+Values: `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo`, `agy`. To switch the agent of a running workspace, change `agent` and run `jailoc restart my-project`; sessions fail with a hint to restart until you do.
 
 `opencode` is an alias of `opencode2`, OpenCode 2. `opencode1` runs OpenCode 1 (`opencode-ai`). The two keep their sessions apart: OpenCode 2 doesn't see the sessions of OpenCode 1, and switching back and forth doesn't mix their databases. Both get a read-only copy of the same `~/.config/opencode`. To keep using OpenCode 1 and its existing sessions:
 
@@ -21,24 +26,9 @@ Values: `opencode`, `opencode1`, `opencode2`, `claude`, `copilot`, `omo`, `agy`.
 agent = "opencode1"
 ```
 
-Start the workspace and open a session:
-
-```bash
-jailoc up my-project
-jailoc -w my-project
-```
-
-To switch the agent of a running workspace, change `agent` and run:
-
-```bash
-jailoc restart my-project
-```
-
-Sessions fail with a hint to restart until you do.
-
 ## Run several agents on one project
 
-Configure one workspace per agent with the same path:
+Configure one workspace per agent with the same path. Each workspace boots its own VM; in that directory, pick the workspace with `-w`:
 
 ```toml
 [workspaces.my-project]
@@ -48,8 +38,6 @@ paths = ["~/projects/my-project"]
 paths = ["~/projects/my-project"]
 agent = "claude"
 ```
-
-Each workspace boots its own VM. In that directory, pick the workspace with `-w`:
 
 ```bash
 jailoc -w my-project-claude
@@ -64,13 +52,14 @@ The agent's state directory (for example `~/.claude` for Claude Code) persists a
 from_command = "security find-generic-password -s anthropic -w"
 ```
 
-GitHub Copilot CLI (`copilot`) signs in with a device code in the terminal; with no keyring in the VM, jailoc sets `storeTokenPlaintext` in `~/.copilot/settings.json` so Copilot keeps the token in `~/.copilot/config.json`, or you can pass `COPILOT_GITHUB_TOKEN` (or `GH_TOKEN`) as an env secret. Antigravity CLI (`agy`) prints a sign-in URL and reads the code back in the terminal, so the login works over the session without a browser in the VM; with no keyring in the VM, it keeps the token in a file in `~/.gemini`, its state directory.
+- **GitHub Copilot CLI** (`copilot`) signs in with a device code in the terminal. With no keyring in the VM, jailoc sets `storeTokenPlaintext` in `~/.copilot/settings.json` so Copilot keeps the token in `~/.copilot/config.json`. You can also pass `COPILOT_GITHUB_TOKEN` (or `GH_TOKEN`) as an env secret.
+- **Antigravity CLI** (`agy`) prints a sign-in URL and reads the code back in the terminal, so the login works without a browser in the VM. With no keyring in the VM, it keeps the token in a file in `~/.gemini`, its state directory.
 
-`jailoc down --purge` deletes the state, including logins.
+`jailoc down --purge` deletes the state, including logins (not a named profile, below).
 
 ## Share or discard agent state
 
-By default each workspace keeps its own agent state. To reuse logins and sessions across workspaces, name a profile; to start clean every time, set `profile = false`:
+By default each workspace keeps its own agent state. To reuse logins and sessions across workspaces, name a [profile](../reference/configuration.md#agent-profiles); to start clean every time, set `profile = false`:
 
 ```toml
 [defaults.agents.claude]
@@ -80,14 +69,14 @@ profile = "work"
 profile = false
 ```
 
-A named profile lives in `~/.local/share/jailoc/profiles/<name>`, survives `jailoc down --purge`, and is used by one running workspace at a time: stop the other workspace before starting one with the same profile. A custom agent does not inherit `profile` from the agent it is derived from. See [Agent profiles](../reference/configuration.md#agent-profiles).
+A named profile lives in `~/.local/share/jailoc/profiles/<name>`, survives `jailoc down --purge`, and is used by one running workspace at a time: stop the other workspace before starting one with the same profile. A custom agent does not inherit `profile` from the agent it is derived from.
 
 !!! warning
     A profile carries the harness's hooks, plugins and MCP server settings along with the login, so an agent in one workspace can change what runs in every other workspace on the same profile. Share a profile only between workspaces you trust equally.
 
 ## Mount agent configuration
 
-`agents.<name>.mounts` adds mounts only while that agent is selected, for example a separate OpenCode configuration for a custom agent:
+[`agents.<name>.mounts`](../reference/configuration.md#agent-mounts) adds mounts only while that agent is selected, for example a separate OpenCode configuration for a custom agent. An entry with an empty host, such as `":/home/agent/.agents"`, removes a built-in mount:
 
 ```toml
 [defaults.agents.opencode-legacy]
@@ -95,11 +84,9 @@ from = "opencode"
 mounts = ["~/.config/opencode-legacy:/home/agent/.config/opencode"]
 ```
 
-An entry with an empty host, such as `":/home/agent/.agents"`, removes a built-in mount. See [Agent mounts](../reference/configuration.md#agent-mounts).
-
 ## Use your host agent configuration
 
-jailoc copies the agent's configuration from the host into the VM read-only when the VM starts and on `jailoc reload`: `~/.config/opencode` for OpenCode (plus `omo.jsonc` and `omo.json` from `~/.omo` for OpenCode 1), `CLAUDE.md`, `RTK.md`, `settings.json`, agents, commands, hooks, skills and output styles from `~/.claude` for Claude Code, instructions, agents, hooks, skills and MCP servers from `~/.copilot` for GitHub Copilot CLI, `omo.jsonc` and `omo.json` from `~/.omo` for OmO, and `~/.gemini/GEMINI.md` for Antigravity CLI. An agent in the VM can't change what runs on the host or in other workspaces. Change the configuration on the host, then run `jailoc reload <name>`.
+jailoc copies the agent's configuration from the host into the VM read-only when the VM starts and on `jailoc reload`, so an agent in the VM can't change what runs on the host or in other workspaces. [`import_agent_config`](../reference/configuration.md#import_agent_config) lists the files copied for each agent. Change the configuration on the host, then run `jailoc reload <name>`.
 
 OpenCode doesn't install plugins into the read-only copy, and `node_modules` isn't copied. Plugins listed in `plugin` install into `~/.cache`; install the packages a local plugin imports in the image.
 
@@ -113,14 +100,15 @@ snapshots = [":/home/agent/.claude/settings.json"]
 import_agent_config = false
 ```
 
-To let the agent change the host configuration, mount it read-write; the mount replaces the copy. Every workspace using the mount, and the host, then run what the agent writes there:
+To let the agent change the host configuration, mount it read-write; the mount replaces the copy:
 
 ```toml
 [defaults.agents.opencode]
 mounts = ["~/.config/opencode:/home/agent/.config/opencode:rw"]
 ```
 
-See [`import_agent_config`](../reference/configuration.md#import_agent_config).
+!!! warning
+    Every workspace using the mount, and the host, then run what the agent writes there.
 
 ## Use agent configuration from a dotfiles repository
 
@@ -140,7 +128,8 @@ args = [
 
 The mount is live: edits on the host apply to the next session without `jailoc reload`. A missing host directory of a read-only mount fails `jailoc up`, so a wrong path is reported instead of sharing an empty directory.
 
-Don't pass `--settings` in `args`: jailoc already passes `--settings` with its own file (the workspace indicator), and a second `--settings` replaces it instead of merging with it. Snapshot the settings file to `/home/agent/.claude/settings.json` instead, as above. The snapshot replaces the copy of your host `~/.claude/settings.json` that [`import_agent_config`](../reference/configuration.md#import_agent_config) makes, and a change to the file needs `jailoc reload`.
+!!! warning
+    Don't pass `--settings` in `args`: jailoc already passes `--settings` with its own file (the workspace indicator), and a second `--settings` replaces it instead of merging with it. Snapshot the settings file to `/home/agent/.claude/settings.json` instead, as above. The snapshot replaces the copy of your host `~/.claude/settings.json` that `import_agent_config` makes, and a change to the file needs `jailoc reload`.
 
 A symlink inside a path or mount that points outside every share or snapshot is dangling in the VM; `jailoc up` warns about it. Snapshot its target at the path the link names, or mount the directory that contains the target at the matching directory in the VM; mounts share directories only.
 
@@ -168,7 +157,7 @@ Antigravity CLI is installed from its GitHub release rather than npm. For a vers
 
 ## Define a custom agent
 
-A custom agent is a built-in agent under another name with its own settings, for example a model preset or a version you want to try next to the pinned one:
+A [custom agent](../reference/configuration.md#custom-agents) is a built-in agent under another name with its own settings, for example a model preset or a version you want to try next to the pinned one. Settings it doesn't set come from the agent it is derived from: here `claude-opus` installs the same Claude Code version as `claude`.
 
 ```toml
 [defaults.agents.claude-opus]
@@ -180,11 +169,9 @@ paths = ["~/projects/my-project"]
 agent = "claude-opus"
 ```
 
-Settings not set on the custom agent come from the agent it is derived from: here `claude-opus` installs the same Claude Code version as `claude`. See [Custom agents](../reference/configuration.md#custom-agents).
-
 ## Install the agent yourself
 
-To provide the agent from your own overlay Dockerfile, for example a build of your own, turn off the built-in installation:
+To provide the agent from your own overlay Dockerfile, for example a build of your own, turn off the built-in installation. The binary (`claude`) must be on `PATH` in the image; an image used directly with `image` never gets the agent installed by jailoc and must contain it.
 
 ```toml
 [workspaces.my-project-claude]
@@ -195,7 +182,3 @@ dockerfile = "~/projects/my-project/agent.Dockerfile"
 [workspaces.my-project-claude.agents.claude]
 install = false
 ```
-
-The binary (`claude`) must be on `PATH` in the image. An image used directly with `image` never gets the agent installed by jailoc and must contain it.
-
-For the session commands, persistent directories and environment of each agent, see [Coding agents](../reference/configuration.md#coding-agents).
