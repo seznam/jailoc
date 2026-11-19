@@ -27,7 +27,7 @@ func TestDesktopSpecs(t *testing.T) {
 		want []string
 	}{
 		{"xtigervnc", 0, []string{"Xtigervnc", ":1", "-localhost", "-SecurityTypes", "None", "-rfbport", "5901", "-nolisten", "tcp", "-UseIPv6=0", "-geometry", "1280x800", "-depth", "24"}},
-		{"openbox", 1, []string{"dbus-run-session", "--", "openbox"}},
+		{"openbox", 1, []string{"dbus-run-session", "--", "openbox", "--startup", "xterm"}},
 		{"websockify", 2, []string{"websockify", "--web", "/usr/share/novnc", "127.0.0.1:6080", "127.0.0.1:5901"}},
 	}
 	for _, tt := range tests {

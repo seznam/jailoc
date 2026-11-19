@@ -86,7 +86,10 @@ func desktopSpecs() []desktopSpec {
 				return dialReady("unix", filepath.Join(desktopX11Dir, "X"+strings.TrimPrefix(DesktopDisplay, ":")))
 			},
 		},
-		{name: "openbox", argv: []string{"dbus-run-session", "--", "openbox"}},
+		// Openbox draws no background or panel, so the desktop would open as
+		// an empty black screen. It starts an xterm once it runs; an image
+		// without xterm still gets a working, empty desktop.
+		{name: "openbox", argv: []string{"dbus-run-session", "--", "openbox", "--startup", "xterm"}},
 		{
 			name: "websockify",
 			argv: []string{
