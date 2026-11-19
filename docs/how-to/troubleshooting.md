@@ -241,15 +241,15 @@ tail -n 50 ~/.cache/jailoc-vm/builder/supervisor.log
 cat ~/.cache/jailoc-vm/builder/state.json
 ```
 
-For an isolated builder, use the second directory. `jailoc up` stops waiting as soon as the builder's VM runner, network broker or NIC connection is lost, and names the console log. When the state or the console contains `no space left on device`, the error also quotes the guest's last `df` lines, names the data disk and says which setting to raise. A lost builder or a failed liveness check alone doesn't prove the disk is full: the same text can also come from a full host disk, and other causes end the same way.
+For an isolated builder, use the second directory. `jailoc up` stops waiting as soon as the builder's VM runner, network broker or NIC connection is lost, and names the console log. When the state or the console contains `no space left on device`, the error also quotes the guest's last `df` lines and names the data disk. It calls the Docker data filesystem full only when the console shows it: the failing path is `/var/lib/docker` or below, or its `df` row has no free blocks or inodes. Otherwise the text can come from the guest root filesystem, which is backed by host storage, or from a full host disk, and the error says to check the host's free space and to raise the setting only if the data disk turns out to be full. A lost builder or a failed liveness check alone doesn't prove the disk is full; other causes end the same way.
 
 The guest init writes `df -k` and `df -i` of the data disk to the console after mounting it, after growing it and when `dockerd` exits unexpectedly, together with the `dockerd` exit status. Tell the capacities apart:
 
-- **Host disk:** `df -h ~/.cache/jailoc-vm` on the host. The builder's `docker.img` is a sparse file, so a full host disk fails writes on the host, and the error text can match.
+- **Host disk:** `df -h ~/.cache/jailoc-vm` on the host. The builder's `docker.img` is a sparse file, so a full host disk fails writes on the host, and the error text can match. The guest's root filesystem is host-backed as well, so an out-of-space error on a path outside `/var/lib/docker` (for example `/usr/lib`) points here, not at the Docker disk.
 - **Guest capacity:** the `df -k` lines on the console. A builder `docker.img` of 20 GiB (the default) holds the build cache and every built image; the guest can be full while the host has plenty of space.
 - **Guest inodes:** the `df -i` lines. Many small files can use up the inodes before the blocks.
 
-**Fix:** jailoc maintains a builder's cache before and after builds, but a daemon on a full disk can't run to prune. Free host space if the host disk is full, then grow the builder disk:
+**Fix:** jailoc maintains a builder's cache before and after builds, but a daemon on a full disk can't run to prune. If the host disk is full, free host space; that alone fixes it, and growing the Docker disk would only let the sparse file take more of it. Grow the builder disk only when the guest `df` shows the data filesystem full, of blocks or of inodes:
 
 ```toml
 [vm]
