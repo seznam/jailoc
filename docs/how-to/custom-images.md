@@ -17,7 +17,7 @@ An image used directly (`image`) or built from a custom base Dockerfile (`[base]
 - for [Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm): `dockerd` and `nftables` with `image`, or `apt-get` (or `nft` on `PATH`) when jailoc adds its Docker layer on top of a `[base] dockerfile`.
 
 !!! warning
-    A plain OS image like `ubuntu:24.04` doesn't meet these requirements. Start from the [jailoc base](../reference/default-image.md) with an overlay unless you need full control.
+    A plain OS image like `ubuntu:26.04` doesn't meet these requirements. Start from the [jailoc base](../reference/default-image.md) with an overlay unless you need full control.
 
 ## Use a pre-built image
 

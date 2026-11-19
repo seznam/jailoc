@@ -59,7 +59,7 @@ go test ./...
 
 ## 📦 What's in the default image
 
-Ubuntu 24.04 with Node.js, Python 3, npm, four language servers (TypeScript, Pyright, YAML, Bash) and everyday CLI tools such as `rg`, `fdfind`, `jq`, `git`, `gpg`, `ssh` and `curl`. jailoc adds the workspace's coding agent and, with `enable_docker`, Docker on top. Versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile); the [default image reference](https://seznam.github.io/jailoc/reference/default-image/) lists every tool.
+Ubuntu 26.04 with Node.js, Python 3.14, npm, four language servers (TypeScript, Pyright, YAML, Bash) and everyday CLI tools such as `rg`, `fdfind`, `jq`, `git`, `gpg`, `ssh` and `curl`. jailoc adds the workspace's coding agent and, with `enable_docker`, Docker on top. Versions are pinned in the [embedded Dockerfile](internal/embed/assets/Dockerfile); the [default image reference](https://seznam.github.io/jailoc/reference/default-image/) lists every tool.
 
 ## Security
 
