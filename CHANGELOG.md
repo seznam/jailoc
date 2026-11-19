@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.7.1](https://github.com/seznam/jailoc/compare/v2.7.0...v2.7.1) (2026-11-19)
+
+
+### Features
+
+* **migrate:** guide config upgrades and internal DNS trust ([844fb99](https://github.com/seznam/jailoc/commit/844fb99c4bc0acc9eec9a9f25df0ac37f696685e))
+* **migrate:** offer internal zones for hostname allow rules ([6cfba18](https://github.com/seznam/jailoc/commit/6cfba180e98391b921f4d5e8b8fa0fc365dfba0f))
+
+
+### Bug Fixes
+
+* **agent:** allow overriding default session arguments ([e3c153f](https://github.com/seznam/jailoc/commit/e3c153ff42b97b9b5c1a001a4233e3f751ec5a5e))
+* **agent:** allow overriding default session arguments ([086eb72](https://github.com/seznam/jailoc/commit/086eb725e381a630ad1f6fe3d92a8165db048c1d))
+* **cmd:** recommend migration after deprecation notices ([2e40e10](https://github.com/seznam/jailoc/commit/2e40e10d854849a7ee1a19b74be1b9795de428f8))
+
+
+### Documentation
+
+* **migrate:** explain internal zone prompts and trust ([4e7bf80](https://github.com/seznam/jailoc/commit/4e7bf8026af9131d9e0cc4c49ad2aa52a2dbfa9d))
+
 ## [2.7.0](https://github.com/seznam/jailoc/compare/v2.6.0...v2.7.0) (2026-11-18)
 
 
