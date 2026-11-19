@@ -413,7 +413,7 @@ func TestWorkspaceVM(t *testing.T) {
 	})
 
 	t.Run("network policy", func(t *testing.T) {
-		if got := mustGuest(ctx, t, "curl -sS -m 20 -o /dev/null -w '%{http_code}' https://example.com"); got != "200" {
+		if got := mustGuest(ctx, t, "curl -sS -m 20 -4 -o /dev/null -w '%{http_code}' https://example.com"); got != "200" {
 			t.Fatalf("public https = %q", got)
 		}
 		for _, target := range []string{"http://10.0.0.1/", "http://192.168.127.1:22/", "http://169.254.169.254/"} {
