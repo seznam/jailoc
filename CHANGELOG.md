@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.7.2](https://github.com/seznam/jailoc/compare/v2.7.1...v2.7.2) (2026-11-19)
+
+
+### Bug Fixes
+
+* **cmd:** reject invalid workspace paths before VM startup ([5c67c70](https://github.com/seznam/jailoc/commit/5c67c70d6119f1b17f4ad11a868e9d6a581e971a))
+* **cmd:** validate workspace paths before VM startup ([1baa787](https://github.com/seznam/jailoc/commit/1baa787b12255a47a40414a04d71f8a611d565f7))
+* **deps:** update go-microvm to prevent SSH admission stalls ([9e887c6](https://github.com/seznam/jailoc/commit/9e887c61382c8d9b53d966696d2edef4733df2a8))
+* **deps:** update go-microvm to prevent SSH admission stalls ([0c8ade0](https://github.com/seznam/jailoc/commit/0c8ade0ae4fdbc17e45a537c1aca45b98e065667))
+
+
+### Documentation
+
+* **config:** require existing workspace directories ([62274e3](https://github.com/seznam/jailoc/commit/62274e38ab6444161edad22e6ec779c196670915))
+
 ## [2.7.1](https://github.com/seznam/jailoc/compare/v2.7.0...v2.7.1) (2026-11-19)
 
 
