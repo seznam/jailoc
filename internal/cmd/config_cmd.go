@@ -258,8 +258,12 @@ func printConfigWarnings(cfg *config.Config) {
 	for _, k := range cfg.UnknownKeys() {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: unknown setting %q in config.toml is ignored\n", k)
 	}
-	for _, w := range config.DeprecationWarnings(cfg) {
+	warnings := config.DeprecationWarnings(cfg)
+	for _, w := range warnings {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
+	if len(warnings) > 0 {
+		_, _ = color.New(color.FgYellow).Fprintln(os.Stderr, "Run `jailoc migrate` to update deprecated settings in config.toml.")
 	}
 }
 
