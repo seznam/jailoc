@@ -76,7 +76,10 @@ prepare_data_disk() {
 	mkdir -p "$DATA_DIR"
 	if [ -z "$(blkid "$DATA_DEV")" ]; then
 		apk add -q --no-cache e2fsprogs || fail "apk add e2fsprogs failed"
-		mkfs.ext4 -q -F "$DATA_DEV" || fail "mkfs failed"
+		# mke2fs always zeroes the last 64 KiB of the file system, and libkrun's
+		# imago < 0.2.5 truncates the disk image when that reaches its end
+		# (libkrun#949): leave 1 MiB (256 blocks) unformatted.
+		mkfs.ext4 -q -F -b 4096 -E nodiscard "$DATA_DEV" "$((DISK_SIZE / 4096 - 256))" || fail "mkfs failed"
 		fresh=1
 	fi
 	mount -t ext4 "$DATA_DEV" "$DATA_DIR" || fail "mount data disk failed"

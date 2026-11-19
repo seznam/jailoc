@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -318,6 +319,52 @@ func TestInitGrowsBeforePackageInstall(t *testing.T) {
 			t.Errorf("a freshly formatted disk needs no resize:\n%s", strings.Join(calls, "\n"))
 		}
 	})
+}
+
+func TestInitFormatsFreshDiskLeavingTail(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		diskSize int64
+		want     string
+	}{
+		{name: "1 GiB", diskSize: 1 << 30, want: "mkfs.ext4 -q -F -b 4096 -E nodiscard /dev/vda 261888"},
+		{name: "2 GiB", diskSize: 2 << 30, want: "mkfs.ext4 -q -F -b 4096 -E nodiscard /dev/vda 524032"},
+		{name: "20 GiB", diskSize: 20 << 30, want: "mkfs.ext4 -q -F -b 4096 -E nodiscard /dev/vda 5242624"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := newInitHarness(t)
+			h.apk()
+			h.stub("blkid", ``)
+			out, code := h.run(fmt.Sprintf("DISK_SIZE=%d\nprepare_data_disk", tt.diskSize))
+			if code != 0 {
+				t.Fatalf("exit %d, output:\n%s", code, out)
+			}
+			calls := h.callLog()
+			mkfs := index(calls, "mkfs.ext4")
+			if mkfs < 0 || calls[mkfs] != tt.want {
+				t.Fatalf("mkfs call index %d, want %q in:\n%s", mkfs, tt.want, strings.Join(calls, "\n"))
+			}
+			// The file system must end 1 MiB before the disk does.
+			fields := strings.Fields(calls[mkfs])
+			blocks, err := strconv.ParseInt(fields[len(fields)-1], 10, 64)
+			if err != nil {
+				t.Fatalf("mkfs block count: %v", err)
+			}
+			if tail := tt.diskSize - blocks*4096; tail != 1<<20 {
+				t.Errorf("tail after the file system = %d bytes, want %d", tail, 1<<20)
+			}
+			mount, pkg := index(calls, "mount -t ext4"), index(calls, "nftables")
+			if mount < mkfs || pkg < mount {
+				t.Errorf("want mkfs < mount < package install, got %d %d %d in:\n%s", mkfs, mount, pkg, strings.Join(calls, "\n"))
+			}
+			if index(calls, "resize2fs") >= 0 {
+				t.Errorf("a freshly formatted disk is not resized:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
 }
 
 func TestInitDaemonConfig(t *testing.T) {
