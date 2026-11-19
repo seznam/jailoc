@@ -321,10 +321,19 @@ func TestWorkspaceVM(t *testing.T) {
 		}
 	})
 
+	t.Run("runtime is Ubuntu 26.04 with Python 3.14", func(t *testing.T) {
+		const want = "ubuntu 26.04\n3.14"
+		got := mustGuest(ctx, t, `. /etc/os-release; echo "$ID $VERSION_ID"; python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])'`)
+		if got != want {
+			t.Fatalf("guest OS and Python = %q, want %q", got, want)
+		}
+	})
+
 	t.Run("root filesystem from EROFS layers keeps image ownership", func(t *testing.T) {
 		// The layers keep the image's own IDs: /etc/shadow belongs to the
-		// shadow group and sudo stays setuid root.
-		if got := mustGuest(ctx, t, "findmnt -n -o FSTYPE /; stat -c %u:%g /etc/shadow; stat -c %u:%a /usr/bin/sudo"); got != "overlay\n0:42\n0:4755" {
+		// shadow group and sudo stays setuid root. /usr/bin/sudo may be an
+		// alternatives symlink, so stat follows it to the real binary.
+		if got := mustGuest(ctx, t, "findmnt -n -o FSTYPE /; stat -c %u:%g /etc/shadow; stat -L -c %u:%a /usr/bin/sudo"); got != "overlay\n0:42\n0:4755" {
 			t.Fatalf("root filesystem = %q, want an overlay with the image's owners and modes", got)
 		}
 	})
