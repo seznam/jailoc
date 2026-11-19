@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/gatewayhost"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -702,12 +703,33 @@ func startGatewayRun(t *testing.T, handler http.Handler) (*gatewayRun, string) {
 // the route at host from a fake VM configured as g.
 func startGatewayRunFor(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config) (*gatewayRun, string) {
 	t.Helper()
-	// A short path: unix socket paths are limited to about 100 bytes.
-	home, err := os.MkdirTemp("/tmp", "jg")
+	return startGatewayRunArgs(t, handler, cfgTOML, host, g, func(certFile, keyFile string) []string {
+		return []string{"--listen", "127.0.0.1:0", "--tls-cert", certFile, "--tls-key", keyFile}
+	})
+}
+
+// shortTempDir creates a temporary directory with a short path: unix socket
+// paths are limited to about 100 bytes, so a long TMPDIR (macOS) falls back
+// to /tmp.
+func shortTempDir(t *testing.T, pattern string) string {
+	t.Helper()
+	base := os.TempDir()
+	if len(base) > 40 {
+		base = "/tmp"
+	}
+	dir, err := os.MkdirTemp(base, pattern)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// startGatewayRunArgs is startGatewayRunFor with the command line built by
+// mkArgs from the generated certificate and key paths.
+func startGatewayRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config, mkArgs func(certFile, keyFile string) []string) (*gatewayRun, string) {
+	t.Helper()
+	home := shortTempDir(t, "jg")
 	t.Setenv("HOME", home)
 	cfgPath := filepath.Join(home, "config.toml")
 	if err := os.WriteFile(cfgPath, []byte(cfgTOML), 0o600); err != nil {
@@ -726,7 +748,7 @@ func startGatewayRunFor(t *testing.T, handler http.Handler, cfgTOML, host string
 	cmd := newGatewayCmd()
 	cmd.SetOut(run.out)
 	cmd.SetErr(run.errOut)
-	cmd.SetArgs([]string{"--listen", "127.0.0.1:0", "--tls-cert", certFile, "--tls-key", keyFile})
+	cmd.SetArgs(mkArgs(certFile, keyFile))
 	go func() {
 		run.err = cmd.ExecuteContext(ctx)
 		close(run.done)
@@ -886,5 +908,240 @@ func TestGatewayStopsOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("gateway ignored cancellation")
+	}
+}
+
+// useGatewayBrokerHost replaces the host seam of --listener-broker for one
+// test. Tests that call it must not be parallel.
+func useGatewayBrokerHost(t *testing.T, target gatewayBrokerTarget) {
+	t.Helper()
+	old := gatewayBrokerHost
+	gatewayBrokerHost = func() gatewayBrokerTarget { return target }
+	t.Cleanup(func() { gatewayBrokerHost = old })
+}
+
+func testUID() uint32 {
+	return uint32(os.Getuid()) //nolint:gosec // UIDs are 32-bit on Linux and Darwin.
+}
+
+// startTestListenerBroker runs an in-process listener broker for the current
+// user on an ephemeral loopback port and a socket in a private directory.
+func startTestListenerBroker(t *testing.T) gatewayBrokerTarget {
+	t.Helper()
+	if os.Getuid() == 0 {
+		t.Skip("the test needs an unprivileged user")
+	}
+	sock := filepath.Join(shortTempDir(t, "jb"), "b.sock")
+	tcp, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := gatewayhost.ListenBrokerSocket(sock, testUID())
+	if err != nil {
+		_ = tcp.Close()
+		t.Fatal(err)
+	}
+	b, err := gatewayhost.NewBroker(gatewayhost.BrokerConfig{OwnerUID: testUID(), Listeners: []*net.TCPListener{tcp}, Control: control, Logf: t.Logf})
+	if err != nil {
+		_ = tcp.Close()
+		_ = control.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- b.Serve(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("broker Serve: %v", err)
+		}
+	})
+	return gatewayBrokerTarget{uid: testUID(), socketPath: sock, brokerUID: testUID(), addr: tcp.Addr().(*net.TCPAddr)}
+}
+
+func runGatewayArgs(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	cmd := newGatewayCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(args)
+	err := cmd.ExecuteContext(t.Context())
+	return out.String(), err
+}
+
+func TestGatewayListenerBrokerRefusesListen(t *testing.T) {
+	useGatewayBrokerHost(t, gatewayBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: gatewayBrokerAddr})
+	for _, listen := range []string{"127.0.0.1:8443", "127.0.0.1:443", gatewayDefaultListen} {
+		_, err := runGatewayArgs(t, "--tls-cert", "c.pem", "--tls-key", "k.pem", "--listener-broker", "--listen", listen)
+		if err == nil || !strings.Contains(err.Error(), "--listener-broker") || !strings.Contains(err.Error(), "--listen") {
+			t.Errorf("--listen %s: error = %v, want a refusal naming both flags", listen, err)
+		}
+	}
+}
+
+func TestGatewayListenerBrokerRefusesRoot(t *testing.T) {
+	useGatewayBrokerHost(t, gatewayBrokerTarget{uid: 0, socketPath: "/nonexistent/b.sock", addr: gatewayBrokerAddr})
+	_, err := runGatewayArgs(t, "--tls-cert", "c.pem", "--tls-key", "k.pem", "--listener-broker")
+	if err == nil || !strings.Contains(err.Error(), "root") || !strings.Contains(err.Error(), "--listener-broker") {
+		t.Fatalf("error = %v, want a refusal to run as root", err)
+	}
+}
+
+func TestGatewayListenerBrokerKeepsHostProofEscape(t *testing.T) {
+	// A workspace named host-proof is reached with `--`; the flag must not
+	// change how the command line is routed, so the run reaches the gateway
+	// itself (and stops at the root refusal), not the host-proof command.
+	useGatewayBrokerHost(t, gatewayBrokerTarget{uid: 0, socketPath: "/nonexistent/b.sock", addr: gatewayBrokerAddr})
+	_, err := runGatewayArgs(t, "--tls-cert", "c.pem", "--tls-key", "k.pem", "--listener-broker", "--", "host-proof")
+	if err == nil || !strings.Contains(err.Error(), "--listener-broker") || strings.Contains(err.Error(), "host proof") {
+		t.Fatalf("error = %v, want the gateway's own refusal", err)
+	}
+}
+
+func TestGatewayListenerBrokerRequiresTLSFlags(t *testing.T) {
+	useGatewayBrokerHost(t, gatewayBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: gatewayBrokerAddr})
+	if _, err := runGatewayArgs(t, "--listener-broker"); err == nil || !strings.Contains(err.Error(), `"tls-cert"`) {
+		t.Errorf("error = %v, want the required TLS flags named", err)
+	}
+}
+
+func TestGatewayListenerBrokerHelp(t *testing.T) {
+	out, err := runGatewayArgs(t, "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "--listener-broker") || !strings.Contains(out, "jailoc-listener-broker") {
+		t.Errorf("help lacks the flag and the broker command:\n%s", out)
+	}
+}
+
+func TestGatewayListenerBrokerProductionTarget(t *testing.T) {
+	t.Parallel()
+	got := defaultGatewayBrokerHost()
+	if got.uid != testUID() || got.brokerUID != 0 || got.socketPath != gatewayhost.BrokerSocketPath(testUID()) {
+		t.Errorf("target = %+v, want this user, a root broker and its socket path", got)
+	}
+	if got.addr == nil || got.addr.String() != "127.0.0.1:443" {
+		t.Errorf("addr = %v, want 127.0.0.1:443", got.addr)
+	}
+}
+
+func TestAttachGatewayBrokerErrors(t *testing.T) {
+	t.Run("missing broker", func(t *testing.T) {
+		dir := shortTempDir(t, "jb")
+		target := gatewayBrokerTarget{uid: testUID(), socketPath: filepath.Join(dir, "none.sock"), brokerUID: testUID(), addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}}
+		useGatewayBrokerHost(t, target)
+		ln, err := attachGatewayBroker(t.Context())
+		if err == nil {
+			_ = ln.Close()
+			t.Fatal("attach without a broker succeeded")
+		}
+		for _, want := range []string{"listener broker is not running", "jailoc-listener-broker"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q lacks %q", err, want)
+			}
+		}
+	})
+	t.Run("stale socket", func(t *testing.T) {
+		dir := shortTempDir(t, "jb")
+		sock := filepath.Join(dir, "stale.sock")
+		l, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.SetUnlinkOnClose(false)
+		if err := l.Close(); err != nil {
+			t.Fatal(err)
+		}
+		useGatewayBrokerHost(t, gatewayBrokerTarget{uid: testUID(), socketPath: sock, brokerUID: testUID(), addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}})
+		ln, err := attachGatewayBroker(t.Context())
+		if err == nil {
+			_ = ln.Close()
+			t.Fatal("attach to a stale socket succeeded")
+		}
+		if !strings.Contains(err.Error(), "listener broker is not running") {
+			t.Errorf("error = %q, want the not-running message", err)
+		}
+	})
+	t.Run("busy", func(t *testing.T) {
+		target := startTestListenerBroker(t)
+		useGatewayBrokerHost(t, target)
+		first, err := attachGatewayBroker(t.Context())
+		if err != nil {
+			t.Fatalf("first attach: %v", err)
+		}
+		t.Cleanup(func() { _ = first.Close() })
+		ln, err := attachGatewayBroker(t.Context())
+		if err == nil {
+			_ = ln.Close()
+			t.Fatal("second attach succeeded")
+		}
+		if !strings.Contains(err.Error(), "another gateway is attached") {
+			t.Errorf("error = %q, want the busy message", err)
+		}
+	})
+	t.Run("broker of another user", func(t *testing.T) {
+		target := startTestListenerBroker(t)
+		target.brokerUID = testUID() + 1
+		useGatewayBrokerHost(t, target)
+		ln, err := attachGatewayBroker(t.Context())
+		if err == nil {
+			_ = ln.Close()
+			t.Fatal("attach to a broker of the wrong user succeeded")
+		}
+	})
+}
+
+func TestGatewayListenerBrokerServesThroughBroker(t *testing.T) {
+	target := startTestListenerBroker(t)
+	useGatewayBrokerHost(t, target)
+	run, _ := startGatewayRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "through the broker")
+	}), "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(false, 3000), func(certFile, keyFile string) []string {
+		return []string{"--listener-broker", "--tls-cert", certFile, "--tls-key", keyFile}
+	})
+	if run.addr != target.addr.String() {
+		t.Errorf("gateway reports %s, want the broker address %s", run.addr, target.addr)
+	}
+	out := run.out.String()
+	if strings.Contains(out, "https://app.e2e.jailoc.local:") {
+		t.Errorf("URLs must carry no port:\n%s", out)
+	}
+	// The connection below reaches the gateway only through the broker: the
+	// gateway opened no listener of its own.
+	cookie := run.login(t)
+	res := run.do(t, "GET", "/", nil, cookie)
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK || string(body) != "through the broker" {
+		t.Fatalf("status %d, body %q", res.StatusCode, body)
+	}
+
+	// A second gateway is refused while this one is attached.
+	if _, err := attachGatewayBroker(t.Context()); err == nil || !strings.Contains(err.Error(), "another gateway is attached") {
+		t.Errorf("second attach error = %v, want the busy message", err)
+	}
+
+	// Stopping the gateway detaches it, so the next one can attach.
+	run.cancel()
+	select {
+	case <-run.done:
+		if run.err != nil {
+			t.Fatalf("gateway ended with %v on cancel, want nil", run.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway ignored cancellation")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ln, err := attachGatewayBroker(t.Context())
+		if err == nil {
+			_ = ln.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the broker stayed busy after the gateway stopped: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
