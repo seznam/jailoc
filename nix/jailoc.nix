@@ -21,7 +21,7 @@ buildGoModule {
     ];
   };
 
-  vendorHash = "sha256-ijOSykf4ONyj1LXF5tSNVPxGcxPxh2ZwF+ZXP18E50U=";
+  vendorHash = "sha256-aUR5CVfRuJiXn6SQkbBZm+rsfzueRWjLgu7++Cr79Z8=";
 
   subPackages = ["cmd/jailoc"];
 
