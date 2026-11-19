@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -47,7 +48,10 @@ It moves allowed_hosts, allowed_networks, filtered_dns, dns_upstream and
 dns_blocked_zones of [defaults] and every workspace into their network table
 and [[*.network.rules]].
 The previous config.toml is kept as a backup; comments in it are not carried
-over.`,
+over.
+
+When allow rules name hosts but no internal_zones are set, migrate also offers
+to add internal_zones to [defaults.network]; enter only zones you control.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
@@ -260,7 +264,82 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		}}, d.Network.Rules...)
 		m.changes = append(m.changes, `[[defaults.network.rules]]: add allow = ["*"] (public internet)`)
 	}
+	if err := askInternalZones(cfg, p, m); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// needsInternalZones reports whether an allow rule names a host while no
+// internal_zones are set anywhere, so the allowed names cannot resolve to
+// private addresses.
+func needsInternalZones(cfg *config.Config) bool {
+	if len(cfg.Defaults.Network.Get().InternalZones) > 0 {
+		return false
+	}
+	hasName := false
+	scan := func(n *config.Network) {
+		for _, r := range n.Get().Rules {
+			for _, target := range r.Allow {
+				if kind, _, err := config.ParseRuleTarget(target); err == nil && kind == "name" {
+					hasName = true
+				}
+			}
+		}
+	}
+	scan(cfg.Defaults.Network)
+	for _, ws := range cfg.Workspaces {
+		if len(ws.Network.Get().InternalZones) > 0 {
+			return false
+		}
+		scan(ws.Network)
+	}
+	return hasName
+}
+
+// askInternalZones offers to set [defaults.network] internal_zones when
+// allow rules name hosts but no zone is configured. An empty answer or
+// --yes keeps the configuration as it is.
+func askInternalZones(cfg *config.Config, p *prompter, m *migration) error {
+	if p.yes || !needsInternalZones(cfg) {
+		return nil
+	}
+	_, _ = fmt.Fprintln(p.out, "\nAllow rules name hosts, but no internal_zones are set.")
+	_, _ = fmt.Fprintln(p.out, "  internal_zones lists DNS zones you control and trust; only add zones you control.")
+	_, _ = fmt.Fprintln(p.out, "  Names in a zone and its subdomains may resolve to private addresses.")
+	_, _ = fmt.Fprintln(p.out, "  Outside the zones, private DNS answers are filtered to prevent DNS rebinding.")
+	_, _ = fmt.Fprintln(p.out, "  A zone alone grants no access; a matching allow rule is still needed.")
+	_, _ = fmt.Fprintln(p.out, "  The zones are written to [defaults.network] internal_zones and apply to every workspace.")
+	for {
+		_, _ = fmt.Fprint(p.out, "Internal zones (comma or space separated, empty to skip): ")
+		line, err := p.in.ReadString('\n')
+		if strings.TrimSpace(line) == "" && err != nil {
+			return fmt.Errorf("read internal zones: %w", err)
+		}
+		fields := strings.FieldsFunc(line, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+		if len(fields) == 0 {
+			return nil
+		}
+		zones := make([]string, len(fields))
+		valid := true
+		for i, f := range fields {
+			if err := config.ValidateInternalZone(f); err != nil {
+				_, _ = fmt.Fprintf(p.out, "  %v\n", err)
+				valid = false
+			}
+			zones[i] = config.NormalizeInternalZone(f)
+		}
+		if !valid {
+			continue
+		}
+		zones = uniqueStrings(zones)
+		if cfg.Defaults.Network == nil {
+			cfg.Defaults.Network = &config.Network{}
+		}
+		cfg.Defaults.Network.InternalZones = zones
+		m.changes = append(m.changes, fmt.Sprintf("[defaults.network]: add internal_zones (%s)", strings.Join(zones, ", ")))
+		return nil
+	}
 }
 
 func hasAnyNetworkRules(cfg *config.Config) bool {
