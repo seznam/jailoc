@@ -203,3 +203,84 @@ func TestPrintNetworkRulesShowsLogFalse(t *testing.T) {
 		t.Fatalf("output = %q, want %q", out, want)
 	}
 }
+
+func TestPrintConfigWarningsMigrateFooter(t *testing.T) {
+	// captureStderr swaps os.Stderr: do not run in parallel.
+	const footer = "Run `jailoc migrate` to update deprecated settings in config.toml.\n"
+	const rules = "[[defaults.network.rules]]\nallow = [\"*\"]\n"
+	tests := []struct {
+		name       string
+		toml       string
+		wantFooter bool
+		wantParts  []string
+	}{
+		{
+			name:       "single legacy notice with rules",
+			toml:       "[defaults]\nallowed_hosts = [\"example.com\"]\n" + rules,
+			wantFooter: true,
+			wantParts:  []string{"allowed_hosts is deprecated"},
+		},
+		{
+			name:       "multiple notices",
+			toml:       "[defaults]\nallowed_hosts = [\"example.com\"]\nallowed_networks = [\"10.0.0.0/8\"]\n" + rules,
+			wantFooter: true,
+			wantParts:  []string{"allowed_hosts is deprecated", "allowed_networks is deprecated"},
+		},
+		{
+			name:       "no notices",
+			toml:       rules + "\n[workspaces.demo]\npaths = [\"/srv/demo\"]\n",
+			wantFooter: false,
+		},
+		{
+			name:       "unknown key only",
+			toml:       "[defaults]\nbogus_setting = true\n" + rules,
+			wantFooter: false,
+			wantParts:  []string{"unknown setting \"defaults.bogus_setting\""},
+		},
+		{
+			name:       "no rules only",
+			toml:       "[workspaces.demo]\npaths = [\"/srv/demo\"]\n",
+			wantFooter: true,
+			wantParts:  []string{"no [[*.network.rules]] configured", "allow = [\"*\"]", "[[defaults.network.rules]]"},
+		},
+		{
+			name:       "legacy and no rules",
+			toml:       "[defaults]\nallowed_hosts = [\"example.com\"]\nbogus_setting = true\n\n[workspaces.demo]\npaths = [\"/srv/demo\"]\n",
+			wantFooter: true,
+			wantParts:  []string{"unknown setting", "allowed_hosts is deprecated", "no [[*.network.rules]] configured"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tt.toml), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := config.LoadFrom(path)
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+
+			out := captureStderr(t, func() { printConfigWarnings(cfg) })
+
+			last := -1
+			for _, part := range tt.wantParts {
+				idx := strings.Index(out, part)
+				if idx < 0 {
+					t.Fatalf("stderr missing %q:\n%s", part, out)
+				}
+				if idx < last {
+					t.Fatalf("stderr part %q out of order:\n%s", part, out)
+				}
+				last = idx
+			}
+			if got := strings.Count(out, "jailoc migrate"); tt.wantFooter && got != 1 || !tt.wantFooter && got != 0 {
+				t.Fatalf("jailoc migrate mentions = %d, want footer=%v:\n%s", got, tt.wantFooter, out)
+			}
+			if tt.wantFooter && !strings.HasSuffix(out, footer) {
+				t.Fatalf("stderr does not end with footer:\n%s", out)
+			}
+		})
+	}
+}

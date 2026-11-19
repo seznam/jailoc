@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -377,5 +379,260 @@ allowed_hosts = ["db.corp.example"]
 	want := `warning: [defaults]: allowed host "db.corp.example" is an alias of "db-node.corp.example", outside internal_zones`
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("output misses %q:\n%s", want, out)
+	}
+}
+
+const internalZonesPrompt = "Internal zones"
+
+func vmDefaultsWithRules(allow, deny []string, zones []string) config.Defaults {
+	return config.Defaults{
+		Backend: config.BackendVM,
+		Network: &config.Network{
+			InternalZones: zones,
+			Rules:         []config.NetworkRule{{Name: "r", Allow: allow, Deny: deny, Proto: config.RuleProtoAny}},
+		},
+	}
+}
+
+func TestPlanMigrationAsksInternalZones(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		cfg  *config.Config
+		asks bool
+	}{
+		{"defaults hostname", &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}, true},
+		{"defaults wildcard hostname", &config.Config{Defaults: vmDefaultsWithRules([]string{"*.corp.example"}, nil, nil)}, true},
+		{"empty zones list", &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, []string{})}, true},
+		{"workspace hostname", &config.Config{
+			Defaults: config.Defaults{Backend: config.BackendVM},
+			Workspaces: map[string]config.Workspace{"web": {Network: &config.Network{
+				Rules: []config.NetworkRule{{Name: "r", Allow: []string{"git.corp.example"}, Proto: config.RuleProtoAny}},
+			}}},
+		}, true},
+		{"defaults zones", &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, []string{"corp.example"})}, false},
+		{"workspace zones", &config.Config{
+			Defaults:   vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil),
+			Workspaces: map[string]config.Workspace{"web": {Network: &config.Network{InternalZones: []string{"corp.example"}}}},
+		}, false},
+		{"migrated allowed_hosts zones", &config.Config{Defaults: config.Defaults{Backend: config.BackendVM, AllowedHosts: []string{"git.corp.example"}}}, false},
+		{"wildcard allow", &config.Config{Defaults: vmDefaultsWithRules([]string{"*"}, nil, nil)}, false},
+		{"ip and cidr allow", &config.Config{Defaults: vmDefaultsWithRules([]string{"10.1.2.3", "10.0.0.0/8"}, nil, nil)}, false},
+		{"hostname deny only", &config.Config{Defaults: vmDefaultsWithRules(nil, []string{"git.corp.example"}, nil)}, false},
+		{"no rules", &config.Config{Defaults: config.Defaults{Backend: config.BackendVM}}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p, out := scripted("")
+			if _, err := planMigration(tt.cfg, p, os.Stat); err != nil {
+				t.Fatalf("planMigration: %v\n%s", err, out)
+			}
+			if got := strings.Contains(out.String(), internalZonesPrompt); got != tt.asks {
+				t.Fatalf("asked = %v, want %v\n%s", got, tt.asks, out)
+			}
+		})
+	}
+}
+
+func TestPlanMigrationInternalZonesExplanation(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
+	p, out := scripted("")
+	if _, err := planMigration(cfg, p, os.Stat); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"zones you control",
+		"subdomains",
+		"private addresses",
+		"rebinding",
+		"A zone alone grants no access",
+		"[defaults.network]",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("explanation misses %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestPlanMigrationInternalZonesSkipped(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		yes  bool
+		in   []string
+	}{
+		{"blank answer", false, []string{""}},
+		{"whitespace answer", false, []string{" , "}},
+		{"yes flag", true, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
+			p, out := scripted(tt.in...)
+			p.yes = tt.yes
+			m, err := planMigration(cfg, p, os.Stat)
+			if err != nil {
+				t.Fatalf("planMigration: %v\n%s", err, out)
+			}
+			if got := cfg.Defaults.Network.InternalZones; len(got) != 0 {
+				t.Fatalf("internal_zones = %v, want none", got)
+			}
+			if len(m.changes) != 0 {
+				t.Fatalf("changes = %v, want none", m.changes)
+			}
+			if tt.yes && strings.Contains(out.String(), internalZonesPrompt) {
+				t.Fatalf("--yes asked:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestPlanMigrationInternalZonesInput(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
+	p, out := scripted("Corp.Example., *.lab.example\tcorp.example,db.example")
+	m, err := planMigration(cfg, p, os.Stat)
+	if err != nil {
+		t.Fatalf("planMigration: %v\n%s", err, out)
+	}
+	if want := []string{"corp.example", "lab.example", "db.example"}; !slices.Equal(cfg.Defaults.Network.InternalZones, want) {
+		t.Fatalf("internal_zones = %v, want %v", cfg.Defaults.Network.InternalZones, want)
+	}
+	if want := "[defaults.network]: add internal_zones (corp.example, lab.example, db.example)"; !slices.Contains(m.changes, want) {
+		t.Fatalf("changes = %v, want %q", m.changes, want)
+	}
+}
+
+func TestPlanMigrationInternalZonesCreatesNetworkTable(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Defaults: config.Defaults{Backend: config.BackendVM},
+		Workspaces: map[string]config.Workspace{"web": {Network: &config.Network{
+			Rules: []config.NetworkRule{{Name: "r", Allow: []string{"git.corp.example"}, Proto: config.RuleProtoAny}},
+		}}},
+	}
+	p, out := scripted("corp.example")
+	if _, err := planMigration(cfg, p, os.Stat); err != nil {
+		t.Fatalf("planMigration: %v\n%s", err, out)
+	}
+	if got := cfg.Defaults.Network.Get().InternalZones; !slices.Equal(got, []string{"corp.example"}) {
+		t.Fatalf("defaults internal_zones = %v", got)
+	}
+	if got := cfg.Workspaces["web"].Network.InternalZones; len(got) != 0 {
+		t.Fatalf("workspace internal_zones = %v, want none", got)
+	}
+}
+
+func TestPlanMigrationInternalZonesRetry(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
+	// The first answer mixes a valid zone with a public suffix: nothing of it is kept.
+	p, out := scripted("corp.example, com", "app.nip.io", "10.0.0.1", "*", "lab.example")
+	if _, err := planMigration(cfg, p, os.Stat); err != nil {
+		t.Fatalf("planMigration: %v\n%s", err, out)
+	}
+	if want := []string{"lab.example"}; !slices.Equal(cfg.Defaults.Network.InternalZones, want) {
+		t.Fatalf("internal_zones = %v, want %v\n%s", cfg.Defaults.Network.InternalZones, want, out)
+	}
+	if n := strings.Count(out.String(), internalZonesPrompt); n != 5 {
+		t.Fatalf("prompted %d times, want 5\n%s", n, out)
+	}
+	for _, want := range []string{`"com"`, `"app.nip.io"`, `"10.0.0.1"`, `"*"`} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output misses error for %s:\n%s", want, out)
+		}
+	}
+}
+
+func TestPlanMigrationInternalZonesEOF(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
+	out := &bytes.Buffer{}
+	p := &prompter{in: bufio.NewReader(strings.NewReader("")), out: out, resolver: &fakeResolver{}}
+	_, err := planMigration(cfg, p, os.Stat)
+	if err == nil || !strings.Contains(err.Error(), "read internal zones") || !errors.Is(err, io.EOF) {
+		t.Fatalf("planMigration error = %v, want wrapped read error\n%s", err, out)
+	}
+	if len(cfg.Defaults.Network.InternalZones) != 0 {
+		t.Fatalf("internal_zones = %v, want none", cfg.Defaults.Network.InternalZones)
+	}
+}
+
+const internalZonesConfig = `[defaults]
+backend = "vm"
+
+[[defaults.network.rules]]
+name = "internet"
+allow = ["*", "git.corp.example"]
+`
+
+func TestRunMigrateAddsInternalZones(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(internalZonesConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, out := scripted("corp.example", "y")
+	if err := runMigrate(context.Background(), path, p); err != nil {
+		t.Fatalf("runMigrate: %v\n%s", err, out)
+	}
+	backup, err := os.ReadFile(path + ".pre-vm-migration") //nolint:gosec // G304: test file
+	if err != nil || string(backup) != internalZonesConfig {
+		t.Fatalf("backup = %q, %v", backup, err)
+	}
+	cfg, err := config.ReadRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Defaults.Network.Get().InternalZones; !slices.Equal(got, []string{"corp.example"}) {
+		t.Fatalf("internal_zones = %v\n%s", got, out)
+	}
+
+	p, out = scripted()
+	if err := runMigrate(context.Background(), path, p); err != nil || strings.Contains(out.String(), internalZonesPrompt) || !strings.Contains(out.String(), "nothing to migrate") {
+		t.Fatalf("second run = %v\n%s", err, out)
+	}
+}
+
+func TestRunMigrateDeclinedKeepsInternalZonesUnapplied(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(internalZonesConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, out := scripted("corp.example", "n")
+	if err := runMigrate(context.Background(), path, p); err != nil {
+		t.Fatalf("runMigrate: %v\n%s", err, out)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != internalZonesConfig { //nolint:gosec // G304: test file
+		t.Fatalf("config changed = %q, %v", data, err)
+	}
+	if _, err := os.Stat(path + ".pre-vm-migration"); !os.IsNotExist(err) {
+		t.Fatalf("backup exists: %v", err)
+	}
+}
+
+// TestRunMigrateDryRunAsksInternalZones is not parallel: it sets the
+// migrateDryRun flag, and parallel tests only resume after serial ones finish.
+func TestRunMigrateDryRunAsksInternalZones(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(internalZonesConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	migrateDryRun = true
+	t.Cleanup(func() { migrateDryRun = false })
+	p, out := scripted("corp.example")
+	if err := runMigrate(context.Background(), path, p); err != nil {
+		t.Fatalf("runMigrate: %v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), internalZonesPrompt) || !strings.Contains(out.String(), `internal_zones = ["corp.example"]`) {
+		t.Fatalf("dry run output:\n%s", out)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != internalZonesConfig { //nolint:gosec // G304: test file
+		t.Fatalf("config changed = %q, %v", data, err)
+	}
+	if _, err := os.Stat(path + ".pre-vm-migration"); !os.IsNotExist(err) {
+		t.Fatalf("backup exists: %v", err)
 	}
 }

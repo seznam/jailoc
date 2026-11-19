@@ -362,7 +362,7 @@ func DeprecationWarnings(cfg *Config) []string {
 		}
 	}
 	if !hasRules && len(cfg.Workspaces) > 0 {
-		warnings = append(warnings, "no [[*.network.rules]] configured: only coding agent endpoints are allowed; run `jailoc migrate` to add allow = [\"*\"] or configure [[defaults.network.rules]]")
+		warnings = append(warnings, "no [[*.network.rules]] configured: only coding agent endpoints are allowed; add allow = [\"*\"] or configure [[defaults.network.rules]]")
 	}
 
 	return warnings
