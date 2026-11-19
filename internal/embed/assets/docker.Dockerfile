@@ -12,7 +12,7 @@ ARG DOCKER_VERSION=29.9.2
 ARG BUILDX_VERSION=0.38.1
 ARG COMPOSE_VERSION=5.6.1
 
-FROM ubuntu:24.04 AS docker
+FROM ubuntu:26.04 AS docker
 
 # The apt cache mounts are stripped for the classic builder; this stage isn't
 # part of the final image, so it leaves its apt files behind either way.
