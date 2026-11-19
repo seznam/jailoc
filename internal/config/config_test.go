@@ -4133,3 +4133,68 @@ paths = ["/data/inherited"]
 		t.Errorf("defaults dns_blocked_zones = %#v", zones)
 	}
 }
+
+func TestAgentDefaultArgsRoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `[defaults.agents.opencode]
+default_args = ["--auto", "--mine"]
+
+[workspaces.cleared]
+paths = ["/data/cleared"]
+
+[workspaces.cleared.agents.opencode]
+default_args = []
+
+[workspaces.inherited]
+paths = ["/data/inherited"]
+
+[workspaces.inherited.agents.opencode]
+install = false
+`)
+	first, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	data, err := Encode(first)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	path2 := filepath.Join(dir, "config2.toml")
+	writeFile(t, path2, string(data))
+	second, err := LoadFrom(path2)
+	if err != nil {
+		t.Fatalf("second LoadFrom: %v\n%s", err, data)
+	}
+	if got := second.Workspaces["cleared"].Agents["opencode"].DefaultArgs; got == nil || len(got) != 0 {
+		t.Errorf("cleared default_args = %#v, want an explicitly empty list", got)
+	}
+	if got := second.Workspaces["inherited"].Agents["opencode"].DefaultArgs; got != nil {
+		t.Errorf("inherited default_args = %#v, want nil", got)
+	}
+	if got := second.Defaults.Agents["opencode"].DefaultArgs; !slices.Equal(got, []string{"--auto", "--mine"}) {
+		t.Errorf("defaults default_args = %#v", got)
+	}
+}
+
+func TestLoadAgentDefaultArgsInvalidTypes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"string not list", `default_args = "--auto"`},
+		{"non-string entry", `default_args = ["--auto", 1]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "config.toml")
+			writeFile(t, path, "[workspaces.test]\npaths = [\"/data/work\"]\n\n[workspaces.test.agents.opencode]\n"+tt.value+"\n")
+			if _, err := LoadFrom(path); err == nil {
+				t.Fatal("LoadFrom accepted invalid default_args")
+			}
+		})
+	}
+}

@@ -326,6 +326,11 @@ type AgentSettings struct {
 	// when the configuration is written back: it clears the defaults' args,
 	// which an omitted list inherits.
 	Args []string `toml:"args"`
+	// DefaultArgs replace the harness's built-in default flags (for example
+	// the ones that skip permission prompts); flags jailoc requires stay.
+	// An empty list is kept when the configuration is written back: it
+	// removes the built-in defaults, which an omitted list keeps.
+	DefaultArgs []string `toml:"default_args"`
 	// Mounts are merged by guest path over the harness mounts, before the
 	// [defaults] and workspace mounts.
 	Mounts []string `toml:"mounts,omitempty"`

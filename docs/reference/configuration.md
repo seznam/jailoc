@@ -618,7 +618,7 @@ dockerfile = "~/projects/my-project/overlay.Dockerfile"
 
 ## Coding agents
 
-Each workspace runs one coding agent. Sessions start it in unattended mode, because the VM is the security boundary.
+Each workspace runs one coding agent. By default, sessions start it in unattended mode, because the VM is the security boundary. The flags that enable unattended mode are the agent's [`default_args`](#agents), which a configuration can replace or clear.
 
 `opencode` is an alias of `opencode2`: it runs the same harness and shares its persistent home directories, while `agents.opencode` and `agents.opencode2` are separate tables.
 
@@ -633,7 +633,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 | `omo` | OmO | `omo-ai` |
 | `agy` | Antigravity CLI | GitHub release `google-antigravity/antigravity-cli` |
 
-**Session command and flags**
+**Default session command and flags**
 
 | `agent` | Session command | Continue (`-c`) | Resume (`-s ID`) |
 |---------|-----------------|-----------------|------------------|
@@ -666,7 +666,20 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 | `omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
 | `agy` | `AGY_CLI_DISABLE_AUTO_UPDATE=1` |
 
-**Session command line**: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
+**Optional default arguments**
+
+| `agent` | Built-in `default_args` |
+|---------|-------------------------|
+| `opencode2`, `opencode` | `["--auto"]` |
+| `opencode1` | `[]` |
+| `claude` | `["--dangerously-skip-permissions"]` |
+| `copilot` | `["--allow-all"]` |
+| `omo` | `["--permission-preset", "full-access"]` |
+| `agy` | `["--dangerously-skip-permissions"]` |
+
+`--standalone` of `opencode2`, and the plugin flags `--settings` and `--extension`, are not default arguments: they are always present.
+
+**Session command line**: the agent binary, its always-present `--standalone` (for `opencode2`), the effective `default_args`, the plugin flags (`--settings`, `--extension`), the continue or resume flag, then `args` from [`agents`](#agents). The default session command table shows the line with the built-in `default_args`.
 
 **Agent-specific behavior**
 
@@ -694,14 +707,18 @@ Settings per agent live in `[defaults.agents.<name>]` and `[workspaces.<ws>.agen
 | `from` | string | | Custom agents only: the built-in agent it is derived from. |
 | `install` | bool | `true` | Install the agent in the images jailoc builds. With `false`, the image must provide the binary, for example through the workspace `dockerfile`. |
 | `version` | string | (pinned) | npm or release version installed instead of the version pinned by jailoc, e.g. `"2.1.400"`. |
-| `args` | string[] | `[]` | Arguments appended to every session command line. |
+| `default_args` | string[] | (built-in) | Optional default arguments of the session command line, such as the flags that enable unattended mode. A set list replaces the built-in ones. See the built-in values under [Coding agents](#coding-agents). |
+| `args` | string[] | `[]` | Arguments appended to every session command line, after `default_args`. |
 | `mounts` | string[] | `[]` | Mounts added while the agent is selected. See [Agent mounts](#agent-mounts). |
 | `profile` | `false` or string | (unset) | Where the agent's persistent home directories live. See [Agent profiles](#agent-profiles). |
 
 Field notes:
 
 - `version`: must be an exact version; dist-tags such as `latest` are rejected. For `agy`, jailoc reads the checksums of another version's assets from the GitHub API.
-- `args`: a workspace list replaces the `[defaults]` list; `args = []` clears it.
+- `default_args`: an unset field inherits the value from `[defaults]` (or the base agent for a custom agent), falling back to the built-in `default_args` of the agent's harness. `default_args = []` clears them, and a non-empty list replaces them. Each entry is one argument. It doesn't touch the always-present arguments (`--standalone` of `opencode2`, `--settings` and `--extension` of the plugin) or `args`. Each of `default_args` and `args` is inherited independently of the other.
+- `default_args` is not a permission policy. Removing a flag doesn't prevent the agent from running without prompts: imported agent settings, or entries in `args`, can still enable a permission bypass. The VM remains the boundary.
+- `args`: a workspace list replaces the `[defaults]` list; `args = []` clears it. `args = []` removes only the extra arguments you added; the built-in `default_args` stay. `default_args = []` removes the built-in defaults; `args` stay.
+- A change to `default_args` or `args` applies to sessions started afterwards (new, resumed or continued). A running attached session keeps its arguments. Neither needs `jailoc restart` or `jailoc reload`.
 - `mounts`: same syntax and validation as [`mounts`](#mounts). An empty host (`":/home/agent/.agents"`) removes a mount added by the agent or an earlier table.
 - `profile` values: unset means per workspace; `false` means per workspace, emptied on every VM start; a name selects the shared profile `~/.local/share/jailoc/profiles/<name>`.
 
@@ -733,7 +750,7 @@ agent = "claude-opus"
 ```
 
 - A custom agent defined in `[defaults]` can be selected and configured in any workspace; one defined in a workspace only there.
-- Each field except `mounts` and `profile` takes the first value set in, in this order:
+- Each field except `mounts` and `profile` takes the first value set in, in this order (`default_args` counts as set when written, including `[]`):
     1. the workspace's table of the agent
     2. the defaults' table of the agent
     3. for a custom agent, the workspace's table of the agent it is derived from
