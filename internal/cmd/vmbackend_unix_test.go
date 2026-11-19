@@ -1235,6 +1235,16 @@ func TestVMFailure(t *testing.T) {
 		"jailoc-init:   /dev/vdb             20463184   1000000  19000000   5% /var/lib/docker\n" +
 		"resize2fs: Bad magic number in super-block\n" +
 		"jailoc-init: resize2fs /dev/vdb failed\n"
+	const dfBlocksHealthy = "Filesystem      1K-blocks    Used Available Use% Mounted on\n" +
+		"/dev/vdb         20463184 20000000     12345  99% /var/lib/docker\n"
+	const dfInodesHealthy = "Filesystem      Inodes IUsed IFree IUse% Mounted on\n" +
+		"/dev/vdb        1310720 52311 1258409    4% /var/lib/docker\n"
+	const dfInodesFull = "Filesystem      Inodes   IUsed IFree IUse% Mounted on\n" +
+		"/dev/vdb        1310720 1310720     0  100% /var/lib/docker\n"
+	const dfBlocksOK = "Filesystem      1K-blocks    Used Available Use% Mounted on\n" +
+		"/dev/vdb         20463184  1000000  19000000   5% /var/lib/docker\n"
+	hostAmbiguous := []string{"no guest console evidence", "root filesystem", "host's free space", "only if the console log shows"}
+	notGuestFull := []string{"Docker data filesystem is full", "this is the guest filesystem, not the host"}
 	tests := []struct {
 		name       string
 		stateError string
@@ -1316,6 +1326,62 @@ func TestVMFailure(t *testing.T) {
 			console:    new("boot ok\n"),
 			want:       []string{"grow data disk", "host", "no guest console evidence", "[vm] builder_disk"},
 			notWant:    []string{"Docker data filesystem is full", "console.log (not found)"},
+		},
+		{
+			name:    "apk ENOSPC on the root path with a healthy docker df is not attributed to Docker",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj", DiskSize: 20 << 30},
+			console: new("ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n" + dfBlocksHealthy + dfInodesHealthy),
+			want:    append([]string{"/usr/lib/libfoo.so", `docker_disk of workspace "proj"`}, hostAmbiguous...),
+			notWant: notGuestFull,
+		},
+		{
+			name:    "bare console ENOSPC without df or path is not attributed to Docker",
+			spec:    &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console: new("level=fatal msg=\"no space left on device\"\n"),
+			want:    append([]string{"[vm] builder_disk"}, hostAmbiguous...),
+			notWant: notGuestFull,
+		},
+		{
+			name:    "inode exhaustion in the data df with a generic ENOSPC is guest evidence",
+			spec:    &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console: new("level=fatal msg=\"no space left on device\"\n" + dfBlocksOK + dfInodesFull),
+			want:    []string{"Docker data filesystem is full", "this is the guest filesystem, not the host", "[vm] builder_disk"},
+			notWant: []string{"no guest console evidence", "only if"},
+		},
+		{
+			name:    "ENOSPC on a path under the data directory without df is guest evidence",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("level=fatal msg=\"docker: failed to mkdir /var/lib/docker/tmp: no space left on device\"\n"),
+			want:    []string{"Docker data filesystem is full", `docker_disk of workspace "proj"`},
+			notWant: []string{"no guest console evidence", "only if"},
+		},
+		{
+			name:    "ENOSPC on exactly the data directory is guest evidence",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("mkdir /var/lib/docker: No space left on device\n"),
+			want:    []string{"Docker data filesystem is full"},
+			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name:    "rounded 100 percent with free blocks is not exhaustion",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("fatal: no space left on device\n" + dfBlocksHealthy + dfInodesHealthy),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "a generic message that names the data directory but fails on another path is not attributed to Docker",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("level=error msg=\"cleanup of /var/lib/docker skipped; write /usr/lib/x: no space left on device\"\n" + dfBlocksOK + dfInodesHealthy),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "a sibling directory with the data directory as prefix is not the data directory",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("write /var/lib/docker-old/x: no space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
 		},
 		{
 			name:       "builder startup fatal shows the line and console path",

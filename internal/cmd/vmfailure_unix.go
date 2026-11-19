@@ -25,11 +25,14 @@ const (
 	failureDiskLines  = 4
 
 	noSpaceLeft = "no space left on device"
+	// dockerDataDir is where the guest mounts the Docker data disk.
+	dockerDataDir = "/var/lib/docker"
 )
 
 // vmFailure explains why a VM did not come up, from its state, guest console
 // or log. A full guest Docker disk gets its own explanation and remedy; an
-// out-of-space error without guest console evidence may be the host's.
+// out-of-space error without concrete evidence of it (the failing path or the
+// data disk's df) may be the guest root or the host filesystem.
 func vmFailure(stateDir, logPath string) string {
 	stateErr := ""
 	if st, err := vm.ReadState(stateDir); err == nil {
@@ -40,7 +43,7 @@ func vmFailure(stateDir, logPath string) string {
 	diag := consoleDiagnostics(console, stateErr)
 	switch {
 	case hasNoSpace(console):
-		return diskFullFailure(stateDir, stateErr, consolePath, diag, consoleFound, true)
+		return diskFullFailure(stateDir, stateErr, consolePath, diag, consoleFound, diag.dataFull)
 	case hasNoSpace(stateErr):
 		return diskFullFailure(stateDir, stateErr, consolePath, diag, consoleFound, false)
 	}
@@ -116,8 +119,9 @@ func readLogTail(path string, limit int64) (string, bool) {
 
 // diskFullFailure describes an out-of-space failure: what the guest
 // reported, where to look, and which setting grows the disk. guestEvidence
-// tells whether the guest console itself reported it; without that the error
-// may come from the host filesystem that holds the disk image.
+// tells whether the guest console shows the Docker data filesystem full; without
+// that the error may come from the guest root filesystem or from the host
+// filesystem that holds the disk images.
 func diskFullFailure(stateDir, stateErr, consolePath string, diag consoleDiag, consoleFound, guestEvidence bool) string {
 	parts := []string{}
 	if stateErr != "" {
@@ -129,7 +133,7 @@ func diskFullFailure(stateDir, stateErr, consolePath string, diag consoleDiag, c
 	if guestEvidence {
 		parts = append(parts, noSpaceLeft+" inside the guest: its Docker data filesystem is full, either of blocks or of inodes; this is the guest filesystem, not the host's free space")
 	} else {
-		parts = append(parts, noSpaceLeft+" was reported, but there is no guest console evidence of a full guest Docker filesystem: it may be the host filesystem holding the data disk image that is out of space, so check the host's free space too")
+		parts = append(parts, noSpaceLeft+" was reported, but there is no guest console evidence of a full Docker data filesystem (a failing path under "+dockerDataDir+", or a df of it with no free blocks or inodes): it may be the guest root filesystem, which is backed by host storage, or the host filesystem holding the disk images, so check the host's free space too")
 	}
 	for _, line := range diag.df {
 		parts = append(parts, "guest df: "+line)
@@ -150,7 +154,7 @@ func diskFullFailure(stateDir, stateErr, consolePath string, diag consoleDiag, c
 	}
 	remedy := growthRemedy(spec)
 	if !guestEvidence {
-		remedy = "only if the console log shows the guest filesystem full: " + remedy
+		remedy = "only if the console log shows the Docker data filesystem full: " + remedy
 	}
 	parts = append(parts,
 		"console log: "+consoleNote+" (look for the guest df -k and df -i output there)",
@@ -167,15 +171,26 @@ type consoleDiag struct {
 	startup []string
 	// df: header and rows of the guest df listings.
 	df []string
+	// dataFull: a console line shows the Docker data filesystem full, either
+	// an out-of-space error on a path under dockerDataDir or a df row of it
+	// with no free blocks or inodes.
+	dataFull bool
 }
 
 // consoleDiagnostics picks, from the console tail, the last fatal lines and
 // the guest df lines, sanitized and length-capped. Lines equal to skip are left out.
 func consoleDiagnostics(console, skip string) consoleDiag {
 	var cause, startup, df []string
+	dataFull := false
 	for line := range strings.SplitSeq(console, "\n") {
 		line = sanitizeConsoleLine(line)
-		if line == "" || line == skip {
+		if line == "" {
+			continue
+		}
+		if dataFilesystemFull(line) {
+			dataFull = true
+		}
+		if line == skip {
 			continue
 		}
 		if row, ok := dfLine(line); ok {
@@ -190,10 +205,34 @@ func consoleDiagnostics(console, skip string) consoleDiag {
 		}
 	}
 	return consoleDiag{
-		cause:   lastN(cause, failureCauseLines),
-		startup: lastN(startup, failureCauseLines),
-		df:      lastN(df, failureDiskLines),
+		cause:    lastN(cause, failureCauseLines),
+		startup:  lastN(startup, failureCauseLines),
+		df:       lastN(df, failureDiskLines),
+		dataFull: dataFull,
 	}
+}
+
+// dataFilesystemFull reports whether one console line is concrete evidence
+// that the Docker data filesystem is full: an out-of-space error whose failing
+// path (the last word before the message) is dockerDataDir or below it, or a df
+// row of dockerDataDir with 0 available blocks or inodes. A df row at 100%
+// with space still available is rounding, not exhaustion.
+func dataFilesystemFull(line string) bool {
+	lower := strings.ToLower(line)
+	if i := strings.Index(lower, noSpaceLeft); i >= 0 {
+		words := strings.Fields(lower[:i])
+		if len(words) == 0 {
+			return false
+		}
+		path := strings.Trim(words[len(words)-1], `:,;"'`)
+		return path == dockerDataDir || strings.HasPrefix(path, dockerDataDir+"/")
+	}
+	row, ok := dfLine(line)
+	if !ok {
+		return false
+	}
+	fields := strings.Fields(row)
+	return len(fields) >= 6 && fields[3] == "0" && fields[len(fields)-1] == dockerDataDir
 }
 
 const initPrefix = "jailoc-init:"
