@@ -65,7 +65,7 @@ func newInitHarness(t *testing.T) *initHarness {
 	// Tools the init script calls; each records its invocation.
 	h.stub("blkid", `echo ext4`)
 	h.stub("mount", ``)
-	h.stub("mkfs.ext4", ``)
+	h.stub("mkfs.ext4", `[ -e "$STATE/installed/e2fsprogs" ] && [ -e "$STATE/installed/e2fsprogs-libs" ] || { echo "mkfs.ext4: not found" >&2; exit 127; }`)
 	h.stub("poweroff", ``)
 	h.stub("df", `echo "Filesystem 1K-blocks Used Available Use% Mounted on"`)
 	return h
@@ -86,27 +86,123 @@ func (h *initHarness) mark(name string) {
 	}
 }
 
-// apk simulates the package manager. Installing e2fsprogs-extra provides a
-// resize2fs; any write to a data disk marked full fails until resize2fs ran.
+// cacheDir and stageDir are the persistent (data disk) and the disposable
+// (root filesystem) APK cache of the init script under test.
+func (h *initHarness) cacheDir() string { return filepath.Join(h.root, "docker", ".jailoc-apk-cache") }
+func (h *initHarness) stageDir() string { return filepath.Join(h.root, "apk-stage") }
+
+// restartRoot simulates a reboot of the guest: the root filesystem (installed
+// packages, the staging APK cache, the call log) is discarded, the data disk
+// (its APK cache, the full and resized state) is kept.
+func (h *initHarness) restartRoot() {
+	h.t.Helper()
+	for _, p := range []string{filepath.Join(h.state, "installed"), filepath.Join(h.bin, "resize2fs"), h.stageDir(), h.calls} {
+		if err := os.RemoveAll(p); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+}
+
+// cached lists the package files of the persistent APK cache.
+func (h *initHarness) cached() []string {
+	h.t.Helper()
+	entries, err := os.ReadDir(h.cacheDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// warmCache puts package files into the persistent APK cache.
+func (h *initHarness) warmCache(pkgs ...string) {
+	h.t.Helper()
+	if err := os.MkdirAll(h.cacheDir(), 0o750); err != nil {
+		h.t.Fatal(err)
+	}
+	for _, p := range pkgs {
+		if err := os.WriteFile(filepath.Join(h.cacheDir(), p+".apk"), nil, 0o644); err != nil { //nolint:gosec // G306: test package file
+			h.t.Fatal(err)
+		}
+	}
+}
+
+// apk simulates the package manager of the pinned Alpine (apk-tools 3.0):
+//   - add is the only command and -q, --no-cache, --no-network and --cache-dir
+//     the only options; others (apk-tools 3 only flags such as
+//     --cache-packages, which apk-tools 2 lacks) fail the call.
+//   - A --cache-dir must exist. Packages downloaded with one are kept in it;
+//     packages found in it are installed from it, with or without network.
+//   - Installing a package installs its dependencies, but downloads only what
+//     the root filesystem lacks. Installing e2fsprogs-extra provides
+//     resize2fs, which needs e2fsprogs-libs; mkfs.ext4 needs e2fsprogs.
+//   - Downloading into a cache on a data disk marked full fails until
+//     resize2fs ran. The no-network mark makes the network unreachable.
 func (h *initHarness) apk() {
 	h.t.Helper()
 	h.stub("apk", `
-case "$*" in
-*e2fsprogs-extra*)
-	case "$*" in
-	*--no-network*) [ -e "$STATE/cache-warm" ] || exit 1 ;;
-	*--no-cache*) [ ! -e "$STATE/no-network" ] || { echo "network unreachable" >&2; exit 1; } ;;
+apk_deps() {
+	case "$1" in
+	e2fsprogs) echo "e2fsprogs-libs libcom_err" ;;
+	e2fsprogs-extra) echo "e2fsprogs-libs" ;;
+	nftables) echo "libmnl" ;;
 	esac
-	printf '#!/bin/sh\necho "resize2fs $*" >> "$CALLS"\n[ ! -e "$STATE/resize-fails" ] || exit 1\ntouch "$STATE/resized"\n' > "$BIN/resize2fs"
-	chmod +x "$BIN/resize2fs"
-	;;
-*nftables*)
-	case "$*" in *--no-network*) exit 1 ;; esac
-	if [ -e "$STATE/full" ] && [ ! -e "$STATE/resized" ]; then
-		echo "apk: No space left on device" >&2
+}
+want=
+closure() {
+	case " $want " in *" $1 "*) return 0 ;; esac
+	want="$want $1"
+	for dep in $(apk_deps "$1"); do closure "$dep"; done
+}
+[ "${1:-}" = add ] || { echo "apk: unsupported command $*" >&2; exit 99; }
+shift
+nonet= cdir= pkgs=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-q|--no-cache) ;;
+	--no-network) nonet=1 ;;
+	--cache-dir) shift; cdir=${1:-} ;;
+	-*) echo "apk: unsupported option $1" >&2; exit 99 ;;
+	*) pkgs="$pkgs $1" ;;
+	esac
+	shift
+done
+if [ -n "$cdir" ] && [ ! -d "$cdir" ]; then
+	echo "apk: $cdir: No such file or directory" >&2
+	exit 1
+fi
+for p in $pkgs; do closure "$p"; done
+mkdir -p "$STATE/installed"
+fetch=
+for p in $want; do
+	[ ! -e "$STATE/installed/$p" ] || continue
+	if [ -n "$cdir" ] && [ -e "$cdir/$p.apk" ]; then continue; fi
+	if [ -n "$nonet" ] || [ -e "$STATE/no-network" ]; then
+		echo "apk: unable to select packages: $p (network unreachable or not cached)" >&2
 		exit 1
 	fi
-	;;
+	fetch="$fetch $p"
+done
+if [ -n "$fetch" ] && [ -n "$cdir" ]; then
+	case "$cdir" in
+	"$DATA_MOUNT"/*)
+		if [ -e "$STATE/full" ] && [ ! -e "$STATE/resized" ]; then
+			echo "apk: $cdir: No space left on device" >&2
+			exit 1
+		fi ;;
+	esac
+	for p in $fetch; do touch "$cdir/$p.apk"; done
+fi
+for p in $want; do touch "$STATE/installed/$p"; done
+case " $want " in *" e2fsprogs-extra "*)
+	printf '#!/bin/sh\necho "resize2fs $*" >> "$CALLS"\n[ -e "$STATE/installed/e2fsprogs-libs" ] || exit 127\n[ ! -e "$STATE/resize-fails" ] || exit 1\ntouch "$STATE/resized"\n' > "$BIN/resize2fs"
+	chmod +x "$BIN/resize2fs" ;;
 esac
 `)
 }
@@ -118,6 +214,7 @@ func (h *initHarness) run(script string, env ...string) (string, int) {
 DATA_DEV=/dev/vda
 DATA_DIR=%[1]s/docker
 APKCACHE=$DATA_DIR/.jailoc-apk-cache
+APKSTAGE=%[1]s/apk-stage
 RUN_DIR=%[1]s/run
 DAEMON_CONFIG=$RUN_DIR/jailoc-dockerd.json
 CONTROL=%[1]s/control
@@ -134,7 +231,7 @@ export CONTROL
 	// G204: runs the embedded init.sh functions with a test-controlled script
 	// and stub tools on PATH; no external input reaches the shell.
 	cmd := exec.CommandContext(ctx, h.sh, "-c", preamble+initFunctions(h.t)+script) //nolint:gosec // G204: trusted embedded init functions, test-controlled script
-	cmd.Env = append([]string{"PATH=" + h.bin + ":/usr/bin:/bin", "CALLS=" + h.calls, "STATE=" + h.state, "BIN=" + h.bin}, env...)
+	cmd.Env = append([]string{"PATH=" + h.bin + ":/usr/bin:/bin", "CALLS=" + h.calls, "STATE=" + h.state, "BIN=" + h.bin, "DATA_MOUNT=" + filepath.Join(h.root, "docker")}, env...)
 	out, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	switch {
@@ -208,12 +305,12 @@ func TestInitGrowsBeforePackageInstall(t *testing.T) {
 			t.Fatalf("exit %d, output:\n%s", code, out)
 		}
 		calls := h.callLog()
-		mount, tool, resize, nft := index(calls, "mount -t ext4 /dev/vda"), index(calls, "apk", "--no-cache", "e2fsprogs-extra"), index(calls, "resize2fs"), index(calls, "nftables")
+		mount, tool, resize, nft := index(calls, "mount -t ext4 /dev/vda"), index(calls, "apk", "--cache-dir "+h.stageDir(), "e2fsprogs-extra"), index(calls, "resize2fs"), index(calls, "nftables")
 		if mount < 0 || tool < mount || resize < tool || nft < resize {
 			t.Fatalf("want mount < resize tool install < resize2fs < nftables install, got %d %d %d %d in:\n%s", mount, tool, resize, nft, strings.Join(calls, "\n"))
 		}
 		for i, c := range calls[:resize] {
-			if strings.HasPrefix(c, "apk") && strings.Contains(c, "--cache-dir") && !strings.Contains(c, "--no-network") {
+			if strings.HasPrefix(c, "apk") && strings.Contains(c, h.cacheDir()) && !strings.Contains(c, "--no-network") {
 				t.Errorf("call %d writes the data disk cache before the resize: %s", i, c)
 			}
 		}
@@ -229,17 +326,16 @@ func TestInitGrowsBeforePackageInstall(t *testing.T) {
 		h := newInitHarness(t)
 		h.apk()
 		h.mark("full")
-		h.mark("cache-warm")
-		if err := os.MkdirAll(filepath.Join(h.root, "docker", ".jailoc-apk-cache"), 0o750); err != nil {
-			t.Fatal(err)
-		}
+		h.warmCache("e2fsprogs-extra", "e2fsprogs-libs", "libcom_err", "nftables", "libmnl")
 		out, code := h.run(`prepare_data_disk`)
 		if code != 0 {
 			t.Fatalf("exit %d, output:\n%s", code, out)
 		}
 		calls := h.callLog()
-		if index(calls, "--no-cache") >= 0 {
-			t.Errorf("warm cache still used the network fallback:\n%s", strings.Join(calls, "\n"))
+		for _, c := range calls {
+			if strings.HasPrefix(c, "apk") && !strings.Contains(c, "--no-network") {
+				t.Errorf("warm cache still used the network fallback: %s", c)
+			}
 		}
 		if i, r := index(calls, "apk", "--no-network", "e2fsprogs-extra"), index(calls, "resize2fs"); i < 0 || r < i {
 			t.Errorf("want offline tool install before resize2fs:\n%s", strings.Join(calls, "\n"))
@@ -315,10 +411,117 @@ func TestInitGrowsBeforePackageInstall(t *testing.T) {
 		if mkfs, mount := index(calls, "mkfs.ext4"), index(calls, "mount -t ext4"); mkfs < 0 || mount < mkfs {
 			t.Errorf("want mkfs before mount:\n%s", strings.Join(calls, "\n"))
 		}
-		if index(calls, "resize2fs") >= 0 || index(calls, "e2fsprogs-extra") >= 0 {
+		if index(calls, "resize2fs") >= 0 {
 			t.Errorf("a freshly formatted disk needs no resize:\n%s", strings.Join(calls, "\n"))
 		}
 	})
+}
+
+// TestInitOfflineRestartAfterFirstBoot boots a builder twice with the root
+// filesystem reset in between: the second boot has no network, so the resize
+// tool and its dependencies, and nftables, must come from the APK cache that
+// the first boot left on the data disk.
+func TestInitOfflineRestartAfterFirstBoot(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		full bool
+	}{
+		{name: "unchanged disk"},
+		{name: "full disk", full: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := newInitHarness(t)
+			h.apk()
+			h.stub("blkid", ``)
+			out, code := h.run(`prepare_data_disk`)
+			if code != 0 {
+				t.Fatalf("first boot: exit %d, output:\n%s", code, out)
+			}
+			first := h.callLog()
+			// Before the data disk exists the packages go to the staging
+			// cache on the root filesystem, never to the data disk.
+			install, mkfs, mount := index(first, "apk", "--cache-dir "+h.stageDir(), "e2fsprogs", "e2fsprogs-extra"), index(first, "mkfs.ext4"), index(first, "mount -t ext4")
+			if install < 0 || mkfs < install || mount < mkfs {
+				t.Fatalf("want staged e2fsprogs install < mkfs < mount, got %d %d %d in:\n%s", install, mkfs, mount, strings.Join(first, "\n"))
+			}
+			for i, c := range first[:mount] {
+				if strings.Contains(c, h.cacheDir()) {
+					t.Errorf("first boot call %d uses the data disk cache before it is mounted: %s", i, c)
+				}
+			}
+			if index(first, "resize2fs") >= 0 {
+				t.Errorf("a freshly formatted disk is not resized:\n%s", strings.Join(first, "\n"))
+			}
+			// Everything the resize tool needs, dependencies the mkfs
+			// install already put on the root filesystem included, must
+			// have reached the persistent cache.
+			cached := strings.Join(h.cached(), " ")
+			for _, want := range []string{"e2fsprogs-extra.apk", "e2fsprogs-libs.apk", "nftables.apk", "libmnl.apk"} {
+				if !strings.Contains(cached, want) {
+					t.Errorf("persistent cache lacks %s: %s", want, cached)
+				}
+			}
+
+			// Second boot: new root filesystem, same data disk, no network.
+			h.restartRoot()
+			h.stub("blkid", `echo ext4`)
+			h.mark("no-network")
+			if tt.full {
+				h.mark("full")
+			}
+			out, code = h.run(`prepare_data_disk`)
+			if code != 0 {
+				t.Fatalf("offline second boot: exit %d, output:\n%s", code, out)
+			}
+			calls := h.callLog()
+			for _, c := range calls {
+				if strings.HasPrefix(c, "apk") && !strings.Contains(c, "--no-network") {
+					t.Errorf("offline boot used the network: %s", c)
+				}
+			}
+			tool, resize, nft := index(calls, "apk", "--no-network", "e2fsprogs-extra"), index(calls, "resize2fs"), index(calls, "apk", "--no-network", "nftables")
+			if tool < 0 || resize < tool || nft < resize {
+				t.Errorf("want offline tool install < resize2fs < offline nftables install, got %d %d %d in:\n%s", tool, resize, nft, strings.Join(calls, "\n"))
+			}
+			if index(calls, "poweroff") >= 0 || index(calls, "mkfs.ext4") >= 0 {
+				t.Errorf("offline boot powered off or reformatted:\n%s", strings.Join(calls, "\n"))
+			}
+		})
+	}
+}
+
+// TestInitHealsCacheWithoutResizeTool covers a data disk whose APK cache
+// predates the resize tool (only nftables): the boot that needs the tool uses
+// the network, staged on the root filesystem, and leaves the tool and its
+// dependencies in the persistent cache for the offline boots after it.
+func TestInitHealsCacheWithoutResizeTool(t *testing.T) {
+	t.Parallel()
+	h := newInitHarness(t)
+	h.apk()
+	h.warmCache("nftables", "libmnl")
+	h.mark("full")
+	out, code := h.run(`prepare_data_disk`)
+	if code != 0 {
+		t.Fatalf("exit %d, output:\n%s", code, out)
+	}
+	calls := h.callLog()
+	offline, stage, resize := index(calls, "apk", "--no-network", "e2fsprogs-extra"), index(calls, "apk", "--cache-dir "+h.stageDir(), "e2fsprogs-extra"), index(calls, "resize2fs")
+	if offline < 0 || stage < offline || resize < stage {
+		t.Fatalf("want offline attempt < staged network install < resize2fs, got %d %d %d in:\n%s", offline, stage, resize, strings.Join(calls, "\n"))
+	}
+
+	h.restartRoot()
+	if err := os.Remove(filepath.Join(h.state, "full")); err != nil {
+		t.Fatal(err)
+	}
+	h.mark("no-network")
+	out, code = h.run(`prepare_data_disk`)
+	if code != 0 {
+		t.Fatalf("offline boot after the healing boot: exit %d, output:\n%s", code, out)
+	}
 }
 
 func TestInitFormatsFreshDiskLeavingTail(t *testing.T) {

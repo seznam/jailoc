@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -44,6 +45,14 @@ const (
 // vmBuilderPolicy for a workspace without network rules): public destinations
 // are allowed, private and reserved ones denied.
 const builderPolicy = `{}`
+
+// builderDenyAllPolicy denies every destination, public ones by raw IP and by
+// name included: a wildcard deny rule matches any public address and any name
+// resolved to it, wins over allow rules, blocks name resolution, and its mere
+// presence puts the policy in rules mode, where what no rule allows is denied.
+// (An empty policy would allow public destinations.) A restarted builder must
+// run offline from what the first boot left on its data disk.
+const builderDenyAllPolicy = `{"deny":[{"name":"deny-all","names":["*"],"proto":"any"}]}`
 
 // builderRun is a vm.Run of a builder VM on its own goroutine.
 type builderRun struct {
@@ -175,6 +184,50 @@ func builderDiskSize(t *testing.T, dir string) int64 {
 	return st.Size()
 }
 
+func TestBuilderPolicies(t *testing.T) {
+	t.Parallel()
+	parse := func(t *testing.T, policy string) *netbroker.Policy {
+		t.Helper()
+		pol, err := netbroker.ParsePolicy([]byte(policy), "builder test policy")
+		if err != nil {
+			t.Fatalf("ParsePolicy(%s): %v", policy, err)
+		}
+		return pol
+	}
+	open, denyAll := parse(t, builderPolicy), parse(t, builderDenyAllPolicy)
+	env := netbroker.Env{Gateway: netip.MustParseAddr(vm.Gateway), Subnet: netip.MustParsePrefix(vm.Subnet)}
+	named := env
+	named.Names = []string{"dl-cdn.alpinelinux.org"}
+	tests := []struct {
+		name  string
+		env   netbroker.Env
+		proto string
+		dst   string
+	}{
+		{"raw public IP over https", env, netbroker.ProtoTCP, "151.101.2.132:443"},
+		{"raw public IP over http", env, netbroker.ProtoTCP, "151.101.2.132:80"},
+		{"resolved public name over https", named, netbroker.ProtoTCP, "151.101.2.132:443"},
+		{"public DNS resolver", env, netbroker.ProtoUDP, "8.8.8.8:53"},
+		{"DNS over TLS port", env, netbroker.ProtoTCP, "1.1.1.1:853"},
+		{"QUIC port", env, netbroker.ProtoUDP, "151.101.2.132:443"},
+		{"private address", env, netbroker.ProtoTCP, "10.0.0.5:443"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dst := netip.MustParseAddrPort(tt.dst)
+			if got := netbroker.Decide(denyAll, tt.env, tt.proto, dst); got.Allow {
+				t.Errorf("deny-all policy allows %s %s: %+v", tt.proto, tt.dst, got)
+			}
+		})
+	}
+	// The first boot needs the network; the empty policy must still open it,
+	// or the deny-all policy would prove nothing.
+	if got := netbroker.Decide(open, env, netbroker.ProtoTCP, netip.MustParseAddrPort("151.101.2.132:443")); !got.Allow {
+		t.Errorf("builder policy %s denies public https: %+v", builderPolicy, got)
+	}
+}
+
 func TestParseDataDiskBlocks(t *testing.T) {
 	t.Parallel()
 	report := func(phase, blocks string) string {
@@ -220,7 +273,9 @@ func TestParseDataDiskBlocks(t *testing.T) {
 // with a larger data disk and expects the volume to survive and the disk file
 // to have grown. A guest init that cannot get through its disk resize, cache
 // or dockerd configuration never reports ready, so booting twice covers the
-// first (mkfs) and the repeated (cached, grown) init paths.
+// first (mkfs) and the repeated (cached, grown) init paths. The restart denies
+// all egress: the resize tool, its dependencies and nftables must come from the
+// package cache the first boot left on the data disk.
 func TestBuilderVM(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -231,8 +286,10 @@ func TestBuilderVM(t *testing.T) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := netbroker.ParsePolicy([]byte(builderPolicy), "builder test policy"); err != nil {
-		t.Fatalf("builder policy: %v", err)
+	for _, policy := range []string{builderPolicy, builderDenyAllPolicy} {
+		if _, err := netbroker.ParsePolicy([]byte(policy), "builder test policy"); err != nil {
+			t.Fatalf("builder policy %s: %v", policy, err)
+		}
 	}
 	logFile, err := os.OpenFile(filepath.Join(dir, "supervisor.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // G304: test state file
 	if err != nil {
@@ -328,9 +385,12 @@ func TestBuilderVM(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Second boot with a larger data disk: the guest init must grow the file
-	// system from its package cache and keep what dockerd stored.
+	// Second boot with a larger data disk and no network: the guest init must
+	// grow the file system from its package cache and keep what dockerd
+	// stored. Any download would fail, and a guest init that gives up never
+	// reports ready.
 	spec.DiskSize = builderDiskGrown
+	spec.Policy = []byte(builderDenyAllPolicy)
 	st = boot(builderRebootTimeout)
 	if got := builderDiskSize(t, dir); got != builderDiskGrown {
 		t.Fatalf("data disk = %d bytes after the restart, want %d", got, int64(builderDiskGrown))

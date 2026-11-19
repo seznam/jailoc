@@ -15,8 +15,13 @@ DISK_SIZE=@DISK_SIZE@
 
 DATA_DEV=/dev/vda
 DATA_DIR=/var/lib/docker
-# Keeps dockerd's nftables package so later boots do not need the network.
+# Keeps dockerd's nftables package and the resize tool, with their
+# dependencies, so later boots do not need the network.
 APKCACHE=$DATA_DIR/.jailoc-apk-cache
+# Disposable APK cache on the root filesystem: packages that are downloaded
+# before the data disk is mounted or grown land here, and move to APKCACHE
+# once the file system has room.
+APKSTAGE=/tmp/jailoc-apk-stage
 RUN_DIR=/run
 DAEMON_CONFIG=$RUN_DIR/jailoc-dockerd.json
 # Tenths of a second dockerd gets to stop after SIGTERM.
@@ -39,14 +44,14 @@ log_usage() {
 
 # install_resize_tool makes resize2fs available without writing to the data
 # disk, which may be full: from the package cache on the data disk (read
-# only), else from the network straight into the root filesystem.
+# only), else from the network into the root filesystem and its staging cache.
 install_resize_tool() {
 	command -v resize2fs >/dev/null 2>&1 && return 0
 	if [ -d "$APKCACHE" ] && apk add -q --no-network --cache-dir "$APKCACHE" e2fsprogs-extra 2>/dev/null; then
 		return 0
 	fi
-	apk add -q --no-cache e2fsprogs-extra || fail "installing resize2fs (e2fsprogs-extra) failed; cannot grow the data disk"
-	RESIZE_TOOL_FETCHED=1
+	mkdir -p "$APKSTAGE" || fail "create apk stage failed; cannot grow the data disk"
+	apk add -q --cache-dir "$APKSTAGE" e2fsprogs-extra || fail "installing resize2fs (e2fsprogs-extra) failed; cannot grow the data disk"
 }
 
 # grow_data_disk grows the file system to the disk when docker_disk or
@@ -57,25 +62,29 @@ grow_data_disk() {
 	resize2fs "$DATA_DEV" || fail "resize2fs $DATA_DEV failed"
 }
 
-# cache_packages installs nftables, which dockerd's nftables backend needs,
-# keeping the package cache on the data disk for later boots.
+# cache_packages moves the packages staged on the root filesystem (the format
+# and resize tools with their dependencies) to the package cache on the data
+# disk, then installs nftables, which dockerd's nftables backend needs, into
+# that cache for later boots.
 cache_packages() {
 	mkdir -p "$APKCACHE" || log "create apk cache failed"
+	if [ -d "$APKSTAGE" ]; then
+		cp -a "$APKSTAGE"/. "$APKCACHE"/ || log "caching staged packages failed"
+	fi
 	apk add -q --no-network --cache-dir "$APKCACHE" nftables 2>/dev/null ||
 		apk add -q --cache-dir "$APKCACHE" nftables || log "apk add nftables failed"
-	if [ -n "$RESIZE_TOOL_FETCHED" ]; then
-		apk fix -q --reinstall --cache-dir "$APKCACHE" e2fsprogs-extra || log "caching e2fsprogs-extra failed"
-	fi
 }
 
 # prepare_data_disk formats the data disk on first use, mounts it, grows the
 # file system and only then installs packages onto it.
 prepare_data_disk() {
-	RESIZE_TOOL_FETCHED=
 	fresh=
 	mkdir -p "$DATA_DIR"
 	if [ -z "$(blkid "$DATA_DEV")" ]; then
-		apk add -q --no-cache e2fsprogs || fail "apk add e2fsprogs failed"
+		# The resize tool comes along so that later boots find it, with the
+		# dependencies of both, in the package cache.
+		mkdir -p "$APKSTAGE" || fail "create apk stage failed"
+		apk add -q --cache-dir "$APKSTAGE" e2fsprogs e2fsprogs-extra || fail "apk add e2fsprogs failed"
 		# mke2fs always zeroes the last 64 KiB of the file system, and libkrun's
 		# imago < 0.2.5 truncates the disk image when that reaches its end
 		# (libkrun#949): leave 1 MiB (256 blocks) unformatted.
