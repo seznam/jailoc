@@ -15,9 +15,11 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/gatewayhost"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/webgateway"
@@ -45,9 +47,33 @@ var errGatewayVMGone = errors.New("the workspace VM stopped or was replaced; res
 var errGatewayNoVMs = errors.New("every served workspace VM stopped or was replaced; restart `jailoc gateway` to serve them again")
 
 type gatewayOptions struct {
-	listen   string
-	certFile string
-	keyFile  string
+	listen         string
+	certFile       string
+	keyFile        string
+	listenerBroker bool
+}
+
+// gatewayBrokerTarget is the listener broker `jailoc gateway
+// --listener-broker` attaches to: the gateway user's UID, the control socket,
+// the UID the broker must run as and the address it listens on.
+type gatewayBrokerTarget struct {
+	uid        uint32
+	socketPath string
+	brokerUID  uint32
+	addr       *net.TCPAddr
+}
+
+// gatewayBrokerAddr is the address the privileged broker listens on for the
+// gateway.
+var gatewayBrokerAddr = &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}
+
+// gatewayBrokerHost resolves the listener broker of the running user. Tests
+// replace it, which makes them non-parallel.
+var gatewayBrokerHost = defaultGatewayBrokerHost
+
+func defaultGatewayBrokerHost() gatewayBrokerTarget {
+	uid := uint32(os.Getuid()) //nolint:gosec // UIDs are 32-bit on Linux and Darwin.
+	return gatewayBrokerTarget{uid: uid, socketPath: gatewayhost.BrokerSocketPath(uid), brokerUID: 0, addr: gatewayBrokerAddr}
 }
 
 func init() {
@@ -70,7 +96,11 @@ func newGatewayCmd() *cobra.Command {
 			"Without workspace arguments the gateway serves every running workspace that has routes. Naming a workspace that is\n" +
 			"not running, has no routes, or whose running VM does not match its configuration is an error.\n" +
 			"A gateway serves the VM boots it started with: when a VM stops or is replaced, its routes fail and the gateway\n" +
-			"must be restarted.",
+			"must be restarted.\n\n" +
+			"With --listener-broker the gateway does not open a listener: it attaches to jailoc-listener-broker, a separate\n" +
+			"root-owned program that holds 127.0.0.1:443 and [::1]:443 for your user and passes each connection to the gateway, so\n" +
+			"the URLs need no forward and no port. Run it as root with --uid <your uid>; only one gateway can attach at a time.\n" +
+			"The flag cannot be combined with --listen, and the gateway refuses to run as root.",
 		Args:         cobra.ArbitraryArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -78,10 +108,12 @@ func newGatewayCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.listen, "listen", gatewayDefaultListen, "loopback address to listen on, host:port (port 0 picks a free port)")
+	cmd.Flags().BoolVar(&opts.listenerBroker, "listener-broker", false, "serve through jailoc-listener-broker on 127.0.0.1:443 instead of opening a listener")
 	cmd.Flags().StringVar(&opts.certFile, "tls-cert", "", "PEM certificate chain that covers every route host")
 	cmd.Flags().StringVar(&opts.keyFile, "tls-key", "", "PEM private key of the certificate")
 	_ = cmd.MarkFlagRequired("tls-cert")
 	_ = cmd.MarkFlagRequired("tls-key")
+	cmd.AddCommand(newGatewayHostProofCmd())
 	return cmd
 }
 
@@ -90,9 +122,16 @@ func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	listen, err := parseGatewayListen(opts.listen)
-	if err != nil {
-		return err
+	var listen string
+	if opts.listenerBroker {
+		if err := checkGatewayBrokerOptions(cmd); err != nil {
+			return fmt.Errorf("gateway options: %w", err)
+		}
+	} else {
+		var err error
+		if listen, err = parseGatewayListen(opts.listen); err != nil {
+			return err
+		}
 	}
 	cert, err := tls.LoadX509KeyPair(opts.certFile, opts.keyFile)
 	if err != nil {
@@ -124,9 +163,9 @@ func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
 	if err != nil {
 		return fmt.Errorf("start gateway: %w", err)
 	}
-	ln, err := net.Listen("tcp", listen)
+	ln, err := listenGateway(runCtx, opts, listen)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", listen, err)
+		return fmt.Errorf("open gateway listener: %w", err)
 	}
 	defer func() { _ = ln.Close() }()
 
@@ -156,6 +195,49 @@ func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
 		return fmt.Errorf("serve gateway: %w", err)
 	}
 	return nil
+}
+
+// listenGateway opens the listener the gateway serves on: its own on listen,
+// or the one fed by the listener broker.
+func listenGateway(ctx context.Context, opts gatewayOptions, listen string) (net.Listener, error) {
+	if opts.listenerBroker {
+		return attachGatewayBroker(ctx)
+	}
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", listen, err)
+	}
+	return ln, nil
+}
+
+// checkGatewayBrokerOptions refuses --listener-broker together with an
+// explicit --listen and when running as root: the broker is the privileged
+// part, the gateway that parses HTTP and TLS must not be.
+func checkGatewayBrokerOptions(cmd *cobra.Command) error {
+	if cmd.Flags().Changed("listen") {
+		return errors.New("--listener-broker serves on 127.0.0.1:443 through the broker; do not combine it with --listen")
+	}
+	if gatewayBrokerHost().uid == 0 {
+		return errors.New("--listener-broker: refusing to run the gateway as root; run it as your own user (only jailoc-listener-broker runs as root)")
+	}
+	return nil
+}
+
+// attachGatewayBroker attaches to the listener broker of the running user.
+// The returned listener reports the broker's address, so printed URLs have
+// no port.
+func attachGatewayBroker(ctx context.Context) (net.Listener, error) {
+	t := gatewayBrokerHost()
+	ln, err := gatewayhost.AttachBroker(ctx, t.socketPath, t.brokerUID, t.addr)
+	switch {
+	case err == nil:
+		return ln, nil
+	case errors.Is(err, gatewayhost.ErrBrokerBusy):
+		return nil, errors.New("another gateway is attached to the listener broker; stop it first, only one gateway can serve port 443 at a time")
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ECONNREFUSED):
+		return nil, fmt.Errorf("the listener broker is not running for this user (no answer on %s); a root user must start jailoc-listener-broker --uid %d", t.socketPath, t.uid)
+	}
+	return nil, fmt.Errorf("attach to the listener broker: %w", err)
 }
 
 // parseGatewayListen validates a --listen value: a loopback IP address and a
