@@ -285,9 +285,13 @@ func TestVMSharesLimit(t *testing.T) {
 	oc, _ := agent.Lookup("opencode1")
 	for _, docker := range []bool{false, true} {
 		limit := vm.MaxShares(docker)
+		root := t.TempDir()
 		paths := make([]string, limit+1)
 		for i := range paths {
-			paths[i] = fmt.Sprintf("/src/p%02d", i)
+			paths[i] = filepath.Join(root, fmt.Sprintf("p%02d", i))
+			if err := os.Mkdir(paths[i], 0o750); err != nil {
+				t.Fatal(err)
+			}
 		}
 		ws := &workspace.Resolved{Name: "w", Paths: paths[:limit], Agent: oc, EnableDocker: docker}
 		if _, err := vmShares(ws); err != nil {
@@ -298,6 +302,106 @@ func TestVMSharesLimit(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("exceed the limit of %d", limit)) {
 			t.Fatalf("docker=%v: %d shares: err = %v, want limit error", docker, limit+1, err)
 		}
+	}
+}
+
+func TestVMSharesPaths(t *testing.T) {
+	t.Parallel()
+	oc, _ := agent.Lookup("opencode1")
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, root string) string
+		wantErr string
+		missing bool
+	}{
+		{
+			name: "existing directory",
+			setup: func(t *testing.T, root string) string {
+				p := filepath.Join(root, "project")
+				if err := os.Mkdir(p, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+		},
+		{
+			name: "symlink to directory",
+			setup: func(t *testing.T, root string) string {
+				target := filepath.Join(root, "target")
+				if err := os.Mkdir(target, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				p := filepath.Join(root, "link")
+				if err := os.Symlink(target, p); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+		},
+		{
+			name:    "missing path",
+			setup:   func(_ *testing.T, root string) string { return filepath.Join(root, "missing") },
+			missing: true,
+		},
+		{
+			name: "regular file",
+			setup: func(t *testing.T, root string) string {
+				p := filepath.Join(root, "file.txt")
+				if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+			wantErr: "is not a directory",
+		},
+		{
+			name: "dangling symlink",
+			setup: func(t *testing.T, root string) string {
+				p := filepath.Join(root, "dangling")
+				if err := os.Symlink(filepath.Join(root, "gone"), p); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+			missing: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := tt.setup(t, t.TempDir())
+			ws := &workspace.Resolved{Name: "w", Paths: []string{p}, Agent: oc}
+			shares, err := vmShares(ws)
+			if tt.wantErr == "" && !tt.missing {
+				if err != nil {
+					t.Fatalf("vmShares: %v", err)
+				}
+				want := []vm.Share{{HostPath: p, GuestPath: p}}
+				if !slices.Equal(shares, want) {
+					t.Fatalf("shares = %+v, want %+v", shares, want)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("vmShares accepted %q: %+v", p, shares)
+			}
+			for _, part := range []string{`workspace "w"`, fmt.Sprintf("path %q", p)} {
+				if !strings.Contains(err.Error(), part) {
+					t.Errorf("err = %v, want it to contain %s", err, part)
+				}
+			}
+			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("err = %v, want it to contain %q", err, tt.wantErr)
+			}
+			if tt.missing {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("err = %v, want os.ErrNotExist", err)
+				}
+				if _, statErr := os.Stat(p); !errors.Is(statErr, os.ErrNotExist) {
+					t.Errorf("missing path created: %v", statErr)
+				}
+			}
+		})
 	}
 }
 

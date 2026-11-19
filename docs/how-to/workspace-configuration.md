@@ -58,6 +58,8 @@ paths = ["/home/you/projects/myproject"]
 
 Each path is shared into the VM read-write at its original absolute path, so `/home/you/projects/myproject` has the same path inside the guest. Files the agent creates there belong to your host user.
 
+Each path must be an existing directory: create missing project directories or remove stale paths, otherwise `jailoc up` fails.
+
 !!! note
     `~` expands to your home directory. System directories such as `/usr`, `/etc`, `/var`, `/home/agent` and `/tmp` are rejected; see [`paths`](../reference/configuration.md#paths).
 

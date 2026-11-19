@@ -312,6 +312,13 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 		byGuest[guestPath] = vm.Share{HostPath: filepath.Clean(host), GuestPath: guestPath, ReadOnly: ro}
 	}
 	for _, p := range ws.Paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: path %q: %w", ws.Name, p, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("workspace %q: path %q is not a directory", ws.Name, p)
+		}
 		add(p, p, false)
 	}
 	for _, spec := range ws.Mounts {
