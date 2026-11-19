@@ -120,6 +120,7 @@ require (
 
 // Fork with WithRootFSShare (stacklok/go-microvm#160), WithProcessName
 // (stacklok/go-microvm#162), root-only tar ownership restore
-// (stacklok/go-microvm#164) and WithRootFSShareDir (stacklok/go-microvm#176)
-// on top of upstream v0.0.44, until released upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261114115008-f6df49aad2e1
+// (stacklok/go-microvm#164), WithRootFSShareDir (stacklok/go-microvm#176) and
+// the SSH fix for stacklok/go-microvm#178 on top of upstream v0.0.44, until
+// released upstream.
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261119174455-e0fa2a88b1cb

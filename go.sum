@@ -314,8 +314,8 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f h1:9hiVElpCmKzsBKQHkBqZ8LGzt82iLfM8egxr4sew+Ys=
 github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f/go.mod h1:8/zr1Tv0+cKpVtGCEB/7YfRXr2TszsMxMXLaT8YuBgU=
-github.com/thejoeejoee/go-microvm v0.0.42-0.20261114115008-f6df49aad2e1 h1:gpgclG0dVI53jZw4uctxseq4Kj/XLZq0b70Y6aTK4E8=
-github.com/thejoeejoee/go-microvm v0.0.42-0.20261114115008-f6df49aad2e1/go.mod h1:qe+JDPzfKtm8PUWJglHBuNqcGw2So6Zs+sqOgnN0z48=
+github.com/thejoeejoee/go-microvm v0.0.42-0.20261119174455-e0fa2a88b1cb h1:xcOMwMymi/FO8BBpt46aI3usKxYn/BeMKehqZPjaqRE=
+github.com/thejoeejoee/go-microvm v0.0.42-0.20261119174455-e0fa2a88b1cb/go.mod h1:qe+JDPzfKtm8PUWJglHBuNqcGw2So6Zs+sqOgnN0z48=
 github.com/theupdateframework/go-tuf/v2 v2.4.2 h1:w7976/W8uTwlsegP5nRymlpjPgrwSh+AXUf85is6nJk=
 github.com/theupdateframework/go-tuf/v2 v2.4.2/go.mod h1:JqBrIUnNLAaNq/8GmBcEMFWfAFBbqp/MkJEJseXKbks=
 github.com/tonistiigi/fsutil v0.0.0-20261103125000-e075fd9305eb h1:/703X47pvph093rG6sD1wzLd2d4YdWgiPLRjnkV5qYY=
