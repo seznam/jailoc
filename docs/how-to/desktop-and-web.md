@@ -51,7 +51,7 @@ The guest ports in use are fixed: 6080 (noVNC) and 5901 (VNC, loopback only, no 
 
 ## Run a browser in the desktop
 
-The desktop is an X11 session on display `:1`. Sessions of the agent get `DISPLAY=:1`, so a GUI program the agent starts appears on the desktop.
+The desktop is an X11 session on display `:1` with the Openbox window manager and no panel or background. It opens with an `xterm`; right-click the desktop for the Openbox menu. Sessions of the agent get `DISPLAY=:1`, so a GUI program the agent starts appears on the desktop.
 
 No browser is installed. Ask the agent to install one with Playwright, for example `npx playwright install chromium`, and to launch it headful (`headless: false`). Chromium needs system libraries the image may lack; add them in a [custom Dockerfile](custom-images.md) rather than disabling the browser sandbox.
 
@@ -69,7 +69,7 @@ jailoc gateway demo \
 
 The command runs in the foreground until you stop it. For each route it prints the URL and a login code.
 
-- The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused.
+- The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused. With `--listener-broker` the gateway serves port 443 through a root broker instead; see [Use the listener broker](#use-the-listener-broker-experimental).
 - Without workspace arguments the gateway serves every running configured workspace that has routes. A named workspace must be running and have routes.
 - Routes close when a workspace VM stops or is replaced. Restart the gateway to serve the new VM.
 
@@ -211,7 +211,7 @@ getent hosts foo.demo.jailoc.local                  # Linux
 
 ### Redirect port 443 to the gateway
 
-An unprivileged process can't listen on 443, so the gateway listens on 8443 and the host redirects loopback port 443 to it. Redirect only `127.0.0.1` port 443; don't redirect other traffic.
+An unprivileged process can't listen on 443, so the gateway listens on 8443 and the host redirects loopback port 443 to it. Redirect only `127.0.0.1` port 443; don't redirect other traffic. The [listener broker](#use-the-listener-broker-experimental) replaces this redirect.
 
 **Linux** with `nftables`, in a table of its own so cleanup removes only this:
 
@@ -251,6 +251,35 @@ sudo nft add rule ip jailoc_ingress output ip daddr 127.0.0.1/32 tcp dport 443 r
 
 Confirm the rule is loaded with `sudo pfctl -a jailoc-ingress -s nat`, and confirm traffic with the [verification](#verify-the-setup) below. If the verification fails, remove the rule as described under [Clean up](#clean-up) rather than leaving it half working. The `nftables` redirect doesn't survive a reboot.
 
+### Use the listener broker (experimental)
+
+Instead of a redirect, a small root helper, `jailoc-listener-broker`, binds `127.0.0.1:443` and `[::1]:443` and passes each accepted connection to your gateway over a private socket. It holds no certificate and parses no HTTP. Release archives don't include it, so build it from a jailoc source checkout and install it in a directory that only root can write; it refuses to start from anywhere else.
+
+```bash
+go build -o jailoc-listener-broker ./cmd/jailoc-listener-broker
+sudo install -d -o root -m 0755 /usr/local/libexec          # Linux
+sudo install -o root -g 0 -m 0755 jailoc-listener-broker /usr/local/libexec/
+sudo /usr/local/libexec/jailoc-listener-broker --uid "$(id -u)"
+```
+
+On macOS, use `/Library/PrivilegedHelperTools` instead of `/usr/local/libexec`, which Homebrew can make user-writable. The broker runs in the foreground; stop it with Ctrl+C.
+
+In another terminal, start the gateway with `--listener-broker` instead of `--listen`:
+
+```bash
+jailoc gateway demo --listener-broker \
+  --tls-cert ~/.config/jailoc/ingress/demo.crt \
+  --tls-key ~/.config/jailoc/ingress/demo.key
+```
+
+- Only the UID given to `--uid` can attach, and only one gateway at a time. A second gateway is refused until the first exits.
+- While no gateway is attached, the broker closes incoming connections.
+- The broker doesn't start at boot, and no `launchd` or `systemd` unit is provided.
+
+!!! warning "Experimental"
+
+    The broker hasn't been tested as an installed root binary on a real host or with a second local user. Name resolution and CA trust still need the steps above.
+
 ## Verify the setup
 
 With the gateway running, request the login page with the CA as the only trust anchor and the name pinned to loopback. No `-k`: a certificate failure must fail the command.
@@ -261,6 +290,32 @@ curl --cacert "$ING/ca.crt" --resolve foo.demo.jailoc.local:443:127.0.0.1 \
 ```
 
 `200` shows that the certificate chain, the 443 redirect and the gateway work. It doesn't test DNS or the browser's trust store; run the resolver check above, then open the page in the browser.
+
+## Check the host primitives (experimental)
+
+`jailoc gateway host-proof` exercises the host mechanisms that a managed gateway would rely on, with throwaway data only. It is a foundation proof, not enrollment.
+
+```bash
+jailoc gateway host-proof
+```
+
+The command takes no arguments or command-specific flags, reads no configuration and takes no certificate or key paths. It runs unprivileged with a 15-second execution deadline followed by bounded cleanup, and refuses to run as root. It prints one `PASS` or `FAIL` row per check and exits with an error if a check or cleanup fails. It prints no private key or token.
+
+| Check | Covers |
+|-------|--------|
+| Broker listener | A broker bound to ephemeral loopback ports, which passes each accepted connection to the attached gateway. |
+| Private Unix socket | The broker's control socket (mode `0600`) in a temporary directory (mode `0700`), with the peer's UID verified on both sides. |
+| Gateway attachment | One gateway serves HTTPS through the broker; a second gateway is refused while the first is attached and serves once the first detaches. |
+| TLS trust | A dummy CA and a leaf for `proof.jl.local`, both held in memory only. The client trusts exactly that CA, with no `InsecureSkipVerify`. A wrong host name and an untrusted CA are both rejected. |
+| Marker rewrite | A hosts-file plan that adds and removes only marker-owned exact-host lines, applied to a temporary fixture file. The fixture is synced to disk, rolled back, and every unrelated byte is preserved. |
+
+The proof changes no host settings. It sets no DNS, and it changes no `/etc/hosts`, trust store, service, firewall, `sysctl` setting, browser setting or port 443. It installs no root helper and persists no CA.
+
+Normal CLI startup still initializes persistent logging and can check for updates in an interactive terminal. The temporary proof does not isolate those CLI hooks.
+
+It does not prove enrollment. The broker and both gateways run in one process on ephemeral ports; nothing in the proof covers port 443, root, a second UID or a browser trusting a `.local` name. The [manual host setup](#set-up-the-host) stays necessary for the foreground gateway and its `jailoc.local` names. Workspaces are not converted to `jl.local` names. No `jailoc` command sets up, checks or removes the host DNS, trust store or port 443 configuration.
+
+To pass a workspace named `host-proof` to the foreground gateway, put its name after `--`, following the gateway's TLS flags.
 
 ## Clean up
 
@@ -277,6 +332,10 @@ sudo pfctl -a jailoc-ingress -F nat
 sudo pfctl -X <token>
 sudo rm /etc/pf.anchors/jailoc-ingress
 sudo rm /etc/pf.conf.jailoc-backup
+
+# listener broker: stop it with Ctrl+C first
+sudo rm /usr/local/libexec/jailoc-listener-broker     # or /Library/PrivilegedHelperTools/ on macOS
+sudo rmdir /var/run/jailoc-gateway/"$(id -u)" /var/run/jailoc-gateway
 
 # names: only the lines that carry the marker (on macOS use: sudo sed -i '' ...)
 sudo sed -i '/# jailoc-ingress$/d' /etc/hosts
@@ -311,6 +370,9 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 | Login code rejected | A code works once and expires 10 minutes after the gateway starts. Restart `jailoc gateway` for a new one. |
 | Gateway refuses the workspace | The running VM doesn't match the configured desktop or web ports. Run `jailoc restart <workspace>`. |
 | Route fails after the VM stopped or was replaced | Restart `jailoc gateway`. |
+| `the listener broker is not running for this user` | Start `jailoc-listener-broker --uid` with your UID as root; see [Use the listener broker](#use-the-listener-broker-experimental). |
+| `another gateway is attached to the listener broker` | Stop the other `jailoc gateway --listener-broker` first. |
+| Broker refuses its executable | Install it in a root-owned directory that group and others can't write. |
 | Login post or pages behave oddly on a reused route name | An old service worker may control the origin. Unregister it and clear the site data; see [Service workers and origin reuse](#service-workers-and-origin-reuse). |
 | `jailoc up` names missing desktop programs | The explicit `image` lacks them; see [Images](#images). |
 | Validation error on `ports` or `host_ports` | Guest ports 6081, and 6080 and 5901 with the desktop, are reserved. |
@@ -319,4 +381,5 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 
 - [`enable_desktop` and `web`](../reference/configuration.md#enable_desktop-and-web)
 - [`jailoc gateway`](../reference/cli.md#jailoc-gateway)
+- [`jailoc gateway host-proof`](../reference/cli.md#jailoc-gateway-host-proof)
 - [Security Boundaries](../explanation/security-boundaries.md#web-gateway)
