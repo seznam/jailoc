@@ -109,6 +109,10 @@ Each running workspace has three host processes: a supervisor, the VMM and the n
 
 The DNS limits count the gateway resolver and direct DNS to allowed resolvers together. Connections and flows over a limit are refused; refused ones appear in `jailoc traffic`, while DNS queries over the limit are dropped and the client retries.
 
+## Guest SSH connections
+
+`jailoc-guest` accepts at most 64 concurrent SSH connections per workspace. The limit counts connections, not agent processes: session attachments and the short-lived control calls that jailoc makes to the guest each take one slot while they are open. A connection over the limit is closed right away, before the SSH handshake starts, and is not queued. Closing a connection frees its slot. The limit is the same on Linux and macOS hosts, because it is enforced by the SSH server inside the Linux guest.
+
 ## Logs
 
 Logs that grow with VM activity are rotated, keeping one previous file:

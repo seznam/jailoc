@@ -10,7 +10,7 @@
 }: let
   goMicrovmOwner = "thejoeejoee";
   goMicrovmRepo = "go-microvm";
-  goMicrovmRev = "f6df49aad2e1aafcdd17903e97ddb6cf427d2fc6";
+  goMicrovmRev = "e0fa2a88b1cb7806673c0596e0e9f3f54084a43d";
 
   libkrunVersion = "1.19.7";
   libkrunfwVersion = "5.6.2";
@@ -60,7 +60,7 @@
         owner = goMicrovmOwner;
         repo = goMicrovmRepo;
         rev = goMicrovmRev;
-        hash = "sha256-ZpGhe08LlrFJ6R4O1f2m6bY+O6CF2S58rkNDd3anIWo=";
+        hash = "sha256-+HKeh1zETZ2Y6kEMCwpy7BIE5kNWPKonkWOWQBbW5sw=";
       };
 in {
   goMicrovm = {
