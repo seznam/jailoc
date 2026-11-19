@@ -209,6 +209,10 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	if err != nil {
 		return "", fmt.Errorf("locate jailoc executable: %w", err)
 	}
+	diskSize, err := builderDiskSize(cfg, ws)
+	if err != nil {
+		return "", err
+	}
 	spec := vm.Spec{
 		Kind:       vm.KindBuilder,
 		Workspace:  "builder",
@@ -216,7 +220,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		Image:      vm.DefaultImage,
 		CPUs:       builderCPUs,
 		MemoryMiB:  builderMemoryMiB,
-		DiskSize:   vm.DefaultDiskSize,
+		DiskSize:   diskSize,
 		Policy:     policy,
 		RunnerPath: rt.runner,
 		LibDir:     rt.libDir,
@@ -228,9 +232,6 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	}
 	if ws.IsolatedBuild {
 		spec.Workspace = ws.Name + "-builder"
-		if spec.DiskSize, err = vmDockerDiskSize(ws.DockerDisk); err != nil {
-			return "", err
-		}
 	}
 	start := time.Now()
 	st, err := startSupervisor(ctx, spec, label)
@@ -248,7 +249,14 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		return "", err
 	}
 	defer restoreHost()
-	return importWorkspaceImage(ctx, cfg, ws)
+	// The builder lock is held until return, so the maintenance of the
+	// builder's own daemon is serialized with every other build in this
+	// HOME. The host daemon is never maintained: other tools and HOMEs share it.
+	return withBuilderMaintenance(ctx, func(ctx context.Context, phase string) {
+		maintainBuilderDaemon(ctx, spec.DiskSize, phase, os.Stdout, os.Stderr)
+	}, func() (string, error) {
+		return importWorkspaceImage(ctx, cfg, ws)
+	})
 }
 
 // useHostDocker reports whether the workspace image is built with the host
