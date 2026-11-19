@@ -358,3 +358,15 @@ func TestLoginPageKeepsGatewayWorkerPolicy(t *testing.T) {
 		t.Fatalf("duplicate gateway policy: %v", vals)
 	}
 }
+
+// Browsers send "Origin: null" on a form POST from a page with
+// Referrer-Policy no-referrer (Fetch, "serializing a request origin"), which
+// the exact-Origin check refuses. The login page must keep its own origin.
+func TestLoginPageReferrerPolicyKeepsFormOrigin(t *testing.T) {
+	t.Parallel()
+	x := startGateway(t, http.NotFoundHandler(), nil)
+	res := request(t, x.client(t, hostA), newRequest(t, "GET", hostA, "/.jailoc/login"), 200)
+	if got := res.Header.Get("Referrer-Policy"); got != "same-origin" {
+		t.Fatalf("login Referrer-Policy = %q, want same-origin", got)
+	}
+}

@@ -19,7 +19,10 @@ var loginPage = template.Must(template.New("login").Parse(`<!doctype html>
 
 func (g *Gateway) loginHandler(w http.ResponseWriter, r *http.Request, host string) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	// same-origin, not no-referrer: with no-referrer browsers send
+	// "Origin: null" on the login form POST, and the exact-Origin check
+	// refuses it. Cross-origin requests still get no referrer.
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
