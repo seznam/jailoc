@@ -261,6 +261,9 @@ func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, confi
 		if settings.Args == nil {
 			settings.Args = t.Args
 		}
+		if settings.DefaultArgs == nil {
+			settings.DefaultArgs = t.DefaultArgs
+		}
 		settings.Version = cmp.Or(settings.Version, t.Version)
 	}
 	for _, t := range slices.Backward(tables) {
@@ -268,6 +271,9 @@ func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, confi
 	}
 	settings.Profile = cmp.Or(tables[0].Profile, tables[1].Profile)
 	h.Version = cmp.Or(settings.Version, h.Version)
+	if settings.DefaultArgs != nil {
+		h.DefaultArgs = slices.Clone(settings.DefaultArgs)
+	}
 	return h, settings, nil
 }
 

@@ -160,9 +160,13 @@ type Harness struct {
 	Continue string
 	// Resume is the flag that takes the conversation ID to resume.
 	Resume string
-	// Unattended are the flags that let the agent act without asking for
-	// permission: the VM is the security boundary.
-	Unattended []string
+	// RequiredArgs are the flags jailoc needs for the session to work; the
+	// configuration cannot remove them.
+	RequiredArgs []string
+	// DefaultArgs are the flags that let the agent act without asking for
+	// permission (the VM is the security boundary). The default_args setting
+	// of the agent replaces them.
+	DefaultArgs []string
 	// Env is set in the VM for every session.
 	Env []string
 	// State are the home directories that survive VM restarts.
@@ -274,8 +278,9 @@ var harnesses = []Harness{
 		// --standalone runs a private server per session instead of the
 		// shared background service, so every session gets its own
 		// environment, secrets included.
-		Unattended: []string{"--standalone", "--auto"},
-		Env:        []string{"OPENCODE_DISABLE_AUTOUPDATE=1"},
+		RequiredArgs: []string{"--standalone"},
+		DefaultArgs:  []string{"--auto"},
+		Env:          []string{"OPENCODE_DISABLE_AUTOUPDATE=1"},
 		// Separate from OpenCode 1: both keep their database in the same
 		// guest paths, in incompatible formats.
 		State: []StateDir{
@@ -290,14 +295,14 @@ var harnesses = []Harness{
 		Diagnose:        []string{openCodePrintLogsFlag},
 	},
 	{
-		Name:       "claude",
-		Title:      "Claude Code",
-		Binary:     "claude",
-		Package:    "@anthropic-ai/claude-code",
-		Version:    "2.1.318",
-		Continue:   "--continue",
-		Resume:     "--resume",
-		Unattended: []string{"--dangerously-skip-permissions"},
+		Name:        "claude",
+		Title:       "Claude Code",
+		Binary:      "claude",
+		Package:     "@anthropic-ai/claude-code",
+		Version:     "2.1.318",
+		Continue:    "--continue",
+		Resume:      "--resume",
+		DefaultArgs: []string{"--dangerously-skip-permissions"},
 		// CLAUDE_CONFIG_DIR also moves ~/.claude.json into the persistent
 		// directory. CLAUDE_CODE_SANDBOXED makes Claude Code trust the
 		// working directory without its trust prompt, which background
@@ -321,16 +326,16 @@ var harnesses = []Harness{
 		Endpoints: []string{"api.anthropic.com", "claude.ai", "console.anthropic.com", "platform.claude.com"},
 	},
 	{
-		Name:       "copilot",
-		Title:      "GitHub Copilot CLI",
-		Binary:     "copilot",
-		Package:    "@github/copilot",
-		Version:    "1.0.111",
-		Continue:   "--continue",
-		Resume:     "--resume",
-		Unattended: []string{"--allow-all"},
-		Env:        []string{"COPILOT_AUTO_UPDATE=false"},
-		State:      []StateDir{{Name: "copilot", Path: "/home/agent/.copilot"}},
+		Name:        "copilot",
+		Title:       "GitHub Copilot CLI",
+		Binary:      "copilot",
+		Package:     "@github/copilot",
+		Version:     "1.0.111",
+		Continue:    "--continue",
+		Resume:      "--resume",
+		DefaultArgs: []string{"--allow-all"},
+		Env:         []string{"COPILOT_AUTO_UPDATE=false"},
+		State:       []StateDir{{Name: "copilot", Path: "/home/agent/.copilot"}},
 		// Not config.json or settings.json: Copilot CLI writes its login
 		// and preferences there, and jailoc sets the status line and
 		// storeTokenPlaintext in settings.json.
@@ -345,14 +350,14 @@ var harnesses = []Harness{
 		Endpoints: []string{"api.github.com", "github.com", "api.githubcopilot.com", "*.githubcopilot.com", "copilot-proxy.githubusercontent.com"},
 	},
 	{
-		Name:       "omo",
-		Title:      "OmO",
-		Binary:     "omo",
-		Package:    "omo-ai",
-		Version:    "5.1.60",
-		Continue:   "--continue",
-		Resume:     "--session",
-		Unattended: []string{"--permission-preset", "full-access"},
+		Name:        "omo",
+		Title:       "OmO",
+		Binary:      "omo",
+		Package:     "omo-ai",
+		Version:     "5.1.60",
+		Continue:    "--continue",
+		Resume:      "--session",
+		DefaultArgs: []string{"--permission-preset", "full-access"},
 		// The image runs Node.js; OMO_RUNTIME=node silences the Bun notice.
 		Env:         []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
 		State:       []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
@@ -375,10 +380,10 @@ var harnesses = []Harness{
 				"arm64": "87e73a5ab4ecb3a9668660d259dafd13f5443149da0113664d59129a21a62ba4",
 			},
 		},
-		Continue:   "--continue",
-		Resume:     "--conversation",
-		Unattended: []string{"--dangerously-skip-permissions"},
-		Env:        []string{"AGY_CLI_DISABLE_AUTO_UPDATE=1"},
+		Continue:    "--continue",
+		Resume:      "--conversation",
+		DefaultArgs: []string{"--dangerously-skip-permissions"},
+		Env:         []string{"AGY_CLI_DISABLE_AUTO_UPDATE=1"},
 		// Settings, conversations and the OAuth token, which falls back to
 		// a file without a keyring. Gemini CLI shares ~/.gemini, so only
 		// the global instructions are copied from the host.
@@ -423,12 +428,13 @@ func (h Harness) DefaultMounts() []string {
 	return append(slices.Clone(h.Mounts), sharedMounts...)
 }
 
-// Command returns the command line of a new agent session: the flags that
-// load the jailoc plugin, then resume the conversation id when set,
+// Command returns the command line of a new agent session: the required and
+// default flags, the flags that load the jailoc plugin, then resume the conversation id when set,
 // otherwise continue the last one when cont is set, followed by args from
 // the configuration.
 func (h Harness) Command(args []string, id string, cont bool) []string {
-	cmd := append([]string{h.Binary}, h.Unattended...)
+	cmd := append([]string{h.Binary}, h.RequiredArgs...)
+	cmd = append(cmd, h.DefaultArgs...)
 	cmd = append(cmd, h.TUIPlugin.Args()...)
 	switch {
 	case id != "":

@@ -161,3 +161,49 @@ func TestSettingsFile(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandDefaultArgs(t *testing.T) {
+	t.Parallel()
+
+	opencode, _ := Lookup("opencode")
+	omo, _ := Lookup("omo")
+	claude, _ := Lookup("claude")
+
+	cleared := opencode
+	cleared.DefaultArgs = nil
+	replaced := opencode
+	replaced.DefaultArgs = []string{"--mine"}
+	omoCleared := omo
+	omoCleared.DefaultArgs = []string{}
+	claudeReplaced := claude
+	claudeReplaced.DefaultArgs = []string{"--permission-mode", "plan"}
+
+	if !slices.Equal(opencode.RequiredArgs, []string{"--standalone"}) || !slices.Equal(opencode.DefaultArgs, []string{"--auto"}) {
+		t.Fatalf("opencode required=%q default=%q, want [--standalone] [--auto]", opencode.RequiredArgs, opencode.DefaultArgs)
+	}
+
+	tests := []struct {
+		name string
+		h    Harness
+		args []string
+		id   string
+		cont bool
+		want []string
+	}{
+		{"cleared keeps required", cleared, nil, "", false, []string{"opencode", "--standalone"}},
+		{"cleared keeps resume and args", cleared, []string{"-v"}, "ses_1", false, []string{"opencode", "--standalone", "--session", "ses_1", "-v"}},
+		{"cleared keeps continue", cleared, nil, "", true, []string{"opencode", "--standalone", "--continue"}},
+		{"replaced keeps required", replaced, []string{"-v"}, "", true, []string{"opencode", "--standalone", "--mine", "--continue", "-v"}},
+		{"cleared keeps plugin args", omoCleared, []string{"-v"}, "", false, []string{"omo", "--extension", PluginDir + "/omo.js", "-v"}},
+		{"replaced keeps plugin args", claudeReplaced, nil, "abc", false, []string{"claude", "--permission-mode", "plan", "--settings", PluginDir + "/claude-settings.json", "--resume", "abc"}},
+		{"user args may repeat a default", opencode, []string{"--auto"}, "", false, []string{"opencode", "--standalone", "--auto", "--auto"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.h.Command(tt.args, tt.id, tt.cont); !slices.Equal(got, tt.want) {
+				t.Fatalf("Command() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
