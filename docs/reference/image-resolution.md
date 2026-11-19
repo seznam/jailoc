@@ -77,7 +77,9 @@ No build runs.
 **Trigger:** none of the above apply.
 
 - The Dockerfile embedded in the jailoc binary is built as `jailoc-base:embedded`, unless that image was already built from the same Dockerfile and build arguments.
-- Updates of its `ubuntu:24.04` base reach the image only after `docker rmi jailoc-base:embedded`.
+- A changed embedded Dockerfile or changed build arguments rebuild the image automatically.
+- Updates of the mutable `ubuntu:26.04` tag reach the image only after `docker rmi jailoc-base:embedded`.
+- A running VM adopts a rebuilt image only after `jailoc restart`; `jailoc up` on a running VM reloads it without changing its image.
 - See [Default Image](default-image.md).
 
 ### Docker layer (steps 2, 4 and 5)

@@ -1,6 +1,6 @@
 # Default Image Contents
 
-The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed below.
+The embedded Dockerfile builds a base image (Ubuntu 26.04) with the tools listed below.
 
 - **Used when** no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile).
 - **Runs as** the root file system of the workspace VM: jailoc converts its layers into read-only EROFS images in the VM image cache and boots them.
@@ -14,7 +14,7 @@ The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed
 | Tool | Package / Source | Binary |
 |------|-----------------|--------|
 | Node.js | Official tarball | `node`, `npm`, `npx`, `corepack` |
-| Python 3 | `python3` (apt) | `python3` |
+| Python 3.14 | `python3` (apt) | `python3` |
 
 ## Language servers
 
@@ -36,9 +36,12 @@ The embedded Dockerfile builds a base image (Ubuntu 24.04) with the tools listed
 | openssh-client | `openssh-client` (apt) | `ssh` |
 | gpg | `gpg` (apt) | `gpg` |
 | curl | `curl` (apt) | `curl` |
-| sudo | `sudo` (apt) | `sudo` |
+| sudo | `sudo` (apt, classic `sudo.ws`, installed with `--no-install-recommends`) | `sudo` (`/usr/bin/sudo` through alternatives) |
 | unzip | `unzip` (apt) | `unzip` |
 | xz-utils | `xz-utils` (apt) | `xz` |
+
+!!! warning
+    Python environments that outlive the VM and target the system Python 3.12, such as a `.venv` in a shared project directory or one under the persisted `~/.cache`, must be recreated for Python 3.14.
 
 ## Docker layer
 
@@ -66,6 +69,7 @@ The base image contains no coding agent. jailoc installs the workspace's agent (
 | Agent user | `agent`, UID 1000, home `/home/agent`, shell `/bin/bash` |
 | sudo | passwordless for `agent` (disabled at runtime by `protect_git`) |
 | `PATH` | `/home/agent/.local/bin` prepended |
+| coreutils | Rust uutils; GNU `cp`, `df`, `mv`, `rm` and `true` |
 
 ## System components
 
