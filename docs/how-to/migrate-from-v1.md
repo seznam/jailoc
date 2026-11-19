@@ -78,6 +78,10 @@ This part of `jailoc migrate` applies to any configuration that uses the older n
 - adds a rule with `allow = ["*"]` when the configuration had no `network.rules`;
 - keeps the value of the new field and removes the old one when both are set.
 
+After converting deprecated settings, `jailoc migrate` asks for optional `internal_zones` when no non-empty `internal_zones` exists in `[defaults]` or any workspace and explicit `allow` rules include hostnames. Wildcard hostnames count; `*`, IP addresses, CIDRs and `deny` rules do not. Answer with comma- or whitespace-separated DNS zones; they are stored in `defaults.network.internal_zones` and apply to every workspace. A blank answer leaves the zones unset; `--yes` skips the question. `--dry-run` asks the question and previews the result without writing it. Zones added by the conversion of legacy `allowed_hosts` suppress the question. The question also applies to configurations without deprecated settings.
+
+Only list zones whose DNS you control. A zone and its subdomains may resolve to private addresses; for names outside the zones, the broker filters private answers to prevent DNS rebinding. A zone grants no access alone: a matching egress `allow` rule is still required. See [Internal zones](../reference/configuration.md#internal-zones).
+
 See [Moved network settings](../reference/configuration.md#moved-network-settings) for the config load error these fields trigger.
 
 ## Start the migrated workspace
