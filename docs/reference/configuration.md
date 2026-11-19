@@ -58,6 +58,7 @@ Host runtime of the workspace VMs. All fields are optional.
 | `runner` | string | (embedded or package-provided) | Path to a `jailoc-vm-runner` (or `go-microvm-runner`) binary. Must be absolute; supports `~` expansion. |
 | `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Must be absolute; supports `~` expansion. |
 | `builder` | string | `"auto"` | Where workspace images are built: `"auto"`, `"docker"` or `"vm"`. |
+| `builder_disk` | string | `"20g"` | Size of the data disk of the shared builder VM, at least `1g` (checked when the shared builder VM starts, not by validation). The disk can grow but not shrink. |
 
 **`runner`: runtime selection order**
 
@@ -80,7 +81,14 @@ Builds with none of these (other platforms, builds from source) require `runner`
 | `"docker"` | The host Docker daemon; it is required. |
 | `"vm"` | The shared builder VM, always. |
 
-A workspace with `isolated_build = true` always uses its own builder VM.
+A workspace with `isolated_build = true` always uses its own builder VM, whose data disk follows the workspace's [`docker_disk`](#vm-resource-and-docker-fields), not `builder_disk`.
+
+**`builder_disk`: details**
+
+- It sizes the data disk (`docker.img`) of the shared builder VM in `~/.cache/jailoc-vm/builder`. The format and limits are in [`cpu`, `memory` and `docker_disk`](#cpu-memory-and-docker_disk).
+- A value larger than the existing disk grows it, and the file system grows with it, keeping its content. A smaller value makes `jailoc up` fail; the disk never shrinks.
+- jailoc maintains the cache of a builder VM it owns, and never prunes the host Docker daemon. See [Builder cache maintenance](image-resolution.md#builder-cache-maintenance).
+- A builder whose disk is already full can't prune itself. See [Builder VM disk is full](../how-to/troubleshooting.md#builder-vm-disk-is-full).
 
 ### Example
 
@@ -88,6 +96,7 @@ A workspace with `isolated_build = true` always uses its own builder VM.
 [vm]
 runner = "~/.local/bin/go-microvm-runner"
 lib_dir = "/opt/homebrew/lib"
+builder_disk = "40g"
 ```
 
 ---
@@ -1121,6 +1130,8 @@ protect_git = true
 | `docker_disk` | Must match `^[1-9][0-9]*[kmgKMG]?$` (for example `512m`, `4g`). At `jailoc up`, at least `1g`, and rounded up to whole MiB. |
 
 When the existing data disk is larger than `docker_disk`, `jailoc up` fails instead of shrinking it.
+
+`[vm] builder_disk` follows the same format and grow-only rule, with at least `1g`, checked when the shared builder VM starts for a build, not by validation.
 
 ### `timezone`
 

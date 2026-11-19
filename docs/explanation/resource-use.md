@@ -67,15 +67,21 @@ After every import, jailoc prunes its EROFS image cache under the current home d
 
 go-microvm's directory cache, which holds the builder VM image and workspace images unpacked by older jailoc releases, is pruned as well: unpacked trees nothing references, and layers unused for two weeks. Running VMs from older releases keep using their unpacked image until they restart.
 
-Unused images in a Docker daemon (the host's or the builder VM's) are not pruned automatically; cleaning them up is the owner's job, see [Converting for the VM](../reference/image-resolution.md#converting-for-the-vm).
+jailoc never prunes the host Docker daemon, which other users and other jailoc home directories can share; unused images there stay until their owner removes them, see [Converting for the VM](../reference/image-resolution.md#converting-for-the-vm). The builder VMs jailoc owns are maintained instead, see [Data disks](#data-disks).
 
 ### Data disks
 
-The builder VM and workspaces with `enable_docker` have a data disk, 20 GiB unless `docker_disk` sets another size.
+The builder VMs and workspaces with `enable_docker` have a data disk, 20 GiB by default. `docker_disk` sizes the disk of a workspace and of its `isolated_build` builder VM; `[vm] builder_disk` sizes the shared builder VM's.
 
 - Disks are sparse files, so they take host space only for blocks that have been written, but blocks freed inside the VM stay allocated on the host.
-- Raising `docker_disk` grows the disk on the next start; it never shrinks.
+- Raising `docker_disk` or `builder_disk` grows the disk and its file system on the next start, keeping the content; neither shrinks.
 - Workspaces without `enable_docker` get no disk at all and don't start a Docker daemon.
+
+#### Builder cache
+
+A builder VM's disk holds its build cache and the images it built, which grow with every distinct build. jailoc maintains the cache of the builder VMs it owns under the builder's exclusive lock, before and after each build: Docker 29 garbage collection aims for a build cache of at most 50% of the disk and at least 20% free, and jailoc prunes through the Docker SDK as well. Only images jailoc built are removal candidates, and those whose ID is converted into the EROFS image cache, their base and agent ancestors, images younger than one hour and images with a foreign tag are kept.
+
+The 50% and 20% figures are targets, not a quota. The active build cache, the layers of the images being built and a single large build can exceed them, and a disk that is already full can't be pruned, because the Docker daemon can't run. See [Builder VM disk is full](../how-to/troubleshooting.md#builder-vm-disk-is-full).
 
 ### VM runtime
 
