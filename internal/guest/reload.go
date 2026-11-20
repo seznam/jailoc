@@ -1,6 +1,9 @@
 package guest
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // Reload carries the guest settings the host can change without a restart.
 // The host writes it as ReloadFile in ControlDir; the guest init applies it
@@ -17,6 +20,10 @@ type Reload struct {
 	Snapshots []Snapshot `json:"snapshots,omitempty"`
 	// TimeZone replaces the guest's local time zone when set.
 	TimeZone *TimeZone `json:"time_zone,omitempty"`
+	// TmpTTL replaces the /tmp expiry when set; zero disables it. An
+	// expiry pass that runs with the old value stops before the guest
+	// answers.
+	TmpTTL *time.Duration `json:"tmp_ttl_ns,omitempty"`
 }
 
 // ReloadDone reports the result of applying the Reload with Seq.

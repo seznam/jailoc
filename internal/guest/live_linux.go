@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 )
 
 // liveState applies Reload requests: the CA bundle, the SSH and gpg agent
-// relays, the host port mirrors, the snapshot binds and the time zone.
+// relays, the host port mirrors, the snapshot binds, the time zone and the
+// /tmp expiry.
 type liveState struct {
 	logger    *slog.Logger
 	acct      account
@@ -26,10 +28,21 @@ type liveState struct {
 	mounts    []int
 	// created holds the snapshot mount points the guest created.
 	created map[string]bool
+	// tmp expires /tmp entries; Reload.TmpTTL replaces its TTL.
+	tmp *tmpCleaner
+	// setCA overrides setCABundle in tests when non-nil.
+	setCA func(string) error
 }
 
 func (l *liveState) apply(r Reload) error {
-	if err := setCABundle(r.CABundle); err != nil {
+	if r.TmpTTL != nil && *r.TmpTTL < 0 {
+		return fmt.Errorf("tmp: negative ttl %s", *r.TmpTTL)
+	}
+	setCA := l.setCA
+	if setCA == nil {
+		setCA = setCABundle
+	}
+	if err := setCA(r.CABundle); err != nil {
 		return err
 	}
 	if !slices.Equal(r.Snapshots, l.snapshots) {
@@ -65,6 +78,13 @@ func (l *liveState) apply(r Reload) error {
 		if err := setTimeZone("/", *r.TimeZone); err != nil {
 			l.logger.Warn("set time zone", "error", err)
 		}
+	}
+	if r.TmpTTL != nil {
+		// Applied after the fallible reload steps succeed so a failed
+		// reload never leaves a shorter TTL active. SetTTL returns once
+		// any pass with the old TTL has stopped, before the reload is
+		// acknowledged.
+		l.tmp.SetTTL(*r.TmpTTL)
 	}
 	l.applied = r
 	return nil
@@ -115,11 +135,19 @@ func (l *liveState) poll() {
 		l.logger.Error("reload", "error", err)
 		done.Error = err.Error()
 	} else {
-		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "gpg_agent", r.GPGAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots), "time_zone", timeZoneName(r.TimeZone))
+		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "gpg_agent", r.GPGAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots), "time_zone", timeZoneName(r.TimeZone), "tmp_ttl", tmpTTLName(r.TmpTTL))
 	}
 	out, _ := json.Marshal(done)
 	tmp := filepath.Join(ControlDir, ReloadDoneFile+".tmp")
 	if err := os.WriteFile(tmp, out, 0o600); err == nil {
 		_ = os.Rename(tmp, filepath.Join(ControlDir, ReloadDoneFile))
 	}
+}
+
+// tmpTTLName describes a Reload.TmpTTL for the log.
+func tmpTTLName(ttl *time.Duration) string {
+	if ttl == nil {
+		return "unchanged"
+	}
+	return ttl.String()
 }
