@@ -395,6 +395,10 @@ type VMConfig struct {
 	// Docker when usable, otherwise a builder VM), BuilderDocker or
 	// BuilderVM. Empty means BuilderAuto.
 	Builder string `toml:"builder,omitempty"`
+	// BuilderDisk is the size of the Docker data disk of the shared builder
+	// VM, like docker_disk. Empty means "20g". Workspaces with isolated_build
+	// size their own builder with docker_disk instead.
+	BuilderDisk string `toml:"builder_disk,omitempty"`
 }
 
 // Image builders of the VM backend.
@@ -1193,6 +1197,9 @@ func Validate(cfg *Config) error {
 	case "", BuilderAuto, BuilderDocker, BuilderVM:
 	default:
 		return fmt.Errorf("vm: invalid builder %q: must be %q, %q, %q, or empty (%s)", cfg.VM.Builder, BuilderAuto, BuilderDocker, BuilderVM, BuilderAuto)
+	}
+	if cfg.VM.BuilderDisk != "" && !validMemory.MatchString(cfg.VM.BuilderDisk) {
+		return fmt.Errorf("vm: invalid builder_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", cfg.VM.BuilderDisk)
 	}
 	for _, p := range []*string{&cfg.VM.Runner, &cfg.VM.LibDir} {
 		if *p == "" {

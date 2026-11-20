@@ -3826,6 +3826,13 @@ func TestBackendValidation(t *testing.T) {
 		{name: "builder docker", ws: Workspace{}, vm: VMConfig{Builder: BuilderDocker}},
 		{name: "builder vm", ws: Workspace{}, vm: VMConfig{Builder: BuilderVM}},
 		{name: "builder unknown", ws: Workspace{}, vm: VMConfig{Builder: "podman"}, wantError: `vm: invalid builder "podman"`},
+		{name: "builder_disk gigabytes", ws: Workspace{}, vm: VMConfig{BuilderDisk: "40g"}},
+		{name: "builder_disk megabytes", ws: Workspace{}, vm: VMConfig{BuilderDisk: "51200m"}},
+		{name: "builder_disk empty", ws: Workspace{}, vm: VMConfig{BuilderDisk: ""}},
+		{name: "builder_disk words", ws: Workspace{}, vm: VMConfig{BuilderDisk: "big"}, wantError: `vm: invalid builder_disk format "big"`},
+		{name: "builder_disk zero", ws: Workspace{}, vm: VMConfig{BuilderDisk: "0g"}, wantError: `vm: invalid builder_disk format "0g"`},
+		{name: "builder_disk negative", ws: Workspace{}, vm: VMConfig{BuilderDisk: "-5g"}, wantError: `vm: invalid builder_disk format "-5g"`},
+		{name: "builder_disk fraction", ws: Workspace{}, vm: VMConfig{BuilderDisk: "1.5g"}, wantError: `vm: invalid builder_disk format "1.5g"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3841,6 +3848,24 @@ func TestBackendValidation(t *testing.T) {
 				t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
 			}
 		})
+	}
+}
+
+func TestLoadBuilderDiskTOML(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[vm]\nbuilder_disk = \"40g\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.VM.BuilderDisk != "40g" {
+		t.Fatalf("VM.BuilderDisk = %q, want 40g", cfg.VM.BuilderDisk)
+	}
+	if got := cfg.UnknownKeys(); len(got) != 0 {
+		t.Fatalf("UnknownKeys() = %v, want none", got)
 	}
 }
 

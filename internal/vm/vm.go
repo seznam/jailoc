@@ -277,6 +277,12 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	if err := os.MkdirAll(spec.StateDir, 0o700); err != nil {
 		return fmt.Errorf("create vm state dir: %w", err)
 	}
+	// The console of the previous boot is evidence of that boot only; drop it
+	// before anything of this attempt can fail, so a host failure is not
+	// diagnosed from a stale guest console.
+	if err := os.Remove(filepath.Join(spec.StateDir, "microvm", "console.log")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reset vm console log: %w", err)
+	}
 	if spec.ImageCache != "" {
 		if err := privateCacheDir(spec.ImageCache); err != nil {
 			return err
@@ -291,11 +297,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		}
 	}
 	if !workspace || spec.Docker {
-		diskSize := spec.DiskSize
-		if diskSize == 0 {
-			diskSize = DefaultDiskSize
-		}
-		if err := ensureDisk(diskPath(spec.StateDir), diskSize); err != nil {
+		if err := ensureDisk(diskPath(spec.StateDir), diskSize(spec), diskSetting(spec)); err != nil {
 			return err
 		}
 	}
@@ -344,16 +346,24 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		_ = vm.Stop(sctx)
 		_ = bp.Stop(5 * time.Second)
 	}
-	if err := bp.WaitNIC(ctx, 30*time.Second); err != nil {
-		stopBoth()
-		return err
+	handle := vmHandle{vm: vm, stateDir: spec.StateDir, nicDown: bp.NICDown()}
+	// Fail startup as soon as the VM, its broker or its NIC is lost; the
+	// waits below would otherwise run into their timeouts.
+	mctx, stopWatch := monitorStartup(ctx, startupWatch{BrokerDone: bp.Done(), NICDown: bp.NICDown(), Alive: handle.Alive})
+	phase := "VM NIC"
+	err = bp.WaitNIC(mctx, 30*time.Second)
+	if err == nil {
+		switch {
+		case workspace:
+			phase = "guest ssh"
+			err = waitSSH(mctx, spec.StateDir, 2*time.Minute)
+		default:
+			phase = "guest docker"
+			err = waitDocker(mctx, st.DockerSocket, 3*time.Minute)
+		}
 	}
-	if workspace {
-		err = waitSSH(ctx, spec.StateDir, 2*time.Minute)
-	} else {
-		err = waitDocker(ctx, st.DockerSocket, 3*time.Minute)
-	}
-	if err != nil {
+	stopWatch()
+	if err = startupError(ctx, mctx, phase, err, filepath.Join(spec.StateDir, "microvm", "console.log")); err != nil {
 		stopBoth()
 		return err
 	}
@@ -364,7 +374,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	}
 	logf("%s ready after %s", spec.Kind, step())
 
-	out := brokerproc.Supervise(ctx, bp, vmHandle{vm: vm, stateDir: spec.StateDir, nicDown: bp.NICDown()}, 500*time.Millisecond, stopGrace)
+	out := brokerproc.Supervise(ctx, bp, handle, 500*time.Millisecond, stopGrace)
 	logf("supervise %s", out.Reason)
 	if out.Reason == "shutdown" {
 		return nil
@@ -440,12 +450,18 @@ func commonOptions(spec Spec) []microvm.Option {
 	return opts
 }
 
-func builderOptions(spec Spec) []microvm.Option {
-	script := strings.NewReplacer(
+// renderBuilderInit fills the placeholders of the builder's guest init.
+func renderBuilderInit(spec Spec) string {
+	return strings.NewReplacer(
 		"@GATEWAY@", Gateway, "@GUEST@", GuestIP,
 		"@DOCKER_PORT@", strconv.Itoa(DockerPort), "@AGENT_GID@", strconv.Itoa(agentGID),
 		"@CONTROL@", controlDir(spec.StateDir), "@MTU@", strconv.Itoa(guest.MTU),
+		"@DISK_SIZE@", strconv.FormatInt(diskSize(spec), 10),
 	).Replace(initScript)
+}
+
+func builderOptions(spec Spec) []microvm.Option {
+	script := renderBuilderInit(spec)
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares))
 	var table strings.Builder
 	for i, s := range spec.Shares {
@@ -486,16 +502,34 @@ func builderOptions(spec Spec) []microvm.Option {
 	)
 }
 
+// diskSize is the size of the spec's data disk.
+func diskSize(spec Spec) int64 {
+	if spec.DiskSize == 0 {
+		return DefaultDiskSize
+	}
+	return spec.DiskSize
+}
+
+// diskSetting names the configuration setting that sizes the spec's data
+// disk: the shared builder's disk is [vm] builder_disk, every other Docker
+// disk (an isolated builder's, a workspace's) is the workspace's docker_disk.
+func diskSetting(spec Spec) string {
+	if spec.Kind == KindBuilder && spec.Workspace == "builder" {
+		return "[vm] builder_disk"
+	}
+	return "docker_disk"
+}
+
 // ensureDisk creates the sparse data disk, or grows it to size. libkrun
 // releases built with imago < 0.2.5 truncate the image when a discard or
 // write-zeroes request reaches its end (libkrun/libkrun#949), which mkfs does.
 // A disk larger than size is refused: shrinking it would cut off the file
 // system on it.
-func ensureDisk(path string, size int64) error {
+func ensureDisk(path string, size int64, setting string) error {
 	st, err := os.Stat(path)
 	if err == nil {
 		if st.Size() > size {
-			return fmt.Errorf("data disk %s is %d MiB, larger than the requested %d MiB, and cannot shrink: set docker_disk to at least %dm, or remove the file to start over with an empty disk", path, st.Size()>>20, size>>20, (st.Size()+(1<<20-1))>>20)
+			return fmt.Errorf("data disk %s is %d MiB, larger than the requested %d MiB, and cannot shrink: set %s to at least %dm", path, st.Size()>>20, size>>20, setting, (st.Size()+(1<<20-1))>>20)
 		}
 		if st.Size() < size {
 			if err := os.Truncate(path, size); err != nil {

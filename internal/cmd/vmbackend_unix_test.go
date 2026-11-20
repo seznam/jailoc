@@ -1209,3 +1209,445 @@ func TestVMPolicyWithoutQuietRulesOmitsQuiet(t *testing.T) {
 		t.Fatalf("policy without log = false mentions quiet: %s", data)
 	}
 }
+
+func TestVMFailure(t *testing.T) {
+	t.Parallel()
+	const enospc = "docker: failed to mkdir /var/lib/docker/tmp: no space left on device"
+	console := "boot ok\n" +
+		"time=... level=fatal msg=\"" + enospc + "\"\n" +
+		"Filesystem      1K-blocks    Used Available Use% Mounted on\n" +
+		"/dev/vda         20463184 20463184         0 100% /var/lib/docker\n" +
+		"Filesystem      Inodes IUsed IFree IUse% Mounted on\n" +
+		"/dev/vda        1310720 52311 1258409    4% /var/lib/docker\n" +
+		"SECRET_TOKEN=hunter2\n"
+	// The guest's init prints every df row behind the "jailoc-init:   " prefix.
+	prefixedConsole := "jailoc-init: mounted\n" +
+		"jailoc-init: data disk usage (after dockerd exit):\n" +
+		"jailoc-init:   Filesystem           1K-blocks      Used Available Use% Mounted on\n" +
+		"jailoc-init:   /dev/vdb             20463184  20463184         0 100% /var/lib/docker\n" +
+		"jailoc-init:   Filesystem              Inodes      Used Available Use% Mounted on\n" +
+		"jailoc-init:   /dev/vdb            1310720     52311   1258409   4% /var/lib/docker\n" +
+		"jailoc-init: dockerd exited unexpectedly with status 1\n" +
+		"level=fatal msg=\"" + enospc + "\"\n"
+	initFailure := "jailoc-init: mounted\n" +
+		"jailoc-init: data disk usage (after mount):\n" +
+		"jailoc-init:   Filesystem           1K-blocks      Used Available Use% Mounted on\n" +
+		"jailoc-init:   /dev/vdb             20463184   1000000  19000000   5% /var/lib/docker\n" +
+		"resize2fs: Bad magic number in super-block\n" +
+		"jailoc-init: resize2fs /dev/vdb failed\n"
+	const dfBlocksHealthy = "Filesystem      1K-blocks    Used Available Use% Mounted on\n" +
+		"/dev/vdb         20463184 20000000     12345  99% /var/lib/docker\n"
+	const dfInodesHealthy = "Filesystem      Inodes IUsed IFree IUse% Mounted on\n" +
+		"/dev/vdb        1310720 52311 1258409    4% /var/lib/docker\n"
+	const dfInodesFull = "Filesystem      Inodes   IUsed IFree IUse% Mounted on\n" +
+		"/dev/vdb        1310720 1310720     0  100% /var/lib/docker\n"
+	const dfBlocksOK = "Filesystem      1K-blocks    Used Available Use% Mounted on\n" +
+		"/dev/vdb         20463184  1000000  19000000   5% /var/lib/docker\n"
+	const dfBlocksFull = "Filesystem      1K-blocks    Used Available Use% Mounted on\n" +
+		"/dev/vdb         20463184 20463184         0 100% /var/lib/docker\n"
+	hostAmbiguous := []string{"no guest console evidence", "root filesystem", "host's free space", "only if the console log shows"}
+	notGuestFull := []string{"Docker data filesystem is full", "this is the guest filesystem, not the host"}
+	tests := []struct {
+		name       string
+		stateError string
+		spec       *vm.Spec
+		console    *string
+		supervisor string
+		want       []string
+		notWant    []string
+		wantExact  string
+	}{
+		{
+			name:       "shared builder ENOSPC in console",
+			stateError: "docker not ready",
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder", DiskSize: 20 << 30},
+			console:    &console,
+			want: []string{
+				"docker not ready", "no space left on device", "console.log", "docker.img",
+				"20 GiB", "[vm] builder_disk", "guest filesystem", "not the host", "df -k", "df -i",
+				"/dev/vda         20463184 20463184         0 100% /var/lib/docker",
+				"/dev/vda        1310720 52311 1258409    4% /var/lib/docker",
+			},
+			notWant: []string{"hunter2", "SECRET_TOKEN", "docker_disk"},
+		},
+		{
+			name:       "isolated builder ENOSPC in state error",
+			stateError: enospc,
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "proj-builder", DiskSize: 30 << 30},
+			want:       []string{enospc, "30 GiB", `docker_disk of workspace "proj"`, "console.log (not found)"},
+			notWant:    []string{"builder_disk"},
+		},
+		{
+			name:       "workspace ENOSPC",
+			stateError: enospc,
+			spec:       &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj", DiskSize: 20 << 30},
+			want:       []string{`docker_disk of workspace "proj"`},
+		},
+		{
+			name:       "ENOSPC without spec",
+			stateError: enospc,
+			want:       []string{enospc, "docker.img", "builder_disk", "docker_disk"},
+		},
+		{
+			name:       "ENOSPC from console without state error",
+			supervisor: "irrelevant\n",
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console:    &console,
+			want:       []string{"no space left on device", "20 GiB", "builder_disk"},
+		},
+		{
+			name:       "real init console format keeps prefixed df rows",
+			stateError: "docker not ready",
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder", DiskSize: 20 << 30},
+			console:    &prefixedConsole,
+			want: []string{
+				"docker not ready", "inside the guest", "df -k", "df -i",
+				"guest df: Filesystem           1K-blocks      Used Available Use% Mounted on",
+				"guest df: /dev/vdb             20463184  20463184         0 100% /var/lib/docker",
+				"guest df: Filesystem              Inodes      Used Available Use% Mounted on",
+				"guest df: /dev/vdb            1310720     52311   1258409   4% /var/lib/docker",
+				"guest: jailoc-init: dockerd exited unexpectedly with status 1",
+				"[vm] builder_disk",
+			},
+			notWant: []string{"df -h", "jailoc-init:   ", "jailoc-init: mounted"},
+		},
+		{
+			name:       "state-only ENOSPC may be the host and is not called guest full",
+			stateError: "size data disk: " + enospc,
+			spec:       &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj", DiskSize: 20 << 30},
+			want: []string{
+				"size data disk", "host", "console.log (not found)", "docker.img", "20 GiB",
+				"no guest console evidence", `docker_disk of workspace "proj"`,
+			},
+			notWant: []string{"Docker data filesystem is full", "this is the guest filesystem, not the host"},
+		},
+		{
+			name:       "state-only ENOSPC with unrelated console is not called guest full",
+			stateError: "grow data disk: " + enospc,
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder", DiskSize: 20 << 30},
+			console:    new("boot ok\n"),
+			want:       []string{"grow data disk", "host", "no guest console evidence", "[vm] builder_disk"},
+			notWant:    []string{"Docker data filesystem is full", "console.log (not found)"},
+		},
+		{
+			name:    "apk ENOSPC on the root path with a healthy docker df is not attributed to Docker",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj", DiskSize: 20 << 30},
+			console: new("ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n" + dfBlocksHealthy + dfInodesHealthy),
+			want:    append([]string{"/usr/lib/libfoo.so", `docker_disk of workspace "proj"`}, hostAmbiguous...),
+			notWant: notGuestFull,
+		},
+		{
+			name:    "bare console ENOSPC without df or path is not attributed to Docker",
+			spec:    &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console: new("level=fatal msg=\"no space left on device\"\n"),
+			want:    append([]string{"[vm] builder_disk"}, hostAmbiguous...),
+			notWant: notGuestFull,
+		},
+		{
+			name:    "inode exhaustion in the data df with a generic ENOSPC is guest evidence",
+			spec:    &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console: new("level=fatal msg=\"no space left on device\"\n" + dfBlocksOK + dfInodesFull),
+			want:    []string{"Docker data filesystem is full", "this is the guest filesystem, not the host", "[vm] builder_disk"},
+			notWant: []string{"no guest console evidence", "only if"},
+		},
+		{
+			name:    "ENOSPC on a path under the data directory without df is guest evidence",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("level=fatal msg=\"docker: failed to mkdir /var/lib/docker/tmp: no space left on device\"\n"),
+			want:    []string{"Docker data filesystem is full", `docker_disk of workspace "proj"`},
+			notWant: []string{"no guest console evidence", "only if"},
+		},
+		{
+			name:    "ENOSPC on exactly the data directory may be the root filesystem before the mount",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("mkdir /var/lib/docker: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "ENOSPC on the data directory with a trailing slash is still exact",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("mkdir /var/lib/docker/: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "ENOSPC on the data directory with a trailing dot is still exact",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("mkdir /var/lib/docker/.: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "ENOSPC on the data directory is guest evidence when the latest df shows no free blocks",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("mkdir /var/lib/docker: No space left on device\n" + dfBlocksFull + dfInodesHealthy + dfBlocksFull),
+			want:    []string{"Docker data filesystem is full"},
+			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name: "a long path under the data directory keeps its guest evidence past the display cap",
+			spec: &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("level=error msg=\"write /var/lib/docker/overlay2/" + strings.Repeat("a", 300) +
+				"/diff/x: no space left on device\"\n"),
+			want:    []string{"Docker data filesystem is full", "..."},
+			notWant: append([]string{strings.Repeat("a", 250)}, "no guest console evidence"),
+		},
+		{
+			name:    "an older full block df followed by a healthy one and a root path ENOSPC is ambiguous",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfBlocksFull + dfBlocksOK + "ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "an older full inode df followed by a healthy one and a root path ENOSPC is ambiguous",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfInodesFull + dfInodesHealthy + "ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "healthy blocks do not clear full inodes",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfInodesFull + dfBlocksOK + "ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n"),
+			want:    []string{"Docker data filesystem is full"},
+			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name:    "healthy inodes do not clear full blocks",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfBlocksFull + dfInodesHealthy + "ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n"),
+			want:    []string{"Docker data filesystem is full"},
+			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name:    "a path failure under the data directory is obsolete once a later df is healthy",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("docker: failed to mkdir /var/lib/docker/tmp: no space left on device\n" + dfBlocksOK + dfInodesHealthy),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "a path failure under the data directory after a healthy df is guest evidence",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfBlocksOK + dfInodesHealthy + "docker: failed to mkdir /var/lib/docker/tmp: no space left on device\n"),
+			want:    []string{"Docker data filesystem is full"},
+			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name: "a zero-free row under an unknown df header is not guest evidence",
+			spec: &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("fatal: no space left on device\n" +
+				"Filesystem      Size  Used Avail Use% Mounted on\n" +
+				"/dev/vdb         20G   20G     0 100% /var/lib/docker\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "rounded 100 percent with free blocks is not exhaustion",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("fatal: no space left on device\n" + dfBlocksHealthy + dfInodesHealthy),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "a generic message that names the data directory but fails on another path is not attributed to Docker",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("level=error msg=\"cleanup of /var/lib/docker skipped; write /usr/lib/x: no space left on device\"\n" + dfBlocksOK + dfInodesHealthy),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "a sibling directory with the data directory as prefix is not the data directory",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("write /var/lib/docker-old/x: no space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:       "builder startup fatal shows the line and console path",
+			stateError: "docker not ready",
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console:    &initFailure,
+			want:       []string{"docker not ready", "guest: jailoc-init: resize2fs /dev/vdb failed", "console.log"},
+			notWant:    []string{"no space left", "Bad magic", "20463184", "Filesystem", "mounted", "builder_disk"},
+		},
+		{
+			name:       "startup fatal without state error follows the supervisor summary",
+			supervisor: "start: boom\n",
+			console:    new("jailoc-init: mounting data disk failed\n"),
+			want:       []string{"start: boom", "guest: jailoc-init: mounting data disk failed", "console.log"},
+		},
+		{
+			name:       "startup fatal lines are bounded and capped",
+			stateError: "docker not ready",
+			console: func() *string {
+				s := ""
+				for i := range 10 {
+					s += fmt.Sprintf("jailoc-init: step %d failed %s\n", i, strings.Repeat("z", 1000))
+				}
+				return &s
+			}(),
+			want:    []string{"docker not ready", "step 9 failed", "step 7 failed", "console.log"},
+			notWant: []string{"step 6 failed", strings.Repeat("z", 400)},
+		},
+		{
+			name:       "huge console only tail is read",
+			stateError: "docker not ready",
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console: func() *string {
+				s := "no space left on device\n" + strings.Repeat("x", 64<<10) + "\n"
+				return &s
+			}(),
+			wantExact: "docker not ready",
+		},
+		{
+			name:       "fatal lines are capped",
+			stateError: "no space left on device",
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console: func() *string {
+				s := "fatal: no space left on device " + strings.Repeat("y", 5000) + "\n"
+				return &s
+			}(),
+			notWant: []string{strings.Repeat("y", 400)},
+			want:    []string{"no space left on device"},
+		},
+		{
+			name:       "non-ENOSPC state error is unchanged",
+			stateError: "libkrun failed",
+			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
+			console:    new("level=fatal something else\n"),
+			wantExact:  "libkrun failed",
+		},
+		{
+			name:       "IRQ hint unchanged",
+			supervisor: "start: IrqsExhausted\n",
+			wantExact:  "the VM has more devices than libkrun can attach on this host (on x86_64 about 11 shared directories besides jailoc's own); remove some paths or mounts",
+		},
+		{
+			name:       "last five supervisor lines",
+			supervisor: "1\n2\n3\n4\n5\n6\n7\n",
+			wantExact:  "3; 4; 5; 6; 7",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			logPath := filepath.Join(dir, "supervisor.log")
+			if tt.supervisor != "" {
+				if err := os.WriteFile(logPath, []byte(tt.supervisor), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.stateError != "" {
+				data, err := json.Marshal(vm.State{PID: 1, Error: tt.stateError})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(vm.StateFile(dir), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.spec != nil {
+				spec := *tt.spec
+				spec.StateDir = dir
+				if err := vm.WriteSpec(spec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.console != nil {
+				if err := os.MkdirAll(filepath.Join(dir, "microvm"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "microvm", "console.log"), []byte(*tt.console), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			got := vmFailure(dir, logPath)
+			if tt.wantExact != "" && got != tt.wantExact {
+				t.Fatalf("vmFailure = %q, want %q", got, tt.wantExact)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("vmFailure = %q, want it to contain %q", got, w)
+				}
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(got, w) {
+					t.Errorf("vmFailure = %q, must not contain %q", got, w)
+				}
+			}
+			if strings.Contains(got, "no space left") && len(got) > 4<<10 {
+				t.Errorf("vmFailure is %d bytes, want a concise message", len(got))
+			}
+			if strings.Contains(got, "docker.img") && !strings.Contains(got, filepath.Join(dir, "docker.img")) {
+				t.Errorf("vmFailure = %q, want the full docker.img path", got)
+			}
+		})
+	}
+}
+
+// TestVMFailureIgnoresStaleConsoleAfterHostENOSPC runs the real vm.Run into an
+// early failure (an oversized existing data disk), so that the prior boot's
+// guest console, which says the Docker filesystem is full, is dropped. The
+// current attempt then fails with a host ENOSPC and must be reported as such.
+func TestVMFailureIgnoresStaleConsoleAfterHostENOSPC(t *testing.T) {
+	t.Parallel()
+	const enospc = "no space left on device"
+	dir, err := os.MkdirTemp("/tmp", "jlf-") // short path: unix socket paths are limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	disk := filepath.Join(dir, "docker.img")
+	f, err := os.Create(disk) //nolint:gosec // G304: disk inside the test's own temporary directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(2 << 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	console := filepath.Join(dir, "microvm", "console.log")
+	if err := os.MkdirAll(filepath.Dir(console), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := "level=fatal msg=\"docker: failed to mkdir /var/lib/docker/tmp: " + enospc + "\"\n" +
+		"/dev/vdb             20463184  20463184         0 100% /var/lib/docker\n"
+	if err := os.WriteFile(console, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	spec := vm.Spec{Kind: vm.KindBuilder, Workspace: "builder", StateDir: dir, DiskSize: 1 << 20}
+	if err := vm.WriteSpec(spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := vm.Run(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "cannot shrink") {
+		t.Fatalf("vm.Run = %v, want the data disk shrink refusal", err)
+	}
+	// The current attempt's failure is the host's: truncating the disk hit ENOSPC.
+	data, err := json.Marshal(vm.State{PID: 1, Error: "grow data disk: truncate " + disk + ": " + enospc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vm.StateFile(dir), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := vmFailure(dir, filepath.Join(dir, "supervisor.log"))
+	for _, w := range []string{"grow data disk", "host", "no guest console evidence", "[vm] builder_disk"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("vmFailure = %q, want it to contain %q", got, w)
+		}
+	}
+	for _, w := range []string{"Docker data filesystem is full", "this is the guest filesystem, not the host", "level=fatal"} {
+		if strings.Contains(got, w) {
+			t.Errorf("vmFailure = %q, must not contain %q", got, w)
+		}
+	}
+}
