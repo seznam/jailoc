@@ -4,7 +4,8 @@
 #
 # libkrun is built from the release go-microvm names in versions.env, with
 # jailoc's patches (build-libkrun-linux.sh explains them; 0001/0002 are
-# x86_64-only, 0003 is the macOS FIFO fix) and the same features as on Linux,
+# x86_64-only, 0003 is the macOS FIFO fix, 0004 the imago raw-disk discard
+# fix) and the same features as on Linux,
 # so the runtime needs no GPU libraries. Its guest init is the musl build of
 # the linux-arm64 job (build-init.sh) instead of a cross-compile against a
 # Debian glibc sysroot.
