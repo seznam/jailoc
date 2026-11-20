@@ -72,6 +72,7 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  CPU: %g\n", ws.CPU)
 	_, _ = cyan.Fprintf(os.Stdout, "  Memory: %s\n", ws.Memory)
 	_, _ = cyan.Fprintf(os.Stdout, "  Docker Disk: %s\n", ws.DockerDisk)
+	_, _ = cyan.Fprintf(os.Stdout, "  Tmp: %s\n", resolvedTmpLabel(ws))
 	_, _ = cyan.Fprintf(os.Stdout, "  Time Zone: %s\n", cmp.Or(ws.TimeZone, "(host time zone)"))
 	_, _ = cyan.Fprintf(os.Stdout, "  SSH Agent: %t\n", ws.SSHAuthSock)
 	_, _ = cyan.Fprintf(os.Stdout, "  GPG Agent: %t\n", ws.GPGAgent)
