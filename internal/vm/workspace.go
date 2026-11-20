@@ -135,19 +135,24 @@ const simplifiedOwnership = runtime.GOOS == "darwin"
 var virtioIRQs = map[string]int{"amd64": 19, "arm64": 128}
 
 // fixedDevices counts the virtio devices of a workspace VM besides its
-// shares and Docker disk: balloon, rng, console, network, root filesystem,
-// root image share, internal share and internal read-only share.
+// shares and optional disks (Docker data, tmp): balloon, rng, console,
+// network, root filesystem, root image share, internal share and internal
+// read-only share.
 const fixedDevices = 8
 
 // MaxShares returns how many shares a workspace VM on this host boots with.
-// Beyond it libkrun runs out of interrupt lines for the devices.
-func MaxShares(docker bool) int {
-	return maxShares(runtime.GOARCH, docker)
+// Beyond it libkrun runs out of interrupt lines for the devices; the Docker
+// data disk and the tmp disk (docker, diskTmp) each take one of them.
+func MaxShares(docker, diskTmp bool) int {
+	return maxShares(runtime.GOARCH, docker, diskTmp)
 }
 
-func maxShares(arch string, docker bool) int {
+func maxShares(arch string, docker, diskTmp bool) int {
 	n := virtioIRQs[arch] - fixedDevices
 	if docker {
+		n--
+	}
+	if diskTmp {
 		n--
 	}
 	return n
@@ -166,9 +171,10 @@ func workspaceOptions(spec Spec, files map[string]fileContent, imageDir string, 
 		microvm.VirtioFSMount{Tag: internalTag, HostPath: GuestDataDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership},
 		microvm.VirtioFSMount{Tag: internalROTag, HostPath: GuestReadOnlyDir(spec.StateDir), ReadOnly: true, SimplifiedOwnership: simplifiedOwnership})
 	opts := commonOptions(spec)
-	if spec.Docker {
-		// The only disk, so the guest sees it as /dev/vda (guest.DockerDisk).
-		opts = append(opts, microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}))
+	if disks := workspaceDisks(spec); len(disks) > 0 {
+		// In attach order: the Docker disk is /dev/vda (guest.DockerDisk),
+		// the tmp disk the next one.
+		opts = append(opts, microvm.WithDisks(disks...))
 	}
 	return append(opts,
 		microvm.WithRootFSShareDir(rootTag, imageDir),
