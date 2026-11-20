@@ -54,6 +54,12 @@ type Resolved struct {
 	CPU               float64
 	Memory            string
 	DockerDisk        string
+	// TmpStorage is "ram" or "disk": what backs the guest /tmp.
+	TmpStorage string
+	// TmpSizeBytes is the capacity of /tmp.
+	TmpSizeBytes int64
+	// TmpTTL is the age after which /tmp entries are removed; 0 never cleans up.
+	TmpTTL time.Duration
 	// TimeZone is the time zone name for the VM; empty means the host's zone.
 	TimeZone     string
 	EnableDocker bool
@@ -175,6 +181,11 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 
 	mergedSecrets := mergeSecrets(cfg.Defaults.Secrets, ws.Secrets)
 
+	tmp, err := config.ResolveTmp(cfg.Defaults, ws)
+	if err != nil {
+		return nil, fmt.Errorf("workspace %s: %w", name, err)
+	}
+
 	r := &Resolved{
 		Name:              name,
 		Paths:             paths,
@@ -198,6 +209,9 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		CPU:               floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:            stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 		DockerDisk:        stringWithDefault(cfg.Defaults.DockerDisk, ws.DockerDisk, "20g"),
+		TmpStorage:        tmp.Storage,
+		TmpSizeBytes:      tmp.SizeBytes,
+		TmpTTL:            tmp.TTL,
 		TimeZone:          stringWithDefault(cfg.Defaults.TimeZone, ws.TimeZone, ""),
 		Notifications:     cmp.Or(ws.Notifications, cfg.Defaults.Notifications, config.NotificationsAuto),
 		EnableDocker:      boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, false),
