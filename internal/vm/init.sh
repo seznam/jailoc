@@ -54,10 +54,42 @@ install_resize_tool() {
 	apk add -q --cache-dir "$APKSTAGE" e2fsprogs-extra || fail "installing resize2fs (e2fsprogs-extra) failed; cannot grow the data disk"
 }
 
+# superblock_word prints the little-endian 32-bit field at an absolute byte
+# offset of the ext4 superblock (which starts at byte 1024 of the device).
+superblock_word() {
+	word=$(od -An -t u4 -j "$1" -N 4 "$DATA_DEV") || return 1
+	set -- $word
+	[ $# -eq 1 ] || return 1
+	echo "$1"
+}
+
+# data_fs_bytes prints the size of the ext4 file system on the data disk in
+# bytes: blocks_lo at 1028 (plus blocks_hi at 1360 when the 64bit incompat
+# feature, bit 0x80 of the flags at 1120, is set) times the block size,
+# 1024 << log_block_size at 1048.
+data_fs_bytes() {
+	blocks=$(superblock_word 1028) || return 1
+	log_bs=$(superblock_word 1048) || return 1
+	incompat=$(superblock_word 1120) || return 1
+	[ "$log_bs" -le 6 ] || return 1
+	if [ $((incompat & 128)) -ne 0 ]; then
+		blocks_hi=$(superblock_word 1360) || return 1
+		blocks=$((blocks_hi * 4294967296 + blocks))
+	fi
+	echo $((blocks * (1024 << log_bs)))
+}
+
 # grow_data_disk grows the file system to the disk when docker_disk or
-# builder_disk was raised since the last boot. It runs before anything is
-# installed onto the data disk: a full disk would refuse the packages.
+# builder_disk was raised since the file system was made. The file system size
+# decides, not a record of earlier boots, so a growth that did not happen is
+# retried. The format leaves 1 MiB of the disk unformatted: that much is no
+# growth. It runs before anything is installed onto the data disk: a full disk
+# would refuse the packages.
 grow_data_disk() {
+	fs_bytes=$(data_fs_bytes) || fail "reading the file system size of $DATA_DEV failed; cannot tell whether the data disk must grow"
+	if [ $((DISK_SIZE - fs_bytes)) -le 1048576 ]; then
+		return 0
+	fi
 	install_resize_tool
 	resize2fs "$DATA_DEV" || fail "resize2fs $DATA_DEV failed"
 }
