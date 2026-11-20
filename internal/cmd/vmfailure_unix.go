@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -171,68 +172,117 @@ type consoleDiag struct {
 	startup []string
 	// df: header and rows of the guest df listings.
 	df []string
-	// dataFull: a console line shows the Docker data filesystem full, either
-	// an out-of-space error on a path under dockerDataDir or a df row of it
-	// with no free blocks or inodes.
+	// dataFull: the console currently shows the Docker data filesystem full:
+	// the latest df of dockerDataDir has no free blocks or no free inodes (each
+	// tracked on its own), or an out-of-space error on a path below
+	// dockerDataDir came after the latest healthy df of it.
 	dataFull bool
 }
 
+// dfKind is the kind of the df listing whose rows are being read.
+type dfKind int
+
+const (
+	dfUnknown dfKind = iota
+	dfBlocks
+	dfInodes
+)
+
 // consoleDiagnostics picks, from the console tail, the last fatal lines and
 // the guest df lines, sanitized and length-capped. Lines equal to skip are left out.
+// Lines are classified whole; only what is quoted is capped.
 func consoleDiagnostics(console, skip string) consoleDiag {
 	var cause, startup, df []string
-	dataFull := false
+	var blocksFull, inodesFull, pathFull bool
+	kind := dfUnknown
 	for line := range strings.SplitSeq(console, "\n") {
-		line = sanitizeConsoleLine(line)
+		line = cleanConsoleLine(line)
 		if line == "" {
 			continue
 		}
-		if dataFilesystemFull(line) {
-			dataFull = true
-		}
-		if line == skip {
-			continue
+		if dataPathFull(line) {
+			pathFull = true
 		}
 		if row, ok := dfLine(line); ok {
-			df = append(df, row)
+			if k, header := dfHeaderKind(row); header {
+				kind = k
+			} else if free, ok := dataDiskFree(row); ok {
+				full := free == "0"
+				switch kind {
+				case dfBlocks:
+					blocksFull = full
+				case dfInodes:
+					inodesFull = full
+				}
+				if !full && kind != dfUnknown {
+					pathFull = false
+				}
+			}
+			if capConsoleLine(line) != skip {
+				df = append(df, capConsoleLine(row))
+			}
+			continue
+		}
+		shown := capConsoleLine(line)
+		if shown == skip {
 			continue
 		}
 		if isStartupFailure(line) {
-			startup = append(startup, line)
+			startup = append(startup, shown)
 		}
 		if isFatalLine(line) {
-			cause = append(cause, line)
+			cause = append(cause, shown)
 		}
 	}
 	return consoleDiag{
 		cause:    lastN(cause, failureCauseLines),
 		startup:  lastN(startup, failureCauseLines),
 		df:       lastN(df, failureDiskLines),
-		dataFull: dataFull,
+		dataFull: blocksFull || inodesFull || pathFull,
 	}
 }
 
-// dataFilesystemFull reports whether one console line is concrete evidence
-// that the Docker data filesystem is full: an out-of-space error whose failing
-// path (the last word before the message) is dockerDataDir or below it, or a df
-// row of dockerDataDir with 0 available blocks or inodes. A df row at 100%
-// with space still available is rounding, not exhaustion.
-func dataFilesystemFull(line string) bool {
+// dataPathFull reports whether one console line is an out-of-space error whose
+// failing path (the last word before the message) is strictly below
+// dockerDataDir. The directory itself is not evidence: it also exists on the
+// guest root filesystem before the data disk is mounted.
+func dataPathFull(line string) bool {
 	lower := strings.ToLower(line)
-	if i := strings.Index(lower, noSpaceLeft); i >= 0 {
-		words := strings.Fields(lower[:i])
-		if len(words) == 0 {
-			return false
-		}
-		path := strings.Trim(words[len(words)-1], `:,;"'`)
-		return path == dockerDataDir || strings.HasPrefix(path, dockerDataDir+"/")
-	}
-	row, ok := dfLine(line)
-	if !ok {
+	i := strings.Index(lower, noSpaceLeft)
+	if i < 0 {
 		return false
 	}
+	words := strings.Fields(lower[:i])
+	if len(words) == 0 {
+		return false
+	}
+	p := path.Clean(strings.Trim(words[len(words)-1], `:,;"'`))
+	return strings.HasPrefix(p, dockerDataDir+"/")
+}
+
+// dfHeaderKind reports whether row is a df header and which listing it starts.
+func dfHeaderKind(row string) (dfKind, bool) {
+	if !strings.HasPrefix(row, "Filesystem") {
+		return dfUnknown, false
+	}
+	lower := strings.ToLower(row)
+	switch {
+	case strings.Contains(lower, "inodes"):
+		return dfInodes, true
+	case strings.Contains(lower, "blocks"):
+		return dfBlocks, true
+	}
+	return dfUnknown, true
+}
+
+// dataDiskFree returns the available blocks or free inodes of a df row of
+// dockerDataDir.
+func dataDiskFree(row string) (string, bool) {
 	fields := strings.Fields(row)
-	return len(fields) >= 6 && fields[3] == "0" && fields[len(fields)-1] == dockerDataDir
+	if len(fields) < 6 || fields[len(fields)-1] != dockerDataDir {
+		return "", false
+	}
+	return fields[3], true
 }
 
 const initPrefix = "jailoc-init:"
@@ -271,15 +321,19 @@ func lastN(lines []string, n int) []string {
 	return lines
 }
 
-// sanitizeConsoleLine replaces control characters and caps the length.
-func sanitizeConsoleLine(line string) string {
+// cleanConsoleLine replaces control characters.
+func cleanConsoleLine(line string) string {
 	line = strings.Map(func(r rune) rune {
 		if r == '\t' || !unicode.IsPrint(r) {
 			return ' '
 		}
 		return r
 	}, strings.TrimRight(line, "\r"))
-	line = strings.TrimSpace(line)
+	return strings.TrimSpace(line)
+}
+
+// capConsoleLine caps the length of a line quoted in an error message.
+func capConsoleLine(line string) string {
 	if len(line) > failureLineMax {
 		cut := failureLineMax
 		for cut > 0 && !utf8.RuneStart(line[cut]) {

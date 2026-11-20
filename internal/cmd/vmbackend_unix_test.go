@@ -1243,6 +1243,8 @@ func TestVMFailure(t *testing.T) {
 		"/dev/vdb        1310720 1310720     0  100% /var/lib/docker\n"
 	const dfBlocksOK = "Filesystem      1K-blocks    Used Available Use% Mounted on\n" +
 		"/dev/vdb         20463184  1000000  19000000   5% /var/lib/docker\n"
+	const dfBlocksFull = "Filesystem      1K-blocks    Used Available Use% Mounted on\n" +
+		"/dev/vdb         20463184 20463184         0 100% /var/lib/docker\n"
 	hostAmbiguous := []string{"no guest console evidence", "root filesystem", "host's free space", "only if the console log shows"}
 	notGuestFull := []string{"Docker data filesystem is full", "this is the guest filesystem, not the host"}
 	tests := []struct {
@@ -1356,11 +1358,91 @@ func TestVMFailure(t *testing.T) {
 			notWant: []string{"no guest console evidence", "only if"},
 		},
 		{
-			name:    "ENOSPC on exactly the data directory is guest evidence",
+			name:    "ENOSPC on exactly the data directory may be the root filesystem before the mount",
 			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
 			console: new("mkdir /var/lib/docker: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "ENOSPC on the data directory with a trailing slash is still exact",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("mkdir /var/lib/docker/: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "ENOSPC on the data directory with a trailing dot is still exact",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("mkdir /var/lib/docker/.: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "ENOSPC on the data directory is guest evidence when the latest df shows no free blocks",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("mkdir /var/lib/docker: No space left on device\n" + dfBlocksFull + dfInodesHealthy + dfBlocksFull),
 			want:    []string{"Docker data filesystem is full"},
 			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name: "a long path under the data directory keeps its guest evidence past the display cap",
+			spec: &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("level=error msg=\"write /var/lib/docker/overlay2/" + strings.Repeat("a", 300) +
+				"/diff/x: no space left on device\"\n"),
+			want:    []string{"Docker data filesystem is full", "..."},
+			notWant: append([]string{strings.Repeat("a", 250)}, "no guest console evidence"),
+		},
+		{
+			name:    "an older full block df followed by a healthy one and a root path ENOSPC is ambiguous",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfBlocksFull + dfBlocksOK + "ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "an older full inode df followed by a healthy one and a root path ENOSPC is ambiguous",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfInodesFull + dfInodesHealthy + "ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "healthy blocks do not clear full inodes",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfInodesFull + dfBlocksOK + "ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n"),
+			want:    []string{"Docker data filesystem is full"},
+			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name:    "healthy inodes do not clear full blocks",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfBlocksFull + dfInodesHealthy + "ERROR: unable to write /usr/lib/libfoo.so: No space left on device\n"),
+			want:    []string{"Docker data filesystem is full"},
+			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name:    "a path failure under the data directory is obsolete once a later df is healthy",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("docker: failed to mkdir /var/lib/docker/tmp: no space left on device\n" + dfBlocksOK + dfInodesHealthy),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
+		},
+		{
+			name:    "a path failure under the data directory after a healthy df is guest evidence",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new(dfBlocksOK + dfInodesHealthy + "docker: failed to mkdir /var/lib/docker/tmp: no space left on device\n"),
+			want:    []string{"Docker data filesystem is full"},
+			notWant: []string{"no guest console evidence"},
+		},
+		{
+			name: "a zero-free row under an unknown df header is not guest evidence",
+			spec: &vm.Spec{Kind: vm.KindWorkspace, Workspace: "proj"},
+			console: new("fatal: no space left on device\n" +
+				"Filesystem      Size  Used Avail Use% Mounted on\n" +
+				"/dev/vdb         20G   20G     0 100% /var/lib/docker\n"),
+			want:    hostAmbiguous,
+			notWant: notGuestFull,
 		},
 		{
 			name:    "rounded 100 percent with free blocks is not exhaustion",
