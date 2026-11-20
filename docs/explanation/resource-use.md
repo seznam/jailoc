@@ -35,7 +35,7 @@ A VM has no swap disk. `jailoc-guest` sets up a zram device of half the VM memor
 Besides process memory and page cache, a few file systems live in VM memory:
 
 - **The overlay over the read-only image.** Any file written outside the shares and the persistent home, for example a package installed with `apt-get`, stays in memory until the VM stops. Download caches of Go modules, npm, Bun and NuGet go to the persistent `~/.cache` instead (see [Tool caches](../reference/configuration.md#tool-caches)); caches that other tools keep elsewhere below the home directory, such as `~/.cargo` or `~/.m2`, count against memory.
-- **`/tmp`**, limited to 1 GiB, plus `/var/tmp` and `/dev/shm`.
+- **`/tmp`** with `tmp_storage = "ram"` (the default), limited to `tmp_size` (1 GiB unless set), plus `/var/tmp` and `/dev/shm`. See [Temporary files](#temporary-files).
 - **`/run/secrets`** and the session environment.
 
 These pages are anonymous memory, so idle ones go to compressed swap like any other.
@@ -75,7 +75,15 @@ The builder VMs and workspaces with `enable_docker` have a data disk, 20 GiB by 
 
 - Disks are sparse files, so they take host space only for blocks that have been written, but blocks freed inside the VM stay allocated on the host.
 - Raising `docker_disk` or `builder_disk` grows the disk and its file system on the next start, keeping the content; neither shrinks.
-- Workspaces without `enable_docker` get no disk at all and don't start a Docker daemon.
+- Workspaces without `enable_docker` get no Docker data disk and don't start a Docker daemon. A workspace with `tmp_storage = "disk"` has a second, separate disk for `/tmp`, described below.
+
+### Temporary files
+
+`/tmp` can live in memory or on a disk, and both keep it bounded. With `tmp_storage = "ram"` it is a tmpfs of at most `tmp_size`. The cap is not a reservation: the host sets nothing aside, the pages count against the VM's `memory` only once written, and idle ones are compressed by zram like other anonymous pages. Its free disk space doesn't matter. RAM is fast and leaves nothing on the host, but a large build directory in `/tmp` competes with the agent's processes for the same memory. A cap above `memory` doesn't create room.
+
+With `tmp_storage = "disk"`, `/tmp` is an ext4 file system on a sparse disk file (`tmp.img`) that belongs to the workspace alone. It sits in the workspace state directory, outside every guest share, and has nothing to do with the Docker data disk. jailoc creates it empty at each VM start and the guest formats it, so the content is scratch space for one VM lifetime. Because it is sparse, the host spends space only on written blocks, and the guest periodically trims freed blocks so the host can take them back. The file is removed when the VM stops. ext4's own metadata makes the usable capacity a little smaller than `tmp_size`, and the minimum is 16 MiB. Choose a disk for large artifacts, test databases or compilers that write gigabytes; choose RAM for the usual small scratch files.
+
+Either way, entries expire. Every 15 minutes the guest removes files whose access, modification and change times are all older than `tmp_ttl` (8 hours by default), and empty directories whose access and modification times are, skipping locked files, sockets, symlinks, devices and FIFOs and never crossing into other mounts. The 8 hours are deliberately more aggressive than the 10 days common in distributions, because a VM's `/tmp` is scratch space for an agent that can create a lot of it quickly. Set `tmp_ttl = "0"` to turn the cleanup off. The expiry can't stop a running job from filling `/tmp` before the TTL passes; the size limit does that. The guest cleans `/tmp` only, not `/var/tmp`, the persistent home or a `TMPDIR` that points elsewhere. The sweep is best effort, so removal is not timed to the second after creation. See the [reference](../reference/configuration.md#tmp_storage-tmp_size-and-tmp_ttl) for exact rules.
 
 #### Builder cache
 
@@ -99,8 +107,8 @@ A restart costs a VM boot and, after an image change, an export. Much of the con
 
 | Command | Applies |
 |---------|---------|
-| `jailoc reload` | Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets, to the running VM |
-| `jailoc restart` | Changes to `cpu`, `memory`, `docker_disk`, `paths`, `mounts`, `enable_docker`, `protect_git` and the image |
+| `jailoc reload` | Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl` and secrets, to the running VM |
+| `jailoc restart` | Changes to `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `paths`, `mounts`, `enable_docker`, `protect_git` and the image |
 
 ## Host processes
 
