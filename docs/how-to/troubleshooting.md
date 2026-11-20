@@ -264,6 +264,8 @@ jailoc up <workspace>
 
 The disk and its file system grow and keep their content; they never shrink. Pick a size the host disk can hold, since the sparse file can grow up to it.
 
+The guest init compares the data disk's file system capacity with its device before it installs the resize tool. A disk whose file system already fills it, including the intentional 1 MiB tail of a freshly formatted disk, needs neither the resize packages nor the network, so an existing cache that holds only `nftables` starts offline with the disk unchanged. Actual growth needs `resize2fs`, which comes from a complete persisted APK cache or from the package network. A missing tool or a failed resize is fatal. When growth is required and the builder is offline, give it access to the package network instead of resetting its data.
+
 **Optional: start with an empty builder disk.** Only the builder's `docker.img` is moved aside here. The cache, built images and the Docker daemon's state in it are lost to the builder, and nothing is wiped for you. Keep the builder directory and its lock file, `builder.lock`, which sits next to the directory and not inside it: `~/.cache/jailoc-vm/builder.lock` for the shared builder, `~/.cache/jailoc-vm/workspaces/<workspace>/builder.lock` for an isolated one. Do not touch workspace homes.
 
 jailoc stops a builder VM when its build ends, so a running builder supervisor means a `jailoc up` is building or a supervisor was left behind. Make sure no `jailoc up` is running, then check that no supervisor of that builder is alive. The command prints nothing when there is none:
