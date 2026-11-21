@@ -159,6 +159,7 @@ jailoc reload [workspace] [flags]
 - `snapshots`, including the Git configuration and `known_hosts`: every reload copies the sources again, adds new entries and removes dropped ones
 - `env`, `env_file` and secrets
 - `timezone`, or the host's current zone when it is unset
+- `tmp_ttl`
 
 **Needs a new VM**
 
@@ -168,6 +169,7 @@ jailoc reload [workspace] [flags]
 - the agent's `profile`
 - `cpu`, `memory`
 - `enable_docker`, `enable_desktop`, the set of guest ports the `web` routes use (renaming a route, or adding one on a port already in the set, needs only a restart of [`jailoc gateway`](#jailoc-gateway)), `protect_git`
+- `tmp_storage`, `tmp_size`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest
 
@@ -197,12 +199,12 @@ jailoc status [workspace] [flags]
 **Shown for a running VM**
 
 - Uptime, CPUs, memory and Docker disk.
+- The storage mode, configured size, cleanup TTL, and used, free and total capacity of `/tmp` (`Tmp` warns when `/tmp` is 90% full or more, and shows `unknown` when the guest can't be reached).
 - Where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
 - The number of agent sessions.
 - Whether the VM runs the current configuration:
-    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `agent`, `profile`, `enable_docker`, `enable_desktop`, the set of `web` guest ports, `protect_git`, or a jailoc upgrade that changed the guest protocol).
+    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, `enable_desktop`, the set of `web` guest ports, `protect_git`, or a jailoc upgrade that changed the guest protocol).
     - `jailoc reload` is needed when the configuration file changed after the VM started or was last reloaded.
-
 **Shown for a stopped VM**: when it stopped and the last error.
 
 `Data` is the VM state directory on the host.
@@ -219,6 +221,8 @@ State:     running (supervisor pid 4242)
 Started:   2026-10-31T09:12:44+01:00 (up 2h5m)
 Resources: 2 CPUs, 4096 MiB memory
 Profile:   workspace
+Tmp:       ram, 1 GiB, cleanup after 8h;
+12 MiB of 1 GiB used (1%), 1012 MiB free
 Sessions:  2 (1 attached); `jailoc sessions myproject` lists them
 Config:    changed since the VM started; `jailoc reload myproject` applies it
 Data:      ~/.cache/jailoc-vm/workspaces/myproject
@@ -560,6 +564,8 @@ jailoc migrate [flags]
 |------|-------|-------------|
 | `--dry-run` | | Print the planned changes and the resulting `config.toml` without changing anything. |
 | `--yes` | `-y` | Accept the default answer to every question. Required when standard input is not a terminal. |
+
+`jailoc migrate` asks for optional `internal_zones` (comma- or whitespace-separated DNS zones) when no non-empty `internal_zones` exists in `[defaults]` or any workspace and explicit `allow` rules include hostnames, including wildcard hostnames. The answer is stored in `defaults.network.internal_zones` and applies to every workspace. A blank answer leaves the zones unset; `--yes` skips the question. `--dry-run` asks the question and previews the result without writing it. Names in a zone and its subdomains may resolve to private addresses, but a zone alone grants no access; see [Internal zones](configuration.md#internal-zones).
 
 For configuration changes, data transfer and migration troubleshooting, see [Upgrade an existing installation](../how-to/migrate-from-v1.md).
 

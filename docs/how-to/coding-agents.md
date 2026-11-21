@@ -1,6 +1,6 @@
 # How to choose a coding agent
 
-Each workspace runs one coding agent: OpenCode by default, or Claude Code, GitHub Copilot CLI, OmO or Antigravity CLI. jailoc installs the agent into the workspace image and starts it in unattended mode, because the VM is the security boundary.
+Each workspace runs one coding agent: OpenCode by default, or Claude Code, GitHub Copilot CLI, OmO or Antigravity CLI. jailoc installs the agent into the workspace image and starts it with its unattended-mode flags by default, because the VM is the security boundary. [`default_args`](#change-the-default-arguments) changes them.
 
 ## Select the agent
 
@@ -141,6 +141,32 @@ A symlink inside a path or mount that points outside every share or snapshot is 
 [workspaces.my-project-claude.agents.claude]
 args = ["--model", "sonnet"]
 ```
+
+## Change the default arguments
+
+Each agent starts with built-in `default_args`, such as `--dangerously-skip-permissions` for Claude Code. Set `default_args` to replace them, or `default_args = []` to start the agent without them. To keep Claude Code's own permission prompts and start in plan mode:
+
+```toml
+[workspaces.my-project-claude.agents.claude]
+default_args = []
+args = ["--permission-mode", "plan"]
+```
+
+To replace the defaults with another list, for example to start Claude Code in plan mode everywhere without needing `args`:
+
+```toml
+[defaults.agents.claude]
+default_args = ["--permission-mode", "plan"]
+```
+
+Set it in `[workspaces.<ws>.agents.<name>]` for one workspace, or in `[defaults.agents.<name>]` for all. `opencode` and `opencode2` are separate tables. Arguments of `args` follow `default_args` on the command line, and each list is inherited on its own.
+
+`default_args = []` and `args = []` differ: `default_args = []` removes the built-in defaults, while `args = []` only clears extra arguments and leaves the built-in defaults in place.
+
+New, resumed and continued sessions use the current configuration. A session that's already running is unchanged. No `jailoc restart` is needed.
+
+!!! warning
+    `default_args` is not an access control. Imported agent settings or explicit `args` can still enable a permission bypass. The VM stays the security boundary.
 
 ## Use another version
 

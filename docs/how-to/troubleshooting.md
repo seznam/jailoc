@@ -15,6 +15,7 @@ Find the symptom, then apply the fix. Start with [Find the logs](#find-the-logs)
 | `403` on an allowed host | [Request denied with `http-no-match`](#request-denied-with-http-no-match) |
 | TLS error on a host with an `http` rule | [Certificate error on an inspected host](#certificate-error-on-an-inspected-host) |
 | Image pull or build errors | [Image build fails](#image-build-fails) |
+| Build fails with `no space left on device`, or the builder VM is lost at startup | [Builder VM disk is full](#builder-vm-disk-is-full) |
 | `docker` missing or failing in the guest | [Docker inside the VM fails](#docker-inside-the-vm-fails) |
 | OpenCode exits at startup | [OpenCode fails to start with a server or database error](#opencode-fails-to-start-with-a-server-or-database-error) |
 
@@ -222,6 +223,68 @@ grep -Ei "image|pull|build|dockerfile" ~/.cache/jailoc/jailoc.log
 ```
 
 See the [Image resolution reference](../reference/image-resolution.md).
+
+## Builder VM disk is full
+
+**Symptom:** a build in a builder VM fails with `no space left on device`, or `jailoc up` fails while the builder VM starts, naming the builder's console log.
+
+**Diagnose:** the builder VM keeps its own logs, separate from `jailoc logs`, which covers workspaces only:
+
+| Builder | Directory |
+|---------|-----------|
+| Shared | `~/.cache/jailoc-vm/builder/` |
+| `isolated_build` of a workspace | `~/.cache/jailoc-vm/workspaces/<workspace>/builder/` |
+
+```bash
+tail -n 100 ~/.cache/jailoc-vm/builder/microvm/console.log
+tail -n 50 ~/.cache/jailoc-vm/builder/supervisor.log
+cat ~/.cache/jailoc-vm/builder/state.json
+```
+
+For an isolated builder, use the second directory. `jailoc up` stops waiting as soon as the builder's VM runner, network broker or NIC connection is lost, and names the console log. When the state or the console contains `no space left on device`, the error also quotes the guest's last `df` lines and names the data disk. It calls the Docker data filesystem full only when the console shows it as of its latest lines: the failing path is below `/var/lib/docker`, or the latest `df` of `/var/lib/docker` has no free blocks or no free inodes (judged separately, so a healthy report of one doesn't clear the other, and a later healthy report clears an earlier failure). An error on exactly `/var/lib/docker` stays ambiguous, because that directory also exists on the guest root filesystem before the data disk is mounted. Otherwise the text can come from the guest root filesystem, which is backed by host storage, or from a full host disk, and the error says to check the host's free space and to raise the setting only if the data disk turns out to be full. A lost builder or a failed liveness check alone doesn't prove the disk is full; other causes end the same way.
+
+The guest init writes `df -k` and `df -i` of the data disk to the console after mounting it, after growing it and when `dockerd` exits unexpectedly, together with the `dockerd` exit status. Tell the capacities apart:
+
+- **Host disk:** `df -h ~/.cache/jailoc-vm` on the host. The builder's `docker.img` is a sparse file, so a full host disk fails writes on the host, and the error text can match. The guest's root filesystem is host-backed as well, so an out-of-space error on a path outside `/var/lib/docker` (for example `/usr/lib`) points here, not at the Docker disk.
+- **Guest capacity:** the `df -k` lines on the console. A builder `docker.img` of 20 GiB (the default) holds the build cache and every built image; the guest can be full while the host has plenty of space.
+- **Guest inodes:** the `df -i` lines. Many small files can use up the inodes before the blocks.
+
+**Fix:** jailoc maintains a builder's cache before and after builds, but a daemon on a full disk can't run to prune. If the host disk is full, free host space; that alone fixes it, and growing the Docker disk would only let the sparse file take more of it. Grow the builder disk only when the guest `df` shows the data filesystem full, of blocks or of inodes:
+
+```toml
+[vm]
+builder_disk = "40g"   # shared builder
+```
+
+For an isolated builder, raise the workspace's `docker_disk` instead.
+
+```bash
+jailoc up <workspace>
+```
+
+The disk and its file system grow and keep their content; they never shrink. Pick a size the host disk can hold, since the sparse file can grow up to it.
+
+The guest init compares the data disk's file system capacity with its device before it installs the resize tool. A disk whose file system already fills it, including the intentional 1 MiB tail of a freshly formatted disk, needs neither the resize packages nor the network, so an existing cache that holds only `nftables` starts offline with the disk unchanged. Actual growth needs `resize2fs`, which comes from a complete persisted APK cache or from the package network. A missing tool or a failed resize is fatal. When growth is required and the builder is offline, give it access to the package network instead of resetting its data.
+
+**Optional: start with an empty builder disk.** Only the builder's `docker.img` is moved aside here. The cache, built images and the Docker daemon's state in it are lost to the builder, and nothing is wiped for you. Keep the builder directory and its lock file, `builder.lock`, which sits next to the directory and not inside it: `~/.cache/jailoc-vm/builder.lock` for the shared builder, `~/.cache/jailoc-vm/workspaces/<workspace>/builder.lock` for an isolated one. Do not touch workspace homes.
+
+jailoc stops a builder VM when its build ends, so a running builder supervisor means a `jailoc up` is building or a supervisor was left behind. Make sure no `jailoc up` is running, then check that no supervisor of that builder is alive. The command prints nothing when there is none:
+
+```bash
+# shared builder
+pgrep -fl 'vm-supervise.*jailoc-vm/builder'
+# isolated builder of a workspace
+pgrep -fl 'vm-supervise.*jailoc-vm/workspaces/<workspace>/builder'
+```
+
+With no match, move the disk aside and run `jailoc up` (use the isolated path for an isolated builder):
+
+```bash
+mv ~/.cache/jailoc-vm/builder/docker.img ~/.cache/jailoc-vm/builder/docker.img.bak-$(date +%Y%m%d-%H%M%S)
+jailoc up <workspace>
+```
+
+The backup takes host disk space until you delete it, and the next build recreates the cache from scratch, so it takes longer. Delete the backup once the builder works. Image layers in the VM image cache and workspace homes are unaffected.
 
 ## Docker inside the VM fails
 

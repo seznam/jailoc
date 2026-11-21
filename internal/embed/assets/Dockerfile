@@ -25,7 +25,7 @@ ARG TS_VERSION=6.0.3
 ARG PYRIGHT_VERSION=1.1.411
 ARG BASH_LS_VERSION=5.6.0
 
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG JAILOC_CLEAN_CACHES
@@ -38,6 +38,7 @@ ARG JAILOC_CLEAN_CACHES
 #   ripgrep (rg), fd-find, jq — fast search/filter tools used by coding agents
 #   unzip, xz-utils        — archive extraction for runtime downloads
 #   libatomic1             — required by Node.js 26+ runtime
+#   e2fsprogs              — mkfs.ext4 formatter of the disk-backed /tmp
 # docker-clean is moved aside during the install so downloaded packages stay
 # in the cache mount, and restored so the image behaves like stock Ubuntu.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -45,7 +46,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     mv /etc/apt/apt.conf.d/docker-clean /etc/apt/docker-clean \
     && apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git gpg openssh-client sudo \
-    python3 ripgrep fd-find jq unzip xz-utils libatomic1 \
+    python3 ripgrep fd-find jq unzip xz-utils libatomic1 e2fsprogs \
     && mv /etc/apt/docker-clean /etc/apt/apt.conf.d/docker-clean \
     && if [ -n "$JAILOC_CLEAN_CACHES" ]; then apt-get clean && rm -rf /var/lib/apt/lists/*; fi
 

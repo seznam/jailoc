@@ -50,6 +50,9 @@ const (
 # cpu = 2.0  # virtual CPU cores per workspace VM
 # memory = "4g"  # RAM limit per workspace VM
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
+# tmp_storage = "ram"  # /tmp backing: ram or disk
+# tmp_size = "1g"  # /tmp size (disk: at least 16m)
+# tmp_ttl = "8h"  # remove /tmp entries unused for this long; "0" never cleans up
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 # notifications = "auto"  # attached OpenCode sessions: auto, native, osc or off
 
@@ -152,6 +155,9 @@ paths = []
 # cpu = 2.0  # virtual CPU cores per workspace VM
 # memory = "4g"  # RAM limit per workspace VM
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
+# tmp_storage = "ram"  # /tmp backing: ram or disk
+# tmp_size = "1g"  # /tmp size (disk: at least 16m)
+# tmp_ttl = "8h"  # remove /tmp entries unused for this long; "0" never cleans up
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 # notifications = "auto"  # attached OpenCode sessions: auto, native, osc or off
 
@@ -331,6 +337,11 @@ type AgentSettings struct {
 	// when the configuration is written back: it clears the defaults' args,
 	// which an omitted list inherits.
 	Args []string `toml:"args"`
+	// DefaultArgs replace the harness's built-in default flags (for example
+	// the ones that skip permission prompts); flags jailoc requires stay.
+	// An empty list is kept when the configuration is written back: it
+	// removes the built-in defaults, which an omitted list keeps.
+	DefaultArgs []string `toml:"default_args"`
 	// Mounts are merged by guest path over the harness mounts, before the
 	// [defaults] and workspace mounts.
 	Mounts []string `toml:"mounts,omitempty"`
@@ -395,6 +406,10 @@ type VMConfig struct {
 	// Docker when usable, otherwise a builder VM), BuilderDocker or
 	// BuilderVM. Empty means BuilderAuto.
 	Builder string `toml:"builder,omitempty"`
+	// BuilderDisk is the size of the Docker data disk of the shared builder
+	// VM, like docker_disk. Empty means "20g". Workspaces with isolated_build
+	// size their own builder with docker_disk instead.
+	BuilderDisk string `toml:"builder_disk,omitempty"`
 }
 
 // Image builders of the VM backend.
@@ -427,6 +442,9 @@ type Defaults struct {
 	CPU               *float64                 `toml:"cpu,omitempty"`
 	Memory            *string                  `toml:"memory,omitempty"`
 	DockerDisk        *string                  `toml:"docker_disk,omitempty"`
+	TmpStorage        *string                  `toml:"tmp_storage,omitempty"`
+	TmpSize           *string                  `toml:"tmp_size,omitempty"`
+	TmpTTL            *string                  `toml:"tmp_ttl,omitempty"`
 	TimeZone          *string                  `toml:"timezone,omitempty"`
 	// Notifications is how attached sessions notify about the agent: one of
 	// the Notifications* values; empty means NotificationsAuto.
@@ -468,6 +486,9 @@ type Workspace struct {
 	CPU               *float64                 `toml:"cpu,omitempty"`
 	Memory            *string                  `toml:"memory,omitempty"`
 	DockerDisk        *string                  `toml:"docker_disk,omitempty"`
+	TmpStorage        *string                  `toml:"tmp_storage,omitempty"`
+	TmpSize           *string                  `toml:"tmp_size,omitempty"`
+	TmpTTL            *string                  `toml:"tmp_ttl,omitempty"`
 	TimeZone          *string                  `toml:"timezone,omitempty"`
 	// Notifications overrides the [defaults] notifications when set.
 	Notifications string   `toml:"notifications,omitempty"`
@@ -1199,6 +1220,9 @@ func Validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("vm: invalid builder %q: must be %q, %q, %q, or empty (%s)", cfg.VM.Builder, BuilderAuto, BuilderDocker, BuilderVM, BuilderAuto)
 	}
+	if cfg.VM.BuilderDisk != "" && !validMemory.MatchString(cfg.VM.BuilderDisk) {
+		return fmt.Errorf("vm: invalid builder_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", cfg.VM.BuilderDisk)
+	}
 	for _, p := range []*string{&cfg.VM.Runner, &cfg.VM.LibDir} {
 		if *p == "" {
 			continue
@@ -1301,6 +1325,9 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.Defaults.DockerDisk != nil && !validMemory.MatchString(*cfg.Defaults.DockerDisk) {
 		return fmt.Errorf("defaults: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", *cfg.Defaults.DockerDisk)
+	}
+	if _, err := ResolveTmp(cfg.Defaults, Workspace{}); err != nil {
+		return fmt.Errorf("defaults: %w", err)
 	}
 	if cfg.Defaults.TimeZone != nil && !validTimeZone.MatchString(*cfg.Defaults.TimeZone) {
 		return fmt.Errorf("defaults: invalid timezone %q: must be a time zone name such as \"UTC\" or \"Europe/Prague\"", *cfg.Defaults.TimeZone)
@@ -1416,6 +1443,9 @@ func Validate(cfg *Config) error {
 		}
 		if ws.DockerDisk != nil && !validMemory.MatchString(*ws.DockerDisk) {
 			return fmt.Errorf("workspace %q: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", name, *ws.DockerDisk)
+		}
+		if _, err := ResolveTmp(cfg.Defaults, ws); err != nil {
+			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if ws.TimeZone != nil && !validTimeZone.MatchString(*ws.TimeZone) {
 			return fmt.Errorf("workspace %q: invalid timezone %q: must be a time zone name such as \"UTC\" or \"Europe/Prague\"", name, *ws.TimeZone)

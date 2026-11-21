@@ -14,8 +14,8 @@ require (
 	github.com/hashicorp/go-version v1.9.0
 	github.com/moby/buildkit v0.35.0
 	github.com/moby/go-archive v0.3.3
-	github.com/moby/moby/api v1.56.1
-	github.com/moby/moby/client v0.6.2
+	github.com/moby/moby/api v1.57.0
+	github.com/moby/moby/client v0.6.3
 	github.com/moby/term v0.5.2
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/pelletier/go-toml/v2 v2.4.4-0.20260711173024-cbe6f88bcc08
@@ -120,6 +120,7 @@ require (
 
 // Fork with WithRootFSShare (stacklok/go-microvm#160), WithProcessName
 // (stacklok/go-microvm#162), root-only tar ownership restore
-// (stacklok/go-microvm#164) and WithRootFSShareDir (stacklok/go-microvm#176)
-// on top of upstream v0.0.44, until released upstream.
-replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261114115008-f6df49aad2e1
+// (stacklok/go-microvm#164), WithRootFSShareDir (stacklok/go-microvm#176) and
+// the SSH fix for stacklok/go-microvm#178 on top of upstream v0.0.44, until
+// released upstream.
+replace github.com/stacklok/go-microvm => github.com/thejoeejoee/go-microvm v0.0.42-0.20261119174455-e0fa2a88b1cb

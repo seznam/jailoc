@@ -56,6 +56,9 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	if running.Guest == nil {
 		return fmt.Errorf("workspace %q: running VM has no guest configuration; run `jailoc restart %s`", ws.Name, ws.Name)
 	}
+	if err := checkTmpReload(ws, running); err != nil {
+		return err
+	}
 	want, snapshots, err := reloadSpec(ctx, ws, running)
 	if err != nil {
 		return err
@@ -86,9 +89,11 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	if err := reloadBroker(next, st.BrokerPID); err != nil {
 		return fmt.Errorf("reload network broker of workspace %q: %w", ws.Name, err)
 	}
-	if err := reloadGuest(stateDir, g); err != nil {
+	if err := reloadGuest(stateDir, g, tmpReloadTTL(running, want.Guest.Tmp)); err != nil {
 		return fmt.Errorf("reload workspace %q: %w", ws.Name, err)
 	}
+	// The guest has applied tmp_ttl; record only it, the rest of /tmp needs a restart.
+	g.Tmp = reloadedTmp(running, want.Guest.Tmp)
 	if err := vm.WriteSpec(next); err != nil {
 		return err
 	}
@@ -299,6 +304,7 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if running.Docker != want.Docker {
 		out = append(out, "enable_docker")
 	}
+	out = append(out, tmpRestartChanges(running.Guest.Tmp, want.Guest.Tmp)...)
 	if running.Guest.NoPrivilegeEscalation != want.Guest.NoPrivilegeEscalation {
 		out = append(out, "protect_git")
 	}
@@ -452,8 +458,9 @@ func scanReloadEvent(r io.Reader) (brokerReload, bool) {
 
 // reloadGuest asks the guest init to apply the CA bundle, SSH and GPG agents,
 // host ports, snapshots and time zone of g and waits for its answer.
-func reloadGuest(stateDir string, g guest.Config) error {
-	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, GPGAgent: g.GPGAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots, TimeZone: g.TimeZone}
+// tmpTTL, when set, replaces the /tmp expiry.
+func reloadGuest(stateDir string, g guest.Config, tmpTTL *time.Duration) error {
+	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, GPGAgent: g.GPGAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots, TimeZone: g.TimeZone, TmpTTL: tmpTTL}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode reload request: %w", err)

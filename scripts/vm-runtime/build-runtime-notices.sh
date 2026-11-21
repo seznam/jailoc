@@ -8,7 +8,7 @@
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
 #   OUT_DIR              receives vm-runtime-notices.txt
 #
-# Requires: go, git, cargo and cargo-about.
+# Requires: go, git, patch, cargo and cargo-about.
 set -euo pipefail
 
 src=$(cd "${1:?go-microvm checkout}" && pwd)
@@ -25,6 +25,11 @@ libkrunfw=$(pinned LIBKRUNFW_VERSION)
 rev=$(git -C "$src" rev-parse --short HEAD)
 git clone --quiet --depth 1 --branch "$libkrun" https://github.com/libkrun/libkrun "$work/libkrun"
 git clone --quiet --depth 1 --branch "$libkrunfw" https://github.com/libkrun/libkrunfw "$work/libkrunfw"
+# The patches can change Cargo.lock (0004 bumps imago), so the crates listed
+# below are the ones built into the patched libkrun.
+for p in "$here"/libkrun-patches/*.patch; do
+	patch -d "$work/libkrun" -p1 --forward --quiet < "$p"
+done
 
 section() {
 	printf '%s\n%s\n%s\n\n' "################################################################################" \

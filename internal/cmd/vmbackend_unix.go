@@ -165,29 +165,10 @@ func startSupervisor(ctx context.Context, spec vm.Spec, label string) (*vm.State
 				return st, nil
 			}
 			if st.Error != "" {
-				return nil, fmt.Errorf("start vm: %s", st.Error)
+				return nil, fmt.Errorf("start vm: %s", vmFailure(spec.StateDir, logPath))
 			}
 		}
 	}
-}
-
-// vmFailure explains why a VM did not come up, from its state or log.
-func vmFailure(stateDir, logPath string) string {
-	if st, err := vm.ReadState(stateDir); err == nil && st.Error != "" {
-		return st.Error
-	}
-	data, err := os.ReadFile(logPath) //nolint:gosec // G304: jailoc-owned state path
-	if err != nil || len(data) == 0 {
-		return "see " + logPath
-	}
-	if strings.Contains(string(data), "IrqsExhausted") {
-		return "the VM has more devices than libkrun can attach on this host (on x86_64 about 11 shared directories besides jailoc's own); remove some paths or mounts"
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) > 5 {
-		lines = lines[len(lines)-5:]
-	}
-	return strings.Join(lines, "; ")
 }
 
 // stopSupervisor stops the VM supervisor of stateDir and waits for it.
@@ -312,6 +293,13 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 		byGuest[guestPath] = vm.Share{HostPath: filepath.Clean(host), GuestPath: guestPath, ReadOnly: ro}
 	}
 	for _, p := range ws.Paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q: path %q: %w", ws.Name, p, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("workspace %q: path %q is not a directory", ws.Name, p)
+		}
 		add(p, p, false)
 	}
 	for _, spec := range ws.Mounts {
@@ -374,7 +362,7 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 	for _, p := range guestPaths {
 		shares = append(shares, byGuest[p])
 	}
-	if limit := vm.MaxShares(ws.EnableDocker); len(shares) > limit {
+	if limit := vm.MaxShares(ws.EnableDocker, ws.TmpStorage == config.TmpStorageDisk); len(shares) > limit {
 		return nil, fmt.Errorf("workspace %q: %d shared directories (paths, mounts and profile state) exceed the limit of %d a VM on this host boots with; list a common parent directory in paths instead of its subdirectories", ws.Name, len(shares), limit)
 	}
 	if err := checkNestedShares(shares); err != nil {
@@ -627,31 +615,7 @@ const vmMinDockerDiskSize = 1 << 30
 // vmDockerDiskSize parses the docker_disk setting into the size of the sparse Docker
 // data disk in bytes, rounded up to whole MiB.
 func vmDockerDiskSize(size string) (int64, error) {
-	if size == "" {
-		return 0, errors.New("empty docker_disk")
-	}
-	mult := int64(1)
-	switch unit := strings.ToLower(size[len(size)-1:]); unit {
-	case "k":
-		mult = 1 << 10
-	case "m":
-		mult = 1 << 20
-	case "g":
-		mult = 1 << 30
-	}
-	digits := strings.TrimRight(size, "kmgKMG")
-	n, err := strconv.ParseInt(digits, 10, 64)
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("invalid docker_disk %q", size)
-	}
-	if n > (math.MaxInt64-(1<<20-1))/mult {
-		return 0, fmt.Errorf("docker_disk %q is too large", size)
-	}
-	bytes := (n*mult + (1<<20 - 1)) &^ (1<<20 - 1)
-	if bytes < vmMinDockerDiskSize {
-		return 0, fmt.Errorf("docker_disk %q is below the %d GiB minimum", size, vmMinDockerDiskSize>>30)
-	}
-	return bytes, nil
+	return vmDiskSize("docker_disk", size)
 }
 
 type vmRule struct {

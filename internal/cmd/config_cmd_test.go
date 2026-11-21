@@ -210,3 +210,171 @@ func TestPrintNetworkRulesShowsLogFalse(t *testing.T) {
 		t.Fatalf("output = %q, want %q", out, want)
 	}
 }
+
+func TestPrintConfigWarningsMigrateFooter(t *testing.T) {
+	// captureStderr swaps os.Stderr: do not run in parallel.
+	const footer = "Run `jailoc migrate` to update deprecated settings in config.toml.\n"
+	const rules = "[[defaults.network.rules]]\nallow = [\"*\"]\n"
+	tests := []struct {
+		name       string
+		toml       string
+		wantFooter bool
+		wantParts  []string
+	}{
+		{
+			name:       "single legacy notice with rules",
+			toml:       "[defaults]\nallowed_hosts = [\"example.com\"]\n" + rules,
+			wantFooter: true,
+			wantParts:  []string{"allowed_hosts is deprecated"},
+		},
+		{
+			name:       "multiple notices",
+			toml:       "[defaults]\nallowed_hosts = [\"example.com\"]\nallowed_networks = [\"10.0.0.0/8\"]\n" + rules,
+			wantFooter: true,
+			wantParts:  []string{"allowed_hosts is deprecated", "allowed_networks is deprecated"},
+		},
+		{
+			name:       "no notices",
+			toml:       rules + "\n[workspaces.demo]\npaths = [\"/srv/demo\"]\n",
+			wantFooter: false,
+		},
+		{
+			name:       "unknown key only",
+			toml:       "[defaults]\nbogus_setting = true\n" + rules,
+			wantFooter: false,
+			wantParts:  []string{"unknown setting \"defaults.bogus_setting\""},
+		},
+		{
+			name:       "no rules only",
+			toml:       "[workspaces.demo]\npaths = [\"/srv/demo\"]\n",
+			wantFooter: true,
+			wantParts:  []string{"no [[*.network.rules]] configured", "allow = [\"*\"]", "[[defaults.network.rules]]"},
+		},
+		{
+			name:       "legacy and no rules",
+			toml:       "[defaults]\nallowed_hosts = [\"example.com\"]\nbogus_setting = true\n\n[workspaces.demo]\npaths = [\"/srv/demo\"]\n",
+			wantFooter: true,
+			wantParts:  []string{"unknown setting", "allowed_hosts is deprecated", "no [[*.network.rules]] configured"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tt.toml), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := config.LoadFrom(path)
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+
+			out := captureStderr(t, func() { printConfigWarnings(cfg) })
+
+			last := -1
+			for _, part := range tt.wantParts {
+				idx := strings.Index(out, part)
+				if idx < 0 {
+					t.Fatalf("stderr missing %q:\n%s", part, out)
+				}
+				if idx < last {
+					t.Fatalf("stderr part %q out of order:\n%s", part, out)
+				}
+				last = idx
+			}
+			if got := strings.Count(out, "jailoc migrate"); tt.wantFooter && got != 1 || !tt.wantFooter && got != 0 {
+				t.Fatalf("jailoc migrate mentions = %d, want footer=%v:\n%s", got, tt.wantFooter, out)
+			}
+			if tt.wantFooter && !strings.HasSuffix(out, footer) {
+				t.Fatalf("stderr does not end with footer:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestConfigShowsTmpSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".config", "jailoc")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	content := `[defaults]
+tmp_storage = "disk"
+tmp_size = "2g"
+tmp_ttl = "15m"
+
+[workspaces.inherits]
+paths = []
+
+[workspaces.overrides]
+paths = []
+tmp_storage = "ram"
+tmp_size = "512m"
+tmp_ttl = "0"
+
+[workspaces.bare]
+paths = []
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Cleanup(func() { allFlag, workspaceFlag, workspaceExplicit = false, "default", false })
+	allFlag = false
+	workspaceFlag, workspaceExplicit = "default", false
+
+	tests := []struct {
+		workspace string
+		want      string
+	}{
+		{"inherits", "  Tmp: disk, 2 GiB, cleanup after 15m\n"},
+		{"overrides", "  Tmp: ram, 512 MiB, no cleanup\n"},
+	}
+	for _, tt := range tests {
+		out := captureStdout(t, func() {
+			cmd := &cobra.Command{}
+			cmd.SetContext(context.Background())
+			if err := runConfig(cmd, []string{tt.workspace}); err != nil {
+				t.Fatalf("runConfig(%s) = %v", tt.workspace, err)
+			}
+		})
+		assertContains(t, out, tt.want)
+	}
+
+	// Without tmp settings anywhere the host defaults apply.
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[workspaces.bare]\npaths = []\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	out := captureStdout(t, func() {
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		if err := runConfig(cmd, []string{"bare"}); err != nil {
+			t.Fatalf("runConfig(bare) = %v", err)
+		}
+	})
+	assertContains(t, out, "  Tmp: ram, 1 GiB, cleanup after 8h\n")
+}
+
+func TestConfigRejectsInvalidTmpSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".config", "jailoc")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[workspaces.small]\npaths = []\ntmp_storage = \"disk\"\ntmp_size = \"1m\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Cleanup(func() { allFlag, workspaceFlag, workspaceExplicit = false, "default", false })
+	allFlag = false
+	workspaceFlag, workspaceExplicit = "default", false
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	err := runConfig(cmd, []string{"small"})
+	if err == nil || !strings.Contains(err.Error(), "16 MiB") {
+		t.Fatalf("runConfig error = %v, want the 16 MiB minimum", err)
+	}
+}

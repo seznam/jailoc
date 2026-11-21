@@ -58,6 +58,8 @@ paths = ["/home/you/projects/myproject"]
 
 Each path is shared into the VM read-write at its original absolute path, so `/home/you/projects/myproject` has the same path inside the guest. Files the agent creates there belong to your host user.
 
+Each path must be an existing directory: create missing project directories or remove stale paths, otherwise `jailoc up` fails.
+
 !!! note
     `~` expands to your home directory. System directories such as `/usr`, `/etc`, `/var`, `/home/agent` and `/tmp` are rejected; see [`paths`](../reference/configuration.md#paths).
 
@@ -234,6 +236,34 @@ Workspace values override defaults. Without either, the VM gets 2 vCPUs and `4g`
 
 Inside the VM, jailoc swaps to compressed memory (zram, half of `memory`) and trims part of the file cache every minute; freed pages are reported to the host through the balloon device. See [Resource use](../explanation/resource-use.md).
 
+## Set the size, storage and expiry of /tmp
+
+`/tmp` lives in the VM's memory, is limited to `1g` and removes entries unused for `8h`. Change these with `tmp_storage`, `tmp_size` and `tmp_ttl`, in `[defaults]` or per workspace:
+
+```toml
+[workspaces.build]
+tmp_size = "4g"
+```
+
+With `tmp_storage = "ram"` (the default), `/tmp` counts against `memory`. A large `tmp_size` is only a cap, so keep `memory` big enough for what the agent really writes. For big builds or test artifacts, move `/tmp` to a disk of its own:
+
+```toml
+[workspaces.build]
+tmp_storage = "disk"
+tmp_size = "20g"
+```
+
+The disk is private to the workspace and starts empty at every VM start. It needs at least `16m`, and ext4 metadata makes the usable space somewhat smaller than `tmp_size`. The host stores only the blocks that were written. The image must contain `mkfs.ext4` (`e2fsprogs`); see [custom images](custom-images.md#know-what-the-image-must-provide).
+
+To keep files in `/tmp` as long as the VM runs, disable the expiry:
+
+```toml
+[workspaces.build]
+tmp_ttl = "0"
+```
+
+Use a shorter or longer duration (`"30m"`, `"24h"`) to tune it. Only `/tmp` is cleaned: a long job can still fill it before the TTL passes, and `/var/tmp`, the persistent home and a `TMPDIR` pointing elsewhere are left alone. Sessions get `TMPDIR`, `TMP`, `TEMP` and `GOTMPDIR` set to `/tmp` unless the image or your `env` sets them. `tmp_ttl` applies with `jailoc reload`; `tmp_storage` and `tmp_size` need `jailoc restart`. See the [reference](../reference/configuration.md#tmp_storage-tmp_size-and-tmp_ttl) for the cleanup rules, and `jailoc status` for how full `/tmp` is.
+
 ## Apply changes to a running workspace
 
 After editing the config, apply it without restarting:
@@ -242,8 +272,8 @@ After editing the config, apply it without restarting:
 jailoc reload myproject
 ```
 
-These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file` and secrets. Running sessions keep their old environment.
+These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl` and secrets. Running sessions keep their old environment.
 
-Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `enable_docker`, `enable_desktop`, the set of guest ports used by `web` (see [desktop and web](desktop-and-web.md#apply-changes)), `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
+Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `enable_docker`, `enable_desktop`, the set of guest ports used by `web` (see [desktop and web](desktop-and-web.md#apply-changes)), `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
 
 Concurrent reloads of one workspace run one at a time.

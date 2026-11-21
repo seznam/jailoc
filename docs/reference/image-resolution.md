@@ -15,6 +15,8 @@ During `jailoc up` and `jailoc restart`, jailoc resolves the workspace image wit
 
 `jailoc down --purge` deletes the workspace's builder VM and its build cache.
 
+The data disk of the shared builder VM is sized by [`[vm] builder_disk`](configuration.md#vm) (default `20g`). The data disk of an `isolated_build` builder VM is sized by the workspace's `docker_disk`.
+
 - jailoc builds with BuildKit when the daemon reports it as its default builder, and with the classic builder otherwise.
 - With BuildKit, the embedded Dockerfile, the agent layer and the Docker layer keep apt and npm downloads in BuildKit cache mounts, which survive image pruning.
 - The classic builder gets the same Dockerfiles without the cache mounts.
@@ -77,7 +79,9 @@ No build runs.
 **Trigger:** none of the above apply.
 
 - The Dockerfile embedded in the jailoc binary is built as `jailoc-base:embedded`, unless that image was already built from the same Dockerfile and build arguments.
-- Updates of its `ubuntu:24.04` base reach the image only after `docker rmi jailoc-base:embedded`.
+- A changed embedded Dockerfile or changed build arguments rebuild the image automatically.
+- Updates of the mutable `ubuntu:26.04` tag reach the image only after `docker rmi jailoc-base:embedded`.
+- A running VM adopts a rebuilt image only after `jailoc restart`; `jailoc up` on a running VM reloads it without changing its image.
 - See [Default Image](default-image.md).
 
 ### Docker layer (steps 2, 4 and 5)
@@ -193,8 +197,24 @@ The builder VM image stays in go-microvm's directory image cache; only workspace
 ### Image labels and unused images
 
 - jailoc labels the images it builds with `com.github.seznam.jailoc`.
-- It does not automatically prune unused images from the host or builder VM Docker daemon, because a daemon can be shared with other users and other jailoc home directories. Unused images stay until their owner removes them.
+- It never prunes the host Docker daemon, because a daemon can be shared with other users and other jailoc home directories. Unused images stay until their owner removes them.
 - List them with `docker images --filter label=com.github.seznam.jailoc` and remove chosen ones with `docker image rm <image>`.
+
+### Builder cache maintenance
+
+jailoc maintains the cache of the builder VMs it owns, the shared builder VM and the `isolated_build` builder VMs, and only those.
+
+- Maintenance runs under the builder's exclusive lock, before and after each build (also after a failed one), so it never overlaps a build on that builder. A maintenance failure only warns; it doesn't fail the build.
+- Inside the builder VM, Docker 29 garbage collection works best effort towards a build cache of at most 50% of the disk with at least 20% of the disk free. The explicit prune through the Docker SDK uses the same targets, before and after the build. They are targets, not a hard quota.
+- Only images that jailoc built (selected by the `com.github.seznam.jailoc` label) are removal candidates, and they are removed without force. These are kept:
+    - images whose ID is converted into the VM image cache,
+    - the base and agent ancestors of a kept image,
+    - images created less than one hour ago,
+    - images used by a container,
+    - images with a foreign tag, one outside the `jailoc-*` repositories.
+- The active build cache, the layers of the images being built and a single large build can exceed the targets.
+
+A builder disk that is already full can't be pruned, because the Docker daemon can't run. See [Builder VM disk is full](../how-to/troubleshooting.md#builder-vm-disk-is-full).
 
 ### Ignored image settings
 

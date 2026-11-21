@@ -72,6 +72,7 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  CPU: %g\n", ws.CPU)
 	_, _ = cyan.Fprintf(os.Stdout, "  Memory: %s\n", ws.Memory)
 	_, _ = cyan.Fprintf(os.Stdout, "  Docker Disk: %s\n", ws.DockerDisk)
+	_, _ = cyan.Fprintf(os.Stdout, "  Tmp: %s\n", resolvedTmpLabel(ws))
 	_, _ = cyan.Fprintf(os.Stdout, "  Time Zone: %s\n", cmp.Or(ws.TimeZone, "(host time zone)"))
 	_, _ = cyan.Fprintf(os.Stdout, "  SSH Agent: %t\n", ws.SSHAuthSock)
 	_, _ = cyan.Fprintf(os.Stdout, "  GPG Agent: %t\n", ws.GPGAgent)
@@ -275,8 +276,12 @@ func printConfigWarnings(cfg *config.Config) {
 	for _, k := range cfg.UnknownKeys() {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: unknown setting %q in config.toml is ignored\n", k)
 	}
-	for _, w := range config.DeprecationWarnings(cfg) {
+	warnings := config.DeprecationWarnings(cfg)
+	for _, w := range warnings {
 		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
+	if len(warnings) > 0 {
+		_, _ = color.New(color.FgYellow).Fprintln(os.Stderr, "Run `jailoc migrate` to update deprecated settings in config.toml.")
 	}
 }
 

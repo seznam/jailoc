@@ -16,6 +16,7 @@ Every `config.toml` field with its type, default, validation rule and merge beha
 - VM state under `~/.cache/jailoc-vm/` is keyed by workspace name only and is shared by all configuration files: workspaces with the same name in two files control the same VM.
 - All fields are optional unless noted.
 - jailoc ignores settings it does not know and prints a warning naming each of them. For a config-load error naming a rejected setting, see [Upgrade an existing installation](../how-to/migrate-from-v1.md#recognize-a-v1-configuration).
+- When jailoc prints deprecation notices, it recommends `jailoc migrate` after the notices to update deprecated settings in `config.toml`.
 
 ---
 
@@ -57,6 +58,7 @@ Host runtime of the workspace VMs. All fields are optional.
 | `runner` | string | (embedded or package-provided) | Path to a `jailoc-vm-runner` (or `go-microvm-runner`) binary. Must be absolute; supports `~` expansion. |
 | `lib_dir` | string | (none) | Directory containing `libkrun` and `libkrunfw` for a configured `runner`. Must be absolute; supports `~` expansion. |
 | `builder` | string | `"auto"` | Where workspace images are built: `"auto"`, `"docker"` or `"vm"`. |
+| `builder_disk` | string | `"20g"` | Size of the data disk of the shared builder VM, at least `1g` (checked when the shared builder VM starts, not by validation). The disk can grow but not shrink. |
 
 **`runner`: runtime selection order**
 
@@ -79,7 +81,14 @@ Builds with none of these (other platforms, builds from source) require `runner`
 | `"docker"` | The host Docker daemon; it is required. |
 | `"vm"` | The shared builder VM, always. |
 
-A workspace with `isolated_build = true` always uses its own builder VM.
+A workspace with `isolated_build = true` always uses its own builder VM, whose data disk follows the workspace's [`docker_disk`](#vm-resource-and-docker-fields), not `builder_disk`.
+
+**`builder_disk`: details**
+
+- It sizes the data disk (`docker.img`) of the shared builder VM in `~/.cache/jailoc-vm/builder`. The format and limits are in [`cpu`, `memory` and `docker_disk`](#cpu-memory-and-docker_disk).
+- A value larger than the existing disk grows it, and the file system grows with it, keeping its content. A smaller value makes `jailoc up` fail; the disk never shrinks.
+- jailoc maintains the cache of a builder VM it owns, and never prunes the host Docker daemon. See [Builder cache maintenance](image-resolution.md#builder-cache-maintenance).
+- A builder whose disk is already full can't prune itself. See [Builder VM disk is full](../how-to/troubleshooting.md#builder-vm-disk-is-full).
 
 ### Example
 
@@ -87,6 +96,7 @@ A workspace with `isolated_build = true` always uses its own builder VM.
 [vm]
 runner = "~/.local/bin/go-microvm-runner"
 lib_dir = "/opt/homebrew/lib"
+builder_disk = "40g"
 ```
 
 ---
@@ -177,6 +187,9 @@ Defaults applied to all workspaces. A workspace can override or extend them; see
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
+| `tmp_storage` | string | `"ram"` | Backing of the guest `/tmp`: `"ram"` or `"disk"`. Needs `jailoc restart`. See [`tmp_storage`, `tmp_size` and `tmp_ttl`](#tmp_storage-tmp_size-and-tmp_ttl). |
+| `tmp_size` | string | `"1g"` | Capacity of `/tmp`, at least `16m` with `tmp_storage = "disk"`. Needs `jailoc restart`. |
+| `tmp_ttl` | string | `"8h"` | Age after which `/tmp` entries are removed, or `"0"` to keep them. Applied by `jailoc reload`. |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 | `enable_desktop` | bool | `false` | Run a desktop in the workspace VM, served by the `desktop` web route. See [`enable_desktop` and `web`](#enable_desktop-and-web). |
 
@@ -586,7 +599,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 Fields with the same meaning as in [`[defaults]`](#defaults); the workspace value wins and the default is inherited. Each takes the type of its `[defaults]` field:
 
 - `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`
-- `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`
+- `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`
 - `enable_docker`, `enable_desktop`, `protect_git`, `isolated_build`, `ca_bundle`
 
 ### Merged fields
@@ -602,7 +615,6 @@ Fields with the same meaning as in [`[defaults]`](#defaults); the workspace valu
 | `env` | string[] | `[]` | Overrides `[defaults].env` entries with the same key. |
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
-
 See [Merge Semantics](#merge-semantics) for the exact rules.
 
 ### Example
@@ -620,7 +632,7 @@ dockerfile = "~/projects/my-project/overlay.Dockerfile"
 
 ## Coding agents
 
-Each workspace runs one coding agent. Sessions start it in unattended mode, because the VM is the security boundary.
+Each workspace runs one coding agent. By default, sessions start it in unattended mode, because the VM is the security boundary. The flags that enable unattended mode are the agent's [`default_args`](#agents), which a configuration can replace or clear.
 
 `opencode` is an alias of `opencode2`: it runs the same harness and shares its persistent home directories, while `agents.opencode` and `agents.opencode2` are separate tables.
 
@@ -635,7 +647,7 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 | `omo` | OmO | `omo-ai` |
 | `agy` | Antigravity CLI | GitHub release `google-antigravity/antigravity-cli` |
 
-**Session command and flags**
+**Default session command and flags**
 
 | `agent` | Session command | Continue (`-c`) | Resume (`-s ID`) |
 |---------|-----------------|-----------------|------------------|
@@ -668,7 +680,20 @@ Each workspace runs one coding agent. Sessions start it in unattended mode, beca
 | `omo` | `PI_SKIP_VERSION_CHECK=1`, `OMO_RUNTIME=node` |
 | `agy` | `AGY_CLI_DISABLE_AUTO_UPDATE=1` |
 
-**Session command line**: the command above, the continue or resume flag, then `args` from [`agents`](#agents).
+**Optional default arguments**
+
+| `agent` | Built-in `default_args` |
+|---------|-------------------------|
+| `opencode2`, `opencode` | `["--auto"]` |
+| `opencode1` | `[]` |
+| `claude` | `["--dangerously-skip-permissions"]` |
+| `copilot` | `["--allow-all"]` |
+| `omo` | `["--permission-preset", "full-access"]` |
+| `agy` | `["--dangerously-skip-permissions"]` |
+
+`--standalone` of `opencode2`, and the plugin flags `--settings` and `--extension`, are not default arguments: they are always present.
+
+**Session command line**: the agent binary, its always-present `--standalone` (for `opencode2`), the effective `default_args`, the plugin flags (`--settings`, `--extension`), the continue or resume flag, then `args` from [`agents`](#agents). The default session command table shows the line with the built-in `default_args`.
 
 **Agent-specific behavior**
 
@@ -696,14 +721,18 @@ Settings per agent live in `[defaults.agents.<name>]` and `[workspaces.<ws>.agen
 | `from` | string | | Custom agents only: the built-in agent it is derived from. |
 | `install` | bool | `true` | Install the agent in the images jailoc builds. With `false`, the image must provide the binary, for example through the workspace `dockerfile`. |
 | `version` | string | (pinned) | npm or release version installed instead of the version pinned by jailoc, e.g. `"2.1.400"`. |
-| `args` | string[] | `[]` | Arguments appended to every session command line. |
+| `default_args` | string[] | (built-in) | Optional default arguments of the session command line, such as the flags that enable unattended mode. A set list replaces the built-in ones. See the built-in values under [Coding agents](#coding-agents). |
+| `args` | string[] | `[]` | Arguments appended to every session command line, after `default_args`. |
 | `mounts` | string[] | `[]` | Mounts added while the agent is selected. See [Agent mounts](#agent-mounts). |
 | `profile` | `false` or string | (unset) | Where the agent's persistent home directories live. See [Agent profiles](#agent-profiles). |
 
 Field notes:
 
 - `version`: must be an exact version; dist-tags such as `latest` are rejected. For `agy`, jailoc reads the checksums of another version's assets from the GitHub API.
-- `args`: a workspace list replaces the `[defaults]` list; `args = []` clears it.
+- `default_args`: an unset field inherits the value from `[defaults]` (or the base agent for a custom agent), falling back to the built-in `default_args` of the agent's harness. `default_args = []` clears them, and a non-empty list replaces them. Each entry is one argument. It doesn't touch the always-present arguments (`--standalone` of `opencode2`, `--settings` and `--extension` of the plugin) or `args`. Each of `default_args` and `args` is inherited independently of the other.
+- `default_args` is not a permission policy. Removing a flag doesn't prevent the agent from running without prompts: imported agent settings, or entries in `args`, can still enable a permission bypass. The VM remains the boundary.
+- `args`: a workspace list replaces the `[defaults]` list; `args = []` clears it. `args = []` removes only the extra arguments you added; the built-in `default_args` stay. `default_args = []` removes the built-in defaults; `args` stay.
+- A change to `default_args` or `args` applies to sessions started afterwards (new, resumed or continued). A running attached session keeps its arguments. Neither needs `jailoc restart` or `jailoc reload`.
 - `mounts`: same syntax and validation as [`mounts`](#mounts). An empty host (`":/home/agent/.agents"`) removes a mount added by the agent or an earlier table.
 - `profile` values: unset means per workspace; `false` means per workspace, emptied on every VM start; a name selects the shared profile `~/.local/share/jailoc/profiles/<name>`.
 
@@ -735,7 +764,7 @@ agent = "claude-opus"
 ```
 
 - A custom agent defined in `[defaults]` can be selected and configured in any workspace; one defined in a workspace only there.
-- Each field except `mounts` and `profile` takes the first value set in, in this order:
+- Each field except `mounts` and `profile` takes the first value set in, in this order (`default_args` counts as set when written, including `[]`):
     1. the workspace's table of the agent
     2. the defaults' table of the agent
     3. for a custom agent, the workspace's table of the agent it is derived from
@@ -814,6 +843,7 @@ Any `backend` value other than `"vm"` and empty is rejected. For a config-load e
 
 - `~` is expanded.
 - An empty list is allowed; empty entries are rejected.
+- Each path must exist on the host and be a directory. `jailoc up` and `jailoc reload` fail with an error naming the workspace and path otherwise; `jailoc` does not create a missing path. This differs from read-write [`mounts`](#mounts), whose missing host directories are created.
 - Paths equal to or under these prefixes are rejected: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`.
 - Several workspaces may share a path, for example to run different agents in the same project. When the current directory matches several workspaces at the same depth, `jailoc` fails and asks for `-w`.
 
@@ -824,7 +854,7 @@ Any `backend` value other than `"vm"` and empty is rejected. For a config-load e
 | linux/amd64 | 11 |
 | arm64 (macOS and Linux) | 120 |
 
-- With [`enable_docker`](#enable_docker) the limit is one fewer.
+- With [`enable_docker`](#enable_docker) the limit is one fewer, and with `tmp_storage = "disk"` one fewer.
 - Paths, [`mounts`](#mounts) with a host directory and the state directories of a named [agent profile](#agent-profiles) count towards the limit.
 - `jailoc up` and `jailoc reload` fail above the limit. List a common parent directory instead of many sibling directories.
 
@@ -1129,6 +1159,72 @@ protect_git = true
 
 When the existing data disk is larger than `docker_disk`, `jailoc up` fails instead of shrinking it.
 
+`[vm] builder_disk` follows the same format and grow-only rule, with at least `1g`, checked when the shared builder VM starts for a build, not by validation.
+
+### `tmp_storage`, `tmp_size` and `tmp_ttl`
+
+These settings apply to the guest `/tmp` only. `/var/tmp`, `~/.local/tmp`, `/run/secrets`, persistent caches and directories named by an overridden `TMPDIR` are not affected. A workspace value wins over `[defaults]`, which wins over the built-in value.
+
+| Field | Valid values | Default | Applied by |
+|---|---|---|---|
+| `tmp_storage` | `"ram"`, `"disk"` | `"ram"` | `jailoc restart` |
+| `tmp_size` | positive integer of bytes, optionally followed by `k`, `m` or `g` (binary multiples, either case); at least `16m` with `"disk"` | `"1g"` | `jailoc restart` |
+| `tmp_ttl` | positive Go duration (`time.ParseDuration`, e.g. `"15m"`, `"8h"`) or `"0"` | `"8h"` | `jailoc reload` |
+
+`tmp_ttl = "0"` disables the cleanup. A value outside these rules is rejected. A VM started by a jailoc release with an older guest protocol (before protocol 4) needs `jailoc restart` before it uses any of these settings, including `tmp_ttl`.
+
+#### Storage
+
+| `tmp_storage` | `/tmp` lives in | Capacity |
+|---|---|---|
+| `ram` | a tmpfs in the VM's memory | `tmp_size` is an upper bound. The pages count against the VM's `memory`, and idle ones go to compressed swap (zram). The host reserves nothing, and its free disk space is irrelevant. A cap above `memory` does not add room. |
+| `disk` | an ext4 file system on a private sparse disk | `tmp_size` is the size of the disk. ext4 metadata reduces the available capacity below it. The sparse file is a cap, not a reservation: the host stores only the blocks the guest has written. |
+
+With `disk`:
+
+- The disk is private to the workspace. It is the file `tmp.img` in the workspace state directory on the host, outside every guest share, and it is independent of the Docker data disk ([`docker_disk`](#cpu-memory-and-docker_disk)).
+- jailoc creates the disk empty at every VM start and formats it with `mkfs.ext4` from the workspace image. Nothing in `/tmp` survives a VM stop or restart.
+- The image must contain `mkfs.ext4` (package `e2fsprogs`). The embedded base image does. An image without it fails the VM start with an error that names `mkfs.ext4`; jailoc installs nothing. See [Use a custom image](../how-to/custom-images.md#know-what-the-image-must-provide).
+- The guest trims freed blocks periodically (`FITRIM`) so that the host can reclaim them, and jailoc removes the disk file when the VM stops.
+
+#### Mount options
+
+`/tmp` has mode `1777` and is mounted `nosuid`, `nodev`, `strictatime` and executable, so access times are exact and build tools and test runners can run files from it.
+
+#### Cleanup
+
+With `tmp_ttl` above zero, the guest sweeps `/tmp` every 15 minutes. The cutoff is the current time minus `tmp_ttl`.
+
+| Entry | Removed when |
+|---|---|
+| Regular file | its access, modification and change times are all older than the cutoff |
+| Directory | it is empty and its access and modification times are older than the cutoff; its change time is ignored |
+
+The sweep skips:
+
+- entries that another process holds an `flock` on;
+- sockets, symbolic links, devices and FIFOs;
+- other mounts below `/tmp`; the sweep does not cross into them.
+
+The checks are best effort. A file renamed into a checked name during a sweep can be removed in its place, and a program that keeps a file open without an `flock` does not protect its path, though it keeps reading the unlinked file through its descriptor. Removal happens at the first sweep after the cutoff, not at exactly creation time plus `tmp_ttl`.
+
+The default `8h` is more aggressive than the 10 days that distributions typically keep `/tmp` files. The cleanup cannot stop a running job from filling `/tmp` before the TTL passes; the capacity limit still applies.
+
+#### Session environment
+
+Sessions get `TMPDIR`, `TMP`, `TEMP` and `GOTMPDIR` set to `/tmp`. A variable set by the image configuration, the workspace's `env` or `env_file`, an env secret, or the command itself takes precedence.
+
+```toml
+[defaults]
+tmp_storage = "ram"
+tmp_size = "2g"
+
+[workspaces.build]
+tmp_storage = "disk"
+tmp_size = "20g"
+tmp_ttl = "0"
+```
+
 ### `timezone`
 
 - `timezone` must match `^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$`; absolute paths and POSIX `TZ` rules are rejected.
@@ -1271,7 +1367,7 @@ See the [secrets how-to](../how-to/secrets.md).
 - A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`.
 - An inherited default secret can't be unset in a workspace.
 
-**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`, `enable_docker`, `enable_desktop`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
+**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`, `enable_docker`, `enable_desktop`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
 
 **`agents.<name>`**:
 

@@ -213,6 +213,10 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	if err != nil {
 		return "", fmt.Errorf("locate jailoc executable: %w", err)
 	}
+	diskSize, err := builderDiskSize(cfg, ws)
+	if err != nil {
+		return "", err
+	}
 	spec := vm.Spec{
 		Kind:       vm.KindBuilder,
 		Workspace:  "builder",
@@ -220,7 +224,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		Image:      vm.DefaultImage,
 		CPUs:       builderCPUs,
 		MemoryMiB:  builderMemoryMiB,
-		DiskSize:   vm.DefaultDiskSize,
+		DiskSize:   diskSize,
 		Policy:     policy,
 		RunnerPath: rt.runner,
 		LibDir:     rt.libDir,
@@ -232,9 +236,6 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	}
 	if ws.IsolatedBuild {
 		spec.Workspace = ws.Name + "-builder"
-		if spec.DiskSize, err = vmDockerDiskSize(ws.DockerDisk); err != nil {
-			return "", err
-		}
 	}
 	start := time.Now()
 	st, err := startSupervisor(ctx, spec, label)
@@ -252,7 +253,14 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		return "", err
 	}
 	defer restoreHost()
-	return importWorkspaceImage(ctx, cfg, ws)
+	// The builder lock is held until return, so the maintenance of the
+	// builder's own daemon is serialized with every other build in this
+	// HOME. The host daemon is never maintained: other tools and HOMEs share it.
+	return withBuilderMaintenance(ctx, func(ctx context.Context, phase string) {
+		maintainBuilderDaemon(ctx, spec.DiskSize, phase, os.Stdout, os.Stderr)
+	}, func() (string, error) {
+		return importWorkspaceImage(ctx, cfg, ws)
+	})
 }
 
 // useHostDocker reports whether the workspace image is built with the host
@@ -652,6 +660,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		IPv6:      ws.IPv6,
 		TimeZone:  workspaceTimeZone(ws.TimeZone),
 		CacheDir:  guestUserCache,
+		Tmp:       workspaceTmp(ws),
 	}
 	switch ws.Agent.TUIPlugin {
 	case agent.OpenCode1TUI:
@@ -706,6 +715,9 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		SSHAgent:      agent,
 		GPGAgent:      gpgAgent,
 		HostServices:  hostServices,
+	}
+	if ws.TmpStorage == config.TmpStorageDisk {
+		spec.TmpDiskSize = ws.TmpSizeBytes
 	}
 	if ws.AgentProfile != nil {
 		spec.Profile, _ = ws.AgentProfile.Name()
@@ -993,6 +1005,7 @@ func statusVM(ctx context.Context, ws *workspace.Resolved) error {
 	}
 	fmt.Printf("Resources: %s\n", resourcesLabel(*spec))
 	fmt.Printf("Profile:   %s\n", profileLabel(*spec))
+	fmt.Printf("Tmp:       %s\n", tmpStatus(ctx, stateDir, *spec))
 	sessionsCtx, cancel := context.WithTimeout(ctx, listSessionsTimeout)
 	defer cancel()
 	if infos, err := vmSessions(sessionsCtx, ws); err != nil {
@@ -1101,6 +1114,7 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	if running.Docker != ws.EnableDocker {
 		out = append(out, "enable_docker")
 	}
+	out = append(out, tmpRestartChanges(effectiveTmp(running), workspaceTmp(ws))...)
 	if running.Guest != nil && running.Guest.NoPrivilegeEscalation != ws.ProtectGit {
 		out = append(out, "protect_git")
 	}

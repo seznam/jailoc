@@ -14,10 +14,11 @@ An image used directly (`image`) or built from a custom base Dockerfile (`[base]
 - `PATH` including `/home/agent/.local/bin`, and for OpenCode `/home/agent/.opencode/bin`;
 - the agent binary (for example `opencode` or `claude`) on `PATH` when you use `image`; `npm` on `PATH` when jailoc installs the [coding agent](coding-agents.md) on top of a `[base] dockerfile` (Antigravity CLI: `curl`, `tar` and `sha256sum` on a glibc system);
 - `node` on `PATH` for the [workspace indicator](tui-plugin.md) of Claude Code; without it Claude Code runs without the indicator;
-- for [Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm): `dockerd` and `nftables` with `image`, or `apt-get` (or `nft` on `PATH`) when jailoc adds its Docker layer on top of a `[base] dockerfile`.
+- for [Docker inside the VM](workspace-configuration.md#use-docker-inside-the-vm): `dockerd` and `nftables` with `image`, or `apt-get` (or `nft` on `PATH`) when jailoc adds its Docker layer on top of a `[base] dockerfile`;
+- for `tmp_storage = "disk"`, `mkfs.ext4` on `PATH` (package `e2fsprogs`; the embedded base image has it). Without it the VM fails to start with an error naming `mkfs.ext4`; jailoc doesn't install it. Add `e2fsprogs` to your base or overlay Dockerfile (see [Set the size, storage and expiry of /tmp](workspace-configuration.md#set-the-size-storage-and-expiry-of-tmp)).
 
 !!! warning
-    A plain OS image like `ubuntu:24.04` doesn't meet these requirements. Start from the [jailoc base](../reference/default-image.md) with an overlay unless you need full control.
+    A plain OS image like `ubuntu:26.04` doesn't meet these requirements. Start from the [jailoc base](../reference/default-image.md) with an overlay unless you need full control.
 
 ## Use a pre-built image
 
