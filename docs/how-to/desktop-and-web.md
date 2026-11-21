@@ -1,6 +1,6 @@
 # How to open a desktop and web services in your browser
 
-A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc proxy` is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
+A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc up`, `jailoc reload` and `jailoc down` manage the local HTTPS proxy in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
 
 The examples use a workspace named `demo` with a proxy route `foo`. Their addresses are `https://desktop.demo.jailoc.local` and `https://foo.demo.jailoc.local`.
 
@@ -37,10 +37,8 @@ The guest ports in use are fixed: 6080 (noVNC) and 5901 (VNC, loopback only, no 
 
 | Change | Needed |
 |--------|--------|
-| `enable_desktop`, or the set of guest ports the `proxy` routes use | `jailoc restart` for the workspace, then a restart or sync of `jailoc proxy` |
-| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | `jailoc proxy` only; nothing changes in the guest |
-
-`jailoc proxy` refuses a running VM whose desktop or proxy ports differ from the configuration, and asks for `jailoc restart` first.
+| `enable_desktop`, or the set of guest ports the `proxy` routes use | `jailoc restart` for the workspace |
+| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | `jailoc reload` for the workspace |
 
 !!! note "Removing routes or the desktop and `jailoc reload`"
 
@@ -61,19 +59,12 @@ No browser is installed. Ask the agent to install one with Playwright, for examp
 
     The desktop starts at boot with a snapshot of the environment. It holds neither the secrets nor the `env` values delivered after boot, so programs started from the desktop menu don't see them. A program an agent session launches inherits that session's current environment, secrets included, even though its window appears on the desktop.
 
-## Start the proxy
+## How the proxy starts
 
-`jailoc up` automatically starts or updates the background proxy when a workspace has `proxy` routes, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). You can also run `jailoc proxy` directly:
+`jailoc up` and `jailoc restart` automatically start or update the background HTTPS proxy when a workspace has `proxy` routes, `jailoc reload` updates routes whose guest ports are already in the running VM's allowlist, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). `jailoc status` shows the running proxy and its route URLs.
 
-```bash
-jailoc proxy demo
-```
-
-- Runs in the background by default (`--foreground` / `-f` keeps it in the foreground). When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes; newly added routes with `auth = true` get a fresh login code.
-- `jailoc proxy status` shows the running proxy and its routes; `jailoc proxy stop` stops it.
-- When `--tls-cert` and `--tls-key` are omitted, jailoc generates and reuses a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local`.
-- The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused. With `--listener-broker` the proxy serves port 443 through a root broker instead; see [Use the listener broker](#use-the-listener-broker-experimental).
-- Without workspace arguments the proxy serves every running configured workspace that has routes. A named workspace must be running and have routes.
+- jailoc generates and reuses a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local`.
+- The proxy listens on `127.0.0.1:8443` by default.
 - Routes close when a workspace VM stops or is replaced.
 
 1. Open `<origin>/.jailoc/login`, for example `https://foo.demo.jailoc.local/.jailoc/login`.

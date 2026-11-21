@@ -1080,7 +1080,7 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 
 ### `enable_desktop` and `proxy`
 
-`enable_desktop = true` runs a native desktop in the workspace VM; `proxy` serves guest ports to a browser on the host. Both are reached through [`jailoc proxy`](cli.md#jailoc-proxy); see the [how-to](../how-to/desktop-and-web.md).
+`enable_desktop = true` runs a native desktop in the workspace VM; `proxy` serves guest ports to a browser on the host over HTTPS. See the [how-to](../how-to/desktop-and-web.md).
 
 ```toml
 [defaults.proxy]
@@ -1108,9 +1108,9 @@ Validation:
 - `proxy` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `proxy` port is fine; only the guest side counts.
 - With the desktop or any `proxy` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
 - `ports` and `host_ports` can't use guest port 6081, and with `enable_desktop` also 6080 and 5901.
-- A proxy route is not a published port: nothing listens on the host except `jailoc proxy`.
+- A proxy route is not a published port: nothing listens on the host except the local HTTPS proxy.
 
-Changing `enable_desktop` or the set of guest ports the `proxy` routes use takes effect after `jailoc restart` and a restart or sync of `jailoc proxy`; `jailoc proxy` refuses a running VM that doesn't match. Renaming a route, changing `auth`, or adding a route on a guest port already in that set needs only `jailoc proxy`.
+Changing `enable_desktop` or the set of guest ports the `proxy` routes use takes effect after `jailoc restart`. Renaming a route, changing `auth`, or adding a route on a guest port already in that set takes effect on `jailoc reload`.
 
 A running VM keeps its desktop ports (6080, 5901), the relay port 6081 and the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `enable_desktop` or `proxy`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`. In the images jailoc builds, the desktop packages are installed only with `enable_desktop`; see [Desktop layer](image-resolution.md#desktop-layer-steps-2-4-and-5). Software rendering needs CPU: `cpu = 4` and `memory = "6g"` are a reasonable start. The VM has no GPU and no audio device.
 
