@@ -229,6 +229,14 @@ func (s *startupStatus) abortCut() error {
 	return err
 }
 
+// Write implements io.Writer by forwarding p through write.
+func (s *startupStatus) Write(p []byte) (int, error) {
+	if err := s.write(p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
 // write writes p, agent output, and keeps the status line on the alternate
 // screen until the agent draws its first visible character. It continues
 // scanning after the status line stops so altScreen and visible stay accurate
