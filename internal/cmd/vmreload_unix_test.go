@@ -299,9 +299,8 @@ func TestReloadSpecRunningSharesExcludeSnapshots(t *testing.T) {
 	}
 }
 
-func TestRestartOnlyChangesDesktopWeb(t *testing.T) {
+func TestRestartOnlyChangesWeb(t *testing.T) {
 	t.Parallel()
-	desktop := func() *guest.Desktop { return &guest.Desktop{} }
 	relay := func(ports ...uint16) *guest.WebRelay { return &guest.WebRelay{Ports: ports} }
 	for _, tt := range []struct {
 		name          string
@@ -309,10 +308,7 @@ func TestRestartOnlyChangesDesktopWeb(t *testing.T) {
 		changes       []string
 	}{
 		{"unchanged none", guest.Config{}, guest.Config{}, nil},
-		{"unchanged both", guest.Config{Desktop: desktop(), WebRelay: relay(3000, 6080)}, guest.Config{Desktop: desktop(), WebRelay: relay(3000, 6080)}, nil},
-		{"desktop on adds its web port", guest.Config{}, guest.Config{Desktop: desktop(), WebRelay: relay(6080)}, []string{"enable_desktop", "web"}},
-		{"desktop off", guest.Config{Desktop: desktop(), WebRelay: relay(6080)}, guest.Config{}, []string{"enable_desktop", "web"}},
-		{"desktop off keeps other web", guest.Config{Desktop: desktop(), WebRelay: relay(3000, 6080)}, guest.Config{WebRelay: relay(3000)}, []string{"enable_desktop", "web"}},
+		{"unchanged web", guest.Config{WebRelay: relay(3000, 6080)}, guest.Config{WebRelay: relay(3000, 6080)}, nil},
 		{"web added", guest.Config{}, guest.Config{WebRelay: relay(3000)}, []string{"web"}},
 		{"web port changed", guest.Config{WebRelay: relay(3000)}, guest.Config{WebRelay: relay(3001)}, []string{"web"}},
 		{"web removed", guest.Config{WebRelay: relay(3000)}, guest.Config{}, []string{"web"}},
@@ -326,35 +322,22 @@ func TestRestartOnlyChangesDesktopWeb(t *testing.T) {
 	}
 }
 
-// A desktop or web change must not be reported as a changed session
-// environment: the guest exports DISPLAY itself.
-func TestRestartOnlyChangesDesktopNotTUIEnv(t *testing.T) {
-	t.Parallel()
-	running := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &guest.Config{Env: []string{"A=1"}}}
-	want := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &guest.Config{Env: []string{"A=1"}, Desktop: &guest.Desktop{}}}
-	if got := restartOnlyChanges(running, want); slices.Contains(got, "TUI plugins") {
-		t.Errorf("got %v; the desktop must not be reported as TUI plugins", got)
-	}
-}
-
-func TestReloadedGuestRetainsDesktopWeb(t *testing.T) {
+func TestReloadedGuestRetainsWeb(t *testing.T) {
 	t.Parallel()
 	running := guest.Config{
-		Desktop:  &guest.Desktop{},
 		WebRelay: &guest.WebRelay{Ports: []uint16{3000, 6080}},
 		CABundle: "/old.pem",
 		TimeZone: &guest.TimeZone{},
 	}
-	// The configuration now asks for another desktop and web setup, which
-	// only a restart applies.
+	// The configuration now asks for another web setup, which only a restart applies.
 	want := guest.Config{
 		WebRelay: &guest.WebRelay{Ports: []uint16{9000}},
 		CABundle: "/new.pem",
 	}
 	binds := []guest.Snapshot{{Source: "/a", Target: "/snap"}}
 	got := reloadedGuest(running, want, binds)
-	if got.Desktop == nil || got.WebRelay == nil || !slices.Equal(got.WebRelay.Ports, []uint16{3000, 6080}) {
-		t.Errorf("reloaded guest lost desktop/web: %+v", got)
+	if got.WebRelay == nil || !slices.Equal(got.WebRelay.Ports, []uint16{3000, 6080}) {
+		t.Errorf("reloaded guest lost web: %+v", got)
 	}
 	if got.CABundle != "/new.pem" || got.TimeZone != nil || len(got.Snapshots) != 1 {
 		t.Errorf("reloaded guest did not take the reloadable settings: %+v", got)
@@ -363,7 +346,6 @@ func TestReloadedGuestRetainsDesktopWeb(t *testing.T) {
 
 func TestCheckReloadWebCollision(t *testing.T) {
 	t.Parallel()
-	desktopRunning := guest.Config{Desktop: &guest.Desktop{}, WebRelay: &guest.WebRelay{Ports: []uint16{3000, 6080}}}
 	webRunning := guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}
 	hostPort := func(port uint16) vm.Spec {
 		return vm.Spec{
@@ -382,22 +364,15 @@ func TestCheckReloadWebCollision(t *testing.T) {
 	}{
 		{"no relay, any host port", guest.Config{}, hostPort(3000), ""},
 		{"no relay, relay port forward", guest.Config{}, forward(6081), ""},
-		{"unrelated host port", desktopRunning, hostPort(9090), ""},
-		{"unrelated forward", desktopRunning, forward(8080), ""},
-		{"no host ports at all", desktopRunning, vm.Spec{Guest: &guest.Config{}}, ""},
+		{"unrelated host port", webRunning, hostPort(9090), ""},
+		{"unrelated forward", webRunning, forward(8080), ""},
+		{"no host ports at all", webRunning, vm.Spec{Guest: &guest.Config{}}, ""},
 		{"web allowlist port as host port after web was removed", webRunning, hostPort(3000), "guest port 3000"},
-		{"web allowlist port as host port, desktop running", desktopRunning, hostPort(3000), "guest port 3000"},
-		{"desktop web port as host port", desktopRunning, hostPort(6080), "guest port 6080"},
 		{"relay port as host port", webRunning, hostPort(6081), "guest port 6081"},
 		{"relay port as forward", webRunning, forward(6081), "guest port 6081"},
-		{"desktop web port as forward", desktopRunning, forward(6080), "guest port 6080"},
-		{"vnc port as forward", desktopRunning, forward(5901), "guest port 5901"},
-		{"vnc port as host port", desktopRunning, hostPort(5901), "guest port 5901"},
 		{"allowlist port as forward", webRunning, forward(3000), "guest port 3000"},
-		{"vnc port is free without a desktop", webRunning, forward(5901), ""},
-		{"desktop web port is free without the desktop or allowlist", webRunning, hostPort(6080), ""},
-		{"host service only in the spec list", desktopRunning, vm.Spec{HostServices: []vm.HostService{{GuestPort: 3000}}, Guest: &guest.Config{}}, "guest port 3000"},
-		{"host port only in the guest list", desktopRunning, vm.Spec{Guest: &guest.Config{HostPorts: []uint16{3000}}}, "guest port 3000"},
+		{"host service only in the spec list", webRunning, vm.Spec{HostServices: []vm.HostService{{GuestPort: 3000}}, Guest: &guest.Config{}}, "guest port 3000"},
+		{"host port only in the guest list", webRunning, vm.Spec{Guest: &guest.Config{HostPorts: []uint16{3000}}}, "guest port 3000"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -411,7 +386,7 @@ func TestCheckReloadWebCollision(t *testing.T) {
 				return
 			}
 			if err == nil {
-				t.Fatal("reload that exposes a running web or desktop port was allowed")
+				t.Fatal("reload that exposes a running web port was allowed")
 			}
 			for _, want := range []string{tt.wantErr, "jailoc restart ws"} {
 				if !strings.Contains(err.Error(), want) {
@@ -422,8 +397,8 @@ func TestCheckReloadWebCollision(t *testing.T) {
 	}
 }
 
-// The reload that removes web and the desktop from the configuration while
-// the VM still runs them must not turn their ports into host ports.
+// The reload that removes web from the configuration while the VM still runs
+// it must not turn its ports into host ports.
 func TestReloadWantAfterWebRemovedKeepsCollisionVisible(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ws := &workspace.Resolved{
@@ -435,11 +410,11 @@ func TestReloadWantAfterWebRemovedKeepsCollisionVisible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want.Guest.Desktop != nil || want.Guest.WebRelay != nil {
-		t.Fatalf("the wanted spec still has desktop/web: %+v", want.Guest)
+	if want.Guest.WebRelay != nil {
+		t.Fatalf("the wanted spec still has web: %+v", want.Guest)
 	}
-	running := vm.Spec{Guest: &guest.Config{Desktop: &guest.Desktop{}, WebRelay: &guest.WebRelay{Ports: []uint16{3000, 6080}}}}
+	running := vm.Spec{Guest: &guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000, 6080}}}}
 	if err := checkReloadWebCollision("ws", running, want); err == nil {
-		t.Fatal("removing web and desktop from the configuration made their ports reloadable as host ports")
+		t.Fatal("removing web from the configuration made its ports reloadable as host ports")
 	}
 }

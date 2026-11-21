@@ -583,46 +583,32 @@ func TestWorkspaceSpecTmpfs(t *testing.T) {
 	}
 }
 
-func TestWorkspaceSpecDesktopWeb(t *testing.T) {
+func TestWorkspaceSpecWeb(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name        string
-		desktop     bool
-		web         []workspace.WebRoute
-		wantDesktop bool
-		wantPorts   []uint16 // nil: no web relay
+		name      string
+		web       []workspace.WebRoute
+		wantPorts []uint16 // nil: no web relay
 	}{
-		{name: "neither"},
+		{name: "none"},
 		{
-			name:      "web only",
+			name:      "web routes",
 			web:       []workspace.WebRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}},
 			wantPorts: []uint16{3000, 8080},
 		},
 		{
-			name:        "desktop only",
-			desktop:     true,
-			web:         []workspace.WebRoute{{Name: "desktop", Port: 6080}},
-			wantDesktop: true,
-			wantPorts:   []uint16{6080},
-		},
-		{
-			name:        "desktop and web with a shared port",
-			desktop:     true,
-			web:         []workspace.WebRoute{{Name: "a", Port: 3000}, {Name: "b", Port: 3000}, {Name: "desktop", Port: 6080}},
-			wantDesktop: true,
-			wantPorts:   []uint16{3000, 6080},
+			name:      "web routes with a shared port",
+			web:       []workspace.WebRoute{{Name: "a", Port: 3000}, {Name: "b", Port: 3000}, {Name: "c", Port: 6080}},
+			wantPorts: []uint16{3000, 6080},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", EnableDesktop: tt.desktop, Web: tt.web}
+			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", Web: tt.web}
 			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
-			}
-			if got := spec.Guest.Desktop != nil; got != tt.wantDesktop {
-				t.Errorf("Guest.Desktop set = %v, want %v", got, tt.wantDesktop)
 			}
 			if tt.wantPorts == nil {
 				if spec.Guest.WebRelay != nil {
@@ -631,33 +617,21 @@ func TestWorkspaceSpecDesktopWeb(t *testing.T) {
 			} else if spec.Guest.WebRelay == nil || !slices.Equal(spec.Guest.WebRelay.Ports, tt.wantPorts) {
 				t.Errorf("Guest.WebRelay = %+v, want ports %v", spec.Guest.WebRelay, tt.wantPorts)
 			}
-			for _, e := range spec.Guest.Env {
-				if strings.HasPrefix(e, "DISPLAY=") {
-					t.Errorf("host-side session env sets %q; the guest adds DISPLAY itself", e)
-				}
-			}
 		})
 	}
 }
 
-func TestStatusRestartChangesDesktopWeb(t *testing.T) {
+func TestStatusRestartChangesWeb(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	base := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol}
 	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g"}
 	tests := []struct {
 		name    string
-		desktop bool
 		web     []workspace.WebRoute
 		running guest.Config
 		want    []string
 	}{
 		{name: "none"},
-		{name: "desktop enabled", desktop: true, web: []workspace.WebRoute{{Name: "desktop", Port: 6080}}, want: []string{"enable_desktop", "web"}},
-		{name: "desktop disabled", running: guest.Config{Desktop: &guest.Desktop{}, WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}, want: []string{"enable_desktop", "web"}},
-		{
-			name: "desktop unchanged", desktop: true, web: []workspace.WebRoute{{Name: "desktop", Port: 6080}},
-			running: guest.Config{Desktop: &guest.Desktop{}, WebRelay: &guest.WebRelay{Ports: []uint16{6080}}},
-		},
 		{name: "web added", web: []workspace.WebRoute{{Name: "app", Port: 3000}}, want: []string{"web"}},
 		{
 			name: "web port changed", web: []workspace.WebRoute{{Name: "app", Port: 3001}},
@@ -673,71 +647,12 @@ func TestStatusRestartChangesDesktopWeb(t *testing.T) {
 	}
 	for _, tt := range tests {
 		w := *ws
-		w.EnableDesktop, w.Web = tt.desktop, tt.web
+		w.Web = tt.web
 		running := base
 		g := tt.running
 		running.Guest = &g
 		if got := statusRestartChanges(&w, running); !slices.Equal(got, tt.want) {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
-	}
-}
-
-func TestMissingDesktopFiles(t *testing.T) {
-	t.Parallel()
-	all := func(...string) (bool, error) { return true, nil }
-	got, err := missingDesktopFiles(all)
-	if err != nil || len(got) != 0 {
-		t.Fatalf("complete image: got %v, %v; want none", got, err)
-	}
-	var asked [][]string
-	none := func(paths ...string) (bool, error) {
-		asked = append(asked, paths)
-		return false, nil
-	}
-	got, err = missingDesktopFiles(none)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"Xtigervnc", "websockify", "openbox", "dbus-run-session", "noVNC vnc.html"}
-	if !slices.Equal(got, want) {
-		t.Errorf("empty image: missing %v, want %v", got, want)
-	}
-	if len(asked) != len(want) {
-		t.Errorf("asked for %d files, want %d", len(asked), len(want))
-	}
-	onlyNoVNC := func(paths ...string) (bool, error) {
-		return slices.Contains(paths, "usr/share/novnc/vnc.html"), nil
-	}
-	if got, _ := missingDesktopFiles(onlyNoVNC); !slices.Equal(got, want[:4]) {
-		t.Errorf("image with only noVNC: missing %v, want %v", got, want[:4])
-	}
-	wantErr := errors.New("read layer")
-	if _, err := missingDesktopFiles(func(...string) (bool, error) { return false, wantErr }); !errors.Is(err, wantErr) {
-		t.Errorf("lookup error: got %v, want it wrapped", err)
-	}
-}
-
-func TestDesktopImageError(t *testing.T) {
-	t.Parallel()
-	err := desktopImageError("ws", []string{"Xtigervnc", "openbox"})
-	if err == nil {
-		t.Fatal("no error for missing files")
-	}
-	for _, want := range []string{`workspace "ws"`, "enable_desktop", "Xtigervnc, openbox", "apt-get install", "enable_desktop = false"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q lacks %q", err, want)
-		}
-	}
-	if err := desktopImageError("ws", nil); err != nil {
-		t.Errorf("nothing missing: got %v", err)
-	}
-}
-
-func TestConfigureVMDesktopOff(t *testing.T) {
-	t.Parallel()
-	spec := vm.Spec{Guest: &guest.Config{}}
-	if err := configureVMDesktop(&workspace.Resolved{Name: "ws"}, &spec); err != nil {
-		t.Fatalf("desktop off: %v", err)
 	}
 }

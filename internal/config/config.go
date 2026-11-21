@@ -46,7 +46,6 @@ const (
 # git_config = true  # copy host Git configuration read-only
 # import_agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
 # enable_docker = false  # run an isolated Docker daemon inside the VM
-# enable_desktop = false  # run a desktop in the VM, served at https://desktop.<workspace>.jailoc.local (restart to apply)
 # ca_bundle = true  # true: auto-detect SSL_CERT_FILE/NIX_SSL_CERT_FILE; false: disabled; string: custom bundle path
 # cpu = 2.0  # virtual CPU cores per workspace VM
 # memory = "4g"  # RAM limit per workspace VM
@@ -168,7 +167,6 @@ paths = []
 # git_config = true  # copy host Git configuration read-only
 # import_agent_config = true  # read-only copy of the agent's host configuration (CLAUDE.md, ~/.config/opencode, ...)
 # enable_docker = false  # run an isolated Docker daemon inside the VM
-# enable_desktop = false  # omitted: inherit defaults; true/false: override (restart to apply)
 # ca_bundle = true  # omitted: inherit defaults; true/false/string: override
 # cpu = 2.0  # virtual CPU cores per workspace VM
 # memory = "4g"  # RAM limit per workspace VM
@@ -179,7 +177,7 @@ paths = []
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 # notifications = "auto"  # attached OpenCode sessions: auto, native, osc or off
 
-# [workspaces.default.web]  # guest web services served at https://<name>.<workspace>.jailoc.local ("desktop" is reserved)
+# [workspaces.default.web]  # guest web services served at https://<name>.<workspace>.jailoc.local
 # app = 3000
 
 # [workspaces.default.network]
@@ -473,7 +471,6 @@ type Defaults struct {
 	Notifications string   `toml:"notifications,omitempty"`
 	ExposePort    *bool    `toml:"expose_port,omitempty"`
 	EnableDocker  *bool    `toml:"enable_docker,omitempty"`
-	EnableDesktop *bool    `toml:"enable_desktop,omitempty"`
 	Network       *Network `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
@@ -516,7 +513,6 @@ type Workspace struct {
 	Notifications string   `toml:"notifications,omitempty"`
 	ExposePort    *bool    `toml:"expose_port,omitempty"`
 	EnableDocker  *bool    `toml:"enable_docker,omitempty"`
-	EnableDesktop *bool    `toml:"enable_desktop,omitempty"`
 	Network       *Network `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`

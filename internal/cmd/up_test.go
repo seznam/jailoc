@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/seznam/jailoc/internal/agent"
@@ -455,38 +454,6 @@ func TestWorkspaceStatusLineCommand(t *testing.T) {
 			out, err := cmd.Output()
 			if err != nil || string(out) != tt.want {
 				t.Fatalf("status line = %q, %v; want %q", out, err, tt.want)
-			}
-		})
-	}
-}
-
-func TestWorkspaceLayerPlan(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		ws   workspace.Resolved
-		want []string
-	}{
-		{name: "none"},
-		{name: "docker", ws: workspace.Resolved{EnableDocker: true}, want: []string{"docker"}},
-		{name: "desktop", ws: workspace.Resolved{EnableDesktop: true}, want: []string{"desktop"}},
-		{name: "agent", ws: workspace.Resolved{AgentInstall: true}, want: []string{"agent"}},
-		{
-			name: "desktop after docker and before agent",
-			ws:   workspace.Resolved{EnableDocker: true, EnableDesktop: true, AgentInstall: true},
-			want: []string{"docker", "desktop", "agent"},
-		},
-		{name: "desktop before agent", ws: workspace.Resolved{EnableDesktop: true, AgentInstall: true}, want: []string{"desktop", "agent"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			var got []string
-			for _, layer := range workspaceLayerPlan(nil, &tt.ws) {
-				got = append(got, layer.name)
-			}
-			if !slices.Equal(got, tt.want) {
-				t.Errorf("layers = %v, want %v", got, tt.want)
 			}
 		})
 	}

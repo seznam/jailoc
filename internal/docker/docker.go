@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -317,15 +316,6 @@ func BuildDockerImage(ctx context.Context, base, mirror string) (string, error) 
 	})
 }
 
-// BuildDesktopImage adds the embedded desktop layer (TigerVNC, noVNC,
-// websockify, Openbox) on top of base and returns the tag of the result. The
-// base image must be Debian or Ubuntu based.
-func BuildDesktopImage(ctx context.Context, base string) (string, error) {
-	return buildLayerImage(ctx, base, "jailoc-desktop", "desktop", proxyBuildArgs(), func(user string) []byte {
-		return desktopLayerDockerfile(embed.DesktopLayer(), user)
-	})
-}
-
 // buildLayerImage builds the Dockerfile that dockerfile returns for the user
 // of base, with buildArgs and base as the BASE build argument, and tags the
 // result repo with a hash of the base image ID and the Dockerfile.
@@ -418,26 +408,6 @@ func dockerLayerDockerfile(stages []byte, user string) []byte {
 		"    && if [ -n \"$%s\" ]; then apt-get clean && rm -rf /var/lib/apt/lists/*; fi)\n", cleanCachesArg)
 	b.WriteString("COPY --from=docker /out/bin/ /usr/local/bin/\n")
 	b.WriteString("COPY --from=docker /out/cli-plugins/ /usr/local/lib/docker/cli-plugins/\n")
-	if switchUser {
-		fmt.Fprintf(&b, "USER %s\n", user)
-	}
-	return []byte(b.String())
-}
-
-// desktopLayerDockerfile runs run, the RUN fragment of the desktop layer, on
-// BASE as root, restoring the user.
-func desktopLayerDockerfile(run []byte, user string) []byte {
-	var b strings.Builder
-	b.WriteString(layerHead + "FROM ${BASE}\n")
-	switchUser := asRoot(user)
-	if switchUser {
-		b.WriteString("USER root\n")
-	}
-	fmt.Fprintf(&b, "ARG %s\n", cleanCachesArg)
-	b.Write(run)
-	if !bytes.HasSuffix(run, []byte("\n")) {
-		b.WriteString("\n")
-	}
 	if switchUser {
 		fmt.Fprintf(&b, "USER %s\n", user)
 	}

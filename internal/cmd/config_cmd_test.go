@@ -48,7 +48,6 @@ paths = [` + `"` + projectDir + `"` + `]
 env = ["SHARED=from_workspace", "WS_VAR=2"]
 ports = ["8080:80"]
 host_ports = [5432]
-enable_desktop = true
 ssh_auth_sock = true
 protect_git = true
 notifications = "osc"
@@ -88,8 +87,7 @@ app = 3000
 	assertContains(t, out, "  Env:\n    - DEFAULT_VAR=1\n    - SHARED=from_workspace\n    - WS_VAR=2\n")
 	assertContains(t, out, "  Ports:\n    - 127.0.0.1:8080 -> 80\n")
 	assertContains(t, out, "  Host Ports:\n    - 5432 -> 127.0.0.1:5432\n")
-	assertContains(t, out, "  Enable Desktop: true\n")
-	assertContains(t, out, "  Web:\n    - https://app.myproject.jailoc.local -> 3000\n    - https://desktop.myproject.jailoc.local -> 6080\n    - https://zeta.myproject.jailoc.local -> 9000\n")
+	assertContains(t, out, "  Web:\n    - https://app.myproject.jailoc.local -> 3000\n    - https://zeta.myproject.jailoc.local -> 9000\n")
 	assertContains(t, out, "  CPU: 4\n")
 	assertContains(t, out, "  Memory: 8g\n")
 	assertContains(t, out, "  Time Zone: Europe/Prague\n")
