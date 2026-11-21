@@ -541,11 +541,11 @@ func TestGatewayCommandArguments(t *testing.T) {
 		err := cmd.ExecuteContext(t.Context())
 		return out.String(), err
 	}
-	if _, err := run(); err == nil || !strings.Contains(err.Error(), `"tls-cert"`) || !strings.Contains(err.Error(), `"tls-key"`) {
-		t.Errorf("no flags: error = %v, want the required TLS flags named", err)
-	}
-	if _, err := run("--tls-cert", "c.pem"); err == nil || !strings.Contains(err.Error(), `"tls-key"`) {
+	if _, err := run("--tls-cert", "c.pem"); err == nil || !strings.Contains(err.Error(), "tls-key") {
 		t.Errorf("no key: error = %v, want tls-key named", err)
+	}
+	if _, err := run("--tls-key", "k.pem"); err == nil || !strings.Contains(err.Error(), "tls-cert") {
+		t.Errorf("no cert: error = %v, want tls-cert named", err)
 	}
 	for _, listen := range []string{"0.0.0.0:8443", "example.com:443", "8443"} {
 		if _, err := run("--tls-cert", "c.pem", "--tls-key", "k.pem", "--listen", listen); err == nil || !strings.Contains(err.Error(), "--listen") {
@@ -560,7 +560,7 @@ func TestGatewayCommandArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"gateway [workspace...]", "--listen", "--tls-cert", "--tls-key", gatewayDefaultListen} {
+	for _, want := range []string{"web [workspace...]", "--foreground", "--listen", "--tls-cert", "--tls-key", gatewayDefaultListen} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}
@@ -704,7 +704,7 @@ func startGatewayRun(t *testing.T, handler http.Handler) (*gatewayRun, string) {
 func startGatewayRunFor(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config) (*gatewayRun, string) {
 	t.Helper()
 	return startGatewayRunArgs(t, handler, cfgTOML, host, g, func(certFile, keyFile string) []string {
-		return []string{"--listen", "127.0.0.1:0", "--tls-cert", certFile, "--tls-key", keyFile}
+		return []string{"--foreground", "--listen", "127.0.0.1:0", "--tls-cert", certFile, "--tls-key", keyFile}
 	})
 }
 
@@ -999,10 +999,10 @@ func TestGatewayListenerBrokerKeepsHostProofEscape(t *testing.T) {
 	}
 }
 
-func TestGatewayListenerBrokerRequiresTLSFlags(t *testing.T) {
+func TestGatewayListenerBrokerRequiresMatchingTLSFlags(t *testing.T) {
 	useGatewayBrokerHost(t, gatewayBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: gatewayBrokerAddr})
-	if _, err := runGatewayArgs(t, "--listener-broker"); err == nil || !strings.Contains(err.Error(), `"tls-cert"`) {
-		t.Errorf("error = %v, want the required TLS flags named", err)
+	if _, err := runGatewayArgs(t, "--listener-broker", "--tls-cert", "c.pem"); err == nil || !strings.Contains(err.Error(), "tls-key") {
+		t.Errorf("error = %v, want tls-key named", err)
 	}
 }
 
@@ -1099,7 +1099,7 @@ func TestGatewayListenerBrokerServesThroughBroker(t *testing.T) {
 	run, _ := startGatewayRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "through the broker")
 	}), "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(false, 3000), func(certFile, keyFile string) []string {
-		return []string{"--listener-broker", "--tls-cert", certFile, "--tls-key", keyFile}
+		return []string{"--foreground", "--listener-broker", "--tls-cert", certFile, "--tls-key", keyFile}
 	})
 	if run.addr != target.addr.String() {
 		t.Errorf("gateway reports %s, want the broker address %s", run.addr, target.addr)
@@ -1143,5 +1143,116 @@ func TestGatewayListenerBrokerServesThroughBroker(t *testing.T) {
 			t.Fatalf("the broker stayed busy after the gateway stopped: %v", err)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestEnsureIngressCert(t *testing.T) {
+	home := shortTempDir(t, "jc")
+	t.Setenv("HOME", home)
+	t.Setenv(config.PathEnv, filepath.Join(home, "config.toml"))
+	cfg := &config.Config{Workspaces: map[string]config.Workspace{
+		"one": {Web: map[string]int{"app": 3000}},
+	}}
+	targets := []gatewayTarget{{ws: &workspace.Resolved{Name: "one", Web: []workspace.WebRoute{{Name: "app", Port: 3000}}}}}
+	cert1, caPath, err := ensureIngressCert(cfg, targets)
+	if err != nil {
+		t.Fatalf("ensureIngressCert: %v", err)
+	}
+	if caPath == "" {
+		t.Fatal("caPath is empty")
+	}
+	if err := cert1.Leaf.VerifyHostname("app.one.jailoc.local"); err != nil {
+		t.Fatalf("VerifyHostname: %v", err)
+	}
+	// Second call reuses the existing leaf and CA.
+	cert2, _, err := ensureIngressCert(cfg, targets)
+	if err != nil {
+		t.Fatalf("second ensureIngressCert: %v", err)
+	}
+	if !bytes.Equal(cert1.Certificate[0], cert2.Certificate[0]) {
+		t.Fatal("existing valid leaf was regenerated")
+	}
+	// Adding a workspace not covered by the first leaf regenerates the leaf with the same CA.
+	cfg.Workspaces["two"] = config.Workspace{Web: map[string]int{"api": 8080}}
+	targets = append(targets, gatewayTarget{ws: &workspace.Resolved{Name: "two", Web: []workspace.WebRoute{{Name: "api", Port: 8080}}}})
+	cert3, _, err := ensureIngressCert(cfg, targets)
+	if err != nil {
+		t.Fatalf("third ensureIngressCert: %v", err)
+	}
+	if err := cert3.Leaf.VerifyHostname("api.two.jailoc.local"); err != nil {
+		t.Fatalf("VerifyHostname(api.two): %v", err)
+	}
+	if err := cert3.Leaf.VerifyHostname("app.one.jailoc.local"); err != nil {
+		t.Fatalf("VerifyHostname(app.one): %v", err)
+	}
+}
+
+func TestWebGatewaySyncStatusAndStop(t *testing.T) {
+	run, _ := startGatewayRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "hello")
+	}), "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(false, 3000), func(_, _ string) []string {
+		return []string{"--foreground", "--listen", "127.0.0.1:0"}
+	})
+	// Trust the auto-generated CA in the test client.
+	caPEM, err := os.ReadFile(ingressCACertPath()) //nolint:gosec // test fixture path.
+	if err != nil {
+		t.Fatalf("ReadFile(ca.crt): %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("AppendCertsFromPEM failed")
+	}
+	run.client.Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
+	cookie := run.login(t)
+
+	// Re-running `jailoc web` (without --foreground) syncs the running gateway,
+	// preserves the existing session, and prints status without a new login code.
+	var syncOut bytes.Buffer
+	syncCmd := newGatewayCmd()
+	syncCmd.SetOut(&syncOut)
+	syncCmd.SetErr(&syncOut)
+	if err := syncCmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("background sync: %v\n%s", err, syncOut.String())
+	}
+	if !strings.Contains(syncOut.String(), "existing session preserved") || strings.Contains(syncOut.String(), "login code") {
+		t.Fatalf("sync output = %q, want existing session preserved without a new login code", syncOut.String())
+	}
+	res := run.do(t, "GET", "/", nil, cookie)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET / after sync = %d, want 200", res.StatusCode)
+	}
+
+	// `jailoc web status` reports the running gateway.
+	var statusOut bytes.Buffer
+	statusCmd := newGatewayCmd()
+	statusCmd.SetOut(&statusOut)
+	statusCmd.SetErr(&statusOut)
+	statusCmd.SetArgs([]string{"status"})
+	if err := statusCmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("web status: %v", err)
+	}
+	if !strings.Contains(statusOut.String(), "https://app.e2e.jailoc.local/") {
+		t.Fatalf("status output = %q, want route URL", statusOut.String())
+	}
+
+	ws := &workspace.Resolved{Name: "e2e", Web: []workspace.WebRoute{{Name: "app", Port: 3000}}}
+	if label := webStatusLabel(ws); !strings.Contains(label, "running on "+run.addr) {
+		t.Fatalf("webStatusLabel(running) = %q", label)
+	}
+
+	// `jailoc web stop` stops the running gateway.
+	var stopOut bytes.Buffer
+	stopCmd := newGatewayCmd()
+	stopCmd.SetOut(&stopOut)
+	stopCmd.SetErr(&stopOut)
+	stopCmd.SetArgs([]string{"stop"})
+	if err := stopCmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("web stop: %v", err)
+	}
+	if !strings.Contains(stopOut.String(), "Web gateway stopped") {
+		t.Fatalf("stop output = %q", stopOut.String())
+	}
+	if label := webStatusLabel(ws); !strings.Contains(label, "gateway stopped") {
+		t.Fatalf("webStatusLabel(stopped) = %q", label)
 	}
 }

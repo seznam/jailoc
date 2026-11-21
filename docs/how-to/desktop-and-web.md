@@ -1,6 +1,6 @@
 # How to open a desktop and web services in your browser
 
-A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc gateway` is the host-side entry point. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
+A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc web` (`jailoc gateway`, `jailoc gw`) is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
 
 The examples use a workspace named `demo` with a web route `foo`. Their addresses are `https://desktop.demo.jailoc.local` and `https://foo.demo.jailoc.local`.
 
@@ -61,18 +61,18 @@ No browser is installed. Ask the agent to install one with Playwright, for examp
 
 ## Start the gateway
 
+`jailoc up` automatically starts or updates the background web gateway when a workspace has `web` routes, and `jailoc down` drops the workspace's routes (stopping the gateway when no web workspaces remain). You can also run `jailoc web` directly:
+
 ```bash
-jailoc gateway demo \
-  --tls-cert ~/.config/jailoc/ingress/demo.crt \
-  --tls-key ~/.config/jailoc/ingress/demo.key
+jailoc web demo
 ```
 
-The command runs in the foreground until you stop it. For each route it prints the URL and a login code.
-
+- Runs in the background by default (`--foreground` / `-f` keeps it in the foreground). When the background gateway is already running, `jailoc web` keeps existing browser sessions and prints the active routes; newly started workspaces get a fresh login code.
+- `jailoc web status` shows the running gateway and its routes; `jailoc web stop` stops it.
+- When `--tls-cert` and `--tls-key` are omitted, jailoc generates and reuses a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local`.
 - The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused. With `--listener-broker` the gateway serves port 443 through a root broker instead; see [Use the listener broker](#use-the-listener-broker-experimental).
 - Without workspace arguments the gateway serves every running configured workspace that has routes. A named workspace must be running and have routes.
-- Routes close when a workspace VM stops or is replaced. Restart the gateway to serve the new VM.
-
+- Routes close when a workspace VM stops or is replaced.
 1. Open `<origin>/.jailoc/login`, for example `https://foo.demo.jailoc.local/.jailoc/login`.
 2. Enter the code. The page posts it to the same origin.
 

@@ -112,8 +112,8 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request, host string) {
 // landing is where a signed-in browser of host starts: the route's start path,
 // else the root.
 func (g *Gateway) landing(host string) string {
-	if p := g.routes[host].StartPath; p != "" {
-		return p
+	if r, ok := g.route(host); ok && r.StartPath != "" {
+		return r.StartPath
 	}
 	return "/"
 }
