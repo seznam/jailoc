@@ -202,8 +202,8 @@ func TestProxyHeadersAndCookies(t *testing.T) {
 	r.Host = hostA + ":443"
 	r.AddCookie(cookie)
 	r.AddCookie(&http.Cookie{Name: appCookiePrefix(hostA) + "app", Value: "ok", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-	r.AddCookie(&http.Cookie{Name: appCookiePrefix(hostB) + "app", Value: "other-route", Secure: true})
-	r.AddCookie(&http.Cookie{Name: "parent_domain_js", Value: "attacker"})
+	r.AddCookie(&http.Cookie{Name: appCookiePrefix(hostB) + "app", Value: "other-route", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	r.AddCookie(&http.Cookie{Name: "parent_domain_js", Value: "attacker", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Evil"} {
 		r.Header.Set(h, "attacker")
 	}
