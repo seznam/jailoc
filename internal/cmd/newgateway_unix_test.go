@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -128,14 +129,19 @@ func replaceWebSocket(t *testing.T, path string) {
 	}
 }
 
-func relayGuest(ports ...uint16) guest.Config {
-	return guest.Config{WebRelay: &guest.WebRelay{Ports: ports}}
+func relayGuest(desktop bool, ports ...uint16) guest.Config {
+	g := guest.Config{WebRelay: &guest.WebRelay{Ports: ports}}
+	if desktop {
+		g.Desktop = &guest.Desktop{}
+	}
+	return g
 }
 
 func gatewayTestConfig() *config.Config {
+	yes := true
 	return &config.Config{Workspaces: map[string]config.Workspace{
 		"app":     {Web: map[string]int{"app": 3000, "api": 8080}},
-		"desk":    {Web: map[string]int{"web": 6080}},
+		"desk":    {EnableDesktop: &yes},
 		"plain":   {},
 		"stopped": {Web: map[string]int{"app": 3000}},
 	}}
@@ -143,8 +149,8 @@ func gatewayTestConfig() *config.Config {
 
 func TestSelectGatewayTargets(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	fakeVM(t, "app", relayGuest(3000, 8080))
-	fakeVM(t, "desk", relayGuest(6080))
+	fakeVM(t, "app", relayGuest(false, 3000, 8080))
+	fakeVM(t, "desk", relayGuest(true, 6080))
 	fakeVM(t, "plain", guest.Config{})
 	cfg := gatewayTestConfig()
 
@@ -206,14 +212,17 @@ func TestSelectGatewayTargets(t *testing.T) {
 
 func TestSelectGatewayTargetsRejectsRunningMismatch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	yes := true
 	for _, tt := range []struct {
 		name    string
 		ws      config.Workspace
 		running guest.Config
 		want    string
 	}{
-		{"web route added since start", config.Workspace{Web: map[string]int{"app": 3000, "api": 8080}}, relayGuest(3000), "configured web"},
-		{"web port changed since start", config.Workspace{Web: map[string]int{"app": 3001}}, relayGuest(3000), "configured web"},
+		{"web route added since start", config.Workspace{Web: map[string]int{"app": 3000, "api": 8080}}, relayGuest(false, 3000), "configured web"},
+		{"web port changed since start", config.Workspace{Web: map[string]int{"app": 3001}}, relayGuest(false, 3000), "configured web"},
+		{"desktop enabled since start", config.Workspace{EnableDesktop: &yes, Web: map[string]int{"app": 3000}}, relayGuest(false, 3000), "configured enable_desktop and web"},
+		{"desktop disabled since start", config.Workspace{Web: map[string]int{"app": 3000}}, relayGuest(true, 3000, 6080), "configured enable_desktop and web"},
 		{"running VM without a guest relay", config.Workspace{Web: map[string]int{"app": 3000}}, guest.Config{}, "configured web"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -229,7 +238,7 @@ func TestSelectGatewayTargetsRejectsRunningMismatch(t *testing.T) {
 		})
 	}
 	t.Run("renamed route on the same port is safe", func(t *testing.T) {
-		fakeVM(t, "ws", relayGuest(3000))
+		fakeVM(t, "ws", relayGuest(false, 3000))
 		cfg := &config.Config{Workspaces: map[string]config.Workspace{"ws": {Web: map[string]int{"renamed": 3000}}}}
 		if _, err := selectGatewayTargets(cfg, []string{"ws"}, io.Discard); err != nil {
 			t.Fatal(err)
@@ -316,6 +325,21 @@ func TestGatewayRoutes(t *testing.T) {
 	}
 	if want := []string{"api.ws.jailoc.local", "app.ws.jailoc.local"}; !slices.Equal(hosts, want) {
 		t.Errorf("hosts = %v, want %v", hosts, want)
+	}
+}
+
+func TestGatewayRouteStartPaths(t *testing.T) {
+	t.Parallel()
+	var errw bytes.Buffer
+	ws := &workspace.Resolved{Name: "ws", Web: []workspace.WebRoute{{Name: "desktop", Port: 6080}, {Name: "foo", Port: 3000}}}
+	inst := newGatewayInstance(t.Context(), gatewayTarget{ws: ws, stateDir: "/state"}, &errw)
+	got := map[string]string{}
+	for _, r := range inst.routes() {
+		got[r.Host] = r.StartPath
+	}
+	want := map[string]string{"desktop.ws.jailoc.local": "/vnc.html?autoconnect=1", "foo.ws.jailoc.local": ""}
+	if !maps.Equal(got, want) {
+		t.Errorf("start paths = %v, want %v", got, want)
 	}
 }
 
@@ -672,7 +696,7 @@ var (
 // handler, and waits until it prints its address and login code.
 func startGatewayRun(t *testing.T, handler http.Handler) (*gatewayRun, string) {
 	t.Helper()
-	return startGatewayRunFor(t, handler, "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(3000))
+	return startGatewayRunFor(t, handler, "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(false, 3000))
 }
 
 // startGatewayRunFor is startGatewayRun for the config text cfgTOML, serving
@@ -800,6 +824,42 @@ func (r *gatewayRun) login(t *testing.T) *http.Cookie {
 		t.Fatalf("login: status %d, cookies %v", res.StatusCode, res.Cookies())
 	}
 	return res.Cookies()[0]
+}
+
+func TestGatewayDesktopLandsOnNoVNC(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	run, _ := startGatewayRunFor(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.RequestURI())
+		mu.Unlock()
+		_, _ = io.WriteString(w, "novnc")
+	}), "[workspaces.e2e]\nenable_desktop = true\n", "desktop.e2e.jailoc.local", relayGuest(true, 6080))
+	if out := run.out.String(); !strings.Contains(out, "https://desktop.e2e.jailoc.local/\n") {
+		t.Errorf("output must show the canonical root URL:\n%s", out)
+	}
+	res := run.do(t, "GET", "/", nil, nil)
+	if got := res.Header.Get("Location"); res.StatusCode != http.StatusSeeOther || got != "/.jailoc/login" {
+		t.Fatalf("without a session: status %d, Location %q", res.StatusCode, got)
+	}
+	res = run.do(t, "POST", "/.jailoc/login", url.Values{"code": {run.code}}, nil)
+	if got := res.Header.Get("Location"); res.StatusCode != http.StatusSeeOther || got != "/vnc.html?autoconnect=1" {
+		t.Fatalf("login: status %d, Location %q", res.StatusCode, got)
+	}
+	cookie := res.Cookies()[0]
+	res = run.do(t, "GET", "/", nil, cookie)
+	if got := res.Header.Get("Location"); res.StatusCode != http.StatusSeeOther || got != "/vnc.html?autoconnect=1" {
+		t.Fatalf("root: status %d, Location %q", res.StatusCode, got)
+	}
+	res = run.do(t, "GET", "/vnc.html?autoconnect=1", nil, cookie)
+	if body, _ := io.ReadAll(res.Body); res.StatusCode != http.StatusOK || string(body) != "novnc" {
+		t.Fatalf("landing page: status %d, body %q", res.StatusCode, body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(seen, []string{"/vnc.html?autoconnect=1"}) {
+		t.Errorf("upstream saw %v, want only the landing page", seen)
+	}
 }
 
 func TestGatewayServesAndFailsClosedWhenVMReplaced(t *testing.T) {
@@ -1038,7 +1098,7 @@ func TestGatewayListenerBrokerServesThroughBroker(t *testing.T) {
 	useGatewayBrokerHost(t, target)
 	run, _ := startGatewayRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "through the broker")
-	}), "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(3000), func(certFile, keyFile string) []string {
+	}), "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(false, 3000), func(certFile, keyFile string) []string {
 		return []string{"--listener-broker", "--tls-cert", certFile, "--tls-key", keyFile}
 	})
 	if run.addr != target.addr.String() {

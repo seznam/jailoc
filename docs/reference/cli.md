@@ -168,7 +168,7 @@ jailoc reload [workspace] [flags]
 - `paths` and `mounts`, including `agents.<name>.mounts`
 - the agent's `profile`
 - `cpu`, `memory`
-- `enable_docker`, the set of guest ports the `web` routes use (renaming a route, or adding one on a port already in the set, needs only a restart of [`jailoc gateway`](#jailoc-gateway)), `protect_git`
+- `enable_docker`, `enable_desktop`, the set of guest ports the `web` routes use (renaming a route, or adding one on a port already in the set, needs only a restart of [`jailoc gateway`](#jailoc-gateway)), `protect_git`
 - `tmp_storage`, `tmp_size`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest
@@ -184,7 +184,7 @@ jailoc reload [workspace] [flags]
 - Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets.
 - Files opened before a reload keep their old snapshot content.
 - Concurrent reloads of one workspace, including those `jailoc up` starts, wait for each other and run one at a time.
-- A running VM keeps the guest ports of its `web` routes reserved until a restart, even when the configuration dropped `web`. A reload whose `host_ports` or `ports` use one of them fails and asks for [`jailoc restart`](#jailoc-restart).
+- A running VM keeps its desktop ports (6080, 5901) and the guest ports of its `web` routes reserved until a restart, even when the configuration dropped `enable_desktop` or `web`. A reload whose `host_ports` or `ports` use one of them fails and asks for [`jailoc restart`](#jailoc-restart).
 
 ---
 
@@ -203,7 +203,7 @@ jailoc status [workspace] [flags]
 - Where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
 - The number of agent sessions.
 - Whether the VM runs the current configuration:
-    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, the set of `web` guest ports, `protect_git`, or a jailoc upgrade that changed the guest protocol).
+    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, `enable_desktop`, the set of `web` guest ports, `protect_git`, or a jailoc upgrade that changed the guest protocol).
     - `jailoc reload` is needed when the configuration file changed after the VM started or was last reloaded.
 **Shown for a stopped VM**: when it stopped and the last error.
 
@@ -405,18 +405,19 @@ jailoc sessions stop ID [flags]
 
 ### `jailoc gateway`
 
-Serve the web routes of running workspaces to a browser on the host over HTTPS.
+Serve the web routes and the desktop of running workspaces to a browser on the host over HTTPS.
 
 ```text
 jailoc gateway [workspace...] --tls-cert <path> --tls-key <path> [--listen 127.0.0.1:8443 | --listener-broker]
 ```
 
 - Runs in the foreground until interrupted.
-- With no `workspace` argument it serves every running configured workspace that has `web` routes and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
-- A running VM whose web guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
+- With no `workspace` argument it serves every running configured workspace that has routes (the `web` entries and, with `enable_desktop`, the `desktop` route) and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
+- A running VM whose desktop or web guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
 - Prints the URL (`https://<name>.<workspace>.jailoc.local/`) and a login code for each route.
+- The built-in `desktop` route redirects its root and its login to `/vnc.html?autoconnect=1`, the noVNC client page; other routes serve `/` unchanged.
 - Serves the VM boots it started with. Routes close when a workspace VM stops or is replaced, and the gateway exits when every served VM is gone. Restart the gateway to serve a new VM.
-- Reads the configuration at start. Adding or renaming a route that uses a guest port already in the set of the running VM needs only a gateway restart; changing the set of guest ports needs `jailoc restart` and a gateway restart.
+- Reads the configuration at start. Adding or renaming a route that uses a guest port already in the set of the running VM needs only a gateway restart; changing `enable_desktop` or the set of guest ports needs `jailoc restart` and a gateway restart.
 
 | Flag | Default | Description |
 |------|---------|-------------|

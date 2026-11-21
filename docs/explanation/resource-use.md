@@ -108,7 +108,7 @@ A restart costs a VM boot and, after an image change, an export. Much of the con
 | Command | Applies |
 |---------|---------|
 | `jailoc reload` | Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl` and secrets, to the running VM |
-| `jailoc restart` | Changes to `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `paths`, `mounts`, `enable_docker`, the guest ports of `web` routes, `protect_git` and the image |
+| `jailoc restart` | Changes to `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `paths`, `mounts`, `enable_docker`, `enable_desktop`, the guest ports of `web` routes, `protect_git` and the image |
 
 ## Host processes
 

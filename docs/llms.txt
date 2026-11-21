@@ -13,8 +13,8 @@ Key facts:
 ## Reference
 
 - [CLI Reference](https://seznam.github.io/jailoc/reference/cli/): Root command (`--new`, `--attach`, `-c`, `-s`, `-w`) and all subcommands (`up`, `down --purge`, `restart`, `reload`, `sessions`, `gateway`, `logs`, `traffic`, `strace`, `exec`, `shell`, `status`, `list`, `add`, `config`, `setup` / `wizard`, `migrate`) with flags
-- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field in `[base]`, `[vm]`, `[defaults]` and `[workspaces.<name>]` (including `web`), with types, defaults, validation rules and merge semantics; network rules including per-request `http` methods and paths; built-in coding agents with their session flags, persistent directories and environment
-- [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): How the workspace image is chosen, built and exported into the VM
+- [Configuration Reference](https://seznam.github.io/jailoc/reference/configuration/): Every `config.toml` field in `[base]`, `[vm]`, `[defaults]` and `[workspaces.<name>]` (including `enable_desktop` and `web`), with types, defaults, validation rules and merge semantics; network rules including per-request `http` methods and paths; built-in coding agents with their session flags, persistent directories and environment
+- [Image Resolution](https://seznam.github.io/jailoc/reference/image-resolution/): How the workspace image is chosen, built (Docker, desktop and agent layers) and exported into the VM
 - [Default Image Contents](https://seznam.github.io/jailoc/reference/default-image/): Tools and runtimes shipped in the embedded base image
 - [Overlay Compatibility](https://seznam.github.io/jailoc/reference/overlay-compatibility/): Rules for workspace Dockerfile overlays
 
@@ -25,7 +25,7 @@ Key facts:
 - [Custom Images](https://seznam.github.io/jailoc/how-to/custom-images/): URL Dockerfile presets, local Dockerfiles, build context, isolated builds
 - [Network Access](https://seznam.github.io/jailoc/how-to/network-access/): allowed_hosts, allowed_networks, filtered DNS, restricting HTTP methods and paths, certificate errors on inspected hosts, verifying the policy
 - [Secrets](https://seznam.github.io/jailoc/how-to/secrets/): Pass secrets from host environment variables (from_env), files (from_file) or commands such as password managers (from_command) into the VM as session environment variables or /run/secrets files; rotate with reload
-- [Web Routes](https://seznam.github.io/jailoc/how-to/desktop-and-web/): Serve guest web ports (`web`) to a host browser over HTTPS with `jailoc gateway`: login codes, a dedicated ingress CA, DNS, trust and port 443 redirect setup on macOS and Linux, cleanup
+- [Desktop and Web](https://seznam.github.io/jailoc/how-to/desktop-and-web/): Run a native desktop (`enable_desktop`) and serve guest web ports (`web`) to a host browser over HTTPS with `jailoc gateway`: login codes, a dedicated ingress CA, DNS, trust and port 443 redirect setup on macOS and Linux, running a Playwright browser on the desktop, cleanup
 - [SSH & Git Passthrough](https://seznam.github.io/jailoc/how-to/ssh-git-passthrough/): Forward the SSH agent and known_hosts, copy Git config into the VM
 - [Sessions](https://seznam.github.io/jailoc/how-to/sessions/): Attach to, start, continue and list agent sessions; read logs
 - [Coding Agents](https://seznam.github.io/jailoc/how-to/coding-agents/): Choose OpenCode, Claude Code, GitHub Copilot CLI, OmO or Antigravity CLI per workspace, run several agents on one project, log in, pass arguments, use another version, define custom agents, install the agent yourself
