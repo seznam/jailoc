@@ -3,8 +3,8 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -51,6 +52,7 @@ type gatewayOptions struct {
 	certFile       string
 	keyFile        string
 	listenerBroker bool
+	foreground     bool
 }
 
 // gatewayBrokerTarget is the listener broker `jailoc gateway
@@ -80,24 +82,26 @@ func init() {
 	rootCmd.AddCommand(newGatewayCmd())
 }
 
-// newGatewayCmd builds `jailoc proxy`, the foreground HTTPS proxy to the
-// proxy routes of running workspace VMs.
+// newGatewayCmd builds `jailoc proxy`, the internal HTTPS proxy to the proxy
+// routes of running workspace VMs.
 func newGatewayCmd() *cobra.Command {
 	var opts gatewayOptions
 	cmd := &cobra.Command{
 		Use:    "proxy [workspace...]",
 		Hidden: true,
 		Short:  "Serve the proxy routes of running workspaces over HTTPS",
-		Long: "Serve the proxy routes of running workspaces over HTTPS on a loopback address, in the foreground.\n\n" +
-			"Each route is https://<route>.<workspace>.jailoc.local; routes with auth = true are protected by a one-time login code, printed once at start.\n" +
+		Long: "Serve the proxy routes of running workspaces over HTTPS on a loopback address.\n\n" +
+			"By default the proxy runs in the background (`--foreground` keeps it in the foreground).\n" +
+			"When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes.\n\n" +
+			"Each route is https://<route>.<workspace>.jailoc.local; routes with auth = true are protected by a one-time login code, printed once when the route is added.\n" +
+			"When --tls-cert and --tls-key are omitted, jailoc generates and reuses a local CA and leaf certificate in ~/.config/jailoc/ingress.\n" +
 			"The gateway starts no VM, opens no browser and changes no host setting: make the names resolve to the listen address\n" +
-			"(for example with /etc/hosts entries) and give it a certificate that covers them with --tls-cert and --tls-key.\n" +
+			"(for example with /etc/hosts entries) and trust ~/.config/jailoc/ingress/ca.crt in your browser.\n" +
 			"The gateway does not listen on privileged ports itself: browsers use port 443 for these URLs, so a --listen port\n" +
 			"other than 443 needs a forward from 443 to it that you set up.\n\n" +
 			"Without workspace arguments the gateway serves every running workspace that has routes. Naming a workspace that is\n" +
 			"not running, has no routes, or whose running VM does not match its configuration is an error.\n" +
-			"A gateway serves the VM boots it started with: when a VM stops or is replaced, its routes fail and the gateway\n" +
-			"must be restarted.\n\n" +
+			"A gateway serves the VM boots it started with: when a VM stops or is replaced, its routes close.\n\n" +
 			"With --listener-broker the gateway does not open a listener: it attaches to jailoc-listener-broker, a separate\n" +
 			"root-owned program that holds 127.0.0.1:443 and [::1]:443 for your user and passes each connection to the gateway, so\n" +
 			"the URLs need no forward and no port. Run it as root with --uid <your uid>; only one gateway can attach at a time.\n" +
@@ -108,17 +112,23 @@ func newGatewayCmd() *cobra.Command {
 			return runGateway(cmd, args, opts)
 		},
 	}
+	cmd.Flags().BoolVarP(&opts.foreground, "foreground", "f", false, "run the gateway in the foreground instead of the background")
 	cmd.Flags().StringVar(&opts.listen, "listen", gatewayDefaultListen, "loopback address to listen on, host:port (port 0 picks a free port)")
 	cmd.Flags().BoolVar(&opts.listenerBroker, "listener-broker", false, "serve through jailoc-listener-broker on 127.0.0.1:443 instead of opening a listener")
-	cmd.Flags().StringVar(&opts.certFile, "tls-cert", "", "PEM certificate chain that covers every route host")
-	cmd.Flags().StringVar(&opts.keyFile, "tls-key", "", "PEM private key of the certificate")
-	_ = cmd.MarkFlagRequired("tls-cert")
-	_ = cmd.MarkFlagRequired("tls-key")
-	cmd.AddCommand(newGatewayHostProofCmd())
+	cmd.Flags().StringVar(&opts.certFile, "tls-cert", "", "PEM certificate chain that covers every route host (default: automatic cert in ~/.config/jailoc/ingress)")
+	cmd.Flags().StringVar(&opts.keyFile, "tls-key", "", "PEM private key of the certificate (default: automatic key in ~/.config/jailoc/ingress)")
+	cmd.AddCommand(newWebStatusCmd(), newWebStopCmd(), newGatewayHostProofCmd())
 	return cmd
 }
 
 func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
+	names := args
+	if len(names) == 0 && workspaceExplicit {
+		names = []string{workspaceFlag}
+	}
+	if !opts.foreground {
+		return runBackgroundGateway(cmd, names, opts)
+	}
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -134,62 +144,107 @@ func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
 			return err
 		}
 	}
-	cert, err := tls.LoadX509KeyPair(opts.certFile, opts.keyFile)
-	if err != nil {
-		return fmt.Errorf("load TLS certificate: %w", err)
+	if (opts.certFile == "") != (opts.keyFile == "") {
+		return errors.New("both --tls-cert and --tls-key must be set, or omit both to use the automatic certificate in ~/.config/jailoc/ingress")
+	}
+	if opts.certFile != "" {
+		if _, err := os.Stat(opts.certFile); err != nil {
+			return fmt.Errorf("load TLS certificate: %w", err)
+		}
+		if _, err := os.Stat(opts.keyFile); err != nil {
+			return fmt.Errorf("load TLS certificate: %w", err)
+		}
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	names := args
-	if len(names) == 0 && workspaceExplicit {
-		names = []string{workspaceFlag}
-	}
-	targets, err := selectGatewayTargets(cfg, names, cmd.ErrOrStderr())
+	var notes bytes.Buffer
+	targets, err := selectGatewayTargets(cfg, names, &notes)
 	if err != nil {
 		return err
 	}
+	cert, caPath, err := resolveGatewayCert(opts, cfg, targets)
+	if err != nil {
+		return err
+	}
+	if notes.Len() > 0 {
+		_, _ = io.WriteString(cmd.ErrOrStderr(), notes.String())
+	}
+
+	unlockProxy, err := acquireWebProxyLock()
+	if err != nil {
+		return err
+	}
+	defer unlockProxy()
 
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
+	var watchers sync.WaitGroup
+	mgr := &gatewayManager{
+		runCtx:    runCtx,
+		cancelRun: cancelRun,
+		opts:      opts,
+		caCert:    caPath,
+		startedAt: time.Now(),
+		instances: make(map[string]*gatewayInstance, len(targets)),
+		wsRoutes:  make(map[string][]workspace.ProxyRoute, len(targets)),
+		watchers:  &watchers,
+		errw:      cmd.ErrOrStderr(),
+	}
 	var routes []webgateway.Route
-	var instances []*gatewayInstance
 	for _, t := range targets {
-		inst := newGatewayInstance(runCtx, t, cmd.ErrOrStderr())
-		instances = append(instances, inst)
+		inst := mgr.addInstanceLocked(t)
 		routes = append(routes, inst.routes()...)
 	}
 	gw, codes, err := webgateway.New(webgateway.Config{Cert: cert, Routes: routes})
 	if err != nil {
 		return fmt.Errorf("start gateway: %w", err)
 	}
+	mgr.gw = gw
 	ln, err := listenGateway(runCtx, opts, listen)
 	if err != nil {
 		return fmt.Errorf("open gateway listener: %w", err)
 	}
 	defer func() { _ = ln.Close() }()
+	mgr.listen = ln.Addr().String()
 
-	printGatewayRoutes(cmd.OutOrStdout(), ln.Addr(), targets, codes)
-
-	var watchers sync.WaitGroup
-	for _, inst := range instances {
-		watchers.Add(1)
-		go func() {
-			defer watchers.Done()
-			inst.watch(gatewayPollInterval)
-		}()
+	ctrlLn, sockPath, cleanupCtrl, err := openWebControlListener()
+	if err != nil {
+		return err
 	}
-	go func() {
-		watchers.Wait()
-		cancelRun(errGatewayNoVMs)
+	defer func() {
+		_ = os.Remove(webStateFile())
+		cleanupCtrl()
 	}()
+	mgr.sockPath = sockPath
+	_ = writeWebSavedOptions(opts)
+	_ = writeWebGatewayState(mgr.stateLocked())
+	go mgr.serveControl(ctrlLn)
+
+	bannerOut := cmd.OutOrStdout()
+	startupPipe := startupBannerWriter()
+	if startupPipe != nil {
+		var buf bytes.Buffer
+		if notes.Len() > 0 {
+			_, _ = buf.Write(notes.Bytes())
+		}
+		printGatewayRoutesWithCA(&buf, ln.Addr(), caPath, targets, codes)
+		_, _ = startupPipe.Write(buf.Bytes())
+		_ = startupPipe.Close()
+	} else {
+		printGatewayRoutesWithCA(bannerOut, ln.Addr(), caPath, targets, codes)
+	}
+
 	err = gw.Serve(runCtx, ln)
 	cancelRun(nil)
+	cleanupCtrl()
 	watchers.Wait()
 	switch {
 	case errors.Is(context.Cause(runCtx), errGatewayNoVMs):
 		return errGatewayNoVMs
+	case errors.Is(context.Cause(runCtx), context.Canceled) && ctx.Err() == nil:
+		return nil
 	case ctx.Err() != nil && (err == nil || errors.Is(err, context.Canceled)):
 		return nil
 	case err != nil:
@@ -354,7 +409,15 @@ func webChanges(ws *workspace.Resolved, g *guest.Config) []string {
 // accepts requests for https://<host> only, which browsers send to port 443,
 // so a listen address on another port needs a forward from 443.
 func printGatewayRoutes(w io.Writer, addr net.Addr, targets []gatewayTarget, codes map[string]string) {
+	printGatewayRoutesWithCA(w, addr, "", targets, codes)
+}
+
+func printGatewayRoutesWithCA(w io.Writer, addr net.Addr, caPath string, targets []gatewayTarget, codes map[string]string) {
 	_, _ = fmt.Fprintf(w, "Proxy listening on %s (loopback only)\n", addr)
+	if caPath != "" {
+		home, _ := os.UserHomeDir()
+		_, _ = fmt.Fprintf(w, "CA certificate: %s\n", shortenHome(caPath, home))
+	}
 	if addrPort(addr) != 443 {
 		_, _ = fmt.Fprintf(w, "Browsers use port 443 for these URLs: forward 127.0.0.1:443 to %s, and resolve the host names to 127.0.0.1\n", addr)
 	}
@@ -429,8 +492,11 @@ func (a vmIdentity) same(b vmIdentity) bool {
 
 // gatewayInstance is one workspace VM boot served by the gateway. Its
 // context ends for good when the VM stops or is replaced.
+var nextGatewayInstanceGen atomic.Uint64
+
 type gatewayInstance struct {
 	target gatewayTarget
+	gen    string
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 	gone   sync.Once
@@ -443,16 +509,21 @@ type gatewayInstance struct {
 
 func newGatewayInstance(parent context.Context, t gatewayTarget, errw io.Writer) *gatewayInstance {
 	ctx, cancel := context.WithCancelCause(parent)
-	return &gatewayInstance{target: t, ctx: ctx, cancel: cancel, errw: errw, read: readVMIdentity, dial: vm.DialWeb}
+	gen := fmt.Sprintf("%d:%d:%d", nextGatewayInstanceGen.Add(1), t.id.pid, t.id.brokerPID)
+	return &gatewayInstance{target: t, gen: gen, ctx: ctx, cancel: cancel, errw: errw, read: readVMIdentity, dial: vm.DialWeb}
 }
 
-// routes returns the gateway routes of the instance, one per web route. Routes
+// routes returns the gateway routes of the instance, one per proxy route. Routes
 // share the instance context, so ending the instance fails them all.
 func (i *gatewayInstance) routes() []webgateway.Route {
-	out := make([]webgateway.Route, 0, len(i.target.ws.Proxy))
-	for _, r := range i.target.ws.Proxy {
+	return i.routesFor(i.target.ws.Proxy)
+}
+
+func (i *gatewayInstance) routesFor(proxyRoutes []workspace.ProxyRoute) []webgateway.Route {
+	out := make([]webgateway.Route, 0, len(proxyRoutes))
+	for _, r := range proxyRoutes {
 		route := &gatewayRoute{inst: i, port: uint16(r.Port), ctx: i.ctx} //nolint:gosec // G115: validated to 1-65535
-		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext, Auth: r.Auth})
+		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext, Auth: r.Auth, Generation: i.gen})
 	}
 	return out
 }

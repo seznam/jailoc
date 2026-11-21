@@ -301,3 +301,49 @@ func TestServeRequiresLoopback(t *testing.T) {
 type wildcardListener struct{ net.Listener }
 
 func (wildcardListener) Addr() net.Addr { return &net.TCPAddr{IP: net.IPv4zero} }
+
+func TestGatewayUpdatePreservesSessionsAndRevokesRemovedRoutes(t *testing.T) {
+	t.Parallel()
+	x := startGateway(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}), nil)
+	cookieA := loginCookie(t, x, hostA)
+	cookieB := loginCookie(t, x, hostB)
+
+	dial := x.g.routes[hostA].Dial
+	codes, err := x.g.Update(Config{
+		Cert:   x.g.cert,
+		Routes: []Route{{Host: hostA, Dial: dial, Auth: true}},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if _, ok := codes[hostA]; ok {
+		t.Fatalf("existing route %s received a new login code", hostA)
+	}
+
+	// Existing session on hostA stays valid without re-login.
+	r := newRequest(t, "GET", hostA, "/")
+	r.AddCookie(cookieA)
+	request(t, x.client(t, hostA), r, 200)
+
+	// Removed route hostB is rejected at TLS SNI / routing and its session is gone.
+	if _, err := x.client(t, hostB).Do(newRequest(t, "GET", hostB, "/")); err == nil {
+		t.Fatal("removed route still served")
+	}
+
+	// Re-adding hostB mints a new code and requires a fresh login; old cookieB is no longer valid.
+	codes, err = x.g.Update(Config{
+		Cert:   x.g.cert,
+		Routes: []Route{{Host: hostA, Dial: dial, Auth: true}, {Host: hostB, Dial: dial, Auth: true}},
+	})
+	if err != nil {
+		t.Fatalf("Update re-add: %v", err)
+	}
+	if codes[hostB] == "" {
+		t.Fatalf("re-added route %s missing login code", hostB)
+	}
+	r = newRequest(t, "GET", hostB, "/")
+	r.AddCookie(cookieB)
+	request(t, x.client(t, hostB), r, 303)
+}
