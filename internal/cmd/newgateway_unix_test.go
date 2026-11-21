@@ -140,10 +140,10 @@ func relayGuest(desktop bool, ports ...uint16) guest.Config {
 func gatewayTestConfig() *config.Config {
 	yes := true
 	return &config.Config{Workspaces: map[string]config.Workspace{
-		"app":     {Web: map[string]int{"app": 3000, "api": 8080}},
+		"app":     {Proxy: config.ProxyMap(map[string]int{"app": 3000, "api": 8080})},
 		"desk":    {EnableDesktop: &yes},
 		"plain":   {},
-		"stopped": {Web: map[string]int{"app": 3000}},
+		"stopped": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
 	}}
 }
 
@@ -190,7 +190,7 @@ func TestSelectGatewayTargets(t *testing.T) {
 		want string
 	}{
 		{"explicit stopped fails", []string{"stopped"}, "is not running; start it with `jailoc up stopped`"},
-		{"explicit without routes fails", []string{"plain"}, "has no web routes"},
+		{"explicit without routes fails", []string{"plain"}, "has no proxy routes"},
 		{"explicit unknown fails", []string{"nope"}, `resolve workspace "nope"`},
 		{"explicit stopped fails even next to a running one", []string{"app", "stopped"}, "is not running"},
 	} {
@@ -204,7 +204,7 @@ func TestSelectGatewayTargets(t *testing.T) {
 	t.Run("nothing to serve", func(t *testing.T) {
 		only := &config.Config{Workspaces: map[string]config.Workspace{"stopped": cfg.Workspaces["stopped"], "plain": {}}}
 		_, err := selectGatewayTargets(only, nil, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "no running workspace with web routes") {
+		if err == nil || !strings.Contains(err.Error(), "no running workspace with proxy routes") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -219,11 +219,11 @@ func TestSelectGatewayTargetsRejectsRunningMismatch(t *testing.T) {
 		running guest.Config
 		want    string
 	}{
-		{"web route added since start", config.Workspace{Web: map[string]int{"app": 3000, "api": 8080}}, relayGuest(false, 3000), "configured web"},
-		{"web port changed since start", config.Workspace{Web: map[string]int{"app": 3001}}, relayGuest(false, 3000), "configured web"},
-		{"desktop enabled since start", config.Workspace{EnableDesktop: &yes, Web: map[string]int{"app": 3000}}, relayGuest(false, 3000), "configured enable_desktop and web"},
-		{"desktop disabled since start", config.Workspace{Web: map[string]int{"app": 3000}}, relayGuest(true, 3000, 6080), "configured enable_desktop and web"},
-		{"running VM without a guest relay", config.Workspace{Web: map[string]int{"app": 3000}}, guest.Config{}, "configured web"},
+		{"proxy route added since start", config.Workspace{Proxy: config.ProxyMap(map[string]int{"app": 3000, "api": 8080})}, relayGuest(false, 3000), "configured proxy"},
+		{"proxy port changed since start", config.Workspace{Proxy: config.ProxyMap(map[string]int{"app": 3001})}, relayGuest(false, 3000), "configured proxy"},
+		{"desktop enabled since start", config.Workspace{EnableDesktop: &yes, Proxy: config.ProxyMap(map[string]int{"app": 3000})}, relayGuest(false, 3000), "configured enable_desktop and proxy"},
+		{"desktop disabled since start", config.Workspace{Proxy: config.ProxyMap(map[string]int{"app": 3000})}, relayGuest(true, 3000, 6080), "configured enable_desktop and proxy"},
+		{"running VM without a guest relay", config.Workspace{Proxy: config.ProxyMap(map[string]int{"app": 3000})}, guest.Config{}, "configured proxy"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			name := "ws"
@@ -239,7 +239,7 @@ func TestSelectGatewayTargetsRejectsRunningMismatch(t *testing.T) {
 	}
 	t.Run("renamed route on the same port is safe", func(t *testing.T) {
 		fakeVM(t, "ws", relayGuest(false, 3000))
-		cfg := &config.Config{Workspaces: map[string]config.Workspace{"ws": {Web: map[string]int{"renamed": 3000}}}}
+		cfg := &config.Config{Workspaces: map[string]config.Workspace{"ws": {Proxy: config.ProxyMap(map[string]int{"renamed": 3000})}}}
 		if _, err := selectGatewayTargets(cfg, []string{"ws"}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
@@ -308,7 +308,7 @@ func TestReadVMIdentity(t *testing.T) {
 func testInstance(t *testing.T, id *vmIdentity, dial func(context.Context, string, uint16) (net.Conn, error)) (*gatewayInstance, *bytes.Buffer) {
 	t.Helper()
 	var errw bytes.Buffer
-	ws := &workspace.Resolved{Name: "ws", Web: []workspace.WebRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}}}
+	ws := &workspace.Resolved{Name: "ws", Proxy: []workspace.ProxyRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}}}
 	inst := newGatewayInstance(t.Context(), gatewayTarget{ws: ws, stateDir: "/state", id: *id}, &errw)
 	inst.read = func(string) (vmIdentity, error) { return *id, nil }
 	inst.dial = dial
@@ -331,7 +331,7 @@ func TestGatewayRoutes(t *testing.T) {
 func TestGatewayRouteStartPaths(t *testing.T) {
 	t.Parallel()
 	var errw bytes.Buffer
-	ws := &workspace.Resolved{Name: "ws", Web: []workspace.WebRoute{{Name: "desktop", Port: 6080}, {Name: "foo", Port: 3000}}}
+	ws := &workspace.Resolved{Name: "ws", Proxy: []workspace.ProxyRoute{{Name: "desktop", Port: 6080}, {Name: "foo", Port: 3000}}}
 	inst := newGatewayInstance(t.Context(), gatewayTarget{ws: ws, stateDir: "/state"}, &errw)
 	got := map[string]string{}
 	for _, r := range inst.routes() {
@@ -501,7 +501,7 @@ func TestGatewayInstanceWatchStopsWithParent(t *testing.T) {
 func TestPrintGatewayRoutes(t *testing.T) {
 	t.Parallel()
 	targets := []gatewayTarget{
-		{ws: &workspace.Resolved{Name: "dev", Web: []workspace.WebRoute{{Name: "app", Port: 3000}, {Name: "desktop", Port: 6080}}}},
+		{ws: &workspace.Resolved{Name: "dev", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000, Auth: true}, {Name: "desktop", Port: 6080, Auth: true}}}},
 	}
 	codes := map[string]string{"app.dev.jailoc.local": "CODE-APP", "desktop.dev.jailoc.local": "CODE-DESK"}
 	var out bytes.Buffer
@@ -560,7 +560,7 @@ func TestGatewayCommandArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"web [workspace...]", "--foreground", "--listen", "--tls-cert", "--tls-key", gatewayDefaultListen} {
+	for _, want := range []string{"proxy [workspace...]", "--foreground", "--listen", "--tls-cert", "--tls-key", gatewayDefaultListen} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}
@@ -687,7 +687,7 @@ type gatewayRun struct {
 }
 
 var (
-	gatewayAddrRe = regexp.MustCompile(`Gateway listening on (127\.0\.0\.1:\d+)`)
+	gatewayAddrRe = regexp.MustCompile(`Proxy listening on (127\.0\.0\.1:\d+)`)
 	gatewayCodeRe = regexp.MustCompile(`login code (\S+) \(only valid for`)
 )
 
@@ -696,7 +696,7 @@ var (
 // handler, and waits until it prints its address and login code.
 func startGatewayRun(t *testing.T, handler http.Handler) (*gatewayRun, string) {
 	t.Helper()
-	return startGatewayRunFor(t, handler, "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(false, 3000))
+	return startGatewayRunFor(t, handler, "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(false, 3000))
 }
 
 // startGatewayRunFor is startGatewayRun for the config text cfgTOML, serving
@@ -834,7 +834,7 @@ func TestGatewayDesktopLandsOnNoVNC(t *testing.T) {
 		seen = append(seen, r.URL.RequestURI())
 		mu.Unlock()
 		_, _ = io.WriteString(w, "novnc")
-	}), "[workspaces.e2e]\nenable_desktop = true\n", "desktop.e2e.jailoc.local", relayGuest(true, 6080))
+	}), "[workspaces.e2e]\nenable_desktop = true\n[workspaces.e2e.proxy]\nauth = true\n", "desktop.e2e.jailoc.local", relayGuest(true, 6080))
 	if out := run.out.String(); !strings.Contains(out, "https://desktop.e2e.jailoc.local/\n") {
 		t.Errorf("output must show the canonical root URL:\n%s", out)
 	}
@@ -1098,7 +1098,7 @@ func TestGatewayListenerBrokerServesThroughBroker(t *testing.T) {
 	useGatewayBrokerHost(t, target)
 	run, _ := startGatewayRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "through the broker")
-	}), "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(false, 3000), func(certFile, keyFile string) []string {
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(false, 3000), func(certFile, keyFile string) []string {
 		return []string{"--foreground", "--listener-broker", "--tls-cert", certFile, "--tls-key", keyFile}
 	})
 	if run.addr != target.addr.String() {
@@ -1151,9 +1151,9 @@ func TestEnsureIngressCert(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv(config.PathEnv, filepath.Join(home, "config.toml"))
 	cfg := &config.Config{Workspaces: map[string]config.Workspace{
-		"one": {Web: map[string]int{"app": 3000}},
+		"one": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
 	}}
-	targets := []gatewayTarget{{ws: &workspace.Resolved{Name: "one", Web: []workspace.WebRoute{{Name: "app", Port: 3000}}}}}
+	targets := []gatewayTarget{{ws: &workspace.Resolved{Name: "one", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}}}
 	cert1, caPath, err := ensureIngressCert(cfg, targets)
 	if err != nil {
 		t.Fatalf("ensureIngressCert: %v", err)
@@ -1173,8 +1173,8 @@ func TestEnsureIngressCert(t *testing.T) {
 		t.Fatal("existing valid leaf was regenerated")
 	}
 	// Adding a workspace not covered by the first leaf regenerates the leaf with the same CA.
-	cfg.Workspaces["two"] = config.Workspace{Web: map[string]int{"api": 8080}}
-	targets = append(targets, gatewayTarget{ws: &workspace.Resolved{Name: "two", Web: []workspace.WebRoute{{Name: "api", Port: 8080}}}})
+	cfg.Workspaces["two"] = config.Workspace{Proxy: config.ProxyMap(map[string]int{"api": 8080})}
+	targets = append(targets, gatewayTarget{ws: &workspace.Resolved{Name: "two", Proxy: []workspace.ProxyRoute{{Name: "api", Port: 8080}}}})
 	cert3, _, err := ensureIngressCert(cfg, targets)
 	if err != nil {
 		t.Fatalf("third ensureIngressCert: %v", err)
@@ -1190,7 +1190,7 @@ func TestEnsureIngressCert(t *testing.T) {
 func TestWebGatewaySyncStatusAndStop(t *testing.T) {
 	run, _ := startGatewayRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "hello")
-	}), "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(false, 3000), func(_, _ string) []string {
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(false, 3000), func(_, _ string) []string {
 		return []string{"--foreground", "--listen", "127.0.0.1:0"}
 	})
 	// Trust the auto-generated CA in the test client.
@@ -1205,7 +1205,7 @@ func TestWebGatewaySyncStatusAndStop(t *testing.T) {
 	run.client.Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
 	cookie := run.login(t)
 
-	// Re-running `jailoc web` (without --foreground) syncs the running gateway,
+	// Re-running `jailoc proxy` (without --foreground) syncs the running proxy,
 	// preserves the existing session, and prints status without a new login code.
 	var syncOut bytes.Buffer
 	syncCmd := newGatewayCmd()
@@ -1222,37 +1222,37 @@ func TestWebGatewaySyncStatusAndStop(t *testing.T) {
 		t.Fatalf("GET / after sync = %d, want 200", res.StatusCode)
 	}
 
-	// `jailoc web status` reports the running gateway.
+	// `jailoc proxy status` reports the running proxy.
 	var statusOut bytes.Buffer
 	statusCmd := newGatewayCmd()
 	statusCmd.SetOut(&statusOut)
 	statusCmd.SetErr(&statusOut)
 	statusCmd.SetArgs([]string{"status"})
 	if err := statusCmd.ExecuteContext(t.Context()); err != nil {
-		t.Fatalf("web status: %v", err)
+		t.Fatalf("proxy status: %v", err)
 	}
 	if !strings.Contains(statusOut.String(), "https://app.e2e.jailoc.local/") {
 		t.Fatalf("status output = %q, want route URL", statusOut.String())
 	}
 
-	ws := &workspace.Resolved{Name: "e2e", Web: []workspace.WebRoute{{Name: "app", Port: 3000}}}
+	ws := &workspace.Resolved{Name: "e2e", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}
 	if label := webStatusLabel(ws); !strings.Contains(label, "running on "+run.addr) {
 		t.Fatalf("webStatusLabel(running) = %q", label)
 	}
 
-	// `jailoc web stop` stops the running gateway.
+	// `jailoc proxy stop` stops the running proxy.
 	var stopOut bytes.Buffer
 	stopCmd := newGatewayCmd()
 	stopCmd.SetOut(&stopOut)
 	stopCmd.SetErr(&stopOut)
 	stopCmd.SetArgs([]string{"stop"})
 	if err := stopCmd.ExecuteContext(t.Context()); err != nil {
-		t.Fatalf("web stop: %v", err)
+		t.Fatalf("proxy stop: %v", err)
 	}
-	if !strings.Contains(stopOut.String(), "Web gateway stopped") {
+	if !strings.Contains(stopOut.String(), "stopped") {
 		t.Fatalf("stop output = %q", stopOut.String())
 	}
-	if label := webStatusLabel(ws); !strings.Contains(label, "gateway stopped") {
+	if label := webStatusLabel(ws); !strings.Contains(label, "proxy stopped") {
 		t.Fatalf("webStatusLabel(stopped) = %q", label)
 	}
 }

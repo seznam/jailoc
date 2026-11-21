@@ -529,32 +529,32 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestWorkspaceSpecDesktopWeb(t *testing.T) {
+func TestWorkspaceSpecDesktopProxy(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name        string
 		desktop     bool
-		web         []workspace.WebRoute
+		proxy       []workspace.ProxyRoute
 		wantDesktop bool
-		wantPorts   []uint16 // nil: no web relay
+		wantPorts   []uint16 // nil: no proxy relay
 	}{
 		{name: "neither"},
 		{
-			name:      "web only",
-			web:       []workspace.WebRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}},
+			name:      "proxy only",
+			proxy:     []workspace.ProxyRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}},
 			wantPorts: []uint16{3000, 8080},
 		},
 		{
 			name:        "desktop only",
 			desktop:     true,
-			web:         []workspace.WebRoute{{Name: "desktop", Port: 6080}},
+			proxy:       []workspace.ProxyRoute{{Name: "desktop", Port: 6080}},
 			wantDesktop: true,
 			wantPorts:   []uint16{6080},
 		},
 		{
-			name:        "desktop and web with a shared port",
+			name:        "desktop and proxy with a shared port",
 			desktop:     true,
-			web:         []workspace.WebRoute{{Name: "a", Port: 3000}, {Name: "b", Port: 3000}, {Name: "desktop", Port: 6080}},
+			proxy:       []workspace.ProxyRoute{{Name: "a", Port: 3000}, {Name: "b", Port: 3000}, {Name: "desktop", Port: 6080}},
 			wantDesktop: true,
 			wantPorts:   []uint16{3000, 6080},
 		},
@@ -562,7 +562,7 @@ func TestWorkspaceSpecDesktopWeb(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", EnableDesktop: tt.desktop, Web: tt.web}
+			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", EnableDesktop: tt.desktop, Proxy: tt.proxy}
 			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
@@ -586,40 +586,40 @@ func TestWorkspaceSpecDesktopWeb(t *testing.T) {
 	}
 }
 
-func TestStatusRestartChangesDesktopWeb(t *testing.T) {
+func TestStatusRestartChangesDesktopProxy(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	base := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol}
 	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g"}
 	tests := []struct {
 		name    string
 		desktop bool
-		web     []workspace.WebRoute
+		proxy   []workspace.ProxyRoute
 		running guest.Config
 		want    []string
 	}{
 		{name: "none"},
-		{name: "desktop enabled", desktop: true, web: []workspace.WebRoute{{Name: "desktop", Port: 6080}}, want: []string{"enable_desktop", "web"}},
-		{name: "desktop disabled", running: guest.Config{Desktop: &guest.Desktop{}, WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}, want: []string{"enable_desktop", "web"}},
+		{name: "desktop enabled", desktop: true, proxy: []workspace.ProxyRoute{{Name: "desktop", Port: 6080}}, want: []string{"enable_desktop", "proxy"}},
+		{name: "desktop disabled", running: guest.Config{Desktop: &guest.Desktop{}, WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}, want: []string{"enable_desktop", "proxy"}},
 		{
-			name: "desktop unchanged", desktop: true, web: []workspace.WebRoute{{Name: "desktop", Port: 6080}},
+			name: "desktop unchanged", desktop: true, proxy: []workspace.ProxyRoute{{Name: "desktop", Port: 6080}},
 			running: guest.Config{Desktop: &guest.Desktop{}, WebRelay: &guest.WebRelay{Ports: []uint16{6080}}},
 		},
-		{name: "web added", web: []workspace.WebRoute{{Name: "app", Port: 3000}}, want: []string{"web"}},
+		{name: "proxy added", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}, want: []string{"proxy"}},
 		{
-			name: "web port changed", web: []workspace.WebRoute{{Name: "app", Port: 3001}},
-			running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"web"},
+			name: "proxy port changed", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3001}},
+			running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
 		},
 		{
-			name: "web renamed on the same port", web: []workspace.WebRoute{{Name: "other", Port: 3000}},
+			name: "proxy renamed on the same port", proxy: []workspace.ProxyRoute{{Name: "other", Port: 3000}},
 			running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}},
 		},
 		{
-			name: "web removed", running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"web"},
+			name: "proxy removed", running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
 		},
 	}
 	for _, tt := range tests {
 		w := *ws
-		w.EnableDesktop, w.Web = tt.desktop, tt.web
+		w.EnableDesktop, w.Proxy = tt.desktop, tt.proxy
 		running := base
 		g := tt.running
 		running.Guest = &g

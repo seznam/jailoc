@@ -290,12 +290,12 @@ func TestRestartOnlyChangesDesktopWeb(t *testing.T) {
 	}{
 		{"unchanged none", guest.Config{}, guest.Config{}, nil},
 		{"unchanged both", guest.Config{Desktop: desktop(), WebRelay: relay(3000, 6080)}, guest.Config{Desktop: desktop(), WebRelay: relay(3000, 6080)}, nil},
-		{"desktop on adds its web port", guest.Config{}, guest.Config{Desktop: desktop(), WebRelay: relay(6080)}, []string{"enable_desktop", "web"}},
-		{"desktop off", guest.Config{Desktop: desktop(), WebRelay: relay(6080)}, guest.Config{}, []string{"enable_desktop", "web"}},
-		{"desktop off keeps other web", guest.Config{Desktop: desktop(), WebRelay: relay(3000, 6080)}, guest.Config{WebRelay: relay(3000)}, []string{"enable_desktop", "web"}},
-		{"web added", guest.Config{}, guest.Config{WebRelay: relay(3000)}, []string{"web"}},
-		{"web port changed", guest.Config{WebRelay: relay(3000)}, guest.Config{WebRelay: relay(3001)}, []string{"web"}},
-		{"web removed", guest.Config{WebRelay: relay(3000)}, guest.Config{}, []string{"web"}},
+		{"desktop on adds its proxy port", guest.Config{}, guest.Config{Desktop: desktop(), WebRelay: relay(6080)}, []string{"enable_desktop", "proxy"}},
+		{"desktop off", guest.Config{Desktop: desktop(), WebRelay: relay(6080)}, guest.Config{}, []string{"enable_desktop", "proxy"}},
+		{"desktop off keeps other proxy", guest.Config{Desktop: desktop(), WebRelay: relay(3000, 6080)}, guest.Config{WebRelay: relay(3000)}, []string{"enable_desktop", "proxy"}},
+		{"proxy added", guest.Config{}, guest.Config{WebRelay: relay(3000)}, []string{"proxy"}},
+		{"proxy port changed", guest.Config{WebRelay: relay(3000)}, guest.Config{WebRelay: relay(3001)}, []string{"proxy"}},
+		{"proxy removed", guest.Config{WebRelay: relay(3000)}, guest.Config{}, []string{"proxy"}},
 		{"empty relay equals none", guest.Config{WebRelay: relay()}, guest.Config{}, nil},
 	} {
 		running := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &tt.running}

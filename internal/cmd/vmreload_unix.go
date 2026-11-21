@@ -315,7 +315,7 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 		out = append(out, "enable_desktop")
 	}
 	if !slices.Equal(guestWebPorts(running.Guest), guestWebPorts(want.Guest)) {
-		out = append(out, "web")
+		out = append(out, "proxy")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
 	agentChanged := cmp.Or(running.Agent, agent.Default) != want.Agent

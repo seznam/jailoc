@@ -580,7 +580,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `paths` | string[] | `[]` | Host directories shared into the VM over virtio-fs at their original absolute paths. See [`paths`](#paths). |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to an overlay Dockerfile built on top of the base image. |
 | `build_context` | string | (none) | Build context of the overlay build. |
-| `web` | table | `{}` | Web routes: route name to guest port, served at `https://<name>.<workspace>.jailoc.local`. Not merged with `[defaults]`. See [`enable_desktop` and `web`](#enable_desktop-and-web). |
+| `proxy` | table | `{}` | HTTPS proxy routes: route name to guest port (or `{ port, auth }`), served at `https://<name>.<workspace>.jailoc.local`. See [`enable_desktop` and `proxy`](#enable_desktop-and-proxy). |
 
 - `paths`: the first path is the working directory; with no paths, the working directory is `/home/agent`.
 - `dockerfile`: build failure is fatal. Maximum file size for HTTP sources: 1 MiB.
@@ -1078,29 +1078,41 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 - `enable_docker = true` together with `protect_git = true` is rejected, because Docker access is root access inside the VM. `protect_git` alone turns Docker off.
 - In the images jailoc builds, Docker is installed only when `enable_docker` is on; see [Docker layer](image-resolution.md#docker-layer-steps-2-4-and-5).
 
-### `enable_desktop` and `web`
+### `enable_desktop` and `proxy`
 
-`enable_desktop = true` runs a native desktop in the workspace VM; `web` serves guest ports to a browser on the host. Both are reached through [`jailoc gateway`](cli.md#jailoc-gateway); see the [how-to](../how-to/desktop-and-web.md).
+`enable_desktop = true` runs a native desktop in the workspace VM; `proxy` serves guest ports to a browser on the host. Both are reached through [`jailoc proxy`](cli.md#jailoc-proxy); see the [how-to](../how-to/desktop-and-web.md).
+
+```toml
+[defaults.proxy]
+auth = false
+
+[workspaces.demo.proxy]
+app = 3000
+admin = { port = 8080, auth = true }
+```
+
+- Each entry in `[workspaces.<name>.proxy]` is either `<route> = <port>` or `<route> = { port = <port>, auth = <bool> }`.
+- `auth` (default `false`) gates the route behind a one-time login code and a `__Host-jailoc` session cookie. It can be set per route, at `[workspaces.<name>.proxy]`, or in `[defaults.proxy]`.
 
 | Item | Guest side |
 |------|------------|
 | Desktop | `Xtigervnc` on display `:1` (VNC on loopback port 5901, no X11 over TCP), Openbox with D-Bus, noVNC served by websockify on loopback port 6080 |
 | `desktop` route | Reserved. Exists only with `enable_desktop = true` and always serves guest port 6080 |
-| Web relay | Guest NIC port 6081, forwarding to the loopback port of each route |
+| Proxy relay | Guest NIC port 6081, forwarding to the loopback port of each route |
 | Session environment | `DISPLAY=:1` while the desktop is on |
 | Desktop environment | A snapshot taken at boot, without the `env` and secrets delivered afterwards; programs an agent session launches inherit that session's environment |
 
 Validation:
 
-- `web` keys are lowercase DNS labels (1 to 63 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`); `desktop` is rejected as a key.
-- `web` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `web` port is fine; only the guest side counts.
-- With the desktop or any `web` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
+- `proxy` route keys are lowercase DNS labels (1 to 63 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`); `desktop` is rejected as a key.
+- `proxy` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `proxy` port is fine; only the guest side counts.
+- With the desktop or any `proxy` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
 - `ports` and `host_ports` can't use guest port 6081, and with `enable_desktop` also 6080 and 5901.
-- A web route is not a published port: nothing listens on the host except `jailoc gateway`.
+- A proxy route is not a published port: nothing listens on the host except `jailoc proxy`.
 
-Changing `enable_desktop` or the set of guest ports the `web` routes use takes effect after `jailoc restart` and a restart of `jailoc gateway`; `jailoc gateway` refuses a running VM that doesn't match. Renaming a route, or adding one on a guest port already in that set, needs only a restart of `jailoc gateway`.
+Changing `enable_desktop` or the set of guest ports the `proxy` routes use takes effect after `jailoc restart` and a restart or sync of `jailoc proxy`; `jailoc proxy` refuses a running VM that doesn't match. Renaming a route, changing `auth`, or adding a route on a guest port already in that set needs only `jailoc proxy`.
 
-A running VM keeps its desktop ports (6080, 5901), the relay port 6081 and the guest ports of its `web` routes reserved until it restarts, even after the configuration drops `enable_desktop` or `web`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`. In the images jailoc builds, the desktop packages are installed only with `enable_desktop`; see [Desktop layer](image-resolution.md#desktop-layer-steps-2-4-and-5). Software rendering needs CPU: `cpu = 4` and `memory = "6g"` are a reasonable start. The VM has no GPU and no audio device.
+A running VM keeps its desktop ports (6080, 5901), the relay port 6081 and the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `enable_desktop` or `proxy`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`. In the images jailoc builds, the desktop packages are installed only with `enable_desktop`; see [Desktop layer](image-resolution.md#desktop-layer-steps-2-4-and-5). Software rendering needs CPU: `cpu = 4` and `memory = "6g"` are a reasonable start. The VM has no GPU and no audio device.
 
 ### `protect_git`
 

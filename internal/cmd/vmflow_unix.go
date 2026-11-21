@@ -692,9 +692,9 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if ws.EnableDesktop {
 		g.Desktop = &guest.Desktop{}
 	}
-	// The relay allowlist is fixed for the life of the VM; a new web route
+	// The relay allowlist is fixed for the life of the VM; a new proxy route
 	// port needs a restart.
-	if ports := webRelayPorts(ws.Web); len(ports) > 0 {
+	if ports := webRelayPorts(ws.Proxy); len(ports) > 0 {
 		g.WebRelay = &guest.WebRelay{Ports: ports}
 	}
 	spec := vm.Spec{
@@ -1014,7 +1014,7 @@ func statusVM(ctx context.Context, ws *workspace.Resolved) error {
 	fmt.Printf("Profile:   %s\n", profileLabel(*spec))
 	fmt.Printf("Tmp:       %s\n", tmpStatus(ctx, stateDir, *spec))
 	if label := webStatusLabel(ws); label != "" {
-		fmt.Printf("Web:       %s\n", label)
+		fmt.Printf("Proxy:     %s\n", label)
 	}
 	sessionsCtx, cancel := context.WithTimeout(ctx, listSessionsTimeout)
 	defer cancel()
@@ -1398,7 +1398,7 @@ func configureVMDesktop(ws *workspace.Resolved, spec *vm.Spec) error {
 
 // webRelayPorts returns the unique guest ports of routes in ascending order:
 // the allowlist of the guest's web relay.
-func webRelayPorts(routes []workspace.WebRoute) []uint16 {
+func webRelayPorts(routes []workspace.ProxyRoute) []uint16 {
 	var ports []uint16
 	for _, r := range routes {
 		ports = append(ports, uint16(r.Port)) //nolint:gosec // G115: validated to 1-65535

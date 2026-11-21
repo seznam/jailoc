@@ -33,6 +33,7 @@ type Route struct {
 	Host      string
 	Dial      func(context.Context) (net.Conn, error)
 	StartPath string
+	Auth      bool
 }
 
 // Config supplies an already trusted certificate and the exact hostname allowlist.
@@ -49,6 +50,7 @@ type Gateway struct {
 	mu         sync.Mutex
 	codes      map[string]*loginCode
 	sessions   map[[32]byte]*session
+	unauth     map[string]*session
 	started    bool
 	base       context.Context
 	now        func() time.Time
@@ -108,26 +110,37 @@ func (g *Gateway) Update(cfg Config) (map[string]string, error) {
 	g.mu.Lock()
 	now := g.now()
 	codes := make(map[string]string)
-	for host := range nextRoutes {
-		if _, exists := g.routes[host]; exists {
+	for host, route := range nextRoutes {
+		if prev, exists := g.routes[host]; exists && prev.Auth == route.Auth {
 			continue
 		}
-		code, err := randomToken()
-		if err != nil {
-			g.mu.Unlock()
-			return nil, fmt.Errorf("generate login code: %w", err)
+		if route.Auth {
+			code, err := randomToken()
+			if err != nil {
+				g.mu.Unlock()
+				return nil, fmt.Errorf("generate login code: %w", err)
+			}
+			g.codes[host] = &loginCode{hash: sha256.Sum256([]byte(code)), expires: now.Add(10 * time.Minute)}
+			codes[host] = code
+		} else {
+			delete(g.codes, host)
 		}
-		g.codes[host] = &loginCode{hash: sha256.Sum256([]byte(code)), expires: now.Add(10 * time.Minute)}
-		codes[host] = code
+	}
+	if g.unauth == nil {
+		g.unauth = make(map[string]*session)
 	}
 	var revoked []*session
 	for host := range g.routes {
 		if _, keep := nextRoutes[host]; !keep {
 			delete(g.codes, host)
+			if s := g.unauth[host]; s != nil {
+				revoked = append(revoked, s)
+				delete(g.unauth, host)
+			}
 		}
 	}
 	for k, s := range g.sessions {
-		if _, keep := nextRoutes[s.host]; !keep {
+		if next, keep := nextRoutes[s.host]; !keep || !next.Auth {
 			revoked = append(revoked, s)
 			delete(g.sessions, k)
 		}
@@ -188,11 +201,15 @@ func (g *Gateway) Serve(ctx context.Context, ln net.Listener) error {
 	done := make(chan error, 1)
 	context.AfterFunc(boot, func() {
 		g.mu.Lock()
-		active := make([]*session, 0, len(g.sessions))
+		active := make([]*session, 0, len(g.sessions)+len(g.unauth))
 		for _, s := range g.sessions {
 			active = append(active, s)
 		}
+		for _, s := range g.unauth {
+			active = append(active, s)
+		}
 		clear(g.sessions)
+		clear(g.unauth)
 		g.mu.Unlock()
 		for _, s := range active {
 			s.close()

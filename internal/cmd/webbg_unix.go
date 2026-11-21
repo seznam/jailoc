@@ -125,8 +125,8 @@ func (m *gatewayManager) stateLocked() webGatewayState {
 	ws := make(map[string][]string, len(m.instances))
 	for _, name := range slices.Sorted(maps.Keys(m.instances)) {
 		inst := m.instances[name]
-		hosts := make([]string, 0, len(inst.target.ws.Web))
-		for _, r := range inst.target.ws.Web {
+		hosts := make([]string, 0, len(inst.target.ws.Proxy))
+		for _, r := range inst.target.ws.Proxy {
 			hosts = append(hosts, gatewayHost(r.Name, name))
 		}
 		ws[name] = hosts
@@ -182,7 +182,7 @@ func (m *gatewayManager) sync(reqNames []string) webControlResponse {
 			continue
 		}
 		ws, err := workspace.Resolve(cfg, name)
-		if err != nil || len(ws.Web) == 0 || checkGatewayVM(ws, inst.target.stateDir) != nil {
+		if err != nil || len(ws.Proxy) == 0 || checkGatewayVM(ws, inst.target.stateDir) != nil {
 			inst.cancel(errGatewayVMGone)
 			delete(m.instances, name)
 			continue
@@ -202,7 +202,7 @@ func (m *gatewayManager) sync(reqNames []string) webControlResponse {
 			continue
 		}
 		ws, err := workspace.Resolve(cfg, name)
-		if err != nil || len(ws.Web) == 0 {
+		if err != nil || len(ws.Proxy) == 0 {
 			continue
 		}
 		stateDir := vmStateDir(name)
@@ -422,7 +422,7 @@ func startBackgroundWebGateway(ctx context.Context, names []string, opts gateway
 	}
 	defer func() { _ = bannerR.Close() }()
 
-	childArgs := []string{"web", "--foreground"}
+	childArgs := []string{"proxy", "--foreground"}
 	if opts.listenerBroker {
 		childArgs = append(childArgs, "--listener-broker")
 	} else if opts.listen != "" {
@@ -522,7 +522,7 @@ func stopBackgroundWebGateway() error {
 }
 
 func printSyncedWebGateway(w io.Writer, st webGatewayState, codes map[string]string, filter []string) {
-	_, _ = fmt.Fprintf(w, "Gateway running on %s (pid %d, loopback only)\n", st.Listen, st.PID)
+	_, _ = fmt.Fprintf(w, "Proxy running on %s (pid %d, loopback only)\n", st.Listen, st.PID)
 	if st.CACert != "" {
 		home, _ := os.UserHomeDir()
 		_, _ = fmt.Fprintf(w, "CA certificate: %s\n", shortenHome(st.CACert, home))
@@ -588,10 +588,9 @@ func newWebStopCmd() *cobra.Command {
 	}
 }
 
-// autoManageWebOnUp starts or syncs the background web gateway when ws has
-// web routes.
+// autoManageWebOnUp starts or syncs the background proxy when ws has proxy routes.
 func autoManageWebOnUp(ctx context.Context, ws *workspace.Resolved, out, errw io.Writer) {
-	if len(ws.Web) == 0 {
+	if len(ws.Proxy) == 0 {
 		return
 	}
 	if st := runningWebGateway(); st != nil {
@@ -602,12 +601,12 @@ func autoManageWebOnUp(ctx context.Context, ws *workspace.Resolved, out, errw io
 		}
 	}
 	if err := startBackgroundWebGateway(ctx, []string{ws.Name}, gatewayOptions{listen: gatewayDefaultListen}, out); err != nil {
-		_, _ = color.New(color.FgYellow).Fprintf(errw, "WARNING: could not start background web gateway (%v); run `jailoc web %s`\n", err, ws.Name)
+		_, _ = color.New(color.FgYellow).Fprintf(errw, "WARNING: could not start background proxy (%v); run `jailoc proxy %s`\n", err, ws.Name)
 	}
 }
 
-// syncWebGatewayAfterDown updates the running background web gateway after a
-// workspace VM stops, or stops the gateway when no web workspaces remain.
+// syncWebGatewayAfterDown updates the running background proxy after a
+// workspace VM stops, or stops the proxy when no proxy workspaces remain.
 func syncWebGatewayAfterDown() {
 	st := runningWebGateway()
 	if st == nil {
@@ -618,14 +617,14 @@ func syncWebGatewayAfterDown() {
 	}
 }
 
-// webStatusLabel describes the web routes and background gateway state for
+// webStatusLabel describes the proxy routes and background proxy state for
 // `jailoc status`.
 func webStatusLabel(ws *workspace.Resolved) string {
-	if len(ws.Web) == 0 {
+	if len(ws.Proxy) == 0 {
 		return ""
 	}
-	urls := make([]string, 0, len(ws.Web))
-	for _, r := range ws.Web {
+	urls := make([]string, 0, len(ws.Proxy))
+	for _, r := range ws.Proxy {
 		urls = append(urls, fmt.Sprintf("https://%s -> %d", gatewayHost(r.Name, ws.Name), r.Port))
 	}
 	st := runningWebGateway()
@@ -634,7 +633,7 @@ func webStatusLabel(ws *workspace.Resolved) string {
 			return fmt.Sprintf("running on %s (pid %d); %s", st.Listen, st.PID, strings.Join(urls, ", "))
 		}
 	}
-	return fmt.Sprintf("gateway stopped (`jailoc web %s` starts it); %s", ws.Name, strings.Join(urls, ", "))
+	return fmt.Sprintf("proxy stopped (`jailoc proxy %s` starts it); %s", ws.Name, strings.Join(urls, ", "))
 }
 
 // startupBannerWriter returns the startup pipe writer when the process was

@@ -81,18 +81,18 @@ func init() {
 	rootCmd.AddCommand(newGatewayCmd())
 }
 
-// newGatewayCmd builds `jailoc web` (aliases `gateway`, `gw`), the HTTPS
-// gateway to the web routes of running workspace VMs.
+// newGatewayCmd builds `jailoc proxy` (aliases `gateway`, `gw`, `web`), the HTTPS
+// proxy to the proxy routes of running workspace VMs.
 func newGatewayCmd() *cobra.Command {
 	var opts gatewayOptions
 	cmd := &cobra.Command{
-		Use:     "web [workspace...]",
-		Aliases: []string{"gateway", "gw"},
-		Short:   "Serve the desktop and web routes of running workspaces over HTTPS",
-		Long: "Serve the desktop and web routes of running workspaces over HTTPS on a loopback address.\n\n" +
-			"By default the gateway runs in the background (`--foreground` keeps it in the foreground).\n" +
-			"When the background gateway is already running, `jailoc web` keeps existing browser sessions and prints the active routes.\n\n" +
-			"Each route is https://<route>.<workspace>.jailoc.local and is protected by a one-time login code, printed once when the route is added.\n" +
+		Use:     "proxy [workspace...]",
+		Aliases: []string{"gateway", "gw", "web"},
+		Short:   "Serve the desktop and proxy routes of running workspaces over HTTPS",
+		Long: "Serve the desktop and proxy routes of running workspaces over HTTPS on a loopback address.\n\n" +
+			"By default the proxy runs in the background (`--foreground` keeps it in the foreground).\n" +
+			"When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes.\n\n" +
+			"Each route is https://<route>.<workspace>.jailoc.local; routes with auth = true are protected by a one-time login code, printed once when the route is added.\n" +
 			"When --tls-cert and --tls-key are omitted, jailoc generates and reuses a local CA and leaf certificate in ~/.config/jailoc/ingress.\n" +
 			"The gateway starts no VM, opens no browser and changes no host setting: make the names resolve to the listen address\n" +
 			"(for example with /etc/hosts entries) and trust ~/.config/jailoc/ingress/ca.crt in your browser.\n" +
@@ -356,9 +356,9 @@ func selectGatewayTargets(cfg *config.Config, names []string, w io.Writer) ([]ga
 		if err != nil {
 			return nil, fmt.Errorf("resolve workspace %q: %w", name, err)
 		}
-		if len(ws.Web) == 0 {
+		if len(ws.Proxy) == 0 {
 			if explicit {
-				return nil, fmt.Errorf("workspace %q has no web routes; set enable_desktop or add a [workspaces.%s.web] table", name, name)
+				return nil, fmt.Errorf("workspace %q has no proxy routes; set enable_desktop or add a [workspaces.%s.proxy] table", name, name)
 			}
 			continue
 		}
@@ -379,7 +379,7 @@ func selectGatewayTargets(cfg *config.Config, names []string, w io.Writer) ([]ga
 		targets = append(targets, gatewayTarget{ws: ws, stateDir: stateDir, id: id})
 	}
 	if len(targets) == 0 {
-		return nil, errors.New("no running workspace with web routes; start one with `jailoc up`")
+		return nil, errors.New("no running workspace with proxy routes; start one with `jailoc up`")
 	}
 	return targets, nil
 }
@@ -410,8 +410,8 @@ func webChanges(ws *workspace.Resolved, g *guest.Config) []string {
 	if (g.Desktop != nil) != ws.EnableDesktop {
 		out = append(out, "enable_desktop")
 	}
-	if !slices.Equal(guestWebPorts(g), webRelayPorts(ws.Web)) {
-		out = append(out, "web")
+	if !slices.Equal(guestWebPorts(g), webRelayPorts(ws.Proxy)) {
+		out = append(out, "proxy")
 	}
 	return out
 }
@@ -425,7 +425,7 @@ func printGatewayRoutes(w io.Writer, addr net.Addr, targets []gatewayTarget, cod
 }
 
 func printGatewayRoutesWithCA(w io.Writer, addr net.Addr, caPath string, targets []gatewayTarget, codes map[string]string) {
-	_, _ = fmt.Fprintf(w, "Gateway listening on %s (loopback only)\n", addr)
+	_, _ = fmt.Fprintf(w, "Proxy listening on %s (loopback only)\n", addr)
 	if caPath != "" {
 		home, _ := os.UserHomeDir()
 		_, _ = fmt.Fprintf(w, "CA certificate: %s\n", shortenHome(caPath, home))
@@ -435,9 +435,13 @@ func printGatewayRoutesWithCA(w io.Writer, addr net.Addr, caPath string, targets
 	}
 	for _, t := range targets {
 		_, _ = fmt.Fprintf(w, "Workspace %s:\n", t.ws.Name)
-		for _, r := range t.ws.Web {
+		for _, r := range t.ws.Proxy {
 			host := gatewayHost(r.Name, t.ws.Name)
-			_, _ = fmt.Fprintf(w, "  %-10s %s\n             login code %s (only valid for %s)\n", r.Name, gatewayURL(host), codes[host], gatewayOrigin(host))
+			if code := codes[host]; code != "" {
+				_, _ = fmt.Fprintf(w, "  %-10s %s\n             login code %s (only valid for %s)\n", r.Name, gatewayURL(host), code, gatewayOrigin(host))
+			} else {
+				_, _ = fmt.Fprintf(w, "  %-10s %s\n", r.Name, gatewayURL(host))
+			}
 		}
 	}
 }
@@ -520,10 +524,10 @@ func newGatewayInstance(parent context.Context, t gatewayTarget, errw io.Writer)
 // routes returns the gateway routes of the instance, one per web route. Routes
 // share the instance context, so ending the instance fails them all.
 func (i *gatewayInstance) routes() []webgateway.Route {
-	out := make([]webgateway.Route, 0, len(i.target.ws.Web))
-	for _, r := range i.target.ws.Web {
+	out := make([]webgateway.Route, 0, len(i.target.ws.Proxy))
+	for _, r := range i.target.ws.Proxy {
 		route := &gatewayRoute{inst: i, port: uint16(r.Port), ctx: i.ctx} //nolint:gosec // G115: validated to 1-65535
-		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext, StartPath: gatewayStartPath(r.Name)})
+		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext, StartPath: gatewayStartPath(r.Name), Auth: r.Auth})
 	}
 	return out
 }

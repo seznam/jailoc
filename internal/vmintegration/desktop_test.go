@@ -51,7 +51,7 @@ memory = "3g"
 enable_desktop = %[5]t
 protect_git = true
 
-[workspaces.%[3]s.web]
+[workspaces.%[3]s.proxy]
 foo = 3000
 %[6]s
 [workspaces.%[3]s.network]
@@ -315,7 +315,7 @@ PY`)
 	t.Run("reload reports desktop and web changes as restart-only", func(t *testing.T) {
 		d.writeConfig(t, false, "bar = 3002\n")
 		out := d.jailoc(ctx, t, "reload", desktopWorkspace)
-		for _, want := range []string{"enable_desktop", "web", "jailoc restart " + desktopWorkspace} {
+		for _, want := range []string{"enable_desktop", "proxy", "jailoc restart " + desktopWorkspace} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("reload output misses %q:\n%s", want, out)
 			}

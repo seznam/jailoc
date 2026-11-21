@@ -1,8 +1,8 @@
 # How to open a desktop and web services in your browser
 
-A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc web` (`jailoc gateway`, `jailoc gw`) is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
+A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc proxy` (`jailoc gateway`, `jailoc gw`, `jailoc web`) is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
 
-The examples use a workspace named `demo` with a web route `foo`. Their addresses are `https://desktop.demo.jailoc.local` and `https://foo.demo.jailoc.local`.
+The examples use a workspace named `demo` with a proxy route `foo`. Their addresses are `https://desktop.demo.jailoc.local` and `https://foo.demo.jailoc.local`.
 
 ## Limits
 
@@ -10,7 +10,7 @@ The examples use a workspace named `demo` with a web route `foo`. Their addresse
 - The desktop is a native one in the VM, not a Docker Desktop container, and not your host's Chrome.
 - A browser is not preinstalled. The agent installs one.
 
-## Enable the desktop and web routes
+## Enable the desktop and proxy routes
 
 ```toml
 [workspaces.demo]
@@ -19,30 +19,32 @@ enable_desktop = true
 cpu = 4
 memory = "6g"
 
-[workspaces.demo.web]
+[workspaces.demo.proxy]
 foo = 3000
+admin = { port = 8080, auth = true }
 ```
 
 - `enable_desktop` defaults to `false`.
-- Each `web` entry maps a route name to a guest port. The route is served at `https://<name>.<workspace>.jailoc.local`.
+- Each `proxy` entry maps a route name to a guest port (or `{ port = <port>, auth = <bool> }`). The route is served at `https://<name>.<workspace>.jailoc.local`.
+- By default (`auth = false`), routes require no login code. Setting `auth = true` on a route (or in `[workspaces.<name>.proxy]` / `[defaults.proxy]`) gates it behind a one-time login code and a `__Host-jailoc` session cookie.
 - The route `desktop` is reserved. With `enable_desktop = true` it exists on its own and serves the desktop's noVNC client (guest port 6080).
 - The workspace name and every route name must be a lowercase DNS label (`a-z`, `0-9`, `-`).
 - Software rendering is CPU-bound: start from `cpu = 4` and `memory = "6g"`.
 
-The guest ports in use are fixed: 6080 (noVNC) and 5901 (VNC, loopback only, no X11 over TCP) while the desktop is on, and 6081 (web relay) whenever any route exists. `ports` and `host_ports` can't use them, and a web route can't target a port that `host_ports` also lists. See [`enable_desktop` and `web`](../reference/configuration.md#enable_desktop-and-web).
+The guest ports in use are fixed: 6080 (noVNC) and 5901 (VNC, loopback only, no X11 over TCP) while the desktop is on, and 6081 (proxy relay) whenever any route exists. `ports` and `host_ports` can't use them, and a proxy route can't target a port that `host_ports` or `ports` also lists. See [`enable_desktop` and `proxy`](../reference/configuration.md#enable_desktop-and-proxy).
 
 ### Apply changes
 
 | Change | Needed |
 |--------|--------|
-| `enable_desktop`, or the set of guest ports the `web` routes use | `jailoc restart` for the workspace, then a restart of `jailoc gateway` |
-| Adding or renaming a route that uses a guest port already in that set | A restart of `jailoc gateway` only; nothing changes in the guest |
+| `enable_desktop`, or the set of guest ports the `proxy` routes use | `jailoc restart` for the workspace, then a restart or sync of `jailoc proxy` |
+| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | `jailoc proxy` only; nothing changes in the guest |
 
-`jailoc gateway` refuses a running VM whose desktop or web ports differ from the configuration, and asks for `jailoc restart` first.
+`jailoc proxy` refuses a running VM whose desktop or proxy ports differ from the configuration, and asks for `jailoc restart` first.
 
 !!! note "Removing routes or the desktop and `jailoc reload`"
 
-    A running VM keeps serving the ports of the desktop (6080, 5901) and of its web routes until it restarts, even after you remove `enable_desktop` or `web` from the configuration. Those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
+    A running VM keeps serving the ports of the desktop (6080, 5901) and of its proxy routes until it restarts, even after you remove `enable_desktop` or `proxy` from the configuration. Those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
 
 ### Images
 
@@ -59,20 +61,21 @@ No browser is installed. Ask the agent to install one with Playwright, for examp
 
     The desktop starts at boot with a snapshot of the environment. It holds neither the secrets nor the `env` values delivered after boot, so programs started from the desktop menu don't see them. A program an agent session launches inherits that session's current environment, secrets included, even though its window appears on the desktop.
 
-## Start the gateway
+## Start the proxy
 
-`jailoc up` automatically starts or updates the background web gateway when a workspace has `web` routes, and `jailoc down` drops the workspace's routes (stopping the gateway when no web workspaces remain). You can also run `jailoc web` directly:
+`jailoc up` automatically starts or updates the background proxy when a workspace has `proxy` routes, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). You can also run `jailoc proxy` directly:
 
 ```bash
-jailoc web demo
+jailoc proxy demo
 ```
 
-- Runs in the background by default (`--foreground` / `-f` keeps it in the foreground). When the background gateway is already running, `jailoc web` keeps existing browser sessions and prints the active routes; newly started workspaces get a fresh login code.
-- `jailoc web status` shows the running gateway and its routes; `jailoc web stop` stops it.
+- Runs in the background by default (`--foreground` / `-f` keeps it in the foreground). When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes; newly added routes with `auth = true` get a fresh login code.
+- `jailoc proxy status` shows the running proxy and its routes; `jailoc proxy stop` stops it.
 - When `--tls-cert` and `--tls-key` are omitted, jailoc generates and reuses a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local`.
-- The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused. With `--listener-broker` the gateway serves port 443 through a root broker instead; see [Use the listener broker](#use-the-listener-broker-experimental).
-- Without workspace arguments the gateway serves every running configured workspace that has routes. A named workspace must be running and have routes.
+- The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused. With `--listener-broker` the proxy serves port 443 through a root broker instead; see [Use the listener broker](#use-the-listener-broker-experimental).
+- Without workspace arguments the proxy serves every running configured workspace that has routes. A named workspace must be running and have routes.
 - Routes close when a workspace VM stops or is replaced.
+
 1. Open `<origin>/.jailoc/login`, for example `https://foo.demo.jailoc.local/.jailoc/login`.
 2. Enter the code. The page posts it to the same origin.
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 )
@@ -50,18 +51,36 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "upgrade not supported", http.StatusBadRequest)
 			return
 		}
+		if !route.Auth {
+			w.Header().Set("Cache-Control", "no-store")
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				http.Redirect(w, r, g.landing(host), http.StatusSeeOther)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		g.loginHandler(w, r, host)
 		return
 	}
-	s := g.authenticated(r, host)
-	if s == nil {
-		w.Header().Set("Cache-Control", "no-store")
-		if upgrade == "" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
-			http.Redirect(w, r, "/.jailoc/login", http.StatusSeeOther)
+	var s *session
+	if route.Auth {
+		s = g.authenticated(r, host)
+		if s == nil {
+			w.Header().Set("Cache-Control", "no-store")
+			if upgrade == "" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+				http.Redirect(w, r, "/.jailoc/login", http.StatusSeeOther)
+				return
+			}
+			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
+	} else {
+		s = g.unauthenticatedSession(host)
+		if s == nil {
+			http.Error(w, "gateway stopped", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	if start := route.StartPath; start != "" && r.URL.Path == "/" && r.URL.RawQuery == "" && upgrade == "" &&
 		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
@@ -92,11 +111,35 @@ func externalHostname(authority string) string {
 	return host
 }
 
+func (g *Gateway) unauthenticatedSession(host string) *session {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.base == nil || g.base.Err() != nil {
+		return nil
+	}
+	if s := g.unauth[host]; s != nil && s.ctx.Err() == nil {
+		return s
+	}
+	ctx, cancel := context.WithCancel(g.base)
+	s := &session{host: host, ctx: ctx, cancel: cancel, conns: make(map[*sessionConn]struct{})}
+	g.unauth[host] = s
+	return s
+}
+
 func sameOriginRequest(r *http.Request, host string) bool {
 	origins, present := r.Header["Origin"]
 	exact := len(origins) == 1 && origins[0] == "https://"+host
 	if present && !exact {
 		return false
+	}
+	if referers := r.Header.Values("Referer"); len(referers) > 0 {
+		if len(referers) > 1 {
+			return false
+		}
+		u, err := url.Parse(referers[0])
+		if err != nil || u.Scheme != "https" || u.User != nil || externalHostname(u.Host) != host {
+			return false
+		}
 	}
 	sites := r.Header.Values("Sec-Fetch-Site")
 	if len(sites) > 1 {
@@ -112,6 +155,14 @@ func sameOriginRequest(r *http.Request, host string) bool {
 			}
 		case "same-origin", "none":
 		default:
+			return false
+		}
+	}
+	if modes := r.Header.Values("Sec-Fetch-Mode"); len(modes) > 0 {
+		if len(modes) > 1 {
+			return false
+		}
+		if modes[0] == "nested-navigate" && (len(sites) != 1 || sites[0] != "same-origin") {
 			return false
 		}
 	}
@@ -146,6 +197,12 @@ func headerHasToken(h http.Header, name, want string) bool {
 func addWorkerPolicy(h http.Header) {
 	if !slices.Contains(h.Values("Content-Security-Policy"), workerPolicy) {
 		h.Add("Content-Security-Policy", workerPolicy)
+	}
+	if h.Get("Cross-Origin-Resource-Policy") == "" {
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+	}
+	if h.Get("Cross-Origin-Opener-Policy") == "" {
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 	}
 }
 

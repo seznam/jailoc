@@ -63,12 +63,12 @@ type Resolved struct {
 	// TimeZone is the time zone name for the VM; empty means the host's zone.
 	TimeZone     string
 	EnableDocker bool
-	// EnableDesktop runs a desktop in the VM, served by the "desktop" web
+	// EnableDesktop runs a desktop in the VM, served by the "desktop" proxy
 	// route. Changing it takes a restart.
 	EnableDesktop bool
-	// Web are the web routes of the workspace sorted by name, with the
-	// "desktop" route (guest port 6080) added when EnableDesktop is set.
-	Web []WebRoute
+	// Proxy are the HTTPS proxy routes of the workspace sorted by name, with
+	// the "desktop" route (guest port 6080) added when EnableDesktop is set.
+	Proxy []ProxyRoute
 	// Notifications is how attached sessions notify about the agent, one of
 	// the config.Notifications* values.
 	Notifications string
@@ -98,10 +98,12 @@ type Resolved struct {
 	CABundle      config.CABundle
 }
 
-// WebRoute serves guest port Port at https://<Name>.<workspace>.jailoc.local.
-type WebRoute struct {
+// ProxyRoute serves guest port Port at https://<Name>.<workspace>.jailoc.local.
+// Auth gates the route behind a one-time login code and session cookie when true.
+type ProxyRoute struct {
 	Name string
 	Port int
+	Auth bool
 }
 
 type SecretKind int
@@ -242,7 +244,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	if r.ProtectGit {
 		r.EnableDocker = false
 	}
-	r.Web = resolveWeb(ws.Web, r.EnableDesktop)
+	r.Proxy = resolveProxy(cfg.Defaults.Proxy.Get(), ws.Proxy.Get(), r.EnableDesktop)
 	r.Ports = config.MergePorts(cfg.Defaults.Ports, ws.Ports)
 	r.HostPorts = config.MergeHostPorts(cfg.Defaults.HostPorts, ws.HostPorts)
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
@@ -642,20 +644,25 @@ func stringWithDefault(defaultVal *string, override *string, fallback string) st
 	return fallback
 }
 
-// resolveWeb returns the web routes sorted by name. The desktop route is
+// resolveProxy returns the proxy routes sorted by name. The desktop route is
 // reserved: it exists only when the desktop is enabled and always targets the
-// noVNC port.
-func resolveWeb(web map[string]int, desktop bool) []WebRoute {
-	routes := make([]WebRoute, 0, len(web)+1)
-	for name, port := range web {
+// noVNC port, inheriting the effective default auth.
+func resolveProxy(def config.ProxyDefaults, tbl config.ProxyTable, desktop bool) []ProxyRoute {
+	defaultAuth := boolPtrWithDefault(def.Auth, tbl.Auth, false)
+	routes := make([]ProxyRoute, 0, len(tbl.Routes)+1)
+	for name, r := range tbl.Routes {
 		if name == config.DesktopRouteName {
 			continue
 		}
-		routes = append(routes, WebRoute{Name: name, Port: port})
+		auth := defaultAuth
+		if r.Auth != nil {
+			auth = *r.Auth
+		}
+		routes = append(routes, ProxyRoute{Name: name, Port: r.Port, Auth: auth})
 	}
 	if desktop {
-		routes = append(routes, WebRoute{Name: config.DesktopRouteName, Port: config.DesktopWebPort})
+		routes = append(routes, ProxyRoute{Name: config.DesktopRouteName, Port: config.DesktopWebPort, Auth: defaultAuth})
 	}
-	slices.SortFunc(routes, func(a, b WebRoute) int { return cmp.Compare(a.Name, b.Name) })
+	slices.SortFunc(routes, func(a, b ProxyRoute) int { return cmp.Compare(a.Name, b.Name) })
 	return routes
 }

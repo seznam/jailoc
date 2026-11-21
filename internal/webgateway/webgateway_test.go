@@ -64,7 +64,7 @@ func startGateway(t *testing.T, handler http.Handler, setup func(*Gateway)) *tes
 	dial := func(ctx context.Context) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", up.Listener.Addr().String())
 	}
-	g, codes, err := New(Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial}, {Host: hostB, Dial: dial}}})
+	g, codes, err := New(Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, Auth: true}, {Host: hostB, Dial: dial, Auth: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,12 +171,13 @@ func TestNewValidation(t *testing.T) {
 		cfg   Config
 		valid bool
 	}{
-		{name: "valid", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial}}}, valid: true},
+		{name: "valid auth", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, Auth: true}}}, valid: true},
+		{name: "valid unauth", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, Auth: false}}}, valid: true},
 		{name: "no routes", cfg: Config{Cert: cert}},
 		{name: "no cert", cfg: Config{Routes: []Route{{Host: hostA, Dial: dial}}}},
 		{name: "nil dial", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA}}}},
 		{name: "duplicate", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial}, {Host: hostA, Dial: dial}}}},
-		{name: "start path", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, StartPath: "/vnc.html?autoconnect=1"}}}, valid: true},
+		{name: "start path", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, StartPath: "/vnc.html?autoconnect=1", Auth: true}}}, valid: true},
 		{name: "cert mismatch", cfg: Config{Cert: cert, Routes: []Route{{Host: "other.ws.jailoc.local", Dial: dial}}}},
 	}
 	for _, host := range []string{"FOO.ws.jailoc.local", "127.0.0.1", "[::1]", "foo:443", "foo.", "*.ws.jailoc.local", "-bad.ws.jailoc.local", "bad..ws.jailoc.local", "bad_name.ws.jailoc.local", ""} {
@@ -204,8 +205,16 @@ func TestNewValidation(t *testing.T) {
 			if (err == nil) != tt.valid {
 				t.Fatalf("New: %v, valid %v", err, tt.valid)
 			}
-			if tt.valid && (g == nil || len(codes[hostA]) < 32) {
-				t.Fatal("missing gateway or random code")
+			if tt.valid {
+				if g == nil {
+					t.Fatal("missing gateway")
+				}
+				if tt.cfg.Routes[0].Auth && len(codes[hostA]) < 32 {
+					t.Fatal("missing random code for authenticated route")
+				}
+				if !tt.cfg.Routes[0].Auth && codes[hostA] != "" {
+					t.Fatalf("unexpected code %q for unauthenticated route", codes[hostA])
+				}
 			}
 		})
 	}
@@ -304,7 +313,7 @@ func TestGatewayUpdatePreservesSessionsAndRevokesRemovedRoutes(t *testing.T) {
 	dial := x.g.routes[hostA].Dial
 	codes, err := x.g.Update(Config{
 		Cert:   x.g.cert,
-		Routes: []Route{{Host: hostA, Dial: dial}},
+		Routes: []Route{{Host: hostA, Dial: dial, Auth: true}},
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -326,7 +335,7 @@ func TestGatewayUpdatePreservesSessionsAndRevokesRemovedRoutes(t *testing.T) {
 	// Re-adding hostB mints a new code and requires a fresh login; old cookieB is no longer valid.
 	codes, err = x.g.Update(Config{
 		Cert:   x.g.cert,
-		Routes: []Route{{Host: hostA, Dial: dial}, {Host: hostB, Dial: dial}},
+		Routes: []Route{{Host: hostA, Dial: dial, Auth: true}, {Host: hostB, Dial: dial, Auth: true}},
 	})
 	if err != nil {
 		t.Fatalf("Update re-add: %v", err)
