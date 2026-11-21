@@ -130,9 +130,9 @@ func brokerCmdParseArgs(args []string) (uint32, error) {
 		if seen > 1 {
 			return errors.New("--uid was given more than once")
 		}
-		n, err := strconv.ParseUint(v, 10, 32)
+		n, err := strconv.ParseUint(v, 10, 31)
 		if err != nil {
-			return fmt.Errorf("--uid %q is not a decimal 32-bit UID", v)
+			return fmt.Errorf("--uid %q is not a decimal 31-bit UID", v)
 		}
 		if n == 0 {
 			return errors.New("--uid 0 is refused: the broker serves an unprivileged user, never root")

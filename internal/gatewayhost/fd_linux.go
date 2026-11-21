@@ -9,13 +9,14 @@ import (
 )
 
 // requireTCPProtocol refuses stream sockets of other protocols, such as SCTP
-// or AF_UNIX, which share SOCK_STREAM on Linux.
+// or AF_UNIX, which share SOCK_STREAM on Linux. Go creates TCP listeners with
+// IPPROTO_MPTCP by default on Linux.
 func requireTCPProtocol(fd int) error {
 	proto, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PROTOCOL)
 	if err != nil {
 		return fmt.Errorf("read socket protocol: %w", err)
 	}
-	if proto != unix.IPPROTO_TCP {
+	if proto != unix.IPPROTO_TCP && proto != unix.IPPROTO_MPTCP {
 		return fmt.Errorf("socket protocol %d is not TCP", proto)
 	}
 	return nil

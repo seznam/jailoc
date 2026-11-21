@@ -1033,7 +1033,7 @@ func TestListenBrokerSocket(t *testing.T) {
 				return path
 			},
 			check: func(t *testing.T, path string) {
-				got, err := os.ReadFile(path)
+				got, err := os.ReadFile(path) //nolint:gosec // test fixture path.
 				if err != nil || string(got) != "keep" {
 					t.Fatalf("regular file after refusal = %q, %v; want it untouched", got, err)
 				}
@@ -1266,7 +1266,7 @@ func brkChmod(t *testing.T, path string, mode os.FileMode) {
 		t.Fatalf("Chmod: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := os.Chmod(path, 0o700); err != nil {
+		if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // restoring test directory access.
 			t.Errorf("restore mode of %s: %v", path, err)
 		}
 	})

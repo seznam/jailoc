@@ -411,7 +411,7 @@ func TestRightsFromMessages(t *testing.T) {
 		for _, fd := range fds {
 			fdCloseRaw(t, fd)
 		}
-		if len(fds) != 1 || fds[0] != int(int32(binary.NativeEndian.Uint32(m.Data[:4]))) {
+		if len(fds) != 1 || fds[0] != int(int32(binary.NativeEndian.Uint32(m.Data[:4]))) { //nolint:gosec // SCM_RIGHTS carries 32-bit file descriptors.
 			t.Fatalf("rights = %v, want the whole descriptor", fds)
 		}
 		if err == nil {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -594,6 +595,9 @@ func BrokerSocketPath(uid uint32) string {
 func ListenBrokerSocket(path string, ownerUID uint32) (*net.UnixListener, error) {
 	if path == "" {
 		return nil, errors.New("listen broker socket: path is empty")
+	}
+	if ownerUID > math.MaxInt32 {
+		return nil, fmt.Errorf("listen broker socket: uid %d exceeds %d", ownerUID, math.MaxInt32)
 	}
 	euid := os.Geteuid()
 	base, managed := brokerSocketDirs(path)

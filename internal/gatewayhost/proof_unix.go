@@ -85,7 +85,7 @@ func RunProof(ctx context.Context) (res ProofResult, err error) {
 		p.res.Checks = append(p.res.Checks, row)
 		res = p.res
 	}()
-	if err = p.step(ctx, "unprivileged", "non-root effective uid; private temp root", func() error { return os.Chmod(p.root, 0o700) }); err != nil {
+	if err = p.step(ctx, "unprivileged", "non-root effective uid; private temp root", func() error { return os.Chmod(p.root, 0o700) }); err != nil { //nolint:gosec // p.root is a directory.
 		return p.res, fmt.Errorf("run host proof: %w", err)
 	}
 	err = p.run(ctx)

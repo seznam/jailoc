@@ -54,10 +54,10 @@ func (g *Gateway) proxy(route Route, s *session) *httputil.ReverseProxy {
 				ip = "[" + ip + "]"
 			}
 			p.Out.Header.Set("Forwarded", "for="+strconv.Quote(ip)+";host="+strconv.Quote(p.In.Host)+";proto=https")
-			stripGatewayCookie(p.Out.Header)
+			stripGatewayCookie(p.Out.Header, route.Host)
 		},
 		ModifyResponse: func(res *http.Response) error {
-			filterResponseHeaders(res.Header)
+			filterResponseHeaders(res.Header, route.Host)
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
@@ -66,14 +66,32 @@ func (g *Gateway) proxy(route Route, s *session) *httputil.ReverseProxy {
 	}
 }
 
-func stripGatewayCookie(header http.Header) {
+func appCookiePrefix(host string) string {
+	return "__Host-jailoc-" + host + "-"
+}
+
+// stripGatewayCookie removes the gateway session cookie and any cookie not
+// scoped to host with appCookiePrefix (including parent-domain cookies set via
+// document.cookie on another route), and unwraps the route prefix for upstream.
+func stripGatewayCookie(header http.Header, host string) {
+	prefix := appCookiePrefix(host)
 	kept := make([]string, 0)
 	for _, line := range header.Values("Cookie") {
 		for _, pair := range strings.Split(line, ";") {
-			name, _, _ := strings.Cut(strings.TrimSpace(pair), "=")
-			if !strings.EqualFold(strings.TrimSpace(name), sessionCookie) {
-				kept = append(kept, strings.TrimSpace(pair))
+			pair = strings.TrimSpace(pair)
+			name, val, ok := strings.Cut(pair, "=")
+			name = strings.TrimSpace(name)
+			if !ok || strings.EqualFold(name, sessionCookie) {
+				continue
 			}
+			if len(name) <= len(prefix) || !strings.EqualFold(name[:len(prefix)], prefix) {
+				continue
+			}
+			appName := name[len(prefix):]
+			if strings.EqualFold(appName, sessionCookie) {
+				continue
+			}
+			kept = append(kept, appName+"="+val)
 		}
 	}
 	header.Del("Cookie")
@@ -82,20 +100,36 @@ func stripGatewayCookie(header http.Header) {
 	}
 }
 
-func filterResponseHeaders(header http.Header) {
+func filterResponseHeaders(header http.Header, host string) {
+	prefix := appCookiePrefix(host)
 	cookies := header.Values("Set-Cookie")
 	header.Del("Set-Cookie")
 	for _, cookie := range cookies {
-		name, _, _ := strings.Cut(cookie, "=")
-		if !strings.EqualFold(strings.TrimSpace(name), sessionCookie) {
-			header.Add("Set-Cookie", cookie)
+		c, err := http.ParseSetCookie(cookie)
+		if err != nil {
+			continue
+		}
+		name := c.Name
+		if len(name) >= len(prefix) && strings.EqualFold(name[:len(prefix)], prefix) {
+			name = name[len(prefix):]
+		}
+		if name == "" || strings.EqualFold(name, sessionCookie) {
+			continue
+		}
+		c.Name = prefix + name
+		c.Domain = ""
+		c.Path = "/"
+		c.Secure = true
+		if v := c.String(); v != "" {
+			header.Add("Set-Cookie", v)
 		}
 	}
 	for h := range header {
-		if strings.HasPrefix(strings.ToLower(h), "access-control-") || strings.EqualFold(h, "Alt-Svc") {
+		if strings.HasPrefix(strings.ToLower(h), "access-control-") || strings.EqualFold(h, "Alt-Svc") || strings.EqualFold(h, "Clear-Site-Data") {
 			header.Del(h)
 		}
 	}
+	header.Set("Cache-Control", "no-store")
 }
 
 type sessionWriter struct {
@@ -107,7 +141,7 @@ func (w *sessionWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *sessionWriter) WriteHeader(status int) {
 	// ReverseProxy forwards informational responses before ModifyResponse.
-	filterResponseHeaders(w.Header())
+	filterResponseHeaders(w.Header(), w.owner.host)
 	w.ResponseWriter.WriteHeader(status)
 }
 

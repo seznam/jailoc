@@ -190,28 +190,32 @@ func TestProxyHeadersAndCookies(t *testing.T) {
 		seen <- r.Clone(r.Context())
 		w.Header().Add("Set-Cookie", "__Host-jailoc=forged; Path=/; Secure")
 		w.Header().Add("Set-Cookie", "__HOST-JAILOC=forged; Path=/; Secure")
-		w.Header().Add("Set-Cookie", "app=ok; Path=/")
+		w.Header().Add("Set-Cookie", "app=ok; Domain=jailoc.local; Path=/sub")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Alt-Svc", `h2=":443"`)
+		w.Header().Set("Clear-Site-Data", `"cookies"`)
+		w.Header().Set("Cache-Control", "public, max-age=31536000")
 		w.WriteHeader(200)
 	}), nil)
 	cookie := loginCookie(t, x, hostA)
 	r := newRequest(t, "GET", hostA, "/asset.js?x=1")
 	r.Host = hostA + ":443"
 	r.AddCookie(cookie)
-	r.AddCookie(&http.Cookie{Name: "app", Value: "ok", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	r.AddCookie(&http.Cookie{Name: appCookiePrefix(hostA) + "app", Value: "ok", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	r.AddCookie(&http.Cookie{Name: appCookiePrefix(hostB) + "app", Value: "other-route", Secure: true})
+	r.AddCookie(&http.Cookie{Name: "parent_domain_js", Value: "attacker"})
 	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Evil"} {
 		r.Header.Set(h, "attacker")
 	}
 	res := request(t, x.client(t, hostA), r, 200)
 	u := <-seen
-	if strings.Contains(u.Header.Get("Cookie"), "jailoc") || u.Header.Get("Cookie") != "app=ok" {
+	if strings.Contains(u.Header.Get("Cookie"), "jailoc") || strings.Contains(u.Header.Get("Cookie"), "parent_domain_js") || strings.Contains(u.Header.Get("Cookie"), "other-route") || u.Header.Get("Cookie") != "app=ok" {
 		t.Fatalf("upstream cookie: %q", u.Header.Get("Cookie"))
 	}
 	if u.Host != hostA+":443" || u.Header.Get("X-Forwarded-Host") != hostA+":443" || u.Header.Get("X-Forwarded-Proto") != "https" || u.Header.Get("X-Forwarded-For") != "127.0.0.1" || !strings.Contains(u.Header.Get("Forwarded"), `host="`+hostA+`:443"`) || u.Header.Get("X-Forwarded-Evil") != "" {
 		t.Fatalf("upstream host/forwarding: %s %+v", u.Host, u.Header)
 	}
-	if len(res.Cookies()) != 1 || res.Cookies()[0].Name != "app" || res.Header.Get("Access-Control-Allow-Origin") != "" || res.Header.Get("Alt-Svc") != "" {
+	if len(res.Cookies()) != 1 || res.Cookies()[0].Name != appCookiePrefix(hostA)+"app" || res.Cookies()[0].Value != "ok" || res.Cookies()[0].Domain != "" || res.Cookies()[0].Path != "/" || !res.Cookies()[0].Secure || res.Header.Get("Access-Control-Allow-Origin") != "" || res.Header.Get("Alt-Svc") != "" || res.Header.Get("Clear-Site-Data") != "" || res.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("upstream response filtering: %+v", res.Header)
 	}
 }
