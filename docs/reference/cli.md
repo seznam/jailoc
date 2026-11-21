@@ -430,7 +430,7 @@ jailoc gateway [workspace...] --tls-cert <path> --tls-key <path> [--listen 127.0
 
 - Open `<origin>/.jailoc/login` and enter the code; the form posts to the same origin.
 - A code works once and expires 10 minutes after the gateway starts.
-- A login sets a `__Host-` cookie that lasts 8 hours.
+- A login sets a `__Host-` cookie that lasts 8 hours. Upstream `Set-Cookie` headers are rewritten to `__Host-jailoc-<host>-<name>` (`Path=/`, `Secure`, no `Domain`) and unwrapped on incoming `Cookie` headers; cookies without that route prefix are dropped, so client-side scripts using `document.cookie` for server-visible cookies must use `__Host-jailoc-<host>-<name>; Path=/; Secure`.
 - Every request must carry the route's `Host` and a matching TLS server name.
 - A `GET` or `HEAD` without an `Origin` header is accepted; if `Origin` is present it must be exactly the route's origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`. Cross-site requests are refused.
 - The external host is the route name without a port, or with port 443. Access through `:8443` is rejected, so either the host redirects `127.0.0.1` port 443 to the listener or the gateway runs with `--listener-broker`; see the [how-to](../how-to/desktop-and-web.md).
