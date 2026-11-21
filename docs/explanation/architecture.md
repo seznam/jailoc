@@ -164,7 +164,7 @@ The broker also carries a few host services:
 | Host gpg-agent extra socket (`gpg_agent` on) | Exposes it as `/run/user/<uid>/gnupg/S.gpg-agent` |
 | `ports` | Publishes guest ports on host `127.0.0.1` |
 | `host_ports` | Relays guest connections on the gateway to host loopback ports or Unix sockets. `jailoc-guest` mirrors each entry on guest loopback and maps `host.jailoc.internal` and `host.docker.internal` to the gateway in `/etc/hosts`. |
-| `web` routes and the desktop (`enable_desktop`) | `jailoc gateway` connects to a private Unix socket (`web.sock`); the broker relays it to guest NIC port 6081, and `jailoc-guest` forwards it to the route's loopback port. The desktop (Xtigervnc on display `:1`, Openbox, noVNC on loopback port 6080) is started by `jailoc-guest`. |
+| `proxy` routes and the desktop (`enable_desktop`) | `jailoc proxy` connects to a private Unix socket (`web.sock`); the broker relays it to guest NIC port 6081, and `jailoc-guest` forwards it to the route's loopback port. The desktop (Xtigervnc on display `:1`, Openbox, noVNC on loopback port 6080) is started by `jailoc-guest`. |
 
 ## Trade-offs
 

@@ -89,7 +89,11 @@ func desktopSpecs() []desktopSpec {
 		// Openbox draws no background or panel, so the desktop would open as
 		// an empty black screen. It starts an xterm once it runs; an image
 		// without xterm still gets a working, empty desktop.
-		{name: "openbox", argv: []string{"dbus-run-session", "--", "openbox", "--startup", "xterm"}},
+		{
+			name:  "openbox",
+			argv:  []string{"dbus-run-session", "--", "openbox", "--startup", "xterm"},
+			ready: func() error { return procCommRunning("openbox") },
+		},
 		{
 			name: "websockify",
 			argv: []string{
@@ -108,6 +112,30 @@ func dialReady(network, addr string) error {
 		return fmt.Errorf("dial %s %s: %w", network, addr, err)
 	}
 	return c.Close()
+}
+
+func procCommRunning(want string) error {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return fmt.Errorf("read /proc: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join("/proc", e.Name(), "comm")) //nolint:gosec // G304: numeric /proc/<pid>/comm path
+		if err != nil || strings.TrimSpace(string(b)) != want {
+			continue
+		}
+		if leaderRunning(pid) {
+			return nil
+		}
+	}
+	return fmt.Errorf("process %s is not running", want)
 }
 
 // desktopEnv is the environment of the desktop programs: base (the session
@@ -212,6 +240,18 @@ func runDesktop(logger *slog.Logger, specs []desktopSpec, run desktopRun) (*desk
 			return nil, fmt.Errorf("%s: %w", s.name, err)
 		}
 	}
+	for i, p := range d.procs {
+		if !leaderRunning(p.pid) {
+			d.stop(logger)
+			return nil, fmt.Errorf("%s: exited during startup (see %s)", p.name, run.logPath(specs[i]))
+		}
+		if specs[i].ready != nil {
+			if err := specs[i].ready(); err != nil {
+				d.stop(logger)
+				return nil, fmt.Errorf("%s: %w", p.name, err)
+			}
+		}
+	}
 	return d, nil
 }
 
@@ -257,7 +297,13 @@ func (run desktopRun) waitReady(s desktopSpec, pid int) error {
 			return fmt.Errorf("exited during startup (see %s)", logPath)
 		}
 		if s.ready == nil {
-			// Nothing to probe: it only has to be running.
+			if time.Now().After(deadline) {
+				return nil
+			}
+			time.Sleep(min(desktopPollEvery, time.Until(deadline)))
+			if !leaderRunning(pid) {
+				return fmt.Errorf("exited during startup (see %s)", logPath)
+			}
 			return nil
 		}
 		if last = s.ready(); last == nil {

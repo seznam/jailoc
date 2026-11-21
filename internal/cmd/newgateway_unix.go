@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -171,6 +172,12 @@ func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
 		_, _ = io.WriteString(cmd.ErrOrStderr(), notes.String())
 	}
 
+	unlockProxy, err := acquireWebProxyLock()
+	if err != nil {
+		return err
+	}
+	defer unlockProxy()
+
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
 	var watchers sync.WaitGroup
@@ -181,6 +188,7 @@ func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
 		caCert:    caPath,
 		startedAt: time.Now(),
 		instances: make(map[string]*gatewayInstance, len(targets)),
+		wsRoutes:  make(map[string][]workspace.ProxyRoute, len(targets)),
 		watchers:  &watchers,
 		errw:      cmd.ErrOrStderr(),
 	}
@@ -210,6 +218,7 @@ func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
 		cleanupCtrl()
 	}()
 	mgr.sockPath = sockPath
+	_ = writeWebSavedOptions(opts)
 	_ = writeWebGatewayState(mgr.stateLocked())
 	go mgr.serveControl(ctrlLn)
 
@@ -227,10 +236,6 @@ func runGateway(cmd *cobra.Command, args []string, opts gatewayOptions) error {
 		printGatewayRoutesWithCA(bannerOut, ln.Addr(), caPath, targets, codes)
 	}
 
-	go func() {
-		watchers.Wait()
-		cancelRun(errGatewayNoVMs)
-	}()
 	err = gw.Serve(runCtx, ln)
 	cancelRun(nil)
 	cleanupCtrl()
@@ -504,8 +509,11 @@ func (a vmIdentity) same(b vmIdentity) bool {
 
 // gatewayInstance is one workspace VM boot served by the gateway. Its
 // context ends for good when the VM stops or is replaced.
+var nextGatewayInstanceGen atomic.Uint64
+
 type gatewayInstance struct {
 	target gatewayTarget
+	gen    string
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 	gone   sync.Once
@@ -518,16 +526,21 @@ type gatewayInstance struct {
 
 func newGatewayInstance(parent context.Context, t gatewayTarget, errw io.Writer) *gatewayInstance {
 	ctx, cancel := context.WithCancelCause(parent)
-	return &gatewayInstance{target: t, ctx: ctx, cancel: cancel, errw: errw, read: readVMIdentity, dial: vm.DialWeb}
+	gen := fmt.Sprintf("%d:%d:%d", nextGatewayInstanceGen.Add(1), t.id.pid, t.id.brokerPID)
+	return &gatewayInstance{target: t, gen: gen, ctx: ctx, cancel: cancel, errw: errw, read: readVMIdentity, dial: vm.DialWeb}
 }
 
-// routes returns the gateway routes of the instance, one per web route. Routes
+// routes returns the gateway routes of the instance, one per proxy route. Routes
 // share the instance context, so ending the instance fails them all.
 func (i *gatewayInstance) routes() []webgateway.Route {
-	out := make([]webgateway.Route, 0, len(i.target.ws.Proxy))
-	for _, r := range i.target.ws.Proxy {
+	return i.routesFor(i.target.ws.Proxy)
+}
+
+func (i *gatewayInstance) routesFor(proxyRoutes []workspace.ProxyRoute) []webgateway.Route {
+	out := make([]webgateway.Route, 0, len(proxyRoutes))
+	for _, r := range proxyRoutes {
 		route := &gatewayRoute{inst: i, port: uint16(r.Port), ctx: i.ctx} //nolint:gosec // G115: validated to 1-65535
-		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext, StartPath: gatewayStartPath(r.Name), Auth: r.Auth})
+		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext, StartPath: gatewayStartPath(r.Name), Auth: r.Auth, Generation: i.gen})
 	}
 	return out
 }

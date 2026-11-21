@@ -54,7 +54,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !route.Auth {
 			w.Header().Set("Cache-Control", "no-store")
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
-				http.Redirect(w, r, g.landing(host), http.StatusSeeOther)
+				http.Redirect(w, r, g.landing(host), http.StatusSeeOther) //nolint:gosec // G710: landing returns "/" or the validated same-origin Route.StartPath
 				return
 			}
 			http.NotFound(w, r)
@@ -198,12 +198,8 @@ func addWorkerPolicy(h http.Header) {
 	if !slices.Contains(h.Values("Content-Security-Policy"), workerPolicy) {
 		h.Add("Content-Security-Policy", workerPolicy)
 	}
-	if h.Get("Cross-Origin-Resource-Policy") == "" {
-		h.Set("Cross-Origin-Resource-Policy", "same-origin")
-	}
-	if h.Get("Cross-Origin-Opener-Policy") == "" {
-		h.Set("Cross-Origin-Opener-Policy", "same-origin")
-	}
+	h.Set("Cross-Origin-Resource-Policy", "same-origin")
+	h.Set("Cross-Origin-Opener-Policy", "same-origin")
 }
 
 // policyWriter re-adds the gateway policy at every WriteHeader, including

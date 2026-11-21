@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // Guest ports of the desktop and proxy routes. They mirror the guest's
@@ -72,6 +74,33 @@ func ProxyMap(m map[string]int) *ProxyTable {
 		routes[k] = ProxyRoute{Port: port}
 	}
 	return &ProxyTable{Routes: routes}
+}
+
+// MarshalTOML encodes the proxy table with route names directly under proxy so
+// Encode, WriteRaw and ValidateCopy round-trip cleanly.
+func (p ProxyTable) MarshalTOML() ([]byte, error) {
+	var parts []string
+	if p.Auth != nil {
+		parts = append(parts, fmt.Sprintf("auth = %t", *p.Auth))
+	}
+	names := make([]string, 0, len(p.Routes))
+	for name := range p.Routes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		r := p.Routes[name]
+		key := strconv.Quote(name)
+		if ValidWebLabel(name) {
+			key = name
+		}
+		if r.Auth == nil {
+			parts = append(parts, fmt.Sprintf("%s = %d", key, r.Port))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s = { port = %d, auth = %t }", key, r.Port, *r.Auth))
+		}
+	}
+	return []byte("{ " + strings.Join(parts, ", ") + " }"), nil
 }
 
 // UnmarshalTOML decodes a [workspaces.<name>.proxy] table containing optional

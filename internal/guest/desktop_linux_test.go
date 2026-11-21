@@ -39,8 +39,8 @@ func TestDesktopSpecs(t *testing.T) {
 		})
 	}
 	// Openbox starts only once the X display accepts connections.
-	if specs[0].ready == nil || specs[2].ready == nil {
-		t.Error("Xtigervnc and websockify need readiness checks")
+	if specs[0].ready == nil || specs[1].ready == nil || specs[2].ready == nil {
+		t.Error("Xtigervnc, openbox and websockify need readiness checks")
 	}
 }
 
@@ -198,6 +198,35 @@ func TestRunDesktopFailureStopsStarted(t *testing.T) {
 	}
 	reap(t, firstPID)
 	waitFor(t, func() bool { return !alive(firstPID) })
+}
+
+func TestRunDesktopRechecksNoProbeLeaderBeforeReturning(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	specs := []desktopSpec{
+		{name: "noprobe-dies", argv: []string{"sh", "-c", "sleep 0.05; exit 2"}, ready: nil},
+		{name: "later", argv: []string{"sleep", "60"}, ready: func() error { time.Sleep(150 * time.Millisecond); return nil }},
+	}
+	var laterPID int
+	run := desktopRun{
+		env: os.Environ(), dir: dir, logDir: dir, termWait: 200 * time.Millisecond, readyWait: 2 * time.Second,
+		started: func(name string, pid int) {
+			if name == "later" {
+				laterPID = pid
+			}
+		},
+	}
+	d, err := runDesktop(discardLogger(), specs, run)
+	if err == nil || !strings.Contains(err.Error(), "noprobe-dies") {
+		t.Fatalf("err = %v, want failure naming noprobe-dies", err)
+	}
+	if d != nil {
+		t.Error("failed start returned a desktop")
+	}
+	if laterPID != 0 {
+		reap(t, laterPID)
+		waitFor(t, func() bool { return !alive(laterPID) })
+	}
 }
 
 func TestRunDesktopMissingProgram(t *testing.T) {

@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/seznam/jailoc/internal/config"
@@ -31,6 +33,9 @@ const (
 )
 
 func ingressDir() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".config", "jailoc", ingressDirName)
+	}
 	return filepath.Join(config.ConfigDir(), ingressDirName)
 }
 
@@ -61,28 +66,148 @@ func resolveGatewayCert(opts gatewayOptions, cfg *config.Config, targets []gatew
 // routes in targets.
 func ensureIngressCert(cfg *config.Config, targets []gatewayTarget) (tls.Certificate, string, error) {
 	dir := ingressDir()
+	if err := checkIngressDirNotShared(dir, cfg, targets); err != nil {
+		return tls.Certificate{}, "", err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return tls.Certificate{}, "", fmt.Errorf("create ingress directory: %w", err)
 	}
 	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // ingress directory must be 0700.
 		return tls.Certificate{}, "", fmt.Errorf("chmod ingress directory: %w", err)
 	}
-	now := time.Now()
-	caCert, caKey, caDER, err := loadOrCreateIngressCA(dir, now)
+	var (
+		cert   tls.Certificate
+		caPath = filepath.Join(dir, ingressCACert)
+	)
+	err := withIngressCertLock(dir, func() error {
+		now := time.Now()
+		dnsNames, checkHosts := ingressSANs(cfg, targets)
+		certPath := filepath.Join(dir, ingressLeafCert)
+		keyPath := filepath.Join(dir, ingressLeafKey)
+		caCertPath := filepath.Join(dir, ingressCACert)
+		if caCert, _, err := readIngressCACertOnly(caCertPath, now); err == nil {
+			if existing, err := loadValidIngressLeaf(certPath, keyPath, caCert, checkHosts, now); err == nil {
+				cert = existing
+				return nil
+			}
+		}
+		caCert, caKey, caDER, err := loadOrCreateIngressCA(dir, now)
+		if err != nil {
+			return err
+		}
+		if existing, err := loadValidIngressLeaf(certPath, keyPath, caCert, checkHosts, now); err == nil {
+			cert = existing
+			return nil
+		}
+		leaf, err := createIngressLeaf(certPath, keyPath, caCert, caKey, caDER, dnsNames, now)
+		if err != nil {
+			return err
+		}
+		cert = leaf
+		return nil
+	})
 	if err != nil {
 		return tls.Certificate{}, "", err
 	}
-	dnsNames, checkHosts := ingressSANs(cfg, targets)
-	certPath := filepath.Join(dir, ingressLeafCert)
-	keyPath := filepath.Join(dir, ingressLeafKey)
-	if cert, err := loadValidIngressLeaf(certPath, keyPath, caCert, checkHosts, now); err == nil {
-		return cert, filepath.Join(dir, ingressCACert), nil
+	return cert, caPath, nil
+}
+
+func checkIngressDirNotShared(dir string, cfg *config.Config, targets []gatewayTarget) error {
+	cleanDir := filepath.Clean(dir)
+	check := func(wsName, share string) error {
+		if share == "" {
+			return nil
+		}
+		hostPath, _, _ := strings.Cut(share, ":")
+		if strings.HasPrefix(hostPath, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				hostPath = filepath.Join(home, hostPath[2:])
+			}
+		}
+		cleanShare := filepath.Clean(hostPath)
+		if !filepath.IsAbs(cleanShare) {
+			return nil
+		}
+		if pathsOverlap(cleanDir, cleanShare) {
+			return fmt.Errorf("ingress CA directory %q overlaps shared path %q of workspace %q", cleanDir, cleanShare, wsName)
+		}
+		return nil
 	}
-	cert, err := createIngressLeaf(certPath, keyPath, caCert, caKey, caDER, dnsNames, now)
+	if cfg != nil {
+		for _, s := range cfg.Defaults.Mounts {
+			if err := check("defaults", s); err != nil {
+				return err
+			}
+		}
+		for _, s := range cfg.Defaults.Snapshots {
+			if err := check("defaults", s); err != nil {
+				return err
+			}
+		}
+		for wsName, ws := range cfg.Workspaces {
+			for _, p := range ws.Paths {
+				if err := check(wsName, p); err != nil {
+					return err
+				}
+			}
+			for _, m := range ws.Mounts {
+				if err := check(wsName, m); err != nil {
+					return err
+				}
+			}
+			for _, s := range ws.Snapshots {
+				if err := check(wsName, s); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, t := range targets {
+		for _, p := range t.ws.Paths {
+			if err := check(t.ws.Name, p); err != nil {
+				return err
+			}
+		}
+		for _, m := range t.ws.Mounts {
+			if err := check(t.ws.Name, m); err != nil {
+				return err
+			}
+		}
+		for _, s := range t.ws.Snapshots {
+			if err := check(t.ws.Name, s); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func pathsOverlap(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ap := a + string(filepath.Separator)
+	bp := b + string(filepath.Separator)
+	return strings.HasPrefix(ap, bp) || strings.HasPrefix(bp, ap)
+}
+
+func withIngressCertLock(dir string, fn func() error) error {
+	lockPath := filepath.Join(dir, ".ingress.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: jailoc-owned ingress lock path
 	if err != nil {
-		return tls.Certificate{}, "", err
+		return fmt.Errorf("open ingress lock: %w", err)
 	}
-	return cert, filepath.Join(dir, ingressCACert), nil
+	defer func() { _ = f.Close() }()
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX) //nolint:gosec // G115: file descriptors fit in int
+		if err == nil {
+			defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }() //nolint:gosec // G115: file descriptors fit in int
+			return fn()
+		}
+		if !errors.Is(err, syscall.EINTR) {
+			return fmt.Errorf("lock ingress directory: %w", err)
+		}
+	}
 }
 
 func ingressSANs(cfg *config.Config, targets []gatewayTarget) (dnsNames, checkHosts []string) {
@@ -114,7 +239,13 @@ func ingressSANs(cfg *config.Config, targets []gatewayTarget) (dnsNames, checkHo
 func loadOrCreateIngressCA(dir string, now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, []byte, error) {
 	certPath := filepath.Join(dir, ingressCACert)
 	keyPath := filepath.Join(dir, ingressCAKey)
-	if caCert, caKey, caDER, err := readIngressCA(certPath, keyPath, now); err == nil {
+	_, errCert := os.Stat(certPath)
+	_, errKey := os.Stat(keyPath)
+	if !errors.Is(errCert, os.ErrNotExist) || !errors.Is(errKey, os.ErrNotExist) {
+		caCert, caKey, caDER, err := readIngressCA(certPath, keyPath, now)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("existing ingress CA in %s is unusable (%w); remove %s and %s to generate a new CA", dir, err, certPath, keyPath)
+		}
 		return caCert, caKey, caDER, nil
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -148,13 +279,32 @@ func loadOrCreateIngressCA(dir string, now time.Time) (*x509.Certificate, *ecdsa
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("marshal ingress CA key: %w", err)
 	}
-	if err := writePrivateFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})); err != nil {
-		return nil, nil, nil, fmt.Errorf("write ingress CA certificate: %w", err)
-	}
 	if err := writePrivateFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})); err != nil {
 		return nil, nil, nil, fmt.Errorf("write ingress CA key: %w", err)
 	}
+	if err := writePrivateFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})); err != nil {
+		return nil, nil, nil, fmt.Errorf("write ingress CA certificate: %w", err)
+	}
 	return caCert, key, der, nil
+}
+
+func readIngressCACertOnly(certPath string, now time.Time) (*x509.Certificate, []byte, error) {
+	pemBytes, err := os.ReadFile(certPath) //nolint:gosec // G304: jailoc-owned ingress path
+	if err != nil {
+		return nil, nil, err
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, nil, errors.New("invalid ingress CA certificate PEM")
+	}
+	caCert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !caCert.IsCA || now.Before(caCert.NotBefore) || !now.Add(30*24*time.Hour).Before(caCert.NotAfter) {
+		return nil, nil, errors.New("ingress CA is expired or near expiry")
+	}
+	return caCert, block.Bytes, nil
 }
 
 func readIngressCA(certPath, keyPath string, now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, []byte, error) {
@@ -249,29 +399,5 @@ func randomSerial() (*big.Int, error) {
 }
 
 func writePrivateFile(path string, data []byte) error {
-	tmp := path + ".tmp"
-	_ = os.Remove(tmp)
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: jailoc-owned ingress path
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return writeFileAtomically(path, data, 0o600)
 }

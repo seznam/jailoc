@@ -272,7 +272,7 @@ On macOS, use `/Library/PrivilegedHelperTools` instead of `/usr/local/libexec`, 
 In another terminal, start the gateway with `--listener-broker` instead of `--listen`:
 
 ```bash
-jailoc gateway demo --listener-broker \
+jailoc proxy demo --listener-broker \
   --tls-cert ~/.config/jailoc/ingress/demo.crt \
   --tls-key ~/.config/jailoc/ingress/demo.key
 ```
@@ -298,10 +298,10 @@ curl --cacert "$ING/ca.crt" --resolve foo.demo.jailoc.local:443:127.0.0.1 \
 
 ## Check the host primitives (experimental)
 
-`jailoc gateway host-proof` exercises the host mechanisms that a managed gateway would rely on, with throwaway data only. It is a foundation proof, not enrollment.
+`jailoc proxy host-proof` exercises the host mechanisms that a managed proxy would rely on, with throwaway data only. It is a foundation proof, not enrollment.
 
 ```bash
-jailoc gateway host-proof
+jailoc proxy host-proof
 ```
 
 The command takes no arguments or command-specific flags, reads no configuration and takes no certificate or key paths. It runs unprivileged with a 15-second execution deadline followed by bounded cleanup, and refuses to run as root. It prints one `PASS` or `FAIL` row per check and exits with an error if a check or cleanup fails. It prints no private key or token.
@@ -370,13 +370,13 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 |---------|-------|
 | Certificate warning | The CA isn't trusted by this browser; see [Trust the CA](#trust-the-ca). The leaf must list the route's host in `subjectAltName`. |
 | Name doesn't resolve | Run the resolver check above; `.local` and secure DNS are the usual causes. Use `/etc/hosts`. |
-| Connection refused on 443 | The redirect isn't loaded, or `jailoc gateway` isn't running. |
+| Connection refused on 443 | The redirect isn't loaded, or `jailoc proxy` isn't running. |
 | `:8443` URL rejected | Open the route without a port. |
-| Login code rejected | A code works once and expires 10 minutes after the gateway starts. Restart `jailoc gateway` for a new one. |
-| Gateway refuses the workspace | The running VM doesn't match the configured desktop or web ports. Run `jailoc restart <workspace>`. |
-| Route fails after the VM stopped or was replaced | Restart `jailoc gateway`. |
+| Login code rejected | A code works once and expires 10 minutes after the proxy starts. Restart `jailoc proxy` for a new one. |
+| Proxy refuses the workspace | The running VM doesn't match the configured proxy ports. Run `jailoc restart <workspace>`. |
+| Route fails after the VM stopped or was replaced | Restart `jailoc proxy`. |
 | `the listener broker is not running for this user` | Start `jailoc-listener-broker --uid` with your UID as root; see [Use the listener broker](#use-the-listener-broker-experimental). |
-| `another gateway is attached to the listener broker` | Stop the other `jailoc gateway --listener-broker` first. |
+| `another gateway is attached to the listener broker` | Stop the other `jailoc proxy --listener-broker` first. |
 | Broker refuses its executable | Install it in a root-owned directory that group and others can't write. |
 | Login post or pages behave oddly on a reused route name | An old service worker may control the origin. Unregister it and clear the site data; see [Service workers and origin reuse](#service-workers-and-origin-reuse). |
 | `jailoc up` names missing desktop programs | The explicit `image` lacks them; see [Images](#images). |
@@ -384,7 +384,7 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 
 ## Related
 
-- [`enable_desktop` and `web`](../reference/configuration.md#enable_desktop-and-web)
-- [`jailoc gateway`](../reference/cli.md#jailoc-gateway)
-- [`jailoc gateway host-proof`](../reference/cli.md#jailoc-gateway-host-proof)
+- [`enable_desktop` and `proxy`](../reference/configuration.md#enable_desktop-and-proxy)
+- [`jailoc proxy`](../reference/cli.md#jailoc-proxy)
+- [`jailoc proxy host-proof`](../reference/cli.md#jailoc-proxy-host-proof)
 - [Security Boundaries](../explanation/security-boundaries.md#web-gateway)

@@ -130,6 +130,9 @@ func filterResponseHeaders(header http.Header, host string) {
 		}
 	}
 	header.Set("Cache-Control", "no-store")
+	header.Set("Referrer-Policy", "same-origin")
+	header.Set("Cross-Origin-Resource-Policy", "same-origin")
+	header.Set("Cross-Origin-Opener-Policy", "same-origin")
 }
 
 type sessionWriter struct {
