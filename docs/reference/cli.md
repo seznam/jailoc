@@ -405,7 +405,7 @@ jailoc sessions stop ID [flags]
 
 ### `jailoc proxy`
 
-Serve the proxy routes and the desktop of running workspaces to a browser on the host over HTTPS (`jailoc gateway`, `jailoc gw` and `jailoc web` are aliases).
+Serve the proxy routes and the desktop of running workspaces to a browser on the host over HTTPS.
 
 ```text
 jailoc proxy [workspace...] [--foreground] [--tls-cert <path> --tls-key <path>] [--listen 127.0.0.1:8443 | --listener-broker]

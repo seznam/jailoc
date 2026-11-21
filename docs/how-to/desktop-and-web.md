@@ -1,6 +1,6 @@
 # How to open a desktop and web services in your browser
 
-A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc proxy` (`jailoc gateway`, `jailoc gw`, `jailoc web`) is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
+A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc proxy` is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
 
 The examples use a workspace named `demo` with a proxy route `foo`. Their addresses are `https://desktop.demo.jailoc.local` and `https://foo.demo.jailoc.local`.
 
