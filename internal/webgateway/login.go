@@ -106,7 +106,7 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request, host string) {
 	})
 	g.mu.Unlock()
 	setSessionCookie(w, token)
-	http.Redirect(w, r, g.landing(host), http.StatusSeeOther)
+	http.Redirect(w, r, g.landing(host), http.StatusSeeOther) //nolint:gosec // G710: landing returns "/" or the validated same-origin Route.StartPath
 }
 
 // landing is where a signed-in browser of host starts: the route's start path,

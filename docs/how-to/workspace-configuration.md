@@ -2,7 +2,7 @@
 
 This guide shows how to define and tune workspaces in jailoc's configuration file. For every field, its type and its validation rules, see the [Configuration reference](../reference/configuration.md).
 
-Separate guides cover [network access](network-access.md) (`allowed_hosts`, `allowed_networks`), [custom images](custom-images.md) (`image`, `dockerfile`, `build_context`), [SSH and Git passthrough](ssh-git-passthrough.md) (`ssh_auth_sock`, `gpg_agent`), [coding agents](coding-agents.md) (`agent`, `agents`) and [web routes](desktop-and-web.md) (`web`).
+Separate guides cover [network access](network-access.md) (`allowed_hosts`, `allowed_networks`), [custom images](custom-images.md) (`image`, `dockerfile`, `build_context`), [SSH and Git passthrough](ssh-git-passthrough.md) (`ssh_auth_sock`, `gpg_agent`), [coding agents](coding-agents.md) (`agent`, `agents`) and [proxy routes](desktop-and-web.md) (`proxy`).
 
 ## Find the config file
 
