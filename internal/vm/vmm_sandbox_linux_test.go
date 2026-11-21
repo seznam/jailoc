@@ -41,6 +41,8 @@ func TestConfinedRunnerAccess(t *testing.T) {
 		filepath.Join(dirs["runtime"], RunnerBinary): "runner",
 		filepath.Join(dirs["runtime"], "other-file"): "other",
 		filepath.Join(base, "state/docker.img"):      "",
+		filepath.Join(base, "state/tmp.img"):         "",
+		filepath.Join(base, "state/tmp.img.lock"):    "",
 	} {
 		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 			t.Fatal(err)
@@ -74,7 +76,10 @@ func TestConfinedRunnerAccess(t *testing.T) {
 			{Tag: "rw", HostPath: dirs["rw"]},
 			{Tag: "ro", HostPath: dirs["ro"], ReadOnly: true},
 		},
-		Disks:      []runner.Disk{{ID: "docker", HostPath: filepath.Join(base, "state/docker.img")}},
+		Disks: []runner.Disk{
+			{ID: "docker", HostPath: filepath.Join(base, "state/docker.img")},
+			{ID: "tmp", HostPath: filepath.Join(base, "state/tmp.img")},
+		},
 		ConsoleLog: filepath.Join(base, "state/microvm/console.log"),
 		VMLogPath:  filepath.Join(base, "state/microvm/vm.log"),
 	}
@@ -92,6 +97,13 @@ func TestConfinedRunnerAccess(t *testing.T) {
 		{"rename across rw share dirs", `mkdir -p "$RW/b" && echo y > "$RW/a/mv" && mv "$RW/a/mv" "$RW/b/mv"`, true},
 		{"write root fs", `mkdir -p "$ROOT/etc" && echo x > "$ROOT/etc/x"`, true},
 		{"write disk", `echo x >> "$DISK"`, true},
+		{"write tmp disk", `echo x >> "$TMP_DISK"`, true},
+		{"read tmp disk", `cat "$TMP_DISK" >/dev/null`, true},
+		{"punch hole in tmp disk", `echo x > "$TMP_DISK" && truncate -s 0 "$TMP_DISK"`, true},
+		{"write tmp disk lock file", `echo x >> "$TMP_LOCK"`, false},
+		{"create file next to tmp disk", `touch "$BASE/state/tmp.img.new"`, false},
+		{"replace tmp disk by rename", `echo x > "$BASE/state/tmp.img.new" ; mv "$BASE/state/tmp.img.new" "$TMP_DISK"`, false},
+		{"delete tmp disk", `rm "$TMP_DISK"`, false},
 		{"write console log", `echo x > "$LOG"`, true},
 		{"read outside through share", `cat "$RW/../home/key"`, false},
 		{"list outside through share", `ls "$RO/../home"`, false},
@@ -107,7 +119,8 @@ func TestConfinedRunnerAccess(t *testing.T) {
 	}
 	env := append(os.Environ(),
 		"RO="+dirs["ro"], "RW="+dirs["rw"], "ROOT="+dirs["state/microvm/rootfs"],
-		"DISK="+filepath.Join(base, "state/docker.img"), "LOG="+cfg.ConsoleLog, "BASE="+base,
+		"DISK="+filepath.Join(base, "state/docker.img"), "TMP_DISK="+filepath.Join(base, "state/tmp.img"),
+		"TMP_LOCK="+filepath.Join(base, "state/tmp.img.lock"), "LOG="+cfg.ConsoleLog, "BASE="+base,
 		"RUNNER="+cfg.RunnerPath, "RUNNER_OTHER="+filepath.Join(dirs["runtime"], "other-file"),
 		"DEV_FILE="+devFilePath,
 	)
@@ -166,4 +179,33 @@ func TestConfinedRunnerAccess(t *testing.T) {
 			t.Fatalf("proc access did not match process domain: %v", err)
 		}
 	})
+}
+
+// TestVMMRulesGrantTmpDiskOnly checks, without needing a Landlock kernel,
+// that the tmp disk of a workspace VM is reachable through its Disks entry
+// alone: read and write on the image file, and no rule covers its state
+// directory, the lock file or a sibling.
+func TestVMMRulesGrantTmpDiskOnly(t *testing.T) {
+	t.Parallel()
+	state := filepath.Join(t.TempDir(), "state")
+	tmp := tmpDiskPath(state)
+	cfg := runner.Config{Disks: []runner.Disk{
+		{ID: "docker", HostPath: diskPath(state)},
+		{ID: "tmp", HostPath: tmp},
+	}}
+	var got []landlockRule
+	for _, r := range vmmRules(cfg) {
+		if r.path == tmp {
+			got = append(got, r)
+		}
+		if r.path == state || r.path == tmpLockPath(state) {
+			t.Errorf("rule %+v covers the state dir or the tmp lock file", r)
+		}
+	}
+	if len(got) != 1 || got[0].access != llRead|llWrite || got[0].optional {
+		t.Fatalf("tmp disk rules = %+v, want one mandatory read+write rule", got)
+	}
+	if got[0].access&unix.LANDLOCK_ACCESS_FS_REFER != 0 || got[0].access&unix.LANDLOCK_ACCESS_FS_REMOVE_FILE != 0 {
+		t.Fatalf("tmp disk rule may rename or remove: %#x", got[0].access)
+	}
 }

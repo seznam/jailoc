@@ -21,7 +21,9 @@ package guest
 // Protocol 2: the guest configures IPv6 only when Config.IPv6 is set, and
 // the broker policy denies IPv6 unless its ipv6 field is set.
 // Protocol 3: the broker policy uses dns, allow and deny rules.
-const Protocol = 3
+// Protocol 4: the guest mounts /tmp from Config.Tmp, applies Reload.TmpTTL
+// and answers "jailoc-guest tmp-status".
+const Protocol = 4
 
 // Paths inside the guest root file system.
 const (
@@ -174,6 +176,8 @@ type Config struct {
 	// CacheDir is the persistent cache directory. When set, sessions point
 	// tool download caches that default to other home paths into it.
 	CacheDir string `json:"cache_dir,omitempty"`
+	// Tmp configures the /tmp file system and the expiry of its entries.
+	Tmp TmpConfig `json:"tmp"`
 }
 
 // DockerDisk is the block device of the workspace VM's Docker data disk.

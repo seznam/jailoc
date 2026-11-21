@@ -125,6 +125,10 @@ type Spec struct {
 	// Docker attaches a persistent data disk for the Docker daemon of a
 	// workspace VM (the builder always has one).
 	Docker bool `json:"docker,omitempty"`
+	// TmpDiskSize is the size in bytes of the sparse disk behind a
+	// disk-backed /tmp (Guest.Tmp.Storage "disk"); jailoc creates it fresh
+	// for every boot. Zero falls back to Guest.Tmp.SizeBytes.
+	TmpDiskSize int64 `json:"tmp_disk_size,omitempty"`
 	// SSHAgent is the host SSH agent socket relayed into a workspace VM.
 	SSHAgent string `json:"ssh_agent,omitempty"`
 	// GPGAgent is the host gpg-agent extra socket relayed into a workspace VM.
@@ -301,6 +305,17 @@ func Run(ctx context.Context, spec Spec) (err error) {
 			return err
 		}
 	}
+	// The tmp disk is scratch space of this VM lifetime: fresh and exclusive
+	// before boot, removed once the runner has exited on every path out.
+	releaseTmp, err := prepareWorkspaceTmp(spec, logf, hostFreeBytes)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rerr := releaseTmp(); rerr != nil {
+			logf("%v", rerr)
+		}
+	}()
 	var guestFiles map[string]fileContent
 	var imgDir string
 	var img imageManifest

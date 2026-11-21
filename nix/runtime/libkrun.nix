@@ -21,7 +21,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   cargoDeps = rustPlatform.fetchCargoVendor {
     inherit (finalAttrs) pname version src;
-    hash = "sha256-Ab7b37Npf0vNg7rF8KfPdLYCBuBCyRAYhR13RLecV04=";
+    hash = "sha256-NdGypD5MIjSWAVztRhvPABkrUalpZyM/MN1LFzRu140=";
   };
 
   # libkrun dlopens libkrunfw by name: keep it NEEDED so RUNPATH survives stdenv's shrinking fixup.

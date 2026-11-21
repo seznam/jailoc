@@ -159,6 +159,7 @@ jailoc reload [workspace] [flags]
 - `snapshots`, including the Git configuration and `known_hosts`: every reload copies the sources again, adds new entries and removes dropped ones
 - `env`, `env_file` and secrets
 - `timezone`, or the host's current zone when it is unset
+- `tmp_ttl`
 
 **Needs a new VM**
 
@@ -168,6 +169,7 @@ jailoc reload [workspace] [flags]
 - the agent's `profile`
 - `cpu`, `memory`
 - `enable_docker`, `protect_git`
+- `tmp_storage`, `tmp_size`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest
 
@@ -196,12 +198,12 @@ jailoc status [workspace] [flags]
 **Shown for a running VM**
 
 - Uptime, CPUs, memory and Docker disk.
+- The storage mode, configured size, cleanup TTL, and used, free and total capacity of `/tmp` (`Tmp` warns when `/tmp` is 90% full or more, and shows `unknown` when the guest can't be reached).
 - Where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
 - The number of agent sessions.
 - Whether the VM runs the current configuration:
-    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `agent`, `profile`, `enable_docker`, `protect_git`, or a jailoc upgrade that changed the guest protocol).
+    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, `protect_git`, or a jailoc upgrade that changed the guest protocol).
     - `jailoc reload` is needed when the configuration file changed after the VM started or was last reloaded.
-
 **Shown for a stopped VM**: when it stopped and the last error.
 
 `Data` is the VM state directory on the host.
@@ -218,6 +220,8 @@ State:     running (supervisor pid 4242)
 Started:   2026-10-31T09:12:44+01:00 (up 2h5m)
 Resources: 2 CPUs, 4096 MiB memory
 Profile:   workspace
+Tmp:       ram, 1 GiB, cleanup after 8h;
+12 MiB of 1 GiB used (1%), 1012 MiB free
 Sessions:  2 (1 attached); `jailoc sessions myproject` lists them
 Config:    changed since the VM started; `jailoc reload myproject` applies it
 Data:      ~/.cache/jailoc-vm/workspaces/myproject

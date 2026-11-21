@@ -656,6 +656,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		IPv6:      ws.IPv6,
 		TimeZone:  workspaceTimeZone(ws.TimeZone),
 		CacheDir:  guestUserCache,
+		Tmp:       workspaceTmp(ws),
 	}
 	switch ws.Agent.TUIPlugin {
 	case agent.OpenCode1TUI:
@@ -702,6 +703,9 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		SSHAgent:      agent,
 		GPGAgent:      gpgAgent,
 		HostServices:  hostServices,
+	}
+	if ws.TmpStorage == config.TmpStorageDisk {
+		spec.TmpDiskSize = ws.TmpSizeBytes
 	}
 	if ws.AgentProfile != nil {
 		spec.Profile, _ = ws.AgentProfile.Name()
@@ -989,6 +993,7 @@ func statusVM(ctx context.Context, ws *workspace.Resolved) error {
 	}
 	fmt.Printf("Resources: %s\n", resourcesLabel(*spec))
 	fmt.Printf("Profile:   %s\n", profileLabel(*spec))
+	fmt.Printf("Tmp:       %s\n", tmpStatus(ctx, stateDir, *spec))
 	sessionsCtx, cancel := context.WithTimeout(ctx, listSessionsTimeout)
 	defer cancel()
 	if infos, err := vmSessions(sessionsCtx, ws); err != nil {
@@ -1097,6 +1102,7 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	if running.Docker != ws.EnableDocker {
 		out = append(out, "enable_docker")
 	}
+	out = append(out, tmpRestartChanges(effectiveTmp(running), workspaceTmp(ws))...)
 	if running.Guest != nil && running.Guest.NoPrivilegeEscalation != ws.ProtectGit {
 		out = append(out, "protect_git")
 	}

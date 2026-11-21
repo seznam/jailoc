@@ -4,7 +4,8 @@
 // VM. Without arguments it initialises the guest and serves SSH sessions;
 // "secrets" stores secrets read from stdin; "run [-C DIR] [-e KEY=VALUE]...
 // -- CMD..." executes a command with the workspace environment; "session"
-// manages detachable agent sessions.
+// manages detachable agent sessions; "tmp-status" prints the /tmp usage as
+// JSON.
 package main
 
 import (
@@ -34,6 +35,8 @@ func run(logger *slog.Logger, args []string) error {
 		return guest.HoldUserNamespace(os.Stdin)
 	case "session":
 		return guest.Session(args[1:], os.Stdin, os.Stdout)
+	case "tmp-status":
+		return guest.TmpStatus(os.Stdout)
 	case "run":
 		var dir string
 		var env []string

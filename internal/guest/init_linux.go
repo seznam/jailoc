@@ -55,6 +55,10 @@ func Init(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	tmp, err := cfg.Tmp.resolve()
+	if err != nil {
+		return err
+	}
 	if err := mount.Essential(logger, tmpSizeMiB); err != nil {
 		return fmt.Errorf("essential mounts: %w", err)
 	}
@@ -69,6 +73,17 @@ func Init(logger *slog.Logger) error {
 	if err := remountAfterPivot(logger); err != nil {
 		return err
 	}
+	// The final /tmp replaces the bootstrap tmpfs before any share is
+	// mounted, so shares below /tmp stay on their own mounts, which the
+	// expiry never enters.
+	if err := mountTmp(logger, tmp, tmpScratchDisk(cfg)); err != nil {
+		return err
+	}
+	tmpClean, err := newTmpCleaner(logger, tmpDir, tmp.TTL, tmp.Storage == TmpStorageDisk)
+	if err != nil {
+		return err
+	}
+	defer tmpClean.close()
 	if cfg.Hostname != "" {
 		if err := syscall.Sethostname([]byte(cfg.Hostname)); err != nil {
 			logger.Warn("set hostname", "error", err)
@@ -127,7 +142,7 @@ func Init(logger *slog.Logger) error {
 			return err
 		}
 	}
-	live := &liveState{logger: logger, acct: acct, created: map[string]bool{}, hostPorts: map[uint16]func(){}}
+	live := &liveState{logger: logger, acct: acct, created: map[string]bool{}, hostPorts: map[uint16]func(){}, tmp: tmpClean}
 	if err := live.setSnapshots(cfg.Snapshots); err != nil {
 		return err
 	}
@@ -142,7 +157,7 @@ func Init(logger *slog.Logger) error {
 			return err
 		}
 	}
-	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, GPGAgent: cfg.GPGAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots, TimeZone: zone}); err != nil {
+	if err := live.apply(Reload{CABundle: cfg.CABundle, SSHAgent: cfg.SSHAgent, GPGAgent: cfg.GPGAgent, HostPorts: cfg.HostPorts, Snapshots: cfg.Snapshots, TimeZone: zone, TmpTTL: &tmp.TTL}); err != nil {
 		return err
 	}
 
@@ -614,9 +629,10 @@ func chown(path string, acct account) error {
 
 // sessionEnv is the base environment of every session: the image
 // environment that libkrun passes to init, plus the configured entries and
-// the tool cache variables they leave unset (see cacheEnv). It
-// also returns the zone the guest manages through /etc/localtime: the
-// configured one, or else the image's TZ when it names a zone the image has.
+// the tool cache and temporary directory variables they leave unset (see
+// cacheEnv and tmpEnv). It also returns the zone the guest manages through
+// /etc/localtime: the configured one, or else the image's TZ when it names a
+// zone the image has.
 // The image's TZ is dropped whenever a zone is managed, at boot, so sessions
 // follow /etc/localtime and a reload that changes the zone reaches them; only
 // a TZ the guest cannot manage, such as a POSIX rule, is kept. A TZ in the
@@ -640,7 +656,8 @@ func sessionEnv(cfg *Config) ([]string, *TimeZone) {
 		env = append(env, kv)
 	}
 	env = append(env, cfg.Env...)
-	return append(env, cacheEnv(cfg.CacheDir, env)...), zone
+	env = append(env, cacheEnv(cfg.CacheDir, env)...)
+	return append(env, tmpEnv(env)...), zone
 }
 
 func newSSHServer(logger *slog.Logger, cfg *Config, acct account, env []string) (*sshd.Server, error) {

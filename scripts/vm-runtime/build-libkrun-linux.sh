@@ -11,9 +11,15 @@
 #         through its opt-in ACPI tables).
 #   0003  open inodes with O_NONBLOCK before unlinking on macOS so a FIFO
 #         does not block the virtio-fs worker (upstream e3a887a2).
-# Drop 0001 once go-microvm pins a libkrun release that contains it. The IRQ
-# patches touch only x86_64 code (on aarch64 they apply and change nothing);
-# 0003 touches only the macOS source, which the Linux build ignores.
+#   0004  bump imago to 0.2.6 so a discard or unmapping write-zeroes request
+#         that reaches the end of a raw disk punches a hole instead of
+#         truncating the image file (libkrun 1.19.8, 05898284; changes
+#         only Cargo.toml and Cargo.lock).
+# Drop 0001 once go-microvm pins a libkrun release that contains it, and 0004
+# once it pins 1.19.8 or later. The IRQ patches touch only x86_64 code (on
+# aarch64 they apply and change nothing); 0003 touches only the macOS source,
+# which the Linux build ignores. 0004 adds crates that the builder image has
+# not cached, so cargo downloads them during the build.
 # The patches are applied to the source tree inside the builder image,
 # which has the matching toolchain, and the result replaces libkrun.so.1.
 #

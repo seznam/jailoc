@@ -187,6 +187,9 @@ Defaults applied to all workspaces. A workspace can override or extend them; see
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
+| `tmp_storage` | string | `"ram"` | Backing of the guest `/tmp`: `"ram"` or `"disk"`. Needs `jailoc restart`. See [`tmp_storage`, `tmp_size` and `tmp_ttl`](#tmp_storage-tmp_size-and-tmp_ttl). |
+| `tmp_size` | string | `"1g"` | Capacity of `/tmp`, at least `16m` with `tmp_storage = "disk"`. Needs `jailoc restart`. |
+| `tmp_ttl` | string | `"8h"` | Age after which `/tmp` entries are removed, or `"0"` to keep them. Applied by `jailoc reload`. |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
 
 ### Git protection and build fields
@@ -594,7 +597,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 Fields with the same meaning as in [`[defaults]`](#defaults); the workspace value wins and the default is inherited. Each takes the type of its `[defaults]` field:
 
 - `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`
-- `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`
+- `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`
 - `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`
 
 ### Merged fields
@@ -610,7 +613,6 @@ Fields with the same meaning as in [`[defaults]`](#defaults); the workspace valu
 | `env` | string[] | `[]` | Overrides `[defaults].env` entries with the same key. |
 | `env_file` | string[] | `[]` | Loaded after `[defaults].env_file`. |
 | `secrets` | table | `{}` | Overrides default secrets with the same name. |
-
 See [Merge Semantics](#merge-semantics) for the exact rules.
 
 ### Example
@@ -850,7 +852,7 @@ Any `backend` value other than `"vm"` and empty is rejected. For a config-load e
 | linux/amd64 | 11 |
 | arm64 (macOS and Linux) | 120 |
 
-- With [`enable_docker`](#enable_docker) the limit is one fewer.
+- With [`enable_docker`](#enable_docker) the limit is one fewer, and with `tmp_storage = "disk"` one fewer.
 - Paths, [`mounts`](#mounts) with a host directory and the state directories of a named [agent profile](#agent-profiles) count towards the limit.
 - `jailoc up` and `jailoc reload` fail above the limit. List a common parent directory instead of many sibling directories.
 
@@ -1133,6 +1135,70 @@ When the existing data disk is larger than `docker_disk`, `jailoc up` fails inst
 
 `[vm] builder_disk` follows the same format and grow-only rule, with at least `1g`, checked when the shared builder VM starts for a build, not by validation.
 
+### `tmp_storage`, `tmp_size` and `tmp_ttl`
+
+These settings apply to the guest `/tmp` only. `/var/tmp`, `~/.local/tmp`, `/run/secrets`, persistent caches and directories named by an overridden `TMPDIR` are not affected. A workspace value wins over `[defaults]`, which wins over the built-in value.
+
+| Field | Valid values | Default | Applied by |
+|---|---|---|---|
+| `tmp_storage` | `"ram"`, `"disk"` | `"ram"` | `jailoc restart` |
+| `tmp_size` | positive integer of bytes, optionally followed by `k`, `m` or `g` (binary multiples, either case); at least `16m` with `"disk"` | `"1g"` | `jailoc restart` |
+| `tmp_ttl` | positive Go duration (`time.ParseDuration`, e.g. `"15m"`, `"8h"`) or `"0"` | `"8h"` | `jailoc reload` |
+
+`tmp_ttl = "0"` disables the cleanup. A value outside these rules is rejected. A VM started by a jailoc release with an older guest protocol (before protocol 4) needs `jailoc restart` before it uses any of these settings, including `tmp_ttl`.
+
+#### Storage
+
+| `tmp_storage` | `/tmp` lives in | Capacity |
+|---|---|---|
+| `ram` | a tmpfs in the VM's memory | `tmp_size` is an upper bound. The pages count against the VM's `memory`, and idle ones go to compressed swap (zram). The host reserves nothing, and its free disk space is irrelevant. A cap above `memory` does not add room. |
+| `disk` | an ext4 file system on a private sparse disk | `tmp_size` is the size of the disk. ext4 metadata reduces the available capacity below it. The sparse file is a cap, not a reservation: the host stores only the blocks the guest has written. |
+
+With `disk`:
+
+- The disk is private to the workspace. It is the file `tmp.img` in the workspace state directory on the host, outside every guest share, and it is independent of the Docker data disk ([`docker_disk`](#cpu-memory-and-docker_disk)).
+- jailoc creates the disk empty at every VM start and formats it with `mkfs.ext4` from the workspace image. Nothing in `/tmp` survives a VM stop or restart.
+- The image must contain `mkfs.ext4` (package `e2fsprogs`). The embedded base image does. An image without it fails the VM start with an error that names `mkfs.ext4`; jailoc installs nothing. See [Use a custom image](../how-to/custom-images.md#know-what-the-image-must-provide).
+- The guest trims freed blocks periodically (`FITRIM`) so that the host can reclaim them, and jailoc removes the disk file when the VM stops.
+
+#### Mount options
+
+`/tmp` has mode `1777` and is mounted `nosuid`, `nodev`, `strictatime` and executable, so access times are exact and build tools and test runners can run files from it.
+
+#### Cleanup
+
+With `tmp_ttl` above zero, the guest sweeps `/tmp` every 15 minutes. The cutoff is the current time minus `tmp_ttl`.
+
+| Entry | Removed when |
+|---|---|
+| Regular file | its access, modification and change times are all older than the cutoff |
+| Directory | it is empty and its access and modification times are older than the cutoff; its change time is ignored |
+
+The sweep skips:
+
+- entries that another process holds an `flock` on;
+- sockets, symbolic links, devices and FIFOs;
+- other mounts below `/tmp`; the sweep does not cross into them.
+
+The checks are best effort. A file renamed into a checked name during a sweep can be removed in its place, and a program that keeps a file open without an `flock` does not protect its path, though it keeps reading the unlinked file through its descriptor. Removal happens at the first sweep after the cutoff, not at exactly creation time plus `tmp_ttl`.
+
+The default `8h` is more aggressive than the 10 days that distributions typically keep `/tmp` files. The cleanup cannot stop a running job from filling `/tmp` before the TTL passes; the capacity limit still applies.
+
+#### Session environment
+
+Sessions get `TMPDIR`, `TMP`, `TEMP` and `GOTMPDIR` set to `/tmp`. A variable set by the image configuration, the workspace's `env` or `env_file`, an env secret, or the command itself takes precedence.
+
+```toml
+[defaults]
+tmp_storage = "ram"
+tmp_size = "2g"
+
+[workspaces.build]
+tmp_storage = "disk"
+tmp_size = "20g"
+tmp_ttl = "0"
+```
+
 ### `timezone`
 
 - `timezone` must match `^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$`; absolute paths and POSIX `TZ` rules are rejected.
@@ -1275,7 +1341,7 @@ See the [secrets how-to](../how-to/secrets.md).
 - A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`.
 - An inherited default secret can't be unset in a workspace.
 
-**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `timezone`, `notifications`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
+**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
 
 **`agents.<name>`**:
 
