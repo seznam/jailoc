@@ -10,10 +10,6 @@ const (
 	terminalModeReset = terminalModesCommon + "\x1b[?1049l" + terminalModesTail
 )
 
-func resetTerminalModes(w io.Writer) {
-	_, _ = io.WriteString(w, terminalModeReset)
-}
-
 // resetSessionTerminalModes turns off the terminal modes an agent may leave on
 // when its session detaches or exits. Leaving the alternate screen (\x1b[?1049l)
 // also restores the cursor position saved when entering it (DECRC), so it is

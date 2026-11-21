@@ -244,6 +244,20 @@ func TestResetSessionTerminalModes(t *testing.T) {
 	if bytes.Contains(onMain.Bytes(), []byte("\x1b[?1049l")) {
 		t.Errorf("resetSessionTerminalModes(alt=false) = %q, must not contain \\x1b[?1049l", onMain.String())
 	}
+	var copyBuf bytes.Buffer
+	w := newStartupStatus(&copyBuf, nil)
+	if _, err := w.Write([]byte("line 1\r\nline 2\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if w.altScreen() {
+		t.Fatal("altScreen() = true on main-screen shell output, want false")
+	}
+	if _, err := w.Write([]byte("\x1b[?1049h")); err != nil {
+		t.Fatal(err)
+	}
+	if !w.altScreen() {
+		t.Fatal("altScreen() = false after entering alternate screen via io.Writer, want true")
+	}
 }
 
 // termSink takes the bytes of a notification writer into out, the buffer

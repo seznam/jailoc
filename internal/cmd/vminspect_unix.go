@@ -88,10 +88,18 @@ func execVM(cmd *cobra.Command, ws *workspace.Resolved, args []string) error {
 		if err := sess.RequestPty(termName, h, w, ssh.TerminalModes{ssh.ECHO: 1}); err != nil {
 			return fmt.Errorf("request terminal: %w", err)
 		}
+		status := newStartupStatus(os.Stdout, nil)
+		outTTY := term.IsTerminal(int(os.Stdout.Fd())) //nolint:gosec // G115: file descriptors fit in int
+		if outTTY {
+			sess.Stdout = status
+		}
 		old, err := term.MakeRaw(fd)
 		if err == nil {
 			defer func() {
-				resetTerminalModes(os.Stdout)
+				if outTTY {
+					status.settle()
+					resetSessionTerminalModes(os.Stdout, status.altScreen())
+				}
 				_ = term.Restore(fd, old)
 			}()
 		}
