@@ -82,13 +82,14 @@ func init() {
 	rootCmd.AddCommand(newGatewayCmd())
 }
 
-// newGatewayCmd builds `jailoc proxy`, the HTTPS proxy to the proxy routes of
-// running workspace VMs.
+// newGatewayCmd builds `jailoc proxy`, the internal HTTPS proxy to the proxy
+// routes of running workspace VMs.
 func newGatewayCmd() *cobra.Command {
 	var opts gatewayOptions
 	cmd := &cobra.Command{
-		Use:   "proxy [workspace...]",
-		Short: "Serve the proxy routes of running workspaces over HTTPS",
+		Use:    "proxy [workspace...]",
+		Hidden: true,
+		Short:  "Serve the proxy routes of running workspaces over HTTPS",
 		Long: "Serve the proxy routes of running workspaces over HTTPS on a loopback address.\n\n" +
 			"By default the proxy runs in the background (`--foreground` keeps it in the foreground).\n" +
 			"When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes.\n\n" +

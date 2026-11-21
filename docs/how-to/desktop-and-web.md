@@ -1,6 +1,6 @@
 # How to open web services in your browser
 
-A workspace can serve web apps from the VM, and you open them in a browser on the host over HTTPS. `jailoc proxy` is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
+A workspace can serve web apps from the VM, and you open them in a browser on the host over HTTPS. `jailoc up`, `jailoc reload` and `jailoc down` manage the local HTTPS proxy in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
 
 The examples use a workspace named `demo` with a proxy route `foo`. Its address is `https://foo.demo.jailoc.local`.
 
@@ -25,28 +25,19 @@ Guest port 6081 (the proxy relay) is reserved whenever any route exists. `ports`
 
 | Change | Needed |
 |--------|--------|
-| The set of guest ports the `proxy` routes use | `jailoc restart` for the workspace, then a restart of `jailoc proxy` |
-| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | A restart of `jailoc proxy` only; nothing changes in the guest |
-
-`jailoc proxy` refuses a running VM whose proxy ports differ from the configuration, and asks for `jailoc restart` first.
+| The set of guest ports the `proxy` routes use | `jailoc restart` for the workspace |
+| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | `jailoc reload` for the workspace |
 
 !!! note "Removing routes and `jailoc reload`"
 
     A running VM keeps serving the ports of its proxy routes until it restarts, even after you remove `proxy` from the configuration. Those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
 
-## Start the proxy
+## How the proxy starts
 
-`jailoc up` automatically starts or updates the background proxy when a workspace has `proxy` routes, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). You can also run `jailoc proxy` directly:
+`jailoc up` and `jailoc restart` automatically start or update the background HTTPS proxy when a workspace has `proxy` routes, `jailoc reload` updates routes whose guest ports are already in the running VM's allowlist, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). `jailoc status` shows the running proxy and its route URLs.
 
-```bash
-jailoc proxy demo
-```
-
-- Runs in the background by default (`--foreground` / `-f` keeps it in the foreground). When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes; newly added routes with `auth = true` get a fresh login code.
-- `jailoc proxy status` shows the running proxy and its routes; `jailoc proxy stop` stops it.
-- When `--tls-cert` and `--tls-key` are omitted, jailoc generates and reuses a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local`.
-- The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused. With `--listener-broker` the proxy serves port 443 through a root broker instead; see [Use the listener broker](#use-the-listener-broker-experimental).
-- Without workspace arguments the proxy serves every running configured workspace that has routes. A named workspace must be running and have routes.
+- jailoc generates and reuses a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local`.
+- The proxy listens on `127.0.0.1:8443` by default.
 - Routes close when a workspace VM stops or is replaced.
 
 1. Open `<origin>/.jailoc/login`, for example `https://foo.demo.jailoc.local/.jailoc/login`.
