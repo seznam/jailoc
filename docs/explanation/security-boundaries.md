@@ -111,7 +111,9 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | GPG agent | Guest to host | Ask the host gpg-agent to sign or decrypt with any key it holds while forwarded; the extra socket refuses key export and management; keys stay on the host | `gpg_agent` |
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
+| Proxy routes | Host to guest | Serve a guest port to a browser over HTTPS through `jailoc proxy` (with optional one-time login code when `auth = true`) | `proxy` |
 | CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |
+| Ingress CA | Host to browser | Not a jailoc channel: a CA you create and trust by hand, for the gateway's certificate | manual, see [Web gateway](#web-gateway) |
 | Inspection CA | Host to guest | Trust certificates the broker signs for hosts matched by `http` rules, which lets the broker read their traffic | `network.rules` with `http` |
 | Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `network` |
 | SSH session | Host to guest | Accept sessions only from jailoc, which authenticates with a per-workspace key and pins the guest host key generated at each start | fixed |
@@ -120,6 +122,25 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 ### host_ports needs the most care
 
 A Chrome DevTools port or a container runtime socket gives the guest control of the browser or the host; jailoc warns about both.
+
+### Web gateway
+
+`jailoc proxy` exposes guest web services to a browser on the host. The path has these properties:
+
+- The proxy listens on the address you give it, normally host loopback, and serves only the routes of workspaces you name. It reaches a VM through a private Unix socket (`web.sock`, mode `0600`, in a state directory with mode `0700`), and the broker relays that to a fixed guest NIC port (6081). The relay forwards only to the loopback ports of configured routes, and no port is published on the host.
+- By default (`auth = false`), routes do not require a login code; setting `auth = true` gates the route behind a one-time login code (valid for 10 minutes) and an 8-hour `__Host-jailoc` session cookie. Upstream application cookies are rewritten to `__Host-jailoc-<host>-<name>` (`Path=/`, `Secure`, no `Domain`) and unwrapped on requests, and cookies without the route's prefix are dropped so a route cannot inject `Domain=jailoc.local` cookies into another route via `Set-Cookie` or `document.cookie`. Every request must match the route's `Host` and TLS server name exactly. A `GET` or `HEAD` needs no `Origin` header, but any present `Origin` or `Referer` must match the route's `https://<host>` origin; every other method, and every WebSocket upgrade, requires that exact `Origin`. Cross-site requests, cross-origin `nested-navigate` frames, and requests with mismatched `Sec-Fetch-Site` or `Referer` are refused, and every response carries `Cross-Origin-Resource-Policy: same-origin` and `Cross-Origin-Opener-Policy: same-origin`.
+- The browser can do whatever the service in the guest lets it do.
+- `proxy` routes can't target a `host_ports` guest port, so a route can't be used to reach a host service.
+jailoc changes no host DNS, trust store or firewall. Setting up names, trust and the 443 redirect is manual, and it extends your host's trust:
+
+- The ingress CA must be a dedicated one, separate from the network broker's inspection CA. Don't rely on a name constraint to limit it to `jailoc.local`: clients may ignore constraints on trust anchors, so a leaked CA key can mint certificates for any domain in every client that trusts the CA.
+- The CA and leaf keys must stay outside every workspace `paths`, `mounts` and `snapshots` source. An agent that can read the CA key can issue certificates your browser accepts, for any domain where constraints are ignored.
+- Redirect rules should match only `127.0.0.1` port 443, and DNS entries only the route names or `jailoc.local`. Browsers with a separate trust store, such as Firefox, need their own trust setup, and a browser with secure DNS may bypass the resolution configured on the host.
+- The gateway doesn't support service workers. It rejects every service worker script fetch (`Service-Worker: script` or `Sec-Fetch-Dest: serviceworker`) with `403` before routing, login or proxying, and adds `worker-src 'none'` to every response as a separate `Content-Security-Policy` header, so an upstream policy can't weaken it. Both checks rely on headers a browser sets and don't constrain other clients. They stop new installs and updates only: a worker that a guest installed earlier on a reused, stable route origin stays registered in the browser, and can intercept requests to the gateway, including login codes. The gateway can't stop it server-side. Unregister every service worker and clear the site data for each development origin before you use the gateway on it; jailoc doesn't do that for you. Browser behaviour across restarts is unverified and needs a manual check before merge.
+- A gateway serves the VM boots it started with. When a VM stops or is replaced, its routes close and a new gateway process must start.
+- The optional `jailoc-listener-broker` is the only part that runs as root. It binds loopback port 443, parses no HTTP or TLS and holds no key; it passes each accepted TCP connection to the gateway over a socket that only the configured UID can open, and the gateway checks the socket belongs to root. Any process of that user can attach in the gateway's place, so it adds no separation between that user's processes. It refuses to run from a path that a non-root user can modify.
+
+The [how-to](../how-to/desktop-and-web.md) gives the commands and their cleanup.
 
 ### Session output is untrusted
 

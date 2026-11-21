@@ -201,6 +201,16 @@ func Init(logger *slog.Logger) error {
 		}
 	}
 
+	stopWebRelay := func() {}
+	if cfg.WebRelay != nil && len(cfg.WebRelay.Ports) > 0 {
+		stop, err := startWebRelay(logger, cfg.WebRelay)
+		if err != nil {
+			return fmt.Errorf("web relay: %w", err)
+		}
+		stopWebRelay = sync.OnceFunc(stop)
+		defer stopWebRelay()
+	}
+
 	srv, err := newSSHServer(logger, cfg, acct, env)
 	if err != nil {
 		return err
@@ -226,6 +236,8 @@ func Init(logger *slog.Logger) error {
 		if _, err := os.Stat(filepath.Join(ControlDir, "shutdown")); err == nil {
 			logger.Info("shutdown requested")
 			srv.Close()
+			// Before the reaper stops, so the exits are collected.
+			stopWebRelay()
 			docker.stop(logger)
 			syscall.Sync()
 			return nil

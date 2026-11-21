@@ -159,6 +159,10 @@ paths = []
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 # notifications = "auto"  # attached OpenCode sessions: auto, native, osc or off
 
+# [workspaces.default.proxy]  # guest web services served at https://<name>.<workspace>.jailoc.local
+# app = 3000
+# admin = { port = 8080, auth = true }
+
 # [workspaces.default.network]
 # ipv6 = false
 # dns = "9.9.9.9"
@@ -443,10 +447,11 @@ type Defaults struct {
 	TimeZone          *string                  `toml:"timezone,omitempty"`
 	// Notifications is how attached sessions notify about the agent: one of
 	// the Notifications* values; empty means NotificationsAuto.
-	Notifications string   `toml:"notifications,omitempty"`
-	ExposePort    *bool    `toml:"expose_port,omitempty"`
-	EnableDocker  *bool    `toml:"enable_docker,omitempty"`
-	Network       *Network `toml:"network,omitempty"`
+	Notifications string         `toml:"notifications,omitempty"`
+	ExposePort    *bool          `toml:"expose_port,omitempty"`
+	EnableDocker  *bool          `toml:"enable_docker,omitempty"`
+	Proxy         *ProxyDefaults `toml:"proxy,omitempty"`
+	Network       *Network       `toml:"network,omitempty"`
 	// Legacy network settings, moved to Network; `jailoc migrate` moves them.
 	LegacyFilteredDNS     *bool      `toml:"filtered_dns,omitempty"`
 	LegacyDNSUpstream     string     `toml:"dns_upstream,omitempty"`
@@ -498,6 +503,9 @@ type Workspace struct {
 	ProtectGit            *bool      `toml:"protect_git,omitempty"`
 	Ports                 []Port     `toml:"ports,omitempty"`
 	HostPorts             []HostPort `toml:"host_ports,omitempty"`
+	// Proxy maps a proxy route name to the guest port (and optional auth)
+	// it serves, reachable at https://<name>.<workspace>.jailoc.local.
+	Proxy *ProxyTable `toml:"proxy,omitempty"`
 }
 
 // Network is a [<scope>.network] table: the guest network of a workspace.
@@ -1477,6 +1485,9 @@ func Validate(cfg *Config) error {
 		}
 		if err := validateHostPorts(ws.HostPorts); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
+		}
+		if err := validateProxy(cfg, name, ws); err != nil {
+			return err
 		}
 		if explicitTrue(cfg.Defaults.EnableDocker, ws.EnableDocker) && explicitTrue(cfg.Defaults.ProtectGit, ws.ProtectGit) {
 			return fmt.Errorf("workspace %q: enable_docker cannot be combined with protect_git: Docker access is root access in the VM", name)

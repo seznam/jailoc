@@ -579,6 +579,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `paths` | string[] | `[]` | Host directories shared into the VM over virtio-fs at their original absolute paths. See [`paths`](#paths). |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to an overlay Dockerfile built on top of the base image. |
 | `build_context` | string | (none) | Build context of the overlay build. |
+| `proxy` | table | `{}` | HTTPS proxy routes: route name to guest port (or `{ port, auth }`), served at `https://<name>.<workspace>.jailoc.local`. See [`proxy`](#proxy). |
 
 - `paths`: the first path is the working directory; with no paths, the working directory is `/home/agent`.
 - `dockerfile`: build failure is fatal. Maximum file size for HTTP sources: 1 MiB.
@@ -1075,6 +1076,34 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 - With `enable_docker = true`, jailoc starts `dockerd` inside the workspace VM; an image without `dockerd` fails `jailoc up`.
 - `enable_docker = true` together with `protect_git = true` is rejected, because Docker access is root access inside the VM. `protect_git` alone turns Docker off.
 - In the images jailoc builds, Docker is installed only when `enable_docker` is on; see [Docker layer](image-resolution.md#docker-layer-steps-2-4-and-5).
+
+### `proxy`
+
+`proxy` serves guest ports to a browser on the host over HTTPS; see the [how-to](../how-to/desktop-and-web.md). The guest runs a proxy relay on NIC port 6081, forwarding to the loopback port of each route.
+
+```toml
+[defaults.proxy]
+auth = false
+
+[workspaces.demo.proxy]
+app = 3000
+admin = { port = 8080, auth = true }
+```
+
+- Each entry in `[workspaces.<name>.proxy]` is either `<route> = <port>` or `<route> = { port = <port>, auth = <bool> }`.
+- `auth` (default `false`) gates the route behind a one-time login code and a `__Host-jailoc` session cookie. It can be set per route, at `[workspaces.<name>.proxy]`, or in `[defaults.proxy]`.
+
+Validation:
+
+- `proxy` route keys are lowercase DNS labels (1 to 63 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`).
+- `proxy` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `proxy` port is fine; only the guest side counts.
+- With any `proxy` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
+- `ports` and `host_ports` can't use guest port 6081.
+- A proxy route is not a published port: nothing listens on the host except the local HTTPS proxy.
+
+Changing the set of guest ports the `proxy` routes use takes effect after `jailoc restart` and a restart of `jailoc proxy`; `jailoc proxy` refuses a running VM that doesn't match. Renaming a route, changing `auth`, or adding a route on a guest port already in that set needs only a restart of `jailoc proxy`.
+
+A running VM keeps the relay port 6081 and the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `proxy`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`.
 
 ### `protect_git`
 

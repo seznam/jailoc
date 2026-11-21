@@ -1,0 +1,262 @@
+// Package webgateway serves workspace web apps over HTTPS on loopback,
+// behind a per-route login code and a boot-scoped session cookie.
+package webgateway
+
+import (
+	"bytes"
+	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Route maps one external hostname to the dialer of its upstream.
+//
+// StartPath, when set, is where a signed-in browser lands instead of "/": the
+// login and a later GET or HEAD of the bare root redirect to it. It must be a
+// same-origin relative path with an optional query, such as
+// "/vnc.html?autoconnect=1". The default is "/".
+type Route struct {
+	Host      string
+	Dial      func(context.Context) (net.Conn, error)
+	StartPath string
+	Auth      bool
+}
+
+// Config supplies an already trusted certificate and the exact hostname allowlist.
+// The caller owns certificate issuance, DNS, trust installation and the dialers.
+type Config struct {
+	Cert   tls.Certificate
+	Routes []Route
+}
+
+// Gateway is an authenticating HTTPS reverse proxy.
+type Gateway struct {
+	cert       tls.Certificate
+	routes     map[string]Route
+	mu         sync.Mutex
+	codes      map[string]*loginCode
+	sessions   map[[32]byte]*session
+	unauth     map[string]*session
+	started    bool
+	base       context.Context
+	now        func() time.Time
+	sessionTTL time.Duration
+}
+
+type loginCode struct {
+	hash    [32]byte
+	expires time.Time
+	used    bool
+}
+
+// New returns one unpredictable, single-use, ten-minute login code per host.
+// Codes are submitted in a POST body, never in a URL. Routes are copied and
+// cannot be changed; a Gateway may be served only once, for one VM boot.
+func New(cfg Config) (*Gateway, map[string]string, error) {
+	if len(cfg.Routes) == 0 {
+		return nil, nil, fmt.Errorf("web gateway requires routes")
+	}
+	cert, err := copyCertificate(cfg.Cert)
+	if err != nil {
+		return nil, nil, fmt.Errorf("web gateway certificate: %w", err)
+	}
+	g := &Gateway{
+		cert: cert, routes: make(map[string]Route, len(cfg.Routes)),
+		codes: make(map[string]*loginCode, len(cfg.Routes)), sessions: make(map[[32]byte]*session),
+		unauth: make(map[string]*session, len(cfg.Routes)),
+		now:    time.Now, sessionTTL: 8 * time.Hour,
+	}
+	codes := make(map[string]string, len(cfg.Routes))
+	for _, route := range cfg.Routes {
+		if !validHostname(route.Host) || route.Dial == nil {
+			return nil, nil, fmt.Errorf("invalid web gateway route %q", route.Host)
+		}
+		if err := validStartPath(route.StartPath); err != nil {
+			return nil, nil, fmt.Errorf("web gateway route %q start path: %w", route.Host, err)
+		}
+		if _, exists := g.routes[route.Host]; exists {
+			return nil, nil, fmt.Errorf("duplicate web gateway route %q", route.Host)
+		}
+		if err := cert.Leaf.VerifyHostname(route.Host); err != nil {
+			return nil, nil, fmt.Errorf("certificate for route %q: %w", route.Host, err)
+		}
+		g.routes[route.Host] = route
+		if route.Auth {
+			code, err := randomToken()
+			if err != nil {
+				return nil, nil, fmt.Errorf("generate login code: %w", err)
+			}
+			g.codes[route.Host] = &loginCode{hash: sha256.Sum256([]byte(code)), expires: g.now().Add(10 * time.Minute)}
+			codes[route.Host] = code
+		}
+	}
+	return g, codes, nil
+}
+
+// Serve takes ownership of a TCP listener bound to a loopback IP. The listener
+// may use any local port, but the external HTTPS authority must use port 443.
+// Cancellation revokes all sessions and closes HTTP and upgraded connections.
+func (g *Gateway) Serve(ctx context.Context, ln net.Listener) error {
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || !addr.IP.IsLoopback() {
+		return fmt.Errorf("web gateway listener must be loopback TCP")
+	}
+	g.mu.Lock()
+	if g.started {
+		g.mu.Unlock()
+		return fmt.Errorf("web gateway already served")
+	}
+	boot, cancel := context.WithCancel(ctx)
+	g.started, g.base = true, boot
+	g.mu.Unlock()
+	defer cancel()
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"},
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if _, ok := g.routes[hello.ServerName]; !ok {
+				return nil, fmt.Errorf("unrecognized web gateway SNI")
+			}
+			return &g.cert, nil
+		},
+	}
+	srv := &http.Server{
+		Handler: g, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute,
+		MaxHeaderBytes: 32 << 10, TLSConfig: tlsConfig,
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		BaseContext:  func(net.Listener) context.Context { return boot },
+		ErrorLog:     log.New(io.Discard, "", 0),
+	}
+	done := make(chan error, 1)
+	context.AfterFunc(boot, func() {
+		g.mu.Lock()
+		active := make([]*session, 0, len(g.sessions)+len(g.unauth))
+		for _, s := range g.sessions {
+			active = append(active, s)
+		}
+		for _, s := range g.unauth {
+			active = append(active, s)
+		}
+		clear(g.sessions)
+		clear(g.unauth)
+		g.mu.Unlock()
+		for _, s := range active {
+			s.close()
+		}
+		done <- srv.Close()
+	})
+	err := srv.Serve(tls.NewListener(ln, tlsConfig))
+	cancel()
+	if closeErr := <-done; closeErr != nil {
+		return fmt.Errorf("close web gateway: %w", closeErr)
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serve web gateway: %w", err)
+	}
+	return nil
+}
+
+// validStartPath accepts an empty path or an absolute same-origin path that is
+// neither the root nor under the gateway's own /.jailoc/ namespace, so that
+// redirecting to it can neither loop nor leave the origin. Percent escapes are
+// refused in the path, and dot segments, backslashes, fragments and control
+// characters everywhere; the query must parse.
+func validStartPath(p string) error {
+	if p == "" {
+		return nil
+	}
+	if len(p) > 1024 || p[0] != '/' || strings.HasPrefix(p, "//") {
+		return fmt.Errorf("%q is not an absolute path", p)
+	}
+	for _, c := range []byte(p) {
+		if c <= ' ' || c == 0x7f || c == '\\' || c == '#' {
+			return fmt.Errorf("%q contains a forbidden character", p)
+		}
+	}
+	path, query, hasQuery := strings.Cut(p, "?")
+	if strings.Contains(path, "%") {
+		return fmt.Errorf("%q: escapes are not allowed in the path", p)
+	}
+	if path == "/" || path == "/.jailoc" || strings.HasPrefix(path, "/.jailoc/") {
+		return fmt.Errorf("%q is not a landing page", p)
+	}
+	for _, seg := range strings.Split(path[1:], "/") {
+		if seg == "." || seg == ".." {
+			return fmt.Errorf("%q contains a dot segment", p)
+		}
+	}
+	if hasQuery {
+		if _, err := url.ParseQuery(query); err != nil {
+			return fmt.Errorf("%q: invalid query: %w", p, err)
+		}
+	}
+	u, err := url.Parse(p)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+		return fmt.Errorf("%q is not a same-origin path", p)
+	}
+	return nil
+}
+
+func validHostname(host string) bool {
+	if len(host) == 0 || len(host) > 253 || net.ParseIP(host) != nil {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func copyCertificate(cert tls.Certificate) (tls.Certificate, error) {
+	if len(cert.Certificate) == 0 {
+		return tls.Certificate{}, fmt.Errorf("missing leaf")
+	}
+	chain := make([][]byte, len(cert.Certificate))
+	for i, der := range cert.Certificate {
+		chain[i] = bytes.Clone(der)
+	}
+	leaf, err := x509.ParseCertificate(chain[0])
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("parse leaf: %w", err)
+	}
+	key, ok := cert.PrivateKey.(crypto.Signer)
+	if !ok {
+		return tls.Certificate{}, fmt.Errorf("missing signing key")
+	}
+	public, err := x509.MarshalPKIXPublicKey(key.Public())
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("marshal public key: %w", err)
+	}
+	if !bytes.Equal(public, leaf.RawSubjectPublicKeyInfo) {
+		return tls.Certificate{}, fmt.Errorf("leaf and key mismatch")
+	}
+	return tls.Certificate{Certificate: chain, PrivateKey: key, Leaf: leaf, OCSPStaple: bytes.Clone(cert.OCSPStaple)}, nil
+}
+
+func randomToken() (string, error) {
+	var data [32]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return "", fmt.Errorf("random token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(data[:]), nil
+}
