@@ -156,7 +156,7 @@ func TestWriteFileAtomic(t *testing.T) {
 			if err := writeFileAtomic(path, tt.data); err != nil {
 				t.Fatalf("writeFileAtomic: %v", err)
 			}
-			got, err := os.ReadFile(path)
+			got, err := os.ReadFile(path) //nolint:gosec // test fixture path.
 			if err != nil || !bytes.Equal(got, tt.data) {
 				t.Errorf("content = %q (%v), want %q", got, err, tt.data)
 			}

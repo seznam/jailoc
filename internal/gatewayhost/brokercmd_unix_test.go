@@ -51,7 +51,7 @@ func bcNewTree(t *testing.T) bcTree {
 	t.Cleanup(func() {
 		// A test may have made a directory unwritable or opened it up;
 		// restore access before removing.
-		if err := os.Chmod(root, 0o700); err != nil {
+		if err := os.Chmod(root, 0o700); err != nil { //nolint:gosec // root is a test directory.
 			t.Errorf("chmod %s: %v", root, err)
 		}
 		if err := os.RemoveAll(root); err != nil {
@@ -62,14 +62,14 @@ func bcNewTree(t *testing.T) bcTree {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(root, "bin")
-	if err := os.Mkdir(bin, 0o755); err != nil {
+	if err := os.Mkdir(bin, 0o755); err != nil { //nolint:gosec // simulates a system bin directory.
 		t.Fatal(err)
 	}
 	if err := os.Chmod(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	exe := filepath.Join(bin, "jailoc-listener-broker")
-	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // simulates an installed executable.
 		t.Fatal(err)
 	}
 	if err := os.Chmod(exe, 0o755); err != nil {
@@ -88,7 +88,7 @@ func TestBrokerCmdParseArgs(t *testing.T) {
 	}{
 		{name: "separate value", args: []string{"--uid", "501"}, want: 501},
 		{name: "equals value", args: []string{"--uid=1000"}, want: 1000},
-		{name: "largest uid", args: []string{"--uid", "4294967295"}, want: 4294967295},
+		{name: "largest uid", args: []string{"--uid", "2147483647"}, want: 2147483647},
 		{name: "no arguments", args: nil, wantErr: "--uid"},
 		{name: "flag without value", args: []string{"--uid"}, wantErr: "--uid"},
 		{name: "empty value", args: []string{"--uid", ""}, wantErr: "--uid"},
@@ -96,7 +96,7 @@ func TestBrokerCmdParseArgs(t *testing.T) {
 		{name: "negative", args: []string{"--uid", "-1"}, wantErr: "--uid"},
 		{name: "signed", args: []string{"--uid", "+501"}, wantErr: "--uid"},
 		{name: "zero", args: []string{"--uid", "0"}, wantErr: "root"},
-		{name: "overflow", args: []string{"--uid", "4294967296"}, wantErr: "--uid"},
+		{name: "overflow", args: []string{"--uid", "2147483648"}, wantErr: "--uid"},
 		{name: "positional only", args: []string{"501"}, wantErr: "--uid"},
 		{name: "extra positional", args: []string{"--uid", "501", "extra"}, wantErr: "arguments"},
 		{name: "extra flag", args: []string{"--uid", "501", "--port", "80"}, wantErr: "port"},
@@ -169,7 +169,7 @@ func TestBrokerCmdCheckTrusted(t *testing.T) {
 				if err := os.Remove(tr.exe); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Mkdir(tr.exe, 0o755); err != nil {
+				if err := os.Mkdir(tr.exe, 0o755); err != nil { //nolint:gosec // test fixture.
 					t.Fatal(err)
 				}
 			},
@@ -384,12 +384,12 @@ func TestBrokerCmdRefusesUntrustedExecutable(t *testing.T) {
 				// The link lives in a good directory and points into a
 				// writable one: the target decides.
 				bad := filepath.Join(h.tree.root, "bad")
-				if err := os.Mkdir(bad, 0o755); err != nil {
+				if err := os.Mkdir(bad, 0o755); err != nil { //nolint:gosec // test fixture.
 					t.Fatal(err)
 				}
 				bcChmod(t, bad, 0o777)
 				target := filepath.Join(bad, "real")
-				if err := os.WriteFile(target, []byte("x"), 0o755); err != nil {
+				if err := os.WriteFile(target, []byte("x"), 0o755); err != nil { //nolint:gosec // test fixture.
 					t.Fatal(err)
 				}
 				link := filepath.Join(h.tree.bin, "link")
