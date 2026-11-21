@@ -75,9 +75,9 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request, host string) {
 	}
 	hash := sha256.Sum256([]byte(values[0]))
 	g.mu.Lock()
+	route, ok := g.routes[host]
 	code := g.codes[host]
-	match := subtle.ConstantTimeCompare(hash[:], code.hash[:]) == 1
-	if !match || code.used || !g.now().Before(code.expires) {
+	if !ok || !route.Auth || code == nil || subtle.ConstantTimeCompare(hash[:], code.hash[:]) != 1 || code.used || !g.now().Before(code.expires) {
 		g.mu.Unlock()
 		http.Error(w, "invalid or expired login code", http.StatusUnauthorized)
 		return
@@ -106,7 +106,7 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request, host string) {
 	})
 	g.mu.Unlock()
 	setSessionCookie(w, token)
-	http.Redirect(w, r, g.landing(host), http.StatusSeeOther)
+	http.Redirect(w, r, g.landing(host), http.StatusSeeOther) //nolint:gosec // G710: landing returns "/" or the validated same-origin Route.StartPath
 }
 
 // landing is where a signed-in browser of host starts: the route's start path,

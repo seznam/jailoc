@@ -95,7 +95,7 @@ Host credentials, SSH keys and unrelated projects aren't in the VM.
 
 #### Browser access to the guest
 
-Web routes (`jailoc gateway`) let a host browser reach guest services. A login code, valid once and for 10 minutes after the gateway starts, and a route-bound session cookie gate every route; nothing is exposed until you run the gateway. The CA you trust for the gateway's certificate is a host credential: clients may ignore name constraints on it, so a leaked key can mint certificates for any domain. Keep its key out of the workspace. See [Security Boundaries](security-boundaries.md#web-gateway).
+Proxy routes (`jailoc proxy`, configured under `[workspaces.<name>.proxy]`) let a host browser reach guest services over HTTPS. By default (`auth = false`), routes require no login code and rely on loopback binding, exact `Host` and SNI matching, and `Sec-Fetch-Site` / `Origin` / `Referer` / `CORP` / `COOP` checks; setting `auth = true` gates the route behind a one-time login code (valid for 10 minutes) and an 8-hour `__Host-jailoc` session cookie. Nothing is exposed until `jailoc proxy` runs. The CA you trust for the proxy's certificate is a host credential: clients may ignore name constraints on it, so a leaked key can mint certificates for any domain. Keep its key out of the workspace. See [Security Boundaries](security-boundaries.md#web-gateway).
 
 #### Files the host later runs
 

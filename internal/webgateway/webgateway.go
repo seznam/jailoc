@@ -30,10 +30,11 @@ import (
 // same-origin relative path with an optional query, such as
 // "/vnc.html?autoconnect=1". The default is "/".
 type Route struct {
-	Host      string
-	Dial      func(context.Context) (net.Conn, error)
-	StartPath string
-	Auth      bool
+	Host       string
+	Dial       func(context.Context) (net.Conn, error)
+	StartPath  string
+	Auth       bool
+	Generation string
 }
 
 // Config supplies an already trusted certificate and the exact hostname allowlist.
@@ -111,7 +112,7 @@ func (g *Gateway) Update(cfg Config) (map[string]string, error) {
 	now := g.now()
 	codes := make(map[string]string)
 	for host, route := range nextRoutes {
-		if prev, exists := g.routes[host]; exists && prev.Auth == route.Auth {
+		if prev, exists := g.routes[host]; exists && prev.Auth == route.Auth && prev.Generation == route.Generation {
 			continue
 		}
 		if route.Auth {
@@ -130,9 +131,12 @@ func (g *Gateway) Update(cfg Config) (map[string]string, error) {
 		g.unauth = make(map[string]*session)
 	}
 	var revoked []*session
-	for host := range g.routes {
-		if _, keep := nextRoutes[host]; !keep {
+	for host, prev := range g.routes {
+		next, keep := nextRoutes[host]
+		if !keep {
 			delete(g.codes, host)
+		}
+		if !keep || next.Auth || next.Generation != prev.Generation {
 			if s := g.unauth[host]; s != nil {
 				revoked = append(revoked, s)
 				delete(g.unauth, host)
@@ -140,7 +144,8 @@ func (g *Gateway) Update(cfg Config) (map[string]string, error) {
 		}
 	}
 	for k, s := range g.sessions {
-		if next, keep := nextRoutes[s.host]; !keep || !next.Auth {
+		prev := g.routes[s.host]
+		if next, keep := nextRoutes[s.host]; !keep || !next.Auth || next.Generation != prev.Generation {
 			revoked = append(revoked, s)
 			delete(g.sessions, k)
 		}

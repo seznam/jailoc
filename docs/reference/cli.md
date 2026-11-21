@@ -168,7 +168,7 @@ jailoc reload [workspace] [flags]
 - `paths` and `mounts`, including `agents.<name>.mounts`
 - the agent's `profile`
 - `cpu`, `memory`
-- `enable_docker`, the set of guest ports the `web` routes use (renaming a route, or adding one on a port already in the set, needs only a restart of [`jailoc gateway`](#jailoc-gateway)), `protect_git`
+- `enable_docker`, the set of guest ports the `proxy` routes use (renaming a route, changing `auth`, or adding one on a port already in the set needs only a restart of [`jailoc proxy`](#jailoc-proxy)), `protect_git`
 - `tmp_storage`, `tmp_size`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest
@@ -184,7 +184,7 @@ jailoc reload [workspace] [flags]
 - Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets.
 - Files opened before a reload keep their old snapshot content.
 - Concurrent reloads of one workspace, including those `jailoc up` starts, wait for each other and run one at a time.
-- A running VM keeps the guest ports of its `web` routes reserved until a restart, even when the configuration dropped `web`. A reload whose `host_ports` or `ports` use one of them fails and asks for [`jailoc restart`](#jailoc-restart).
+- A running VM keeps the guest ports of its `proxy` routes reserved until a restart, even when the configuration dropped `proxy`. A reload whose `host_ports` or `ports` use one of them fails and asks for [`jailoc restart`](#jailoc-restart).
 
 ---
 
@@ -457,7 +457,7 @@ jailoc proxy host-proof
 - Prints one `PASS` or `FAIL` row per check and exits with an error if a check or cleanup fails. Prints no private key or token.
 - Changes no DNS, `/etc/hosts`, trust store, service, firewall, `sysctl` setting, browser setting or port 443, installs no root helper and persists no CA.
 - Normal CLI startup still initializes persistent logging and can check for updates in an interactive terminal. The proof's temporary-fixture isolation does not cover these CLI hooks.
-- Runs the broker and both gateways in one process on ephemeral loopback ports. Covers no second UID, port 443, root or browser trust check. The manual setup in the [how-to](../how-to/desktop-and-web.md#check-the-host-primitives-experimental) remains required for `jailoc gateway`.
+- Runs the broker and both proxies in one process on ephemeral loopback ports. Covers no second UID, port 443, root or browser trust check. The manual setup in the [how-to](../how-to/desktop-and-web.md#check-the-host-primitives-experimental) remains required for `jailoc proxy`.
 
 | Check | Covers |
 |-------|--------|

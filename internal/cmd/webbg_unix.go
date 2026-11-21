@@ -66,10 +66,83 @@ func webStateFile() string {
 	return filepath.Join(webStateDir(), "state.json")
 }
 
+func webOptionsFile() string {
+	return filepath.Join(webStateDir(), "options.json")
+}
+
+func webLockFile() string {
+	return filepath.Join(webStateDir(), "proxy.lock")
+}
+
 func webLogFile() string {
 	return filepath.Join(webStateDir(), "web.log")
 }
 
+type webSavedOptions struct {
+	Listen         string `json:"listen,omitempty"`
+	ListenerBroker bool   `json:"listener_broker,omitempty"`
+	CertFile       string `json:"cert_file,omitempty"`
+	KeyFile        string `json:"key_file,omitempty"`
+}
+
+func writeWebSavedOptions(opts gatewayOptions) error {
+	if err := os.MkdirAll(webStateDir(), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(webSavedOptions{
+		Listen:         opts.listen,
+		ListenerBroker: opts.listenerBroker,
+		CertFile:       opts.certFile,
+		KeyFile:        opts.keyFile,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writePrivateFile(webOptionsFile(), append(data, '\n'))
+}
+
+func loadWebSavedOptions() gatewayOptions {
+	data, err := os.ReadFile(webOptionsFile()) //nolint:gosec // G304: jailoc-owned state path
+	if err != nil {
+		return gatewayOptions{listen: gatewayDefaultListen}
+	}
+	var saved webSavedOptions
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return gatewayOptions{listen: gatewayDefaultListen}
+	}
+	listen := saved.Listen
+	if listen == "" && !saved.ListenerBroker {
+		listen = gatewayDefaultListen
+	}
+	return gatewayOptions{
+		listen:         listen,
+		listenerBroker: saved.ListenerBroker,
+		certFile:       saved.CertFile,
+		keyFile:        saved.KeyFile,
+	}
+}
+
+func acquireWebProxyLock() (func(), error) {
+	dir := webStateDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create web state dir: %w", err)
+	}
+	f, err := os.OpenFile(webLockFile(), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: jailoc-owned state path
+	if err != nil {
+		return nil, fmt.Errorf("open proxy lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { //nolint:gosec // G115: file descriptors fit in int
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, errors.New("another jailoc proxy is already running")
+		}
+		return nil, fmt.Errorf("lock proxy state: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) //nolint:gosec // G115: file descriptors fit in int
+		_ = f.Close()
+	}, nil
+}
 func readWebGatewayState() (*webGatewayState, error) {
 	data, err := os.ReadFile(webStateFile()) //nolint:gosec // G304: jailoc-owned state path
 	if err != nil {
@@ -117,6 +190,7 @@ type gatewayManager struct {
 	startedAt time.Time
 	gw        *webgateway.Gateway
 	instances map[string]*gatewayInstance
+	wsRoutes  map[string][]workspace.ProxyRoute
 	watchers  *sync.WaitGroup
 	errw      io.Writer
 }
@@ -124,9 +198,9 @@ type gatewayManager struct {
 func (m *gatewayManager) stateLocked() webGatewayState {
 	ws := make(map[string][]string, len(m.instances))
 	for _, name := range slices.Sorted(maps.Keys(m.instances)) {
-		inst := m.instances[name]
-		hosts := make([]string, 0, len(inst.target.ws.Proxy))
-		for _, r := range inst.target.ws.Proxy {
+		routes := m.wsRoutes[name]
+		hosts := make([]string, 0, len(routes))
+		for _, r := range routes {
 			hosts = append(hosts, gatewayHost(r.Name, name))
 		}
 		ws[name] = hosts
@@ -145,12 +219,30 @@ func (m *gatewayManager) stateLocked() webGatewayState {
 func (m *gatewayManager) addInstanceLocked(t gatewayTarget) *gatewayInstance {
 	inst := newGatewayInstance(m.runCtx, t, m.errw)
 	m.instances[t.ws.Name] = inst
+	if m.wsRoutes == nil {
+		m.wsRoutes = make(map[string][]workspace.ProxyRoute)
+	}
+	m.wsRoutes[t.ws.Name] = slices.Clone(t.ws.Proxy)
 	m.watchers.Add(1)
-	go func() {
+	go func(name string, i *gatewayInstance) {
 		defer m.watchers.Done()
-		inst.watch(gatewayPollInterval)
-	}()
+		i.watch(gatewayPollInterval)
+		m.onInstanceDone(name, i)
+	}(t.ws.Name, inst)
 	return inst
+}
+
+func (m *gatewayManager) onInstanceDone(name string, inst *gatewayInstance) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.instances[name] != inst {
+		return
+	}
+	delete(m.instances, name)
+	delete(m.wsRoutes, name)
+	if len(m.instances) == 0 {
+		m.cancelRun(errGatewayNoVMs)
+	}
 }
 
 func (m *gatewayManager) sync(reqNames []string) webControlResponse {
@@ -173,21 +265,24 @@ func (m *gatewayManager) sync(reqNames []string) webControlResponse {
 	for name, inst := range m.instances {
 		if inst.check() != nil {
 			delete(m.instances, name)
+			delete(m.wsRoutes, name)
 			continue
 		}
 		_, exists := cfg.Workspaces[name]
 		if !exists {
-			inst.cancel(errGatewayVMGone)
 			delete(m.instances, name)
+			delete(m.wsRoutes, name)
+			inst.cancel(errGatewayVMGone)
 			continue
 		}
 		ws, err := workspace.Resolve(cfg, name)
 		if err != nil || len(ws.Proxy) == 0 || checkGatewayVM(ws, inst.target.stateDir) != nil {
-			inst.cancel(errGatewayVMGone)
 			delete(m.instances, name)
+			delete(m.wsRoutes, name)
+			inst.cancel(errGatewayVMGone)
 			continue
 		}
-		inst.target.ws = ws
+		m.wsRoutes[name] = slices.Clone(ws.Proxy)
 	}
 
 	// Discover all running workspaces with routes (or ensure reqNames are included).
@@ -228,8 +323,10 @@ func (m *gatewayManager) sync(reqNames []string) webControlResponse {
 	var routes []webgateway.Route
 	for _, name := range slices.Sorted(maps.Keys(m.instances)) {
 		inst := m.instances[name]
-		targets = append(targets, inst.target)
-		routes = append(routes, inst.routes()...)
+		wsCopy := *inst.target.ws
+		wsCopy.Proxy = m.wsRoutes[name]
+		targets = append(targets, gatewayTarget{ws: &wsCopy, stateDir: inst.target.stateDir, id: inst.target.id})
+		routes = append(routes, inst.routesFor(m.wsRoutes[name])...)
 	}
 	cert, caPath, err := resolveGatewayCert(m.opts, cfg, targets)
 	if err != nil {
@@ -422,7 +519,7 @@ func startBackgroundWebGateway(ctx context.Context, names []string, opts gateway
 	}
 	defer func() { _ = bannerR.Close() }()
 
-	childArgs := []string{"proxy", "--foreground"}
+	childArgs := []string{"--config", config.ConfigPath(), "proxy", "--foreground"}
 	if opts.listenerBroker {
 		childArgs = append(childArgs, "--listener-broker")
 	} else if opts.listen != "" {
@@ -582,6 +679,7 @@ func newWebStopCmd() *cobra.Command {
 			if err := stopBackgroundWebGateway(); err != nil {
 				return err
 			}
+			_ = os.Remove(webOptionsFile())
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Web gateway stopped")
 			return nil
 		},
@@ -595,12 +693,16 @@ func autoManageWebOnUp(ctx context.Context, ws *workspace.Resolved, out, errw io
 	}
 	if st := runningWebGateway(); st != nil {
 		resp, err := sendWebControl(st.ControlSocket, webControlRequest{Action: "sync", Workspaces: []string{ws.Name}})
-		if err == nil && resp.Error == "" {
+		if err == nil {
+			if resp.Error != "" {
+				_, _ = color.New(color.FgYellow).Fprintf(errw, "WARNING: could not sync background proxy (%s); run `jailoc proxy %s`\n", resp.Error, ws.Name)
+				return
+			}
 			printSyncedWebGateway(out, resp.State, resp.Codes, []string{ws.Name})
 			return
 		}
 	}
-	if err := startBackgroundWebGateway(ctx, []string{ws.Name}, gatewayOptions{listen: gatewayDefaultListen}, out); err != nil {
+	if err := startBackgroundWebGateway(ctx, []string{ws.Name}, loadWebSavedOptions(), out); err != nil {
 		_, _ = color.New(color.FgYellow).Fprintf(errw, "WARNING: could not start background proxy (%v); run `jailoc proxy %s`\n", err, ws.Name)
 	}
 }
