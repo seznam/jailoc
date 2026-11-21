@@ -95,7 +95,7 @@ Host credentials, SSH keys and unrelated projects aren't in the VM.
 
 #### Browser access to the guest
 
-Web routes and the desktop (`jailoc gateway`) let a host browser reach guest services. A login code, valid once and for 10 minutes after the gateway starts, and a route-bound session cookie gate every route; nothing is exposed until you run the gateway. A desktop session is as powerful as the agent itself: whoever is logged in sees and controls everything on the screen. The CA you trust for the gateway's certificate is a host credential: clients may ignore name constraints on it, so a leaked key can mint certificates for any domain. Keep its key out of the workspace. See [Security Boundaries](security-boundaries.md#web-gateway).
+Web routes (`jailoc gateway`) let a host browser reach guest services. A login code, valid once and for 10 minutes after the gateway starts, and a route-bound session cookie gate every route; nothing is exposed until you run the gateway. The CA you trust for the gateway's certificate is a host credential: clients may ignore name constraints on it, so a leaked key can mint certificates for any domain. Keep its key out of the workspace. See [Security Boundaries](security-boundaries.md#web-gateway).
 
 #### Files the host later runs
 

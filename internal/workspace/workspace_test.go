@@ -2039,20 +2039,15 @@ func TestResolveNetworkRulesLog(t *testing.T) {
 	}
 }
 
-func TestResolveDesktopAndWeb(t *testing.T) {
+func TestResolveWeb(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name         string
-		defaults     *bool
 		ws           config.Workspace
-		wantDesktop  bool
 		wantWeb      []workspace.WebRoute
 		wantNoRoutes bool
 	}{
 		{name: "off by default", ws: config.Workspace{}, wantNoRoutes: true},
-		{name: "workspace on", ws: config.Workspace{EnableDesktop: new(true)}, wantDesktop: true, wantWeb: []workspace.WebRoute{{Name: "desktop", Port: 6080}}},
-		{name: "defaults on", defaults: new(true), ws: config.Workspace{}, wantDesktop: true, wantWeb: []workspace.WebRoute{{Name: "desktop", Port: 6080}}},
-		{name: "workspace disables defaults", defaults: new(true), ws: config.Workspace{EnableDesktop: new(false)}, wantNoRoutes: true},
 		{
 			name: "web sorted by name",
 			ws:   config.Workspace{Web: map[string]int{"zeta": 1, "app": 3000, "mid": 8080}},
@@ -2060,34 +2055,16 @@ func TestResolveDesktopAndWeb(t *testing.T) {
 				{Name: "app", Port: 3000}, {Name: "mid", Port: 8080}, {Name: "zeta", Port: 1},
 			},
 		},
-		{
-			name:        "desktop synthesized and sorted with web",
-			ws:          config.Workspace{EnableDesktop: new(true), Web: map[string]int{"zeta": 9000, "app": 3000}},
-			wantDesktop: true,
-			wantWeb: []workspace.WebRoute{
-				{Name: "app", Port: 3000}, {Name: "desktop", Port: 6080}, {Name: "zeta", Port: 9000},
-			},
-		},
-		{
-			name:        "reserved desktop name never overridden",
-			ws:          config.Workspace{EnableDesktop: new(true), Web: map[string]int{"desktop": 1234}},
-			wantDesktop: true,
-			wantWeb:     []workspace.WebRoute{{Name: "desktop", Port: 6080}},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &config.Config{
-				Defaults:   config.Defaults{EnableDesktop: tt.defaults},
 				Workspaces: map[string]config.Workspace{"w": tt.ws},
 			}
 			got, err := workspace.Resolve(cfg, "w")
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
-			}
-			if got.EnableDesktop != tt.wantDesktop {
-				t.Errorf("EnableDesktop = %v, want %v", got.EnableDesktop, tt.wantDesktop)
 			}
 			if tt.wantNoRoutes {
 				if len(got.Web) != 0 {

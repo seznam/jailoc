@@ -63,11 +63,7 @@ type Resolved struct {
 	// TimeZone is the time zone name for the VM; empty means the host's zone.
 	TimeZone     string
 	EnableDocker bool
-	// EnableDesktop runs a desktop in the VM, served by the "desktop" web
-	// route. Changing it takes a restart.
-	EnableDesktop bool
-	// Web are the web routes of the workspace sorted by name, with the
-	// "desktop" route (guest port 6080) added when EnableDesktop is set.
+	// Web are the web routes of the workspace sorted by name.
 	Web []WebRoute
 	// Notifications is how attached sessions notify about the agent, one of
 	// the config.Notifications* values.
@@ -227,7 +223,6 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		TimeZone:          stringWithDefault(cfg.Defaults.TimeZone, ws.TimeZone, ""),
 		Notifications:     cmp.Or(ws.Notifications, cfg.Defaults.Notifications, config.NotificationsAuto),
 		EnableDocker:      boolPtrWithDefault(cfg.Defaults.EnableDocker, ws.EnableDocker, false),
-		EnableDesktop:     boolPtrWithDefault(cfg.Defaults.EnableDesktop, ws.EnableDesktop, false),
 		IsolatedBuild:     boolPtrWithDefault(cfg.Defaults.IsolatedBuild, ws.IsolatedBuild, false),
 		ProtectGit:        boolPtrWithDefault(cfg.Defaults.ProtectGit, ws.ProtectGit, false),
 		IPv6:              boolPtrWithDefault(cfg.Defaults.Network.Get().IPv6, ws.Network.Get().IPv6, false),
@@ -242,7 +237,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	if r.ProtectGit {
 		r.EnableDocker = false
 	}
-	r.Web = resolveWeb(ws.Web, r.EnableDesktop)
+	r.Web = resolveWeb(ws.Web)
 	r.Ports = config.MergePorts(cfg.Defaults.Ports, ws.Ports)
 	r.HostPorts = config.MergeHostPorts(cfg.Defaults.HostPorts, ws.HostPorts)
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
@@ -642,19 +637,11 @@ func stringWithDefault(defaultVal *string, override *string, fallback string) st
 	return fallback
 }
 
-// resolveWeb returns the web routes sorted by name. The desktop route is
-// reserved: it exists only when the desktop is enabled and always targets the
-// noVNC port.
-func resolveWeb(web map[string]int, desktop bool) []WebRoute {
-	routes := make([]WebRoute, 0, len(web)+1)
+// resolveWeb returns the web routes sorted by name.
+func resolveWeb(web map[string]int) []WebRoute {
+	routes := make([]WebRoute, 0, len(web))
 	for name, port := range web {
-		if name == config.DesktopRouteName {
-			continue
-		}
 		routes = append(routes, WebRoute{Name: name, Port: port})
-	}
-	if desktop {
-		routes = append(routes, WebRoute{Name: config.DesktopRouteName, Port: config.DesktopWebPort})
 	}
 	slices.SortFunc(routes, func(a, b WebRoute) int { return cmp.Compare(a.Name, b.Name) })
 	return routes

@@ -86,8 +86,8 @@ func newGatewayCmd() *cobra.Command {
 	var opts gatewayOptions
 	cmd := &cobra.Command{
 		Use:   "gateway [workspace...]",
-		Short: "Serve the desktop and web routes of running workspaces over HTTPS",
-		Long: "Serve the desktop and web routes of running workspaces over HTTPS on a loopback address, in the foreground.\n\n" +
+		Short: "Serve the web routes of running workspaces over HTTPS",
+		Long: "Serve the web routes of running workspaces over HTTPS on a loopback address, in the foreground.\n\n" +
 			"Each route is https://<route>.<workspace>.jailoc.local and is protected by a one-time login code, printed once at start.\n" +
 			"The gateway starts no VM, opens no browser and changes no host setting: make the names resolve to the listen address\n" +
 			"(for example with /etc/hosts entries) and give it a certificate that covers them with --tls-cert and --tls-key.\n" +
@@ -261,19 +261,6 @@ func parseGatewayListen(s string) (string, error) {
 	return net.JoinHostPort(ip.Unmap().String(), port), nil
 }
 
-// desktopStartPath is the noVNC page that connects at once: the desktop's
-// document root has no index page, so "/" would list the directory.
-const desktopStartPath = "/vnc.html?autoconnect=1"
-
-// gatewayStartPath is where a signed-in browser lands on the web route name:
-// the built-in desktop route opens noVNC, every other route its root.
-func gatewayStartPath(name string) string {
-	if name == config.DesktopRouteName {
-		return desktopStartPath
-	}
-	return ""
-}
-
 // gatewayHost is the host name of a web route of a workspace.
 func gatewayHost(route, workspace string) string {
 	return route + "." + workspace + "." + gatewayDomain
@@ -307,7 +294,7 @@ func selectGatewayTargets(cfg *config.Config, names []string, w io.Writer) ([]ga
 		}
 		if len(ws.Web) == 0 {
 			if explicit {
-				return nil, fmt.Errorf("workspace %q has no web routes; set enable_desktop or add a [workspaces.%s.web] table", name, name)
+				return nil, fmt.Errorf("workspace %q has no web routes; add a [workspaces.%s.web] table", name, name)
 			}
 			continue
 		}
@@ -352,17 +339,13 @@ func checkGatewayVM(ws *workspace.Resolved, stateDir string) error {
 	return nil
 }
 
-// webChanges names the desktop and web settings of ws that differ from the
-// running guest configuration g and need a restart.
+// webChanges names the web settings of ws that differ from the running guest
+// configuration g and need a restart.
 func webChanges(ws *workspace.Resolved, g *guest.Config) []string {
-	var out []string
-	if (g.Desktop != nil) != ws.EnableDesktop {
-		out = append(out, "enable_desktop")
-	}
 	if !slices.Equal(guestWebPorts(g), webRelayPorts(ws.Web)) {
-		out = append(out, "web")
+		return []string{"web"}
 	}
-	return out
+	return nil
 }
 
 // printGatewayRoutes prints each route's URL and its login code once, on w.
@@ -464,7 +447,7 @@ func (i *gatewayInstance) routes() []webgateway.Route {
 	out := make([]webgateway.Route, 0, len(i.target.ws.Web))
 	for _, r := range i.target.ws.Web {
 		route := &gatewayRoute{inst: i, port: uint16(r.Port), ctx: i.ctx} //nolint:gosec // G115: validated to 1-65535
-		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext, StartPath: gatewayStartPath(r.Name)})
+		out = append(out, webgateway.Route{Host: gatewayHost(r.Name, i.target.ws.Name), Dial: route.dialContext})
 	}
 	return out
 }

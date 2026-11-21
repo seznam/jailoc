@@ -11,7 +11,6 @@ import (
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
-	"github.com/seznam/jailoc/internal/embed"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -136,58 +135,6 @@ func TestDockerLayerDockerfile(t *testing.T) {
 				t.Fatalf("dockerLayerDockerfile() =\n%s\nwant\n%s", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestDesktopLayerDockerfile(t *testing.T) {
-	t.Parallel()
-
-	const fragment = "RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \\\n    apt-get update\n"
-	layer := "ARG JAILOC_CLEAN_CACHES\n" + fragment
-	head := layerHead + "FROM ${BASE}\n"
-	tests := []struct {
-		user string
-		want string
-	}{
-		{"", head + layer},
-		{"root", head + layer},
-		{"0:0", head + layer},
-		{"agent", head + "USER root\n" + layer + "USER agent\n"},
-		{"1000:1000", head + "USER root\n" + layer + "USER 1000:1000\n"},
-	}
-	for _, tt := range tests {
-		t.Run("user="+tt.user, func(t *testing.T) {
-			t.Parallel()
-			if got := string(desktopLayerDockerfile([]byte(fragment), tt.user)); got != tt.want {
-				t.Fatalf("desktopLayerDockerfile() =\n%s\nwant\n%s", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestDesktopLayerDockerfileEmbedded(t *testing.T) {
-	t.Parallel()
-
-	got := string(desktopLayerDockerfile(embed.DesktopLayer(), "agent"))
-	for _, want := range []string{"USER root\nARG " + cleanCachesArg + "\n", "tigervnc-standalone-server", "Debian or Ubuntu"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("desktop Dockerfile does not contain %q:\n%s", want, got)
-		}
-	}
-	if !strings.HasSuffix(got, "\nUSER agent\n") {
-		t.Errorf("desktop Dockerfile does not restore the user:\n%s", got)
-	}
-	// The classic builder drops the cache mounts and keeps a valid RUN.
-	args := map[string]*string{}
-	classic := string(forBuilder(build.BuilderV1, []byte(got), args))
-	if strings.Contains(classic, "--mount=") {
-		t.Errorf("classic desktop Dockerfile keeps cache mounts:\n%s", classic)
-	}
-	if v, ok := args[cleanCachesArg]; !ok || *v != "1" {
-		t.Errorf("args[%s] = %v, %v, want 1", cleanCachesArg, v, ok)
-	}
-	if !strings.Contains(classic, "RUN if ") {
-		t.Errorf("classic desktop Dockerfile RUN does not start with the apt check:\n%s", classic)
 	}
 }
 

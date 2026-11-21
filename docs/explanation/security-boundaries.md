@@ -111,7 +111,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | GPG agent | Guest to host | Ask the host gpg-agent to sign or decrypt with any key it holds while forwarded; the extra socket refuses key export and management; keys stay on the host | `gpg_agent` |
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
-| Web routes and desktop | Host to guest | Serve a guest port, or the desktop, to a browser that holds a login code, through `jailoc gateway` | `web`, `enable_desktop` |
+| Web routes | Host to guest | Serve a guest port to a browser that holds a login code, through `jailoc gateway` | `web` |
 | CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |
 | Ingress CA | Host to browser | Not a jailoc channel: a CA you create and trust by hand, for the gateway's certificate | manual, see [Web gateway](#web-gateway) |
 | Inspection CA | Host to guest | Trust certificates the broker signs for hosts matched by `http` rules, which lets the broker read their traffic | `network.rules` with `http` |
@@ -125,13 +125,12 @@ A Chrome DevTools port or a container runtime socket gives the guest control of 
 
 ### Web gateway
 
-`jailoc gateway` exposes guest web services and the desktop to a browser on the host. The path has these properties:
+`jailoc gateway` exposes guest web services to a browser on the host. The path has these properties:
 
 - The gateway listens on the address you give it, normally host loopback, and serves only the routes of workspaces you name. It reaches a VM through a private Unix socket (`web.sock`, mode `0600`, in a state directory with mode `0700`), and the broker relays that to a fixed guest NIC port (6081). The relay forwards only to the loopback ports of configured routes, and no port is published on the host.
 - A route is never open: access needs a one-time login code, printed by the gateway process, that expires 10 minutes after the gateway starts. The session cookie is `__Host-` prefixed and lasts 8 hours. Upstream application cookies are rewritten to `__Host-jailoc-<host>-<name>` (`Path=/`, `Secure`, no `Domain`) and unwrapped on requests, and cookies without the route's prefix are dropped so a route cannot inject `Domain=jailoc.local` cookies into another route via `Set-Cookie` or `document.cookie`. Every request must match the route's `Host` and TLS server name exactly. A `GET` or `HEAD` needs no `Origin` header, but one that is present must be exactly the route's origin; every other method, and every WebSocket upgrade, requires it. Cross-site requests are refused.
-- The browser can do whatever the service in the guest lets it do. The desktop gives whoever holds the login the agent's screen, keyboard and any program on it, which includes the agent's session and secrets in its environment. Treat a login as agent-level access.
+- The browser can do whatever the service in the guest lets it do.
 - `web` routes can't target a `host_ports` guest port, so a route can't be used to reach a host service.
-- Programs the desktop starts at boot get a snapshot of the environment without later secrets; programs an agent session launches onto the desktop inherit that session's environment, secrets included.
 
 jailoc changes no host DNS, trust store or firewall. Setting up names, trust and the 443 redirect is manual, and it extends your host's trust:
 
