@@ -100,7 +100,7 @@ func ingressSANs(cfg *config.Config, targets []gatewayTarget) (dnsNames, checkHo
 		if config.ValidWebLabel(t.ws.Name) {
 			names = append(names, "*."+t.ws.Name+"."+gatewayDomain)
 		}
-		for _, r := range t.ws.Web {
+		for _, r := range t.ws.Proxy {
 			h := gatewayHost(r.Name, t.ws.Name)
 			names = append(names, h)
 			hosts = append(hosts, h)

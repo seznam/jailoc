@@ -529,29 +529,29 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestWorkspaceSpecWeb(t *testing.T) {
+func TestWorkspaceSpecProxy(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
-		web       []workspace.WebRoute
-		wantPorts []uint16 // nil: no web relay
+		proxy     []workspace.ProxyRoute
+		wantPorts []uint16 // nil: no proxy relay
 	}{
 		{name: "none"},
 		{
-			name:      "web routes",
-			web:       []workspace.WebRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}},
+			name:      "proxy routes",
+			proxy:     []workspace.ProxyRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}},
 			wantPorts: []uint16{3000, 8080},
 		},
 		{
-			name:      "web routes with a shared port",
-			web:       []workspace.WebRoute{{Name: "a", Port: 3000}, {Name: "b", Port: 3000}, {Name: "c", Port: 6080}},
+			name:      "proxy routes with a shared port",
+			proxy:     []workspace.ProxyRoute{{Name: "a", Port: 3000}, {Name: "b", Port: 3000}, {Name: "c", Port: 6080}},
 			wantPorts: []uint16{3000, 6080},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", Web: tt.web}
+			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", Proxy: tt.proxy}
 			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
@@ -567,33 +567,33 @@ func TestWorkspaceSpecWeb(t *testing.T) {
 	}
 }
 
-func TestStatusRestartChangesWeb(t *testing.T) {
+func TestStatusRestartChangesProxy(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	base := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol}
 	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g"}
 	tests := []struct {
 		name    string
-		web     []workspace.WebRoute
+		proxy   []workspace.ProxyRoute
 		running guest.Config
 		want    []string
 	}{
 		{name: "none"},
-		{name: "web added", web: []workspace.WebRoute{{Name: "app", Port: 3000}}, want: []string{"web"}},
+		{name: "proxy added", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}, want: []string{"proxy"}},
 		{
-			name: "web port changed", web: []workspace.WebRoute{{Name: "app", Port: 3001}},
-			running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"web"},
+			name: "proxy port changed", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3001}},
+			running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
 		},
 		{
-			name: "web renamed on the same port", web: []workspace.WebRoute{{Name: "other", Port: 3000}},
+			name: "proxy renamed on the same port", proxy: []workspace.ProxyRoute{{Name: "other", Port: 3000}},
 			running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}},
 		},
 		{
-			name: "web removed", running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"web"},
+			name: "proxy removed", running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
 		},
 	}
 	for _, tt := range tests {
 		w := *ws
-		w.Web = tt.web
+		w.Proxy = tt.proxy
 		running := base
 		g := tt.running
 		running.Guest = &g

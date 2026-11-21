@@ -403,52 +403,53 @@ jailoc sessions stop ID [flags]
 
 ---
 
-### `jailoc web`
+### `jailoc proxy`
 
-Serve the web routes of running workspaces to a browser on the host over HTTPS (aliases: `gateway`, `gw`).
+Serve the proxy routes of running workspaces to a browser on the host over HTTPS (`jailoc gateway`, `jailoc gw` and `jailoc web` are aliases).
 
 ```text
-jailoc web [workspace...] [--foreground] [--tls-cert <path> --tls-key <path>] [--listen 127.0.0.1:8443 | --listener-broker]
-jailoc web status
-jailoc web stop
+jailoc proxy [workspace...] [--foreground] [--tls-cert <path> --tls-key <path>] [--listen 127.0.0.1:8443 | --listener-broker]
+jailoc proxy status
+jailoc proxy stop
 ```
 
 - Runs in the background by default; `--foreground` (`-f`) runs in the foreground until interrupted.
-- `jailoc up` and `jailoc restart` automatically start or sync the background gateway when a workspace has `web` routes; `jailoc down` removes the stopped workspace's routes and stops the background gateway when no web workspaces remain.
-- Re-running `jailoc web` while the background gateway is running preserves existing browser sessions and prints the active routes, minting login codes only for newly added routes.
-- With no `workspace` argument it serves every running configured workspace that has `web` routes and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
-- A running VM whose web guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
-- Prints the URL (`https://<name>.<workspace>.jailoc.local/`) and a login code when a route is added.
-- Routes close when a workspace VM stops or is replaced, and the gateway exits when every served VM is gone.
+- `jailoc up` and `jailoc restart` automatically start or sync the background proxy when a workspace has `proxy` routes; `jailoc down` removes the stopped workspace's routes and stops the background proxy when no proxy workspaces remain.
+- Re-running `jailoc proxy` while the background proxy is running preserves existing browser sessions and prints the active routes, minting login codes only for newly added routes with `auth = true`.
+- With no `workspace` argument it serves every running configured workspace that has `proxy` routes and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
+- A running VM whose proxy guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
+- Prints the URL (`https://<name>.<workspace>.jailoc.local/`) for each route, and a one-time login code when a route has `auth = true`.
+- Routes close when a workspace VM stops or is replaced, and the proxy exits when every served VM is gone.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-f`, `--foreground` | off | Run in the foreground instead of starting or syncing the background gateway. |
+| `-f`, `--foreground` | off | Run in the foreground instead of starting or syncing the background proxy. |
 | `--tls-cert PATH` | `~/.config/jailoc/ingress/cert.crt` | PEM certificate chain that covers every route host. When omitted together with `--tls-key`, jailoc generates and reuses a local CA (`ca.crt`) and leaf certificate in `~/.config/jailoc/ingress`. |
 | `--tls-key PATH` | `~/.config/jailoc/ingress/cert.key` | PEM private key of the certificate. |
 | `--listen ADDRESS` | `127.0.0.1:8443` | Loopback IP address and port of the HTTPS listener, for example `127.0.0.1:8443` or `[::1]:8443`. Host names and non-loopback addresses are refused; port 0 picks a free port. |
-| `--listener-broker` | off | Serve on `127.0.0.1:443` and `[::1]:443` through [`jailoc-listener-broker`](#jailoc-listener-broker) instead of opening a listener. Refused together with `--listen` and when the gateway runs as root. |
-**Authentication**
+| `--listener-broker` | off | Serve on `127.0.0.1:443` and `[::1]:443` through [`jailoc-listener-broker`](#jailoc-listener-broker) instead of opening a listener. Refused together with `--listen` and when the proxy runs as root. |
 
-- Open `<origin>/.jailoc/login` and enter the code; the form posts to the same origin.
-- A code works once and expires 10 minutes after the gateway starts.
-- A login sets a `__Host-` cookie that lasts 8 hours. Upstream `Set-Cookie` headers are rewritten to `__Host-jailoc-<host>-<name>` (`Path=/`, `Secure`, no `Domain`) and unwrapped on incoming `Cookie` headers; cookies without that route prefix are dropped, so client-side scripts using `document.cookie` for server-visible cookies must use `__Host-jailoc-<host>-<name>; Path=/; Secure`.
+**Authentication and origin checks**
+
+- By default (`auth = false`), routes are served without a login code.
+- When a route has `auth = true` (set on the route or in `[defaults.proxy]` / `[workspaces.<name>.proxy]`), open `<origin>/.jailoc/login` and enter the one-time code printed at start; the code expires after 10 minutes and sets an 8-hour `__Host-jailoc` cookie.
+- Upstream `Set-Cookie` headers are rewritten to `__Host-jailoc-<host>-<name>` (`Path=/`, `Secure`, no `Domain`) and unwrapped on incoming `Cookie` headers; cookies without that route prefix are dropped, so client-side scripts using `document.cookie` for server-visible cookies must use `__Host-jailoc-<host>-<name>; Path=/; Secure`.
 - Every request must carry the route's `Host` and a matching TLS server name.
-- A `GET` or `HEAD` without an `Origin` header is accepted; if `Origin` is present it must be exactly the route's origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`. Cross-site requests are refused.
-- The external host is the route name without a port, or with port 443. Access through `:8443` is rejected, so either the host redirects `127.0.0.1` port 443 to the listener or the gateway runs with `--listener-broker`; see the [how-to](../how-to/desktop-and-web.md).
+- A `GET` or `HEAD` without an `Origin` header is accepted; if `Origin` or `Referer` is present it must match the route's `https://<host>` origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`. Cross-site requests, cross-origin `nested-navigate` frames, and requests with mismatched `Sec-Fetch-Site` or `Referer` are refused, and every response carries `Cross-Origin-Resource-Policy: same-origin` and `Cross-Origin-Opener-Policy: same-origin`.
+- The external host is the route name without a port, or with port 443. Access through `:8443` is rejected, so either the host redirects `127.0.0.1` port 443 to the listener or the proxy runs with `--listener-broker`; see the [how-to](../how-to/desktop-and-web.md).
 
 **Transport**
 
-- The gateway talks to each workspace over a private Unix socket, `web.sock` (mode `0600`), in the workspace's VM state directory (mode `0700`).
+- The proxy talks to each workspace over a private Unix socket, `web.sock` (mode `0600`), in the workspace's VM state directory (mode `0700`).
 - The broker relays it to the guest NIC on port 6081, an allowlisted relay that forwards to the route's loopback port in the guest.
 - jailoc changes no host DNS, trust store or firewall; the [how-to](../how-to/desktop-and-web.md) lists the manual setup.
 
-#### `jailoc gateway host-proof`
+#### `jailoc proxy host-proof`
 
-Experimental proof of the host mechanisms a managed gateway uses. It is not enrollment.
+Experimental proof of the host mechanisms a managed proxy uses. It is not enrollment.
 
 ```text
-jailoc gateway host-proof
+jailoc proxy host-proof
 ```
 
 - Takes no arguments or command-specific flags. Reads no configuration and takes no certificate, key or listen address.
