@@ -403,21 +403,20 @@ jailoc sessions stop ID [flags]
 
 ---
 
-### `jailoc gateway`
+### `jailoc proxy`
 
-Serve the web routes of running workspaces to a browser on the host over HTTPS.
+Serve the proxy routes of running workspaces to a browser on the host over HTTPS (`jailoc gateway`, `jailoc gw` and `jailoc web` are aliases).
 
 ```text
-jailoc gateway [workspace...] --tls-cert <path> --tls-key <path> [--listen 127.0.0.1:8443 | --listener-broker]
+jailoc proxy [workspace...] --tls-cert <path> --tls-key <path> [--listen 127.0.0.1:8443 | --listener-broker]
 ```
 
 - Runs in the foreground until interrupted.
-- With no `workspace` argument it serves every running configured workspace that has `web` routes and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
-- A running VM whose web guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
-- Prints the URL (`https://<name>.<workspace>.jailoc.local/`) and a login code for each route.
-- Serves the VM boots it started with. Routes close when a workspace VM stops or is replaced, and the gateway exits when every served VM is gone. Restart the gateway to serve a new VM.
-- Reads the configuration at start. Adding or renaming a route that uses a guest port already in the set of the running VM needs only a gateway restart; changing the set of guest ports needs `jailoc restart` and a gateway restart.
-
+- With no `workspace` argument it serves every running configured workspace that has `proxy` routes and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
+- A running VM whose proxy guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
+- Prints the URL (`https://<name>.<workspace>.jailoc.local/`) for each route, and a one-time login code for routes with `auth = true`.
+- Serves the VM boots it started with. Routes close when a workspace VM stops or is replaced, and the proxy exits when every served VM is gone. Restart the proxy to serve a new VM.
+- Reads the configuration at start. Adding or renaming a route that uses a guest port already in the set of the running VM needs only a proxy restart; changing the set of guest ports needs `jailoc restart` and a proxy restart.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--tls-cert PATH` | (required) | PEM certificate chain that covers every route host, for example with `*.<workspace>.jailoc.local` in `subjectAltName`. |
@@ -425,27 +424,27 @@ jailoc gateway [workspace...] --tls-cert <path> --tls-key <path> [--listen 127.0
 | `--listen ADDRESS` | `127.0.0.1:8443` | Loopback IP address and port of the HTTPS listener, for example `127.0.0.1:8443` or `[::1]:8443`. Host names and non-loopback addresses are refused; port 0 picks a free port. |
 | `--listener-broker` | off | Serve on `127.0.0.1:443` and `[::1]:443` through [`jailoc-listener-broker`](#jailoc-listener-broker) instead of opening a listener. Refused together with `--listen` and when the gateway runs as root. |
 
-**Authentication**
+**Authentication and origin checks**
 
-- Open `<origin>/.jailoc/login` and enter the code; the form posts to the same origin.
-- A code works once and expires 10 minutes after the gateway starts.
-- A login sets a `__Host-` cookie that lasts 8 hours. Upstream `Set-Cookie` headers are rewritten to `__Host-jailoc-<host>-<name>` (`Path=/`, `Secure`, no `Domain`) and unwrapped on incoming `Cookie` headers; cookies without that route prefix are dropped, so client-side scripts using `document.cookie` for server-visible cookies must use `__Host-jailoc-<host>-<name>; Path=/; Secure`.
+- By default (`auth = false`), routes are served without a login code.
+- When a route has `auth = true` (set on the route or in `[defaults.proxy]` / `[workspaces.<name>.proxy]`), open `<origin>/.jailoc/login` and enter the one-time code printed at start; the code expires after 10 minutes and sets an 8-hour `__Host-jailoc` cookie.
+- Upstream `Set-Cookie` headers are rewritten to `__Host-jailoc-<host>-<name>` (`Path=/`, `Secure`, no `Domain`) and unwrapped on incoming `Cookie` headers; cookies without that route prefix are dropped, so client-side scripts using `document.cookie` for server-visible cookies must use `__Host-jailoc-<host>-<name>; Path=/; Secure`.
 - Every request must carry the route's `Host` and a matching TLS server name.
-- A `GET` or `HEAD` without an `Origin` header is accepted; if `Origin` is present it must be exactly the route's origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`. Cross-site requests are refused.
-- The external host is the route name without a port, or with port 443. Access through `:8443` is rejected, so either the host redirects `127.0.0.1` port 443 to the listener or the gateway runs with `--listener-broker`; see the [how-to](../how-to/desktop-and-web.md).
+- A `GET` or `HEAD` without an `Origin` header is accepted; if `Origin` or `Referer` is present it must match the route's `https://<host>` origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`. Cross-site requests, cross-origin `nested-navigate` frames, and requests with mismatched `Sec-Fetch-Site` or `Referer` are refused, and every response carries `Cross-Origin-Resource-Policy: same-origin` and `Cross-Origin-Opener-Policy: same-origin`.
+- The external host is the route name without a port, or with port 443. Access through `:8443` is rejected, so either the host redirects `127.0.0.1` port 443 to the listener or the proxy runs with `--listener-broker`; see the [how-to](../how-to/desktop-and-web.md).
 
 **Transport**
 
-- The gateway talks to each workspace over a private Unix socket, `web.sock` (mode `0600`), in the workspace's VM state directory (mode `0700`).
+- The proxy talks to each workspace over a private Unix socket, `web.sock` (mode `0600`), in the workspace's VM state directory (mode `0700`).
 - The broker relays it to the guest NIC on port 6081, an allowlisted relay that forwards to the route's loopback port in the guest.
 - jailoc changes no host DNS, trust store or firewall; the [how-to](../how-to/desktop-and-web.md) lists the manual setup.
 
-#### `jailoc gateway host-proof`
+#### `jailoc proxy host-proof`
 
-Experimental proof of the host mechanisms a managed gateway uses. It is not enrollment.
+Experimental proof of the host mechanisms a managed proxy uses. It is not enrollment.
 
 ```text
-jailoc gateway host-proof
+jailoc proxy host-proof
 ```
 
 - Takes no arguments or command-specific flags. Reads no configuration and takes no certificate, key or listen address.

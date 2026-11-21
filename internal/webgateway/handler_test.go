@@ -119,10 +119,17 @@ func TestOriginBoundary(t *testing.T) {
 	x := startGateway(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }), nil)
 	cookie := loginCookie(t, x, hostA)
 	for _, tt := range []struct {
-		name, method, origin, site, upgrade string
-		status                              int
+		name, method, origin, referer, site, mode, upgrade string
+		status                                             int
 	}{
 		{name: "safe no origin", method: "GET", status: 200},
+		{name: "same-origin referer", method: "GET", referer: "https://" + hostA + "/page", status: 200},
+		{name: "same-origin referer port 443", method: "GET", referer: "https://" + hostA + ":443/page", status: 200},
+		{name: "foreign referer", method: "GET", referer: "https://example.com/", status: 403},
+		{name: "sibling referer", method: "GET", referer: "https://" + hostB + "/", status: 403},
+		{name: "http referer", method: "GET", referer: "http://" + hostA + "/", status: 403},
+		{name: "nested-navigate without same-origin site", method: "GET", mode: "nested-navigate", status: 403},
+		{name: "nested-navigate with same-origin site", method: "GET", site: "same-origin", mode: "nested-navigate", status: 200},
 		{name: "foreign", method: "GET", origin: "https://example.com", status: 403},
 		{name: "null", method: "GET", origin: "null", status: 403},
 		{name: "sibling", method: "GET", origin: "https://" + hostB, status: 403},
@@ -145,8 +152,14 @@ func TestOriginBoundary(t *testing.T) {
 			if tt.origin != "" {
 				r.Header.Set("Origin", tt.origin)
 			}
+			if tt.referer != "" {
+				r.Header.Set("Referer", tt.referer)
+			}
 			if tt.site != "" {
 				r.Header.Set("Sec-Fetch-Site", tt.site)
+			}
+			if tt.mode != "" {
+				r.Header.Set("Sec-Fetch-Mode", tt.mode)
 			}
 			if tt.upgrade != "" {
 				r.Header.Set("Upgrade", tt.upgrade)
@@ -155,6 +168,36 @@ func TestOriginBoundary(t *testing.T) {
 			request(t, x.client(t, hostA), r, tt.status)
 		})
 	}
+}
+
+func TestUnauthenticatedRouteServesDirectlyAndEnforcesOrigin(t *testing.T) {
+	t.Parallel()
+	x := startGateway(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "open-ok")
+	}), func(g *Gateway) {
+		route := g.routes[hostA]
+		route.Auth = false
+		g.routes[hostA] = route
+		delete(g.codes, hostA)
+	})
+	res := request(t, x.client(t, hostA), newRequest(t, "GET", hostA, "/"), 200)
+	if res.Header.Get("Cross-Origin-Resource-Policy") != "same-origin" || res.Header.Get("Cross-Origin-Opener-Policy") != "same-origin" {
+		t.Fatalf("missing CORP/COOP headers: %+v", res.Header)
+	}
+	// Login path redirects to landing when Auth is false.
+	res = request(t, x.client(t, hostA), newRequest(t, "GET", hostA, "/.jailoc/login"), 303)
+	if got := res.Header.Get("Location"); got != "/" {
+		t.Fatalf("unauthenticated /.jailoc/login Location = %q, want /", got)
+	}
+	// Cross-site and foreign-Referer GETs are still refused on unauthenticated routes.
+	r := newRequest(t, "GET", hostA, "/")
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	request(t, x.client(t, hostA), r, 403)
+	r = newRequest(t, "GET", hostA, "/")
+	r.Header.Set("Referer", "https://evil.example/attack")
+	request(t, x.client(t, hostA), r, 403)
+	// Sibling route with Auth = true still requires login.
+	request(t, x.client(t, hostB), newRequest(t, "GET", hostB, "/"), 303)
 }
 
 func TestLoginRequiresExactOriginAndAuthCoversUpgrade(t *testing.T) {
