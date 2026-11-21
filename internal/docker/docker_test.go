@@ -11,6 +11,7 @@ import (
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/embed"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 

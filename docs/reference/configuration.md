@@ -1103,7 +1103,7 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 
 ### `proxy`
 
-`proxy` serves guest ports to a browser on the host through [`jailoc proxy`](cli.md#jailoc-proxy); see the [how-to](../how-to/desktop-and-web.md). The guest runs a proxy relay on NIC port 6081, forwarding to the loopback port of each route.
+`proxy` serves guest ports to a browser on the host over HTTPS; see the [how-to](../how-to/desktop-and-web.md). The guest runs a proxy relay on NIC port 6081, forwarding to the loopback port of each route.
 
 ```toml
 [defaults.proxy]
@@ -1123,7 +1123,7 @@ Validation:
 - `proxy` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `proxy` port is fine; only the guest side counts.
 - With any `proxy` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
 - `ports` and `host_ports` can't use guest port 6081.
-- A proxy route is not a published port: nothing listens on the host except `jailoc proxy`.
+- A proxy route is not a published port: nothing listens on the host except the local HTTPS proxy.
 
 Changing the set of guest ports the `proxy` routes use takes effect after `jailoc restart` and a restart of `jailoc proxy`; `jailoc proxy` refuses a running VM that doesn't match. Renaming a route, changing `auth`, or adding a route on a guest port already in that set needs only a restart of `jailoc proxy`.
 

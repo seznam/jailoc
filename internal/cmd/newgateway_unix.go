@@ -85,8 +85,9 @@ func init() {
 func newGatewayCmd() *cobra.Command {
 	var opts gatewayOptions
 	cmd := &cobra.Command{
-		Use:   "proxy [workspace...]",
-		Short: "Serve the proxy routes of running workspaces over HTTPS",
+		Use:    "proxy [workspace...]",
+		Hidden: true,
+		Short:  "Serve the proxy routes of running workspaces over HTTPS",
 		Long: "Serve the proxy routes of running workspaces over HTTPS on a loopback address, in the foreground.\n\n" +
 			"Each route is https://<route>.<workspace>.jailoc.local; routes with auth = true are protected by a one-time login code, printed once at start.\n" +
 			"The gateway starts no VM, opens no browser and changes no host setting: make the names resolve to the listen address\n" +
