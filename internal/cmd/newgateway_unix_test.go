@@ -134,10 +134,10 @@ func relayGuest(ports ...uint16) guest.Config {
 
 func gatewayTestConfig() *config.Config {
 	return &config.Config{Workspaces: map[string]config.Workspace{
-		"app":     {Web: map[string]int{"app": 3000, "api": 8080}},
-		"desk":    {Web: map[string]int{"web": 6080}},
+		"app":     {Proxy: config.ProxyMap(map[string]int{"app": 3000, "api": 8080})},
+		"desk":    {Proxy: config.ProxyMap(map[string]int{"web": 6080})},
 		"plain":   {},
-		"stopped": {Web: map[string]int{"app": 3000}},
+		"stopped": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
 	}}
 }
 
@@ -184,7 +184,7 @@ func TestSelectGatewayTargets(t *testing.T) {
 		want string
 	}{
 		{"explicit stopped fails", []string{"stopped"}, "is not running; start it with `jailoc up stopped`"},
-		{"explicit without routes fails", []string{"plain"}, "has no web routes"},
+		{"explicit without routes fails", []string{"plain"}, "has no proxy routes"},
 		{"explicit unknown fails", []string{"nope"}, `resolve workspace "nope"`},
 		{"explicit stopped fails even next to a running one", []string{"app", "stopped"}, "is not running"},
 	} {
@@ -198,7 +198,7 @@ func TestSelectGatewayTargets(t *testing.T) {
 	t.Run("nothing to serve", func(t *testing.T) {
 		only := &config.Config{Workspaces: map[string]config.Workspace{"stopped": cfg.Workspaces["stopped"], "plain": {}}}
 		_, err := selectGatewayTargets(only, nil, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "no running workspace with web routes") {
+		if err == nil || !strings.Contains(err.Error(), "no running workspace with proxy routes") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -212,9 +212,9 @@ func TestSelectGatewayTargetsRejectsRunningMismatch(t *testing.T) {
 		running guest.Config
 		want    string
 	}{
-		{"web route added since start", config.Workspace{Web: map[string]int{"app": 3000, "api": 8080}}, relayGuest(3000), "configured web"},
-		{"web port changed since start", config.Workspace{Web: map[string]int{"app": 3001}}, relayGuest(3000), "configured web"},
-		{"running VM without a guest relay", config.Workspace{Web: map[string]int{"app": 3000}}, guest.Config{}, "configured web"},
+		{"proxy route added since start", config.Workspace{Proxy: config.ProxyMap(map[string]int{"app": 3000, "api": 8080})}, relayGuest(3000), "configured proxy"},
+		{"proxy port changed since start", config.Workspace{Proxy: config.ProxyMap(map[string]int{"app": 3001})}, relayGuest(3000), "configured proxy"},
+		{"running VM without a guest relay", config.Workspace{Proxy: config.ProxyMap(map[string]int{"app": 3000})}, guest.Config{}, "configured proxy"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			name := "ws"
@@ -230,7 +230,7 @@ func TestSelectGatewayTargetsRejectsRunningMismatch(t *testing.T) {
 	}
 	t.Run("renamed route on the same port is safe", func(t *testing.T) {
 		fakeVM(t, "ws", relayGuest(3000))
-		cfg := &config.Config{Workspaces: map[string]config.Workspace{"ws": {Web: map[string]int{"renamed": 3000}}}}
+		cfg := &config.Config{Workspaces: map[string]config.Workspace{"ws": {Proxy: config.ProxyMap(map[string]int{"renamed": 3000})}}}
 		if _, err := selectGatewayTargets(cfg, []string{"ws"}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
@@ -299,7 +299,7 @@ func TestReadVMIdentity(t *testing.T) {
 func testInstance(t *testing.T, id *vmIdentity, dial func(context.Context, string, uint16) (net.Conn, error)) (*gatewayInstance, *bytes.Buffer) {
 	t.Helper()
 	var errw bytes.Buffer
-	ws := &workspace.Resolved{Name: "ws", Web: []workspace.WebRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}}}
+	ws := &workspace.Resolved{Name: "ws", Proxy: []workspace.ProxyRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}}}
 	inst := newGatewayInstance(t.Context(), gatewayTarget{ws: ws, stateDir: "/state", id: *id}, &errw)
 	inst.read = func(string) (vmIdentity, error) { return *id, nil }
 	inst.dial = dial
@@ -477,7 +477,7 @@ func TestGatewayInstanceWatchStopsWithParent(t *testing.T) {
 func TestPrintGatewayRoutes(t *testing.T) {
 	t.Parallel()
 	targets := []gatewayTarget{
-		{ws: &workspace.Resolved{Name: "dev", Web: []workspace.WebRoute{{Name: "app", Port: 3000}, {Name: "desktop", Port: 6080}}}},
+		{ws: &workspace.Resolved{Name: "dev", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000, Auth: true}, {Name: "desktop", Port: 6080, Auth: true}}}},
 	}
 	codes := map[string]string{"app.dev.jailoc.local": "CODE-APP", "desktop.dev.jailoc.local": "CODE-DESK"}
 	var out bytes.Buffer
@@ -536,7 +536,7 @@ func TestGatewayCommandArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"gateway [workspace...]", "--listen", "--tls-cert", "--tls-key", gatewayDefaultListen} {
+	for _, want := range []string{"proxy [workspace...]", "--listen", "--tls-cert", "--tls-key", gatewayDefaultListen} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}
@@ -663,7 +663,7 @@ type gatewayRun struct {
 }
 
 var (
-	gatewayAddrRe = regexp.MustCompile(`Gateway listening on (127\.0\.0\.1:\d+)`)
+	gatewayAddrRe = regexp.MustCompile(`Proxy listening on (127\.0\.0\.1:\d+)`)
 	gatewayCodeRe = regexp.MustCompile(`login code (\S+) \(only valid for`)
 )
 
@@ -672,7 +672,7 @@ var (
 // handler, and waits until it prints its address and login code.
 func startGatewayRun(t *testing.T, handler http.Handler) (*gatewayRun, string) {
 	t.Helper()
-	return startGatewayRunFor(t, handler, "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(3000))
+	return startGatewayRunFor(t, handler, "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000))
 }
 
 // startGatewayRunFor is startGatewayRun for the config text cfgTOML, serving
@@ -1038,7 +1038,7 @@ func TestGatewayListenerBrokerServesThroughBroker(t *testing.T) {
 	useGatewayBrokerHost(t, target)
 	run, _ := startGatewayRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "through the broker")
-	}), "[workspaces.e2e.web]\napp = 3000\n", "app.e2e.jailoc.local", relayGuest(3000), func(certFile, keyFile string) []string {
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), func(certFile, keyFile string) []string {
 		return []string{"--listener-broker", "--tls-cert", certFile, "--tls-key", keyFile}
 	})
 	if run.addr != target.addr.String() {

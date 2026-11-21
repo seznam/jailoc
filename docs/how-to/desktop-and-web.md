@@ -1,50 +1,52 @@
 # How to open web services in your browser
 
-A workspace can serve web apps from the VM, and you open them in a browser on the host over HTTPS. `jailoc gateway` is the host-side entry point. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
+A workspace can serve web apps from the VM, and you open them in a browser on the host over HTTPS. `jailoc proxy` is the host-side entry point. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
 
-The examples use a workspace named `demo` with a web route `foo`. Its address is `https://foo.demo.jailoc.local`.
+The examples use a workspace named `demo` with a proxy route `foo`. Its address is `https://foo.demo.jailoc.local`.
 
-## Configure web routes
+## Configure proxy routes
 
 ```toml
 [workspaces.demo]
 paths = ["~/projects/demo"]
 
-[workspaces.demo.web]
+[workspaces.demo.proxy]
 foo = 3000
+admin = { port = 8080, auth = true }
 ```
 
-- Each `web` entry maps a route name to a guest port. The route is served at `https://<name>.<workspace>.jailoc.local`.
+- Each `proxy` entry maps a route name to a guest port (or `{ port = <port>, auth = <bool> }`). The route is served at `https://<name>.<workspace>.jailoc.local`.
+- By default (`auth = false`), routes require no login code. Setting `auth = true` on a route (or in `[workspaces.<name>.proxy]` / `[defaults.proxy]`) gates it behind a one-time login code and a `__Host-jailoc` session cookie.
 - The workspace name and every route name must be a lowercase DNS label (`a-z`, `0-9`, `-`).
 
-Guest port 6081 (the web relay) is reserved whenever any route exists. `ports` and `host_ports` can't use it, and a web route can't target a port that `host_ports` or `ports` also lists. See [`web`](../reference/configuration.md#web).
+Guest port 6081 (the proxy relay) is reserved whenever any route exists. `ports` and `host_ports` can't use it, and a proxy route can't target a port that `host_ports` or `ports` also lists. See [`proxy`](../reference/configuration.md#proxy).
 
 ### Apply changes
 
 | Change | Needed |
 |--------|--------|
-| The set of guest ports the `web` routes use | `jailoc restart` for the workspace, then a restart of `jailoc gateway` |
-| Adding or renaming a route that uses a guest port already in that set | A restart of `jailoc gateway` only; nothing changes in the guest |
+| The set of guest ports the `proxy` routes use | `jailoc restart` for the workspace, then a restart of `jailoc proxy` |
+| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | A restart of `jailoc proxy` only; nothing changes in the guest |
 
-`jailoc gateway` refuses a running VM whose web ports differ from the configuration, and asks for `jailoc restart` first.
+`jailoc proxy` refuses a running VM whose proxy ports differ from the configuration, and asks for `jailoc restart` first.
 
 !!! note "Removing routes and `jailoc reload`"
 
-    A running VM keeps serving the ports of its web routes until it restarts, even after you remove `web` from the configuration. Those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
+    A running VM keeps serving the ports of its proxy routes until it restarts, even after you remove `proxy` from the configuration. Those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
 
-## Start the gateway
+## Start the proxy
 
 ```bash
-jailoc gateway demo \
+jailoc proxy demo \
   --tls-cert ~/.config/jailoc/ingress/demo.crt \
   --tls-key ~/.config/jailoc/ingress/demo.key
 ```
 
-The command runs in the foreground until you stop it. For each route it prints the URL and a login code.
+The command runs in the foreground until you stop it. For each route it prints the URL (and a login code when `auth = true`).
 
-- The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused. With `--listener-broker` the gateway serves port 443 through a root broker instead; see [Use the listener broker](#use-the-listener-broker-experimental).
-- Without workspace arguments the gateway serves every running configured workspace that has routes. A named workspace must be running and have routes.
-- Routes close when a workspace VM stops or is replaced. Restart the gateway to serve the new VM.
+- The listener defaults to `127.0.0.1:8443`. `--listen` takes a loopback IP address and a port; a host name is refused. With `--listener-broker` the proxy serves port 443 through a root broker instead; see [Use the listener broker](#use-the-listener-broker-experimental).
+- Without workspace arguments the proxy serves every running configured workspace that has routes. A named workspace must be running and have routes.
+- Routes close when a workspace VM stops or is replaced. Restart the proxy to serve the new VM.
 
 1. Open `<origin>/.jailoc/login`, for example `https://foo.demo.jailoc.local/.jailoc/login`.
 2. Enter the code. The page posts it to the same origin.

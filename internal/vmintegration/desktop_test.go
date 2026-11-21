@@ -49,7 +49,7 @@ cpu = 2.0
 memory = "3g"
 protect_git = true
 
-[workspaces.%[3]s.web]
+[workspaces.%[3]s.proxy]
 foo = 3000
 %[5]s
 [workspaces.%[3]s.network]
@@ -234,7 +234,7 @@ func TestWebRelay(t *testing.T) {
 	t.Run("reload reports web changes as restart-only", func(t *testing.T) {
 		d.writeConfig(t, "bar = 3002\n")
 		out := d.jailoc(ctx, t, "reload", desktopWorkspace)
-		for _, want := range []string{"web", "jailoc restart " + desktopWorkspace} {
+		for _, want := range []string{"proxy", "jailoc restart " + desktopWorkspace} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("reload output misses %q:\n%s", want, out)
 			}

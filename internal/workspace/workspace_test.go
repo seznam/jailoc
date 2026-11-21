@@ -2039,20 +2039,37 @@ func TestResolveNetworkRulesLog(t *testing.T) {
 	}
 }
 
-func TestResolveWeb(t *testing.T) {
+func TestResolveProxy(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name         string
+		defProxy     *config.ProxyDefaults
 		ws           config.Workspace
-		wantWeb      []workspace.WebRoute
+		wantProxy    []workspace.ProxyRoute
 		wantNoRoutes bool
 	}{
 		{name: "off by default", ws: config.Workspace{}, wantNoRoutes: true},
 		{
-			name: "web sorted by name",
-			ws:   config.Workspace{Web: map[string]int{"zeta": 1, "app": 3000, "mid": 8080}},
-			wantWeb: []workspace.WebRoute{
+			name: "proxy sorted by name, auth false by default",
+			ws:   config.Workspace{Proxy: config.ProxyMap(map[string]int{"zeta": 1, "app": 3000, "mid": 8080})},
+			wantProxy: []workspace.ProxyRoute{
 				{Name: "app", Port: 3000}, {Name: "mid", Port: 8080}, {Name: "zeta", Port: 1},
+			},
+		},
+		{
+			name:     "auth inheritance and route override",
+			defProxy: &config.ProxyDefaults{Auth: new(true)},
+			ws: config.Workspace{
+				Proxy: &config.ProxyTable{
+					Routes: map[string]config.ProxyRoute{
+						"app":    {Port: 3000},
+						"public": {Port: 8080, Auth: new(false)},
+					},
+				},
+			},
+			wantProxy: []workspace.ProxyRoute{
+				{Name: "app", Port: 3000, Auth: true},
+				{Name: "public", Port: 8080, Auth: false},
 			},
 		},
 	}
@@ -2060,6 +2077,7 @@ func TestResolveWeb(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &config.Config{
+				Defaults:   config.Defaults{Proxy: tt.defProxy},
 				Workspaces: map[string]config.Workspace{"w": tt.ws},
 			}
 			got, err := workspace.Resolve(cfg, "w")
@@ -2067,13 +2085,13 @@ func TestResolveWeb(t *testing.T) {
 				t.Fatalf("Resolve: %v", err)
 			}
 			if tt.wantNoRoutes {
-				if len(got.Web) != 0 {
-					t.Errorf("Web = %v, want none", got.Web)
+				if len(got.Proxy) != 0 {
+					t.Errorf("Proxy = %v, want none", got.Proxy)
 				}
 				return
 			}
-			if !slices.Equal(got.Web, tt.wantWeb) {
-				t.Errorf("Web = %v, want %v", got.Web, tt.wantWeb)
+			if !slices.Equal(got.Proxy, tt.wantProxy) {
+				t.Errorf("Proxy = %+v, want %+v", got.Proxy, tt.wantProxy)
 			}
 		})
 	}

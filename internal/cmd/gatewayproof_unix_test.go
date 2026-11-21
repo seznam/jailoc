@@ -55,7 +55,7 @@ func TestGatewayHostProofIsRegisteredUnderGateway(t *testing.T) {
 func TestGatewayHostProofKeepsForegroundCommandContract(t *testing.T) {
 	t.Parallel()
 	gw := newGatewayCmd()
-	if gw.Use != "gateway [workspace...]" {
+	if gw.Use != "proxy [workspace...]" {
 		t.Errorf("Use = %q, want the foreground usage", gw.Use)
 	}
 	for _, name := range []string{"tls-cert", "tls-key"} {
@@ -181,7 +181,7 @@ func TestGatewayForegroundHelpAndMissingFlagsUnchanged(t *testing.T) {
 	if err := gw.ExecuteContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"gateway [workspace...]", "--listen", "--tls-cert", "--tls-key", "host-proof"} {
+	for _, want := range []string{"proxy [workspace...]", "--listen", "--tls-cert", "--tls-key", "host-proof"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("gateway help lacks %q:\n%s", want, out.String())
 		}

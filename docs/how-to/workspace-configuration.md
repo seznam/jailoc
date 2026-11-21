@@ -274,6 +274,6 @@ jailoc reload myproject
 
 These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl` and secrets. Running sessions keep their old environment.
 
-Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `enable_docker`, the set of guest ports used by `web` (see [web routes](desktop-and-web.md#apply-changes)), `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
+Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `enable_docker`, the set of guest ports used by `proxy` (see [proxy routes](desktop-and-web.md#apply-changes)), `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
 
 Concurrent reloads of one workspace run one at a time.

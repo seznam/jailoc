@@ -33,6 +33,7 @@ type Route struct {
 	Host      string
 	Dial      func(context.Context) (net.Conn, error)
 	StartPath string
+	Auth      bool
 }
 
 // Config supplies an already trusted certificate and the exact hostname allowlist.
@@ -49,6 +50,7 @@ type Gateway struct {
 	mu         sync.Mutex
 	codes      map[string]*loginCode
 	sessions   map[[32]byte]*session
+	unauth     map[string]*session
 	started    bool
 	base       context.Context
 	now        func() time.Time
@@ -75,7 +77,8 @@ func New(cfg Config) (*Gateway, map[string]string, error) {
 	g := &Gateway{
 		cert: cert, routes: make(map[string]Route, len(cfg.Routes)),
 		codes: make(map[string]*loginCode, len(cfg.Routes)), sessions: make(map[[32]byte]*session),
-		now: time.Now, sessionTTL: 8 * time.Hour,
+		unauth: make(map[string]*session, len(cfg.Routes)),
+		now:    time.Now, sessionTTL: 8 * time.Hour,
 	}
 	codes := make(map[string]string, len(cfg.Routes))
 	for _, route := range cfg.Routes {
@@ -91,13 +94,15 @@ func New(cfg Config) (*Gateway, map[string]string, error) {
 		if err := cert.Leaf.VerifyHostname(route.Host); err != nil {
 			return nil, nil, fmt.Errorf("certificate for route %q: %w", route.Host, err)
 		}
-		code, err := randomToken()
-		if err != nil {
-			return nil, nil, fmt.Errorf("generate login code: %w", err)
-		}
 		g.routes[route.Host] = route
-		g.codes[route.Host] = &loginCode{hash: sha256.Sum256([]byte(code)), expires: g.now().Add(10 * time.Minute)}
-		codes[route.Host] = code
+		if route.Auth {
+			code, err := randomToken()
+			if err != nil {
+				return nil, nil, fmt.Errorf("generate login code: %w", err)
+			}
+			g.codes[route.Host] = &loginCode{hash: sha256.Sum256([]byte(code)), expires: g.now().Add(10 * time.Minute)}
+			codes[route.Host] = code
+		}
 	}
 	return g, codes, nil
 }
@@ -138,11 +143,15 @@ func (g *Gateway) Serve(ctx context.Context, ln net.Listener) error {
 	done := make(chan error, 1)
 	context.AfterFunc(boot, func() {
 		g.mu.Lock()
-		active := make([]*session, 0, len(g.sessions))
+		active := make([]*session, 0, len(g.sessions)+len(g.unauth))
 		for _, s := range g.sessions {
 			active = append(active, s)
 		}
+		for _, s := range g.unauth {
+			active = append(active, s)
+		}
 		clear(g.sessions)
+		clear(g.unauth)
 		g.mu.Unlock()
 		for _, s := range active {
 			s.close()
