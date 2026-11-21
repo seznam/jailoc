@@ -1,38 +1,65 @@
-# How to open web services in your browser
+# How to open a desktop and web services in your browser
 
-A workspace can serve web apps from the VM, and you open them in a browser on the host over HTTPS. `jailoc proxy` (`jailoc gateway`, `jailoc gw`, `jailoc web`) is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
+A workspace can run a graphical desktop and serve web apps from the VM, and you open both in a browser on the host over HTTPS. `jailoc proxy` (`jailoc gateway`, `jailoc gw`, `jailoc web`) is the host-side entry point, and `jailoc up` / `jailoc down` manage it in the background automatically. jailoc never changes your host's DNS, trust store or firewall; the one-time setup below is manual and uses only commands you run yourself.
 
-The examples use a workspace named `demo` with a proxy route `foo`. Its address is `https://foo.demo.jailoc.local`.
+The examples use a workspace named `demo` with a proxy route `foo`. Their addresses are `https://desktop.demo.jailoc.local` and `https://foo.demo.jailoc.local`.
 
-## Configure proxy routes
+## Limits
+
+- The desktop uses software rendering: no GPU. There is no audio.
+- The desktop is a native one in the VM, not a Docker Desktop container, and not your host's Chrome.
+- A browser is not preinstalled. The agent installs one.
+
+## Enable the desktop and proxy routes
 
 ```toml
 [workspaces.demo]
 paths = ["~/projects/demo"]
+enable_desktop = true
+cpu = 4
+memory = "6g"
 
 [workspaces.demo.proxy]
 foo = 3000
 admin = { port = 8080, auth = true }
 ```
 
+- `enable_desktop` defaults to `false`.
 - Each `proxy` entry maps a route name to a guest port (or `{ port = <port>, auth = <bool> }`). The route is served at `https://<name>.<workspace>.jailoc.local`.
 - By default (`auth = false`), routes require no login code. Setting `auth = true` on a route (or in `[workspaces.<name>.proxy]` / `[defaults.proxy]`) gates it behind a one-time login code and a `__Host-jailoc` session cookie.
+- The route `desktop` is reserved. With `enable_desktop = true` it exists on its own and serves the desktop's noVNC client (guest port 6080).
 - The workspace name and every route name must be a lowercase DNS label (`a-z`, `0-9`, `-`).
+- Software rendering is CPU-bound: start from `cpu = 4` and `memory = "6g"`.
 
-Guest port 6081 (the proxy relay) is reserved whenever any route exists. `ports` and `host_ports` can't use it, and a proxy route can't target a port that `host_ports` or `ports` also lists. See [`proxy`](../reference/configuration.md#proxy).
+The guest ports in use are fixed: 6080 (noVNC) and 5901 (VNC, loopback only, no X11 over TCP) while the desktop is on, and 6081 (proxy relay) whenever any route exists. `ports` and `host_ports` can't use them, and a proxy route can't target a port that `host_ports` or `ports` also lists. See [`enable_desktop` and `proxy`](../reference/configuration.md#enable_desktop-and-proxy).
 
 ### Apply changes
 
 | Change | Needed |
 |--------|--------|
-| The set of guest ports the `proxy` routes use | `jailoc restart` for the workspace, then a restart of `jailoc proxy` |
-| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | A restart of `jailoc proxy` only; nothing changes in the guest |
+| `enable_desktop`, or the set of guest ports the `proxy` routes use | `jailoc restart` for the workspace, then a restart or sync of `jailoc proxy` |
+| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | `jailoc proxy` only; nothing changes in the guest |
 
-`jailoc proxy` refuses a running VM whose proxy ports differ from the configuration, and asks for `jailoc restart` first.
+`jailoc proxy` refuses a running VM whose desktop or proxy ports differ from the configuration, and asks for `jailoc restart` first.
 
-!!! note "Removing routes and `jailoc reload`"
+!!! note "Removing routes or the desktop and `jailoc reload`"
 
-    A running VM keeps serving the ports of its proxy routes until it restarts, even after you remove `proxy` from the configuration. Those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
+    A running VM keeps serving the ports of the desktop (6080, 5901) and of its proxy routes until it restarts, even after you remove `enable_desktop` or `proxy` from the configuration. Those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
+
+### Images
+
+- Images jailoc builds (the embedded Dockerfile, a `[base] dockerfile`, or `defaults.image` with a workspace overlay) get a stock `apt` desktop layer when `enable_desktop` is on. The base must be Debian or Ubuntu based.
+- An image you set explicitly (`image`, or `defaults.image` without an overlay) gets no layer and must contain the desktop itself: `Xtigervnc`, `websockify`, `openbox`, `dbus-run-session` and noVNC's `vnc.html`. On Debian or Ubuntu these are the packages `tigervnc-standalone-server`, `websockify`, `novnc`, `openbox` and `dbus-x11`. As with `dockerd` for `enable_docker`, `jailoc up` checks the image on the host and fails before the VM boots, naming what is missing. See [Image Resolution](../reference/image-resolution.md#desktop-layer-steps-2-4-and-5).
+
+## Run a browser in the desktop
+
+The desktop is an X11 session on display `:1` with the Openbox window manager and no panel or background. It opens with an `xterm`; right-click the desktop for the Openbox menu. Sessions of the agent get `DISPLAY=:1`, so a GUI program the agent starts appears on the desktop.
+
+No browser is installed. Ask the agent to install one with Playwright, for example `npx playwright install chromium`, and to launch it headful (`headless: false`). Chromium needs system libraries the image may lack; add them in a [custom Dockerfile](custom-images.md) rather than disabling the browser sandbox.
+
+!!! note "Environment of desktop programs"
+
+    The desktop starts at boot with a snapshot of the environment. It holds neither the secrets nor the `env` values delivered after boot, so programs started from the desktop menu don't see them. A program an agent session launches inherits that session's current environment, secrets included, even though its window appears on the desktop.
 
 ## Start the proxy
 
@@ -51,6 +78,9 @@ jailoc proxy demo
 
 1. Open `<origin>/.jailoc/login`, for example `https://foo.demo.jailoc.local/.jailoc/login`.
 2. Enter the code. The page posts it to the same origin.
+
+The `desktop` route serves the noVNC client, which has no `index.html`: its root and its login redirect to `/vnc.html?autoconnect=1`, so `https://desktop.demo.jailoc.local/` opens the desktop. Other routes, such as `foo`, serve whatever the guest service serves at `/`.
+
 A code works once and expires 10 minutes after the gateway starts. A successful login sets a `__Host-` cookie that lasts 8 hours. Every request must carry the route's `Host` and a matching TLS server name. A `GET` or `HEAD` needs no `Origin` header, but one that is present must be exactly the route's origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`; cross-site requests are refused. Open the route without a port, or with `:443`; `:8443` is rejected.
 
 To keep one route from planting `Domain=jailoc.local` cookies on another, the gateway rewrites every upstream `Set-Cookie` name `<name>` to `__Host-jailoc-<host>-<name>` (with `Path=/`, `Secure` and no `Domain`), unwraps that prefix back to `<name>` on incoming `Cookie` headers, and drops any cookie without the route's `__Host-jailoc-<host>-` prefix. HTTP-only session cookies need no application change; client-side scripts that read a server-set cookie (for example a double-submit CSRF token) or write a cookie for the upstream via `document.cookie` must address it as `` `__Host-jailoc-${location.hostname}-<name>` `` with `; Path=/; Secure` and no `Domain` attribute.
@@ -114,7 +144,7 @@ openssl x509 -req -in demo.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 90
 openssl verify -CAfile ca.crt demo.crt
 ```
 
-- `*.demo.jailoc.local` covers `foo.demo.jailoc.local`. A wildcard covers one label, so `*.jailoc.local` doesn't: issue one leaf per workspace, or list several `DNS:*.<workspace>.jailoc.local` names in one certificate.
+- `*.demo.jailoc.local` covers `foo.demo.jailoc.local` and `desktop.demo.jailoc.local`. A wildcard covers one label, so `*.jailoc.local` doesn't: issue one leaf per workspace, or list several `DNS:*.<workspace>.jailoc.local` names in one certificate.
 - macOS's `/usr/bin/openssl` is LibreSSL. If a command fails, use an OpenSSL 1.1.1 or later from your package manager.
 
 ### Trust the CA
@@ -149,11 +179,11 @@ sudo update-ca-trust
 
 Point the route names at `127.0.0.1`, where the redirect and the gateway listen.
 
-**Exact names in `/etc/hosts` (macOS and Linux).** List every route, and add a name after each new route. Check first that no line of yours already carries the marker:
+**Exact names in `/etc/hosts` (macOS and Linux).** List every route, including `desktop`, and add a name after each new route. Check first that no line of yours already carries the marker:
 
 ```bash
 grep -c '# jailoc-ingress' /etc/hosts    # 0 expected
-echo '127.0.0.1 foo.demo.jailoc.local # jailoc-ingress' | sudo tee -a /etc/hosts
+echo '127.0.0.1 desktop.demo.jailoc.local foo.demo.jailoc.local # jailoc-ingress' | sudo tee -a /etc/hosts
 ```
 
 This is the supported way on Linux. A per-link `resolvectl` route on the loopback interface doesn't work, because `systemd-resolved` ignores the loopback interface when it routes DNS queries.
@@ -349,11 +379,12 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 | `another gateway is attached to the listener broker` | Stop the other `jailoc gateway --listener-broker` first. |
 | Broker refuses its executable | Install it in a root-owned directory that group and others can't write. |
 | Login post or pages behave oddly on a reused route name | An old service worker may control the origin. Unregister it and clear the site data; see [Service workers and origin reuse](#service-workers-and-origin-reuse). |
-| Validation error on `ports` or `host_ports` | Guest port 6081 is reserved for the web relay. |
+| `jailoc up` names missing desktop programs | The explicit `image` lacks them; see [Images](#images). |
+| Validation error on `ports` or `host_ports` | Guest ports 6081, and 6080 and 5901 with the desktop, are reserved. |
 
 ## Related
 
-- [`web`](../reference/configuration.md#web)
+- [`enable_desktop` and `web`](../reference/configuration.md#enable_desktop-and-web)
 - [`jailoc gateway`](../reference/cli.md#jailoc-gateway)
 - [`jailoc gateway host-proof`](../reference/cli.md#jailoc-gateway-host-proof)
 - [Security Boundaries](../explanation/security-boundaries.md#web-gateway)

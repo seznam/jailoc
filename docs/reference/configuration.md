@@ -191,6 +191,7 @@ Defaults applied to all workspaces. A workspace can override or extend them; see
 | `tmp_size` | string | `"1g"` | Capacity of `/tmp`, at least `16m` with `tmp_storage = "disk"`. Needs `jailoc restart`. |
 | `tmp_ttl` | string | `"8h"` | Age after which `/tmp` entries are removed, or `"0"` to keep them. Applied by `jailoc reload`. |
 | `enable_docker` | bool | `false` | Run a Docker daemon inside the workspace VM. See [`enable_docker`](#enable_docker). |
+| `enable_desktop` | bool | `false` | Run a desktop in the workspace VM, served by the `desktop` web route. See [`enable_desktop` and `web`](#enable_desktop-and-web). |
 
 ### Git protection and build fields
 
@@ -579,7 +580,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `paths` | string[] | `[]` | Host directories shared into the VM over virtio-fs at their original absolute paths. See [`paths`](#paths). |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to an overlay Dockerfile built on top of the base image. |
 | `build_context` | string | (none) | Build context of the overlay build. |
-| `proxy` | table | `{}` | HTTPS proxy routes: route name to guest port (or `{ port, auth }`), served at `https://<name>.<workspace>.jailoc.local`. See [`proxy`](#proxy). |
+| `proxy` | table | `{}` | HTTPS proxy routes: route name to guest port (or `{ port, auth }`), served at `https://<name>.<workspace>.jailoc.local`. See [`enable_desktop` and `proxy`](#enable_desktop-and-proxy). |
 
 - `paths`: the first path is the working directory; with no paths, the working directory is `/home/agent`.
 - `dockerfile`: build failure is fatal. Maximum file size for HTTP sources: 1 MiB.
@@ -599,7 +600,7 @@ Fields with the same meaning as in [`[defaults]`](#defaults); the workspace valu
 
 - `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`
 - `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`
-- `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`
+- `enable_docker`, `enable_desktop`, `protect_git`, `isolated_build`, `ca_bundle`
 
 ### Merged fields
 
@@ -1077,9 +1078,9 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 - `enable_docker = true` together with `protect_git = true` is rejected, because Docker access is root access inside the VM. `protect_git` alone turns Docker off.
 - In the images jailoc builds, Docker is installed only when `enable_docker` is on; see [Docker layer](image-resolution.md#docker-layer-steps-2-4-and-5).
 
-### `proxy`
+### `enable_desktop` and `proxy`
 
-`proxy` serves guest ports to a browser on the host through [`jailoc proxy`](cli.md#jailoc-proxy); see the [how-to](../how-to/desktop-and-web.md). The guest runs a proxy relay on NIC port 6081, forwarding to the loopback port of each route.
+`enable_desktop = true` runs a native desktop in the workspace VM; `proxy` serves guest ports to a browser on the host. Both are reached through [`jailoc proxy`](cli.md#jailoc-proxy); see the [how-to](../how-to/desktop-and-web.md).
 
 ```toml
 [defaults.proxy]
@@ -1093,17 +1094,25 @@ admin = { port = 8080, auth = true }
 - Each entry in `[workspaces.<name>.proxy]` is either `<route> = <port>` or `<route> = { port = <port>, auth = <bool> }`.
 - `auth` (default `false`) gates the route behind a one-time login code and a `__Host-jailoc` session cookie. It can be set per route, at `[workspaces.<name>.proxy]`, or in `[defaults.proxy]`.
 
+| Item | Guest side |
+|------|------------|
+| Desktop | `Xtigervnc` on display `:1` (VNC on loopback port 5901, no X11 over TCP), Openbox with D-Bus, noVNC served by websockify on loopback port 6080 |
+| `desktop` route | Reserved. Exists only with `enable_desktop = true` and always serves guest port 6080 |
+| Proxy relay | Guest NIC port 6081, forwarding to the loopback port of each route |
+| Session environment | `DISPLAY=:1` while the desktop is on |
+| Desktop environment | A snapshot taken at boot, without the `env` and secrets delivered afterwards; programs an agent session launches inherit that session's environment |
+
 Validation:
 
-- `proxy` route keys are lowercase DNS labels (1 to 63 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`).
+- `proxy` route keys are lowercase DNS labels (1 to 63 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`); `desktop` is rejected as a key.
 - `proxy` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `proxy` port is fine; only the guest side counts.
-- With any `proxy` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
-- `ports` and `host_ports` can't use guest port 6081.
+- With the desktop or any `proxy` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
+- `ports` and `host_ports` can't use guest port 6081, and with `enable_desktop` also 6080 and 5901.
 - A proxy route is not a published port: nothing listens on the host except `jailoc proxy`.
 
-Changing the set of guest ports the `proxy` routes use takes effect after `jailoc restart` and a restart of `jailoc proxy`; `jailoc proxy` refuses a running VM that doesn't match. Renaming a route, changing `auth`, or adding a route on a guest port already in that set needs only a restart of `jailoc proxy`.
+Changing `enable_desktop` or the set of guest ports the `proxy` routes use takes effect after `jailoc restart` and a restart or sync of `jailoc proxy`; `jailoc proxy` refuses a running VM that doesn't match. Renaming a route, changing `auth`, or adding a route on a guest port already in that set needs only `jailoc proxy`.
 
-A running VM keeps the relay port 6081 and the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `proxy`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`.
+A running VM keeps its desktop ports (6080, 5901), the relay port 6081 and the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `enable_desktop` or `proxy`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`. In the images jailoc builds, the desktop packages are installed only with `enable_desktop`; see [Desktop layer](image-resolution.md#desktop-layer-steps-2-4-and-5). Software rendering needs CPU: `cpu = 4` and `memory = "6g"` are a reasonable start. The VM has no GPU and no audio device.
 
 ### `protect_git`
 
@@ -1370,7 +1379,7 @@ See the [secrets how-to](../how-to/secrets.md).
 - A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`.
 - An inherited default secret can't be unset in a workspace.
 
-**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
+**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`, `enable_docker`, `enable_desktop`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
 
 **`agents.<name>`**:
 

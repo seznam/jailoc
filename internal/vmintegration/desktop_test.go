@@ -34,9 +34,10 @@ func (d desktopVM) stateDir() string {
 	return filepath.Join(d.home, ".cache", "jailoc-vm", "workspaces", desktopWorkspace)
 }
 
-// writeConfig writes the web workspace configuration. web holds the extra
-// lines of the web table (foo = 3000 is always there).
-func (d desktopVM) writeConfig(t *testing.T, web string) {
+// writeConfig writes the desktop workspace configuration. enableDesktop and
+// web are the settings a reload reports as restart-only changes; web holds
+// the extra lines of the web table (foo = 3000 is always there).
+func (d desktopVM) writeConfig(t *testing.T, enableDesktop bool, web string) {
 	t.Helper()
 	cfg := fmt.Sprintf(`[vm]
 runner = %q
@@ -47,14 +48,15 @@ backend = "vm"
 paths = [%[4]q]
 cpu = 2.0
 memory = "3g"
+enable_desktop = %[5]t
 protect_git = true
 
 [workspaces.%[3]s.proxy]
 foo = 3000
-%[5]s
+%[6]s
 [workspaces.%[3]s.network]
 ipv6 = false
-`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), desktopWorkspace, d.project, web)
+`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), desktopWorkspace, d.project, enableDesktop, web)
 	dir := filepath.Join(d.home, ".config", "jailoc")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -159,9 +161,9 @@ func (d desktopVM) get(ctx context.Context, port uint16, path string) (int, stri
 	return resp.StatusCode, string(body), nil
 }
 
-// TestWebRelay boots a workspace with web routes and checks the guest web
-// relay from the host and from inside the guest.
-func TestWebRelay(t *testing.T) {
+// TestDesktopWeb boots a desktop workspace and checks the native desktop and
+// the guest web relay from the host and from inside the guest.
+func TestDesktopWeb(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	// Workspace paths may not live under /tmp, so the home is created in the
@@ -170,13 +172,13 @@ func TestWebRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp(realHome, "jailoc-vm-web-")
+	dir, err := os.MkdirTemp(realHome, "jailoc-vm-desktop-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	d := desktopVM{home: dir, project: filepath.Join(dir, "project")}
-	d.writeConfig(t, "")
+	d.writeConfig(t, true, "")
 	t.Cleanup(func() {
 		if t.Failed() {
 			d.dumpLogs(t)
@@ -190,7 +192,84 @@ func TestWebRelay(t *testing.T) {
 
 	start := time.Now()
 	d.jailoc(ctx, t, "up", desktopWorkspace)
-	t.Logf("web vm up (image build included): %s", time.Since(start).Round(time.Second))
+	t.Logf("desktop up (image build included): %s", time.Since(start).Round(time.Second))
+
+	t.Run("session display and X server", func(t *testing.T) {
+		if got := d.mustGuest(ctx, t, "id -u"); got != "1000" {
+			t.Fatalf("id -u = %q, want 1000", got)
+		}
+		if got := d.mustGuest(ctx, t, `/.jailoc/jailoc-guest run -- sh -c 'echo "$DISPLAY"'`); got != ":1" {
+			t.Fatalf("session DISPLAY = %q, want :1", got)
+		}
+		if got := d.mustGuest(ctx, t, `/.jailoc/jailoc-guest run -- sh -c 'xdpyinfo -display :1 >/dev/null && echo x-ok'`); got != "x-ok" {
+			t.Fatalf("xdpyinfo -display :1 = %q", got)
+		}
+	})
+
+	t.Run("desktop runs as the agent user without TCP X11", func(t *testing.T) {
+		out := d.mustGuest(ctx, t, "ps -eo uid=,args=")
+		for _, name := range []string{"Xtigervnc", "openbox", "websockify"} {
+			found := false
+			for line := range strings.SplitSeq(out, "\n") {
+				fields := strings.Fields(line)
+				if len(fields) < 2 || !strings.Contains(strings.Join(fields[1:], " "), name) {
+					continue
+				}
+				found = true
+				if fields[0] != "1000" {
+					t.Errorf("%s runs as uid %s, want 1000: %s", name, fields[0], line)
+				}
+			}
+			if !found {
+				t.Errorf("no %s process in the guest:\n%s", name, out)
+			}
+		}
+		// Loopback services stay on loopback, the relay is on the guest NIC
+		// only, and the X server has no TCP listener (:1 would be 6001).
+		d.mustGuest(ctx, t, `python3 - <<'PY'
+import socket
+
+listeners = {}
+for path, v6 in (("/proc/net/tcp", False), ("/proc/net/tcp6", True)):
+    try:
+        lines = open(path).read().splitlines()[1:]
+    except FileNotFoundError:
+        continue
+    for line in lines:
+        fields = line.split()
+        if fields[3] != "0A":
+            continue
+        addr, port = fields[1].split(":")
+        raw = bytes.fromhex(addr)
+        if v6:
+            ip = socket.inet_ntop(socket.AF_INET6, b"".join(raw[i:i + 4][::-1] for i in range(0, 16, 4)))
+        else:
+            ip = socket.inet_ntoa(raw[::-1])
+        listeners.setdefault(int(port, 16), set()).add(ip)
+
+assert listeners.get(6080) == {"127.0.0.1"}, listeners
+assert listeners.get(5901) == {"127.0.0.1"}, listeners
+assert listeners.get(6081) == {"192.168.127.2"}, listeners
+assert not [p for p in listeners if 6000 <= p <= 6009], listeners
+print("listeners-ok")
+PY`)
+	})
+
+	t.Run("protect_git restrictions apply to the desktop workspace", func(t *testing.T) {
+		if out, err := d.guest(ctx, t, "sudo -n id -u"); err == nil {
+			t.Fatalf("sudo works with protect_git: %s", out)
+		}
+	})
+
+	t.Run("noVNC over the web relay", func(t *testing.T) {
+		status, body, err := d.get(ctx, 6080, "/vnc.html")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status != http.StatusOK || !strings.Contains(body, "noVNC") {
+			t.Fatalf("GET /vnc.html = %d %q, want 200 with the noVNC client", status, tail([]byte(body), 300))
+		}
+	})
 
 	t.Run("web route to a guest loopback server", func(t *testing.T) {
 		// Nothing serves port 3000 yet: the route is allowed but unavailable.
@@ -219,6 +298,8 @@ func TestWebRelay(t *testing.T) {
 	})
 
 	t.Run("ports outside the allowlist are denied", func(t *testing.T) {
+		// 3001 is not a route; 5901 is the VNC server, 6081 the relay itself
+		// and 22 an arbitrary service. None of them is on the allowlist.
 		for _, port := range []uint16{3001, 5901, 6081, 22} {
 			conn, err := vm.DialWeb(ctx, d.stateDir(), port)
 			if err == nil {
@@ -231,23 +312,26 @@ func TestWebRelay(t *testing.T) {
 		}
 	})
 
-	t.Run("reload reports web changes as restart-only", func(t *testing.T) {
-		d.writeConfig(t, "bar = 3002\n")
+	t.Run("reload reports desktop and web changes as restart-only", func(t *testing.T) {
+		d.writeConfig(t, false, "bar = 3002\n")
 		out := d.jailoc(ctx, t, "reload", desktopWorkspace)
-		for _, want := range []string{"proxy", "jailoc restart " + desktopWorkspace} {
+		for _, want := range []string{"enable_desktop", "proxy", "jailoc restart " + desktopWorkspace} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("reload output misses %q:\n%s", want, out)
 			}
 		}
-		// The running guest keeps its relay allowlist.
+		// The running guest keeps its relay allowlist and its desktop.
 		if conn, err := vm.DialWeb(ctx, d.stateDir(), 3002); err == nil {
 			_ = conn.Close()
 			t.Fatal("DialWeb(3002) succeeded after a reload; the allowlist must change only on restart")
 		} else if !errors.Is(err, vm.ErrWebDenied) {
 			t.Fatalf("DialWeb(3002) = %v, want ErrWebDenied", err)
 		}
+		if status, body, err := d.get(ctx, 6080, "/vnc.html"); err != nil || status != http.StatusOK || !strings.Contains(body, "noVNC") {
+			t.Fatalf("desktop after the reload: GET /vnc.html = %d, %v", status, err)
+		}
 
-		d.writeConfig(t, "")
+		d.writeConfig(t, true, "")
 		if out := d.jailoc(ctx, t, "reload", desktopWorkspace); strings.Contains(out, "jailoc restart") {
 			t.Fatalf("reload of the unchanged settings asks for a restart:\n%s", out)
 		}

@@ -77,7 +77,7 @@ nav:
     - Workspace Configuration: how-to/workspace-configuration.md
     - Custom Images: how-to/custom-images.md
     - Network Access: how-to/network-access.md
-    - Web Routes: how-to/desktop-and-web.md
+    - Desktop and Web: how-to/desktop-and-web.md
     - Secrets: how-to/secrets.md
     - SSH & Git Passthrough: how-to/ssh-git-passthrough.md
     - Sessions: how-to/sessions.md
