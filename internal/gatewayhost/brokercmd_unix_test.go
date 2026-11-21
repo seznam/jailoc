@@ -58,21 +58,21 @@ func bcNewTree(t *testing.T) bcTree {
 			t.Errorf("RemoveAll(%s): %v", root, err)
 		}
 	})
-	if err := os.Chmod(root, 0o700); err != nil {
+	if err := os.Chmod(root, 0o700); err != nil { //nolint:gosec // root is a test directory.
 		t.Fatal(err)
 	}
 	bin := filepath.Join(root, "bin")
 	if err := os.Mkdir(bin, 0o755); err != nil { //nolint:gosec // simulates a system bin directory.
 		t.Fatal(err)
 	}
-	if err := os.Chmod(bin, 0o755); err != nil {
+	if err := os.Chmod(bin, 0o755); err != nil { //nolint:gosec // simulates a system bin directory.
 		t.Fatal(err)
 	}
 	exe := filepath.Join(bin, "jailoc-listener-broker")
 	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // simulates an installed executable.
 		t.Fatal(err)
 	}
-	if err := os.Chmod(exe, 0o755); err != nil {
+	if err := os.Chmod(exe, 0o755); err != nil { //nolint:gosec // simulates an installed executable.
 		t.Fatal(err)
 	}
 	return bcTree{root: root, bin: bin, exe: exe}
@@ -608,7 +608,7 @@ func TestBrokerCmdControlSocketFailureClosesListeners(t *testing.T) {
 			t.Errorf("%s is still open after the control socket failed", addr)
 		}
 	}
-	if data, err := os.ReadFile(h.sock); err != nil || string(data) != "not a socket" {
+	if data, err := os.ReadFile(h.sock); err != nil || string(data) != "not a socket" { //nolint:gosec // test fixture path.
 		t.Errorf("the foreign file at the socket path was touched: %q, %v", data, err)
 	}
 }
