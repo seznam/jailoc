@@ -93,6 +93,10 @@ Host credentials, SSH keys and unrelated projects aren't in the VM.
 - **SSH agent.** When forwarded, it signs on the host and never hands keys to the guest. Anything in the guest can ask it to sign while it is forwarded.
 - **`host_ports`.** Each entry opens one host service to the guest outside the network policy. The agent can do with it whatever a local host process can, which for a browser debugging port or a container runtime socket means controlling the browser or the host.
 
+#### Browser access to the guest
+
+Web routes (`jailoc gateway`) let a host browser reach guest services. A login code, valid once and for 10 minutes after the gateway starts, and a route-bound session cookie gate every route; nothing is exposed until you run the gateway. The CA you trust for the gateway's certificate is a host credential: clients may ignore name constraints on it, so a leaked key can mint certificates for any domain. Keep its key out of the workspace. See [Security Boundaries](security-boundaries.md#web-gateway).
+
 #### Files the host later runs
 
 Shared directories are live: anything the agent writes there lands on the host. Snapshots are read-only and never write back.

@@ -168,7 +168,7 @@ jailoc reload [workspace] [flags]
 - `paths` and `mounts`, including `agents.<name>.mounts`
 - the agent's `profile`
 - `cpu`, `memory`
-- `enable_docker`, `protect_git`
+- `enable_docker`, the set of guest ports the `web` routes use (renaming a route, or adding one on a port already in the set, needs only a restart of [`jailoc gateway`](#jailoc-gateway)), `protect_git`
 - `tmp_storage`, `tmp_size`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest
@@ -184,6 +184,7 @@ jailoc reload [workspace] [flags]
 - Running sessions keep running with their old environment; sessions started afterwards get the updated `env`, `env_file` entries and env secrets.
 - Files opened before a reload keep their old snapshot content.
 - Concurrent reloads of one workspace, including those `jailoc up` starts, wait for each other and run one at a time.
+- A running VM keeps the guest ports of its `web` routes reserved until a restart, even when the configuration dropped `web`. A reload whose `host_ports` or `ports` use one of them fails and asks for [`jailoc restart`](#jailoc-restart).
 
 ---
 
@@ -202,7 +203,7 @@ jailoc status [workspace] [flags]
 - Where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
 - The number of agent sessions.
 - Whether the VM runs the current configuration:
-    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, `protect_git`, or a jailoc upgrade that changed the guest protocol).
+    - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, the set of `web` guest ports, `protect_git`, or a jailoc upgrade that changed the guest protocol).
     - `jailoc reload` is needed when the configuration file changed after the VM started or was last reloaded.
 **Shown for a stopped VM**: when it stopped and the last error.
 
@@ -399,6 +400,90 @@ jailoc sessions stop ID [flags]
 - Lists each session's ID, state (`attached` or `detached`), start time, directory and command, most recently attached first.
 - `stop` ends the session's agent; an attached terminal is disconnected.
 - Sessions end when the workspace VM stops.
+
+---
+
+### `jailoc proxy`
+
+Serve the proxy routes of running workspaces to a browser on the host over HTTPS (`jailoc gateway`, `jailoc gw` and `jailoc web` are aliases).
+
+```text
+jailoc proxy [workspace...] --tls-cert <path> --tls-key <path> [--listen 127.0.0.1:8443 | --listener-broker]
+```
+
+- Runs in the foreground until interrupted.
+- With no `workspace` argument it serves every running configured workspace that has `proxy` routes and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
+- A running VM whose proxy guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
+- Prints the URL (`https://<name>.<workspace>.jailoc.local/`) for each route, and a one-time login code for routes with `auth = true`.
+- Serves the VM boots it started with. Routes close when a workspace VM stops or is replaced, and the proxy exits when every served VM is gone. Restart the proxy to serve a new VM.
+- Reads the configuration at start. Adding or renaming a route that uses a guest port already in the set of the running VM needs only a proxy restart; changing the set of guest ports needs `jailoc restart` and a proxy restart.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tls-cert PATH` | (required) | PEM certificate chain that covers every route host, for example with `*.<workspace>.jailoc.local` in `subjectAltName`. |
+| `--tls-key PATH` | (required) | PEM private key of the certificate. |
+| `--listen ADDRESS` | `127.0.0.1:8443` | Loopback IP address and port of the HTTPS listener, for example `127.0.0.1:8443` or `[::1]:8443`. Host names and non-loopback addresses are refused; port 0 picks a free port. |
+| `--listener-broker` | off | Serve on `127.0.0.1:443` and `[::1]:443` through [`jailoc-listener-broker`](#jailoc-listener-broker) instead of opening a listener. Refused together with `--listen` and when the gateway runs as root. |
+
+**Authentication and origin checks**
+
+- By default (`auth = false`), routes are served without a login code.
+- When a route has `auth = true` (set on the route or in `[defaults.proxy]` / `[workspaces.<name>.proxy]`), open `<origin>/.jailoc/login` and enter the one-time code printed at start; the code expires after 10 minutes and sets an 8-hour `__Host-jailoc` cookie.
+- Upstream `Set-Cookie` headers are rewritten to `__Host-jailoc-<host>-<name>` (`Path=/`, `Secure`, no `Domain`) and unwrapped on incoming `Cookie` headers; cookies without that route prefix are dropped, so client-side scripts using `document.cookie` for server-visible cookies must use `__Host-jailoc-<host>-<name>; Path=/; Secure`.
+- Every request must carry the route's `Host` and a matching TLS server name.
+- A `GET` or `HEAD` without an `Origin` header is accepted; if `Origin` or `Referer` is present it must match the route's `https://<host>` origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`. Cross-site requests, cross-origin `nested-navigate` frames, and requests with mismatched `Sec-Fetch-Site` or `Referer` are refused, and every response carries `Cross-Origin-Resource-Policy: same-origin` and `Cross-Origin-Opener-Policy: same-origin`.
+- The external host is the route name without a port, or with port 443. Access through `:8443` is rejected, so either the host redirects `127.0.0.1` port 443 to the listener or the proxy runs with `--listener-broker`; see the [how-to](../how-to/desktop-and-web.md).
+
+**Transport**
+
+- The proxy talks to each workspace over a private Unix socket, `web.sock` (mode `0600`), in the workspace's VM state directory (mode `0700`).
+- The broker relays it to the guest NIC on port 6081, an allowlisted relay that forwards to the route's loopback port in the guest.
+- jailoc changes no host DNS, trust store or firewall; the [how-to](../how-to/desktop-and-web.md) lists the manual setup.
+
+#### `jailoc proxy host-proof`
+
+Experimental proof of the host mechanisms a managed proxy uses. It is not enrollment.
+
+```text
+jailoc proxy host-proof
+```
+
+- Takes no arguments or command-specific flags. Reads no configuration and takes no certificate, key or listen address.
+- Runs unprivileged with a 15-second execution deadline followed by bounded cleanup, and refuses to run as root.
+- Prints one `PASS` or `FAIL` row per check and exits with an error if a check or cleanup fails. Prints no private key or token.
+- Changes no DNS, `/etc/hosts`, trust store, service, firewall, `sysctl` setting, browser setting or port 443, installs no root helper and persists no CA.
+- Normal CLI startup still initializes persistent logging and can check for updates in an interactive terminal. The proof's temporary-fixture isolation does not cover these CLI hooks.
+- Runs the broker and both gateways in one process on ephemeral loopback ports. Covers no second UID, port 443, root or browser trust check. The manual setup in the [how-to](../how-to/desktop-and-web.md#check-the-host-primitives-experimental) remains required for `jailoc gateway`.
+
+| Check | Covers |
+|-------|--------|
+| Broker listener | A broker bound to ephemeral loopback ports, which hands each accepted connection to the attached gateway. |
+| Private Unix socket | Broker control socket mode `0600` in a temporary directory of mode `0700`; peer UID verified on both sides. |
+| Gateway attachment | One gateway serves HTTPS through the broker; a second gateway is refused while the first is attached and serves after the first detaches. |
+| TLS trust | In-memory dummy CA and a leaf for `proof.jl.local`; the client trusts exactly that CA. A wrong host name and an untrusted CA are rejected. |
+| Marker rewrite | Marker-owned exact-host lines applied to a temporary fixture file, synced, then rolled back with unrelated bytes preserved. |
+
+A workspace named `host-proof` remains available to the foreground gateway when passed after `--`, following its TLS flags.
+
+#### `jailoc-listener-broker`
+
+Experimental root helper that binds `127.0.0.1:443` and `[::1]:443` for one user's gateway. It is a separate binary built from `./cmd/jailoc-listener-broker`; release archives don't include it and no `jailoc` command installs it.
+
+```text
+jailoc-listener-broker --uid <uid>
+```
+
+- Takes exactly one flag, `--uid`, the nonzero numeric UID allowed to attach. No other flags or arguments.
+- Refuses to run unless its real and effective UIDs are 0.
+- Refuses to run unless its executable and every directory above it are owned by root and not writable by group or others, and no path component is a symbolic link. Install it in a root-owned directory such as `/usr/local/libexec` or `/Library/PrivilegedHelperTools`.
+- Binds both loopback addresses on port 443, then opens the control socket `/var/run/jailoc-gateway/<uid>/broker.sock`, owned by `<uid>`, mode `0600`. It refuses a socket path where another broker answers, and removes a stale socket. Fails if any of these steps fails.
+- Runs in the foreground until interrupted, then closes the listeners and removes the socket.
+- Parses no HTTP or TLS and holds no certificate or key. It accepts TCP connections and passes each one to the attached gateway over the control socket.
+- Accepts one gateway at a time: a second gateway is refused while one is attached. A gateway that stops taking connections for 2 seconds is detached; connections that arrive with no gateway attached are closed.
+- The gateway checks that the socket belongs to UID 0, and the broker checks that the gateway runs as `<uid>`. Any process of that user can attach.
+
+!!! warning "Unverified on real hosts"
+
+    The broker has not been tested as an installed root binary on macOS or Linux, or with a second local user. No service definition (`launchd`, `systemd`) is provided.
 
 ---
 

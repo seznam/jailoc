@@ -21,8 +21,9 @@ package guest
 // Protocol 2: the guest configures IPv6 only when Config.IPv6 is set, and
 // the broker policy denies IPv6 unless its ipv6 field is set.
 // Protocol 3: the broker policy uses dns, allow and deny rules.
-// Protocol 4: the guest mounts /tmp from Config.Tmp, applies Reload.TmpTTL
-// and answers "jailoc-guest tmp-status".
+// Protocol 4: the guest mounts /tmp from Config.Tmp, applies Reload.TmpTTL,
+// answers "jailoc-guest tmp-status", and runs the web relay (Config.WebRelay),
+// which the host's private web socket reaches through the broker gateway.
 const Protocol = 4
 
 // Paths inside the guest root file system.
@@ -71,6 +72,10 @@ const (
 	// GPGAgentPort is the gateway port the broker relays to the host gpg
 	// agent's extra socket when the workspace forwards it.
 	GPGAgentPort = 7023
+	// WebRelayPort is the single guest NIC port of the web relay. The host
+	// connects to it and names the loopback port to reach in the first two
+	// bytes (see WebRelay).
+	WebRelayPort = 6081
 )
 
 // HostAliases resolve to the broker gateway in /etc/hosts, where host_ports
@@ -178,6 +183,19 @@ type Config struct {
 	CacheDir string `json:"cache_dir,omitempty"`
 	// Tmp configures the /tmp file system and the expiry of its entries.
 	Tmp TmpConfig `json:"tmp"`
+	// WebRelay, when set, runs the web relay on WebRelayPort so the host
+	// reaches allowlisted guest loopback web services.
+	WebRelay *WebRelay `json:"web_relay,omitempty"`
+}
+
+// WebRelay configures the web relay: one listener on the guest NIC at
+// WebRelayPort. A client first sends a 2-byte big-endian target port; the
+// relay answers with one status byte and, if the port is allowed and
+// listening, splices the connection to 127.0.0.1:<port> in the guest.
+type WebRelay struct {
+	// Ports is the allowlist of loopback target ports; any other port is
+	// denied.
+	Ports []uint16 `json:"ports,omitempty"`
 }
 
 // DockerDisk is the block device of the workspace VM's Docker data disk.

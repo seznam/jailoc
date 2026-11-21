@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -680,6 +681,11 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	for _, s := range hostServices {
 		g.HostPorts = append(g.HostPorts, s.GuestPort)
 	}
+	// The relay allowlist is fixed for the life of the VM; a new proxy route
+	// port needs a restart.
+	if ports := webRelayPorts(ws.Proxy); len(ports) > 0 {
+		g.WebRelay = &guest.WebRelay{Ports: ports}
+	}
 	spec := vm.Spec{
 		Kind:          vm.KindWorkspace,
 		Workspace:     ws.Name,
@@ -1109,6 +1115,9 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	if running.Guest != nil && guestIPv6(running) != ws.IPv6 {
 		out = append(out, "network.ipv6")
 	}
+	if running.Guest != nil {
+		out = append(out, webChanges(ws, running.Guest)...)
+	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
 	if cmp.Or(running.Agent, agent.Default) != ws.Agent.Name {
 		out = append(out, "agent")
@@ -1309,6 +1318,25 @@ func configureVMDocker(ws *workspace.Resolved, spec *vm.Spec) error {
 	spec.Docker = true
 	spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
 	return nil
+}
+
+// webRelayPorts returns the unique guest ports of routes in ascending order:
+// the allowlist of the guest's web relay.
+func webRelayPorts(routes []workspace.ProxyRoute) []uint16 {
+	var ports []uint16
+	for _, r := range routes {
+		ports = append(ports, uint16(r.Port)) //nolint:gosec // G115: validated to 1-65535
+	}
+	slices.Sort(ports)
+	return slices.Compact(ports)
+}
+
+// guestWebPorts returns the web relay allowlist of g, in ascending order.
+func guestWebPorts(g *guest.Config) []uint16 {
+	if g == nil || g.WebRelay == nil {
+		return nil
+	}
+	return slices.Compact(slices.Sorted(slices.Values(g.WebRelay.Ports)))
 }
 
 func vmForwards(ports []config.PortForward) []vm.Forward {
