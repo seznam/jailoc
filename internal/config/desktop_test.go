@@ -29,6 +29,18 @@ func TestProxyTOML(t *testing.T) {
 	if ws.Proxy.Routes["admin"].Port != 8080 || ws.Proxy.Routes["admin"].Auth == nil || !*ws.Proxy.Routes["admin"].Auth {
 		t.Fatalf("admin route = %+v", ws.Proxy.Routes["admin"])
 	}
+	encoded, err := Encode(&cfg)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	var roundTrip Config
+	if _, err := toml.Decode(string(encoded), &roundTrip); err != nil {
+		t.Fatalf("round-trip decode: %v\n%s", err, encoded)
+	}
+	rtWS := roundTrip.Workspaces["w"]
+	if rtWS.Proxy == nil || rtWS.Proxy.Auth == nil || *rtWS.Proxy.Auth || rtWS.Proxy.Routes["app"].Port != 3000 || rtWS.Proxy.Routes["app"].Auth != nil || rtWS.Proxy.Routes["admin"].Port != 8080 || rtWS.Proxy.Routes["admin"].Auth == nil || !*rtWS.Proxy.Routes["admin"].Auth {
+		t.Fatalf("round-trip proxy = %+v\n%s", rtWS.Proxy, encoded)
+	}
 }
 
 func TestProxyValidation(t *testing.T) {

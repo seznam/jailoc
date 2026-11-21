@@ -238,6 +238,9 @@ func TestProxyHeadersAndCookies(t *testing.T) {
 		w.Header().Set("Alt-Svc", `h2=":443"`)
 		w.Header().Set("Clear-Site-Data", `"cookies"`)
 		w.Header().Set("Cache-Control", "public, max-age=31536000")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+		w.Header().Set("Cross-Origin-Opener-Policy", "unsafe-none")
 		w.WriteHeader(200)
 	}), nil)
 	cookie := loginCookie(t, x, hostA)
@@ -258,7 +261,7 @@ func TestProxyHeadersAndCookies(t *testing.T) {
 	if u.Host != hostA+":443" || u.Header.Get("X-Forwarded-Host") != hostA+":443" || u.Header.Get("X-Forwarded-Proto") != "https" || u.Header.Get("X-Forwarded-For") != "127.0.0.1" || !strings.Contains(u.Header.Get("Forwarded"), `host="`+hostA+`:443"`) || u.Header.Get("X-Forwarded-Evil") != "" {
 		t.Fatalf("upstream host/forwarding: %s %+v", u.Host, u.Header)
 	}
-	if len(res.Cookies()) != 1 || res.Cookies()[0].Name != appCookiePrefix(hostA)+"app" || res.Cookies()[0].Value != "ok" || res.Cookies()[0].Domain != "" || res.Cookies()[0].Path != "/" || !res.Cookies()[0].Secure || res.Header.Get("Access-Control-Allow-Origin") != "" || res.Header.Get("Alt-Svc") != "" || res.Header.Get("Clear-Site-Data") != "" || res.Header.Get("Cache-Control") != "no-store" {
+	if len(res.Cookies()) != 1 || res.Cookies()[0].Name != appCookiePrefix(hostA)+"app" || res.Cookies()[0].Value != "ok" || res.Cookies()[0].Domain != "" || res.Cookies()[0].Path != "/" || !res.Cookies()[0].Secure || res.Header.Get("Access-Control-Allow-Origin") != "" || res.Header.Get("Alt-Svc") != "" || res.Header.Get("Clear-Site-Data") != "" || res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Referrer-Policy") != "same-origin" || !slices.Equal(res.Header.Values("Cross-Origin-Resource-Policy"), []string{"same-origin"}) || !slices.Equal(res.Header.Values("Cross-Origin-Opener-Policy"), []string{"same-origin"}) {
 		t.Fatalf("upstream response filtering: %+v", res.Header)
 	}
 }
