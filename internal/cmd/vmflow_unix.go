@@ -135,6 +135,9 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if err := configureVMDocker(ws, &spec); err != nil {
 		return err
 	}
+	if err := configureVMDesktop(ws, &spec); err != nil {
+		return err
+	}
 	if ws.ProtectGit {
 		pins, readOnly, err := gitProtection(shares, gitInheritedConfig())
 		if err != nil {
@@ -685,6 +688,9 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	hostServices := vmHostServices(ws)
 	for _, s := range hostServices {
 		g.HostPorts = append(g.HostPorts, s.GuestPort)
+	}
+	if ws.EnableDesktop {
+		g.Desktop = &guest.Desktop{}
 	}
 	// The relay allowlist is fixed for the life of the VM; a new proxy route
 	// port needs a restart.
@@ -1328,6 +1334,66 @@ func configureVMDocker(ws *workspace.Resolved, spec *vm.Spec) error {
 	spec.Docker = true
 	spec.Guest.Docker = &guest.Docker{Disk: guest.DockerDisk}
 	return nil
+}
+
+// desktopFiles are the programs and files the guest needs to run the
+// desktop: what jailoc's desktop layer installs, by the name that error
+// messages use and the image paths that satisfy it.
+var desktopFiles = []struct {
+	name  string
+	paths []string
+}{
+	{"Xtigervnc", []string{"usr/bin/Xtigervnc", "usr/local/bin/Xtigervnc", "bin/Xtigervnc"}},
+	{"websockify", []string{"usr/bin/websockify", "usr/local/bin/websockify", "bin/websockify"}},
+	{"openbox", []string{"usr/bin/openbox", "usr/local/bin/openbox", "bin/openbox"}},
+	{"dbus-run-session", []string{"usr/bin/dbus-run-session", "usr/local/bin/dbus-run-session", "bin/dbus-run-session"}},
+	{"noVNC vnc.html", []string{"usr/share/novnc/vnc.html"}},
+}
+
+// missingDesktopFiles returns the names of the desktopFiles that has, which
+// reports whether the image holds any of the given paths, does not find.
+func missingDesktopFiles(has func(paths ...string) (bool, error)) ([]string, error) {
+	var missing []string
+	for _, f := range desktopFiles {
+		found, err := has(f.paths...)
+		if err != nil {
+			return nil, fmt.Errorf("look for %s: %w", f.name, err)
+		}
+		if !found {
+			missing = append(missing, f.name)
+		}
+	}
+	return missing, nil
+}
+
+// desktopImageError is the error for a workspace image that lacks the
+// desktop files, or nil when none is missing.
+func desktopImageError(workspace string, missing []string) error {
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("workspace %q: enable_desktop is on, but the workspace image has no %s; "+
+		"jailoc adds the desktop only to images it builds (leave image unset or use a dockerfile), "+
+		"so an explicit image must already contain it: install tigervnc-standalone-server, novnc, websockify, "+
+		"openbox and dbus-x11 (apt-get install) in it, or set enable_desktop = false",
+		workspace, strings.Join(missing, ", "))
+}
+
+// configureVMDesktop checks that the workspace image ships the desktop when
+// enable_desktop is on. Images jailoc builds get the desktop layer; an
+// explicit image is used as it is and must bring its own. workspaceSpec
+// already asks the guest to run the desktop.
+func configureVMDesktop(ws *workspace.Resolved, spec *vm.Spec) error {
+	if !ws.EnableDesktop {
+		return nil
+	}
+	missing, err := missingDesktopFiles(func(paths ...string) (bool, error) {
+		return vm.ImageHasFile(spec.ImageCache, spec.Image, paths...)
+	})
+	if err != nil {
+		return fmt.Errorf("workspace %q: %w", ws.Name, err)
+	}
+	return desktopImageError(ws.Name, missing)
 }
 
 // webRelayPorts returns the unique guest ports of routes in ascending order:

@@ -21,6 +21,27 @@ func TestDockerLayerEmbedded(t *testing.T) {
 	}
 }
 
+func TestDesktopLayerEmbedded(t *testing.T) {
+	t.Parallel()
+	layer := string(jailocembed.DesktopLayer())
+	for _, want := range []string{
+		"tigervnc-standalone-server", "novnc", "websockify", "openbox", "dbus-x11",
+		"xterm", "fonts-dejavu-core", "x11-utils", "xauth", "apt-get", "Debian or Ubuntu",
+	} {
+		if !strings.Contains(layer, want) {
+			t.Errorf("DesktopLayer() does not contain %q", want)
+		}
+	}
+	for _, unwanted := range []string{"firefox", "chromium", "snap", "xvfb"} {
+		if strings.Contains(strings.ToLower(layer), unwanted) {
+			t.Errorf("DesktopLayer() contains %q", unwanted)
+		}
+	}
+	if strings.Contains(layer, "FROM") {
+		t.Error("DesktopLayer() must be a RUN fragment without FROM")
+	}
+}
+
 func TestTUIPluginEmbedded(t *testing.T) {
 	t.Parallel()
 	if len(jailocembed.TUIPluginOpenCode1JS()) == 0 || len(jailocembed.TUIPluginOpenCode2JS()) == 0 || len(jailocembed.TUIPluginJSON()) == 0 {

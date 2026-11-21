@@ -114,16 +114,23 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 }
 
 // runningWebPorts are the guest ports the running VM reserves for the web
-// relay: its immutable relay allowlist and the relay port itself. They stay
-// reserved whatever the configuration now says, until a restart.
+// relay and the desktop: its immutable relay allowlist, the relay port
+// itself, and the desktop's websockify and VNC ports. They stay reserved
+// whatever the configuration now says, until a restart.
 func runningWebPorts(g *guest.Config) map[int]string {
 	reserved := map[int]string{}
-	if g == nil || g.WebRelay == nil {
+	if g == nil {
 		return reserved
 	}
-	reserved[guest.WebRelayPort] = "the web relay"
-	for _, p := range g.WebRelay.Ports {
-		reserved[int(p)] = "a web route of the running VM"
+	if g.WebRelay != nil {
+		reserved[guest.WebRelayPort] = "the web relay"
+		for _, p := range g.WebRelay.Ports {
+			reserved[int(p)] = "a web route of the running VM"
+		}
+	}
+	if g.Desktop != nil {
+		reserved[guest.DesktopPort] = "the desktop"
+		reserved[guest.VNCPort] = "the desktop"
 	}
 	return reserved
 }
@@ -309,6 +316,9 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	}
 	if guestIPv6(running) != want.Guest.IPv6 {
 		out = append(out, "network.ipv6")
+	}
+	if (running.Guest.Desktop != nil) != (want.Guest.Desktop != nil) {
+		out = append(out, "enable_desktop")
 	}
 	if !slices.Equal(guestWebPorts(running.Guest), guestWebPorts(want.Guest)) {
 		out = append(out, "proxy")

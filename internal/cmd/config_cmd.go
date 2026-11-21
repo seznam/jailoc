@@ -80,6 +80,7 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  Import Agent Config: %t\n", ws.ImportAgentConfig)
 	_, _ = cyan.Fprintf(os.Stdout, "  CA Bundle: %s\n", caBundleLabel(ws.CABundle))
 	_, _ = cyan.Fprintf(os.Stdout, "  Enable Docker: %t\n", ws.EnableDocker)
+	_, _ = cyan.Fprintf(os.Stdout, "  Enable Desktop: %t\n", ws.EnableDesktop)
 	_, _ = cyan.Fprintf(os.Stdout, "  Proxy:\n")
 	printProxyRoutes(ws.Name, ws.Proxy, "    ")
 	_, _ = cyan.Fprintf(os.Stdout, "  Protect Git: %t\n", ws.ProtectGit)

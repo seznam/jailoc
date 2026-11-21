@@ -201,6 +201,15 @@ func Init(logger *slog.Logger) error {
 		}
 	}
 
+	// The desktop starts only after privilege hardening, so it cannot undo
+	// Pins and ReadOnly (protect_git). It is stopped on every exit path.
+	var desk *desktop
+	if cfg.Desktop != nil {
+		if desk, err = startDesktop(logger, cfg, acct, env); err != nil {
+			return fmt.Errorf("desktop: %w", err)
+		}
+		defer desk.stop(logger)
+	}
 	stopWebRelay := func() {}
 	if cfg.WebRelay != nil && len(cfg.WebRelay.Ports) > 0 {
 		stop, err := startWebRelay(logger, cfg.WebRelay)
@@ -238,6 +247,7 @@ func Init(logger *slog.Logger) error {
 			srv.Close()
 			// Before the reaper stops, so the exits are collected.
 			stopWebRelay()
+			desk.stop(logger)
 			docker.stop(logger)
 			syscall.Sync()
 			return nil
@@ -669,6 +679,12 @@ func sessionEnv(cfg *Config) ([]string, *TimeZone) {
 	}
 	env = append(env, cfg.Env...)
 	env = append(env, cacheEnv(cfg.CacheDir, env)...)
+	if cfg.Desktop != nil {
+		// Sessions draw on the desktop's display. No XAUTHORITY: the
+		// desktop creates no authority file, and an invented path would
+		// break clients that honour it.
+		env = withDesktopDisplay(env)
+	}
 	return append(env, tmpEnv(env)...), zone
 }
 
@@ -854,17 +870,35 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 }
 
 // programEnv returns the environment of a program run with extraEnv: the
-// process environment, the entries of EnvFile and then extraEnv.
+// process environment, the entries of EnvFile and then extraEnv. On a desktop
+// workspace DISPLAY always names the desktop, whatever EnvFile or extraEnv
+// say, as in sessionEnv.
 func programEnv(extraEnv []string) []string {
-	env := os.Environ()
-	if b, err := os.ReadFile(EnvFile); err == nil {
-		for line := range strings.SplitSeq(string(b), "\n") {
-			if line != "" {
-				env = append(env, line)
-			}
+	return composeProgramEnv(os.Environ(), EnvFile, extraEnv, desktopConfigured(ConfigPath))
+}
+
+func composeProgramEnv(base []string, envFile string, extraEnv []string, desktop bool) []string {
+	env := programLastWins(slices.Concat(base, readEnvFile(envFile), extraEnv))
+	if desktop {
+		env = withDesktopDisplay(env)
+	}
+	return env
+}
+
+// readEnvFile returns the KEY=VALUE lines of path; a missing or unreadable
+// file has none.
+func readEnvFile(path string) []string {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: EnvFile or a test path
+	if err != nil {
+		return nil
+	}
+	var env []string
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if line != "" {
+			env = append(env, line)
 		}
 	}
-	return programLastWins(append(env, extraEnv...))
+	return env
 }
 
 // Exec replaces the process with args run in dir, adding the entries of
