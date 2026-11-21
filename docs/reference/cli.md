@@ -408,21 +408,26 @@ jailoc sessions stop ID [flags]
 Serve the proxy routes of running workspaces to a browser on the host over HTTPS (`jailoc gateway`, `jailoc gw` and `jailoc web` are aliases).
 
 ```text
-jailoc proxy [workspace...] --tls-cert <path> --tls-key <path> [--listen 127.0.0.1:8443 | --listener-broker]
+jailoc proxy [workspace...] [--foreground] [--tls-cert <path> --tls-key <path>] [--listen 127.0.0.1:8443 | --listener-broker]
+jailoc proxy status
+jailoc proxy stop
 ```
 
-- Runs in the foreground until interrupted.
+- Runs in the background by default; `--foreground` (`-f`) runs in the foreground until interrupted.
+- `jailoc up` and `jailoc restart` automatically start or sync the background proxy when a workspace has `proxy` routes; `jailoc down` removes the stopped workspace's routes and stops the background proxy when no proxy workspaces remain.
+- Re-running `jailoc proxy` while the background proxy is running preserves existing browser sessions and prints the active routes, minting login codes only for newly added routes with `auth = true`.
 - With no `workspace` argument it serves every running configured workspace that has `proxy` routes and notes the ones it skips. A named workspace must be running and have routes, or the command fails.
 - A running VM whose proxy guest ports differ from the configuration is refused; run [`jailoc restart`](#jailoc-restart) first.
-- Prints the URL (`https://<name>.<workspace>.jailoc.local/`) for each route, and a one-time login code for routes with `auth = true`.
-- Serves the VM boots it started with. Routes close when a workspace VM stops or is replaced, and the proxy exits when every served VM is gone. Restart the proxy to serve a new VM.
-- Reads the configuration at start. Adding or renaming a route that uses a guest port already in the set of the running VM needs only a proxy restart; changing the set of guest ports needs `jailoc restart` and a proxy restart.
+- Prints the URL (`https://<name>.<workspace>.jailoc.local/`) for each route, and a one-time login code when a route has `auth = true`.
+- Routes close when a workspace VM stops or is replaced, and the proxy exits when every served VM is gone.
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--tls-cert PATH` | (required) | PEM certificate chain that covers every route host, for example with `*.<workspace>.jailoc.local` in `subjectAltName`. |
-| `--tls-key PATH` | (required) | PEM private key of the certificate. |
+| `-f`, `--foreground` | off | Run in the foreground instead of starting or syncing the background proxy. |
+| `--tls-cert PATH` | `~/.config/jailoc/ingress/cert.crt` | PEM certificate chain that covers every route host. When omitted together with `--tls-key`, jailoc generates and reuses a local CA (`ca.crt`) and leaf certificate in `~/.config/jailoc/ingress`. |
+| `--tls-key PATH` | `~/.config/jailoc/ingress/cert.key` | PEM private key of the certificate. |
 | `--listen ADDRESS` | `127.0.0.1:8443` | Loopback IP address and port of the HTTPS listener, for example `127.0.0.1:8443` or `[::1]:8443`. Host names and non-loopback addresses are refused; port 0 picks a free port. |
-| `--listener-broker` | off | Serve on `127.0.0.1:443` and `[::1]:443` through [`jailoc-listener-broker`](#jailoc-listener-broker) instead of opening a listener. Refused together with `--listen` and when the gateway runs as root. |
+| `--listener-broker` | off | Serve on `127.0.0.1:443` and `[::1]:443` through [`jailoc-listener-broker`](#jailoc-listener-broker) instead of opening a listener. Refused together with `--listen` and when the proxy runs as root. |
 
 **Authentication and origin checks**
 

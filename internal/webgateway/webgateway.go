@@ -64,47 +64,102 @@ type loginCode struct {
 }
 
 // New returns one unpredictable, single-use, ten-minute login code per host.
-// Codes are submitted in a POST body, never in a URL. Routes are copied and
-// cannot be changed; a Gateway may be served only once, for one VM boot.
+// Codes are submitted in a POST body, never in a URL. Routes are copied and may
+// be updated with Update; a Gateway may be served only once.
 func New(cfg Config) (*Gateway, map[string]string, error) {
+	g := &Gateway{
+		routes: make(map[string]Route), codes: make(map[string]*loginCode),
+		sessions: make(map[[32]byte]*session), now: time.Now, sessionTTL: 8 * time.Hour,
+	}
+	codes, err := g.Update(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return g, codes, nil
+}
+
+// Update replaces the certificate and route set of g while preserving active
+// sessions and login codes of routes that remain in cfg. Routes removed from
+// cfg have their active sessions closed and their login codes removed; newly
+// added routes get a fresh ten-minute login code, returned in the map.
+func (g *Gateway) Update(cfg Config) (map[string]string, error) {
 	if len(cfg.Routes) == 0 {
-		return nil, nil, fmt.Errorf("web gateway requires routes")
+		return nil, fmt.Errorf("web gateway requires routes")
 	}
 	cert, err := copyCertificate(cfg.Cert)
 	if err != nil {
-		return nil, nil, fmt.Errorf("web gateway certificate: %w", err)
+		return nil, fmt.Errorf("web gateway certificate: %w", err)
 	}
-	g := &Gateway{
-		cert: cert, routes: make(map[string]Route, len(cfg.Routes)),
-		codes: make(map[string]*loginCode, len(cfg.Routes)), sessions: make(map[[32]byte]*session),
-		unauth: make(map[string]*session, len(cfg.Routes)),
-		now:    time.Now, sessionTTL: 8 * time.Hour,
-	}
-	codes := make(map[string]string, len(cfg.Routes))
+	nextRoutes := make(map[string]Route, len(cfg.Routes))
 	for _, route := range cfg.Routes {
 		if !validHostname(route.Host) || route.Dial == nil {
-			return nil, nil, fmt.Errorf("invalid web gateway route %q", route.Host)
+			return nil, fmt.Errorf("invalid web gateway route %q", route.Host)
 		}
 		if err := validStartPath(route.StartPath); err != nil {
-			return nil, nil, fmt.Errorf("web gateway route %q start path: %w", route.Host, err)
+			return nil, fmt.Errorf("web gateway route %q start path: %w", route.Host, err)
 		}
-		if _, exists := g.routes[route.Host]; exists {
-			return nil, nil, fmt.Errorf("duplicate web gateway route %q", route.Host)
+		if _, exists := nextRoutes[route.Host]; exists {
+			return nil, fmt.Errorf("duplicate web gateway route %q", route.Host)
 		}
 		if err := cert.Leaf.VerifyHostname(route.Host); err != nil {
-			return nil, nil, fmt.Errorf("certificate for route %q: %w", route.Host, err)
+			return nil, fmt.Errorf("certificate for route %q: %w", route.Host, err)
 		}
-		g.routes[route.Host] = route
+		nextRoutes[route.Host] = route
+	}
+
+	g.mu.Lock()
+	now := g.now()
+	codes := make(map[string]string)
+	for host, route := range nextRoutes {
+		if prev, exists := g.routes[host]; exists && prev.Auth == route.Auth {
+			continue
+		}
 		if route.Auth {
 			code, err := randomToken()
 			if err != nil {
-				return nil, nil, fmt.Errorf("generate login code: %w", err)
+				g.mu.Unlock()
+				return nil, fmt.Errorf("generate login code: %w", err)
 			}
-			g.codes[route.Host] = &loginCode{hash: sha256.Sum256([]byte(code)), expires: g.now().Add(10 * time.Minute)}
-			codes[route.Host] = code
+			g.codes[host] = &loginCode{hash: sha256.Sum256([]byte(code)), expires: now.Add(10 * time.Minute)}
+			codes[host] = code
+		} else {
+			delete(g.codes, host)
 		}
 	}
-	return g, codes, nil
+	if g.unauth == nil {
+		g.unauth = make(map[string]*session)
+	}
+	var revoked []*session
+	for host := range g.routes {
+		if _, keep := nextRoutes[host]; !keep {
+			delete(g.codes, host)
+			if s := g.unauth[host]; s != nil {
+				revoked = append(revoked, s)
+				delete(g.unauth, host)
+			}
+		}
+	}
+	for k, s := range g.sessions {
+		if next, keep := nextRoutes[s.host]; !keep || !next.Auth {
+			revoked = append(revoked, s)
+			delete(g.sessions, k)
+		}
+	}
+	g.cert = cert
+	g.routes = nextRoutes
+	g.mu.Unlock()
+
+	for _, s := range revoked {
+		s.close()
+	}
+	return codes, nil
+}
+
+func (g *Gateway) route(host string) (Route, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	r, ok := g.routes[host]
+	return r, ok
 }
 
 // Serve takes ownership of a TCP listener bound to a loopback IP. The listener
@@ -127,10 +182,13 @@ func (g *Gateway) Serve(ctx context.Context, ln net.Listener) error {
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"},
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			g.mu.Lock()
+			defer g.mu.Unlock()
 			if _, ok := g.routes[hello.ServerName]; !ok {
 				return nil, fmt.Errorf("unrecognized web gateway SNI")
 			}
-			return &g.cert, nil
+			cert := g.cert
+			return &cert, nil
 		},
 	}
 	srv := &http.Server{
