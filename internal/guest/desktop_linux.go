@@ -51,6 +51,7 @@ type desktopRun struct {
 type desktopProc struct {
 	name string
 	pid  int
+	spec desktopSpec
 }
 
 // desktop is the running desktop programs, in start order. Each leads its own
@@ -230,7 +231,7 @@ func runDesktop(logger *slog.Logger, specs []desktopSpec, run desktopRun) (*desk
 			d.stop(logger)
 			return nil, fmt.Errorf("%s: %w", s.name, err)
 		}
-		d.procs = append(d.procs, desktopProc{name: s.name, pid: pid})
+		d.procs = append(d.procs, desktopProc{name: s.name, pid: pid, spec: s})
 		if run.started != nil {
 			run.started(s.name, pid)
 		}
@@ -240,13 +241,13 @@ func runDesktop(logger *slog.Logger, specs []desktopSpec, run desktopRun) (*desk
 			return nil, fmt.Errorf("%s: %w", s.name, err)
 		}
 	}
-	for i, p := range d.procs {
+	for _, p := range d.procs {
 		if !leaderRunning(p.pid) {
 			d.stop(logger)
-			return nil, fmt.Errorf("%s: exited during startup (see %s)", p.name, run.logPath(specs[i]))
+			return nil, fmt.Errorf("%s: exited during startup (see %s)", p.name, run.logPath(p.spec))
 		}
-		if specs[i].ready != nil {
-			if err := specs[i].ready(); err != nil {
+		if p.spec.ready != nil {
+			if err := p.spec.ready(); err != nil {
 				d.stop(logger)
 				return nil, fmt.Errorf("%s: %w", p.name, err)
 			}
