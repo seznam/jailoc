@@ -55,16 +55,13 @@ func TestGatewayHostProofIsRegisteredUnderGateway(t *testing.T) {
 func TestGatewayHostProofKeepsForegroundCommandContract(t *testing.T) {
 	t.Parallel()
 	gw := newGatewayCmd()
-	if gw.Use != "gateway [workspace...]" {
-		t.Errorf("Use = %q, want the foreground usage", gw.Use)
+	if gw.Use != "web [workspace...]" {
+		t.Errorf("Use = %q, want web [workspace...]", gw.Use)
 	}
-	for _, name := range []string{"tls-cert", "tls-key"} {
+	for _, name := range []string{"tls-cert", "tls-key", "foreground"} {
 		f := gw.Flags().Lookup(name)
 		if f == nil {
-			t.Fatalf("gateway lacks --%s", name)
-		}
-		if f.Annotations[cobra.BashCompOneRequiredFlag] == nil {
-			t.Errorf("--%s is no longer required on the foreground command", name)
+			t.Fatalf("web lacks --%s", name)
 		}
 		if gw.PersistentFlags().Lookup(name) != nil {
 			t.Errorf("--%s must not be persistent: host-proof would inherit it", name)
@@ -181,18 +178,18 @@ func TestGatewayForegroundHelpAndMissingFlagsUnchanged(t *testing.T) {
 	if err := gw.ExecuteContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"gateway [workspace...]", "--listen", "--tls-cert", "--tls-key", "host-proof"} {
+	for _, want := range []string{"web [workspace...]", "--foreground", "--listen", "--tls-cert", "--tls-key", "host-proof"} {
 		if !strings.Contains(out.String(), want) {
-			t.Errorf("gateway help lacks %q:\n%s", want, out.String())
+			t.Errorf("web help lacks %q:\n%s", want, out.String())
 		}
 	}
 	gw = newGatewayCmd()
 	gw.SetOut(&out)
 	gw.SetErr(&out)
-	gw.SetArgs(nil)
+	gw.SetArgs([]string{"--tls-cert", "c.pem"})
 	err := gw.ExecuteContext(t.Context())
-	if err == nil || !strings.Contains(err.Error(), `"tls-cert"`) || !strings.Contains(err.Error(), `"tls-key"`) {
-		t.Fatalf("bare gateway error = %v, want the required TLS flags named", err)
+	if err == nil || !strings.Contains(err.Error(), "tls-key") {
+		t.Fatalf("half-specified TLS error = %v, want tls-key named", err)
 	}
 }
 
