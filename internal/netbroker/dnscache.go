@@ -115,7 +115,9 @@ func (c *dnsCache) recordChain(addr netip.Addr, name string, ttl time.Duration, 
 	if ttl > maxDNSCacheTTL {
 		ttl = maxDNSCacheTTL
 	}
-	now := c.now()
+	// Strip the monotonic reading so TTL expiry follows wall clock time across
+	// host sleep.
+	now := c.now().Round(0)
 	exp := now.Add(ttl)
 
 	c.mu.Lock()
@@ -162,7 +164,7 @@ func (c *dnsCache) lookupTrusted(addr netip.Addr, trusted func(chain []string) b
 		return nil, nil
 	}
 	addr = addr.WithZone("").Unmap()
-	now := c.now()
+	now := c.now().Round(0)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

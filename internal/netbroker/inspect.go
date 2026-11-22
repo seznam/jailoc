@@ -38,7 +38,7 @@ import (
 const (
 	// leafCacheSize bounds the issued certificates kept per inspection CA.
 	leafCacheSize = 256
-	leafLifetime  = 24 * time.Hour
+	leafLifetime  = 30 * 24 * time.Hour
 	leafBackdate  = time.Hour
 	// leafMinLeft is the remaining validity under which a cached certificate
 	// is issued again.
@@ -180,7 +180,9 @@ func parseCAKey(data []byte) (crypto.Signer, error) {
 func (i *inspector) leaf(name string) (*tls.Certificate, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	now := i.now()
+	// Strip the monotonic reading so NotAfter comparisons use wall clock time,
+	// which advances while the host sleeps just as the X.509 certificate does.
+	now := i.now().Round(0)
 	if el, ok := i.leaves[name]; ok {
 		e := el.Value.(*leafEntry)
 		if e.notAfter.Sub(now) >= leafMinLeft {

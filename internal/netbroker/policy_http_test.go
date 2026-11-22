@@ -367,14 +367,12 @@ func TestInspectorLeaf(t *testing.T) {
 	if got := cert.NotBefore; !got.Equal(now.Add(-time.Hour).Truncate(time.Second)) {
 		t.Fatalf("NotBefore = %s, want now-1h", got)
 	}
-	// The test CA lives 24h from its creation, a moment before now, so the
-	// leaf is capped at the CA's expiry.
-	wantNotAfter := now.Add(24 * time.Hour)
+	wantNotAfter := now.Add(30 * 24 * time.Hour)
 	if wantNotAfter.After(ca.cert.NotAfter) {
 		wantNotAfter = ca.cert.NotAfter
 	}
 	if got := cert.NotAfter; !got.Equal(wantNotAfter.Truncate(time.Second)) {
-		t.Fatalf("NotAfter = %s, want min(now+24h, CA expiry) = %s", got, wantNotAfter)
+		t.Fatalf("NotAfter = %s, want min(now+30d, CA expiry) = %s", got, wantNotAfter)
 	}
 	if cert.IsCA || cert.KeyUsage != x509.KeyUsageDigitalSignature || len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
 		t.Fatalf("leaf usage = ca:%v ku:%v eku:%v", cert.IsCA, cert.KeyUsage, cert.ExtKeyUsage)
@@ -384,7 +382,7 @@ func TestInspectorLeaf(t *testing.T) {
 	}
 
 	t.Run("reissued with less than an hour left", func(t *testing.T) {
-		insp.now = func() time.Time { return now.Add(23*time.Hour + 30*time.Minute) }
+		insp.now = func() time.Time { return now.Add(30*24*time.Hour - 30*time.Minute) }
 		reissued, err := insp.leaf("api.github.com")
 		if err != nil {
 			t.Fatal(err)
