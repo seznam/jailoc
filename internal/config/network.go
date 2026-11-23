@@ -382,7 +382,7 @@ func DeprecationWarnings(cfg *Config) []string {
 		}
 	}
 	if !hasRules && len(cfg.Workspaces) > 0 {
-		warnings = append(warnings, "no [[*.network.rules]] configured: only the agent's endpoints are allowed; add allow = [\"*\"] or configure [[defaults.network.rules]]")
+		warnings = append(warnings, "no [[*.network.rules]] configured: all egress is denied except the agent rule, if any; add allow = [\"*\"] or configure [[defaults.network.rules]]")
 	}
 	defaultEndpoints := cfg.Defaults.Network.Get().AgentEndpoints
 	for _, name := range names {

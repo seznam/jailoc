@@ -671,6 +671,39 @@ func TestAddAgentEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("single-provider defaults and multi-provider workspaces", func(t *testing.T) {
+		t.Parallel()
+		omo, _ := agent.Lookup("omo")
+		cfg := &config.Config{
+			Defaults: config.Defaults{
+				Agent:  "claude",
+				Agents: map[string]config.AgentSettings{"mine": {From: "omo"}},
+			},
+			Workspaces: map[string]config.Workspace{
+				"web":  {},
+				"api":  {Agent: "opencode"},
+				"tool": {Agent: "mine"},
+			},
+		}
+		m := &migration{}
+		addAgentEndpoints(cfg, []string{"api", "tool", "web"}, m)
+		if cfg.Defaults.Network != nil {
+			t.Fatalf("defaults network = %+v, want unset", cfg.Defaults.Network)
+		}
+		for name, want := range map[string][]string{"api": opencode.Endpoints, "tool": omo.Endpoints, "web": nil} {
+			if got := cfg.Workspaces[name].Network.Get().AgentEndpoints; !slices.Equal(got, want) || (want == nil) != (got == nil) {
+				t.Fatalf("%s agent_endpoints = %v, want %v", name, got, want)
+			}
+		}
+		want := []string{
+			`[workspaces.api.network]: add agent_endpoints of agent "opencode"`,
+			`[workspaces.tool.network]: add agent_endpoints of agent "mine"`,
+		}
+		if !slices.Equal(m.changes, want) {
+			t.Fatalf("changes = %v, want %v", m.changes, want)
+		}
+	})
+
 	t.Run("already configured", func(t *testing.T) {
 		t.Parallel()
 		cfg := &config.Config{Workspaces: map[string]config.Workspace{
