@@ -63,6 +63,9 @@ jobs:
     name: GoReleaser
     needs: [validate, vm-runtime]
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-v${{ inputs.version }}
+      cancel-in-progress: false
     permissions:
       contents: write
       id-token: write
@@ -73,6 +76,16 @@ jobs:
       SHA: ${{ needs.validate.outputs.sha }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      # Recheck after acquiring the per-tag lock in case another run already
+      # published this tag.
+      - name: Check that the release is not published
+        run: |
+          if out=$(gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1); then
+            [[ "$out" == true ]] || { echo "release v${VERSION} is already published" >&2; exit 1; }
+          elif [[ "$out" != "release not found" ]]; then
+            echo "$out" >&2
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -118,7 +131,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/goreleaser.tar.gz" -C "$RUNNER_TEMP/goreleaser" goreleaser
           echo "$RUNNER_TEMP/goreleaser" >> "$GITHUB_PATH"
       - name: GoReleaser
-        run: goreleaser release --verbose --skip=validate
+        run: goreleaser release --verbose --draft --skip=validate,homebrew
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: v${{ inputs.version }}

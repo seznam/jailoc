@@ -25,8 +25,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: |
-          draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
-          [[ "$draft" == true ]] || { echo "release $TAG is already published" >&2; exit 1; }
+          if out=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1); then
+            [[ "$out" == true ]] || { echo "release $TAG is already published" >&2; exit 1; }
+          elif [[ "$out" != "release not found" ]]; then
+            echo "$out" >&2
+            exit 1
+          fi
 
   vm-runtime:
     name: VM runtime
@@ -41,6 +45,9 @@ jobs:
     name: GoReleaser
     needs: vm-runtime
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ inputs.tag }}
+      cancel-in-progress: false
     permissions:
       contents: write
       id-token: write
@@ -48,6 +55,19 @@ jobs:
     outputs:
       prerelease: ${{ steps.publish.outputs.prerelease }}
     steps:
+      # Recheck after acquiring the per-tag lock in case another run already
+      # published this tag while the VM runtime was building.
+      - name: Check that the release is not published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if out=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1); then
+            [[ "$out" == true ]] || { echo "release $TAG is already published" >&2; exit 1; }
+          elif [[ "$out" != "release not found" ]]; then
+            echo "$out" >&2
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -88,7 +108,12 @@ jobs:
           tar -xzf "$RUNNER_TEMP/goreleaser.tar.gz" -C "$RUNNER_TEMP/goreleaser" goreleaser
           echo "$RUNNER_TEMP/goreleaser" >> "$GITHUB_PATH"
       - name: GoReleaser
-        run: goreleaser release --verbose --skip=validate
+        run: |
+          if ! grep -Eq '^[[:space:]]*skip_upload:[[:space:]]*true([[:space:]]|#|$)' .goreleaser.yml; then
+            echo ".goreleaser.yml must set skip_upload: true so GoReleaser does not push the cask directly" >&2
+            exit 1
+          fi
+          goreleaser release --verbose --draft --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
