@@ -85,11 +85,15 @@ changelog:
 
 release:
   disable: false
-  draft: false
+  # The release workflow publishes the draft only after every checksummed
+  # asset is attested; published releases are immutable.
+  draft: true
   # Tags such as v1.20.0-rc.1 become GitHub pre-releases.
   prerelease: auto
   mode: append
   use_existing_draft: true
+  # Lets a re-run on the still-draft release overwrite assets it already uploaded.
+  replace_existing_artifacts: true
   # Complete corresponding source of the GPL-2.0-only kernel and the
   # LGPL-2.1-only library in libkrunfw, which the embedded VM runtime contains.
   extra_files:
@@ -99,7 +103,7 @@ release:
     owner: seznam
     name: jailoc
 
-# Publishes Casks/jailoc.rb to seznam/homebrew-tap:
+# Renders Casks/jailoc.rb for seznam/homebrew-tap:
 #   brew install --cask seznam/tap/jailoc
 homebrew_casks:
   - name: jailoc
@@ -109,15 +113,12 @@ homebrew_casks:
       - jl
     homepage: https://seznam.github.io/jailoc/
     description: Run coding agents in sandboxed libkrun micro-VMs
-    # Tags such as v1.20.0-rc.1 do not update the tap.
-    skip_upload: auto
+    # Only written to dist/homebrew/Casks/jailoc.rb. The release workflow pushes
+    # it to the tap after the release is published; pre-releases skip the tap.
+    skip_upload: true
     repository:
       owner: seznam
       name: homebrew-tap
-      # Pushed over SSH with a write-enabled deploy key of the tap repository.
-      git:
-        url: git@github.com:seznam/homebrew-tap.git
-        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY }}"
     commit_msg_template: "chore(jailoc): update to {{ .Tag }}"
     caveats: |
       On Linux, jailoc needs read-write access to /dev/kvm and a kernel with

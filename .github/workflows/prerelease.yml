@@ -114,12 +114,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: v${{ inputs.version }}
-          # Pre-releases skip the tap; the key is never exposed to this job.
-          HOMEBREW_TAP_DEPLOY_KEY: ""
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
-      - name: Release notes
+      # The release stays a draft until every asset is attested; publishing
+      # makes it immutable.
+      - name: Publish pre-release
         run: |
-          gh release edit "v${VERSION}" --prerelease --latest=false \
+          gh release edit "v${VERSION}" --draft=false --prerelease --latest=false \
             --notes "Release candidate built from \`${REF}\` (${SHA::7}). Not for general use; the update check does not offer pre-releases."
