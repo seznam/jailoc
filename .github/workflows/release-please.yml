@@ -167,6 +167,9 @@ jobs:
     # Tags such as v1.20.0-rc.1 do not update the tap.
     if: ${{ needs.goreleaser.outputs.prerelease == 'false' }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
     # HOMEBREW_TAP_DEPLOY_KEY lives in this environment, limited to main and v* tags.
     environment: homebrew-tap
     permissions: {}
@@ -186,6 +189,15 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -F /dev/null"
           git clone --depth 1 git@github.com:seznam/homebrew-tap.git "$RUNNER_TEMP/tap"
           cd "$RUNNER_TEMP/tap"
+          incoming="${TAG#v}"
+          if [[ -f Casks/jailoc.rb ]]; then
+            current=$(sed -n 's/^[[:space:]]*version "\([^"]*\)"/\1/p;T;q' Casks/jailoc.rb)
+            if [[ -n "$current" && "$current" != "$incoming" ]] && \
+               [[ "$(printf '%s\n%s\n' "$current" "$incoming" | sort -V | tail -n1)" == "$current" ]]; then
+              echo "tap already has newer version $current (skipping $incoming)"
+              exit 0
+            fi
+          fi
           cp "$RUNNER_TEMP/cask/jailoc.rb" Casks/jailoc.rb
           if git diff --quiet; then
             echo "Casks/jailoc.rb is already up to date"

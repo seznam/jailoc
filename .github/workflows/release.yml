@@ -109,11 +109,11 @@ jobs:
           echo "$RUNNER_TEMP/goreleaser" >> "$GITHUB_PATH"
       - name: GoReleaser
         run: |
-          if ! grep -Eq '^[[:space:]]*skip_upload:[[:space:]]*true([[:space:]]|#|$)' .goreleaser.yml; then
-            echo ".goreleaser.yml must set skip_upload: true so GoReleaser does not push the cask directly" >&2
-            exit 1
-          fi
-          goreleaser release --verbose --draft --skip=validate
+          # Normalize the checked-out config so older tags still upload to a
+          # draft, replace partial assets, and render the cask without pushing.
+          yq '.release.draft = true | .release.replace_existing_artifacts = true | (.homebrew_casks[]? |= (.skip_upload = true | del(.repository.git)))' \
+            .goreleaser.yml > "$RUNNER_TEMP/goreleaser.yml"
+          goreleaser release -f "$RUNNER_TEMP/goreleaser.yml" --verbose --draft --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -142,6 +142,9 @@ jobs:
     # Tags such as v1.20.0-rc.1 do not update the tap.
     if: ${{ needs.goreleaser.outputs.prerelease == 'false' }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
     # HOMEBREW_TAP_DEPLOY_KEY lives in this environment, limited to main and v* tags.
     environment: homebrew-tap
     permissions: {}
@@ -161,6 +164,15 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -F /dev/null"
           git clone --depth 1 git@github.com:seznam/homebrew-tap.git "$RUNNER_TEMP/tap"
           cd "$RUNNER_TEMP/tap"
+          incoming="${TAG#v}"
+          if [[ -f Casks/jailoc.rb ]]; then
+            current=$(sed -n 's/^[[:space:]]*version "\([^"]*\)"/\1/p;T;q' Casks/jailoc.rb)
+            if [[ -n "$current" && "$current" != "$incoming" ]] && \
+               [[ "$(printf '%s\n%s\n' "$current" "$incoming" | sort -V | tail -n1)" == "$current" ]]; then
+              echo "tap already has newer version $current (skipping $incoming)"
+              exit 0
+            fi
+          fi
           cp "$RUNNER_TEMP/cask/jailoc.rb" Casks/jailoc.rb
           if git diff --quiet; then
             echo "Casks/jailoc.rb is already up to date"
