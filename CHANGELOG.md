@@ -1,5 +1,56 @@
 # Changelog
 
+## [2.8.0](https://github.com/seznam/jailoc/compare/v2.7.2...v2.8.0) (2026-11-23)
+
+
+### Features
+
+* **cmd:** wire /tmp storage settings, live TTL reload and status reporting ([141ceda](https://github.com/seznam/jailoc/commit/141cedabfbc0549d80a8dc8324f0332e90a786e2))
+* **config:** add shared builder disk sizing ([cdaabde](https://github.com/seznam/jailoc/commit/cdaabdeebf97a900411098059b1e5d6b71752440))
+* **config:** add tmp_storage, tmp_size and tmp_ttl settings ([917f5df](https://github.com/seznam/jailoc/commit/917f5df781bf239321ff76759da3bddd8f8b01b4))
+* **guest:** mount configurable /tmp, expire unused entries and report usage ([9296f74](https://github.com/seznam/jailoc/commit/9296f7474638749c4cbab739d75a85d995f2ee66))
+* **image:** upgrade embedded base to Ubuntu 26.04 ([ff40cfd](https://github.com/seznam/jailoc/commit/ff40cfd59cca01c8f67bbc85c221bb04969a7cb0))
+* **vm:** add configurable /tmp storage, capacity, TTL cleanup and usage status ([340e32e](https://github.com/seznam/jailoc/commit/340e32e419122ecdcc199c430d938eda3bdf7227))
+* **vm:** attach private sparse scratch disk for disk-backed /tmp ([ae5d7e4](https://github.com/seznam/jailoc/commit/ae5d7e4efc6222081baacc140c611e46ec75b821))
+
+
+### Bug Fixes
+
+* **builder:** maintain private image builders under their lock ([132578b](https://github.com/seznam/jailoc/commit/132578be80baf6601b87fd24a7ad681173b9ade6))
+* **builder:** manage storage and surface startup failures ([da4e15e](https://github.com/seznam/jailoc/commit/da4e15ecadcd980f730c02080504a3882c00aef4))
+* **cmd:** classify current full console evidence before quoting ([49b15e1](https://github.com/seznam/jailoc/commit/49b15e181185d264f9e4ad11fe811e5924b51c9b))
+* **cmd:** preserve main-screen terminal output when exiting shell or exec ([0d591ad](https://github.com/seznam/jailoc/commit/0d591ad05d73a7b8c936e0bd308372252a7cba3f))
+* **cmd:** preserve main-screen terminal output when exiting shell or exec ([a674e24](https://github.com/seznam/jailoc/commit/a674e24e8ded374a93af70e0ef822123fdc32364))
+* **cmd:** require data filesystem evidence for ENOSPC advice ([050f86c](https://github.com/seznam/jailoc/commit/050f86c048156bf5f148f833a4e118b4afd7b49b))
+* **cmd:** surface bounded builder failure diagnostics ([7d76675](https://github.com/seznam/jailoc/commit/7d76675221da40760c3ce35565d50c5b4a7c38c5))
+* **docker:** bound private builder cache maintenance ([7464584](https://github.com/seznam/jailoc/commit/74645842e7be77ae82082f3121e16335459877b4))
+* **netbroker:** extend inspection leaf lifetime to 30d and track expiry by wall clock ([c023c77](https://github.com/seznam/jailoc/commit/c023c77f087e45feaa563dc744a8b8798c8931a1))
+* **netbroker:** prevent inspection certificates expiring across host sleep ([a824ba0](https://github.com/seznam/jailoc/commit/a824ba010d322eeab05360cb0f78f9bc24c46890))
+* **vm-runtime:** backport imago 0.2.6 to avoid truncating raw disks on discard ([0ce0266](https://github.com/seznam/jailoc/commit/0ce0266b695c1a23fc5cc7d5ccbd2c8570e1c8cf))
+* **vm:** avoid EOF zeroing during builder disk formatting ([e6de8b8](https://github.com/seznam/jailoc/commit/e6de8b88e221d78fb9980d5a805c3338415c0c08))
+* **vm:** cache resize dependencies before offline restarts ([758d540](https://github.com/seznam/jailoc/commit/758d54040a5ba120a4b4c799d1fe215886fd8614))
+* **vm:** detect startup loss and discard stale console evidence ([3ecfd7e](https://github.com/seznam/jailoc/commit/3ecfd7e4387b6548b59f9eb338aa20d34b74fa6a))
+* **vm:** resize builder disks before caching packages ([fcf31f8](https://github.com/seznam/jailoc/commit/fcf31f8cd3b591ee87b8471c5c5a106cc9ae26dc))
+* **vm:** skip resize tooling when the data filesystem fits ([3f38545](https://github.com/seznam/jailoc/commit/3f38545bfb1193bb53aa80e7c669f904c6d265ba))
+
+
+### Documentation
+
+* **builder:** clarify conditional disk growth advice ([830a283](https://github.com/seznam/jailoc/commit/830a283c27b0d4775ca5c5ae4d27454959ac3a16))
+* **builder:** explain conditional offline disk resizing ([10731a2](https://github.com/seznam/jailoc/commit/10731a2740d738bb81b71695f937485e5c0122a8))
+* **builder:** explain latest filesystem evidence ([a1c1017](https://github.com/seznam/jailoc/commit/a1c10177bd49e08fae4f79f10fab05c37f4fac0d))
+* **builder:** explain storage maintenance and recovery ([ec1ac48](https://github.com/seznam/jailoc/commit/ec1ac48ca9730254e2044e61cedb39b93d3aafcc))
+* **skills:** add release-announcement skill ([72b4856](https://github.com/seznam/jailoc/commit/72b48561a31c7b7f2da10e9a0c7443e80f103df2))
+* **skills:** add release-announcement skill ([02db8a8](https://github.com/seznam/jailoc/commit/02db8a871fc1cdf87c9a9346548fb4a5782a47c1))
+* **tmp:** document /tmp storage, capacity, TTL cleanup and status ([1d6f5eb](https://github.com/seznam/jailoc/commit/1d6f5eb149ceb4acfb744afa99037d877cf34461))
+
+
+### Tests
+
+* **netbroker:** cover wall-clock cache expiry ([d19a4c7](https://github.com/seznam/jailoc/commit/d19a4c770e6b14033045aac887360290b125fcdf))
+* **vm:** cover builder restart and guest disk growth ([2d5ca3c](https://github.com/seznam/jailoc/commit/2d5ca3cbb5a65a79234a68b2efae5e694e82778d))
+* **vmintegration:** cover RAM and disk /tmp, TTL sweep and block discard ([3e4c43c](https://github.com/seznam/jailoc/commit/3e4c43cbfedd7e8d3d6c05b12156f3b8e22d8e7c))
+
 ## [2.7.2](https://github.com/seznam/jailoc/compare/v2.7.1...v2.7.2) (2026-11-19)
 
 
