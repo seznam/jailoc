@@ -76,6 +76,7 @@ This part of `jailoc migrate` applies to any configuration that uses the older n
 - moves `allowed_hosts`, `allowed_networks`, `dns_upstream` and `dns_blocked_zones` into `network.dns` and `[[*.network.rules]]`;
 - removes `filtered_dns`;
 - adds a rule with `allow = ["*"]` when the configuration had no `network.rules`;
+- adds `agent_endpoints` with the coding agent's endpoints to `[defaults.network]`, and to workspaces whose agent needs other endpoints, when no scope sets `agent_endpoints`. Without it the agent can't reach its model and auth endpoints; see [`rule=agent`](../reference/configuration.md#ruleagent);
 - keeps the value of the new field and removes the old one when both are set.
 
 After converting deprecated settings, `jailoc migrate` asks for optional `internal_zones` when no non-empty `internal_zones` exists in `[defaults]` or any workspace and explicit `allow` rules include hostnames. Wildcard hostnames count; `*`, IP addresses, CIDRs and `deny` rules do not. Answer with comma- or whitespace-separated DNS zones; they are stored in `defaults.network.internal_zones` and apply to every workspace. A blank answer leaves the zones unset; `--yes` skips the question. `--dry-run` asks the question and previews the result without writing it. Zones added by the conversion of legacy `allowed_hosts` suppress the question. The question also applies to configurations without deprecated settings.

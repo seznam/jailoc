@@ -3,10 +3,13 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2/unstable/edit"
+
+	"github.com/seznam/jailoc/internal/agent"
 )
 
 func TestIsDefaultFile(t *testing.T) {
@@ -137,6 +140,10 @@ func TestRenderFirstTime(t *testing.T) {
 		rules := cfg.Defaults.Network.Get().Rules
 		if len(rules) != 2 || rules[1].Name != "custom" {
 			t.Fatalf("unexpected network rules: %+v", rules)
+		}
+		omo, _ := agent.Lookup("omo")
+		if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, omo.Endpoints) {
+			t.Errorf("defaults agent_endpoints = %v, want %v", got, omo.Endpoints)
 		}
 		ws := cfg.Workspaces["default"]
 		if len(ws.Paths) != 1 || ws.Paths[0] != "/data/my-app" {
@@ -383,6 +390,10 @@ func TestRenderWorkspaceNewSection(t *testing.T) {
 		if len(rules) != 1 || rules[0].Name != "internet" {
 			t.Errorf("workspace rules = %+v", rules)
 		}
+		claude, _ := agent.Lookup("claude")
+		if got := ws.Network.Get().AgentEndpoints; !slices.Equal(got, claude.Endpoints) {
+			t.Errorf("workspace agent_endpoints = %v, want %v", got, claude.Endpoints)
+		}
 	})
 }
 
@@ -569,6 +580,7 @@ enable_docker = true
 
 [workspaces.szn.network]
 dns = "9.9.9.9"
+agent_endpoints = ["api.anthropic.com"]
 
 [[workspaces.szn.network.rules]]
 name = "internet"
@@ -594,6 +606,9 @@ allow = ["*"]
 	}
 	if rules := ws.Network.Get().Rules; len(rules) != 0 {
 		t.Errorf("inherited network kept rules: %+v", rules)
+	}
+	if got := ws.Network.Get().AgentEndpoints; got != nil {
+		t.Errorf("inherited agent kept agent_endpoints: %v", got)
 	}
 	if got := ws.Network.Get().DNS; got != "9.9.9.9" {
 		t.Errorf("network.dns = %q, want unrelated setting kept", got)

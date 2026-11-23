@@ -56,10 +56,26 @@ const (
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 # notifications = "auto"  # attached OpenCode sessions: auto, native, osc or off
 
-# [defaults.network]
+[defaults.network]
 # ipv6 = false  # true: give the VM IPv6 connectivity (public destinations only)
 # dns = "9.9.9.9"
 # internal_zones = ["internal.example.com"]  # DNS zones whose names may resolve to private addresses
+# Model and auth endpoints the coding agent may reach (rule=agent, TCP 443);
+# keep only the providers you use.
+agent_endpoints = [
+  "api.anthropic.com",
+  "api.openai.com",
+  "auth.openai.com",
+  "chatgpt.com",
+  "generativelanguage.googleapis.com",
+  "oauth2.googleapis.com",
+  "api.githubcopilot.com",
+  "*.githubcopilot.com",
+  "openrouter.ai",
+  "opencode.ai",
+  "*.opencode.ai",
+  "models.dev",
+]
 
 [[defaults.network.rules]]
 name = "dev-deps"
@@ -163,6 +179,7 @@ paths = []
 # [workspaces.default.network]
 # ipv6 = false
 # dns = "9.9.9.9"
+# agent_endpoints = ["api.anthropic.com"]  # replaces [defaults.network] agent_endpoints
 # [[workspaces.default.network.rules]]
 # name = "internet"
 # allow = ["*"]  # explicit opt-in to the whole public internet
@@ -517,10 +534,10 @@ type Network struct {
 	InternalZones []string `toml:"internal_zones,omitempty"`
 	// Rules are the allow/deny egress rules of the scope.
 	Rules []NetworkRule `toml:"rules,omitempty"`
-	// AgentEndpoints replaces the host names of the implicit "agent" rule that
-	// allows the coding agent's LLM providers. Unset keeps the agent's default
-	// list; an empty list removes the rule. No omitempty, so an empty list is
-	// written back.
+	// AgentEndpoints are the host names of the "agent" rule that allows the
+	// coding agent's model and auth endpoints on TCP port 443. A workspace
+	// list replaces the defaults list. Unset or empty means no agent rule. No
+	// omitempty, so an empty list is written back.
 	AgentEndpoints []string `toml:"agent_endpoints"`
 	// Legacy fields migrated in memory with a deprecation warning.
 	FilteredDNS     *bool    `toml:"filtered_dns,omitempty"`

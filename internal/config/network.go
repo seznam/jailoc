@@ -377,7 +377,17 @@ func DeprecationWarnings(cfg *Config) []string {
 		}
 	}
 	if !hasRules && len(cfg.Workspaces) > 0 {
-		warnings = append(warnings, "no [[*.network.rules]] configured: only coding agent endpoints are allowed; add allow = [\"*\"] or configure [[defaults.network.rules]]")
+		warnings = append(warnings, "no [[*.network.rules]] configured: only agent_endpoints are allowed; add allow = [\"*\"] or configure [[defaults.network.rules]]")
+	}
+	hasEndpoints := cfg.Defaults.Network.Get().AgentEndpoints != nil
+	for _, ws := range cfg.Workspaces {
+		if ws.Network.Get().AgentEndpoints != nil {
+			hasEndpoints = true
+			break
+		}
+	}
+	if !hasEndpoints && len(cfg.Workspaces) > 0 {
+		warnings = append(warnings, "no network.agent_endpoints configured: the coding agent cannot reach its model and auth endpoints; set agent_endpoints in [defaults.network]")
 	}
 
 	return warnings

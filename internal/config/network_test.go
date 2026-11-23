@@ -506,3 +506,31 @@ log = "no"
 		t.Fatal("LoadFrom accepted a string log value")
 	}
 }
+
+func TestDeprecationWarningsAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	const want = "no network.agent_endpoints configured"
+	for _, tt := range []struct {
+		name string
+		cfg  *Config
+		warn bool
+	}{
+		{name: "no workspaces", cfg: &Config{}},
+		{name: "unset", cfg: &Config{Workspaces: map[string]Workspace{"api": {}}}, warn: true},
+		{name: "defaults", cfg: &Config{
+			Defaults:   Defaults{Network: &Network{AgentEndpoints: []string{"api.anthropic.com"}}},
+			Workspaces: map[string]Workspace{"api": {}},
+		}},
+		{name: "workspace empty list", cfg: &Config{
+			Workspaces: map[string]Workspace{"api": {Network: &Network{AgentEndpoints: []string{}}}},
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := slices.ContainsFunc(DeprecationWarnings(tt.cfg), func(w string) bool { return strings.HasPrefix(w, want) })
+			if got != tt.warn {
+				t.Fatalf("warning %q present = %v, want %v", want, got, tt.warn)
+			}
+		})
+	}
+}

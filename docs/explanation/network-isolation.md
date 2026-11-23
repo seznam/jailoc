@@ -33,7 +33,7 @@ Every new TCP connection and UDP flow gets one decision. The broker evaluates ru
 | Hard-denied ranges (below) | denied, no rule opens them |
 | Direct DNS (port 53) to any address other than the gateway, unless an `allow` rule lists port 53 in `ports` | denied (`dns-filtered`) |
 | Any matching `deny` rule | denied (`rule=<name>`) |
-| Any matching `allow` rule (including the implicit `agent` rule) | allowed (`rule=<name>`) |
+| Any matching `allow` rule (including the `agent` rule) | allowed (`rule=<name>`) |
 | Rules with `http` matching the connection | requests decided one by one, see [TLS inspection](#tls-inspection) |
 | Everything else | denied (`default-deny` or `denied-range`) |
 
@@ -73,7 +73,7 @@ These rules apply when `network.ipv6` is on.
 
 ## Enforcement by name
 
-Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, together with the implicit `agent` rule for the workspace's coding agent, are combined into a single set where `deny` always wins over `allow`. The `agent` rule lists the agent's built-in endpoints unless `network.agent_endpoints` replaces them.
+Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, together with the `agent` rule, are combined into a single set where `deny` always wins over `allow`. The `agent` rule allows the hosts in `network.agent_endpoints` on TCP 443; jailoc does not add the agent's endpoints on its own, so a workspace without `agent_endpoints` has no `agent` rule.
 
 The broker enforces hostname rules at four points, in the order a connection meets them: DNS, connect time, TLS SNI and HTTP Host, and the HTTP request.
 

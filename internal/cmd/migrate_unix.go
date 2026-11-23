@@ -46,7 +46,8 @@ expose_port) after confirmation, stops running Docker workspaces, and copies the
 OpenCode data and cache volumes into the VM's persistent home directories.
 It moves allowed_hosts, allowed_networks, filtered_dns, dns_upstream and
 dns_blocked_zones of [defaults] and every workspace into their network table
-and [[*.network.rules]].
+and [[*.network.rules]]. When no scope sets network.agent_endpoints, it adds
+the coding agent's model and auth endpoints there.
 The previous config.toml is kept as a backup; comments in it are not carried
 over.
 
@@ -264,10 +265,62 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		}}, d.Network.Rules...)
 		m.changes = append(m.changes, `[[defaults.network.rules]]: add allow = ["*"] (public internet)`)
 	}
+	addAgentEndpoints(cfg, names, m)
 	if err := askInternalZones(cfg, p, m); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// addAgentEndpoints writes the built-in endpoints of the configured agents
+// into agent_endpoints when no scope sets it, so the agents keep reaching
+// the model and auth endpoints that older jailoc allowed implicitly: the
+// default agent's in [defaults.network], and a workspace's own list when its
+// agent has other endpoints.
+func addAgentEndpoints(cfg *config.Config, names []string, m *migration) {
+	if cfg.Defaults.Network.Get().AgentEndpoints != nil {
+		return
+	}
+	for _, name := range names {
+		if cfg.Workspaces[name].Network.Get().AgentEndpoints != nil {
+			return
+		}
+	}
+	defaultName := cmp.Or(cfg.Defaults.Agent, agent.Default)
+	defaults := builtinEndpoints(defaultName, cfg.Defaults.Agents[defaultName].From)
+	d := &cfg.Defaults
+	if d.Network == nil {
+		d.Network = &config.Network{}
+	}
+	d.Network.AgentEndpoints = slices.Clone(defaults)
+	m.changes = append(m.changes, fmt.Sprintf("[defaults.network]: add agent_endpoints of agent %q", defaultName))
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		agentName := cmp.Or(ws.Agent, defaultName)
+		endpoints := builtinEndpoints(agentName, cmp.Or(ws.Agents[agentName].From, cfg.Defaults.Agents[agentName].From))
+		if slices.Equal(endpoints, defaults) {
+			continue
+		}
+		if ws.Network == nil {
+			ws.Network = &config.Network{}
+		}
+		ws.Network.AgentEndpoints = slices.Clone(endpoints)
+		if ws.Network.AgentEndpoints == nil {
+			ws.Network.AgentEndpoints = []string{}
+		}
+		cfg.Workspaces[name] = ws
+		m.changes = append(m.changes, fmt.Sprintf("[workspaces.%s.network]: add agent_endpoints of agent %q", name, agentName))
+	}
+}
+
+// builtinEndpoints returns the endpoints of the built-in agent name, or of
+// the built-in agent from that a custom agent name is derived from.
+func builtinEndpoints(name, from string) []string {
+	if h, ok := agent.Lookup(name); ok {
+		return h.Endpoints
+	}
+	h, _ := agent.Lookup(from)
+	return h.Endpoints
 }
 
 // needsInternalZones reports whether an allow rule names a host while no

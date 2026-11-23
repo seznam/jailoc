@@ -252,7 +252,7 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `dns` | string | (host resolver) | Routable numeric IPv4 resolver used for permitted DNS queries. |
 | `rules` | table[] | `[]` | Allow and deny egress rules (`[[<scope>.network.rules]]`). Combined across `[defaults]` and the workspace; `deny` always wins over `allow`. |
 | `internal_zones` | string[] | `[]` | DNS zones whose names may resolve to private addresses. Combined across `[defaults]` and the workspace. See [Internal zones](#internal-zones). |
-| `agent_endpoints` | string[] | (agent's list) | Hosts of the implicit [`agent` rule](#ruleagent), replacing the agent's built-in list. `[]` removes the rule. A set workspace list replaces the defaults list. |
+| `agent_endpoints` | string[] | (unset) | Hosts of the [`agent` rule](#ruleagent), the model and auth endpoints the coding agent may reach. Unset or `[]`: no `agent` rule. A set workspace list replaces the defaults list. |
 
 `ipv6` details:
 
@@ -263,8 +263,8 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 `agent_endpoints` details:
 
 - Entries are host names or `*.domain` wildcards; IP addresses, CIDRs and `*` are rejected.
-- Use it to allow only the providers you use, for example `agent_endpoints = ["api.anthropic.com"]`. The agent's other endpoints then show as denied in `jailoc traffic`.
-- Omitted: the agent's built-in list below applies.
+- New configurations from the setup wizard and `jailoc migrate` set it to the chosen agent's endpoints (see [`rule=agent`](#ruleagent)). Keep only the providers you use, for example `agent_endpoints = ["api.anthropic.com"]`; the other endpoints then show as denied in `jailoc traffic`.
+- Unset in `[defaults]` and every workspace: the agent can't reach its model and auth endpoints unless your own rules allow them, and the config load prints a warning.
 
 `internal_zones` details: each zone covers itself and every name under it (`corp.example` covers `gitlab.corp.example`; a leading `*.` is dropped).
 
@@ -479,9 +479,9 @@ In addition to `[[defaults.network.rules]]` and `[[workspaces.<name>.network.rul
 
 #### `rule=agent`
 
-Allow, `proto = "tcp"`, `ports = [443]`. Appended automatically for the workspace's selected coding agent (or the `from` agent of a custom agent). A matching `deny` rule still overrides it. [`agent_endpoints`](#defaultsnetwork) replaces its hosts, or removes the rule when empty.
+Allow, `proto = "tcp"`, `ports = [443]`, to the hosts in [`agent_endpoints`](#defaultsnetwork). Added only when `agent_endpoints` is non-empty. A matching `deny` rule still overrides it.
 
-Implicit allowlist (`tcp/443`) per `agent`:
+Endpoints per `agent` that the setup wizard and `jailoc migrate` write into `agent_endpoints`:
 
 - `opencode`, `opencode1`, `opencode2`, `omo`:
     - `api.anthropic.com`

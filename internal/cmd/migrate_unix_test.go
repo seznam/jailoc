@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 )
 
@@ -478,8 +479,8 @@ func TestPlanMigrationInternalZonesSkipped(t *testing.T) {
 			if got := cfg.Defaults.Network.InternalZones; len(got) != 0 {
 				t.Fatalf("internal_zones = %v, want none", got)
 			}
-			if len(m.changes) != 0 {
-				t.Fatalf("changes = %v, want none", m.changes)
+			if want := []string{`[defaults.network]: add agent_endpoints of agent "opencode"`}; !slices.Equal(m.changes, want) {
+				t.Fatalf("changes = %v, want %v", m.changes, want)
 			}
 			if tt.yes && strings.Contains(out.String(), internalZonesPrompt) {
 				t.Fatalf("--yes asked:\n%s", out)
@@ -635,4 +636,55 @@ func TestRunMigrateDryRunAsksInternalZones(t *testing.T) {
 	if _, err := os.Stat(path + ".pre-vm-migration"); !os.IsNotExist(err) {
 		t.Fatalf("backup exists: %v", err)
 	}
+}
+
+func TestAddAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	opencode, _ := agent.Lookup("opencode")
+	claude, _ := agent.Lookup("claude")
+
+	t.Run("defaults and differing workspaces", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{
+			Defaults: config.Defaults{Agents: map[string]config.AgentSettings{"mine": {From: "claude"}}},
+			Workspaces: map[string]config.Workspace{
+				"web":  {},
+				"api":  {Agent: "claude"},
+				"tool": {Agent: "mine"},
+			},
+		}
+		m := &migration{}
+		addAgentEndpoints(cfg, []string{"api", "tool", "web"}, m)
+		if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, opencode.Endpoints) {
+			t.Fatalf("defaults agent_endpoints = %v, want %v", got, opencode.Endpoints)
+		}
+		for _, name := range []string{"api", "tool"} {
+			if got := cfg.Workspaces[name].Network.Get().AgentEndpoints; !slices.Equal(got, claude.Endpoints) {
+				t.Fatalf("%s agent_endpoints = %v, want %v", name, got, claude.Endpoints)
+			}
+		}
+		if got := cfg.Workspaces["web"].Network.Get().AgentEndpoints; got != nil {
+			t.Fatalf("web agent_endpoints = %v, want inherited", got)
+		}
+		want := []string{
+			`[defaults.network]: add agent_endpoints of agent "opencode"`,
+			`[workspaces.api.network]: add agent_endpoints of agent "claude"`,
+			`[workspaces.tool.network]: add agent_endpoints of agent "mine"`,
+		}
+		if !slices.Equal(m.changes, want) {
+			t.Fatalf("changes = %v, want %v", m.changes, want)
+		}
+	})
+
+	t.Run("already configured", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{Workspaces: map[string]config.Workspace{
+			"web": {Network: &config.Network{AgentEndpoints: []string{}}},
+		}}
+		m := &migration{}
+		addAgentEndpoints(cfg, []string{"web"}, m)
+		if cfg.Defaults.Network != nil || len(m.changes) != 0 {
+			t.Fatalf("changed configured agent_endpoints: network %+v, changes %v", cfg.Defaults.Network, m.changes)
+		}
+	})
 }

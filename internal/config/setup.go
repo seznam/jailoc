@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/pelletier/go-toml/v2/unstable"
 	"github.com/pelletier/go-toml/v2/unstable/edit"
+	"github.com/seznam/jailoc/internal/agent"
 )
 
 func IsDefaultFile(path string) (bool, error) {
@@ -247,6 +249,41 @@ func applyDefaultRules(head []string, opts FirstTimeOptions) ([]string, error) {
 	}
 }
 
+// agentEndpoints returns the built-in endpoints of the agent called name, or
+// of agent.Default when name is empty.
+func agentEndpoints(name string) ([]string, error) {
+	h, ok := agent.Lookup(cmp.Or(name, agent.Default))
+	if !ok {
+		return nil, fmt.Errorf("unknown agent %q", name)
+	}
+	return h.Endpoints, nil
+}
+
+// applyAgentEndpoints replaces the template's agent_endpoints list in
+// [defaults.network] with the endpoints of the agent called name.
+func applyAgentEndpoints(head []string, name string) ([]string, error) {
+	endpoints, err := agentEndpoints(name)
+	if err != nil {
+		return nil, err
+	}
+	start := indexLine(head, "agent_endpoints = [")
+	if start < 0 {
+		return nil, errors.New("template has no agent_endpoints list")
+	}
+	end := start + 1
+	for end < len(head) && head[end] != "]" {
+		end++
+	}
+	if end == len(head) {
+		return nil, errors.New("template agent_endpoints list is not closed")
+	}
+	list := make([]string, 0, len(endpoints))
+	for _, e := range endpoints {
+		list = append(list, "  "+strconv.Quote(e)+",")
+	}
+	return slices.Concat(head[:start+1:start+1], list, head[end:]), nil
+}
+
 func RenderFirstTime(opts FirstTimeOptions) ([]byte, error) {
 	head, workspace := splitTemplate()
 	for _, o := range firstTimeDefaults(opts) {
@@ -254,7 +291,11 @@ func RenderFirstTime(opts FirstTimeOptions) ([]byte, error) {
 			return nil, fmt.Errorf("set defaults.%s: %w", o.key, err)
 		}
 	}
-	head, err := applyDefaultRules(head, opts)
+	head, err := applyAgentEndpoints(head, opts.Agent)
+	if err != nil {
+		return nil, fmt.Errorf("set defaults.network.agent_endpoints: %w", err)
+	}
+	head, err = applyDefaultRules(head, opts)
 	if err != nil {
 		return nil, fmt.Errorf("set defaults.network.rules: %w", err)
 	}
@@ -330,6 +371,23 @@ func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
 	}
 	for _, o := range overrides {
 		if err := activateOption(lines, o.key, o.value); err != nil {
+			return "", err
+		}
+	}
+	if opts.Agent != "" {
+		endpoints, err := agentEndpoints(opts.Agent)
+		if err != nil {
+			return "", err
+		}
+		list, err := tomlArray(endpoints)
+		if err != nil {
+			return "", err
+		}
+		network := "[workspaces." + opts.Name + ".network]"
+		if err := replaceLine(lines, "# "+network, network); err != nil {
+			return "", err
+		}
+		if err := replaceLine(lines, "# agent_endpoints = ", "agent_endpoints = "+list+"  # endpoints of agent "+strconv.Quote(opts.Agent)); err != nil {
 			return "", err
 		}
 	}
@@ -441,6 +499,17 @@ func updateWorkspace(doc *edit.Document, opts WorkspaceOptions) ([]byte, error) 
 		}
 	} else {
 		doc.Delete(append(wsKey, "agent"))
+	}
+	if opts.Agent != "" {
+		endpoints, err := agentEndpoints(opts.Agent)
+		if err != nil {
+			return nil, fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
+		}
+		if err := doc.Set(append(wsKey, "network", "agent_endpoints"), endpoints); err != nil {
+			return nil, fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
+		}
+	} else {
+		doc.Delete(append(wsKey, "network", "agent_endpoints"))
 	}
 	if opts.EnableDocker != nil {
 		if err := doc.Set(append(wsKey, "enable_docker"), *opts.EnableDocker); err != nil {

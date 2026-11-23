@@ -2,7 +2,7 @@
 
 All guest traffic leaves through jailoc's network broker on the host. Add rules to `~/.config/jailoc/config.toml`, apply them with `jailoc reload <workspace>` and check the result with `jailoc traffic -f`. For the model behind the rules, see [Network isolation](../explanation/network-isolation.md).
 
-Defaults: a destination that no allow rule matches is denied (`default-deny`), except the configured coding agent's API and authentication endpoints (`rule=agent`). New configurations include a `dev-deps` rule in `[defaults.network.rules]` that lists common package registries, GitHub, container registries and OS mirrors. A `deny` rule always wins over an `allow` rule, whatever the order; rules from `[defaults.network.rules]` and the workspace form one set.
+Defaults: a destination that no allow rule matches is denied (`default-deny`). The coding agent reaches its model and authentication endpoints through the `agent` rule, built from `agent_endpoints` in `[defaults.network]`. New configurations set `agent_endpoints` to the chosen agent's endpoints and include a `dev-deps` rule in `[defaults.network.rules]` that lists common package registries, GitHub, container registries and OS mirrors. A `deny` rule always wins over an `allow` rule, whatever the order; rules from `[defaults.network.rules]` and the workspace form one set.
 
 ## Allow or deny hostnames
 
@@ -77,14 +77,14 @@ allow = ["*"]
 
 ## Limit the agent's endpoints
 
-The `agent` rule allows the coding agent's built-in API and authentication hosts on TCP 443. For OpenCode and OmO, that covers several LLM providers. To allow only the providers you use, list their hosts in `agent_endpoints` and run `jailoc reload api`:
+The `agent` rule allows the hosts in `agent_endpoints` on TCP 443. The setup wizard and `jailoc migrate` fill it with the agent's endpoints; for OpenCode and OmO, that covers several LLM providers. To allow only the providers you use, shorten the list and run `jailoc reload api`:
 
 ```toml
-[workspaces.api.network]
+[defaults.network]
 agent_endpoints = ["api.anthropic.com"]
 ```
 
-`jailoc traffic` then shows connections to the other providers as denied. Set `agent_endpoints` under `[defaults.network]` to apply it to every workspace; a workspace value replaces the defaults list. `agent_endpoints = []` removes the `agent` rule, so the agent needs your own allow rules. See [`rule=agent`](../reference/configuration.md#ruleagent).
+`jailoc traffic` then shows connections to the other providers as denied. A workspace's `[workspaces.<name>.network]` `agent_endpoints` replaces the defaults list, for example for a workspace with a different agent. Without `agent_endpoints`, or with `[]`, there is no `agent` rule, so the agent needs your own allow rules. See [`rule=agent`](../reference/configuration.md#ruleagent) for each agent's endpoints.
 
 ## Restrict HTTP methods and paths
 

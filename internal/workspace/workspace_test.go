@@ -1838,6 +1838,7 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 			Network: &config.Network{
 				DNS:             "9.9.9.9",
 				DNSBlockedZones: []string{"bad.example."},
+				AgentEndpoints:  []string{"api.anthropic.com"},
 				Rules: []config.NetworkRule{
 					{Name: "dev-deps", Allow: []string{"github.com", "registry.npmjs.org"}},
 				},
@@ -1883,18 +1884,14 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 
 func TestResolveAgentEndpoints(t *testing.T) {
 	t.Parallel()
-	claude, ok := agent.Lookup("claude")
-	if !ok {
-		t.Fatal("claude harness not found")
-	}
 	tests := []struct {
 		name     string
 		defaults []string
 		ws       []string
 		want     []string
 	}{
-		{name: "unset keeps harness endpoints", want: claude.Endpoints},
-		{name: "defaults replace harness endpoints", defaults: []string{"api.anthropic.com"}, want: []string{"api.anthropic.com"}},
+		{name: "unset has no agent rule"},
+		{name: "defaults list", defaults: []string{"api.anthropic.com"}, want: []string{"api.anthropic.com"}},
 		{name: "workspace overrides defaults", defaults: []string{"api.anthropic.com"}, ws: []string{"api.openai.com", "*.example.com"}, want: []string{"api.openai.com", "*.example.com"}},
 		{name: "empty workspace list drops rule", defaults: []string{"api.anthropic.com"}, ws: []string{}},
 		{name: "empty defaults list drops rule", defaults: []string{}},
@@ -2061,9 +2058,12 @@ func TestResolveNetworkRulesLog(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		Defaults: config.Defaults{Network: &config.Network{Rules: []config.NetworkRule{
-			{Name: "default-quiet", Allow: []string{"registry.example.com"}, Log: &off},
-		}}},
+		Defaults: config.Defaults{Network: &config.Network{
+			AgentEndpoints: []string{"api.anthropic.com"},
+			Rules: []config.NetworkRule{
+				{Name: "default-quiet", Allow: []string{"registry.example.com"}, Log: &off},
+			},
+		}},
 		Workspaces: map[string]config.Workspace{"api": {
 			Paths: []string{"/data/api"},
 			Network: &config.Network{Rules: []config.NetworkRule{

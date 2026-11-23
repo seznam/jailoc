@@ -191,8 +191,8 @@ type Harness struct {
 	// interface starts, from its environment env and working directory dir:
 	// jailoc shows it while the agent starts.
 	Installs func(env []string, dir string) []string
-	// Endpoints are the API and auth hostnames the agent contacts; they
-	// become an implicit allow rule on TCP port 443.
+	// Endpoints are the API and auth hostnames the agent contacts; setup and
+	// migrate write them into network.agent_endpoints.
 	Endpoints []string
 	// Diagnose is the guest command (without the binary) that prints
 	// unbuffered startup and configuration errors when the agent exits
