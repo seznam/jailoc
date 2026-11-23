@@ -244,6 +244,40 @@ func TestInternalZonesValidation(t *testing.T) {
 	}
 }
 
+func TestValidateAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		endpoint  string
+		wantError string
+	}{
+		{endpoint: "api.anthropic.com"},
+		{endpoint: "*.githubcopilot.com"},
+		{endpoint: "API.OpenAI.com."},
+		{endpoint: "*", wantError: "must be a host name"},
+		{endpoint: "10.0.0.0/8", wantError: "must be a host name"},
+		{endpoint: "1.2.3.4", wantError: "must be a host name"},
+		{endpoint: "", wantError: "empty rule target"},
+		{endpoint: "a.*.example.com", wantError: "invalid hostname"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.endpoint, func(t *testing.T) {
+			t.Parallel()
+			for _, cfg := range []*Config{
+				{Defaults: Defaults{Network: &Network{AgentEndpoints: []string{tc.endpoint}}}},
+				{Workspaces: map[string]Workspace{"api": {Paths: []string{"/data/api"}, Network: &Network{AgentEndpoints: []string{tc.endpoint}}}}},
+			} {
+				err := Validate(cfg)
+				if tc.wantError == "" && err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError) || !strings.Contains(err.Error(), "agent_endpoints")) {
+					t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadNetworkRulesTOML(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -470,5 +504,38 @@ log = "no"
 `)
 	if _, err := LoadFrom(path); err == nil {
 		t.Fatal("LoadFrom accepted a string log value")
+	}
+}
+
+func TestDeprecationWarningsAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	const want = "no agent rule: network.agent_endpoints is not set"
+	for _, tt := range []struct {
+		name string
+		cfg  *Config
+		warn bool
+	}{
+		{name: "no workspaces", cfg: &Config{}},
+		{name: "unset", cfg: &Config{Workspaces: map[string]Workspace{"api": {}}}, warn: true},
+		{name: "single-provider agent", cfg: &Config{Workspaces: map[string]Workspace{"api": {Agent: "claude"}}}},
+		{name: "custom agent from omo", cfg: &Config{
+			Defaults:   Defaults{Agents: map[string]AgentSettings{"mine": {From: "omo"}}},
+			Workspaces: map[string]Workspace{"api": {Agent: "mine"}},
+		}, warn: true},
+		{name: "defaults", cfg: &Config{
+			Defaults:   Defaults{Network: &Network{AgentEndpoints: []string{"api.anthropic.com"}}},
+			Workspaces: map[string]Workspace{"api": {}},
+		}},
+		{name: "workspace empty list", cfg: &Config{
+			Workspaces: map[string]Workspace{"api": {Network: &Network{AgentEndpoints: []string{}}}},
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := slices.ContainsFunc(DeprecationWarnings(tt.cfg), func(w string) bool { return strings.Contains(w, want) })
+			if got != tt.warn {
+				t.Fatalf("warning %q present = %v, want %v", want, got, tt.warn)
+			}
+		})
 	}
 }

@@ -106,7 +106,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
 		var out bytes.Buffer
-		w := &wizardPrompter{in: answers("", "", "", "", "", "", "", "", "", "", "", ""), out: &out}
+		w := &wizardPrompter{in: answers("", "", "", "", "", "", "", "", "", "", "", "", ""), out: &out}
 
 		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd}); err != nil {
 			t.Fatalf("runSetup failed: %v", err)
@@ -229,7 +229,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		cfgPath := writeCustomConfig(t)
 		var out bytes.Buffer
 		w := &wizardPrompter{
-			in:  answers("other", chosen, "inherit", "inherit", "inherit", "yes", "yes"),
+			in:  answers("other", chosen, "inherit", "inherit", "inherit", "", "yes", "yes"),
 			out: &out,
 		}
 
@@ -248,7 +248,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		cfgPath := writeCustomConfig(t)
 		var out bytes.Buffer
 		w := &wizardPrompter{
-			in:  answers("embedded", cwd, "inherit", "inherit", "inherit", "yes"),
+			in:  answers("embedded", cwd, "inherit", "inherit", "inherit", "", "yes"),
 			out: &out,
 		}
 
@@ -287,7 +287,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		cfgPath := writeCustomConfig(t)
 		var out bytes.Buffer
 		w := &wizardPrompter{
-			in:  answers("narrow", "/", "no", cwd, "inherit", "inherit", "inherit", "yes"),
+			in:  answers("narrow", "/", "no", cwd, "inherit", "inherit", "inherit", "", "yes"),
 			out: &out,
 		}
 
@@ -373,7 +373,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		cfgPath := writeCustomConfig(t)
 		var out bytes.Buffer
 		w := &wizardPrompter{
-			in:  answers("linked", link, "yes", "inherit", "inherit", "inherit", "yes"),
+			in:  answers("linked", link, "yes", "inherit", "inherit", "inherit", "", "yes"),
 			out: &out,
 		}
 

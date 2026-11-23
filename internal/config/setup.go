@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/pelletier/go-toml/v2/unstable"
 	"github.com/pelletier/go-toml/v2/unstable/edit"
+	"github.com/seznam/jailoc/internal/agent"
 )
 
 func IsDefaultFile(path string) (bool, error) {
@@ -66,6 +68,7 @@ func ValidateMemoryFormat(mem string) error {
 
 type FirstTimeOptions struct {
 	Agent         string
+	Providers     []string // model providers of a multi-provider agent; nil: all
 	GitConfig     bool
 	SSHAuthSock   bool
 	GPGAgent      bool
@@ -82,6 +85,7 @@ type WorkspaceOptions struct {
 	Name          string
 	Paths         []string
 	Agent         string
+	Providers     []string // model providers of a multi-provider agent; nil: all
 	EnableDocker  *bool
 	AllowInternet bool
 	ExtraHosts    []string
@@ -247,6 +251,51 @@ func applyDefaultRules(head []string, opts FirstTimeOptions) ([]string, error) {
 	}
 }
 
+// agentEndpoints returns the endpoints of the providers of the agent called
+// name, or of agent.Default when name is empty, that belong in
+// network.agent_endpoints; nil providers select all. It returns nil for
+// agents with a fixed provider, whose endpoints are allowed without the list.
+func agentEndpoints(name string, providers []string) ([]string, error) {
+	h, ok := agent.Lookup(cmp.Or(name, agent.Default))
+	if !ok {
+		return nil, fmt.Errorf("unknown agent %q", name)
+	}
+	if !h.ExplicitEndpoints {
+		return nil, nil
+	}
+	return h.ProviderEndpoints(providers)
+}
+
+// applyAgentEndpoints replaces the template's agent_endpoints list in
+// [defaults.network] with the endpoints of the providers of the agent called
+// name (nil providers: all). The list is kept for agents with a fixed
+// provider.
+func applyAgentEndpoints(head []string, name string, providers []string) ([]string, error) {
+	endpoints, err := agentEndpoints(name, providers)
+	if err != nil {
+		return nil, err
+	}
+	if endpoints == nil {
+		return head, nil
+	}
+	start := indexLine(head, "agent_endpoints = [")
+	if start < 0 {
+		return nil, errors.New("template has no agent_endpoints list")
+	}
+	end := start + 1
+	for end < len(head) && head[end] != "]" {
+		end++
+	}
+	if end == len(head) {
+		return nil, errors.New("template agent_endpoints list is not closed")
+	}
+	list := make([]string, 0, len(endpoints))
+	for _, e := range endpoints {
+		list = append(list, "  "+strconv.Quote(e)+",")
+	}
+	return slices.Concat(head[:start+1:start+1], list, head[end:]), nil
+}
+
 func RenderFirstTime(opts FirstTimeOptions) ([]byte, error) {
 	head, workspace := splitTemplate()
 	for _, o := range firstTimeDefaults(opts) {
@@ -254,7 +303,11 @@ func RenderFirstTime(opts FirstTimeOptions) ([]byte, error) {
 			return nil, fmt.Errorf("set defaults.%s: %w", o.key, err)
 		}
 	}
-	head, err := applyDefaultRules(head, opts)
+	head, err := applyAgentEndpoints(head, opts.Agent, opts.Providers)
+	if err != nil {
+		return nil, fmt.Errorf("set defaults.network.agent_endpoints: %w", err)
+	}
+	head, err = applyDefaultRules(head, opts)
 	if err != nil {
 		return nil, fmt.Errorf("set defaults.network.rules: %w", err)
 	}
@@ -311,7 +364,8 @@ func applyWorkspaceRules(lines []string, opts WorkspaceOptions) ([]string, error
 }
 
 // newWorkspaceSection renders a complete [workspaces.<name>] section from the template.
-func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
+// A non-nil seed becomes the workspace's agent_endpoints, commented with seedAgent.
+func newWorkspaceSection(opts WorkspaceOptions, seedAgent string, seed []string) (string, error) {
 	_, template := splitTemplate()
 	lines := renameWorkspace(template, opts.Name)
 	paths, err := tomlArray(opts.Paths)
@@ -333,6 +387,19 @@ func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
 			return "", err
 		}
 	}
+	if seed != nil {
+		list, err := tomlArray(seed)
+		if err != nil {
+			return "", err
+		}
+		network := "[workspaces." + opts.Name + ".network]"
+		if err := replaceLine(lines, "# "+network, network); err != nil {
+			return "", err
+		}
+		if err := replaceLine(lines, "# agent_endpoints = ", "agent_endpoints = "+list+"  # endpoints of agent "+strconv.Quote(seedAgent)); err != nil {
+			return "", err
+		}
+	}
 	lines, err = applyWorkspaceRules(lines, opts)
 	if err != nil {
 		return "", err
@@ -340,8 +407,8 @@ func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-func appendWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
-	section, err := newWorkspaceSection(opts)
+func appendWorkspace(raw []byte, opts WorkspaceOptions, seedAgent string, seed []string) ([]byte, error) {
+	section, err := newWorkspaceSection(opts, seedAgent, seed)
 	if err != nil {
 		return nil, fmt.Errorf("add workspace %q: %w", opts.Name, err)
 	}
@@ -427,7 +494,8 @@ func normalizeInlineWorkspaces(doc *edit.Document) error {
 }
 
 // updateWorkspace rewrites an existing workspace, keeping unrelated settings, and comments the agent and enable_docker lines.
-func updateWorkspace(doc *edit.Document, opts WorkspaceOptions) ([]byte, error) {
+// An existing network.agent_endpoints list is kept.
+func updateWorkspace(doc *edit.Document, opts WorkspaceOptions, seed []string) ([]byte, error) {
 	wsKey := []string{"workspaces", opts.Name}
 	if err := doc.Set(append(wsKey, "paths"), opts.Paths); err != nil {
 		return nil, fmt.Errorf("set workspace %q paths: %w", opts.Name, err)
@@ -441,6 +509,11 @@ func updateWorkspace(doc *edit.Document, opts WorkspaceOptions) ([]byte, error) 
 		}
 	} else {
 		doc.Delete(append(wsKey, "agent"))
+	}
+	if seed != nil {
+		if err := doc.Set(append(wsKey, "network", "agent_endpoints"), seed); err != nil {
+			return nil, fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
+		}
 	}
 	if opts.EnableDocker != nil {
 		if err := doc.Set(append(wsKey, "enable_docker"), *opts.EnableDocker); err != nil {
@@ -468,6 +541,51 @@ func updateWorkspace(doc *edit.Document, opts WorkspaceOptions) ([]byte, error) 
 	return doc.Bytes(), nil
 }
 
+// seedHarness returns the effective agent of workspace opts.Name, including
+// an agent inherited from [defaults], whose endpoints RenderWorkspace writes
+// into the workspace's network.agent_endpoints. ok is false unless the agent
+// is a multi-provider agent and neither the workspace nor [defaults.network]
+// sets a list, so a configured list, including [], is never replaced or
+// removed.
+func seedHarness(raw []byte, opts WorkspaceOptions) (string, agent.Harness, bool, error) {
+	var cfg Config
+	if _, err := toml.NewDecoder(bytes.NewReader(raw)).Decode(&cfg); err != nil {
+		return "", agent.Harness{}, false, fmt.Errorf("decode config: %w", err)
+	}
+	ws := cfg.Workspaces[opts.Name]
+	if ws.Network.Get().AgentEndpoints != nil || cfg.Defaults.Network.Get().AgentEndpoints != nil {
+		return "", agent.Harness{}, false, nil
+	}
+	ws.Agent = opts.Agent
+	h, ok := workspaceHarness(&cfg, ws)
+	if !ok || !h.ExplicitEndpoints {
+		return "", agent.Harness{}, false, nil
+	}
+	return cmp.Or(opts.Agent, cfg.Defaults.Agent, agent.Default), h, true, nil
+}
+
+// SeedAgent returns the multi-provider agent whose endpoints RenderWorkspace
+// writes into workspace opts.Name, so the wizard can ask which of its
+// providers to allow. ok is false when RenderWorkspace writes no list.
+func SeedAgent(raw []byte, opts WorkspaceOptions) (agent.Harness, bool, error) {
+	_, h, ok, err := seedHarness(raw, opts)
+	return h, ok, err
+}
+
+// seedEndpoints returns the agent name and the endpoints of the providers in
+// opts.Providers that RenderWorkspace writes into the workspace, or nil.
+func seedEndpoints(raw []byte, opts WorkspaceOptions) (string, []string, error) {
+	name, h, ok, err := seedHarness(raw, opts)
+	if err != nil || !ok {
+		return "", nil, err
+	}
+	endpoints, err := h.ProviderEndpoints(opts.Providers)
+	if err != nil {
+		return "", nil, fmt.Errorf("agent %q: %w", name, err)
+	}
+	return name, endpoints, nil
+}
+
 func RenderWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
 	if err := ValidateWorkspaceName(opts.Name); err != nil {
 		return nil, err
@@ -477,14 +595,18 @@ func RenderWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
+	seedAgent, seed, err := seedEndpoints(raw, opts)
+	if err != nil {
+		return nil, err
+	}
 	var out []byte
 	if doc.Has([]string{"workspaces", opts.Name}) {
-		out, err = updateWorkspace(doc, opts)
+		out, err = updateWorkspace(doc, opts, seed)
 	} else {
 		if err := normalizeInlineWorkspaces(doc); err != nil {
 			return nil, fmt.Errorf("normalize workspaces: %w", err)
 		}
-		out, err = appendWorkspace(doc.Bytes(), opts)
+		out, err = appendWorkspace(doc.Bytes(), opts, seedAgent, seed)
 	}
 	if err != nil {
 		return nil, err

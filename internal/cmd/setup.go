@@ -366,6 +366,12 @@ func runFirstTimeSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 		return setupResult{}, err
 	}
 	chosenAgent := agentOptions[agentIdx]
+	var providers []string
+	if h, ok := agent.Lookup(chosenAgent); ok && h.ExplicitEndpoints {
+		if providers, err = askProviders(p, h); err != nil {
+			return setupResult{}, err
+		}
+	}
 
 	p.explain("A read-only copy, so commits in the VM use your name and email.")
 	gitCfg, err := p.confirm("Copy host Git configuration into the VM (git_config)?", true)
@@ -451,6 +457,7 @@ func runFirstTimeSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 
 	rendered, err := config.RenderFirstTime(config.FirstTimeOptions{
 		Agent:         chosenAgent,
+		Providers:     providers,
 		GitConfig:     gitCfg,
 		SSHAuthSock:   sshAuth,
 		GPGAgent:      gpgAgent,
@@ -469,6 +476,27 @@ func runFirstTimeSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 	return saveSetup(p, opts, rendered, setupResult{name: wsName, dir: wsDir},
 		fmt.Sprintf("\nWrite configuration to %s?", opts.configPath),
 		fmt.Sprintf("Wrote %s (workspace %q -> %s)\n", opts.configPath, wsName, wsDir))
+}
+
+// askProviders asks which model providers a multi-provider agent may reach;
+// nil selects all of them.
+func askProviders(p *wizardPrompter, h agent.Harness) ([]string, error) {
+	p.explain(
+		"The agent reaches only the model and auth endpoints of the providers you pick.",
+		"Providers: "+strings.Join(h.ProviderNames(), ", ")+".",
+	)
+	answer, err := p.input("Model providers (comma-separated, empty for all)", "", func(s string) error {
+		_, err := h.ParseProviders(s)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	providers, err := h.ParseProviders(answer)
+	if err != nil {
+		return nil, fmt.Errorf("parse providers: %w", err)
+	}
+	return providers, nil
 }
 
 func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error) {
@@ -558,14 +586,23 @@ func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 		extraHosts = splitCSV(hostsInput)
 	}
 
-	rendered, err := config.RenderWorkspace(raw, config.WorkspaceOptions{
+	wsOpts := config.WorkspaceOptions{
 		Name:          wsName,
 		Paths:         []string{wsDir},
 		Agent:         wsAgent,
 		EnableDocker:  enableDocker,
 		AllowInternet: allowInternet,
 		ExtraHosts:    extraHosts,
-	})
+	}
+	if h, seed, err := config.SeedAgent(raw, wsOpts); err != nil {
+		return setupResult{}, fmt.Errorf("update configuration: %w", err)
+	} else if seed {
+		if wsOpts.Providers, err = askProviders(p, h); err != nil {
+			return setupResult{}, err
+		}
+	}
+
+	rendered, err := config.RenderWorkspace(raw, wsOpts)
 	if err != nil {
 		return setupResult{}, fmt.Errorf("update configuration: %w", err)
 	}

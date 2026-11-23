@@ -252,12 +252,20 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `dns` | string | (host resolver) | Routable numeric IPv4 resolver used for permitted DNS queries. |
 | `rules` | table[] | `[]` | Allow and deny egress rules (`[[<scope>.network.rules]]`). Combined across `[defaults]` and the workspace; `deny` always wins over `allow`. |
 | `internal_zones` | string[] | `[]` | DNS zones whose names may resolve to private addresses. Combined across `[defaults]` and the workspace. See [Internal zones](#internal-zones). |
+| `agent_endpoints` | string[] | (unset) | Hosts of the [`agent` rule](#ruleagent) for OpenCode and OmO workspaces: the model and auth endpoints the agent may reach. Unset or `[]`: no `agent` rule for them. A set workspace list replaces the defaults list. Ignored for Claude Code, Copilot CLI and Antigravity. |
 
 `ipv6` details:
 
 - On: the guest has IPv6 and the broker applies the IPv6 policy.
 - Off: the guest has IPv4 only and the broker denies every IPv6 flow.
 - Changing it needs `jailoc restart`. `jailoc reload` turns it off at the broker right away, except in a VM started by a jailoc release without this setting: that VM keeps IPv6 until `jailoc restart`.
+
+`agent_endpoints` details:
+
+- Entries are host names or `*.domain` wildcards; IP addresses, CIDRs and `*` are rejected.
+- Applies to the multi-provider agents `opencode`, `opencode1`, `opencode2` and `omo` (and custom agents built `from` them). `claude`, `copilot` and `agy` always get their built-in endpoints; narrow them with a `deny` rule.
+- The setup wizard and `jailoc migrate` set it to the endpoints of the model providers you select (see [`rule=agent`](#ruleagent)). Adding a workspace whose agent, set or inherited, is OpenCode or OmO with the wizard asks for providers and writes the workspace list only when neither the workspace nor `[defaults.network]` sets one, and keeps an existing list. Endpoints of providers you did not select show as denied in `jailoc traffic`.
+- Unset for a workspace whose agent is OpenCode or OmO: there is no `agent` rule, so the agent reaches its model and auth endpoints only through your other allow rules, and the config load prints a warning.
 
 `internal_zones` details: each zone covers itself and every name under it (`corp.example` covers `gitlab.corp.example`; a leading `*.` is dropped).
 
@@ -472,23 +480,21 @@ In addition to `[[defaults.network.rules]]` and `[[workspaces.<name>.network.rul
 
 #### `rule=agent`
 
-Allow, `proto = "tcp"`, `ports = [443]`. Appended automatically for the workspace's selected coding agent (or the `from` agent of a custom agent). A matching `deny` rule still overrides it.
+Allow, `proto = "tcp"`, `ports = [443]`, to the coding agent's model and auth endpoints. A matching `deny` rule still overrides it.
 
-Implicit allowlist (`tcp/443`) per `agent`:
+- `opencode`, `opencode1`, `opencode2`, `omo`: the hosts in [`agent_endpoints`](#defaultsnetwork); added only when the list is non-empty. The setup wizard and `jailoc migrate` ask which model providers to allow (comma-separated provider names, empty for all; `--yes` takes all) and write the endpoints of those providers plus `models.dev`.
+- `claude`, `copilot`, `agy`: the built-in endpoints below; `agent_endpoints` does not apply.
 
-- `opencode`, `opencode1`, `opencode2`, `omo`:
-    - `api.anthropic.com`
-    - `api.openai.com`
-    - `auth.openai.com`
-    - `chatgpt.com`
-    - `generativelanguage.googleapis.com`
-    - `oauth2.googleapis.com`
-    - `api.githubcopilot.com`
-    - `*.githubcopilot.com`
-    - `openrouter.ai`
-    - `opencode.ai`
-    - `*.opencode.ai`
-    - `models.dev`
+Endpoints per `agent`:
+
+- `opencode`, `opencode1`, `opencode2`, `omo`, per model provider:
+    - `anthropic`: `api.anthropic.com`
+    - `openai`: `api.openai.com`, `auth.openai.com`, `chatgpt.com`
+    - `google`: `generativelanguage.googleapis.com`, `oauth2.googleapis.com`
+    - `github-copilot`: `api.githubcopilot.com`, `*.githubcopilot.com`
+    - `openrouter`: `openrouter.ai`
+    - `opencode`: `opencode.ai`, `*.opencode.ai`
+    - every selection: `models.dev`
 - `claude`:
     - `api.anthropic.com`
     - `claude.ai`
@@ -1364,7 +1370,7 @@ See the [secrets how-to](../how-to/secrets.md).
 - The scalar rule applies to each field of `agents.<name>`; a custom agent then falls back to the tables of the agent it is derived from (see [Custom agents](#custom-agents)).
 - `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent.
 
-**DNS settings**: an empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list.
+**DNS settings**: an empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list. A set workspace `network.agent_endpoints`, including `[]`, replaces the defaults list.
 
 ---
 

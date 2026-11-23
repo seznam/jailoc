@@ -56,10 +56,27 @@ const (
 # timezone = "UTC"  # time zone in the VM; omitted: the host's zone
 # notifications = "auto"  # attached OpenCode sessions: auto, native, osc or off
 
-# [defaults.network]
+[defaults.network]
 # ipv6 = false  # true: give the VM IPv6 connectivity (public destinations only)
 # dns = "9.9.9.9"
 # internal_zones = ["internal.example.com"]  # DNS zones whose names may resolve to private addresses
+# Model and auth endpoints OpenCode and OmO may reach (rule=agent, TCP 443);
+# keep only the providers you use. Claude Code, Copilot CLI and Antigravity
+# always reach their own endpoints.
+agent_endpoints = [
+  "api.anthropic.com",
+  "api.openai.com",
+  "auth.openai.com",
+  "chatgpt.com",
+  "generativelanguage.googleapis.com",
+  "oauth2.googleapis.com",
+  "api.githubcopilot.com",
+  "*.githubcopilot.com",
+  "openrouter.ai",
+  "opencode.ai",
+  "*.opencode.ai",
+  "models.dev",
+]
 
 [[defaults.network.rules]]
 name = "dev-deps"
@@ -163,6 +180,7 @@ paths = []
 # [workspaces.default.network]
 # ipv6 = false
 # dns = "9.9.9.9"
+# agent_endpoints = ["api.anthropic.com"]  # OpenCode/OmO; replaces [defaults.network] agent_endpoints
 # [[workspaces.default.network.rules]]
 # name = "internet"
 # allow = ["*"]  # explicit opt-in to the whole public internet
@@ -517,6 +535,13 @@ type Network struct {
 	InternalZones []string `toml:"internal_zones,omitempty"`
 	// Rules are the allow/deny egress rules of the scope.
 	Rules []NetworkRule `toml:"rules,omitempty"`
+	// AgentEndpoints are the host names of the "agent" rule that allows a
+	// multi-provider agent (OpenCode, OmO) to reach its model and auth
+	// endpoints on TCP port 443. A workspace list replaces the defaults list.
+	// Unset or empty means no agent rule. Single-provider agents ignore it and
+	// get their built-in endpoints. No omitempty, so an empty list is written
+	// back.
+	AgentEndpoints []string `toml:"agent_endpoints"`
 	// Legacy fields migrated in memory with a deprecation warning.
 	FilteredDNS     *bool    `toml:"filtered_dns,omitempty"`
 	DNSUpstream     string   `toml:"dns_upstream,omitempty"`
@@ -1371,6 +1396,9 @@ func Validate(cfg *Config) error {
 	if err := validateNetworkRules(dn.Rules, "defaults"); err != nil {
 		return err
 	}
+	if err := validateAgentEndpoints(dn.AgentEndpoints, "defaults"); err != nil {
+		return err
+	}
 	if err := validateInternalZones(dn.InternalZones, "defaults"); err != nil {
 		return err
 	}
@@ -1482,6 +1510,9 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if err := validateNetworkRules(wn.Rules, wsContext); err != nil {
+			return err
+		}
+		if err := validateAgentEndpoints(wn.AgentEndpoints, wsContext); err != nil {
 			return err
 		}
 		if err := validateInternalZones(wn.InternalZones, wsContext); err != nil {

@@ -2,7 +2,7 @@
 
 All guest traffic leaves through jailoc's network broker on the host. Add rules to `~/.config/jailoc/config.toml`, apply them with `jailoc reload <workspace>` and check the result with `jailoc traffic -f`. For the model behind the rules, see [Network isolation](../explanation/network-isolation.md).
 
-Defaults: a destination that no allow rule matches is denied (`default-deny`), except the configured coding agent's API and authentication endpoints (`rule=agent`). New configurations include a `dev-deps` rule in `[defaults.network.rules]` that lists common package registries, GitHub, container registries and OS mirrors. A `deny` rule always wins over an `allow` rule, whatever the order; rules from `[defaults.network.rules]` and the workspace form one set.
+Defaults: a destination that no allow rule matches is denied (`default-deny`). The coding agent reaches its model and authentication endpoints through the `agent` rule: Claude Code, Copilot CLI and Antigravity with their built-in endpoints, OpenCode and OmO with the hosts in `agent_endpoints`. New configurations set `agent_endpoints` in `[defaults.network]` and include a `dev-deps` rule in `[defaults.network.rules]` that lists common package registries, GitHub, container registries and OS mirrors. A `deny` rule always wins over an `allow` rule, whatever the order; rules from `[defaults.network.rules]` and the workspace form one set.
 
 ## Allow or deny hostnames
 
@@ -74,6 +74,17 @@ allow = ["*"]
 ```
 
 `*` matches any public address on the rule's protocol. It never opens private or reserved ranges, and it excludes DoT port 853 and QUIC UDP port 443 unless you list them explicitly in `ports`.
+
+## Limit the agent's endpoints
+
+The `agent` rule allows the coding agent's model and auth endpoints on TCP 443. Claude Code, Copilot CLI and Antigravity get their built-in endpoints. OpenCode and OmO support several LLM providers, so for them the rule allows the hosts in `agent_endpoints`. The setup wizard and `jailoc migrate` ask which providers you use (for example `anthropic, openrouter`; empty for all) and write their endpoints. To change the list later, edit it and run `jailoc reload api`:
+
+```toml
+[defaults.network]
+agent_endpoints = ["api.anthropic.com", "models.dev"]
+```
+
+`jailoc traffic` then shows connections to the other providers as denied. A workspace's `[workspaces.<name>.network]` `agent_endpoints` replaces the defaults list. Without `agent_endpoints`, or with `[]`, an OpenCode or OmO workspace has no `agent` rule, so the agent needs your own allow rules. To block a provider of Claude Code, Copilot CLI or Antigravity, add a `deny` rule. See [`rule=agent`](../reference/configuration.md#ruleagent) for each agent's endpoints.
 
 ## Restrict HTTP methods and paths
 

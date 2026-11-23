@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 )
 
@@ -113,7 +114,7 @@ func TestRunMigrateWritesBackup(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("y")
+	p, out := scripted("", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -145,7 +146,7 @@ func TestRunMigrateWritesBackup(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	p, out = scripted("y")
+	p, out = scripted("", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil || !strings.Contains(out.String(), "remove unknown setting") {
 		t.Fatalf("unknown-key run = %v\n%s", err, out)
 	}
@@ -194,7 +195,7 @@ paths = ["/src/inherited"]
 	if _, err := config.ReadRaw(path); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("", "y")
+	p, out := scripted("", "", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -342,7 +343,7 @@ filtered_dns = true
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("y")
+	p, out := scripted("", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -368,7 +369,7 @@ allowed_hosts = ["db.corp.example"]
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("y")
+	p, out := scripted("", "y")
 	p.resolver = &fakeResolver{
 		ips:    map[string]string{"db.corp.example": "10.0.0.5"},
 		cnames: map[string]string{"db.corp.example": "db-node.corp.example."},
@@ -423,7 +424,7 @@ func TestPlanMigrationAsksInternalZones(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			p, out := scripted("")
+			p, out := scripted("", "")
 			if _, err := planMigration(tt.cfg, p, os.Stat); err != nil {
 				t.Fatalf("planMigration: %v\n%s", err, out)
 			}
@@ -437,7 +438,7 @@ func TestPlanMigrationAsksInternalZones(t *testing.T) {
 func TestPlanMigrationInternalZonesExplanation(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
-	p, out := scripted("")
+	p, out := scripted("", "")
 	if _, err := planMigration(cfg, p, os.Stat); err != nil {
 		t.Fatal(err)
 	}
@@ -462,8 +463,8 @@ func TestPlanMigrationInternalZonesSkipped(t *testing.T) {
 		yes  bool
 		in   []string
 	}{
-		{"blank answer", false, []string{""}},
-		{"whitespace answer", false, []string{" , "}},
+		{"blank answer", false, []string{"", ""}},
+		{"whitespace answer", false, []string{"", " , "}},
 		{"yes flag", true, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -478,8 +479,8 @@ func TestPlanMigrationInternalZonesSkipped(t *testing.T) {
 			if got := cfg.Defaults.Network.InternalZones; len(got) != 0 {
 				t.Fatalf("internal_zones = %v, want none", got)
 			}
-			if len(m.changes) != 0 {
-				t.Fatalf("changes = %v, want none", m.changes)
+			if want := []string{`[defaults.network]: add agent_endpoints of agent "opencode"`}; !slices.Equal(m.changes, want) {
+				t.Fatalf("changes = %v, want %v", m.changes, want)
 			}
 			if tt.yes && strings.Contains(out.String(), internalZonesPrompt) {
 				t.Fatalf("--yes asked:\n%s", out)
@@ -488,10 +489,24 @@ func TestPlanMigrationInternalZonesSkipped(t *testing.T) {
 	}
 }
 
+func TestPlanMigrationProviders(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
+	p, out := scripted("mistral", "anthropic, openai", "")
+	if _, err := planMigration(cfg, p, os.Stat); err != nil {
+		t.Fatalf("planMigration: %v\n%s", err, out)
+	}
+	assertContains(t, out.String(), `unknown provider "mistral"`)
+	want := []string{"api.anthropic.com", "api.openai.com", "auth.openai.com", "chatgpt.com", "models.dev"}
+	if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, want) {
+		t.Fatalf("agent_endpoints = %v, want %v", got, want)
+	}
+}
+
 func TestPlanMigrationInternalZonesInput(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
-	p, out := scripted("Corp.Example., *.lab.example\tcorp.example,db.example")
+	p, out := scripted("", "Corp.Example., *.lab.example\tcorp.example,db.example")
 	m, err := planMigration(cfg, p, os.Stat)
 	if err != nil {
 		t.Fatalf("planMigration: %v\n%s", err, out)
@@ -512,7 +527,7 @@ func TestPlanMigrationInternalZonesCreatesNetworkTable(t *testing.T) {
 			Rules: []config.NetworkRule{{Name: "r", Allow: []string{"git.corp.example"}, Proto: config.RuleProtoAny}},
 		}}},
 	}
-	p, out := scripted("corp.example")
+	p, out := scripted("", "corp.example")
 	if _, err := planMigration(cfg, p, os.Stat); err != nil {
 		t.Fatalf("planMigration: %v\n%s", err, out)
 	}
@@ -528,7 +543,7 @@ func TestPlanMigrationInternalZonesRetry(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
 	// The first answer mixes a valid zone with a public suffix: nothing of it is kept.
-	p, out := scripted("corp.example, com", "app.nip.io", "10.0.0.1", "*", "lab.example")
+	p, out := scripted("", "corp.example, com", "app.nip.io", "10.0.0.1", "*", "lab.example")
 	if _, err := planMigration(cfg, p, os.Stat); err != nil {
 		t.Fatalf("planMigration: %v\n%s", err, out)
 	}
@@ -573,7 +588,7 @@ func TestRunMigrateAddsInternalZones(t *testing.T) {
 	if err := os.WriteFile(path, []byte(internalZonesConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("corp.example", "y")
+	p, out := scripted("", "corp.example", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -601,7 +616,7 @@ func TestRunMigrateDeclinedKeepsInternalZonesUnapplied(t *testing.T) {
 	if err := os.WriteFile(path, []byte(internalZonesConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("corp.example", "n")
+	p, out := scripted("", "corp.example", "n")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -622,7 +637,7 @@ func TestRunMigrateDryRunAsksInternalZones(t *testing.T) {
 	}
 	migrateDryRun = true
 	t.Cleanup(func() { migrateDryRun = false })
-	p, out := scripted("corp.example")
+	p, out := scripted("", "corp.example")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -635,4 +650,89 @@ func TestRunMigrateDryRunAsksInternalZones(t *testing.T) {
 	if _, err := os.Stat(path + ".pre-vm-migration"); !os.IsNotExist(err) {
 		t.Fatalf("backup exists: %v", err)
 	}
+}
+
+func TestAddAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	opencode, _ := agent.Lookup("opencode")
+
+	t.Run("defaults and differing workspaces", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{
+			Defaults: config.Defaults{Agents: map[string]config.AgentSettings{"mine": {From: "claude"}}},
+			Workspaces: map[string]config.Workspace{
+				"web":  {},
+				"api":  {Agent: "claude"},
+				"tool": {Agent: "mine"},
+			},
+		}
+		m := &migration{}
+		if err := addAgentEndpoints(cfg, []string{"api", "tool", "web"}, &prompter{yes: true, out: io.Discard}, m); err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, opencode.Endpoints) {
+			t.Fatalf("defaults agent_endpoints = %v, want %v", got, opencode.Endpoints)
+		}
+		// claude and mine (from claude) are single-provider agents: no list.
+		for _, name := range []string{"api", "tool", "web"} {
+			if got := cfg.Workspaces[name].Network.Get().AgentEndpoints; got != nil {
+				t.Fatalf("%s agent_endpoints = %v, want unset", name, got)
+			}
+		}
+		want := []string{
+			`[defaults.network]: add agent_endpoints of agent "opencode"`,
+		}
+		if !slices.Equal(m.changes, want) {
+			t.Fatalf("changes = %v, want %v", m.changes, want)
+		}
+	})
+
+	t.Run("single-provider defaults and multi-provider workspaces", func(t *testing.T) {
+		t.Parallel()
+		omo, _ := agent.Lookup("omo")
+		cfg := &config.Config{
+			Defaults: config.Defaults{
+				Agent:  "claude",
+				Agents: map[string]config.AgentSettings{"mine": {From: "omo"}},
+			},
+			Workspaces: map[string]config.Workspace{
+				"web":  {},
+				"api":  {Agent: "opencode"},
+				"tool": {Agent: "mine"},
+			},
+		}
+		m := &migration{}
+		if err := addAgentEndpoints(cfg, []string{"api", "tool", "web"}, &prompter{yes: true, out: io.Discard}, m); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Defaults.Network != nil {
+			t.Fatalf("defaults network = %+v, want unset", cfg.Defaults.Network)
+		}
+		for name, want := range map[string][]string{"api": opencode.Endpoints, "tool": omo.Endpoints, "web": nil} {
+			if got := cfg.Workspaces[name].Network.Get().AgentEndpoints; !slices.Equal(got, want) || (want == nil) != (got == nil) {
+				t.Fatalf("%s agent_endpoints = %v, want %v", name, got, want)
+			}
+		}
+		want := []string{
+			`[workspaces.api.network]: add agent_endpoints of agent "opencode"`,
+			`[workspaces.tool.network]: add agent_endpoints of agent "mine"`,
+		}
+		if !slices.Equal(m.changes, want) {
+			t.Fatalf("changes = %v, want %v", m.changes, want)
+		}
+	})
+
+	t.Run("already configured", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{Workspaces: map[string]config.Workspace{
+			"web": {Network: &config.Network{AgentEndpoints: []string{}}},
+		}}
+		m := &migration{}
+		if err := addAgentEndpoints(cfg, []string{"web"}, &prompter{yes: true, out: io.Discard}, m); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Defaults.Network != nil || len(m.changes) != 0 {
+			t.Fatalf("changed configured agent_endpoints: network %+v, changes %v", cfg.Defaults.Network, m.changes)
+		}
+	})
 }

@@ -1838,6 +1838,7 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 			Network: &config.Network{
 				DNS:             "9.9.9.9",
 				DNSBlockedZones: []string{"bad.example."},
+				AgentEndpoints:  []string{"api.anthropic.com"},
 				Rules: []config.NetworkRule{
 					{Name: "dev-deps", Allow: []string{"github.com", "registry.npmjs.org"}},
 				},
@@ -1878,6 +1879,70 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 	agentRule := r.NetworkRules[5]
 	if agentRule.Name != "agent" || agentRule.Proto != "tcp" || !slices.Equal(agentRule.Ports, []config.RulePort{"443"}) || !slices.Contains(agentRule.Allow, "api.anthropic.com") {
 		t.Fatalf("agent rule = %+v", agentRule)
+	}
+}
+
+func TestResolveAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	claude, ok := agent.Lookup("claude")
+	if !ok {
+		t.Fatal("claude agent not found")
+	}
+	tests := []struct {
+		name     string
+		agent    string
+		defaults []string
+		ws       []string
+		want     []string
+	}{
+		{name: "unset has no agent rule", agent: "opencode"},
+		{name: "defaults list", agent: "opencode", defaults: []string{"api.anthropic.com"}, want: []string{"api.anthropic.com"}},
+		{name: "workspace overrides defaults", agent: "omo", defaults: []string{"api.anthropic.com"}, ws: []string{"api.openai.com", "*.example.com"}, want: []string{"api.openai.com", "*.example.com"}},
+		{name: "empty workspace list drops rule", agent: "opencode", defaults: []string{"api.anthropic.com"}, ws: []string{}},
+		{name: "empty defaults list drops rule", agent: "opencode1", defaults: []string{}},
+		{name: "single-provider agent keeps built-in endpoints", agent: "claude", want: claude.Endpoints},
+		{name: "single-provider agent ignores lists", agent: "claude", defaults: []string{}, ws: []string{"api.openai.com"}, want: claude.Endpoints},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{
+				Defaults: config.Defaults{Agent: tc.agent},
+				Workspaces: map[string]config.Workspace{
+					"api": {Paths: []string{"/data/api"}},
+				},
+			}
+			if tc.defaults != nil {
+				cfg.Defaults.Network = &config.Network{AgentEndpoints: tc.defaults}
+			}
+			if tc.ws != nil {
+				ws := cfg.Workspaces["api"]
+				ws.Network = &config.Network{AgentEndpoints: tc.ws}
+				cfg.Workspaces["api"] = ws
+			}
+			r, err := workspace.Resolve(cfg, "api")
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			var agentRules []config.NetworkRule
+			for _, rule := range r.NetworkRules {
+				if rule.Name == "agent" {
+					agentRules = append(agentRules, rule)
+				}
+			}
+			if tc.want == nil {
+				if len(agentRules) != 0 {
+					t.Fatalf("agent rules = %+v, want none", agentRules)
+				}
+				return
+			}
+			if len(agentRules) != 1 {
+				t.Fatalf("agent rules = %+v, want one", agentRules)
+			}
+			if got := agentRules[0]; !slices.Equal(got.Allow, tc.want) || got.Proto != config.RuleProtoTCP || !slices.Equal(got.Ports, []config.RulePort{"443"}) {
+				t.Fatalf("agent rule = %+v, want allow %v on tcp/443", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -2000,9 +2065,12 @@ func TestResolveNetworkRulesLog(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		Defaults: config.Defaults{Network: &config.Network{Rules: []config.NetworkRule{
-			{Name: "default-quiet", Allow: []string{"registry.example.com"}, Log: &off},
-		}}},
+		Defaults: config.Defaults{Network: &config.Network{
+			AgentEndpoints: []string{"api.anthropic.com"},
+			Rules: []config.NetworkRule{
+				{Name: "default-quiet", Allow: []string{"registry.example.com"}, Log: &off},
+			},
+		}},
 		Workspaces: map[string]config.Workspace{"api": {
 			Paths: []string{"/data/api"},
 			Network: &config.Network{Rules: []config.NetworkRule{

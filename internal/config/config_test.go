@@ -4164,6 +4164,47 @@ install = false
 	}
 }
 
+func TestEncodeKeepsEmptyAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeFile(t, path, `[defaults.network]
+agent_endpoints = ["api.anthropic.com"]
+
+[workspaces.none]
+paths = ["/data/none"]
+
+[workspaces.none.network]
+agent_endpoints = []
+
+[workspaces.inherited]
+paths = ["/data/inherited"]
+`)
+	first, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	data, err := Encode(first)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	path2 := filepath.Join(dir, "config2.toml")
+	writeFile(t, path2, string(data))
+	second, err := LoadFrom(path2)
+	if err != nil {
+		t.Fatalf("second LoadFrom: %v", err)
+	}
+	if eps := second.Workspaces["none"].Network.AgentEndpoints; eps == nil || len(eps) != 0 {
+		t.Errorf("none agent_endpoints = %#v, want an explicitly empty list", eps)
+	}
+	if n := second.Workspaces["inherited"].Network; n != nil {
+		t.Errorf("inherited network = %#v, want no table (inherit defaults)", n)
+	}
+	if eps := second.Defaults.Network.AgentEndpoints; !slices.Equal(eps, []string{"api.anthropic.com"}) {
+		t.Errorf("defaults agent_endpoints = %#v", eps)
+	}
+}
+
 func TestEncodeKeepsEmptyDNSBlockedZones(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

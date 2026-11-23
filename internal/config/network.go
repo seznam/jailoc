@@ -1,12 +1,16 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/seznam/jailoc/internal/agent"
 )
 
 // RuleProto is a protocol name in a network rule.
@@ -318,6 +322,21 @@ func validateInternalZones(zones []string, context string) error {
 	return nil
 }
 
+// validateAgentEndpoints checks the agent_endpoints of a [<scope>.network]
+// table: each entry is a host name or a "*.domain" wildcard.
+func validateAgentEndpoints(endpoints []string, context string) error {
+	for _, e := range endpoints {
+		kind, _, err := ParseRuleTarget(e)
+		if err != nil {
+			return fmt.Errorf("%s: agent_endpoints: %w", context, err)
+		}
+		if kind != "name" {
+			return fmt.Errorf("%s: agent_endpoints entry %q must be a host name or a \"*.domain\" wildcard", context, e)
+		}
+	}
+	return nil
+}
+
 // DeprecationWarnings returns one-line warnings for legacy network settings in
 // cfg that are migrated in memory.
 func DeprecationWarnings(cfg *Config) []string {
@@ -350,6 +369,7 @@ func DeprecationWarnings(cfg *Config) []string {
 	for name := range cfg.Workspaces {
 		names = append(names, name)
 	}
+	slices.Sort(names)
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
 		collect(fmt.Sprintf("[workspaces.%s]", name), ws.AllowedHosts, ws.AllowedNetworks, ws.Network)
@@ -362,10 +382,35 @@ func DeprecationWarnings(cfg *Config) []string {
 		}
 	}
 	if !hasRules && len(cfg.Workspaces) > 0 {
-		warnings = append(warnings, "no [[*.network.rules]] configured: only coding agent endpoints are allowed; add allow = [\"*\"] or configure [[defaults.network.rules]]")
+		warnings = append(warnings, "no [[*.network.rules]] configured: all egress is denied except the agent rule, if any; add allow = [\"*\"] or configure [[defaults.network.rules]]")
+	}
+	defaultEndpoints := cfg.Defaults.Network.Get().AgentEndpoints
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		if defaultEndpoints != nil || ws.Network.Get().AgentEndpoints != nil || !explicitEndpoints(cfg, ws) {
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf("[workspaces.%s]: no agent rule: network.agent_endpoints is not set, so the coding agent reaches its model and auth endpoints only through other allow rules; set agent_endpoints in [defaults.network]", name))
 	}
 
 	return warnings
+}
+
+// explicitEndpoints reports whether the workspace's agent is a multi-provider
+// agent whose endpoints come only from network.agent_endpoints.
+func explicitEndpoints(cfg *Config, ws Workspace) bool {
+	h, ok := workspaceHarness(cfg, ws)
+	return ok && h.ExplicitEndpoints
+}
+
+// workspaceHarness returns the built-in harness of the workspace's agent,
+// inherited from [defaults] when unset, resolving custom agents through from.
+func workspaceHarness(cfg *Config, ws Workspace) (agent.Harness, bool) {
+	name := cmp.Or(ws.Agent, cfg.Defaults.Agent, agent.Default)
+	if h, ok := agent.Lookup(name); ok {
+		return h, true
+	}
+	return agent.Lookup(cmp.Or(ws.Agents[name].From, cfg.Defaults.Agents[name].From))
 }
 
 // LegacyHostZones returns the internal zones that stand for legacy

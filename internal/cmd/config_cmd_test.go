@@ -228,7 +228,7 @@ func TestPrintConfigWarningsMigrateFooter(t *testing.T) {
 		},
 		{
 			name:       "no notices",
-			toml:       rules + "\n[workspaces.demo]\npaths = [\"/srv/demo\"]\n",
+			toml:       "[defaults.network]\nagent_endpoints = [\"api.anthropic.com\"]\n" + rules + "\n[workspaces.demo]\npaths = [\"/srv/demo\"]\n",
 			wantFooter: false,
 		},
 		{
