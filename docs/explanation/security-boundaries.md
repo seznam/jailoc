@@ -24,6 +24,7 @@ The hypervisor (KVM on Linux, Hypervisor.framework on macOS) separates the guest
 - virtio-fs shares for workspace `paths`, `mounts` and jailoc's internal shares. Read-only shares are enforced by the VMM, so guest root can't remount them writable.
 - One virtio-net interface whose only peer is the workspace's network broker.
 - Unix sockets on the host that the broker forwards: the guest SSH server for jailoc, the host SSH agent with `ssh_auth_sock`, the host gpg-agent extra socket with `gpg_agent`, and `host_ports` targets.
+- No virtio-vsock device: jailoc configures no vsock ports and attaches a virtio-net interface, so libkrun enables neither TSI (Transparent Socket Impersonation) nor host vsock endpoints; guest `AF_VSOCK` connections to the host fail with `ENODEV`.
 
 #### Confining the VMM process
 
