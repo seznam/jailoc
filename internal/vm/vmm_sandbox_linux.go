@@ -47,11 +47,19 @@ func vmmSpawner() runner.Spawner { return confinedSpawner{} }
 
 type confinedSpawner struct{}
 
+// runnerProbe, when set, runs on the confined thread right after the runner
+// started, so whatever it starts shares the runner's Landlock domain. Only VM
+// integration builds set it (vmm_sandbox_probe_linux.go).
+var runnerProbe func(cfg runner.Config, runnerPID int)
+
 func (confinedSpawner) Spawn(ctx context.Context, cfg runner.Config) (runner.ProcessHandle, error) {
 	var proc *runner.Process
 	err := startConfined(vmmRules(cfg), func() error {
 		var err error
 		proc, err = runner.SpawnProcess(ctx, cfg)
+		if err == nil && runnerProbe != nil {
+			runnerProbe(cfg, proc.PID())
+		}
 		return err
 	})
 	if err != nil {
