@@ -390,7 +390,7 @@ func DeprecationWarnings(cfg *Config) []string {
 		if defaultEndpoints != nil || ws.Network.Get().AgentEndpoints != nil || !explicitEndpoints(cfg, ws) {
 			continue
 		}
-		warnings = append(warnings, fmt.Sprintf("[workspaces.%s]: no network.agent_endpoints configured: the coding agent cannot reach its model and auth endpoints; set agent_endpoints in [defaults.network]", name))
+		warnings = append(warnings, fmt.Sprintf("[workspaces.%s]: no agent rule: network.agent_endpoints is not set, so the coding agent reaches its model and auth endpoints only through other allow rules; set agent_endpoints in [defaults.network]", name))
 	}
 
 	return warnings

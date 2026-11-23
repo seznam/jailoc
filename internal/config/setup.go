@@ -361,7 +361,8 @@ func applyWorkspaceRules(lines []string, opts WorkspaceOptions) ([]string, error
 }
 
 // newWorkspaceSection renders a complete [workspaces.<name>] section from the template.
-func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
+// With seedEndpoints, a multi-provider agent gets its built-in agent_endpoints.
+func newWorkspaceSection(opts WorkspaceOptions, seedEndpoints bool) (string, error) {
 	_, template := splitTemplate()
 	lines := renameWorkspace(template, opts.Name)
 	paths, err := tomlArray(opts.Paths)
@@ -383,7 +384,7 @@ func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
 			return "", err
 		}
 	}
-	if opts.Agent != "" {
+	if opts.Agent != "" && seedEndpoints {
 		endpoints, err := agentEndpoints(opts.Agent)
 		if err != nil {
 			return "", err
@@ -409,8 +410,8 @@ func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-func appendWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
-	section, err := newWorkspaceSection(opts)
+func appendWorkspace(raw []byte, opts WorkspaceOptions, seedEndpoints bool) ([]byte, error) {
+	section, err := newWorkspaceSection(opts, seedEndpoints)
 	if err != nil {
 		return nil, fmt.Errorf("add workspace %q: %w", opts.Name, err)
 	}
@@ -496,6 +497,7 @@ func normalizeInlineWorkspaces(doc *edit.Document) error {
 }
 
 // updateWorkspace rewrites an existing workspace, keeping unrelated settings, and comments the agent and enable_docker lines.
+// An existing network.agent_endpoints list is kept.
 func updateWorkspace(doc *edit.Document, opts WorkspaceOptions) ([]byte, error) {
 	wsKey := []string{"workspaces", opts.Name}
 	if err := doc.Set(append(wsKey, "paths"), opts.Paths); err != nil {
@@ -511,19 +513,8 @@ func updateWorkspace(doc *edit.Document, opts WorkspaceOptions) ([]byte, error) 
 	} else {
 		doc.Delete(append(wsKey, "agent"))
 	}
-	var endpoints []string
-	if opts.Agent != "" {
-		var err error
-		if endpoints, err = agentEndpoints(opts.Agent); err != nil {
-			return nil, fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
-		}
-	}
-	if endpoints != nil {
-		if err := doc.Set(append(wsKey, "network", "agent_endpoints"), endpoints); err != nil {
-			return nil, fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
-		}
-	} else {
-		doc.Delete(append(wsKey, "network", "agent_endpoints"))
+	if err := seedAgentEndpoints(doc, opts); err != nil {
+		return nil, err
 	}
 	if opts.EnableDocker != nil {
 		if err := doc.Set(append(wsKey, "enable_docker"), *opts.EnableDocker); err != nil {
@@ -551,6 +542,27 @@ func updateWorkspace(doc *edit.Document, opts WorkspaceOptions) ([]byte, error) 
 	return doc.Bytes(), nil
 }
 
+// seedAgentEndpoints writes the built-in agent_endpoints of a multi-provider
+// workspace agent when neither the workspace nor [defaults.network] sets a
+// list, so that a restricted list is never replaced or removed.
+func seedAgentEndpoints(doc *edit.Document, opts WorkspaceOptions) error {
+	key := []string{"workspaces", opts.Name, "network", "agent_endpoints"}
+	if opts.Agent == "" || doc.Has(key) || doc.Has([]string{"defaults", "network", "agent_endpoints"}) {
+		return nil
+	}
+	endpoints, err := agentEndpoints(opts.Agent)
+	if err != nil {
+		return fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
+	}
+	if endpoints == nil {
+		return nil
+	}
+	if err := doc.Set(key, endpoints); err != nil {
+		return fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
+	}
+	return nil
+}
+
 func RenderWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
 	if err := ValidateWorkspaceName(opts.Name); err != nil {
 		return nil, err
@@ -567,7 +579,7 @@ func RenderWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {
 		if err := normalizeInlineWorkspaces(doc); err != nil {
 			return nil, fmt.Errorf("normalize workspaces: %w", err)
 		}
-		out, err = appendWorkspace(doc.Bytes(), opts)
+		out, err = appendWorkspace(doc.Bytes(), opts, !doc.Has([]string{"defaults", "network", "agent_endpoints"}))
 	}
 	if err != nil {
 		return nil, err

@@ -264,8 +264,8 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 
 - Entries are host names or `*.domain` wildcards; IP addresses, CIDRs and `*` are rejected.
 - Applies to the multi-provider agents `opencode`, `opencode1`, `opencode2` and `omo` (and custom agents built `from` them). `claude`, `copilot` and `agy` always get their built-in endpoints; narrow them with a `deny` rule.
-- New configurations from the setup wizard and `jailoc migrate` set it to the OpenCode endpoints (see [`rule=agent`](#ruleagent)). Keep only the providers you use, for example `agent_endpoints = ["api.anthropic.com"]`; the other endpoints then show as denied in `jailoc traffic`.
-- Unset for a workspace whose agent is OpenCode or OmO: the agent can't reach its model and auth endpoints unless your own rules allow them, and the config load prints a warning.
+- New configurations from the setup wizard and `jailoc migrate` set it to the OpenCode endpoints (see [`rule=agent`](#ruleagent)). Adding an OpenCode or OmO workspace with the wizard writes the workspace list only when neither the workspace nor `[defaults.network]` sets one, and keeps an existing list. Keep only the providers you use, for example `agent_endpoints = ["api.anthropic.com"]`; the other endpoints then show as denied in `jailoc traffic`.
+- Unset for a workspace whose agent is OpenCode or OmO: there is no `agent` rule, so the agent reaches its model and auth endpoints only through your other allow rules, and the config load prints a warning.
 
 `internal_zones` details: each zone covers itself and every name under it (`corp.example` covers `gitlab.corp.example`; a leading `*.` is dropped).
 

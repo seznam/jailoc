@@ -509,7 +509,7 @@ log = "no"
 
 func TestDeprecationWarningsAgentEndpoints(t *testing.T) {
 	t.Parallel()
-	const want = "no network.agent_endpoints configured"
+	const want = "no agent rule: network.agent_endpoints is not set"
 	for _, tt := range []struct {
 		name string
 		cfg  *Config

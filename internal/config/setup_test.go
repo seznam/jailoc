@@ -607,13 +607,53 @@ allow = ["*"]
 	if rules := ws.Network.Get().Rules; len(rules) != 0 {
 		t.Errorf("inherited network kept rules: %+v", rules)
 	}
-	if got := ws.Network.Get().AgentEndpoints; got != nil {
-		t.Errorf("inherited agent kept agent_endpoints: %v", got)
+	if got := ws.Network.Get().AgentEndpoints; !slices.Equal(got, []string{"api.anthropic.com"}) {
+		t.Errorf("agent_endpoints = %v, want existing list kept", got)
 	}
 	if got := ws.Network.Get().DNS; got != "9.9.9.9" {
 		t.Errorf("network.dns = %q, want unrelated setting kept", got)
 	}
 	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/szn" {
 		t.Errorf("paths = %v, want [/data/szn]", ws.Paths)
+	}
+}
+
+func TestRenderWorkspaceAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	opencode, ok := agent.Lookup("opencode")
+	if !ok {
+		t.Fatal("opencode harness not found")
+	}
+	for _, tt := range []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{name: "new workspace seeds built-in list", raw: "", want: opencode.Endpoints},
+		{name: "new workspace inherits defaults list", raw: "[defaults.network]\nagent_endpoints = []\n"},
+		{name: "existing workspace seeds built-in list", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n", want: opencode.Endpoints},
+		{name: "existing workspace keeps restricted list", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n\n[workspaces.szn.network]\nagent_endpoints = [\"api.anthropic.com\"]\n", want: []string{"api.anthropic.com"}},
+		{name: "existing workspace keeps empty list", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n\n[workspaces.szn.network]\nagent_endpoints = []\n", want: []string{}},
+		{name: "existing workspace inherits defaults list", raw: "[defaults.network]\nagent_endpoints = [\"api.anthropic.com\"]\n\n[workspaces.szn]\npaths = [\"/data/old\"]\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			out, err := RenderWorkspace([]byte(tt.raw), WorkspaceOptions{Name: "szn", Paths: []string{"/data/szn"}, Agent: "opencode"})
+			if err != nil {
+				t.Fatalf("RenderWorkspace failed: %v", err)
+			}
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			if err := WriteBytes(cfgPath, out); err != nil {
+				t.Fatalf("WriteBytes: %v", err)
+			}
+			cfg, err := LoadFrom(cfgPath)
+			if err != nil {
+				t.Fatalf("LoadFrom: %v\n%s", err, out)
+			}
+			got := cfg.Workspaces["szn"].Network.Get().AgentEndpoints
+			if !slices.Equal(got, tt.want) || (got == nil) != (tt.want == nil) {
+				t.Errorf("workspace agent_endpoints = %#v, want %#v\n%s", got, tt.want, out)
+			}
+		})
 	}
 }
