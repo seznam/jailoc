@@ -21,7 +21,7 @@ An agent on your host can reach everything your user account can. jailoc narrows
 
 !!! warning "What jailoc does not protect against"
 
-    Workspace paths and `rw` mounts are shared read-write, so the agent's edits land on your files at once, including Git hooks that run on the host; [`protect_git`](reference/configuration.md#protect_git) covers only the repositories it applies to. Anything the agent can read can leave through the destinations your rules allow. On Linux, Landlock doesn't confine metadata operations of the VMM process; on macOS the VMM process has no equivalent confinement. [Security Boundaries](explanation/security-boundaries.md#outside-the-boundaries) lists every limit, and the [Threat Model](explanation/threat-model.md) explains why they fall where they do.
+    Workspace paths and `rw` mounts are shared read-write, so the agent's edits land on your files at once, including Git hooks that run on the host; [`protect_git`](reference/configuration.md#protect_git) covers only the repositories it applies to. Anything the agent can read can leave through the destinations your rules allow. On Linux, Landlock doesn't confine metadata operations of the VMM process; on macOS the VMM process runs under a Seatbelt profile, which Apple marks as deprecated. [Security Boundaries](explanation/security-boundaries.md#outside-the-boundaries) lists every limit, and the [Threat Model](explanation/threat-model.md) explains why they fall where they do.
 
 ## Documentation
 
