@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.8.1](https://github.com/seznam/jailoc/compare/v2.8.0...v2.8.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **config:** reject empty-query and https ubuntu_mirror URLs ([b66e98a](https://github.com/seznam/jailoc/commit/b66e98a26585dabd404e2fba3026642b5544bb8a))
+* **image:** install Ubuntu packages from a configurable mirror, cz.archive.ubuntu.com by default ([a4e0f78](https://github.com/seznam/jailoc/commit/a4e0f7836d76445bf03eb39822fac9cdb4bee93a))
+* **image:** install Ubuntu packages from a configurable mirror, cz.archive.ubuntu.com by default ([9a7d210](https://github.com/seznam/jailoc/commit/9a7d21077ad103900ae86fac72f9c0f50044fc18))
+
 ## [2.8.0](https://github.com/seznam/jailoc/compare/v2.7.2...v2.8.0) (2026-11-23)
 
 
