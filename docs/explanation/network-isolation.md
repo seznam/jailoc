@@ -133,7 +133,7 @@ The broker presents certificates signed by a per-workspace CA.
 | Created | On the host, the first time a rule has `http` |
 | Private key | Stays on the host in the VM state directory with mode `0600`, outside every share and file the guest receives; it never enters the VM |
 | Lifetime | Key and certificate stay until `jailoc down --purge` deletes the state directory; the next `up` creates a new CA |
-| Leaf certificates | Valid for 24 hours, issued per server name and cached in memory |
+| Leaf certificates | Valid for 30 days, issued per server name and cached in memory |
 
 The CA certificate goes into the guest's CA bundle and trust stores, also with `ca_bundle = false`. Every process in the guest therefore trusts it, guest root and the agent included. That is what lets the broker read decrypted traffic for the hosts matched by `http` rules: it sees the full requests and responses, headers and bodies included. The broker writes only method, host, path (no query string) and status to `broker.jsonl`. Hosts no `http` rule covers stay encrypted end to end.
 

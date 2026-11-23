@@ -56,7 +56,7 @@ func newTestCA(t *testing.T, cn string) *testCA {
 		SerialNumber:          big.NewInt(time.Now().UnixNano()),
 		Subject:               pkix.Name{CommonName: cn, Organization: []string{"jailoc"}},
 		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(24 * time.Hour),
+		NotAfter:              now.Add(365 * 24 * time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		MaxPathLenZero:        true,

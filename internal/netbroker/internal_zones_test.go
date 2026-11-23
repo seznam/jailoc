@@ -527,13 +527,54 @@ func TestUntrustedCachedNamesStillDenied(t *testing.T) {
 func TestDNSCacheRefreshReplacesChainAndExpiry(t *testing.T) {
 	t.Parallel()
 	c := newDNSCache()
-	now := time.Unix(1000, 0)
+	now := time.Now()
 	c.now = func() time.Time { return now }
 	ip := netip.MustParseAddr("10.0.0.5")
-	c.recordChain(ip, "api.corp.example", time.Hour, []string{"api.corp.example", "edge.vendor.example"})
-	c.recordChain(ip, "api.corp.example", time.Second, []string{"api.corp.example"})
+	const name = "api.corp.example"
+	longChain := []string{name, "edge.vendor.example"}
+	shortChain := []string{name}
+	cachedExp := func(label string) time.Time {
+		t.Helper()
+		e, ok := c.entries[ip][name]
+		if !ok {
+			t.Fatalf("%s: no cache entry for %s", label, name)
+		}
+		if e.exp != e.exp.Round(0) {
+			t.Fatalf("%s: cached expiry %v carries a monotonic reading, want wall-clock only", label, e.exp)
+		}
+		return e.exp
+	}
+
+	c.recordChain(ip, name, time.Hour, longChain)
+	if got, want := cachedExp("initial record"), now.Round(0).Add(time.Hour); !got.Equal(want) {
+		t.Fatalf("initial expiry = %v, want %v", got, want)
+	}
+	c.recordChain(ip, name, time.Second, shortChain)
+	if got, want := cachedExp("refreshed record"), now.Round(0).Add(time.Second); !got.Equal(want) {
+		t.Fatalf("refreshed expiry = %v, want %v", got, want)
+	}
+
+	var seen [][]string
+	names, untrusted := c.lookupTrusted(ip, func(chain []string) bool {
+		seen = append(seen, chain)
+		return !slices.Contains(chain, "edge.vendor.example")
+	})
+	if !slices.Equal(names, []string{name}) || len(untrusted) != 0 {
+		t.Fatalf("live lookup = %v, untrusted %v, want [%s] and none untrusted", names, untrusted, name)
+	}
+	if len(seen) != 1 || !slices.Equal(seen[0], shortChain) {
+		t.Fatalf("trust callback saw chains %v, want only %v", seen, shortChain)
+	}
+
 	now = now.Add(2 * time.Second)
-	if names := c.lookup(ip); len(names) != 0 {
-		t.Fatalf("lookup after the short answer expired = %v, want empty", names)
+	names, untrusted = c.lookupTrusted(ip, func(chain []string) bool {
+		t.Errorf("trust callback called for expired chain %v", chain)
+		return true
+	})
+	if len(names) != 0 || len(untrusted) != 0 {
+		t.Fatalf("lookup after the short answer expired = %v, untrusted %v, want none", names, untrusted)
+	}
+	if _, ok := c.entries[ip]; ok || len(c.entries) != 0 {
+		t.Fatalf("cache entries after expiry = %v, want none", c.entries)
 	}
 }
