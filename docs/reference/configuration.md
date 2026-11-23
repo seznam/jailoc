@@ -108,7 +108,7 @@ Global base image settings. Controls the base image used when no workspace or de
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for the base image. |
-| `ubuntu_mirror` | string | `"http://cz.archive.ubuntu.com/ubuntu"` | HTTP(S) URL of the Ubuntu archive the embedded images install apt packages from. |
+| `ubuntu_mirror` | string | `"http://cz.archive.ubuntu.com/ubuntu"` | HTTP URL of the Ubuntu archive the embedded images install apt packages from. |
 
 `dockerfile` details:
 
@@ -122,7 +122,8 @@ Global base image settings. Controls the base image used when no workspace or de
 - The embedded base image keeps the replaced sources, so `apt-get install` in the workspace VM uses the mirror too.
 - Images from `[base] dockerfile` and `image` keep their own apt sources; workspace Dockerfiles built on the embedded base image inherit the mirror.
 - The mirror must carry the packages of the host architecture (arm64 or amd64) for the `resolute`, `resolute-updates`, `resolute-backports` and `resolute-security` suites.
-- Validation: `http` or `https` scheme, non-empty host, no query, fragment, whitespace, quotes, `&` or `\`.
+- Validation: `http` scheme, non-empty host, no query, fragment, whitespace, quotes, `&` or `\`.
+- `https` is rejected: the embedded images have no CA certificates before their first `apt-get install`. apt verifies the downloaded indexes and packages with the archive's GPG signatures.
 - `"http://archive.ubuntu.com/ubuntu"` installs from the main Ubuntu archive, security updates included.
 
 ### Example
