@@ -399,12 +399,18 @@ func DeprecationWarnings(cfg *Config) []string {
 // explicitEndpoints reports whether the workspace's agent is a multi-provider
 // agent whose endpoints come only from network.agent_endpoints.
 func explicitEndpoints(cfg *Config, ws Workspace) bool {
-	name := cmp.Or(ws.Agent, cfg.Defaults.Agent, agent.Default)
-	h, ok := agent.Lookup(name)
-	if !ok {
-		h, ok = agent.Lookup(cmp.Or(ws.Agents[name].From, cfg.Defaults.Agents[name].From))
-	}
+	h, ok := workspaceHarness(cfg, ws)
 	return ok && h.ExplicitEndpoints
+}
+
+// workspaceHarness returns the built-in harness of the workspace's agent,
+// inherited from [defaults] when unset, resolving custom agents through from.
+func workspaceHarness(cfg *Config, ws Workspace) (agent.Harness, bool) {
+	name := cmp.Or(ws.Agent, cfg.Defaults.Agent, agent.Default)
+	if h, ok := agent.Lookup(name); ok {
+		return h, true
+	}
+	return agent.Lookup(cmp.Or(ws.Agents[name].From, cfg.Defaults.Agents[name].From))
 }
 
 // LegacyHostZones returns the internal zones that stand for legacy

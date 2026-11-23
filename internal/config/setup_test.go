@@ -624,12 +624,22 @@ func TestRenderWorkspaceAgentEndpoints(t *testing.T) {
 	if !ok {
 		t.Fatal("opencode harness not found")
 	}
+	omo, ok := agent.Lookup("omo")
+	if !ok {
+		t.Fatal("omo harness not found")
+	}
 	for _, tt := range []struct {
-		name string
-		raw  string
-		want []string
+		name    string
+		raw     string
+		inherit bool
+		want    []string
 	}{
 		{name: "new workspace seeds built-in list", raw: "", want: opencode.Endpoints},
+		{name: "new workspace seeds inherited agent", raw: "[defaults]\nagent = \"omo\"\n", inherit: true, want: omo.Endpoints},
+		{name: "new workspace seeds default agent", raw: "", inherit: true, want: opencode.Endpoints},
+		{name: "new workspace inherits single-provider agent", raw: "[defaults]\nagent = \"claude\"\n", inherit: true},
+		{name: "existing workspace seeds inherited agent", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n", inherit: true, want: opencode.Endpoints},
+		{name: "inherited agent keeps defaults list", raw: "[defaults.network]\nagent_endpoints = [\"api.anthropic.com\"]\n", inherit: true},
 		{name: "new workspace inherits defaults list", raw: "[defaults.network]\nagent_endpoints = []\n"},
 		{name: "existing workspace seeds built-in list", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n", want: opencode.Endpoints},
 		{name: "existing workspace keeps restricted list", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n\n[workspaces.szn.network]\nagent_endpoints = [\"api.anthropic.com\"]\n", want: []string{"api.anthropic.com"}},
@@ -638,7 +648,11 @@ func TestRenderWorkspaceAgentEndpoints(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			out, err := RenderWorkspace([]byte(tt.raw), WorkspaceOptions{Name: "szn", Paths: []string{"/data/szn"}, Agent: "opencode"})
+			opts := WorkspaceOptions{Name: "szn", Paths: []string{"/data/szn"}, Agent: "opencode"}
+			if tt.inherit {
+				opts.Agent = ""
+			}
+			out, err := RenderWorkspace([]byte(tt.raw), opts)
 			if err != nil {
 				t.Fatalf("RenderWorkspace failed: %v", err)
 			}
