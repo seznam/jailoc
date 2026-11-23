@@ -6,7 +6,8 @@
 # into libkrun. jailoc builds it from the same libkrun source in a pinned
 # Alpine image instead, statically linked against musl (MIT), and hands it to
 # the libkrun build through KRUN_INIT_BINARY_PATH. The compiler flags match
-# libkrun's src/init_blob/build.rs.
+# libkrun's src/init_blob/build.rs. libkrun is cloned at the commit pinned in
+# libkrun-source.sh.
 #
 # Usage: build-init.sh GO_MICROVM_CHECKOUT OUT_DIR
 #   GO_MICROVM_CHECKOUT  go-microvm checkout at the revision pinned in go.mod
@@ -19,20 +20,23 @@ set -euo pipefail
 
 src=${1:?go-microvm checkout}
 out=${2:?output directory}
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=scripts/vm-runtime/libkrun-source.sh
+. "$here/libkrun-source.sh"
 case "$(uname -s)/$(uname -m)" in
   Linux/x86_64) arch=amd64 ;;
   Linux/aarch64) arch=arm64 ;;
   *) echo "must run on Linux x86_64 or aarch64" >&2; exit 1 ;;
 esac
 alpine=docker.io/library/alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
-libkrun=$(grep '^LIBKRUN_VERSION=' "$src/versions.env" | cut -d= -f2)
+libkrun=$(libkrun_release "$src")
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 runtime=$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
-git clone --quiet --depth 1 --branch "$libkrun" https://github.com/libkrun/libkrun "$work/libkrun"
+clone_libkrun "$src" "$work/libkrun"
 "$runtime" run --rm \
   -v "$work/libkrun/src/init_blob/init:/src:ro" -v "$out:/out" \
   -e LIBKRUN_VERSION="$libkrun" -e ARCH="$arch" \
