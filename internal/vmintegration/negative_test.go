@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -252,8 +253,20 @@ func checkNegativeEgress(ctx context.Context, t *testing.T, agentSock string) {
 		netip.AddrPortFrom(netip.MustParseAddr("64:ff9b::7f00:1"), port).String(): "",
 		netip.AddrPortFrom(netip.MustParseAddr("2002:7f00:1::1"), port).String():  "",
 	}
+	// The broker checks the gateway and the guest network before host
+	// addresses (internal/netbroker/policy.go), so a host interface that shares
+	// one of them is denied with that reason instead.
+	gateways := []netip.Addr{netip.MustParseAddr("192.168.127.1"), netip.MustParseAddr("fd00:127::1")}
+	guestNets := []netip.Prefix{netip.MustParsePrefix("192.168.127.0/24"), netip.MustParsePrefix("fd00:127::/64")}
 	for _, ip := range hostInterfaceAddrs(t) {
-		tcpWant[netip.AddrPortFrom(ip, port).String()] = "host-address"
+		reason := "host-address"
+		switch {
+		case slices.Contains(gateways, ip):
+			reason = "gateway"
+		case slices.ContainsFunc(guestNets, func(p netip.Prefix) bool { return p.Contains(ip) }):
+			reason = "guest-network"
+		}
+		tcpWant[netip.AddrPortFrom(ip, port).String()] = reason
 	}
 	var tcpTargets []string
 	for dst := range tcpWant {
