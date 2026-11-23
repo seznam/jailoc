@@ -123,7 +123,7 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 		return strategyImage, []string{strategyImage}, nil
 	case strategyDefaultsOverlay:
 		_, _ = color.New(color.FgCyan).Printf("Building overlay on default image %s...\n", strategyImage)
-		chain, err := workspaceLayers(ctx, ws, []string{strategyImage})
+		chain, err := workspaceLayers(ctx, cfg, ws, []string{strategyImage})
 		if err != nil {
 			return "", nil, err
 		}
@@ -144,7 +144,7 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 			return "", nil, fmt.Errorf("resolve base image: %w", err)
 		}
 		logStep("resolve base image", start, "image", base)
-		chain, err := workspaceLayers(ctx, ws, []string{base})
+		chain, err := workspaceLayers(ctx, cfg, ws, []string{base})
 		if err != nil {
 			return "", nil, err
 		}
@@ -165,10 +165,10 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 // workspaceLayers adds the layers jailoc builds for ws on top of the last
 // image of chain: Docker when enable_docker is on, then the agent. It returns
 // chain with the images it built appended.
-func workspaceLayers(ctx context.Context, ws *workspace.Resolved, chain []string) ([]string, error) {
+func workspaceLayers(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, chain []string) ([]string, error) {
 	if ws.EnableDocker {
 		start := time.Now()
-		image, err := docker.BuildDockerImage(ctx, chain[len(chain)-1])
+		image, err := docker.BuildDockerImage(ctx, chain[len(chain)-1], cfg.Base.UbuntuMirror)
 		if err != nil {
 			return nil, fmt.Errorf("add Docker to the workspace image: %w", err)
 		}

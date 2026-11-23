@@ -29,6 +29,12 @@ FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG JAILOC_CLEAN_CACHES
+# UBUNTU_MIRROR replaces the Ubuntu archive hosts in the apt sources, here and
+# in the final image; jailoc sets it from [base] ubuntu_mirror.
+ARG UBUNTU_MIRROR
+RUN if [ -n "$UBUNTU_MIRROR" ]; then \
+    sed -i -E "s#https?://(archive|security|ports)\.ubuntu\.com/ubuntu(-ports)?/?#${UBUNTU_MIRROR%/}/#" \
+    /etc/apt/sources.list.d/ubuntu.sources; fi
 # Runtime packages:
 #   curl, ca-certificates  — HTTPS fetches (uv install, package downloads)
 #   git, openssh-client    — repo operations (clone, push over SSH)

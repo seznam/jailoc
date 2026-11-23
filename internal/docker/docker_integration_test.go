@@ -109,7 +109,7 @@ func TestBuildEmbeddedImage(t *testing.T) {
 	defer func() { _ = cli.Close() }()
 
 	const tag = "jailoc-base:integration-test"
-	if err := buildEmbeddedImage(ctx, cli, tag); err != nil {
+	if err := buildEmbeddedImage(ctx, cli, tag, ""); err != nil {
 		t.Fatalf("buildEmbeddedImage: %v", err)
 	}
 

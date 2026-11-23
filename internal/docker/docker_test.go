@@ -11,6 +11,7 @@ import (
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/embed"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -77,6 +78,37 @@ func TestProxyBuildArgs(t *testing.T) {
 	}
 	if _, exists := proxyBuildArgs()["HTTP_PROXY"]; exists {
 		t.Fatal("unset HTTP_PROXY was forwarded")
+	}
+}
+
+func TestSetUbuntuMirror(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ mirror, want string }{
+		{"", DefaultUbuntuMirror},
+		{"https://mirror.example.com/ubuntu", "https://mirror.example.com/ubuntu"},
+	} {
+		args := map[string]*string{}
+		setUbuntuMirror(args, tt.mirror)
+		if got := args[ubuntuMirrorArg]; got == nil || *got != tt.want {
+			t.Errorf("setUbuntuMirror(%q) = %v, want %q", tt.mirror, got, tt.want)
+		}
+	}
+}
+
+// TestEmbeddedDockerfilesRewriteUbuntuMirror checks that the embedded
+// Dockerfiles consume ubuntuMirrorArg before their first apt-get update.
+func TestEmbeddedDockerfilesRewriteUbuntuMirror(t *testing.T) {
+	t.Parallel()
+
+	for name, content := range map[string][]byte{"Dockerfile": embed.Dockerfile(), "docker.Dockerfile": embed.DockerLayer()} {
+		s := string(content)
+		arg := strings.Index(s, "ARG "+ubuntuMirrorArg+"\n")
+		rewrite := strings.Index(s, "/etc/apt/sources.list.d/ubuntu.sources")
+		update := strings.Index(s, "apt-get update")
+		if arg < 0 || rewrite < arg || update < rewrite {
+			t.Errorf("%s: ARG %s at %d, sources rewrite at %d, apt-get update at %d; want them in this order", name, ubuntuMirrorArg, arg, rewrite, update)
+		}
 	}
 }
 

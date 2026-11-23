@@ -108,6 +108,7 @@ Global base image settings. Controls the base image used when no workspace or de
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to a Dockerfile for the base image. |
+| `ubuntu_mirror` | string | `"http://cz.archive.ubuntu.com/ubuntu"` | HTTP(S) URL of the Ubuntu archive the embedded images install apt packages from. |
 
 `dockerfile` details:
 
@@ -115,11 +116,25 @@ Global base image settings. Controls the base image used when no workspace or de
 - Build failure is fatal.
 - Maximum file size for HTTP sources: 1 MiB.
 
+`ubuntu_mirror` details:
+
+- Passed as the `UBUNTU_MIRROR` build argument to the embedded Dockerfile and the Docker layer (`enable_docker`). It replaces `archive.ubuntu.com`, `security.ubuntu.com` and `ports.ubuntu.com` in `/etc/apt/sources.list.d/ubuntu.sources`.
+- The embedded base image keeps the replaced sources, so `apt-get install` in the workspace VM uses the mirror too.
+- Images from `[base] dockerfile` and `image` keep their own apt sources; workspace Dockerfiles built on the embedded base image inherit the mirror.
+- The mirror must carry the packages of the host architecture (arm64 or amd64) for the `resolute`, `resolute-updates`, `resolute-backports` and `resolute-security` suites.
+- Validation: `http` or `https` scheme, non-empty host, no query, fragment, whitespace, quotes, `&` or `\`.
+- `"http://archive.ubuntu.com/ubuntu"` installs from the main Ubuntu archive, security updates included.
+
 ### Example
 
 ```toml
 [base]
 dockerfile = "https://example.com/Dockerfiles/custom"
+```
+
+```toml
+[base]
+ubuntu_mirror = "http://de.archive.ubuntu.com/ubuntu"
 ```
 
 ---

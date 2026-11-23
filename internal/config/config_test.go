@@ -3282,6 +3282,50 @@ func TestValidateErrorMessages(t *testing.T) {
 	}
 }
 
+func TestValidateUbuntuMirror(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		mirror  string
+		wantErr string
+	}{
+		{name: "unset", mirror: ""},
+		{name: "http archive", mirror: "http://archive.ubuntu.com/ubuntu"},
+		{name: "https mirror with port and trailing slash", mirror: "https://mirror.example.com:8443/ubuntu/"},
+		{name: "no scheme", mirror: "cz.archive.ubuntu.com/ubuntu", wantErr: "must be an http or https URL"},
+		{name: "ftp scheme", mirror: "ftp://mirror.example.com/ubuntu", wantErr: "must be an http or https URL"},
+		{name: "no host", mirror: "http:///ubuntu", wantErr: "must be an http or https URL"},
+		{name: "query", mirror: "http://mirror.example.com/ubuntu?a=b", wantErr: "must not contain"},
+		{name: "fragment", mirror: "http://mirror.example.com/ubuntu#x", wantErr: "must not contain"},
+		{name: "ampersand", mirror: "http://mirror.example.com/a&b", wantErr: "must not contain"},
+		{name: "backslash", mirror: "http://mirror.example.com/a\\b", wantErr: "must not contain"},
+		{name: "quote", mirror: "http://mirror.example.com/a\"b", wantErr: "must not contain"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := Validate(&Config{Base: BaseConfig{UbuntuMirror: tt.mirror}})
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error containing %q", tt.wantErr)
+			}
+			for _, sub := range []string{"ubuntu_mirror", tt.wantErr} {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("error message %q missing expected substring %q", err, sub)
+				}
+			}
+		})
+	}
+}
+
 func TestConfigCPUMemoryParsing(t *testing.T) {
 	t.Parallel()
 
