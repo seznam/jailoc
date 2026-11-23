@@ -46,10 +46,11 @@ func writeCustomConfig(t *testing.T) string {
 	return cfgPath
 }
 
-// driveFormViews steps through every non-hidden group of form by sending Enter
-// on each field and collects all rendered views.
-func driveFormViews(t *testing.T, form *huh.Form) string {
+// driveFormViews steps through every non-hidden step of the form by sending
+// Enter on each field and collects all rendered views.
+func driveFormViews(t *testing.T, steps formSteps) string {
 	t.Helper()
+	form := steps.form()
 	form.WithTheme(compactTheme())
 	if cmd := form.Init(); cmd != nil {
 		flushCmd(form, cmd)
@@ -401,7 +402,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("broad path group is shown for root and rejects declined confirmation", func(t *testing.T) {
+	t.Run("broad path step is shown for root, allows going back and refuses to save when declined", func(t *testing.T) {
 		t.Parallel()
 
 		cfgPath := writeCustomConfig(t)
@@ -420,7 +421,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		ans.dir = "/"
 		ans.confirmBroad = false
 
-		form := buildWorkspaceSetupForm(&ans, opts, cfg, raw)
+		form := buildWorkspaceSetupForm(&ans, opts, cfg, raw).form()
 		form.WithTheme(compactTheme())
 		if cmd := form.Init(); cmd != nil {
 			flushCmd(form, cmd)
@@ -433,12 +434,17 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		view := form.View()
 		assertContains(t, view, "very broad path")
 
-		// Submitting with confirmBroad = false triggers validation error.
-		_, cmd := form.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		// Declining and pressing Shift+Tab goes back to the directory input.
+		_, cmd := form.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 		flushCmd(form, cmd)
-		if len(form.Errors()) == 0 {
-			t.Fatal("expected validation error when declining broad path")
+		if _, ok := form.GetFocusedField().(*huh.Input); !ok {
+			t.Fatalf("expected focus back on the directory input, got %T", form.GetFocusedField())
 		}
+
+		if _, _, err := ans.toOptions(raw); err == nil {
+			t.Fatal("expected an error when sharing a broad path was not confirmed")
+		}
+		assertContains(t, ans.summary(cfgPath, raw), "was not confirmed")
 	})
 
 	t.Run("cancel while waiting for an answer stops without writing", func(t *testing.T) {

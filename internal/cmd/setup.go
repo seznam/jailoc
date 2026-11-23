@@ -182,6 +182,9 @@ func (a firstTimeAnswers) toOptions() (config.FirstTimeOptions, string, error) {
 	if err != nil {
 		return config.FirstTimeOptions{}, "", err
 	}
+	if isBroadPath(wsDir) && !a.confirmBroad {
+		return config.FirstTimeOptions{}, "", fmt.Errorf("%q is a very broad path and sharing it was not confirmed; run setup again and pick a narrower directory", wsDir)
+	}
 	allowInternet := a.networkMode == "internet"
 	var extraHosts []string
 	if !allowInternet {
@@ -239,6 +242,9 @@ func (a firstTimeAnswers) summary(configPath string) string {
 		dir = norm
 	}
 	fmt.Fprintf(&b, "  Workspace:     %s -> %s", a.wsName, dir)
+	if isBroadPath(dir) && !a.confirmBroad {
+		fmt.Fprintf(&b, "\n  WARNING: sharing %q was not confirmed; go back with Shift+Tab and pick a narrower directory, or nothing is written.", dir)
+	}
 	return b.String()
 }
 
@@ -283,6 +289,9 @@ func (a workspaceSetupAnswers) toOptions(raw []byte) (config.WorkspaceOptions, s
 	wsDir, err := normalizeSetupDir(a.dir)
 	if err != nil {
 		return config.WorkspaceOptions{}, "", err
+	}
+	if isBroadPath(wsDir) && !a.confirmBroad {
+		return config.WorkspaceOptions{}, "", fmt.Errorf("%q is a very broad path and sharing it was not confirmed; run setup again and pick a narrower directory", wsDir)
 	}
 	wsAgent := ""
 	if a.agent != "" && a.agent != "inherit" {
@@ -329,6 +338,9 @@ func (a workspaceSetupAnswers) summary(configPath string, raw []byte) string {
 	}
 	fmt.Fprintf(&b, "  Config file:   %s\n", configPath)
 	fmt.Fprintf(&b, "  Workspace:     %s -> %s\n", a.name, dir)
+	if isBroadPath(dir) && !a.confirmBroad {
+		fmt.Fprintf(&b, "  WARNING: sharing %q was not confirmed; go back with Shift+Tab and pick a narrower directory, or nothing is written.\n", dir)
+	}
 	fmt.Fprintf(&b, "  Agent:         %s\n", cmp.Or(a.agent, "inherit"))
 	probe := config.WorkspaceOptions{Name: a.name}
 	if a.agent != "inherit" {
@@ -420,32 +432,33 @@ func runFirstTimeSetup(ctx context.Context, p *promptIO, opts setupOptions) (set
 
 	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(out, "Welcome to jailoc! Let's configure %s.\n\n", opts.configPath)
 
-	form := buildFirstTimeForm(&ans, opts)
-	if err := p.runForm(ctx, form); err != nil {
+	steps := buildFirstTimeForm(&ans, opts)
+	if err := p.runForm(ctx, steps); err != nil {
 		return setupResult{}, err
 	}
 	return applyFirstTimeSetup(ctx, p, opts, ans)
 }
 
-func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) *huh.Form {
+func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) formSteps {
 	opencodeHarness, _ := agent.Lookup("opencode")
 
-	agentGroup := huh.NewGroup(
+	agentStep := formStep{fields: []huh.Field{
 		huh.NewSelect[string]().
 			Title("Default coding agent").
 			Description("jailoc installs this agent in the VM and starts it in each session.\nIts host configuration is copied into the VM read-only.").
 			Options(agentSelectOptions(false)...).
 			Value(&ans.agent),
-	)
+	}}
 
-	providersGroup := huh.NewGroup(
-		providerMultiSelect("Model providers", opencodeHarness, &ans.providers),
-	).WithHideFunc(func() bool {
-		h, ok := agent.Lookup(ans.agent)
-		return !ok || !h.ExplicitEndpoints
-	})
+	providersStep := formStep{
+		fields: []huh.Field{providerMultiSelect("Model providers", opencodeHarness, &ans.providers)},
+		hidden: func() bool {
+			h, ok := agent.Lookup(ans.agent)
+			return !ok || !h.ExplicitEndpoints
+		},
+	}
 
-	forwardingGroup := huh.NewGroup(
+	forwardingStep := formStep{fields: []huh.Field{
 		huh.NewConfirm().
 			Title("Copy host Git configuration into the VM (git_config)?").
 			Description("A read-only copy, so commits in the VM use your name and email.").
@@ -458,9 +471,9 @@ func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) *huh.Form {
 			Title("Forward host GPG agent into the VM (gpg_agent)?").
 			Description("Lets Git in the VM sign commits and tags with your GPG keys.\nKeys stay on the host, but processes in the VM can sign and decrypt with them.").
 			Value(&ans.gpgAgent),
-	)
+	}}
 
-	networkGroup := huh.NewGroup(
+	networkStep := formStep{fields: []huh.Field{
 		huh.NewSelect[string]().
 			Title("Default network egress policy").
 			Description("\"dev-deps\" allows selected development services, \"internet\" all public hosts.\nPrivate networks stay blocked unless you allow them explicitly.").
@@ -469,20 +482,20 @@ func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) *huh.Form {
 				huh.NewOption("internet (all public hosts)", "internet"),
 			).
 			Value(&ans.networkMode),
-	)
+	}}
 
-	extraHostsGroup := huh.NewGroup(
+	extraHostsStep := formStep{fields: []huh.Field{
 		huh.NewInput().
 			Title("Extra allowed hostnames or CIDRs (comma-separated, optional)").
 			Description("Other hosts the agent needs, such as gitlab.corp.example or 10.20.0.0/16.").
 			Placeholder("gitlab.corp.example, 10.20.0.0/16").
 			Validate(validateHostsCSV).
 			Value(&ans.extraHosts),
-	).WithHideFunc(func() bool {
+	}, hidden: func() bool {
 		return ans.networkMode == "internet"
-	})
+	}}
 
-	vmGroup := huh.NewGroup(
+	vmStep := formStep{fields: []huh.Field{
 		huh.NewConfirm().
 			Title("Enable Docker inside the VM by default (enable_docker)?").
 			Description("Containers run in the VM's own Docker; the host Docker socket is not shared.").
@@ -497,9 +510,9 @@ func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) *huh.Form {
 			Description("RAM limit per VM, not memory reserved on the host.\nAllocated as needed; freed pages and unused file cache return to the host.").
 			Validate(config.ValidateMemoryFormat).
 			Value(&ans.memory),
-	)
+	}}
 
-	workspaceGroup := huh.NewGroup(
+	workspaceStep := formStep{fields: []huh.Field{
 		huh.NewInput().
 			Title("Initial workspace name").
 			Description("Used in commands such as \"jailoc up <name>\".").
@@ -510,59 +523,51 @@ func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) *huh.Form {
 			Description("Shared read-write with the VM at the same path.\nThe agent can modify any file in it.").
 			Validate(validateWorkspaceDir).
 			Value(&ans.wsDir),
-	)
+	}}
 
-	broadGroup := huh.NewGroup(
-		huh.NewConfirm().
-			TitleFunc(func() string {
-				dir, err := normalizeSetupDir(ans.wsDir)
-				if err != nil {
-					dir = ans.wsDir
-				}
-				return fmt.Sprintf("WARNING: %q is a very broad path — this will share your entire directory tree with the VM. Are you sure?", dir)
-			}, &ans.wsDir).
-			Description("Choose No and press Shift+Tab to pick a narrower directory.").
-			Validate(func(ok bool) error {
-				if !ok {
-					return errors.New("broad path declined; press Shift+Tab to enter a narrower directory")
-				}
-				return nil
-			}).
-			Value(&ans.confirmBroad),
-	).WithHideFunc(func() bool {
-		dir, err := normalizeSetupDir(ans.wsDir)
-		if err != nil {
-			return true
-		}
-		return !isBroadPath(dir)
-	})
+	broadTitle := func() string { return broadPathTitle(ans.wsDir) }
+	broadConfirm := huh.NewConfirm().
+		TitleFunc(broadTitle, &ans.wsDir).
+		Description("Choose No and press Shift+Tab to pick a narrower directory.").
+		Value(&ans.confirmBroad)
+	broadStep := formStep{
+		fields:  []huh.Field{broadConfirm},
+		hidden:  func() bool { return !isBroadSetupDir(ans.wsDir) },
+		refresh: func() { broadConfirm.Title(broadTitle()) },
+	}
 
-	groups := []*huh.Group{
-		agentGroup,
-		providersGroup,
-		forwardingGroup,
-		networkGroup,
-		extraHostsGroup,
-		vmGroup,
-		workspaceGroup,
-		broadGroup,
+	steps := formSteps{
+		agentStep,
+		providersStep,
+		forwardingStep,
+		networkStep,
+		extraHostsStep,
+		vmStep,
+		workspaceStep,
+		broadStep,
 	}
 
 	if !opts.dryRun {
-		reviewFields := []huh.Field{
-			huh.NewNote().
-				Title("Review configuration").
-				DescriptionFunc(func() string {
-					return ans.summary(opts.configPath)
-				}, ans),
-			huh.NewConfirm().
-				Title(fmt.Sprintf("Write configuration to %s?", opts.configPath)).
-				Value(&ans.save),
-		}
-		groups = append(groups, huh.NewGroup(reviewFields...))
+		summary := func() string { return ans.summary(opts.configPath) }
+		reviewNote := huh.NewNote().
+			Title("Review configuration").
+			DescriptionFunc(summary, []any{
+				&ans.agent, &ans.providers, &ans.gitConfig, &ans.sshAuthSock, &ans.gpgAgent,
+				&ans.networkMode, &ans.extraHosts, &ans.enableDocker, &ans.cpu, &ans.memory,
+				&ans.wsName, &ans.wsDir, &ans.confirmBroad,
+			})
+		steps = append(steps, formStep{
+			fields: []huh.Field{
+				reviewNote,
+				huh.NewConfirm().
+					Title(fmt.Sprintf("Write configuration to %s?", opts.configPath)).
+					Value(&ans.save),
+			},
+			refresh: func() { reviewNote.Description(summary()) },
+		})
 	}
 
-	return huh.NewForm(groups...)
+	return steps
 }
 
 func applyFirstTimeSetup(ctx context.Context, p *promptIO, opts setupOptions, ans firstTimeAnswers) (setupResult, error) {
@@ -604,8 +609,8 @@ func runWorkspaceSetup(ctx context.Context, p *promptIO, opts setupOptions) (set
 
 	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(out, "Existing configuration found at %s. Let's configure a workspace.\n\n", opts.configPath)
 
-	form := buildWorkspaceSetupForm(&ans, opts, cfg, raw)
-	if err := p.runForm(ctx, form); err != nil {
+	steps := buildWorkspaceSetupForm(&ans, opts, cfg, raw)
+	if err := p.runForm(ctx, steps); err != nil {
 		return setupResult{}, err
 	}
 	if existing, exists := cfg.Workspaces[ans.name]; exists && len(existing.Paths) > 0 && !ans.confirmUpdate {
@@ -615,7 +620,7 @@ func runWorkspaceSetup(ctx context.Context, p *promptIO, opts setupOptions) (set
 	return applyWorkspaceSetup(ctx, p, opts, raw, ans)
 }
 
-func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg *config.Config, raw []byte) *huh.Form {
+func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg *config.Config, raw []byte) formSteps {
 	opencodeHarness, _ := agent.Lookup("opencode")
 
 	isExisting := func() bool {
@@ -626,61 +631,46 @@ func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg 
 		return isExisting() && !ans.confirmUpdate
 	}
 
-	nameGroup := huh.NewGroup(
+	nameStep := formStep{fields: []huh.Field{
 		huh.NewInput().
 			Title("Workspace name").
 			Description("Used in commands such as \"jailoc up <name>\".").
 			Validate(config.ValidateWorkspaceName).
 			Value(&ans.name),
-	)
+	}}
 
-	overwriteGroup := huh.NewGroup(
-		huh.NewConfirm().
-			TitleFunc(func() string {
-				return fmt.Sprintf("Workspace %q already exists. Update it?", ans.name)
-			}, &ans.name).
-			Value(&ans.confirmUpdate),
-	).WithHideFunc(func() bool {
-		return !isExisting()
-	})
+	overwriteTitle := func() string {
+		return fmt.Sprintf("Workspace %q already exists. Update it?", ans.name)
+	}
+	overwriteConfirm := huh.NewConfirm().
+		TitleFunc(overwriteTitle, &ans.name).
+		Value(&ans.confirmUpdate)
+	overwriteStep := formStep{
+		fields:  []huh.Field{overwriteConfirm},
+		hidden:  func() bool { return !isExisting() },
+		refresh: func() { overwriteConfirm.Title(overwriteTitle()) },
+	}
 
-	dirGroup := huh.NewGroup(
+	dirStep := formStep{fields: []huh.Field{
 		huh.NewInput().
 			Title("Workspace directory path").
 			Description("Shared read-write with the VM at the same path.\nThe agent can modify any file in it.").
 			Validate(validateWorkspaceDir).
 			Value(&ans.dir),
-	).WithHideFunc(skippedUpdate)
+	}, hidden: skippedUpdate}
 
-	broadGroup := huh.NewGroup(
-		huh.NewConfirm().
-			TitleFunc(func() string {
-				dir, err := normalizeSetupDir(ans.dir)
-				if err != nil {
-					dir = ans.dir
-				}
-				return fmt.Sprintf("WARNING: %q is a very broad path — this will share your entire directory tree with the VM. Are you sure?", dir)
-			}, &ans.dir).
-			Description("Choose No and press Shift+Tab to pick a narrower directory.").
-			Validate(func(ok bool) error {
-				if !ok {
-					return errors.New("broad path declined; press Shift+Tab to enter a narrower directory")
-				}
-				return nil
-			}).
-			Value(&ans.confirmBroad),
-	).WithHideFunc(func() bool {
-		if skippedUpdate() {
-			return true
-		}
-		dir, err := normalizeSetupDir(ans.dir)
-		if err != nil {
-			return true
-		}
-		return !isBroadPath(dir)
-	})
+	broadTitle := func() string { return broadPathTitle(ans.dir) }
+	broadConfirm := huh.NewConfirm().
+		TitleFunc(broadTitle, &ans.dir).
+		Description("Choose No and press Shift+Tab to pick a narrower directory.").
+		Value(&ans.confirmBroad)
+	broadStep := formStep{
+		fields:  []huh.Field{broadConfirm},
+		hidden:  func() bool { return skippedUpdate() || !isBroadSetupDir(ans.dir) },
+		refresh: func() { broadConfirm.Title(broadTitle()) },
+	}
 
-	optionsGroup := huh.NewGroup(
+	optionsStep := formStep{fields: []huh.Field{
 		huh.NewSelect[string]().
 			Title("Workspace coding agent").
 			Description("\"inherit\" uses the [defaults] agent.").
@@ -704,60 +694,69 @@ func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg 
 				huh.NewOption("custom (hosts/CIDRs you list)", "custom"),
 			).
 			Value(&ans.networkMode),
-	).WithHideFunc(skippedUpdate)
+	}, hidden: skippedUpdate}
 
-	extraHostsGroup := huh.NewGroup(
+	extraHostsStep := formStep{fields: []huh.Field{
 		huh.NewInput().
 			Title("Allowed hostnames or CIDRs for this workspace (comma-separated)").
 			Description("Other hosts the agent needs, such as *.corp.example or 10.20.0.0/16.").
 			Placeholder("*.corp.example, 10.20.0.0/16").
 			Validate(validateHostsCSV).
 			Value(&ans.extraHosts),
-	).WithHideFunc(func() bool {
+	}, hidden: func() bool {
 		return skippedUpdate() || ans.networkMode != "custom"
-	})
+	}}
 
-	providersGroup := huh.NewGroup(
-		providerMultiSelect("Model providers", opencodeHarness, &ans.providers),
-	).WithHideFunc(func() bool {
-		if skippedUpdate() {
-			return true
-		}
-		probe := config.WorkspaceOptions{Name: ans.name}
-		if ans.agent != "inherit" {
-			probe.Agent = ans.agent
-		}
-		_, seed, err := config.SeedAgent(raw, probe)
-		return err != nil || !seed
-	})
+	providersStep := formStep{
+		fields: []huh.Field{providerMultiSelect("Model providers", opencodeHarness, &ans.providers)},
+		hidden: func() bool {
+			if skippedUpdate() {
+				return true
+			}
+			probe := config.WorkspaceOptions{Name: ans.name}
+			if ans.agent != "inherit" {
+				probe.Agent = ans.agent
+			}
+			_, seed, err := config.SeedAgent(raw, probe)
+			return err != nil || !seed
+		},
+	}
 
-	groups := []*huh.Group{
-		nameGroup,
-		overwriteGroup,
-		dirGroup,
-		broadGroup,
-		optionsGroup,
-		extraHostsGroup,
-		providersGroup,
+	steps := formSteps{
+		nameStep,
+		overwriteStep,
+		dirStep,
+		broadStep,
+		optionsStep,
+		extraHostsStep,
+		providersStep,
 	}
 
 	if !opts.dryRun {
-		reviewGroup := huh.NewGroup(
-			huh.NewNote().
-				Title("Review workspace").
-				DescriptionFunc(func() string {
-					return ans.summary(opts.configPath, raw)
-				}, ans),
-			huh.NewConfirm().
-				TitleFunc(func() string {
-					return fmt.Sprintf("Save workspace %q to %s?", ans.name, opts.configPath)
-				}, &ans.name).
-				Value(&ans.save),
-		).WithHideFunc(skippedUpdate)
-		groups = append(groups, reviewGroup)
+		summary := func() string { return ans.summary(opts.configPath, raw) }
+		reviewNote := huh.NewNote().
+			Title("Review workspace").
+			DescriptionFunc(summary, []any{
+				&ans.name, &ans.dir, &ans.confirmBroad, &ans.agent, &ans.providers,
+				&ans.docker, &ans.networkMode, &ans.extraHosts,
+			})
+		saveTitle := func() string {
+			return fmt.Sprintf("Save workspace %q to %s?", ans.name, opts.configPath)
+		}
+		saveConfirm := huh.NewConfirm().
+			TitleFunc(saveTitle, &ans.name).
+			Value(&ans.save)
+		steps = append(steps, formStep{
+			fields: []huh.Field{reviewNote, saveConfirm},
+			hidden: skippedUpdate,
+			refresh: func() {
+				reviewNote.Description(summary())
+				saveConfirm.Title(saveTitle())
+			},
+		})
 	}
 
-	return huh.NewForm(groups...)
+	return steps
 }
 
 func applyWorkspaceSetup(ctx context.Context, p *promptIO, opts setupOptions, raw []byte, ans workspaceSetupAnswers) (setupResult, error) {
@@ -883,4 +882,18 @@ func normalizeSetupDir(p string) (string, error) {
 		return "", fmt.Errorf("path %q is not a directory", abs)
 	}
 	return abs, nil
+}
+
+// isBroadSetupDir reports whether dir resolves to a path that shares a whole
+// directory tree (for example / or $HOME) with the VM.
+func isBroadSetupDir(dir string) bool {
+	norm, err := normalizeSetupDir(dir)
+	return err == nil && isBroadPath(norm)
+}
+
+func broadPathTitle(dir string) string {
+	if norm, err := normalizeSetupDir(dir); err == nil {
+		dir = norm
+	}
+	return fmt.Sprintf("WARNING: %q is a very broad path — this will share your entire directory tree with the VM. Are you sure?", dir)
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -25,6 +27,32 @@ type promptIO struct {
 	yes        bool
 	accessible bool
 	runHook    func(*huh.Form) error
+	// lines feeds accessible prompts; created on first accessible prompt.
+	lines *lineReader
+}
+
+// formStep is one page of a prompt form. huh's accessible mode ignores group
+// hide functions and dynamic titles, so runAccessible evaluates hidden after
+// the earlier answers and calls refresh to update text that depends on them.
+type formStep struct {
+	fields  []huh.Field
+	hidden  func() bool
+	refresh func()
+}
+
+type formSteps []formStep
+
+// form builds the huh form for the interactive terminal UI.
+func (s formSteps) form() *huh.Form {
+	groups := make([]*huh.Group, len(s))
+	for i, st := range s {
+		g := huh.NewGroup(st.fields...)
+		if st.hidden != nil {
+			g = g.WithHideFunc(st.hidden)
+		}
+		groups[i] = g
+	}
+	return huh.NewForm(groups...)
 }
 
 func newStdinPromptIO(yes bool) *promptIO {
@@ -73,43 +101,171 @@ func compactTheme() *huh.Theme {
 	return t
 }
 
-// runForm runs a huh form inline (never alt-screen) with compact styling,
-// mapping user abort to context.Canceled.
-func (p *promptIO) runForm(ctx context.Context, form *huh.Form) error {
+// runForm runs the form steps inline (never alt-screen) with compact styling,
+// or as plain line prompts in accessible mode. User abort maps to
+// context.Canceled.
+func (p *promptIO) runForm(ctx context.Context, steps formSteps) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if len(steps) == 0 {
+		return nil
+	}
+	if p != nil && p.accessible {
+		return p.runAccessible(ctx, steps)
+	}
+
 	in := p.reader()
 	out := p.writer()
-	accessible := p != nil && p.accessible || isAccessibleEnv()
-
-	form.WithTheme(compactTheme()).
+	form := steps.form().
+		WithTheme(compactTheme()).
 		WithInput(in).
 		WithOutput(out).
-		WithAccessible(accessible)
-
-	if !accessible {
-		form.WithProgramOptions(
+		WithProgramOptions(
 			tea.WithInput(in),
 			tea.WithOutput(out),
 			tea.WithContext(ctx),
 		)
-	}
 
 	if p != nil && p.runHook != nil {
 		return p.runHook(form)
 	}
 	err := form.RunWithContext(ctx)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	if err == nil {
 		return nil
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
 	}
 	if errors.Is(err, huh.ErrUserAborted) {
 		return context.Canceled
 	}
 	return fmt.Errorf("prompt: %w", err)
+}
+
+// runAccessible asks the visible steps' fields one line prompt at a time. It
+// replaces huh's accessible runner, which asks hidden groups, ignores ctx and
+// accepts every default once input ends.
+func (p *promptIO) runAccessible(ctx context.Context, steps formSteps) error {
+	if p.lines == nil {
+		p.lines = &lineReader{src: p.reader()}
+	}
+	in := p.lines
+	out := p.writer()
+	theme := compactTheme()
+	for _, st := range steps {
+		if st.hidden != nil && st.hidden() {
+			continue
+		}
+		if st.refresh != nil {
+			st.refresh()
+		}
+		for _, f := range st.fields {
+			f.WithTheme(theme)
+			_ = f.Init()  // the returned command only drives the terminal UI
+			_ = f.Focus() // same
+			in.ctx = ctx
+			// huh validates an input's raw line before falling back to the
+			// current value, so an empty line would fail validation instead
+			// of keeping the default.
+			in.emptyLine = ""
+			if input, ok := f.(*huh.Input); ok {
+				if v, ok := input.GetValue().(string); ok {
+					in.emptyLine = v
+				}
+			}
+			if err := f.RunAccessible(out, in); err != nil {
+				return fmt.Errorf("prompt: %w", err)
+			}
+			_, _ = fmt.Fprintln(out)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if in.err != nil {
+				if errors.Is(in.err, io.EOF) {
+					return errors.New("prompt: input ended before all questions were answered")
+				}
+				return fmt.Errorf("prompt: read input: %w", in.err)
+			}
+		}
+	}
+	return nil
+}
+
+// lineReader hands accessible prompts one input line per Read. huh creates a
+// new bufio.Scanner for every prompt, so returning more than a line would let
+// one prompt swallow the answers to the next ones. It records the first read
+// error (EOF included) so a prompt that fell back to its default can be
+// rejected, and stops waiting for input when ctx ends.
+type lineReader struct {
+	src   io.Reader
+	ctx   context.Context
+	once  sync.Once
+	lines chan lineResult
+	buf   []byte
+	err   error
+
+	// emptyLine replaces an empty input line when set.
+	emptyLine string
+}
+
+type lineResult struct {
+	line []byte
+	err  error
+}
+
+func (r *lineReader) Read(b []byte) (int, error) {
+	if len(r.buf) > 0 {
+		n := copy(b, r.buf)
+		r.buf = r.buf[n:]
+		return n, nil
+	}
+	if r.err != nil {
+		return 0, r.err
+	}
+	r.once.Do(r.start)
+	ctx := r.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case res := <-r.lines:
+		if res.err != nil {
+			r.err = res.err
+			return 0, res.err
+		}
+		line := res.line
+		if r.emptyLine != "" && strings.TrimSpace(string(line)) == "" {
+			line = []byte(r.emptyLine + "\n")
+		}
+		n := copy(b, line)
+		r.buf = line[n:]
+		return n, nil
+	}
+}
+
+// start reads src in the background, so a blocked read never outlives ctx
+// for the caller. The goroutine reads at most one line ahead.
+func (r *lineReader) start() {
+	r.lines = make(chan lineResult)
+	go func() {
+		br := bufio.NewReader(r.src)
+		for {
+			line, err := br.ReadBytes('\n')
+			if len(line) > 0 {
+				if line[len(line)-1] != '\n' {
+					line = append(line, '\n')
+				}
+				r.lines <- lineResult{line: line}
+			}
+			if err != nil {
+				r.lines <- lineResult{err: err}
+				return
+			}
+		}
+	}()
 }
 
 // confirm runs a single inline yes/no prompt, or returns def immediately when
@@ -129,8 +285,7 @@ func (p *promptIO) confirm(ctx context.Context, title, description string, def b
 	if description != "" {
 		field.Description(description)
 	}
-	form := huh.NewForm(huh.NewGroup(field))
-	if err := p.runForm(ctx, form); err != nil {
+	if err := p.runForm(ctx, formSteps{{fields: []huh.Field{field}}}); err != nil {
 		return false, err
 	}
 	return ans, nil

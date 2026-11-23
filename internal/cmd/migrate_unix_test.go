@@ -99,7 +99,7 @@ func TestPlanMigration(t *testing.T) {
 	}
 	// Check that form renders mount explanations including rw snapshot hint.
 	form := buildMigrationForm(cfg, &ans, os.Stat)
-	if form == nil {
+	if len(form) == 0 {
 		t.Fatal("expected non-nil migration form")
 	}
 	views := driveFormViews(t, form)
@@ -489,7 +489,7 @@ func TestPlanMigrationAsksInternalZones(t *testing.T) {
 			}
 			form := buildMigrationForm(tt.cfg, &ans, os.Stat)
 			var views string
-			if form != nil {
+			if len(form) > 0 {
 				views = driveFormViews(t, form)
 			}
 			if got := strings.Contains(views, internalZonesPrompt); got != tt.asks {
@@ -803,4 +803,26 @@ func TestAddAgentEndpoints(t *testing.T) {
 			t.Fatalf("changed configured agent_endpoints: network %+v, changes %v", cfg.Defaults.Network, m.changes)
 		}
 	})
+}
+
+func TestPlanMigrationAccessibleSkipsHiddenSteps(t *testing.T) {
+	t.Parallel()
+
+	data := t.TempDir()
+	cfg := &config.Config{Workspaces: map[string]config.Workspace{
+		"api": {Paths: []string{"/src/api"}, AllowedHosts: []string{"example.com"}, Mounts: []string{data + ":/data:rw"}},
+	}}
+	var out bytes.Buffer
+	p := &migratePrompter{
+		promptIO: &promptIO{in: strings.NewReader("n\n0\n\n\n\n"), out: &out, accessible: true},
+		resolver: &fakeResolver{},
+	}
+
+	if _, err := planMigration(context.Background(), cfg, p, os.Stat); err != nil {
+		t.Fatalf("planMigration: %v\noutput:\n%s", err, out.String())
+	}
+	assertContains(t, out.String(), "jailoc v1 (Docker) configuration")
+	if strings.Contains(out.String(), "/data") {
+		t.Fatalf("mount question asked for a non-Docker configuration:\n%s", out.String())
+	}
 }

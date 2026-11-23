@@ -209,29 +209,26 @@ func planMigration(ctx context.Context, cfg *config.Config, p *migratePrompter, 
 		return nil, err
 	}
 	if p == nil || !p.yes {
-		form := buildMigrationForm(cfg, &ans, stat)
-		if form != nil {
-			if err := p.runForm(ctx, form); err != nil {
-				return nil, err
-			}
+		if err := p.runForm(ctx, buildMigrationForm(cfg, &ans, stat)); err != nil {
+			return nil, err
 		}
 	}
 	return applyMigrationAnswers(cfg, ans, stat)
 }
 
-// buildMigrationForm builds the dynamic huh form for migration questions, or
+// buildMigrationForm builds the dynamic form steps for migration questions, or
 // returns nil when no interactive questions are needed.
-func buildMigrationForm(cfg *config.Config, ans *migrationAnswers, stat func(string) (fs.FileInfo, error)) *huh.Form {
+func buildMigrationForm(cfg *config.Config, ans *migrationAnswers, stat func(string) (fs.FileInfo, error)) formSteps {
 	names := slices.Sorted(maps.Keys(cfg.Workspaces))
-	var groups []*huh.Group
+	var groups formSteps
 
 	askV1 := needsV1DockerQuestion(cfg, names)
 	if askV1 {
-		groups = append(groups, huh.NewGroup(
+		groups = append(groups, formStep{fields: []huh.Field{
 			huh.NewConfirm().
 				Title("The configuration names no backend. Is it a jailoc v1 (Docker) configuration whose workspaces should move to the VM backend?").
 				Value(&ans.isV1Docker),
-		))
+		}})
 	}
 
 	isDockerActive := func() bool {
@@ -258,7 +255,7 @@ func buildMigrationForm(cfg *config.Config, ans *migrationAnswers, stat func(str
 	if items := defaultsIncompatibilities(cfg); len(items) > 0 {
 		groups = append(groups, incompatibilityGroup("[defaults]", items, ans))
 	}
-	if g := mountGroup("[defaults]", cfg.Defaults.Mounts, stat, ans, func() bool { return !hasAnyDockerWorkspace() }); g != nil {
+	if g, ok := mountGroup("[defaults]", cfg.Defaults.Mounts, stat, ans, func() bool { return !hasAnyDockerWorkspace() }); ok {
 		groups = append(groups, g)
 	}
 
@@ -268,10 +265,11 @@ func buildMigrationForm(cfg *config.Config, ans *migrationAnswers, stat func(str
 		label := fmt.Sprintf("[workspaces.%s]", wsName)
 		hideWs := func() bool { return !isDockerWorkspace(wsName) }
 		if items := workspaceIncompatibilities(&ws); len(items) > 0 {
-			g := incompatibilityGroup(label, items, ans).WithHideFunc(hideWs)
+			g := incompatibilityGroup(label, items, ans)
+			g.hidden = hideWs
 			groups = append(groups, g)
 		}
-		if g := mountGroup(label, ws.Mounts, stat, ans, hideWs); g != nil {
+		if g, ok := mountGroup(label, ws.Mounts, stat, ans, hideWs); ok {
 			groups = append(groups, g)
 		}
 	}
@@ -287,7 +285,7 @@ func buildMigrationForm(cfg *config.Config, ans *migrationAnswers, stat func(str
 	if len(overridingWorkspaces) > 0 && len(blockedZonesToDeny(defaultZones)) > 0 {
 		desc := fmt.Sprintf("%s has dns_blocked_zones, and workspace(s) %s override dns_blocked_zones.",
 			defaultZonesSrc, strings.Join(overridingWorkspaces, ", "))
-		groups = append(groups, huh.NewGroup(
+		groups = append(groups, formStep{fields: []huh.Field{
 			huh.NewSelect[string]().
 				Title("Where should default dns_blocked_zones move?").
 				Description(desc).
@@ -296,13 +294,13 @@ func buildMigrationForm(cfg *config.Config, ans *migrationAnswers, stat func(str
 					huh.NewOption("defaults (keep in [[defaults.network.rules]] for all workspaces)", "defaults"),
 				).
 				Value(&ans.blockedZonesTarget),
-		))
+		}})
 	}
 
 	if h, ok := needsAgentEndpointsPrompt(cfg); ok {
-		groups = append(groups, huh.NewGroup(
+		groups = append(groups, formStep{fields: []huh.Field{
 			providerMultiSelect("OpenCode and OmO model providers (agent_endpoints)", h, &ans.providers),
-		))
+		}})
 	}
 
 	if needsInternalZonesAfterNetworkMove(cfg) {
@@ -313,23 +311,20 @@ func buildMigrationForm(cfg *config.Config, ans *migrationAnswers, stat func(str
 			"A zone alone grants no access — a matching allow rule is still needed.",
 			"The zones are written to [defaults.network] internal_zones and apply to every workspace.",
 		}, "\n")
-		groups = append(groups, huh.NewGroup(
+		groups = append(groups, formStep{fields: []huh.Field{
 			huh.NewInput().
 				Title("Internal zones (comma or space separated, empty to skip)").
 				Description(desc).
 				Placeholder("corp.example, lab.example").
 				Validate(validateInternalZonesInput).
 				Value(&ans.internalZones),
-		))
+		}})
 	}
 
-	if len(groups) == 0 {
-		return nil
-	}
-	return huh.NewForm(groups...)
+	return groups
 }
 
-func incompatibilityGroup(label string, items []incompatibility, ans *migrationAnswers) *huh.Group {
+func incompatibilityGroup(label string, items []incompatibility, ans *migrationAnswers) formStep {
 	lines := make([]string, len(items))
 	for i, it := range items {
 		lines[i] = fmt.Sprintf("%s: %s", it.setting, it.reason)
@@ -340,16 +335,19 @@ func incompatibilityGroup(label string, items []incompatibility, ans *migrationA
 		val = cur
 	}
 	ans.removeIncompatible[label] = val
-	return huh.NewGroup(
+	return formStep{fields: []huh.Field{
 		huh.NewConfirm().
 			Title(fmt.Sprintf("Remove incompatible settings in %s?", label)).
 			Description(desc).
 			Accessor(&mapBoolAccessor{m: ans.removeIncompatible, k: label}),
-	)
+	}}
 }
 
-func mountGroup(label string, mounts []string, stat func(string) (fs.FileInfo, error), ans *migrationAnswers, hideFunc func() bool) *huh.Group {
+func mountGroup(label string, mounts []string, stat func(string) (fs.FileInfo, error), ans *migrationAnswers, hideFunc func() bool) (formStep, bool) {
 	var fields []huh.Field
+	// The accessible runner only offers a default for pointer-backed selects,
+	// so bind each select to its element of the per-scope choices slice.
+	choices := ans.mountChoices[label]
 	choiceIdx := 0
 	for _, spec := range mounts {
 		mt, err := config.ParseMount(spec)
@@ -384,21 +382,23 @@ func mountGroup(label string, mounts []string, stat func(string) (fs.FileInfo, e
 				huh.NewOption("drop (remove the mount)", "drop"),
 			}
 		}
-		idx := choiceIdx
-		choiceIdx++
+		if choiceIdx >= len(choices) {
+			break
+		}
 		sel := huh.NewSelect[string]().
 			Title(title).
 			Options(opts...).
-			Accessor(&sliceStringAccessor{m: ans.mountChoices, k: label, idx: idx})
+			Value(&choices[choiceIdx])
+		choiceIdx++
 		if desc != "" {
 			sel.Description(desc)
 		}
 		fields = append(fields, sel)
 	}
 	if len(fields) == 0 {
-		return nil
+		return formStep{}, false
 	}
-	return huh.NewGroup(fields...).WithHideFunc(hideFunc)
+	return formStep{fields: fields, hidden: hideFunc}, true
 }
 
 type mapBoolAccessor struct {
@@ -408,27 +408,6 @@ type mapBoolAccessor struct {
 
 func (a *mapBoolAccessor) Get() bool  { return a.m[a.k] }
 func (a *mapBoolAccessor) Set(v bool) { a.m[a.k] = v }
-
-type sliceStringAccessor struct {
-	m   map[string][]string
-	k   string
-	idx int
-}
-
-func (a *sliceStringAccessor) Get() string {
-	s := a.m[a.k]
-	if a.idx < len(s) {
-		return s[a.idx]
-	}
-	return ""
-}
-
-func (a *sliceStringAccessor) Set(v string) {
-	s := a.m[a.k]
-	if a.idx < len(s) {
-		s[a.idx] = v
-	}
-}
 
 // applyMigrationAnswers rewrites cfg in place from ans, without prompting.
 func applyMigrationAnswers(cfg *config.Config, ans migrationAnswers, stat func(string) (fs.FileInfo, error)) (*migration, error) {

@@ -90,7 +90,7 @@ func TestZZTUIShots(t *testing.T) {
 	ans.agent = "opencode"
 	ans.wsName = "shop"
 	ans.wsDir = "~/shop"
-	views := frames(buildFirstTimeForm(&ans, opts))
+	views := frames(buildFirstTimeForm(&ans, opts).form())
 	welcome := color.New(color.FgCyan, color.Bold).Sprintf("Welcome to jailoc! Let's configure %s.", opts.configPath) + "\n\n"
 	write("setup-agent", "jailoc setup", welcome, views[0])
 	write("setup-review", "jailoc setup", welcome, views[len(views)-1])
@@ -107,7 +107,7 @@ func TestZZTUIShots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range frames(buildMigrationForm(cfg, &mans, os.Stat)) {
+	for _, v := range frames(buildMigrationForm(cfg, &mans, os.Stat).form()) {
 		if strings.Contains(v, "This path is a file") {
 			write("migrate-mounts", "jailoc migrate", "", v)
 			return
