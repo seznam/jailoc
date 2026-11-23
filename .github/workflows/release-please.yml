@@ -157,8 +157,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           prerelease=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
 
   homebrew-tap:
