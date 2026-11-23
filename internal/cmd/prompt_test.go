@@ -46,6 +46,8 @@ func TestAccessibleFirstTimeSetup(t *testing.T) {
 			t.Fatalf("provider question asked for Claude:\n%s", out.String())
 		}
 		assertContains(t, out.String(), "Review configuration")
+		// huh prints only titles in accessible mode; descriptions come from runAccessible.
+		assertContains(t, out.String(), "Keys stay on the host, but processes in the VM can use them.")
 		cfg, err := config.LoadFrom(cfgPath)
 		if err != nil {
 			t.Fatalf("load config: %v", err)
@@ -128,9 +130,43 @@ func TestSetupReviewFollowsEdits(t *testing.T) {
 	}
 	assertContains(t, form.View(), "2 CPUs")
 
-	// An answer changed on an earlier step must show up in the summary.
+	// An answer changed on an earlier step must show up in the summary, and
+	// note markup characters must show literally.
 	ans.cpu = "8"
+	ans.extraHosts = "*.corp.example, my_host.example"
 	_, cmd = form.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	flushCmd(form, cmd)
 	assertContains(t, form.View(), "8 CPUs")
+	assertContains(t, form.View(), "dev-deps + *.corp.example, my_host.example")
+}
+
+func TestAccessiblePromptLeavesRestOfInput(t *testing.T) {
+	t.Parallel()
+
+	in := strings.NewReader("y\nnext line\n")
+	var out bytes.Buffer
+	p := &promptIO{in: in, out: &out, accessible: true}
+
+	ok, err := p.confirm(context.Background(), "Start workspace now?", "Starts it in the background.", false)
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if !ok {
+		t.Fatal("confirm = false, want true")
+	}
+	assertContains(t, out.String(), "Starts it in the background.")
+	// Nothing past the answer is read, so a following agent session gets it.
+	if rest := in.Len(); rest != len("next line\n") {
+		t.Fatalf("unread input = %d bytes, want %d", rest, len("next line\n"))
+	}
+}
+
+func TestEscapeNoteMarkup(t *testing.T) {
+	t.Parallel()
+
+	got := escapeNoteMarkup(`/src/my_repo *.corp.example ` + "`x`" + ` a\b`)
+	want := `/src/my\_repo \*.corp.example \` + "`x\\`" + ` a\\b`
+	if got != want {
+		t.Fatalf("escapeNoteMarkup = %q, want %q", got, want)
+	}
 }

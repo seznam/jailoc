@@ -551,7 +551,7 @@ func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) formSteps {
 		summary := func() string { return ans.summary(opts.configPath) }
 		reviewNote := huh.NewNote().
 			Title("Review configuration").
-			DescriptionFunc(summary, []any{
+			DescriptionFunc(func() string { return escapeNoteMarkup(summary()) }, []any{
 				&ans.agent, &ans.providers, &ans.gitConfig, &ans.sshAuthSock, &ans.gpgAgent,
 				&ans.networkMode, &ans.extraHosts, &ans.enableDocker, &ans.cpu, &ans.memory,
 				&ans.wsName, &ans.wsDir, &ans.confirmBroad,
@@ -736,7 +736,7 @@ func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg 
 		summary := func() string { return ans.summary(opts.configPath, raw) }
 		reviewNote := huh.NewNote().
 			Title("Review workspace").
-			DescriptionFunc(summary, []any{
+			DescriptionFunc(func() string { return escapeNoteMarkup(summary()) }, []any{
 				&ans.name, &ans.dir, &ans.confirmBroad, &ans.agent, &ans.providers,
 				&ans.docker, &ans.networkMode, &ans.extraHosts,
 			})

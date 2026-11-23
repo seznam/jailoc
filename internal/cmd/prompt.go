@@ -1,16 +1,15 @@
 package cmd
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
-	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -174,6 +173,11 @@ func (p *promptIO) runAccessible(ctx context.Context, steps formSteps) error {
 					in.emptyLine = v
 				}
 			}
+			if _, isNote := f.(*huh.Note); !isNote {
+				if desc := fieldDescription(f); desc != "" {
+					_, _ = fmt.Fprintln(out, desc)
+				}
+			}
 			if err := f.RunAccessible(out, in); err != nil {
 				return fmt.Errorf("prompt: %w", err)
 			}
@@ -197,13 +201,18 @@ func (p *promptIO) runAccessible(ctx context.Context, steps formSteps) error {
 // one prompt swallow the answers to the next ones. It records the first read
 // error (EOF included) so a prompt that fell back to its default can be
 // rejected, and stops waiting for input when ctx ends.
+//
+// It reads src only when a prompt asks for a line, one byte at a time, so no
+// read is left pending and no input is buffered once the last answer is in:
+// whatever runs next (such as an agent session) gets the rest of stdin.
 type lineReader struct {
-	src   io.Reader
-	ctx   context.Context
-	once  sync.Once
-	lines chan lineResult
-	buf   []byte
-	err   error
+	src     io.Reader
+	ctx     context.Context
+	pending chan lineResult
+	buf     []byte
+	err     error
+	// srcErr is the error that ended the last line; reported on the next Read.
+	srcErr error
 
 	// emptyLine replaces an empty input line when set.
 	emptyLine string
@@ -223,7 +232,16 @@ func (r *lineReader) Read(b []byte) (int, error) {
 	if r.err != nil {
 		return 0, r.err
 	}
-	r.once.Do(r.start)
+	if r.srcErr != nil {
+		r.err = r.srcErr
+		return 0, r.err
+	}
+	// A read started before ctx ended is still pending; its line answers
+	// the next prompt instead of starting another read.
+	if r.pending == nil {
+		r.pending = make(chan lineResult, 1)
+		go func(src io.Reader, ch chan<- lineResult) { ch <- readLine(src) }(r.src, r.pending)
+	}
 	ctx := r.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -231,11 +249,13 @@ func (r *lineReader) Read(b []byte) (int, error) {
 	select {
 	case <-ctx.Done():
 		return 0, ctx.Err()
-	case res := <-r.lines:
-		if res.err != nil {
+	case res := <-r.pending:
+		r.pending = nil
+		if len(res.line) == 0 {
 			r.err = res.err
-			return 0, res.err
+			return 0, r.err
 		}
+		r.srcErr = res.err
 		line := res.line
 		if r.emptyLine != "" && strings.TrimSpace(string(line)) == "" {
 			line = []byte(r.emptyLine + "\n")
@@ -246,26 +266,62 @@ func (r *lineReader) Read(b []byte) (int, error) {
 	}
 }
 
-// start reads src in the background, so a blocked read never outlives ctx
-// for the caller. The goroutine reads at most one line ahead.
-func (r *lineReader) start() {
-	r.lines = make(chan lineResult)
-	go func() {
-		br := bufio.NewReader(r.src)
-		for {
-			line, err := br.ReadBytes('\n')
-			if len(line) > 0 {
-				if line[len(line)-1] != '\n' {
-					line = append(line, '\n')
-				}
-				r.lines <- lineResult{line: line}
-			}
-			if err != nil {
-				r.lines <- lineResult{err: err}
-				return
+// readLine reads src up to and including the next newline, one byte at a
+// time so nothing past the line is consumed. An unterminated last line gets a
+// newline; the error that ended it is returned with it.
+func readLine(src io.Reader) lineResult {
+	var line []byte
+	var c [1]byte
+	for {
+		n, err := src.Read(c[:])
+		if n > 0 {
+			line = append(line, c[0])
+			if c[0] == '\n' {
+				return lineResult{line: line}
 			}
 		}
-	}()
+		if err != nil {
+			if len(line) > 0 {
+				line = append(line, '\n')
+			}
+			return lineResult{line: line, err: err}
+		}
+	}
+}
+
+// fieldDescription returns the static description of a huh field. huh's
+// accessible prompts print only the title, so runAccessible prints the
+// description itself. huh has no getter for it; read the description.val
+// field shared by its field types (pinned huh version, covered by tests).
+func fieldDescription(f huh.Field) string {
+	v := reflect.ValueOf(f)
+	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
+		return ""
+	}
+	d := v.Elem().FieldByName("description")
+	if d.Kind() != reflect.Struct {
+		return ""
+	}
+	val := d.FieldByName("val")
+	if val.Kind() != reflect.String {
+		return ""
+	}
+	return val.String()
+}
+
+// escapeNoteMarkup escapes the characters huh's note renderer treats as
+// markup (_italic_, *bold*, `code`, \ escape), so paths and host patterns
+// in a note description show literally in the terminal UI.
+func escapeNoteMarkup(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\', '_', '*', '`':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // confirm runs a single inline yes/no prompt, or returns def immediately when
