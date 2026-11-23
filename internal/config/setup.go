@@ -68,6 +68,7 @@ func ValidateMemoryFormat(mem string) error {
 
 type FirstTimeOptions struct {
 	Agent         string
+	Providers     []string // model providers of a multi-provider agent; nil: all
 	GitConfig     bool
 	SSHAuthSock   bool
 	GPGAgent      bool
@@ -84,6 +85,7 @@ type WorkspaceOptions struct {
 	Name          string
 	Paths         []string
 	Agent         string
+	Providers     []string // model providers of a multi-provider agent; nil: all
 	EnableDocker  *bool
 	AllowInternet bool
 	ExtraHosts    []string
@@ -249,11 +251,11 @@ func applyDefaultRules(head []string, opts FirstTimeOptions) ([]string, error) {
 	}
 }
 
-// agentEndpoints returns the endpoints of the agent called name, or of
-// agent.Default when name is empty, that belong in network.agent_endpoints.
-// It returns nil for agents with a fixed provider, whose endpoints are
-// allowed without the list.
-func agentEndpoints(name string) ([]string, error) {
+// agentEndpoints returns the endpoints of the providers of the agent called
+// name, or of agent.Default when name is empty, that belong in
+// network.agent_endpoints; nil providers select all. It returns nil for
+// agents with a fixed provider, whose endpoints are allowed without the list.
+func agentEndpoints(name string, providers []string) ([]string, error) {
 	h, ok := agent.Lookup(cmp.Or(name, agent.Default))
 	if !ok {
 		return nil, fmt.Errorf("unknown agent %q", name)
@@ -261,14 +263,15 @@ func agentEndpoints(name string) ([]string, error) {
 	if !h.ExplicitEndpoints {
 		return nil, nil
 	}
-	return h.Endpoints, nil
+	return h.ProviderEndpoints(providers)
 }
 
 // applyAgentEndpoints replaces the template's agent_endpoints list in
-// [defaults.network] with the endpoints of the agent called name. The list
-// is kept for agents with a fixed provider.
-func applyAgentEndpoints(head []string, name string) ([]string, error) {
-	endpoints, err := agentEndpoints(name)
+// [defaults.network] with the endpoints of the providers of the agent called
+// name (nil providers: all). The list is kept for agents with a fixed
+// provider.
+func applyAgentEndpoints(head []string, name string, providers []string) ([]string, error) {
+	endpoints, err := agentEndpoints(name, providers)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +303,7 @@ func RenderFirstTime(opts FirstTimeOptions) ([]byte, error) {
 			return nil, fmt.Errorf("set defaults.%s: %w", o.key, err)
 		}
 	}
-	head, err := applyAgentEndpoints(head, opts.Agent)
+	head, err := applyAgentEndpoints(head, opts.Agent, opts.Providers)
 	if err != nil {
 		return nil, fmt.Errorf("set defaults.network.agent_endpoints: %w", err)
 	}
@@ -538,27 +541,49 @@ func updateWorkspace(doc *edit.Document, opts WorkspaceOptions, seed []string) (
 	return doc.Bytes(), nil
 }
 
-// seedEndpoints returns the effective agent of workspace opts.Name, including
-// an agent inherited from [defaults], and the built-in endpoints to write into
-// the workspace's network.agent_endpoints. The endpoints are nil unless the
-// agent is a multi-provider agent and neither the workspace nor
-// [defaults.network] sets a list, so a configured list, including [], is never
-// replaced or removed.
-func seedEndpoints(raw []byte, opts WorkspaceOptions) (string, []string, error) {
+// seedHarness returns the effective agent of workspace opts.Name, including
+// an agent inherited from [defaults], whose endpoints RenderWorkspace writes
+// into the workspace's network.agent_endpoints. ok is false unless the agent
+// is a multi-provider agent and neither the workspace nor [defaults.network]
+// sets a list, so a configured list, including [], is never replaced or
+// removed.
+func seedHarness(raw []byte, opts WorkspaceOptions) (string, agent.Harness, bool, error) {
 	var cfg Config
 	if _, err := toml.NewDecoder(bytes.NewReader(raw)).Decode(&cfg); err != nil {
-		return "", nil, fmt.Errorf("decode config: %w", err)
+		return "", agent.Harness{}, false, fmt.Errorf("decode config: %w", err)
 	}
 	ws := cfg.Workspaces[opts.Name]
 	if ws.Network.Get().AgentEndpoints != nil || cfg.Defaults.Network.Get().AgentEndpoints != nil {
-		return "", nil, nil
+		return "", agent.Harness{}, false, nil
 	}
 	ws.Agent = opts.Agent
 	h, ok := workspaceHarness(&cfg, ws)
 	if !ok || !h.ExplicitEndpoints {
-		return "", nil, nil
+		return "", agent.Harness{}, false, nil
 	}
-	return cmp.Or(opts.Agent, cfg.Defaults.Agent, agent.Default), h.Endpoints, nil
+	return cmp.Or(opts.Agent, cfg.Defaults.Agent, agent.Default), h, true, nil
+}
+
+// SeedAgent returns the multi-provider agent whose endpoints RenderWorkspace
+// writes into workspace opts.Name, so the wizard can ask which of its
+// providers to allow. ok is false when RenderWorkspace writes no list.
+func SeedAgent(raw []byte, opts WorkspaceOptions) (agent.Harness, bool, error) {
+	_, h, ok, err := seedHarness(raw, opts)
+	return h, ok, err
+}
+
+// seedEndpoints returns the agent name and the endpoints of the providers in
+// opts.Providers that RenderWorkspace writes into the workspace, or nil.
+func seedEndpoints(raw []byte, opts WorkspaceOptions) (string, []string, error) {
+	name, h, ok, err := seedHarness(raw, opts)
+	if err != nil || !ok {
+		return "", nil, err
+	}
+	endpoints, err := h.ProviderEndpoints(opts.Providers)
+	if err != nil {
+		return "", nil, fmt.Errorf("agent %q: %w", name, err)
+	}
+	return name, endpoints, nil
 }
 
 func RenderWorkspace(raw []byte, opts WorkspaceOptions) ([]byte, error) {

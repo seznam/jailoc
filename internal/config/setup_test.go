@@ -629,12 +629,15 @@ func TestRenderWorkspaceAgentEndpoints(t *testing.T) {
 		t.Fatal("omo harness not found")
 	}
 	for _, tt := range []struct {
-		name    string
-		raw     string
-		inherit bool
-		want    []string
+		name      string
+		raw       string
+		inherit   bool
+		providers []string
+		want      []string
 	}{
 		{name: "new workspace seeds built-in list", raw: "", want: opencode.Endpoints},
+		{name: "new workspace seeds selected providers", raw: "", providers: []string{"anthropic"}, want: []string{"api.anthropic.com", "models.dev"}},
+		{name: "existing workspace seeds selected providers", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n", providers: []string{"google"}, want: []string{"generativelanguage.googleapis.com", "oauth2.googleapis.com", "models.dev"}},
 		{name: "new workspace seeds inherited agent", raw: "[defaults]\nagent = \"omo\"\n", inherit: true, want: omo.Endpoints},
 		{name: "new workspace seeds default agent", raw: "", inherit: true, want: opencode.Endpoints},
 		{name: "new workspace inherits single-provider agent", raw: "[defaults]\nagent = \"claude\"\n", inherit: true},
@@ -648,7 +651,7 @@ func TestRenderWorkspaceAgentEndpoints(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			opts := WorkspaceOptions{Name: "szn", Paths: []string{"/data/szn"}, Agent: "opencode"}
+			opts := WorkspaceOptions{Name: "szn", Paths: []string{"/data/szn"}, Agent: "opencode", Providers: tt.providers}
 			if tt.inherit {
 				opts.Agent = ""
 			}
@@ -669,5 +672,29 @@ func TestRenderWorkspaceAgentEndpoints(t *testing.T) {
 				t.Errorf("workspace agent_endpoints = %#v, want %#v\n%s", got, tt.want, out)
 			}
 		})
+	}
+}
+
+func TestRenderFirstTimeProviders(t *testing.T) {
+	t.Parallel()
+	out, err := RenderFirstTime(FirstTimeOptions{Agent: "opencode", Providers: []string{"anthropic", "openrouter"}, WorkspaceName: "default"})
+	if err != nil {
+		t.Fatalf("RenderFirstTime failed: %v", err)
+	}
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := WriteBytes(cfgPath, out); err != nil {
+		t.Fatalf("WriteBytes: %v", err)
+	}
+	cfg, err := LoadFrom(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v\n%s", err, out)
+	}
+	want := []string{"api.anthropic.com", "openrouter.ai", "models.dev"}
+	if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, want) {
+		t.Errorf("defaults agent_endpoints = %v, want %v", got, want)
+	}
+
+	if _, err := RenderFirstTime(FirstTimeOptions{Agent: "opencode", Providers: []string{"mistral"}, WorkspaceName: "default"}); err == nil {
+		t.Error("RenderFirstTime with an unknown provider: want error")
 	}
 }

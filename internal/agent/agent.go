@@ -4,9 +4,11 @@
 package agent
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Default is the harness of a workspace that does not set agent.
@@ -196,9 +198,11 @@ type Harness struct {
 	Endpoints []string
 	// ExplicitEndpoints marks a multi-provider agent: its Endpoints are not
 	// allowed by default, the user lists the providers they use in
-	// network.agent_endpoints (the config template and migrate start from
-	// Endpoints).
+	// network.agent_endpoints (setup and migrate offer Providers).
 	ExplicitEndpoints bool
+	// Providers groups the model provider endpoints of a multi-provider
+	// agent; Endpoints not in any provider are needed with every provider.
+	Providers []Provider
 	// Diagnose is the guest command (without the binary) that prints
 	// unbuffered startup and configuration errors when the agent exits
 	// before drawing or after a server error.
@@ -230,22 +234,93 @@ const (
 	openCodePrintLogsFlag   = "--print-logs"
 )
 
-// llmEndpoints are the model and auth endpoints shared by multi-provider
-// coding agents (OpenCode and OmO).
-var llmEndpoints = []string{
-	"api.anthropic.com",
-	"api.openai.com",
-	"auth.openai.com",
-	"chatgpt.com",
-	"generativelanguage.googleapis.com",
-	"oauth2.googleapis.com",
-	"api.githubcopilot.com",
-	"*.githubcopilot.com",
-	"openrouter.ai",
-	"opencode.ai",
-	"*.opencode.ai",
-	"models.dev",
+// Provider is a model provider and the endpoints the agent reaches it at.
+type Provider struct {
+	Name      string
+	Endpoints []string
 }
+
+// llmProviders are the model providers of multi-provider coding agents
+// (OpenCode and OmO), named after their OpenCode provider IDs.
+var llmProviders = []Provider{
+	{Name: "anthropic", Endpoints: []string{"api.anthropic.com"}},
+	{Name: "openai", Endpoints: []string{"api.openai.com", "auth.openai.com", "chatgpt.com"}},
+	{Name: "google", Endpoints: []string{"generativelanguage.googleapis.com", "oauth2.googleapis.com"}},
+	{Name: "github-copilot", Endpoints: []string{"api.githubcopilot.com", "*.githubcopilot.com"}},
+	{Name: "openrouter", Endpoints: []string{"openrouter.ai"}},
+	{Name: "opencode", Endpoints: []string{"opencode.ai", "*.opencode.ai"}},
+}
+
+// llmEndpoints are the model and auth endpoints of llmProviders plus the
+// models.dev model catalog that OpenCode loads with every provider.
+var llmEndpoints = append(providerEndpoints(llmProviders), "models.dev")
+
+func providerEndpoints(providers []Provider) []string {
+	var out []string
+	for _, p := range providers {
+		out = append(out, p.Endpoints...)
+	}
+	return out
+}
+
+// ProviderNames returns the names of the agent's providers.
+func (h Harness) ProviderNames() []string {
+	names := make([]string, len(h.Providers))
+	for i, p := range h.Providers {
+		names[i] = p.Name
+	}
+	return names
+}
+
+// ProviderEndpoints returns the agent's Endpoints for the providers called
+// names, plus the endpoints shared by all providers, in Endpoints order.
+// Nil names select every provider.
+func (h Harness) ProviderEndpoints(names []string) ([]string, error) {
+	if names == nil {
+		return slices.Clone(h.Endpoints), nil
+	}
+	skip := map[string]bool{}
+	for _, p := range h.Providers {
+		if !slices.Contains(names, p.Name) {
+			for _, e := range p.Endpoints {
+				skip[e] = true
+			}
+		}
+	}
+	for _, n := range names {
+		if !slices.Contains(h.ProviderNames(), n) {
+			return nil, fmt.Errorf("unknown provider %q (choose from %s)", n, strings.Join(h.ProviderNames(), ", "))
+		}
+	}
+	out := []string{}
+	for _, e := range h.Endpoints {
+		if !skip[e] {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// ParseProviders splits a comma or space separated provider answer and
+// checks the names against h. An empty answer selects every provider (nil).
+func (h Harness) ParseProviders(answer string) ([]string, error) {
+	fields := strings.FieldsFunc(answer, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.ToLower(f)
+		if !slices.Contains(h.ProviderNames(), f) {
+			return nil, fmt.Errorf("unknown provider %q (choose from %s)", f, strings.Join(h.ProviderNames(), ", "))
+		}
+		if !slices.Contains(names, f) {
+			names = append(names, f)
+		}
+	}
+	return names, nil
+}
+
 var harnesses = []Harness{
 	{
 		Name:     "opencode1",
@@ -271,6 +346,7 @@ var harnesses = []Harness{
 		Installs:          openCode1Installs,
 		Endpoints:         llmEndpoints,
 		ExplicitEndpoints: true,
+		Providers:         llmProviders,
 		Diagnose:          []string{openCodePrintLogsFlag},
 	},
 	{
@@ -299,6 +375,7 @@ var harnesses = []Harness{
 		ConfigGitignore:   openCodeConfigGitignore,
 		Endpoints:         llmEndpoints,
 		ExplicitEndpoints: true,
+		Providers:         llmProviders,
 		Diagnose:          []string{openCodePrintLogsFlag},
 	},
 	{
@@ -372,6 +449,7 @@ var harnesses = []Harness{
 		TUIPlugin:         OmOExtension,
 		Endpoints:         llmEndpoints,
 		ExplicitEndpoints: true,
+		Providers:         llmProviders,
 	},
 	{
 		Name:    "agy",

@@ -207,3 +207,50 @@ func TestCommandDefaultArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderEndpoints(t *testing.T) {
+	t.Parallel()
+
+	h, ok := Lookup("opencode")
+	if !ok {
+		t.Fatal("opencode harness not found")
+	}
+	tests := []struct {
+		name    string
+		answer  string
+		want    []string
+		wantErr string
+	}{
+		{name: "empty selects all", answer: "", want: h.Endpoints},
+		{name: "one provider keeps shared endpoints", answer: "anthropic", want: []string{"api.anthropic.com", "models.dev"}},
+		{name: "several providers in endpoint order", answer: "OpenAI, anthropic anthropic", want: []string{"api.anthropic.com", "api.openai.com", "auth.openai.com", "chatgpt.com", "models.dev"}},
+		{name: "unknown provider", answer: "anthropic,mistral", wantErr: `unknown provider "mistral"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			names, err := h.ParseProviders(tc.answer)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("ParseProviders(%q) error = %v, want %q", tc.answer, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseProviders(%q): %v", tc.answer, err)
+			}
+			got, err := h.ProviderEndpoints(names)
+			if err != nil {
+				t.Fatalf("ProviderEndpoints(%v): %v", names, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("ProviderEndpoints(%v) = %v, want %v", names, got, tc.want)
+			}
+		})
+	}
+
+	if _, err := h.ProviderEndpoints([]string{"mistral"}); err == nil {
+		t.Error("ProviderEndpoints with an unknown provider: want error")
+	}
+}

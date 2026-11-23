@@ -478,7 +478,7 @@ jailoc migrate [flags]
 | `--dry-run` | | Print the planned changes and the resulting `config.toml` without changing anything. |
 | `--yes` | `-y` | Accept the default answer to every question. Required when standard input is not a terminal. |
 
-When no scope sets `network.agent_endpoints`, `jailoc migrate` adds the OpenCode and OmO model and auth endpoints to `[defaults.network]` (when the default agent is one of them) and to each OpenCode or OmO workspace that needs other endpoints; see [`rule=agent`](configuration.md#ruleagent).
+When no scope sets `network.agent_endpoints`, `jailoc migrate` asks which model providers OpenCode and OmO may reach (comma-separated, empty for all; `--yes` takes all) and adds their endpoints to `[defaults.network]` (when the default agent is one of them) and to each OpenCode or OmO workspace that needs other endpoints; see [`rule=agent`](configuration.md#ruleagent).
 
 `jailoc migrate` asks for optional `internal_zones` (comma- or whitespace-separated DNS zones) when no non-empty `internal_zones` exists in `[defaults]` or any workspace and explicit `allow` rules include hostnames, including wildcard hostnames. The answer is stored in `defaults.network.internal_zones` and applies to every workspace. A blank answer leaves the zones unset; `--yes` skips the question. `--dry-run` asks the question and previews the result without writing it. Names in a zone and its subdomains may resolve to private addresses, but a zone alone grants no access; see [Internal zones](configuration.md#internal-zones).
 
