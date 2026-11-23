@@ -371,3 +371,40 @@ func TestConfigRejectsInvalidTmpSettings(t *testing.T) {
 		t.Fatalf("runConfig error = %v, want the 16 MiB minimum", err)
 	}
 }
+
+func TestConfigDisplaysAdminPolicyAndReportsViolations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".config", "jailoc")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[workspaces.default]\npaths = []\nenable_docker = true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	policyPath := filepath.Join(t.TempDir(), "policy.toml")
+	if err := os.WriteFile(policyPath, []byte("[workspace]\nforbid_docker = true\n"), 0o600); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	restorePolicy := config.SetPolicyPathsForTest([]string{policyPath}, true)
+	t.Cleanup(restorePolicy)
+	t.Cleanup(func() { allFlag, workspaceFlag, workspaceExplicit = false, "default", false })
+	allFlag = false
+	workspaceFlag, workspaceExplicit = "default", false
+
+	var runErr error
+	out := captureStdout(t, func() {
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		runErr = runConfig(cmd, []string{"default"})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "enable_docker is forbidden") {
+		t.Fatalf("runConfig error = %v, want enable_docker policy violation", runErr)
+	}
+	for _, want := range []string{"Admin Policy: " + policyPath, "workspace.forbid_docker = true", "Policy Violations:", "enable_docker is forbidden"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}

@@ -22,13 +22,17 @@ var configCmd = &cobra.Command{
 }
 
 func runConfig(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load()
+	cfg, err := config.LoadUnchecked()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	printConfigWarnings(cfg)
+	if cfg.Policy != nil {
+		printAdminPolicy(cfg.Policy)
+		_, _ = fmt.Fprintln(os.Stdout)
+	}
 
-	wss, err := targetWorkspaces(cfg, args)
+	wss, err := targetWorkspacesUnchecked(cfg, args)
 	if err != nil {
 		return err
 	}
@@ -39,8 +43,35 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		}
 		first = false
 		printWorkspaceConfig(cfg, ws)
+		if cfg.Policy != nil {
+			if violations := workspace.CheckPolicy(cfg, ws, cfg.Policy); len(violations) > 0 {
+				printPolicyViolations(violations)
+				return fmt.Errorf("admin policy (%s) violation: %s", cfg.Policy.Path, strings.Join(violations, "; "))
+			}
+		}
 		return nil
 	})
+}
+
+func printAdminPolicy(p *config.Policy) {
+	cyanBold := color.New(color.FgCyan, color.Bold)
+	_, _ = cyanBold.Fprintf(os.Stdout, "Admin Policy: %s\n", p.Path)
+	lines := p.SummaryLines()
+	if len(lines) == 0 {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "  (no constraints)\n")
+		return
+	}
+	for _, line := range lines {
+		_, _ = fmt.Fprintf(os.Stdout, "  - %s\n", line)
+	}
+}
+
+func printPolicyViolations(violations []string) {
+	red := color.New(color.FgRed, color.Bold)
+	_, _ = red.Fprintf(os.Stdout, "  Policy Violations:\n")
+	for _, v := range violations {
+		_, _ = color.New(color.FgRed).Fprintf(os.Stdout, "    - %s\n", v)
+	}
 }
 
 func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {

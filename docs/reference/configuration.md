@@ -17,6 +17,7 @@ Every `config.toml` field with its type, default, validation rule and merge beha
 - All fields are optional unless noted.
 - jailoc ignores settings it does not know and prints a warning naming each of them. For a config-load error naming a rejected setting, see [Upgrade an existing installation](../how-to/migrate-from-v1.md#recognize-a-v1-configuration).
 - When jailoc prints deprecation notices, it recommends `jailoc migrate` after the notices to update deprecated settings in `config.toml`.
+- An administrator can pin non-overridable constraints in a root-owned `policy.toml` file; see [Admin Policy Reference](admin-policy.md).
 
 ---
 

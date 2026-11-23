@@ -737,6 +737,9 @@ func buildVMPolicy(ctx context.Context, ws *workspace.Resolved, builder bool) ([
 			}
 		}
 	}
+	if len(ws.PolicyDeny) > 0 {
+		rules = append(rules, config.NetworkRule{Name: "policy", Deny: slices.Clone(ws.PolicyDeny), Proto: config.RuleProtoAny})
+	}
 
 	// Legacy allowed_hosts names open private addresses through the broker's
 	// DNS: Resolve adds them to InternalZones, and their legacy allow rule

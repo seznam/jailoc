@@ -24,6 +24,14 @@ func addAllFlag(cmd *cobra.Command, usage string) {
 // configured workspace with --all, else the one named by args, --workspace
 // or the current directory.
 func targetWorkspaces(cfg *config.Config, args []string) ([]*workspace.Resolved, error) {
+	return targetWorkspacesWith(cfg, args, workspace.Resolve)
+}
+
+func targetWorkspacesUnchecked(cfg *config.Config, args []string) ([]*workspace.Resolved, error) {
+	return targetWorkspacesWith(cfg, args, workspace.ResolveUnchecked)
+}
+
+func targetWorkspacesWith(cfg *config.Config, args []string, resolve func(*config.Config, string) (*workspace.Resolved, error)) ([]*workspace.Resolved, error) {
 	if allFlag {
 		if len(args) > 0 || workspaceExplicit {
 			return nil, errors.New("--all cannot be combined with a workspace name")
@@ -31,7 +39,7 @@ func targetWorkspaces(cfg *config.Config, args []string) ([]*workspace.Resolved,
 		names := slices.Sorted(maps.Keys(cfg.Workspaces))
 		resolved := make([]*workspace.Resolved, 0, len(names))
 		for _, name := range names {
-			ws, err := workspace.Resolve(cfg, name)
+			ws, err := resolve(cfg, name)
 			if err != nil {
 				return nil, fmt.Errorf("resolve workspace %q: %w", name, err)
 			}
@@ -56,7 +64,7 @@ func targetWorkspaces(cfg *config.Config, args []string) ([]*workspace.Resolved,
 			}
 		}
 	}
-	ws, err := workspace.Resolve(cfg, name)
+	ws, err := resolve(cfg, name)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace %q: %w", name, err)
 	}

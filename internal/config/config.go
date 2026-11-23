@@ -399,6 +399,8 @@ type Config struct {
 	VM           VMConfig             `toml:"vm,omitempty"`
 	Defaults     Defaults             `toml:"defaults,omitempty"`
 	Workspaces   map[string]Workspace `toml:"workspaces"`
+	// Policy is the active admin-owned security policy, or nil when none exists.
+	Policy *Policy `toml:"-"`
 
 	// unknown holds the keys of the file jailoc does not know; they are
 	// ignored.
@@ -623,6 +625,20 @@ func ConfigPath() string {
 }
 
 func Load() (*Config, error) {
+	cfg, err := LoadUnchecked()
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateConfigPolicy(cfg, cfg.Policy); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// LoadUnchecked loads the user configuration and active admin policy without
+// failing on admin policy violations, so commands like `jailoc config` can
+// display the active policy and report violations.
+func LoadUnchecked() (*Config, error) {
 	configPath := ConfigPath()
 	slog.Debug("loading config", "path", configPath)
 
@@ -638,6 +654,12 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	policy, err := LoadPolicy()
+	if err != nil {
+		return nil, err
+	}
+	cfg.Policy = policy
 
 	slog.Debug("config loaded", "workspaces", len(cfg.Workspaces))
 
