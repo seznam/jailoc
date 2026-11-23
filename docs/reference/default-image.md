@@ -5,6 +5,7 @@ The embedded Dockerfile builds a base image (Ubuntu 26.04) with the tools listed
 - **Used when** no workspace `image`, `defaults.image` or `[base] dockerfile` is configured: [step 5 of image resolution](image-resolution.md#step-5-embedded-dockerfile).
 - **Runs as** the root file system of the workspace VM: jailoc converts its layers into read-only EROFS images in the VM image cache and boots them.
 - **Versions**: core tool versions (Node.js, the npm language servers) are pinned as `ARG` declarations at the top of the Dockerfile.
+- **apt sources**: point to [`[base] ubuntu_mirror`](configuration.md#base), `http://cz.archive.ubuntu.com/ubuntu` by default.
 - **No process settings**: the image has no `ENTRYPOINT`, `CMD` or `EXPOSE`. jailoc-guest is the init of the VM and starts sessions over SSH.
 
 ---

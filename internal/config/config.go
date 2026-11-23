@@ -33,6 +33,7 @@ const (
 
 [base]
 # dockerfile = ""
+# ubuntu_mirror = "http://cz.archive.ubuntu.com/ubuntu"  # Ubuntu archive of the embedded images
 
 [defaults]
 # agent = "opencode"  # opencode (OpenCode 2), opencode1, opencode2, claude, copilot, omo, agy or an agent defined under agents
@@ -416,6 +417,9 @@ const (
 
 type BaseConfig struct {
 	Dockerfile string `toml:"dockerfile,omitempty"`
+	// UbuntuMirror replaces the Ubuntu archive in the apt sources of the
+	// embedded images, for example "http://archive.ubuntu.com/ubuntu".
+	UbuntuMirror string `toml:"ubuntu_mirror,omitempty"`
 }
 
 type Defaults struct {
@@ -789,6 +793,30 @@ func validateDockerfileSource(value, fieldName string) error {
 
 	// Anything else is invalid
 	return fmt.Errorf("%s: must be an absolute path, ~ home path, or HTTP(S) URL, got %q", fieldName, value)
+}
+
+// validateUbuntuMirror checks that value, when set, is an HTTP URL of an
+// Ubuntu archive without a query or fragment. HTTPS fails in the embedded
+// images: their first apt-get update runs before ca-certificates is
+// installed, and apt verifies the archive with its GPG signatures anyway. The
+// embedded Dockerfiles put it
+// into a sed replacement, so the characters sed treats specially there are
+// rejected too.
+func validateUbuntuMirror(value string) error {
+	if value == "" {
+		return nil
+	}
+	u, err := url.Parse(value)
+	if err == nil && u.Scheme == "https" {
+		return fmt.Errorf("base: invalid ubuntu_mirror %q: must use http, the embedded images have no CA certificates before their first apt-get install (apt verifies packages with the archive's GPG signatures)", value)
+	}
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return fmt.Errorf("base: invalid ubuntu_mirror %q: must be an http URL with a host", value)
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(value, "?#&\\ \t\n\"'") {
+		return fmt.Errorf("base: invalid ubuntu_mirror %q: must not contain a query, fragment, whitespace, quotes, '&' or '\\'", value)
+	}
+	return nil
 }
 
 func validateEnvEntries(entries []string, context string) error {
@@ -1228,6 +1256,9 @@ func Validate(cfg *Config) error {
 	}
 
 	if err := validateDockerfileSource(cfg.Base.Dockerfile, "base dockerfile"); err != nil {
+		return err
+	}
+	if err := validateUbuntuMirror(cfg.Base.UbuntuMirror); err != nil {
 		return err
 	}
 

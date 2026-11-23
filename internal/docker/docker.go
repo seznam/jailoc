@@ -61,7 +61,11 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 	}
 	defer func() { _ = engineCli.Close() }()
 
-	if err := buildEmbeddedImage(ctx, engineCli, embeddedTag); err != nil {
+	mirror := ""
+	if cfg != nil {
+		mirror = cfg.Base.UbuntuMirror
+	}
+	if err := buildEmbeddedImage(ctx, engineCli, embeddedTag, mirror); err != nil {
 		return "", fmt.Errorf("build embedded base image: %w", err)
 	}
 
@@ -91,7 +95,25 @@ func proxyBuildArgs() map[string]*string {
 	return args
 }
 
-func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag string) error {
+// ubuntuMirrorArg is the build argument of the embedded Dockerfiles that
+// names the Ubuntu archive their apt sources point to.
+const ubuntuMirrorArg = "UBUNTU_MIRROR"
+
+// DefaultUbuntuMirror is the Ubuntu archive of the embedded images when
+// [base] ubuntu_mirror is unset. archive.ubuntu.com, which serves arm64 since
+// Ubuntu 26.04, often answers slowly or with errors, and apt waits on it.
+const DefaultUbuntuMirror = "http://cz.archive.ubuntu.com/ubuntu"
+
+// setUbuntuMirror sets ubuntuMirrorArg in args to mirror, or to
+// DefaultUbuntuMirror when mirror is empty.
+func setUbuntuMirror(args map[string]*string, mirror string) {
+	if mirror == "" {
+		mirror = DefaultUbuntuMirror
+	}
+	args[ubuntuMirrorArg] = &mirror
+}
+
+func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag, mirror string) error {
 	tmpDir, err := os.MkdirTemp("", "jailoc-embedded-dockerfile-")
 	if err != nil {
 		return fmt.Errorf("create temp directory for embedded Dockerfile: %w", err)
@@ -106,6 +128,7 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag str
 		return err
 	}
 	buildArgs := proxyBuildArgs()
+	setUbuntuMirror(buildArgs, mirror)
 	content := forBuilder(version, embed.Dockerfile(), buildArgs)
 	hash := contentHash(content, buildArgs)
 	if haveImage(ctx, cli, tag, hash) {
@@ -276,23 +299,27 @@ func BuildAgentImage(ctx context.Context, base string, h agent.Harness) (string,
 		}
 		h.Release = &r
 	}
-	return buildLayerImage(ctx, base, "jailoc-agent-"+h.Name, label, func(user string) []byte {
+	return buildLayerImage(ctx, base, "jailoc-agent-"+h.Name, label, proxyBuildArgs(), func(user string) []byte {
 		return agentDockerfile(h, user)
 	})
 }
 
 // BuildDockerImage adds the embedded Docker layer (Docker CE, buildx,
-// compose, nftables) on top of base and returns the tag of the result.
-func BuildDockerImage(ctx context.Context, base string) (string, error) {
-	return buildLayerImage(ctx, base, "jailoc-docker", "Docker", func(user string) []byte {
+// compose, nftables) on top of base and returns the tag of the result. The
+// stage that downloads Docker gets its apt packages from the Ubuntu archive
+// mirror, DefaultUbuntuMirror when it is empty.
+func BuildDockerImage(ctx context.Context, base, mirror string) (string, error) {
+	buildArgs := proxyBuildArgs()
+	setUbuntuMirror(buildArgs, mirror)
+	return buildLayerImage(ctx, base, "jailoc-docker", "Docker", buildArgs, func(user string) []byte {
 		return dockerLayerDockerfile(embed.DockerLayer(), user)
 	})
 }
 
 // buildLayerImage builds the Dockerfile that dockerfile returns for the user
-// of base, with base as the BASE build argument, and tags the result repo
-// with a hash of the base image ID and the Dockerfile.
-func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile func(user string) []byte) (string, error) {
+// of base, with buildArgs and base as the BASE build argument, and tags the
+// result repo with a hash of the base image ID and the Dockerfile.
+func buildLayerImage(ctx context.Context, base, repo, label string, buildArgs map[string]*string, dockerfile func(user string) []byte) (string, error) {
 	if err := EnsureImage(ctx, base); err != nil {
 		return "", err
 	}
@@ -313,7 +340,6 @@ func buildLayerImage(ctx context.Context, base, repo, label string, dockerfile f
 	if err != nil {
 		return "", err
 	}
-	buildArgs := proxyBuildArgs()
 	content := forBuilder(version, dockerfile(user), buildArgs)
 	hash := sha256.Sum256(append([]byte(inspect.ID+"\n"), content...))
 	tag := fmt.Sprintf("%s:%x", repo, hash[:8])

@@ -14,6 +14,13 @@ ARG COMPOSE_VERSION=5.6.1
 
 FROM ubuntu:26.04 AS docker
 
+# UBUNTU_MIRROR replaces the Ubuntu archive hosts in the apt sources; jailoc
+# sets it from [base] ubuntu_mirror.
+ARG UBUNTU_MIRROR
+RUN if [ -n "$UBUNTU_MIRROR" ]; then \
+    sed -i -E "s#https?://(archive|security|ports)\.ubuntu\.com/ubuntu(-ports)?/?#${UBUNTU_MIRROR%/}/#" \
+    /etc/apt/sources.list.d/ubuntu.sources; fi
+
 # The apt cache mounts are stripped for the classic builder; this stage isn't
 # part of the final image, so it leaves its apt files behind either way.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
