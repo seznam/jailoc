@@ -157,3 +157,9 @@ Each release provides these compliance artifacts:
 gh attestation verify jailoc_<version>_linux_amd64.tar.gz --repo seznam/jailoc
 ```
 
+- **Immutable releases:** a release is published only after every asset is attested, and its assets and tag can't change afterwards. Check that a downloaded file matches the published release:
+
+```bash
+gh release verify-asset v<version> jailoc_<version>_linux_amd64.tar.gz --repo seznam/jailoc
+```
+

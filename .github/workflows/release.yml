@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to re-release (e.g. v1.3.0)"
+        description: "Existing tag whose release is still a draft (e.g. v1.3.0)"
         required: true
 
 env:
@@ -12,8 +12,29 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  check:
+    name: Check draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Published releases are immutable, so only a draft left by a failed run
+      # can be finished.
+      - name: Check that the release is a draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if out=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1); then
+            [[ "$out" == true ]] || { echo "release $TAG is already published" >&2; exit 1; }
+          elif [[ "$out" != "release not found" ]]; then
+            echo "$out" >&2
+            exit 1
+          fi
+
   vm-runtime:
     name: VM runtime
+    needs: check
     permissions:
       contents: read
     uses: ./.github/workflows/vm-runtime.yml
@@ -24,13 +45,29 @@ jobs:
     name: GoReleaser
     needs: vm-runtime
     runs-on: ubuntu-latest
-    # HOMEBREW_TAP_DEPLOY_KEY lives in this environment, limited to main and v* tags.
-    environment: homebrew-tap
+    concurrency:
+      group: release-${{ inputs.tag }}
+      cancel-in-progress: false
     permissions:
       contents: write
       id-token: write
       attestations: write
+    outputs:
+      prerelease: ${{ steps.publish.outputs.prerelease }}
     steps:
+      # Recheck after acquiring the per-tag lock in case another run already
+      # published this tag while the VM runtime was building.
+      - name: Check that the release is not published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if out=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1); then
+            [[ "$out" == true ]] || { echo "release $TAG is already published" >&2; exit 1; }
+          elif [[ "$out" != "release not found" ]]; then
+            echo "$out" >&2
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -71,10 +108,77 @@ jobs:
           tar -xzf "$RUNNER_TEMP/goreleaser.tar.gz" -C "$RUNNER_TEMP/goreleaser" goreleaser
           echo "$RUNNER_TEMP/goreleaser" >> "$GITHUB_PATH"
       - name: GoReleaser
-        run: goreleaser release --verbose --skip=validate
+        run: |
+          # Normalize the checked-out config so older tags still upload to a
+          # draft, replace partial assets, and render the cask without pushing.
+          yq '.release.draft = true | .release.replace_existing_artifacts = true | (.homebrew_casks[]? |= (.skip_upload = true | del(.repository.git)))' \
+            .goreleaser.yml > "$RUNNER_TEMP/goreleaser.yml"
+          goreleaser release -f "$RUNNER_TEMP/goreleaser.yml" --verbose --draft --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: homebrew-cask
+          path: dist/homebrew/Casks/jailoc.rb
+          if-no-files-found: error
+      # The release stays a draft until every asset is attested; publishing
+      # makes it immutable.
+      - name: Publish release
+        id: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          prerelease=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
+
+  homebrew-tap:
+    name: Homebrew tap
+    needs: goreleaser
+    # Tags such as v1.20.0-rc.1 do not update the tap.
+    if: ${{ needs.goreleaser.outputs.prerelease == 'false' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
+    # HOMEBREW_TAP_DEPLOY_KEY lives in this environment, limited to main and v* tags.
+    environment: homebrew-tap
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: homebrew-cask
+          path: ${{ runner.temp }}/cask
+      - name: Push cask to seznam/homebrew-tap
+        env:
+          TAG: ${{ inputs.tag }}
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          key="$RUNNER_TEMP/deploy-key"
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$DEPLOY_KEY" >"$key"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -F /dev/null"
+          git clone --depth 1 git@github.com:seznam/homebrew-tap.git "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          incoming="${TAG#v}"
+          if [[ -f Casks/jailoc.rb ]]; then
+            current=$(sed -n 's/^[[:space:]]*version "\([^"]*\)"/\1/p;T;q' Casks/jailoc.rb)
+            if [[ -n "$current" && "$current" != "$incoming" ]] && \
+               [[ "$(printf '%s\n%s\n' "$current" "$incoming" | sort -V | tail -n1)" == "$current" ]]; then
+              echo "tap already has newer version $current (skipping $incoming)"
+              exit 0
+            fi
+          fi
+          cp "$RUNNER_TEMP/cask/jailoc.rb" Casks/jailoc.rb
+          if git diff --quiet; then
+            echo "Casks/jailoc.rb is already up to date"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -am "chore(jailoc): update to $TAG"
+          git push origin HEAD
