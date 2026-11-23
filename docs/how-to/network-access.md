@@ -75,6 +75,17 @@ allow = ["*"]
 
 `*` matches any public address on the rule's protocol. It never opens private or reserved ranges, and it excludes DoT port 853 and QUIC UDP port 443 unless you list them explicitly in `ports`.
 
+## Limit the agent's endpoints
+
+The `agent` rule allows the coding agent's built-in API and authentication hosts on TCP 443. For OpenCode and OmO, that covers several LLM providers. To allow only the providers you use, list their hosts in `agent_endpoints` and run `jailoc reload api`:
+
+```toml
+[workspaces.api.network]
+agent_endpoints = ["api.anthropic.com"]
+```
+
+`jailoc traffic` then shows connections to the other providers as denied. Set `agent_endpoints` under `[defaults.network]` to apply it to every workspace; a workspace value replaces the defaults list. `agent_endpoints = []` removes the `agent` rule, so the agent needs your own allow rules. See [`rule=agent`](../reference/configuration.md#ruleagent).
+
 ## Restrict HTTP methods and paths
 
 Add an `http` table to a rule to decide per request instead of per connection. This allows read-only access to one organization on GitHub:

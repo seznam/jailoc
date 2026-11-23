@@ -517,6 +517,11 @@ type Network struct {
 	InternalZones []string `toml:"internal_zones,omitempty"`
 	// Rules are the allow/deny egress rules of the scope.
 	Rules []NetworkRule `toml:"rules,omitempty"`
+	// AgentEndpoints replaces the host names of the implicit "agent" rule that
+	// allows the coding agent's LLM providers. Unset keeps the agent's default
+	// list; an empty list removes the rule. No omitempty, so an empty list is
+	// written back.
+	AgentEndpoints []string `toml:"agent_endpoints"`
 	// Legacy fields migrated in memory with a deprecation warning.
 	FilteredDNS     *bool    `toml:"filtered_dns,omitempty"`
 	DNSUpstream     string   `toml:"dns_upstream,omitempty"`
@@ -1371,6 +1376,9 @@ func Validate(cfg *Config) error {
 	if err := validateNetworkRules(dn.Rules, "defaults"); err != nil {
 		return err
 	}
+	if err := validateAgentEndpoints(dn.AgentEndpoints, "defaults"); err != nil {
+		return err
+	}
 	if err := validateInternalZones(dn.InternalZones, "defaults"); err != nil {
 		return err
 	}
@@ -1482,6 +1490,9 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if err := validateNetworkRules(wn.Rules, wsContext); err != nil {
+			return err
+		}
+		if err := validateAgentEndpoints(wn.AgentEndpoints, wsContext); err != nil {
 			return err
 		}
 		if err := validateInternalZones(wn.InternalZones, wsContext); err != nil {

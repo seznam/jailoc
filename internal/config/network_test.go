@@ -244,6 +244,40 @@ func TestInternalZonesValidation(t *testing.T) {
 	}
 }
 
+func TestValidateAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		endpoint  string
+		wantError string
+	}{
+		{endpoint: "api.anthropic.com"},
+		{endpoint: "*.githubcopilot.com"},
+		{endpoint: "API.OpenAI.com."},
+		{endpoint: "*", wantError: "must be a host name"},
+		{endpoint: "10.0.0.0/8", wantError: "must be a host name"},
+		{endpoint: "1.2.3.4", wantError: "must be a host name"},
+		{endpoint: "", wantError: "empty rule target"},
+		{endpoint: "a.*.example.com", wantError: "invalid hostname"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.endpoint, func(t *testing.T) {
+			t.Parallel()
+			for _, cfg := range []*Config{
+				{Defaults: Defaults{Network: &Network{AgentEndpoints: []string{tc.endpoint}}}},
+				{Workspaces: map[string]Workspace{"api": {Paths: []string{"/data/api"}, Network: &Network{AgentEndpoints: []string{tc.endpoint}}}}},
+			} {
+				err := Validate(cfg)
+				if tc.wantError == "" && err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError) || !strings.Contains(err.Error(), "agent_endpoints")) {
+					t.Fatalf("Validate error = %v, want %q", err, tc.wantError)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadNetworkRulesTOML(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.toml")

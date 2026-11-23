@@ -73,7 +73,7 @@ These rules apply when `network.ipv6` is on.
 
 ## Enforcement by name
 
-Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, together with the implicit `agent` rule for the workspace's coding agent, are combined into a single set where `deny` always wins over `allow`.
+Rules from `[defaults.network.rules]` and `[workspaces.<name>.network.rules]`, together with the implicit `agent` rule for the workspace's coding agent, are combined into a single set where `deny` always wins over `allow`. The `agent` rule lists the agent's built-in endpoints unless `network.agent_endpoints` replaces them.
 
 The broker enforces hostname rules at four points, in the order a connection meets them: DNS, connect time, TLS SNI and HTTP Host, and the HTTP request.
 

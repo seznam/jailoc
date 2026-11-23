@@ -1881,6 +1881,67 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 	}
 }
 
+func TestResolveAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	claude, ok := agent.Lookup("claude")
+	if !ok {
+		t.Fatal("claude harness not found")
+	}
+	tests := []struct {
+		name     string
+		defaults []string
+		ws       []string
+		want     []string
+	}{
+		{name: "unset keeps harness endpoints", want: claude.Endpoints},
+		{name: "defaults replace harness endpoints", defaults: []string{"api.anthropic.com"}, want: []string{"api.anthropic.com"}},
+		{name: "workspace overrides defaults", defaults: []string{"api.anthropic.com"}, ws: []string{"api.openai.com", "*.example.com"}, want: []string{"api.openai.com", "*.example.com"}},
+		{name: "empty workspace list drops rule", defaults: []string{"api.anthropic.com"}, ws: []string{}},
+		{name: "empty defaults list drops rule", defaults: []string{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{
+				Defaults: config.Defaults{Agent: "claude"},
+				Workspaces: map[string]config.Workspace{
+					"api": {Paths: []string{"/data/api"}},
+				},
+			}
+			if tc.defaults != nil {
+				cfg.Defaults.Network = &config.Network{AgentEndpoints: tc.defaults}
+			}
+			if tc.ws != nil {
+				ws := cfg.Workspaces["api"]
+				ws.Network = &config.Network{AgentEndpoints: tc.ws}
+				cfg.Workspaces["api"] = ws
+			}
+			r, err := workspace.Resolve(cfg, "api")
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			var agentRules []config.NetworkRule
+			for _, rule := range r.NetworkRules {
+				if rule.Name == "agent" {
+					agentRules = append(agentRules, rule)
+				}
+			}
+			if tc.want == nil {
+				if len(agentRules) != 0 {
+					t.Fatalf("agent rules = %+v, want none", agentRules)
+				}
+				return
+			}
+			if len(agentRules) != 1 {
+				t.Fatalf("agent rules = %+v, want one", agentRules)
+			}
+			if got := agentRules[0]; !slices.Equal(got.Allow, tc.want) || got.Proto != config.RuleProtoTCP || !slices.Equal(got.Ports, []config.RulePort{"443"}) {
+				t.Fatalf("agent rule = %+v, want allow %v on tcp/443", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveNetworkRulesHTTP(t *testing.T) {
 	t.Parallel()
 	plain := &config.Config{Workspaces: map[string]config.Workspace{"api": {Paths: []string{"/data/api"}}}}

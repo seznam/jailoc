@@ -318,6 +318,21 @@ func validateInternalZones(zones []string, context string) error {
 	return nil
 }
 
+// validateAgentEndpoints checks the agent_endpoints of a [<scope>.network]
+// table: each entry is a host name or a "*.domain" wildcard.
+func validateAgentEndpoints(endpoints []string, context string) error {
+	for _, e := range endpoints {
+		kind, _, err := ParseRuleTarget(e)
+		if err != nil {
+			return fmt.Errorf("%s: agent_endpoints: %w", context, err)
+		}
+		if kind != "name" {
+			return fmt.Errorf("%s: agent_endpoints entry %q must be a host name or a \"*.domain\" wildcard", context, e)
+		}
+	}
+	return nil
+}
+
 // DeprecationWarnings returns one-line warnings for legacy network settings in
 // cfg that are migrated in memory.
 func DeprecationWarnings(cfg *Config) []string {

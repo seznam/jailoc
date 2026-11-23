@@ -521,7 +521,7 @@ func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetw
 	}
 	if *table != nil {
 		n := *table
-		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && len(n.InternalZones) == 0 && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
+		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && len(n.InternalZones) == 0 && n.AgentEndpoints == nil && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
 			*table = nil
 		}
 	}

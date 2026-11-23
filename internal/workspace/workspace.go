@@ -293,7 +293,8 @@ func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, confi
 
 // resolveNetworkRules combines [defaults.network.rules],
 // [workspaces.<ws>.network.rules], migrated legacy settings, and the implicit
-// agent endpoints rule.
+// agent endpoints rule. agent_endpoints of the workspace, else of [defaults],
+// replaces the harness endpoints in that rule; an empty list drops the rule.
 func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, allowedNetworks, blockedZones []string, h agent.Harness) []config.NetworkRule {
 	dn, wn := cfg.Defaults.Network.Get(), ws.Network.Get()
 	var rules []config.NetworkRule
@@ -317,10 +318,16 @@ func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, 
 			rules = append(rules, config.NetworkRule{Name: "legacy", Deny: deny, Proto: config.RuleProtoAny})
 		}
 	}
-	if len(h.Endpoints) > 0 {
+	endpoints := h.Endpoints
+	if wn.AgentEndpoints != nil {
+		endpoints = wn.AgentEndpoints
+	} else if dn.AgentEndpoints != nil {
+		endpoints = dn.AgentEndpoints
+	}
+	if len(endpoints) > 0 {
 		rules = append(rules, config.NetworkRule{
 			Name:  "agent",
-			Allow: slices.Clone(h.Endpoints),
+			Allow: slices.Clone(endpoints),
 			Proto: config.RuleProtoTCP,
 			Ports: []config.RulePort{"443"},
 		})
