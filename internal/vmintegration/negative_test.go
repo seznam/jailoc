@@ -121,9 +121,10 @@ func checkRunnerProbe(t *testing.T, probes []runnerProbe) {
 			}
 		case p.op == "connect" && !resolveUnix:
 			t.Logf("kernel cannot restrict Unix socket connections: %s %s = %s", p.op, p.path, got)
-		case got == "ok" || got == "ENOENT":
-			// ENOENT would only show the target is missing, not that Landlock denied it.
-			t.Errorf("confined runner: %s %s = %s, want a Landlock denial", p.op, p.path, got)
+		case got != "EACCES":
+			// Only EACCES proves Landlock denied it: ENOENT would show a missing
+			// target and ECONNREFUSED a stale socket, not confinement.
+			t.Errorf("confined runner: %s %s = %s, want EACCES", p.op, p.path, got)
 		}
 		if p.op == "create" && !p.allow {
 			if _, err := os.Stat(p.path); !errors.Is(err, os.ErrNotExist) {
@@ -170,27 +171,29 @@ func trafficEvents(ctx context.Context, t *testing.T, agentSock string) (string,
 	return out, events
 }
 
-// deniedFlowProblems checks that every destination in want has flow events,
-// that none of them was allowed, and that they carry the wanted reason when
-// one is given.
-func deniedFlowProblems(events []map[string]any, want map[string]string) []string {
+// flow identifies broker flow events by protocol and destination.
+type flow struct{ proto, dst string }
+
+// deniedFlowProblems checks that every flow in want has events, that none of
+// them was allowed, and that they carry the wanted reason when one is given.
+func deniedFlowProblems(events []map[string]any, want map[flow]string) []string {
 	var problems []string
-	for dst, reason := range want {
+	for f, reason := range want {
 		seen := false
 		for _, ev := range events {
-			if ev["event"] != "flow" || ev["dst"] != dst {
+			if ev["event"] != "flow" || ev["proto"] != f.proto || ev["dst"] != f.dst {
 				continue
 			}
 			seen = true
 			if ev["allow"] != false {
-				problems = append(problems, fmt.Sprintf("flow to %s allowed: %v", dst, ev))
+				problems = append(problems, fmt.Sprintf("%s flow to %s allowed: %v", f.proto, f.dst, ev))
 			}
 			if reason != "" && ev["reason"] != reason {
-				problems = append(problems, fmt.Sprintf("flow to %s has reason %v, want %s", dst, ev["reason"], reason))
+				problems = append(problems, fmt.Sprintf("%s flow to %s has reason %v, want %s", f.proto, f.dst, ev["reason"], reason))
 			}
 		}
 		if !seen {
-			problems = append(problems, "no flow event for "+dst)
+			problems = append(problems, "no "+f.proto+" flow event for "+f.dst)
 		}
 	}
 	return problems
@@ -237,29 +240,24 @@ func checkNegativeEgress(ctx context.Context, t *testing.T, agentSock string) {
 	}()
 	port := uint16(ln.Addr().(*net.TCPAddr).Port) //nolint:gosec // G115: a TCP port fits uint16
 
-	// Destination (as the broker logs it) -> wanted deny reason; "" accepts any.
-	want := map[string]string{
-		"9.9.9.9:443":               "default-deny", // public, no rule allows it
-		"169.254.169.254:80":        "hard-deny",
-		"[fd00:ec2::254]:443":       "ipv6-metadata",
-		"[fd00:ec2::23]:443":        "ipv6-metadata",
-		"[fd42::1]:443":             "ipv6-private",
-		"[fc00::1]:443":             "ipv6-private",
-		"8.8.8.8:53":                "dns-filtered", // direct DNS past the gateway resolver
-		"1.1.1.1:53":                "dns-filtered", // even to the configured upstream
-		"[2606:4700:4700::1111]:53": "dns-filtered",
+	// TCP destination (as the broker logs it) -> wanted deny reason; "" accepts any.
+	tcpWant := map[string]string{
+		"9.9.9.9:443":         "default-deny", // public, no rule allows it
+		"169.254.169.254:80":  "hard-deny",
+		"[fd00:ec2::254]:443": "ipv6-metadata",
+		"[fd00:ec2::23]:443":  "ipv6-metadata",
+		"[fd42::1]:443":       "ipv6-private",
+		"[fc00::1]:443":       "ipv6-private",
 		// Host loopback through the IPv6 forms that embed 127.0.0.1.
 		netip.AddrPortFrom(netip.MustParseAddr("64:ff9b::7f00:1"), port).String(): "",
 		netip.AddrPortFrom(netip.MustParseAddr("2002:7f00:1::1"), port).String():  "",
 	}
 	for _, ip := range hostInterfaceAddrs(t) {
-		want[netip.AddrPortFrom(ip, port).String()] = "host-address"
+		tcpWant[netip.AddrPortFrom(ip, port).String()] = "host-address"
 	}
 	var tcpTargets []string
-	for dst := range want {
-		if !strings.HasSuffix(dst, ":53") {
-			tcpTargets = append(tcpTargets, shellQuote(dst))
-		}
+	for dst := range tcpWant {
+		tcpTargets = append(tcpTargets, shellQuote(dst))
 	}
 
 	// A host address the guest also owns (Docker's 172.17.0.1 in an
@@ -285,8 +283,18 @@ PY`)
 	for line := range strings.Lines(out) {
 		if target, ok := strings.CutPrefix(strings.TrimSpace(line), "guest-local "); ok {
 			t.Logf("%s is a guest address too; the connection stays inside the VM", target)
-			delete(want, target)
+			delete(tcpWant, target)
 		}
+	}
+	want := make(map[flow]string)
+	for dst, reason := range tcpWant {
+		want[flow{"tcp", dst}] = reason
+	}
+	// Direct DNS past the gateway resolver, even to the configured upstream,
+	// over both UDP and TCP.
+	for _, dst := range []string{"8.8.8.8:53", "1.1.1.1:53", "[2606:4700:4700::1111]:53"} {
+		want[flow{"udp", dst}] = "dns-filtered"
+		want[flow{"tcp", dst}] = "dns-filtered"
 	}
 	mustGuest(ctx, t, `python3 - <<'PY'
 import socket
