@@ -367,3 +367,34 @@ PY`)
 		time.Sleep(2 * time.Second)
 	}
 }
+
+// checkNoVsock checks that the workspace VM attaches no virtio-vsock device
+// and that guest AF_VSOCK connections to the host (CID 2) and hypervisor
+// (CID 0) fail with ENODEV across a port range.
+func checkNoVsock(ctx context.Context, t *testing.T) {
+	t.Helper()
+	out := mustGuest(ctx, t, `python3 - <<'PY'
+import errno
+import glob
+import socket
+
+for dev in sorted(glob.glob("/sys/bus/virtio/devices/*/device")):
+    with open(dev) as f:
+        val = f.read().strip().lower()
+    if val in ("0x0013", "0x13", "19"):
+        raise SystemExit(f"unexpected virtio-vsock device at {dev}: {val}")
+
+ports = list(range(1, 129)) + [1024, 1025, 2222, 5000, 5001, 5002, 7022, 7023, 8080, 9999]
+for cid in (0, 2):
+    for port in ports:
+        with socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            err = s.connect_ex((cid, port))
+        if err != errno.ENODEV:
+            raise SystemExit(f"AF_VSOCK connect({cid}, {port}) = {err} ({errno.errorcode.get(err, err)}), want ENODEV")
+print("vsock-absent")
+PY`)
+	if strings.TrimSpace(out) != "vsock-absent" {
+		t.Fatalf("vsock check output = %q, want vsock-absent", out)
+	}
+}

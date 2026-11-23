@@ -501,6 +501,10 @@ PY`)
 		checkNegativeEgress(ctx, t, agentSock)
 	})
 
+	t.Run("no host vsock", func(t *testing.T) {
+		checkNoVsock(ctx, t)
+	})
+
 	t.Run("memory: zram swap and reclaim", func(t *testing.T) {
 		// The reclaim loop writes the root cgroup's memory.reclaim.
 		mustGuest(ctx, t, "echo 1M swappiness=0 | sudo -n tee /sys/fs/cgroup/memory.reclaim")
