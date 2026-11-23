@@ -347,6 +347,19 @@ func TestInspectorLeaf(t *testing.T) {
 	now := time.Now()
 	insp.now = func() time.Time { return now }
 
+	cachedNotAfter := func(t *testing.T, name string) {
+		t.Helper()
+		insp.mu.Lock()
+		defer insp.mu.Unlock()
+		el, ok := insp.leaves[name]
+		if !ok {
+			t.Fatalf("no cached leaf for %q", name)
+		}
+		if got := el.Value.(*leafEntry).notAfter; got != got.Round(0) {
+			t.Fatalf("cached notAfter %v has a monotonic reading", got)
+		}
+	}
+
 	verify := func(t *testing.T, name string, certDER []byte) *x509.Certificate {
 		t.Helper()
 		cert, err := x509.ParseCertificate(certDER)
@@ -380,6 +393,7 @@ func TestInspectorLeaf(t *testing.T) {
 	if again, _ := insp.leaf("api.github.com"); again != first {
 		t.Fatal("second lookup did not reuse the cached certificate")
 	}
+	cachedNotAfter(t, "api.github.com")
 
 	t.Run("reissued with less than an hour left", func(t *testing.T) {
 		insp.now = func() time.Time { return now.Add(30*24*time.Hour - 30*time.Minute) }
@@ -390,6 +404,7 @@ func TestInspectorLeaf(t *testing.T) {
 		if reissued == first {
 			t.Fatal("certificate near expiry was reused")
 		}
+		cachedNotAfter(t, "api.github.com")
 		insp.now = func() time.Time { return now }
 	})
 
