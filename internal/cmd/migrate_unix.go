@@ -46,7 +46,8 @@ expose_port) after confirmation, stops running Docker workspaces, and copies the
 OpenCode data and cache volumes into the VM's persistent home directories.
 It moves allowed_hosts, allowed_networks, filtered_dns, dns_upstream and
 dns_blocked_zones of [defaults] and every workspace into their network table
-and [[*.network.rules]].
+and [[*.network.rules]]. When no scope sets network.agent_endpoints, it asks
+which model providers OpenCode and OmO may reach and adds their endpoints there.
 The previous config.toml is kept as a backup; comments in it are not carried
 over.
 
@@ -264,10 +265,121 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		}}, d.Network.Rules...)
 		m.changes = append(m.changes, `[[defaults.network.rules]]: add allow = ["*"] (public internet)`)
 	}
+	if err := addAgentEndpoints(cfg, names, p, m); err != nil {
+		return nil, err
+	}
 	if err := askInternalZones(cfg, p, m); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// addAgentEndpoints writes the endpoints of multi-provider agents (OpenCode,
+// OmO) into agent_endpoints when no scope sets it, so they keep reaching the
+// model and auth endpoints that older jailoc allowed implicitly: the default
+// agent's in [defaults.network], and a workspace's own list when its agent has
+// other endpoints. It asks once which providers to keep. Single-provider
+// agents always reach theirs.
+func addAgentEndpoints(cfg *config.Config, names []string, p *prompter, m *migration) error {
+	if cfg.Defaults.Network.Get().AgentEndpoints != nil {
+		return nil
+	}
+	for _, name := range names {
+		if cfg.Workspaces[name].Network.Get().AgentEndpoints != nil {
+			return nil
+		}
+	}
+	var (
+		providers []string
+		asked     bool
+	)
+	endpoints := func(h agent.Harness) ([]string, error) {
+		if !asked {
+			var err error
+			if providers, err = askMigrateProviders(h, p); err != nil {
+				return nil, err
+			}
+			asked = true
+		}
+		list, err := h.ProviderEndpoints(providers)
+		if err != nil {
+			return nil, fmt.Errorf("agent endpoints: %w", err)
+		}
+		return list, nil
+	}
+
+	defaultName := cmp.Or(cfg.Defaults.Agent, agent.Default)
+	var defaults []string
+	if h := builtinHarness(defaultName, cfg.Defaults.Agents[defaultName].From); h.ExplicitEndpoints {
+		list, err := endpoints(h)
+		if err != nil {
+			return err
+		}
+		defaults = list
+		d := &cfg.Defaults
+		if d.Network == nil {
+			d.Network = &config.Network{}
+		}
+		d.Network.AgentEndpoints = defaults
+		m.changes = append(m.changes, fmt.Sprintf("[defaults.network]: add agent_endpoints of agent %q", defaultName))
+	}
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		agentName := cmp.Or(ws.Agent, defaultName)
+		h := builtinHarness(agentName, cmp.Or(ws.Agents[agentName].From, cfg.Defaults.Agents[agentName].From))
+		if !h.ExplicitEndpoints {
+			continue
+		}
+		list, err := endpoints(h)
+		if err != nil {
+			return err
+		}
+		if defaults != nil && slices.Equal(list, defaults) {
+			continue
+		}
+		if ws.Network == nil {
+			ws.Network = &config.Network{}
+		}
+		ws.Network.AgentEndpoints = list
+		cfg.Workspaces[name] = ws
+		m.changes = append(m.changes, fmt.Sprintf("[workspaces.%s.network]: add agent_endpoints of agent %q", name, agentName))
+	}
+	return nil
+}
+
+// askMigrateProviders asks which model providers multi-provider agents may reach;
+// nil, also for an empty answer, --yes or closed input, selects all of them.
+func askMigrateProviders(h agent.Harness, p *prompter) ([]string, error) {
+	if p.yes {
+		return nil, nil
+	}
+	_, _ = fmt.Fprintln(p.out, "OpenCode and OmO now reach only the model and auth endpoints listed in agent_endpoints.")
+	_, _ = fmt.Fprintf(p.out, "Providers: %s.\n", strings.Join(h.ProviderNames(), ", "))
+	for {
+		_, _ = fmt.Fprint(p.out, "Model providers (comma-separated, empty for all): ")
+		line, err := p.in.ReadString('\n')
+		if strings.TrimSpace(line) == "" && err != nil {
+			return nil, nil
+		}
+		providers, perr := h.ParseProviders(line)
+		if perr == nil {
+			return providers, nil
+		}
+		_, _ = fmt.Fprintf(p.out, "  %v\n", perr)
+		if err != nil {
+			return nil, fmt.Errorf("read model providers: %w", perr)
+		}
+	}
+}
+
+// builtinHarness returns the built-in agent name, or the built-in agent
+// from that a custom agent name is derived from.
+func builtinHarness(name, from string) agent.Harness {
+	if h, ok := agent.Lookup(name); ok {
+		return h
+	}
+	h, _ := agent.Lookup(from)
+	return h
 }
 
 // needsInternalZones reports whether an allow rule names a host while no
@@ -521,7 +633,7 @@ func moveNetwork(label string, table **config.Network, allowedHosts, allowedNetw
 	}
 	if *table != nil {
 		n := *table
-		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && len(n.InternalZones) == 0 && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
+		if n.IPv6 == nil && n.DNS == "" && len(n.Rules) == 0 && len(n.InternalZones) == 0 && n.AgentEndpoints == nil && n.FilteredDNS == nil && n.DNSUpstream == "" && n.DNSBlockedZones == nil {
 			*table = nil
 		}
 	}

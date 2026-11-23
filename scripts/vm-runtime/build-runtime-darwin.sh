@@ -2,7 +2,8 @@
 # Build the darwin/arm64 VM runtime tarballs that release builds of jailoc
 # embed (internal/vm/runtime.go).
 #
-# libkrun is built from the release go-microvm names in versions.env, with
+# libkrun is built from the release go-microvm names in versions.env, at the
+# commit pinned in libkrun-source.sh, with
 # jailoc's patches (build-libkrun-linux.sh explains them; 0001/0002 are
 # x86_64-only, 0003 is the macOS FIFO fix, 0004 the imago raw-disk discard
 # fix) and the same features as on Linux,
@@ -32,6 +33,8 @@ src=${1:?go-microvm checkout}
 init_dir=${2:?init directory}
 out=${3:?output directory}
 here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=scripts/vm-runtime/libkrun-source.sh
+. "$here/libkrun-source.sh"
 name=go-microvm-runtime-darwin-arm64
 # libkrunfw-prebuilt-aarch64.tgz of this libkrunfw release; update both when
 # go-microvm moves to a newer libkrunfw.
@@ -46,7 +49,7 @@ work=$(mktemp -d)
 trap 'rm -r "$work"' EXIT
 
 version() { grep "^$1=" "$src/versions.env" | cut -d= -f2; }
-libkrun=$(version LIBKRUN_VERSION)
+libkrun=$(libkrun_release "$src")
 if [ "$(version LIBKRUNFW_VERSION)" != "$libkrunfw" ]; then
   echo "go-microvm wants libkrunfw $(version LIBKRUNFW_VERSION), this script pins $libkrunfw" >&2
   exit 1
@@ -60,7 +63,7 @@ init=$(cd "$init_dir" && pwd)/init.krun
 musl=$(grep '^MUSL_VERSION=' "$init_dir/init.env" | cut -d= -f2)
 gcc=$(grep '^GCC_VERSION=' "$init_dir/init.env" | cut -d= -f2)
 
-git clone --quiet --depth 1 --branch "$libkrun" https://github.com/libkrun/libkrun "$work/libkrun"
+clone_libkrun "$src" "$work/libkrun"
 for p in "$here"/libkrun-patches/*.patch; do
   echo "applying $(basename "$p")"
   patch -d "$work/libkrun" -p1 --forward < "$p"

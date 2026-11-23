@@ -83,7 +83,7 @@ type Resolved struct {
 	DNSUpstream     string
 	DNSBlockedZones []string
 	// NetworkRules are the combined egress rules (defaults, workspace,
-	// migrated legacy settings, and implicit agent endpoints).
+	// migrated legacy settings, and the agent rule from agent_endpoints).
 	NetworkRules []config.NetworkRule
 	// InternalZones are the DNS zones whose answers may point to private
 	// addresses: [defaults.network] and workspace internal_zones and the names
@@ -292,8 +292,10 @@ func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, confi
 }
 
 // resolveNetworkRules combines [defaults.network.rules],
-// [workspaces.<ws>.network.rules], migrated legacy settings, and the implicit
-// agent endpoints rule.
+// [workspaces.<ws>.network.rules], migrated legacy settings, and the "agent"
+// rule. The rule allows the built-in endpoints of a single-provider agent
+// h; a multi-provider agent gets agent_endpoints, the workspace's list, else
+// the defaults' list, and no agent rule without a non-empty list.
 func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, allowedNetworks, blockedZones []string, h agent.Harness) []config.NetworkRule {
 	dn, wn := cfg.Defaults.Network.Get(), ws.Network.Get()
 	var rules []config.NetworkRule
@@ -317,10 +319,17 @@ func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, 
 			rules = append(rules, config.NetworkRule{Name: "legacy", Deny: deny, Proto: config.RuleProtoAny})
 		}
 	}
-	if len(h.Endpoints) > 0 {
+	endpoints := h.Endpoints
+	if h.ExplicitEndpoints {
+		endpoints = dn.AgentEndpoints
+		if wn.AgentEndpoints != nil {
+			endpoints = wn.AgentEndpoints
+		}
+	}
+	if len(endpoints) > 0 {
 		rules = append(rules, config.NetworkRule{
 			Name:  "agent",
-			Allow: slices.Clone(h.Endpoints),
+			Allow: slices.Clone(endpoints),
 			Proto: config.RuleProtoTCP,
 			Ports: []config.RulePort{"443"},
 		})

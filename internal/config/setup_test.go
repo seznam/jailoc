@@ -3,10 +3,13 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2/unstable/edit"
+
+	"github.com/seznam/jailoc/internal/agent"
 )
 
 func TestIsDefaultFile(t *testing.T) {
@@ -137,6 +140,10 @@ func TestRenderFirstTime(t *testing.T) {
 		rules := cfg.Defaults.Network.Get().Rules
 		if len(rules) != 2 || rules[1].Name != "custom" {
 			t.Fatalf("unexpected network rules: %+v", rules)
+		}
+		omo, _ := agent.Lookup("omo")
+		if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, omo.Endpoints) {
+			t.Errorf("defaults agent_endpoints = %v, want %v", got, omo.Endpoints)
 		}
 		ws := cfg.Workspaces["default"]
 		if len(ws.Paths) != 1 || ws.Paths[0] != "/data/my-app" {
@@ -383,6 +390,10 @@ func TestRenderWorkspaceNewSection(t *testing.T) {
 		if len(rules) != 1 || rules[0].Name != "internet" {
 			t.Errorf("workspace rules = %+v", rules)
 		}
+		// claude is a single-provider agent: no agent_endpoints list.
+		if got := ws.Network.Get().AgentEndpoints; got != nil {
+			t.Errorf("workspace agent_endpoints = %v, want unset", got)
+		}
 	})
 }
 
@@ -569,6 +580,7 @@ enable_docker = true
 
 [workspaces.szn.network]
 dns = "9.9.9.9"
+agent_endpoints = ["api.anthropic.com"]
 
 [[workspaces.szn.network.rules]]
 name = "internet"
@@ -595,10 +607,94 @@ allow = ["*"]
 	if rules := ws.Network.Get().Rules; len(rules) != 0 {
 		t.Errorf("inherited network kept rules: %+v", rules)
 	}
+	if got := ws.Network.Get().AgentEndpoints; !slices.Equal(got, []string{"api.anthropic.com"}) {
+		t.Errorf("agent_endpoints = %v, want existing list kept", got)
+	}
 	if got := ws.Network.Get().DNS; got != "9.9.9.9" {
 		t.Errorf("network.dns = %q, want unrelated setting kept", got)
 	}
 	if len(ws.Paths) != 1 || ws.Paths[0] != "/data/szn" {
 		t.Errorf("paths = %v, want [/data/szn]", ws.Paths)
+	}
+}
+
+func TestRenderWorkspaceAgentEndpoints(t *testing.T) {
+	t.Parallel()
+	opencode, ok := agent.Lookup("opencode")
+	if !ok {
+		t.Fatal("opencode harness not found")
+	}
+	omo, ok := agent.Lookup("omo")
+	if !ok {
+		t.Fatal("omo harness not found")
+	}
+	for _, tt := range []struct {
+		name      string
+		raw       string
+		inherit   bool
+		providers []string
+		want      []string
+	}{
+		{name: "new workspace seeds built-in list", raw: "", want: opencode.Endpoints},
+		{name: "new workspace seeds selected providers", raw: "", providers: []string{"anthropic"}, want: []string{"api.anthropic.com", "models.dev"}},
+		{name: "existing workspace seeds selected providers", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n", providers: []string{"google"}, want: []string{"generativelanguage.googleapis.com", "oauth2.googleapis.com", "models.dev"}},
+		{name: "new workspace seeds inherited agent", raw: "[defaults]\nagent = \"omo\"\n", inherit: true, want: omo.Endpoints},
+		{name: "new workspace seeds default agent", raw: "", inherit: true, want: opencode.Endpoints},
+		{name: "new workspace inherits single-provider agent", raw: "[defaults]\nagent = \"claude\"\n", inherit: true},
+		{name: "existing workspace seeds inherited agent", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n", inherit: true, want: opencode.Endpoints},
+		{name: "inherited agent keeps defaults list", raw: "[defaults.network]\nagent_endpoints = [\"api.anthropic.com\"]\n", inherit: true},
+		{name: "new workspace inherits defaults list", raw: "[defaults.network]\nagent_endpoints = []\n"},
+		{name: "existing workspace seeds built-in list", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n", want: opencode.Endpoints},
+		{name: "existing workspace keeps restricted list", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n\n[workspaces.szn.network]\nagent_endpoints = [\"api.anthropic.com\"]\n", want: []string{"api.anthropic.com"}},
+		{name: "existing workspace keeps empty list", raw: "[workspaces.szn]\npaths = [\"/data/old\"]\n\n[workspaces.szn.network]\nagent_endpoints = []\n", want: []string{}},
+		{name: "existing workspace inherits defaults list", raw: "[defaults.network]\nagent_endpoints = [\"api.anthropic.com\"]\n\n[workspaces.szn]\npaths = [\"/data/old\"]\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := WorkspaceOptions{Name: "szn", Paths: []string{"/data/szn"}, Agent: "opencode", Providers: tt.providers}
+			if tt.inherit {
+				opts.Agent = ""
+			}
+			out, err := RenderWorkspace([]byte(tt.raw), opts)
+			if err != nil {
+				t.Fatalf("RenderWorkspace failed: %v", err)
+			}
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			if err := WriteBytes(cfgPath, out); err != nil {
+				t.Fatalf("WriteBytes: %v", err)
+			}
+			cfg, err := LoadFrom(cfgPath)
+			if err != nil {
+				t.Fatalf("LoadFrom: %v\n%s", err, out)
+			}
+			got := cfg.Workspaces["szn"].Network.Get().AgentEndpoints
+			if !slices.Equal(got, tt.want) || (got == nil) != (tt.want == nil) {
+				t.Errorf("workspace agent_endpoints = %#v, want %#v\n%s", got, tt.want, out)
+			}
+		})
+	}
+}
+
+func TestRenderFirstTimeProviders(t *testing.T) {
+	t.Parallel()
+	out, err := RenderFirstTime(FirstTimeOptions{Agent: "opencode", Providers: []string{"anthropic", "openrouter"}, WorkspaceName: "default"})
+	if err != nil {
+		t.Fatalf("RenderFirstTime failed: %v", err)
+	}
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := WriteBytes(cfgPath, out); err != nil {
+		t.Fatalf("WriteBytes: %v", err)
+	}
+	cfg, err := LoadFrom(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v\n%s", err, out)
+	}
+	want := []string{"api.anthropic.com", "openrouter.ai", "models.dev"}
+	if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, want) {
+		t.Errorf("defaults agent_endpoints = %v, want %v", got, want)
+	}
+
+	if _, err := RenderFirstTime(FirstTimeOptions{Agent: "opencode", Providers: []string{"mistral"}, WorkspaceName: "default"}); err == nil {
+		t.Error("RenderFirstTime with an unknown provider: want error")
 	}
 }
