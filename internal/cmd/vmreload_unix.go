@@ -59,6 +59,9 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	if err := checkTmpReload(ws, running); err != nil {
 		return err
 	}
+	if err := checkRunningVMPolicy(ws, running); err != nil {
+		return err
+	}
 	want, snapshots, err := reloadSpec(ctx, ws, running)
 	if err != nil {
 		return err
@@ -108,6 +111,37 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 		_, _ = color.New(color.FgYellow).Printf("Changes to %s apply after `jailoc restart %s` (this ends running sessions)\n", joinList(changed), ws.Name)
 	}
 	return nil
+}
+
+// checkRunningVMPolicy rejects a reload when the running VM violates a
+// restart-only constraint of the active admin policy that reload cannot apply.
+func checkRunningVMPolicy(ws *workspace.Resolved, running vm.Spec) error {
+	if ws == nil || ws.Policy == nil {
+		return nil
+	}
+	p := ws.Policy
+	var violations []string
+	if p.Workspace.ForbidDocker && running.Docker {
+		violations = append(violations, "enable_docker is active on the running VM")
+	}
+	if p.Workspace.RequireProtectGit && (running.Guest == nil || !running.Guest.NoPrivilegeEscalation) {
+		violations = append(violations, "protect_git is disabled on the running VM")
+	}
+	if p.Network.ForbidIPv6 && guestIPv6(running) {
+		violations = append(violations, "network.ipv6 is enabled on the running VM")
+	}
+	if p.Filesystem.ForbidRWMounts {
+		for _, s := range running.Shares {
+			if !s.ReadOnly {
+				violations = append(violations, fmt.Sprintf("read-write share %q is mounted on the running VM", s.HostPath))
+				break
+			}
+		}
+	}
+	if len(violations) == 0 {
+		return nil
+	}
+	return fmt.Errorf("workspace %q: running VM violates admin policy (%s): %s; run `jailoc restart %s` to apply", ws.Name, p.Path, joinList(violations), ws.Name)
 }
 
 // reloadSpec computes the workspace spec for the current configuration

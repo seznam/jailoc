@@ -87,6 +87,7 @@ nav:
   - Reference:
     - CLI: reference/cli.md
     - Configuration: reference/configuration.md
+    - Admin Policy: reference/admin-policy.md
     - Image Resolution: reference/image-resolution.md
     - Default Image Contents: reference/default-image.md
     - Overlay Compatibility: reference/overlay-compatibility.md

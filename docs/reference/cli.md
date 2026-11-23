@@ -416,6 +416,7 @@ jailoc config [workspace] [flags]
 - Prints the effective workspace configuration together with its `Computed Paths`: `Config File`, `Workspace Config Dir`, `Workspace Cache Dir`, `VM State Dir`, and `Profile Dir`.
 - Lists secrets under `Secrets:` as `NAME (<destination> from_<source> <reference>)`, for example `GH_TOKEN (env from_env HOST_GITHUB_TOKEN)`, `NPM_TOKEN (env from_command "op read op://dev/npm/token", ttl 1h0m0s)` or `db_cert (file from_file /home/you/.config/db.pem)`.
 - Prints only the source reference: secret values are never read, commands are never run.
+- When an [admin policy](admin-policy.md) is active, prints its path, active constraints, and any workspace policy violations (exiting non-zero on violations).
 
 | Flag | Short | Description |
 |------|-------|-------------|

@@ -30,6 +30,9 @@ type Resolved struct {
 	Paths []string
 	// Agent is the harness the workspace runs.
 	Agent agent.Harness
+	// AgentBase is the built-in harness name behind Agent (same as Agent.Name
+	// for built-in agents, or the `from` harness for custom agents).
+	AgentBase string
 	// AgentInstall adds the built-in image layer that installs Agent.
 	AgentInstall bool
 	// AgentArgs are appended to every start of Agent.
@@ -90,6 +93,10 @@ type Resolved struct {
 	// of legacy allowed_hosts, normalized.
 	InternalZones []string
 	CABundle      config.CABundle
+	// PolicyDeny holds mandatory network deny targets from the active admin policy.
+	PolicyDeny []string
+	// Policy is the active admin policy, or nil when none is loaded.
+	Policy *config.Policy
 }
 
 type SecretKind int
@@ -111,6 +118,22 @@ type ResolvedSecret struct {
 }
 
 func Resolve(cfg *config.Config, name string) (*Resolved, error) {
+	r, err := ResolveUnchecked(cfg, name)
+	if err != nil {
+		return nil, err
+	}
+	if cfg != nil && cfg.Policy != nil {
+		if err := EnforcePolicy(cfg, r, cfg.Policy); err != nil {
+			return nil, err
+		}
+	}
+	return r, nil
+}
+
+// ResolveUnchecked resolves workspace name without enforcing cfg.Policy, so
+// commands like `jailoc config` can inspect the resolved workspace alongside
+// any admin policy violations.
+func ResolveUnchecked(cfg *config.Config, name string) (*Resolved, error) {
 	slog.Debug("resolving workspace", "name", name)
 
 	if cfg == nil {
@@ -170,7 +193,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	mergedEnv = append(mergedEnv, ws.Env...)
 	mergedEnv = dedupEnvByKeyLastWins(mergedEnv)
 
-	h, settings, err := resolveAgent(cfg, ws)
+	h, baseName, settings, err := resolveAgent(cfg, ws)
 	if err != nil {
 		return nil, fmt.Errorf("workspace %s: %w", name, err)
 	}
@@ -190,6 +213,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		Name:              name,
 		Paths:             paths,
 		Agent:             h,
+		AgentBase:         baseName,
 		AgentInstall:      settings.Install == nil || *settings.Install,
 		AgentArgs:         settings.Args,
 		AgentProfile:      settings.Profile,
@@ -240,6 +264,10 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		return nil, fmt.Errorf("merge snapshots for workspace %s: %w", name, err)
 	}
 	r.Snapshots = snapshots
+	if cfg.Policy != nil {
+		r.PolicyDeny = slices.Clone(cfg.Policy.Network.Deny)
+		r.Policy = cfg.Policy
+	}
 
 	slog.Debug("workspace resolved", "name", name, "port", r.Port, "paths", len(paths))
 
@@ -255,15 +283,17 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 // tables' mounts in merge order: the built-in agent's defaults and
 // workspace tables, then a custom agent's own. Profile is only taken from
 // the agent's own tables.
-func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, config.AgentSettings, error) {
+func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, string, config.AgentSettings, error) {
 	name := cmp.Or(ws.Agent, cfg.Defaults.Agent, agent.Default)
 	tables := []config.AgentSettings{ws.Agents[name], cfg.Defaults.Agents[name]}
+	baseName := name
 	h, ok := agent.Lookup(name)
 	if !ok {
 		from := cmp.Or(tables[0].From, tables[1].From)
 		if h, ok = agent.Lookup(from); !ok {
-			return agent.Harness{}, config.AgentSettings{}, fmt.Errorf("unknown agent %q: must be one of %s or a custom agent defined under agents", name, strings.Join(agent.Names(), ", "))
+			return agent.Harness{}, "", config.AgentSettings{}, fmt.Errorf("unknown agent %q: must be one of %s or a custom agent defined under agents", name, strings.Join(agent.Names(), ", "))
 		}
+		baseName = from
 		h.Name = name
 		tables = append(tables, ws.Agents[from], cfg.Defaults.Agents[from])
 	}
@@ -288,7 +318,7 @@ func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, confi
 	if settings.DefaultArgs != nil {
 		h.DefaultArgs = slices.Clone(settings.DefaultArgs)
 	}
-	return h, settings, nil
+	return h, baseName, settings, nil
 }
 
 // resolveNetworkRules combines [defaults.network.rules],
