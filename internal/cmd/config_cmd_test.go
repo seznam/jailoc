@@ -98,7 +98,13 @@ notifications = "osc"
 }
 
 func TestConfigComputedProfileDirModes(t *testing.T) {
-	home := t.TempDir()
+	// Use /tmp rather than t.TempDir() so HOME does not live under /var/folders
+	// on macOS, where ~/custom-data would trip the /var forbidden host-mount check.
+	home, err := os.MkdirTemp("/tmp", "jailoc-test-home-")
+	if err != nil {
+		t.Fatalf("create temp home: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 
 	configDir := filepath.Join(home, ".config", "jailoc")
