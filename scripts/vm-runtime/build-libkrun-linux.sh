@@ -26,7 +26,8 @@
 # The image tag names only the libkrun release, so the versions of libkrun
 # and libkrunfw are read from their source trees in the image, and libkrunfw
 # with its license texts is copied from the same image. The image is pinned by
-# digest (builder-image.sh).
+# digest (builder-image.sh), and its libkrun checkout must be at the commit
+# pinned in libkrun-source.sh, the source the guest init is built from.
 #
 # The guest init libkrun embeds is the musl build from build-init.sh, so no
 # glibc code ends up in libkrun.
@@ -50,6 +51,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 patches=$here/libkrun-patches
 # shellcheck source=scripts/vm-runtime/builder-image.sh
 . "$here/builder-image.sh"
+# shellcheck source=scripts/vm-runtime/libkrun-source.sh
+. "$here/libkrun-source.sh"
 
 case "$(uname -s)/$(uname -m)" in
   Linux/x86_64 | Linux/aarch64) ;;
@@ -64,10 +67,15 @@ cargo_auditable=0.7.7
 
 "$runtime" run --rm \
   -v "$patches:/patches:ro" -v "$init:/init/init.krun:ro" -v "$out:/out" \
-  -e CARGO_AUDITABLE_VERSION="$cargo_auditable" \
+  -e CARGO_AUDITABLE_VERSION="$cargo_auditable" -e LIBKRUN_COMMIT="$libkrun_commit" \
   "$image" \
   sh -euc '
     libkrun=$(git -C /opt/libkrun describe --tags --exact-match)
+    head=$(git -C /opt/libkrun rev-parse HEAD)
+    if [ "$head" != "$LIBKRUN_COMMIT" ]; then
+      echo "builder image has libkrun $libkrun at $head, not the pinned $LIBKRUN_COMMIT" >&2
+      exit 1
+    fi
     libkrunfw=$(git -C /opt/libkrunfw describe --tags --exact-match)
     kernel=$(sed -n "s/^KERNEL_VERSION = //p" /opt/libkrunfw/Makefile)
     printf "LIBKRUN_VERSION=%s\nLIBKRUNFW_VERSION=%s\nKERNEL_VERSION=%s\n" \

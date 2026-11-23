@@ -14,16 +14,18 @@ set -euo pipefail
 src=$(cd "${1:?go-microvm checkout}" && pwd)
 out=${2:?output directory}
 here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=scripts/vm-runtime/libkrun-source.sh
+. "$here/libkrun-source.sh"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 pinned() { grep "^$1=" "$src/versions.env" | cut -d= -f2; }
-libkrun=$(pinned LIBKRUN_VERSION)
+libkrun=$(libkrun_release "$src")
 libkrunfw=$(pinned LIBKRUNFW_VERSION)
 rev=$(git -C "$src" rev-parse --short HEAD)
-git clone --quiet --depth 1 --branch "$libkrun" https://github.com/libkrun/libkrun "$work/libkrun"
+clone_libkrun "$src" "$work/libkrun"
 git clone --quiet --depth 1 --branch "$libkrunfw" https://github.com/libkrun/libkrunfw "$work/libkrunfw"
 # The patches can change Cargo.lock (0004 bumps imago), so the crates listed
 # below are the ones built into the patched libkrun.

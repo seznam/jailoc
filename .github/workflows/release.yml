@@ -60,10 +60,18 @@ jobs:
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.55.0
-      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
-        with:
-          version: "~> v2"
-          args: release --verbose --skip=validate
+      - name: Install GoReleaser
+        env:
+          GORELEASER_VERSION: v2.20.3
+          GORELEASER_SHA256: a36d5d7d07a5e538e052cef2a9f93f1cd4af493cf5a3712b9177c1ebe360f0e7
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/goreleaser.tar.gz" "https://github.com/goreleaser/goreleaser/releases/download/${GORELEASER_VERSION}/goreleaser_Linux_x86_64.tar.gz"
+          echo "${GORELEASER_SHA256}  $RUNNER_TEMP/goreleaser.tar.gz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/goreleaser"
+          tar -xzf "$RUNNER_TEMP/goreleaser.tar.gz" -C "$RUNNER_TEMP/goreleaser" goreleaser
+          echo "$RUNNER_TEMP/goreleaser" >> "$GITHUB_PATH"
+      - name: GoReleaser
+        run: goreleaser release --verbose --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
