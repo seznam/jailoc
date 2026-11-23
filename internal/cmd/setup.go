@@ -1,20 +1,18 @@
 package cmd
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/charmbracelet/huh"
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -35,16 +33,16 @@ var setupCmd = &cobra.Command{
 	Long: `Configure jailoc interactively.
 
 When run for the first time (no config.toml or still unmodified defaults),
-setup walks through global defaults (coding agent, Git/SSH/GPG forwarding,
-network policy, Docker in the VM, CPU/memory limits) and configures the
-initial workspace.
+setup walks through global defaults (coding agent, model providers, Git/SSH/GPG
+forwarding, network policy, Docker in the VM, CPU/memory limits) and configures
+the initial workspace.
 
 When run with an existing customized config.toml, setup adds or updates a
 workspace interactively.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd fits int on 64-bit platforms
-		if !interactive && !setupYes {
+		if !interactive && !setupYes && !isAccessibleEnv() {
 			return errors.New("setup asks questions; run it in a terminal or pass --yes to accept the defaults")
 		}
 		targetDir, err := resolveTargetPath(args)
@@ -52,7 +50,7 @@ workspace interactively.`,
 			return fmt.Errorf("resolve target directory: %w", err)
 		}
 		ctx := cmd.Context()
-		res, err := runSetup(ctx, newStdinPrompter(setupYes), setupOptions{
+		res, err := runSetup(ctx, newStdinPromptIO(setupYes), setupOptions{
 			configPath: config.ConfigPath(),
 			targetDir:  targetDir,
 			dryRun:     setupDryRun,
@@ -106,200 +104,256 @@ type setupResult struct {
 	startNow bool
 }
 
-type wizardPrompter struct {
-	ctx       context.Context
-	in        *bufio.Reader
-	out       io.Writer
-	yes       bool
-	explained bool
-	// interrupt sets a read deadline on the input to unblock a pending read
-	// when ctx is cancelled; nil leaves the read running.
-	interrupt func(time.Time) error
+var setupAgentOptions = []string{"opencode", "omo", "claude", "copilot", "agy", "opencode1"}
+
+func agentSelectOptions(includeInherit bool) []huh.Option[string] {
+	var opts []huh.Option[string]
+	if includeInherit {
+		opts = append(opts, huh.NewOption("inherit (use [defaults] agent)", "inherit"))
+	}
+	for _, name := range setupAgentOptions {
+		label := name
+		if h, ok := agent.Lookup(name); ok && h.Title != "" {
+			label = fmt.Sprintf("%s (%s)", name, h.Title)
+		}
+		opts = append(opts, huh.NewOption(label, name))
+	}
+	return opts
 }
 
-func newStdinPrompter(yes bool) *wizardPrompter {
-	return &wizardPrompter{
-		in:        bufio.NewReader(os.Stdin),
-		out:       os.Stdout,
-		yes:       yes,
-		interrupt: os.Stdin.SetReadDeadline,
-	}
+// firstTimeAnswers holds the answers for first-time onboarding.
+type firstTimeAnswers struct {
+	agent        string
+	providers    []string
+	gitConfig    bool
+	sshAuthSock  bool
+	gpgAgent     bool
+	networkMode  string // "dev-deps" or "internet"
+	extraHosts   string
+	enableDocker bool
+	cpu          string
+	memory       string
+	wsName       string
+	wsDir        string
+	confirmBroad bool
+	save         bool
+	startNow     bool
 }
 
-func (p *wizardPrompter) explain(lines ...string) {
-	if p.yes || len(lines) == 0 {
-		return
+func defaultFirstTimeAnswers(opts setupOptions) firstTimeAnswers {
+	defAgent := detectPreferredAgent()
+	if !slices.Contains(setupAgentOptions, defAgent) {
+		defAgent = agent.Default
 	}
-	if p.explained {
-		_, _ = fmt.Fprintln(p.out)
+	var providers []string
+	if h, ok := agent.Lookup("opencode"); ok {
+		providers = h.ProviderNames()
 	}
-	p.explained = true
-	faint := color.New(color.Faint)
-	for _, line := range lines {
-		_, _ = faint.Fprintf(p.out, "  %s\n", line)
-	}
-}
-
-func (p *wizardPrompter) readLine() (string, error) {
-	type result struct {
-		line string
-		err  error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		line, err := p.in.ReadString('\n')
-		ch <- result{line, err}
-	}()
-	select {
-	case <-p.ctx.Done():
-		if p.interrupt != nil && p.interrupt(time.Now()) == nil {
-			<-ch
-			_ = p.interrupt(time.Time{})
-		}
-		return "", p.ctx.Err()
-	case r := <-ch:
-		return r.line, r.err
-	}
-}
-
-func (p *wizardPrompter) choose(question string, options []string, def int) (int, error) {
-	labels := make([]string, len(options))
-	for i, o := range options {
-		labels[i] = o
-		if i == def && len(o) > 0 {
-			labels[i] = strings.ToUpper(o[:1]) + o[1:]
-		}
-	}
-	prompt := fmt.Sprintf("%s [%s] ", question, strings.Join(labels, "/"))
-	for {
-		if err := p.ctx.Err(); err != nil {
-			return 0, err
-		}
-		_, _ = fmt.Fprint(p.out, prompt)
-		if p.yes {
-			_, _ = fmt.Fprintln(p.out, options[def])
-			return def, nil
-		}
-		line, err := p.readLine()
-		if p.ctx.Err() != nil {
-			return 0, p.ctx.Err()
-		}
-		answer := strings.ToLower(strings.TrimSpace(line))
-		if answer == "" && err != nil {
-			return 0, fmt.Errorf("read answer: %w", err)
-		}
-		if answer == "" {
-			return def, nil
-		}
-		if i, ok := matchOption(answer, options); ok {
-			return i, nil
-		}
-		_, _ = fmt.Fprintf(p.out, "  answer one of: %s\n", strings.Join(options, ", "))
+	return firstTimeAnswers{
+		agent:        defAgent,
+		providers:    providers,
+		gitConfig:    true,
+		sshAuthSock:  os.Getenv("SSH_AUTH_SOCK") != "",
+		gpgAgent:     false,
+		networkMode:  "dev-deps",
+		extraHosts:   "",
+		enableDocker: false,
+		cpu:          "2",
+		memory:       "4g",
+		wsName:       seededWorkspaceName(opts, "default"),
+		wsDir:        opts.targetDir,
+		save:         true,
+		startNow:     false,
 	}
 }
 
-// matchOption returns the option equal to answer (case-insensitive) or, for
-// a single-letter answer, the only option starting with that letter.
-func matchOption(answer string, options []string) (int, bool) {
-	for i, o := range options {
-		if answer == strings.ToLower(o) {
-			return i, true
+func (a firstTimeAnswers) toOptions() (config.FirstTimeOptions, string, error) {
+	if err := validatePositiveFloat(a.cpu); err != nil {
+		return config.FirstTimeOptions{}, "", err
+	}
+	cpuVal, _ := strconv.ParseFloat(strings.TrimSpace(a.cpu), 64)
+	if err := config.ValidateMemoryFormat(a.memory); err != nil {
+		return config.FirstTimeOptions{}, "", err
+	}
+	if err := config.ValidateWorkspaceName(a.wsName); err != nil {
+		return config.FirstTimeOptions{}, "", err
+	}
+	wsDir, err := normalizeSetupDir(a.wsDir)
+	if err != nil {
+		return config.FirstTimeOptions{}, "", err
+	}
+	allowInternet := a.networkMode == "internet"
+	var extraHosts []string
+	if !allowInternet {
+		if err := validateHostsCSV(a.extraHosts); err != nil {
+			return config.FirstTimeOptions{}, "", err
 		}
+		extraHosts = splitCSV(a.extraHosts)
 	}
-	if len(answer) != 1 {
-		return 0, false
+	var providers []string
+	if h, ok := agent.Lookup(a.agent); ok && h.ExplicitEndpoints {
+		providers = normalizeProviders(h, a.providers)
 	}
-	match := -1
-	for i, o := range options {
-		if strings.HasPrefix(strings.ToLower(o), answer) {
-			if match >= 0 {
-				return 0, false
-			}
-			match = i
-		}
-	}
-	return match, match >= 0
+	return config.FirstTimeOptions{
+		Agent:         a.agent,
+		Providers:     providers,
+		GitConfig:     a.gitConfig,
+		SSHAuthSock:   a.sshAuthSock,
+		GPGAgent:      a.gpgAgent,
+		EnableDocker:  a.enableDocker,
+		CPU:           cpuVal,
+		Memory:        strings.TrimSpace(a.memory),
+		AllowInternet: allowInternet,
+		ExtraHosts:    extraHosts,
+		WorkspaceName: a.wsName,
+		WorkspacePath: wsDir,
+	}, wsDir, nil
 }
 
-func (p *wizardPrompter) confirm(question string, def bool) (bool, error) {
-	options := []string{"yes", "no"}
-	d := 1
-	if def {
-		d = 0
+func (a firstTimeAnswers) summary(configPath string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "  Config file:   %s\n", configPath)
+	fmt.Fprintf(&b, "  Agent:         %s\n", a.agent)
+	if h, ok := agent.Lookup(a.agent); ok && h.ExplicitEndpoints {
+		p := normalizeProviders(h, a.providers)
+		switch {
+		case p == nil:
+			fmt.Fprintf(&b, "  Providers:     all (%s)\n", strings.Join(h.ProviderNames(), ", "))
+		case len(p) == 0:
+			fmt.Fprintf(&b, "  Providers:     none (models.dev only)\n")
+		default:
+			fmt.Fprintf(&b, "  Providers:     %s\n", strings.Join(p, ", "))
+		}
 	}
-	i, err := p.choose(question, options, d)
-	return i == 0, err
+	fmt.Fprintf(&b, "  Forwarding:    git_config=%t, ssh_auth_sock=%t, gpg_agent=%t\n", a.gitConfig, a.sshAuthSock, a.gpgAgent)
+	netSummary := a.networkMode
+	if a.networkMode != "internet" {
+		if hosts := splitCSV(a.extraHosts); len(hosts) > 0 {
+			netSummary += " + " + strings.Join(hosts, ", ")
+		}
+	}
+	fmt.Fprintf(&b, "  Network:       %s\n", netSummary)
+	fmt.Fprintf(&b, "  VM resources:  %s CPUs, %s memory, docker=%t\n", strings.TrimSpace(a.cpu), strings.TrimSpace(a.memory), a.enableDocker)
+	dir := a.wsDir
+	if norm, err := normalizeSetupDir(a.wsDir); err == nil {
+		dir = norm
+	}
+	fmt.Fprintf(&b, "  Workspace:     %s -> %s", a.wsName, dir)
+	return b.String()
 }
 
-func (p *wizardPrompter) input(question, def string, validate func(string) error) (string, error) {
-	prompt := fmt.Sprintf("%s: ", question)
-	if def != "" {
-		prompt = fmt.Sprintf("%s [%s]: ", question, def)
+// workspaceSetupAnswers holds the answers for adding or updating a workspace.
+type workspaceSetupAnswers struct {
+	name          string
+	confirmUpdate bool
+	dir           string
+	confirmBroad  bool
+	agent         string // "inherit" or agent name
+	providers     []string
+	docker        string // "inherit", "yes", "no"
+	networkMode   string // "inherit", "internet", "custom"
+	extraHosts    string
+	save          bool
+	startNow      bool
+}
+
+func defaultWorkspaceSetupAnswers(opts setupOptions) workspaceSetupAnswers {
+	var providers []string
+	if h, ok := agent.Lookup("opencode"); ok {
+		providers = h.ProviderNames()
 	}
-	for {
-		if err := p.ctx.Err(); err != nil {
-			return "", err
-		}
-		_, _ = fmt.Fprint(p.out, prompt)
-		if p.yes {
-			_, _ = fmt.Fprintln(p.out, def)
-			if validate != nil {
-				if err := validate(def); err != nil {
-					return "", err
-				}
-			}
-			return def, nil
-		}
-		line, err := p.readLine()
-		if p.ctx.Err() != nil {
-			return "", p.ctx.Err()
-		}
-		answer := strings.TrimSpace(line)
-		if answer == "" && err != nil {
-			return "", fmt.Errorf("read input: %w", err)
-		}
-		if answer == "" {
-			answer = def
-		}
-		if validate != nil {
-			if err := validate(answer); err != nil {
-				_, _ = fmt.Fprintf(p.out, "  %v\n", err)
-				continue
-			}
-		}
-		return answer, nil
+	return workspaceSetupAnswers{
+		name:          seededWorkspaceName(opts, config.SanitizeWorkspaceName(filepath.Base(opts.targetDir))),
+		confirmUpdate: true,
+		dir:           opts.targetDir,
+		agent:         "inherit",
+		providers:     providers,
+		docker:        "inherit",
+		networkMode:   "inherit",
+		extraHosts:    "",
+		save:          true,
+		startNow:      false,
 	}
 }
 
-// workspaceDir asks for the workspace directory and, like `jailoc add`,
-// confirms a path that shares the whole home directory or filesystem. With
-// --yes such a path is refused instead of confirmed.
-func (p *wizardPrompter) workspaceDir(question, def string) (string, error) {
-	for {
-		answer, err := p.input(question, def, validateWorkspaceDir)
-		if err != nil {
-			return "", err
-		}
-		dir, err := normalizeSetupDir(answer)
-		if err != nil {
-			return "", err
-		}
-		if !isBroadPath(dir) {
-			return dir, nil
-		}
-		if p.yes {
-			return "", fmt.Errorf("%q is a very broad path; run setup interactively or pass a narrower directory", dir)
-		}
-		_, _ = color.New(color.FgYellow).Fprintf(p.out, "WARNING: %q is a very broad path — this will share your entire directory tree with the VM.\n", dir)
-		ok, err := p.confirm("Are you sure?", false)
-		if err != nil {
-			return "", err
-		}
-		if ok {
-			return dir, nil
-		}
-		def = ""
+func (a workspaceSetupAnswers) toOptions(raw []byte) (config.WorkspaceOptions, string, error) {
+	if err := config.ValidateWorkspaceName(a.name); err != nil {
+		return config.WorkspaceOptions{}, "", err
 	}
+	wsDir, err := normalizeSetupDir(a.dir)
+	if err != nil {
+		return config.WorkspaceOptions{}, "", err
+	}
+	wsAgent := ""
+	if a.agent != "" && a.agent != "inherit" {
+		wsAgent = a.agent
+	}
+	var enableDocker *bool
+	switch a.docker {
+	case "yes":
+		v := true
+		enableDocker = &v
+	case "no":
+		v := false
+		enableDocker = &v
+	}
+	allowInternet := a.networkMode == "internet"
+	var extraHosts []string
+	if a.networkMode == "custom" {
+		if err := validateHostsCSV(a.extraHosts); err != nil {
+			return config.WorkspaceOptions{}, "", err
+		}
+		extraHosts = splitCSV(a.extraHosts)
+	}
+	wsOpts := config.WorkspaceOptions{
+		Name:          a.name,
+		Paths:         []string{wsDir},
+		Agent:         wsAgent,
+		EnableDocker:  enableDocker,
+		AllowInternet: allowInternet,
+		ExtraHosts:    extraHosts,
+	}
+	if h, seed, err := config.SeedAgent(raw, wsOpts); err != nil {
+		return config.WorkspaceOptions{}, "", err
+	} else if seed {
+		wsOpts.Providers = normalizeProviders(h, a.providers)
+	}
+	return wsOpts, wsDir, nil
+}
+
+func (a workspaceSetupAnswers) summary(configPath string, raw []byte) string {
+	var b strings.Builder
+	dir := a.dir
+	if norm, err := normalizeSetupDir(a.dir); err == nil {
+		dir = norm
+	}
+	fmt.Fprintf(&b, "  Config file:   %s\n", configPath)
+	fmt.Fprintf(&b, "  Workspace:     %s -> %s\n", a.name, dir)
+	fmt.Fprintf(&b, "  Agent:         %s\n", cmp.Or(a.agent, "inherit"))
+	probe := config.WorkspaceOptions{Name: a.name}
+	if a.agent != "inherit" {
+		probe.Agent = a.agent
+	}
+	if h, seed, err := config.SeedAgent(raw, probe); err == nil && seed {
+		p := normalizeProviders(h, a.providers)
+		switch {
+		case p == nil:
+			fmt.Fprintf(&b, "  Providers:     all (%s)\n", strings.Join(h.ProviderNames(), ", "))
+		case len(p) == 0:
+			fmt.Fprintf(&b, "  Providers:     none (models.dev only)\n")
+		default:
+			fmt.Fprintf(&b, "  Providers:     %s\n", strings.Join(p, ", "))
+		}
+	}
+	fmt.Fprintf(&b, "  Docker in VM:  %s\n", cmp.Or(a.docker, "inherit"))
+	netSummary := cmp.Or(a.networkMode, "inherit")
+	if a.networkMode == "custom" {
+		if hosts := splitCSV(a.extraHosts); len(hosts) > 0 {
+			netSummary += " (" + strings.Join(hosts, ", ") + ")"
+		}
+	}
+	fmt.Fprintf(&b, "  Network:       %s", netSummary)
+	return b.String()
 }
 
 func detectPreferredAgent() string {
@@ -325,8 +379,7 @@ func detectPreferredAgent() string {
 	return agent.Default
 }
 
-func runSetup(ctx context.Context, p *wizardPrompter, opts setupOptions) (setupResult, error) {
-	p.ctx = ctx
+func runSetup(ctx context.Context, p *promptIO, opts setupOptions) (setupResult, error) {
 	if err := ctx.Err(); err != nil {
 		return setupResult{}, err
 	}
@@ -335,9 +388,9 @@ func runSetup(ctx context.Context, p *wizardPrompter, opts setupOptions) (setupR
 		return setupResult{}, err
 	}
 	if isDefault {
-		return runFirstTimeSetup(p, opts)
+		return runFirstTimeSetup(ctx, p, opts)
 	}
-	return runWorkspaceSetup(p, opts)
+	return runWorkspaceSetup(ctx, p, opts)
 }
 
 func seededWorkspaceName(opts setupOptions, fallback string) string {
@@ -350,156 +403,182 @@ func seededWorkspaceName(opts setupOptions, fallback string) string {
 	return fallback
 }
 
-func runFirstTimeSetup(p *wizardPrompter, opts setupOptions) (setupResult, error) {
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(p.out, "Welcome to jailoc! Let's configure %s.\n\n", opts.configPath)
-	p.explained = false
+func runFirstTimeSetup(ctx context.Context, p *promptIO, opts setupOptions) (setupResult, error) {
+	ans := defaultFirstTimeAnswers(opts)
+	out := p.writer()
 
-	agentOptions := []string{"opencode", "omo", "claude", "copilot", "agy", "opencode1"}
-	defAgent := detectPreferredAgent()
-	defAgentIdx := max(slices.Index(agentOptions, defAgent), 0)
-	p.explain(
-		"jailoc installs this agent in the VM and starts it in each session.",
-		"Its host configuration is copied into the VM read-only.",
-	)
-	agentIdx, err := p.choose("Default coding agent", agentOptions, defAgentIdx)
-	if err != nil {
-		return setupResult{}, err
-	}
-	chosenAgent := agentOptions[agentIdx]
-	var providers []string
-	if h, ok := agent.Lookup(chosenAgent); ok && h.ExplicitEndpoints {
-		if providers, err = askProviders(p, h); err != nil {
-			return setupResult{}, err
-		}
-	}
-
-	p.explain("A read-only copy, so commits in the VM use your name and email.")
-	gitCfg, err := p.confirm("Copy host Git configuration into the VM (git_config)?", true)
-	if err != nil {
-		return setupResult{}, err
-	}
-
-	sshDef := os.Getenv("SSH_AUTH_SOCK") != ""
-	p.explain(
-		"Lets SSH and Git in the VM use your keys and ~/.ssh/known_hosts.",
-		"Keys stay on the host, but processes in the VM can use them.",
-	)
-	sshAuth, err := p.confirm("Forward host SSH agent into the VM (ssh_auth_sock)?", sshDef)
-	if err != nil {
-		return setupResult{}, err
-	}
-
-	p.explain(
-		"Lets Git in the VM sign commits and tags with your GPG keys.",
-		"Keys stay on the host, but processes in the VM can sign and decrypt with them.",
-	)
-	gpgAgent, err := p.confirm("Forward host GPG agent into the VM (gpg_agent)?", false)
-	if err != nil {
-		return setupResult{}, err
-	}
-
-	p.explain(
-		"\"dev-deps\" allows selected development services, \"internet\" all public hosts.",
-		"Private networks stay blocked unless you allow them explicitly.",
-	)
-	netIdx, err := p.choose("Default network egress policy", []string{"dev-deps", "internet"}, 0)
-	if err != nil {
-		return setupResult{}, err
-	}
-	allowInternet := netIdx == 1
-
-	var extraHosts []string
-	if !allowInternet {
-		p.explain("Other hosts the agent needs, such as gitlab.corp.example or 10.20.0.0/16.")
-		hostsInput, err := p.input("Extra allowed hostnames or CIDRs (comma-separated, optional)", "", validateHostsCSV)
+	if p != nil && p.yes {
+		wsDir, err := normalizeSetupDir(ans.wsDir)
 		if err != nil {
 			return setupResult{}, err
 		}
-		extraHosts = splitCSV(hostsInput)
+		if isBroadPath(wsDir) {
+			return setupResult{}, fmt.Errorf("%q is a very broad path; run setup interactively or pass a narrower directory", wsDir)
+		}
+		return applyFirstTimeSetup(ctx, p, opts, ans)
 	}
 
-	p.explain("Containers run in the VM's own Docker; the host Docker socket is not shared.")
-	enableDocker, err := p.confirm("Enable Docker inside the VM by default (enable_docker)?", false)
-	if err != nil {
+	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(out, "Welcome to jailoc! Let's configure %s.\n\n", opts.configPath)
+
+	form := buildFirstTimeForm(&ans, opts)
+	if err := p.runForm(ctx, form); err != nil {
 		return setupResult{}, err
 	}
+	return applyFirstTimeSetup(ctx, p, opts, ans)
+}
 
-	p.explain("Virtual CPUs per VM, rounded up to a whole number.")
-	cpuStr, err := p.input("Default VM CPUs", "2", validatePositiveFloat)
-	if err != nil {
-		return setupResult{}, err
-	}
-	cpuVal, _ := strconv.ParseFloat(cpuStr, 64)
+func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) *huh.Form {
+	opencodeHarness, _ := agent.Lookup("opencode")
 
-	p.explain(
-		"RAM limit per VM, not memory reserved on the host.",
-		"Allocated as needed; freed pages and unused file cache return to the host.",
+	agentGroup := huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Default coding agent").
+			Description("jailoc installs this agent in the VM and starts it in each session.\nIts host configuration is copied into the VM read-only.").
+			Options(agentSelectOptions(false)...).
+			Value(&ans.agent),
 	)
-	memVal, err := p.input("Default VM memory", "4g", config.ValidateMemoryFormat)
-	if err != nil {
-		return setupResult{}, err
-	}
 
-	p.explain("Used in commands such as \"jailoc up <name>\".")
-	wsName, err := p.input("Initial workspace name", seededWorkspaceName(opts, "default"), config.ValidateWorkspaceName)
-	if err != nil {
-		return setupResult{}, err
-	}
-
-	p.explain(
-		"Shared read-write with the VM at the same path.",
-		"The agent can modify any file in it.",
-	)
-	wsDir, err := p.workspaceDir("Initial workspace directory path", opts.targetDir)
-	if err != nil {
-		return setupResult{}, err
-	}
-
-	rendered, err := config.RenderFirstTime(config.FirstTimeOptions{
-		Agent:         chosenAgent,
-		Providers:     providers,
-		GitConfig:     gitCfg,
-		SSHAuthSock:   sshAuth,
-		GPGAgent:      gpgAgent,
-		EnableDocker:  enableDocker,
-		CPU:           cpuVal,
-		Memory:        memVal,
-		AllowInternet: allowInternet,
-		ExtraHosts:    extraHosts,
-		WorkspaceName: wsName,
-		WorkspacePath: wsDir,
+	providersGroup := huh.NewGroup(
+		providerMultiSelect("Model providers", opencodeHarness, &ans.providers),
+	).WithHideFunc(func() bool {
+		h, ok := agent.Lookup(ans.agent)
+		return !ok || !h.ExplicitEndpoints
 	})
+
+	forwardingGroup := huh.NewGroup(
+		huh.NewConfirm().
+			Title("Copy host Git configuration into the VM (git_config)?").
+			Description("A read-only copy, so commits in the VM use your name and email.").
+			Value(&ans.gitConfig),
+		huh.NewConfirm().
+			Title("Forward host SSH agent into the VM (ssh_auth_sock)?").
+			Description("Lets SSH and Git in the VM use your keys and ~/.ssh/known_hosts.\nKeys stay on the host, but processes in the VM can use them.").
+			Value(&ans.sshAuthSock),
+		huh.NewConfirm().
+			Title("Forward host GPG agent into the VM (gpg_agent)?").
+			Description("Lets Git in the VM sign commits and tags with your GPG keys.\nKeys stay on the host, but processes in the VM can sign and decrypt with them.").
+			Value(&ans.gpgAgent),
+	)
+
+	networkGroup := huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Default network egress policy").
+			Description("\"dev-deps\" allows selected development services, \"internet\" all public hosts.\nPrivate networks stay blocked unless you allow them explicitly.").
+			Options(
+				huh.NewOption("dev-deps (selected development services)", "dev-deps"),
+				huh.NewOption("internet (all public hosts)", "internet"),
+			).
+			Value(&ans.networkMode),
+	)
+
+	extraHostsGroup := huh.NewGroup(
+		huh.NewInput().
+			Title("Extra allowed hostnames or CIDRs (comma-separated, optional)").
+			Description("Other hosts the agent needs, such as gitlab.corp.example or 10.20.0.0/16.").
+			Placeholder("gitlab.corp.example, 10.20.0.0/16").
+			Validate(validateHostsCSV).
+			Value(&ans.extraHosts),
+	).WithHideFunc(func() bool {
+		return ans.networkMode == "internet"
+	})
+
+	vmGroup := huh.NewGroup(
+		huh.NewConfirm().
+			Title("Enable Docker inside the VM by default (enable_docker)?").
+			Description("Containers run in the VM's own Docker; the host Docker socket is not shared.").
+			Value(&ans.enableDocker),
+		huh.NewInput().
+			Title("Default VM CPUs").
+			Description("Virtual CPUs per VM, rounded up to a whole number.").
+			Validate(validatePositiveFloat).
+			Value(&ans.cpu),
+		huh.NewInput().
+			Title("Default VM memory").
+			Description("RAM limit per VM, not memory reserved on the host.\nAllocated as needed; freed pages and unused file cache return to the host.").
+			Validate(config.ValidateMemoryFormat).
+			Value(&ans.memory),
+	)
+
+	workspaceGroup := huh.NewGroup(
+		huh.NewInput().
+			Title("Initial workspace name").
+			Description("Used in commands such as \"jailoc up <name>\".").
+			Validate(config.ValidateWorkspaceName).
+			Value(&ans.wsName),
+		huh.NewInput().
+			Title("Initial workspace directory path").
+			Description("Shared read-write with the VM at the same path.\nThe agent can modify any file in it.").
+			Validate(validateWorkspaceDir).
+			Value(&ans.wsDir),
+	)
+
+	broadGroup := huh.NewGroup(
+		huh.NewConfirm().
+			TitleFunc(func() string {
+				dir, err := normalizeSetupDir(ans.wsDir)
+				if err != nil {
+					dir = ans.wsDir
+				}
+				return fmt.Sprintf("WARNING: %q is a very broad path — this will share your entire directory tree with the VM. Are you sure?", dir)
+			}, &ans.wsDir).
+			Description("Choose No and press Shift+Tab to pick a narrower directory.").
+			Validate(func(ok bool) error {
+				if !ok {
+					return errors.New("broad path declined; press Shift+Tab to enter a narrower directory")
+				}
+				return nil
+			}).
+			Value(&ans.confirmBroad),
+	).WithHideFunc(func() bool {
+		dir, err := normalizeSetupDir(ans.wsDir)
+		if err != nil {
+			return true
+		}
+		return !isBroadPath(dir)
+	})
+
+	groups := []*huh.Group{
+		agentGroup,
+		providersGroup,
+		forwardingGroup,
+		networkGroup,
+		extraHostsGroup,
+		vmGroup,
+		workspaceGroup,
+		broadGroup,
+	}
+
+	if !opts.dryRun {
+		reviewFields := []huh.Field{
+			huh.NewNote().
+				Title("Review configuration").
+				DescriptionFunc(func() string {
+					return ans.summary(opts.configPath)
+				}, ans),
+			huh.NewConfirm().
+				Title(fmt.Sprintf("Write configuration to %s?", opts.configPath)).
+				Value(&ans.save),
+		}
+		groups = append(groups, huh.NewGroup(reviewFields...))
+	}
+
+	return huh.NewForm(groups...)
+}
+
+func applyFirstTimeSetup(ctx context.Context, p *promptIO, opts setupOptions, ans firstTimeAnswers) (setupResult, error) {
+	firstOpts, wsDir, err := ans.toOptions()
 	if err != nil {
 		return setupResult{}, fmt.Errorf("build configuration: %w", err)
 	}
-
-	return saveSetup(p, opts, rendered, setupResult{name: wsName, dir: wsDir},
-		fmt.Sprintf("\nWrite configuration to %s?", opts.configPath),
-		fmt.Sprintf("Wrote %s (workspace %q -> %s)\n", opts.configPath, wsName, wsDir))
+	rendered, err := config.RenderFirstTime(firstOpts)
+	if err != nil {
+		return setupResult{}, fmt.Errorf("build configuration: %w", err)
+	}
+	return finishSetup(ctx, p, opts, rendered, setupResult{name: ans.wsName, dir: wsDir}, ans.save,
+		fmt.Sprintf("Wrote %s (workspace %q -> %s)\n", opts.configPath, ans.wsName, wsDir))
 }
 
-// askProviders asks which model providers a multi-provider agent may reach;
-// nil selects all of them.
-func askProviders(p *wizardPrompter, h agent.Harness) ([]string, error) {
-	p.explain(
-		"The agent reaches only the model and auth endpoints of the providers you pick.",
-		"Providers: "+strings.Join(h.ProviderNames(), ", ")+".",
-	)
-	answer, err := p.input("Model providers (comma-separated, empty for all)", "", func(s string) error {
-		_, err := h.ParseProviders(s)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	providers, err := h.ParseProviders(answer)
-	if err != nil {
-		return nil, fmt.Errorf("parse providers: %w", err)
-	}
-	return providers, nil
-}
-
-func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error) {
+func runWorkspaceSetup(ctx context.Context, p *promptIO, opts setupOptions) (setupResult, error) {
 	cfg, err := config.LoadFrom(opts.configPath)
 	if err != nil {
 		return setupResult{}, err
@@ -509,138 +588,217 @@ func runWorkspaceSetup(p *wizardPrompter, opts setupOptions) (setupResult, error
 		return setupResult{}, fmt.Errorf("read config %q: %w", opts.configPath, err)
 	}
 
-	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(p.out, "Existing configuration found at %s. Let's configure a workspace.\n\n", opts.configPath)
-	p.explained = false
+	ans := defaultWorkspaceSetupAnswers(opts)
+	out := p.writer()
 
-	defName := seededWorkspaceName(opts, config.SanitizeWorkspaceName(filepath.Base(opts.targetDir)))
-	p.explain("Used in commands such as \"jailoc up <name>\".")
-	wsName, err := p.input("Workspace name", defName, config.ValidateWorkspaceName)
-	if err != nil {
-		return setupResult{}, err
-	}
-
-	if existing, exists := cfg.Workspaces[wsName]; exists && len(existing.Paths) > 0 {
-		overwrite, err := p.confirm(fmt.Sprintf("Workspace %q already exists. Update it?", wsName), true)
-		if err != nil || !overwrite {
-			if err == nil {
-				_, _ = fmt.Fprintln(p.out, "Nothing changed.")
-			}
-			return setupResult{}, err
-		}
-	}
-
-	p.explain(
-		"Shared read-write with the VM at the same path.",
-		"The agent can modify any file in it.",
-	)
-	wsDir, err := p.workspaceDir("Workspace directory path", opts.targetDir)
-	if err != nil {
-		return setupResult{}, err
-	}
-
-	agentOptions := []string{"inherit", "opencode", "omo", "claude", "copilot", "agy", "opencode1"}
-	p.explain("\"inherit\" uses the [defaults] agent.")
-	agentIdx, err := p.choose("Workspace coding agent", agentOptions, 0)
-	if err != nil {
-		return setupResult{}, err
-	}
-	wsAgent := ""
-	if agentIdx > 0 {
-		wsAgent = agentOptions[agentIdx]
-	}
-
-	p.explain(
-		"Containers run in the VM's own Docker; the host Docker socket is not shared.",
-		"\"inherit\" uses the [defaults] setting.",
-	)
-	dockerIdx, err := p.choose("Enable Docker in this workspace", []string{"inherit", "yes", "no"}, 0)
-	if err != nil {
-		return setupResult{}, err
-	}
-	var enableDocker *bool
-	switch dockerIdx {
-	case 1:
-		v := true
-		enableDocker = &v
-	case 2:
-		v := false
-		enableDocker = &v
-	}
-
-	p.explain(
-		"\"inherit\" uses the [defaults] rules.",
-		"\"internet\" adds all public hosts to them, \"custom\" the hosts you list.",
-	)
-	netIdx, err := p.choose("Workspace network policy", []string{"inherit", "internet", "custom"}, 0)
-	if err != nil {
-		return setupResult{}, err
-	}
-	allowInternet := netIdx == 1
-	var extraHosts []string
-	if netIdx == 2 {
-		p.explain("Other hosts the agent needs, such as *.corp.example or 10.20.0.0/16.")
-		hostsInput, err := p.input("Allowed hostnames or CIDRs for this workspace (comma-separated)", "", validateHostsCSV)
+	if p != nil && p.yes {
+		wsDir, err := normalizeSetupDir(ans.dir)
 		if err != nil {
 			return setupResult{}, err
 		}
-		extraHosts = splitCSV(hostsInput)
-	}
-
-	wsOpts := config.WorkspaceOptions{
-		Name:          wsName,
-		Paths:         []string{wsDir},
-		Agent:         wsAgent,
-		EnableDocker:  enableDocker,
-		AllowInternet: allowInternet,
-		ExtraHosts:    extraHosts,
-	}
-	if h, seed, err := config.SeedAgent(raw, wsOpts); err != nil {
-		return setupResult{}, fmt.Errorf("update configuration: %w", err)
-	} else if seed {
-		if wsOpts.Providers, err = askProviders(p, h); err != nil {
-			return setupResult{}, err
+		if isBroadPath(wsDir) {
+			return setupResult{}, fmt.Errorf("%q is a very broad path; run setup interactively or pass a narrower directory", wsDir)
 		}
+		return applyWorkspaceSetup(ctx, p, opts, raw, ans)
 	}
 
+	_, _ = color.New(color.FgCyan, color.Bold).Fprintf(out, "Existing configuration found at %s. Let's configure a workspace.\n\n", opts.configPath)
+
+	form := buildWorkspaceSetupForm(&ans, opts, cfg, raw)
+	if err := p.runForm(ctx, form); err != nil {
+		return setupResult{}, err
+	}
+	if existing, exists := cfg.Workspaces[ans.name]; exists && len(existing.Paths) > 0 && !ans.confirmUpdate {
+		_, _ = fmt.Fprintln(out, "Nothing changed.")
+		return setupResult{}, nil
+	}
+	return applyWorkspaceSetup(ctx, p, opts, raw, ans)
+}
+
+func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg *config.Config, raw []byte) *huh.Form {
+	opencodeHarness, _ := agent.Lookup("opencode")
+
+	isExisting := func() bool {
+		existing, exists := cfg.Workspaces[ans.name]
+		return exists && len(existing.Paths) > 0
+	}
+	skippedUpdate := func() bool {
+		return isExisting() && !ans.confirmUpdate
+	}
+
+	nameGroup := huh.NewGroup(
+		huh.NewInput().
+			Title("Workspace name").
+			Description("Used in commands such as \"jailoc up <name>\".").
+			Validate(config.ValidateWorkspaceName).
+			Value(&ans.name),
+	)
+
+	overwriteGroup := huh.NewGroup(
+		huh.NewConfirm().
+			TitleFunc(func() string {
+				return fmt.Sprintf("Workspace %q already exists. Update it?", ans.name)
+			}, &ans.name).
+			Value(&ans.confirmUpdate),
+	).WithHideFunc(func() bool {
+		return !isExisting()
+	})
+
+	dirGroup := huh.NewGroup(
+		huh.NewInput().
+			Title("Workspace directory path").
+			Description("Shared read-write with the VM at the same path.\nThe agent can modify any file in it.").
+			Validate(validateWorkspaceDir).
+			Value(&ans.dir),
+	).WithHideFunc(skippedUpdate)
+
+	broadGroup := huh.NewGroup(
+		huh.NewConfirm().
+			TitleFunc(func() string {
+				dir, err := normalizeSetupDir(ans.dir)
+				if err != nil {
+					dir = ans.dir
+				}
+				return fmt.Sprintf("WARNING: %q is a very broad path — this will share your entire directory tree with the VM. Are you sure?", dir)
+			}, &ans.dir).
+			Description("Choose No and press Shift+Tab to pick a narrower directory.").
+			Validate(func(ok bool) error {
+				if !ok {
+					return errors.New("broad path declined; press Shift+Tab to enter a narrower directory")
+				}
+				return nil
+			}).
+			Value(&ans.confirmBroad),
+	).WithHideFunc(func() bool {
+		if skippedUpdate() {
+			return true
+		}
+		dir, err := normalizeSetupDir(ans.dir)
+		if err != nil {
+			return true
+		}
+		return !isBroadPath(dir)
+	})
+
+	optionsGroup := huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Workspace coding agent").
+			Description("\"inherit\" uses the [defaults] agent.").
+			Options(agentSelectOptions(true)...).
+			Value(&ans.agent),
+		huh.NewSelect[string]().
+			Title("Enable Docker in this workspace").
+			Description("Containers run in the VM's own Docker; the host Docker socket is not shared.\n\"inherit\" uses the [defaults] setting.").
+			Options(
+				huh.NewOption("inherit (use [defaults] setting)", "inherit"),
+				huh.NewOption("yes", "yes"),
+				huh.NewOption("no", "no"),
+			).
+			Value(&ans.docker),
+		huh.NewSelect[string]().
+			Title("Workspace network policy").
+			Description("\"inherit\" uses the [defaults] rules.\n\"internet\" adds all public hosts to them, \"custom\" the hosts you list.").
+			Options(
+				huh.NewOption("inherit (use [defaults] rules)", "inherit"),
+				huh.NewOption("internet (all public hosts)", "internet"),
+				huh.NewOption("custom (hosts/CIDRs you list)", "custom"),
+			).
+			Value(&ans.networkMode),
+	).WithHideFunc(skippedUpdate)
+
+	extraHostsGroup := huh.NewGroup(
+		huh.NewInput().
+			Title("Allowed hostnames or CIDRs for this workspace (comma-separated)").
+			Description("Other hosts the agent needs, such as *.corp.example or 10.20.0.0/16.").
+			Placeholder("*.corp.example, 10.20.0.0/16").
+			Validate(validateHostsCSV).
+			Value(&ans.extraHosts),
+	).WithHideFunc(func() bool {
+		return skippedUpdate() || ans.networkMode != "custom"
+	})
+
+	providersGroup := huh.NewGroup(
+		providerMultiSelect("Model providers", opencodeHarness, &ans.providers),
+	).WithHideFunc(func() bool {
+		if skippedUpdate() {
+			return true
+		}
+		probe := config.WorkspaceOptions{Name: ans.name}
+		if ans.agent != "inherit" {
+			probe.Agent = ans.agent
+		}
+		_, seed, err := config.SeedAgent(raw, probe)
+		return err != nil || !seed
+	})
+
+	groups := []*huh.Group{
+		nameGroup,
+		overwriteGroup,
+		dirGroup,
+		broadGroup,
+		optionsGroup,
+		extraHostsGroup,
+		providersGroup,
+	}
+
+	if !opts.dryRun {
+		reviewGroup := huh.NewGroup(
+			huh.NewNote().
+				Title("Review workspace").
+				DescriptionFunc(func() string {
+					return ans.summary(opts.configPath, raw)
+				}, ans),
+			huh.NewConfirm().
+				TitleFunc(func() string {
+					return fmt.Sprintf("Save workspace %q to %s?", ans.name, opts.configPath)
+				}, &ans.name).
+				Value(&ans.save),
+		).WithHideFunc(skippedUpdate)
+		groups = append(groups, reviewGroup)
+	}
+
+	return huh.NewForm(groups...)
+}
+
+func applyWorkspaceSetup(ctx context.Context, p *promptIO, opts setupOptions, raw []byte, ans workspaceSetupAnswers) (setupResult, error) {
+	wsOpts, wsDir, err := ans.toOptions(raw)
+	if err != nil {
+		return setupResult{}, fmt.Errorf("update configuration: %w", err)
+	}
 	rendered, err := config.RenderWorkspace(raw, wsOpts)
 	if err != nil {
 		return setupResult{}, fmt.Errorf("update configuration: %w", err)
 	}
-
-	return saveSetup(p, opts, rendered, setupResult{name: wsName, dir: wsDir},
-		fmt.Sprintf("\nSave workspace %q to %s?", wsName, opts.configPath),
-		fmt.Sprintf("Saved workspace %q (%s) in %s\n", wsName, wsDir, opts.configPath))
+	return finishSetup(ctx, p, opts, rendered, setupResult{name: ans.name, dir: wsDir}, ans.save,
+		fmt.Sprintf("Saved workspace %q (%s) in %s\n", ans.name, wsDir, opts.configPath))
 }
 
-func saveSetup(p *wizardPrompter, opts setupOptions, rendered []byte, res setupResult, question, saved string) (setupResult, error) {
+func finishSetup(ctx context.Context, p *promptIO, opts setupOptions, rendered []byte, res setupResult, save bool, savedMsg string) (setupResult, error) {
+	out := p.writer()
 	if opts.dryRun {
-		_, _ = fmt.Fprintf(p.out, "\nconfig.toml (dry run, nothing written):\n\n%s", rendered)
+		_, _ = fmt.Fprintf(out, "\nconfig.toml (dry run, nothing written):\n\n%s", rendered)
 		return setupResult{}, nil
 	}
-
-	ok, err := p.confirm(question, true)
-	if err != nil || !ok {
-		if err == nil {
-			_, _ = fmt.Fprintln(p.out, "Nothing changed.")
-		}
+	if !save {
+		_, _ = fmt.Fprintln(out, "Nothing changed.")
+		return setupResult{}, nil
+	}
+	if err := ctx.Err(); err != nil {
 		return setupResult{}, err
 	}
-	if err := p.ctx.Err(); err != nil {
-		return setupResult{}, err
-	}
-
 	if err := config.WriteBytes(opts.configPath, rendered); err != nil {
 		return setupResult{}, err
 	}
-	_, _ = color.New(color.FgGreen).Fprint(p.out, saved)
+	_, _ = color.New(color.FgGreen).Fprint(out, savedMsg)
 
-	if !opts.askStart || p.yes {
+	if !opts.askStart || (p != nil && p.yes) {
 		return res, nil
 	}
-	res.startNow, err = p.confirm(fmt.Sprintf("Start workspace %q now?", res.name), false)
+	startNow, err := p.confirm(ctx, fmt.Sprintf("Start workspace %q now?", res.name), "", false)
 	if err != nil {
 		return setupResult{}, err
 	}
+	res.startNow = startNow
 	return res, nil
 }
 
@@ -657,9 +815,8 @@ func maybeOfferFirstTimeSetup(ctx context.Context, targetDir, seedName string) (
 	if err != nil || !isDefault {
 		return setupResult{}, nil
 	}
-	p := newStdinPrompter(false)
-	p.ctx = ctx
-	runWizard, err := p.confirm("No customized jailoc configuration found. Run `jailoc setup` wizard now?", true)
+	p := newStdinPromptIO(false)
+	runWizard, err := p.confirm(ctx, "No customized jailoc configuration found. Run `jailoc setup` wizard now?", "", true)
 	if err != nil || !runWizard {
 		return setupResult{}, err
 	}
