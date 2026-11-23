@@ -47,11 +47,22 @@ func vmmSpawner() runner.Spawner { return confinedSpawner{} }
 
 type confinedSpawner struct{}
 
+// runnerProbe, when set, runs on the confined thread right after the runner
+// started, so whatever it starts shares the runner's Landlock domain. Only VM
+// integration builds set it (vmm_sandbox_probe_linux.go).
+var runnerProbe func(cfg runner.Config, runnerPID int)
+
 func (confinedSpawner) Spawn(ctx context.Context, cfg runner.Config) (runner.ProcessHandle, error) {
+	if len(cfg.VsockPorts) > 0 {
+		return nil, fmt.Errorf("start confined VM runner: vsock ports are not permitted (%d configured)", len(cfg.VsockPorts))
+	}
 	var proc *runner.Process
 	err := startConfined(vmmRules(cfg), func() error {
 		var err error
 		proc, err = runner.SpawnProcess(ctx, cfg)
+		if err == nil && runnerProbe != nil {
+			runnerProbe(cfg, proc.PID())
+		}
 		return err
 	})
 	if err != nil {
@@ -113,13 +124,9 @@ func vmmRules(cfg runner.Config) []landlockRule {
 			rules = append(rules, landlockRule{path: filepath.Dir(p), access: llRead | llWrite | unix.LANDLOCK_ACCESS_FS_MAKE_REG})
 		}
 	}
-	// The broker's NIC socket; libkrun binds vsock sockets itself.
+	// The broker's NIC socket. jailoc configures no vsock ports.
 	if cfg.NetSocket != "" {
 		rules = append(rules, landlockRule{path: filepath.Dir(cfg.NetSocket), access: unix.LANDLOCK_ACCESS_FS_RESOLVE_UNIX})
-	}
-	for _, v := range cfg.VsockPorts {
-		rules = append(rules, landlockRule{path: filepath.Dir(v.SocketPath), access: unix.LANDLOCK_ACCESS_FS_RESOLVE_UNIX |
-			unix.LANDLOCK_ACCESS_FS_MAKE_SOCK | unix.LANDLOCK_ACCESS_FS_REMOVE_FILE})
 	}
 	return rules
 }

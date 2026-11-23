@@ -3,12 +3,14 @@
 package vm
 
 import (
+	"context"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stacklok/go-microvm/runner"
@@ -207,5 +209,21 @@ func TestVMMRulesGrantTmpDiskOnly(t *testing.T) {
 	}
 	if got[0].access&unix.LANDLOCK_ACCESS_FS_REFER != 0 || got[0].access&unix.LANDLOCK_ACCESS_FS_REMOVE_FILE != 0 {
 		t.Fatalf("tmp disk rule may rename or remove: %#x", got[0].access)
+	}
+}
+
+// TestConfinedSpawnerRejectsVsockPorts checks that jailoc's Linux VMM spawner
+// refuses any vsock port configuration and grants no Landlock rules for it.
+func TestConfinedSpawnerRejectsVsockPorts(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "vsock")
+	cfg := runner.Config{VsockPorts: []runner.VsockPort{{Port: 1024, SocketPath: filepath.Join(dir, "agent.sock")}}}
+	for _, r := range vmmRules(cfg) {
+		if r.path == dir {
+			t.Fatalf("vmmRules granted access to vsock dir: %+v", r)
+		}
+	}
+	if _, err := (confinedSpawner{}).Spawn(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "vsock") {
+		t.Fatalf("Spawn with VsockPorts = %v, want vsock error", err)
 	}
 }

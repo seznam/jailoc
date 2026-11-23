@@ -68,7 +68,8 @@ func run(m *testing.M) int {
 	binaryPath = filepath.Join(tmp, "jailoc")
 	for _, args := range [][]string{
 		{"generate", "./internal/guestbin"},
-		{"build", "-o", binaryPath, "./cmd/jailoc"},
+		// The vmintegration tag adds the probe that runs in the runner's Landlock domain.
+		{"build", "-tags", "vmintegration", "-o", binaryPath, "./cmd/jailoc"},
 	} {
 		cmd := exec.Command("go", args...) //nolint:gosec // G204: fixed go subcommands
 		cmd.Dir = root
@@ -144,7 +145,7 @@ dns = "1.1.1.1"
 # Docker Hub serves image blobs from Cloudflare or, at times, from S3.
 [[workspaces.%[7]s.network.rules]]
 name = "dev-deps"
-allow = ["example.com", "*.docker.io", "*.docker.com", "docker-images-prod.s3.dualstack.us-east-1.amazonaws.com", "dl-cdn.alpinelinux.org"]
+allow = ["example.com", "*.nip.io", "*.docker.io", "*.docker.com", "docker-images-prod.s3.dualstack.us-east-1.amazonaws.com", "dl-cdn.alpinelinux.org"]
 
 [[workspaces.%[7]s.network.rules]]
 name = "blocked"
@@ -305,6 +306,12 @@ func TestWorkspaceVM(t *testing.T) {
 		_ = cmd.Run()
 	})
 
+	probes := runnerProbes(agentSock, snapshot)
+	_, noPython := exec.LookPath("python3")
+	if runtime.GOOS == "linux" && noPython == nil {
+		t.Setenv(runnerProbeEnv, runnerProbeScript(probes))
+	}
+
 	start := time.Now()
 	jailoc(ctx, t, agentSock, "up", workspaceName)
 	t.Logf("first up: %s", time.Since(start).Round(time.Second))
@@ -386,6 +393,16 @@ func TestWorkspaceVM(t *testing.T) {
 		if !found {
 			t.Fatal("no running go-microvm-runner process found")
 		}
+	})
+
+	t.Run("confined runner stays inside its rules", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("Landlock confinement of the runner is Linux-only")
+		}
+		if noPython != nil {
+			t.Skip("the runner probe needs python3 on the host")
+		}
+		checkRunnerProbe(t, probes)
 	})
 
 	t.Run("project share", func(t *testing.T) {
@@ -477,6 +494,14 @@ else:
     raise AssertionError("blocked AAAA resolved")
 print("ipv6-dns-ok")
 PY`)
+	})
+
+	t.Run("negative egress", func(t *testing.T) {
+		checkNegativeEgress(ctx, t, agentSock)
+	})
+
+	t.Run("no host vsock", func(t *testing.T) {
+		checkNoVsock(ctx, t)
 	})
 
 	t.Run("memory: zram swap and reclaim", func(t *testing.T) {
