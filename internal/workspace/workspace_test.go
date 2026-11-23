@@ -1884,23 +1884,30 @@ func TestResolveNetworkRulesAndLegacyMigration(t *testing.T) {
 
 func TestResolveAgentEndpoints(t *testing.T) {
 	t.Parallel()
+	claude, ok := agent.Lookup("claude")
+	if !ok {
+		t.Fatal("claude agent not found")
+	}
 	tests := []struct {
 		name     string
+		agent    string
 		defaults []string
 		ws       []string
 		want     []string
 	}{
-		{name: "unset has no agent rule"},
-		{name: "defaults list", defaults: []string{"api.anthropic.com"}, want: []string{"api.anthropic.com"}},
-		{name: "workspace overrides defaults", defaults: []string{"api.anthropic.com"}, ws: []string{"api.openai.com", "*.example.com"}, want: []string{"api.openai.com", "*.example.com"}},
-		{name: "empty workspace list drops rule", defaults: []string{"api.anthropic.com"}, ws: []string{}},
-		{name: "empty defaults list drops rule", defaults: []string{}},
+		{name: "unset has no agent rule", agent: "opencode"},
+		{name: "defaults list", agent: "opencode", defaults: []string{"api.anthropic.com"}, want: []string{"api.anthropic.com"}},
+		{name: "workspace overrides defaults", agent: "omo", defaults: []string{"api.anthropic.com"}, ws: []string{"api.openai.com", "*.example.com"}, want: []string{"api.openai.com", "*.example.com"}},
+		{name: "empty workspace list drops rule", agent: "opencode", defaults: []string{"api.anthropic.com"}, ws: []string{}},
+		{name: "empty defaults list drops rule", agent: "opencode1", defaults: []string{}},
+		{name: "single-provider agent keeps built-in endpoints", agent: "claude", want: claude.Endpoints},
+		{name: "single-provider agent ignores lists", agent: "claude", defaults: []string{}, ws: []string{"api.openai.com"}, want: claude.Endpoints},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &config.Config{
-				Defaults: config.Defaults{Agent: "claude"},
+				Defaults: config.Defaults{Agent: tc.agent},
 				Workspaces: map[string]config.Workspace{
 					"api": {Paths: []string{"/data/api"}},
 				},

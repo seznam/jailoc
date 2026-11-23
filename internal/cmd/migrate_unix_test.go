@@ -641,7 +641,6 @@ func TestRunMigrateDryRunAsksInternalZones(t *testing.T) {
 func TestAddAgentEndpoints(t *testing.T) {
 	t.Parallel()
 	opencode, _ := agent.Lookup("opencode")
-	claude, _ := agent.Lookup("claude")
 
 	t.Run("defaults and differing workspaces", func(t *testing.T) {
 		t.Parallel()
@@ -658,18 +657,14 @@ func TestAddAgentEndpoints(t *testing.T) {
 		if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, opencode.Endpoints) {
 			t.Fatalf("defaults agent_endpoints = %v, want %v", got, opencode.Endpoints)
 		}
-		for _, name := range []string{"api", "tool"} {
-			if got := cfg.Workspaces[name].Network.Get().AgentEndpoints; !slices.Equal(got, claude.Endpoints) {
-				t.Fatalf("%s agent_endpoints = %v, want %v", name, got, claude.Endpoints)
+		// claude and mine (from claude) are single-provider agents: no list.
+		for _, name := range []string{"api", "tool", "web"} {
+			if got := cfg.Workspaces[name].Network.Get().AgentEndpoints; got != nil {
+				t.Fatalf("%s agent_endpoints = %v, want unset", name, got)
 			}
-		}
-		if got := cfg.Workspaces["web"].Network.Get().AgentEndpoints; got != nil {
-			t.Fatalf("web agent_endpoints = %v, want inherited", got)
 		}
 		want := []string{
 			`[defaults.network]: add agent_endpoints of agent "opencode"`,
-			`[workspaces.api.network]: add agent_endpoints of agent "claude"`,
-			`[workspaces.tool.network]: add agent_endpoints of agent "mine"`,
 		}
 		if !slices.Equal(m.changes, want) {
 			t.Fatalf("changes = %v, want %v", m.changes, want)

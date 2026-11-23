@@ -390,9 +390,9 @@ func TestRenderWorkspaceNewSection(t *testing.T) {
 		if len(rules) != 1 || rules[0].Name != "internet" {
 			t.Errorf("workspace rules = %+v", rules)
 		}
-		claude, _ := agent.Lookup("claude")
-		if got := ws.Network.Get().AgentEndpoints; !slices.Equal(got, claude.Endpoints) {
-			t.Errorf("workspace agent_endpoints = %v, want %v", got, claude.Endpoints)
+		// claude is a single-provider agent: no agent_endpoints list.
+		if got := ws.Network.Get().AgentEndpoints; got != nil {
+			t.Errorf("workspace agent_endpoints = %v, want unset", got)
 		}
 	})
 }

@@ -233,7 +233,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	r.HostPorts = config.MergeHostPorts(cfg.Defaults.HostPorts, ws.HostPorts)
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
 	r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
-	r.NetworkRules = resolveNetworkRules(cfg, ws, r.AllowedHosts, r.AllowedNetworks, r.DNSBlockedZones)
+	r.NetworkRules = resolveNetworkRules(cfg, ws, r.AllowedHosts, r.AllowedNetworks, r.DNSBlockedZones, h)
 	r.InternalZones = resolveInternalZones(cfg.Defaults.Network.Get().InternalZones, ws.Network.Get().InternalZones, r.AllowedHosts)
 	snapshots, err := config.MergeSnapshots(cfg.Defaults.Snapshots, ws.Snapshots)
 	if err != nil {
@@ -293,9 +293,10 @@ func resolveAgent(cfg *config.Config, ws config.Workspace) (agent.Harness, confi
 
 // resolveNetworkRules combines [defaults.network.rules],
 // [workspaces.<ws>.network.rules], migrated legacy settings, and the "agent"
-// rule of agent_endpoints: the workspace's list, else the defaults' list.
-// Without a non-empty list there is no agent rule.
-func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, allowedNetworks, blockedZones []string) []config.NetworkRule {
+// rule. The rule allows the built-in endpoints of a single-provider agent
+// h; a multi-provider agent gets agent_endpoints, the workspace's list, else
+// the defaults' list, and no agent rule without a non-empty list.
+func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, allowedNetworks, blockedZones []string, h agent.Harness) []config.NetworkRule {
 	dn, wn := cfg.Defaults.Network.Get(), ws.Network.Get()
 	var rules []config.NetworkRule
 	rules = append(rules, cloneNetworkRules(dn.Rules)...)
@@ -318,9 +319,12 @@ func resolveNetworkRules(cfg *config.Config, ws config.Workspace, allowedHosts, 
 			rules = append(rules, config.NetworkRule{Name: "legacy", Deny: deny, Proto: config.RuleProtoAny})
 		}
 	}
-	endpoints := dn.AgentEndpoints
-	if wn.AgentEndpoints != nil {
-		endpoints = wn.AgentEndpoints
+	endpoints := h.Endpoints
+	if h.ExplicitEndpoints {
+		endpoints = dn.AgentEndpoints
+		if wn.AgentEndpoints != nil {
+			endpoints = wn.AgentEndpoints
+		}
 	}
 	if len(endpoints) > 0 {
 		rules = append(rules, config.NetworkRule{

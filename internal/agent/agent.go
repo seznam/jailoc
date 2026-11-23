@@ -191,9 +191,14 @@ type Harness struct {
 	// interface starts, from its environment env and working directory dir:
 	// jailoc shows it while the agent starts.
 	Installs func(env []string, dir string) []string
-	// Endpoints are the API and auth hostnames the agent contacts; setup and
-	// migrate write them into network.agent_endpoints.
+	// Endpoints are the API and auth hostnames the agent contacts; they
+	// become the "agent" allow rule on TCP port 443.
 	Endpoints []string
+	// ExplicitEndpoints marks a multi-provider agent: its Endpoints are not
+	// allowed by default, the user lists the providers they use in
+	// network.agent_endpoints (the config template and migrate start from
+	// Endpoints).
+	ExplicitEndpoints bool
 	// Diagnose is the guest command (without the binary) that prints
 	// unbuffered startup and configuration errors when the agent exits
 	// before drawing or after a server error.
@@ -259,13 +264,14 @@ var harnesses = []Harness{
 			// state to ~/.omo.
 			{Name: "opencode1-omo", Path: "/home/agent/.omo"},
 		},
-		ConfigFiles:     openCode1Config,
-		TUIPlugin:       OpenCode1TUI,
-		ConfigDir:       openCodeConfigDir,
-		ConfigGitignore: openCodeConfigGitignore,
-		Installs:        openCode1Installs,
-		Endpoints:       llmEndpoints,
-		Diagnose:        []string{openCodePrintLogsFlag},
+		ConfigFiles:       openCode1Config,
+		TUIPlugin:         OpenCode1TUI,
+		ConfigDir:         openCodeConfigDir,
+		ConfigGitignore:   openCodeConfigGitignore,
+		Installs:          openCode1Installs,
+		Endpoints:         llmEndpoints,
+		ExplicitEndpoints: true,
+		Diagnose:          []string{openCodePrintLogsFlag},
 	},
 	{
 		Name:     "opencode2",
@@ -287,12 +293,13 @@ var harnesses = []Harness{
 			{Name: "opencode2-data", Path: "/home/agent/.local/share/opencode"},
 			{Name: "opencode2-state", Path: "/home/agent/.local/state/opencode"},
 		},
-		ConfigFiles:     openCodeConfig,
-		TUIPlugin:       OpenCode2TUI,
-		ConfigDir:       openCodeConfigDir,
-		ConfigGitignore: openCodeConfigGitignore,
-		Endpoints:       llmEndpoints,
-		Diagnose:        []string{openCodePrintLogsFlag},
+		ConfigFiles:       openCodeConfig,
+		TUIPlugin:         OpenCode2TUI,
+		ConfigDir:         openCodeConfigDir,
+		ConfigGitignore:   openCodeConfigGitignore,
+		Endpoints:         llmEndpoints,
+		ExplicitEndpoints: true,
+		Diagnose:          []string{openCodePrintLogsFlag},
 	},
 	{
 		Name:        "claude",
@@ -359,11 +366,12 @@ var harnesses = []Harness{
 		Resume:      "--session",
 		DefaultArgs: []string{"--permission-preset", "full-access"},
 		// The image runs Node.js; OMO_RUNTIME=node silences the Bun notice.
-		Env:         []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
-		State:       []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
-		ConfigFiles: omoConfig,
-		TUIPlugin:   OmOExtension,
-		Endpoints:   llmEndpoints,
+		Env:               []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
+		State:             []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
+		ConfigFiles:       omoConfig,
+		TUIPlugin:         OmOExtension,
+		Endpoints:         llmEndpoints,
+		ExplicitEndpoints: true,
 	},
 	{
 		Name:    "agy",

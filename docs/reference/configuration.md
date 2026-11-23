@@ -252,7 +252,7 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `dns` | string | (host resolver) | Routable numeric IPv4 resolver used for permitted DNS queries. |
 | `rules` | table[] | `[]` | Allow and deny egress rules (`[[<scope>.network.rules]]`). Combined across `[defaults]` and the workspace; `deny` always wins over `allow`. |
 | `internal_zones` | string[] | `[]` | DNS zones whose names may resolve to private addresses. Combined across `[defaults]` and the workspace. See [Internal zones](#internal-zones). |
-| `agent_endpoints` | string[] | (unset) | Hosts of the [`agent` rule](#ruleagent), the model and auth endpoints the coding agent may reach. Unset or `[]`: no `agent` rule. A set workspace list replaces the defaults list. |
+| `agent_endpoints` | string[] | (unset) | Hosts of the [`agent` rule](#ruleagent) for OpenCode and OmO workspaces: the model and auth endpoints the agent may reach. Unset or `[]`: no `agent` rule for them. A set workspace list replaces the defaults list. Ignored for Claude Code, Copilot CLI and Antigravity. |
 
 `ipv6` details:
 
@@ -263,8 +263,9 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 `agent_endpoints` details:
 
 - Entries are host names or `*.domain` wildcards; IP addresses, CIDRs and `*` are rejected.
-- New configurations from the setup wizard and `jailoc migrate` set it to the chosen agent's endpoints (see [`rule=agent`](#ruleagent)). Keep only the providers you use, for example `agent_endpoints = ["api.anthropic.com"]`; the other endpoints then show as denied in `jailoc traffic`.
-- Unset in `[defaults]` and every workspace: the agent can't reach its model and auth endpoints unless your own rules allow them, and the config load prints a warning.
+- Applies to the multi-provider agents `opencode`, `opencode1`, `opencode2` and `omo` (and custom agents built `from` them). `claude`, `copilot` and `agy` always get their built-in endpoints; narrow them with a `deny` rule.
+- New configurations from the setup wizard and `jailoc migrate` set it to the OpenCode endpoints (see [`rule=agent`](#ruleagent)). Keep only the providers you use, for example `agent_endpoints = ["api.anthropic.com"]`; the other endpoints then show as denied in `jailoc traffic`.
+- Unset for a workspace whose agent is OpenCode or OmO: the agent can't reach its model and auth endpoints unless your own rules allow them, and the config load prints a warning.
 
 `internal_zones` details: each zone covers itself and every name under it (`corp.example` covers `gitlab.corp.example`; a leading `*.` is dropped).
 
@@ -479,9 +480,12 @@ In addition to `[[defaults.network.rules]]` and `[[workspaces.<name>.network.rul
 
 #### `rule=agent`
 
-Allow, `proto = "tcp"`, `ports = [443]`, to the hosts in [`agent_endpoints`](#defaultsnetwork). Added only when `agent_endpoints` is non-empty. A matching `deny` rule still overrides it.
+Allow, `proto = "tcp"`, `ports = [443]`, to the coding agent's model and auth endpoints. A matching `deny` rule still overrides it.
 
-Endpoints per `agent` that the setup wizard and `jailoc migrate` write into `agent_endpoints`:
+- `opencode`, `opencode1`, `opencode2`, `omo`: the hosts in [`agent_endpoints`](#defaultsnetwork); added only when the list is non-empty. The setup wizard and `jailoc migrate` write the list below.
+- `claude`, `copilot`, `agy`: the built-in endpoints below; `agent_endpoints` does not apply.
+
+Endpoints per `agent`:
 
 - `opencode`, `opencode1`, `opencode2`, `omo`:
     - `api.anthropic.com`

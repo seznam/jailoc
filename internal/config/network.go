@@ -1,12 +1,16 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/seznam/jailoc/internal/agent"
 )
 
 // RuleProto is a protocol name in a network rule.
@@ -365,6 +369,7 @@ func DeprecationWarnings(cfg *Config) []string {
 	for name := range cfg.Workspaces {
 		names = append(names, name)
 	}
+	slices.Sort(names)
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
 		collect(fmt.Sprintf("[workspaces.%s]", name), ws.AllowedHosts, ws.AllowedNetworks, ws.Network)
@@ -377,20 +382,29 @@ func DeprecationWarnings(cfg *Config) []string {
 		}
 	}
 	if !hasRules && len(cfg.Workspaces) > 0 {
-		warnings = append(warnings, "no [[*.network.rules]] configured: only agent_endpoints are allowed; add allow = [\"*\"] or configure [[defaults.network.rules]]")
+		warnings = append(warnings, "no [[*.network.rules]] configured: only the agent's endpoints are allowed; add allow = [\"*\"] or configure [[defaults.network.rules]]")
 	}
-	hasEndpoints := cfg.Defaults.Network.Get().AgentEndpoints != nil
-	for _, ws := range cfg.Workspaces {
-		if ws.Network.Get().AgentEndpoints != nil {
-			hasEndpoints = true
-			break
+	defaultEndpoints := cfg.Defaults.Network.Get().AgentEndpoints
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		if defaultEndpoints != nil || ws.Network.Get().AgentEndpoints != nil || !explicitEndpoints(cfg, ws) {
+			continue
 		}
-	}
-	if !hasEndpoints && len(cfg.Workspaces) > 0 {
-		warnings = append(warnings, "no network.agent_endpoints configured: the coding agent cannot reach its model and auth endpoints; set agent_endpoints in [defaults.network]")
+		warnings = append(warnings, fmt.Sprintf("[workspaces.%s]: no network.agent_endpoints configured: the coding agent cannot reach its model and auth endpoints; set agent_endpoints in [defaults.network]", name))
 	}
 
 	return warnings
+}
+
+// explicitEndpoints reports whether the workspace's agent is a multi-provider
+// agent whose endpoints come only from network.agent_endpoints.
+func explicitEndpoints(cfg *Config, ws Workspace) bool {
+	name := cmp.Or(ws.Agent, cfg.Defaults.Agent, agent.Default)
+	h, ok := agent.Lookup(name)
+	if !ok {
+		h, ok = agent.Lookup(cmp.Or(ws.Agents[name].From, cfg.Defaults.Agents[name].From))
+	}
+	return ok && h.ExplicitEndpoints
 }
 
 // LegacyHostZones returns the internal zones that stand for legacy

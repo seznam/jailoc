@@ -249,22 +249,31 @@ func applyDefaultRules(head []string, opts FirstTimeOptions) ([]string, error) {
 	}
 }
 
-// agentEndpoints returns the built-in endpoints of the agent called name, or
-// of agent.Default when name is empty.
+// agentEndpoints returns the endpoints of the agent called name, or of
+// agent.Default when name is empty, that belong in network.agent_endpoints.
+// It returns nil for agents with a fixed provider, whose endpoints are
+// allowed without the list.
 func agentEndpoints(name string) ([]string, error) {
 	h, ok := agent.Lookup(cmp.Or(name, agent.Default))
 	if !ok {
 		return nil, fmt.Errorf("unknown agent %q", name)
 	}
+	if !h.ExplicitEndpoints {
+		return nil, nil
+	}
 	return h.Endpoints, nil
 }
 
 // applyAgentEndpoints replaces the template's agent_endpoints list in
-// [defaults.network] with the endpoints of the agent called name.
+// [defaults.network] with the endpoints of the agent called name. The list
+// is kept for agents with a fixed provider.
 func applyAgentEndpoints(head []string, name string) ([]string, error) {
 	endpoints, err := agentEndpoints(name)
 	if err != nil {
 		return nil, err
+	}
+	if endpoints == nil {
+		return head, nil
 	}
 	start := indexLine(head, "agent_endpoints = [")
 	if start < 0 {
@@ -379,16 +388,18 @@ func newWorkspaceSection(opts WorkspaceOptions) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		list, err := tomlArray(endpoints)
-		if err != nil {
-			return "", err
-		}
-		network := "[workspaces." + opts.Name + ".network]"
-		if err := replaceLine(lines, "# "+network, network); err != nil {
-			return "", err
-		}
-		if err := replaceLine(lines, "# agent_endpoints = ", "agent_endpoints = "+list+"  # endpoints of agent "+strconv.Quote(opts.Agent)); err != nil {
-			return "", err
+		if endpoints != nil {
+			list, err := tomlArray(endpoints)
+			if err != nil {
+				return "", err
+			}
+			network := "[workspaces." + opts.Name + ".network]"
+			if err := replaceLine(lines, "# "+network, network); err != nil {
+				return "", err
+			}
+			if err := replaceLine(lines, "# agent_endpoints = ", "agent_endpoints = "+list+"  # endpoints of agent "+strconv.Quote(opts.Agent)); err != nil {
+				return "", err
+			}
 		}
 	}
 	lines, err = applyWorkspaceRules(lines, opts)
@@ -500,11 +511,14 @@ func updateWorkspace(doc *edit.Document, opts WorkspaceOptions) ([]byte, error) 
 	} else {
 		doc.Delete(append(wsKey, "agent"))
 	}
+	var endpoints []string
 	if opts.Agent != "" {
-		endpoints, err := agentEndpoints(opts.Agent)
-		if err != nil {
+		var err error
+		if endpoints, err = agentEndpoints(opts.Agent); err != nil {
 			return nil, fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
 		}
+	}
+	if endpoints != nil {
 		if err := doc.Set(append(wsKey, "network", "agent_endpoints"), endpoints); err != nil {
 			return nil, fmt.Errorf("set workspace %q network.agent_endpoints: %w", opts.Name, err)
 		}

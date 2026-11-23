@@ -517,6 +517,11 @@ func TestDeprecationWarningsAgentEndpoints(t *testing.T) {
 	}{
 		{name: "no workspaces", cfg: &Config{}},
 		{name: "unset", cfg: &Config{Workspaces: map[string]Workspace{"api": {}}}, warn: true},
+		{name: "single-provider agent", cfg: &Config{Workspaces: map[string]Workspace{"api": {Agent: "claude"}}}},
+		{name: "custom agent from omo", cfg: &Config{
+			Defaults:   Defaults{Agents: map[string]AgentSettings{"mine": {From: "omo"}}},
+			Workspaces: map[string]Workspace{"api": {Agent: "mine"}},
+		}, warn: true},
 		{name: "defaults", cfg: &Config{
 			Defaults:   Defaults{Network: &Network{AgentEndpoints: []string{"api.anthropic.com"}}},
 			Workspaces: map[string]Workspace{"api": {}},
@@ -527,7 +532,7 @@ func TestDeprecationWarningsAgentEndpoints(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := slices.ContainsFunc(DeprecationWarnings(tt.cfg), func(w string) bool { return strings.HasPrefix(w, want) })
+			got := slices.ContainsFunc(DeprecationWarnings(tt.cfg), func(w string) bool { return strings.Contains(w, want) })
 			if got != tt.warn {
 				t.Fatalf("warning %q present = %v, want %v", want, got, tt.warn)
 			}
