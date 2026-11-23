@@ -262,19 +262,32 @@ func checkNegativeEgress(ctx context.Context, t *testing.T, agentSock string) {
 		}
 	}
 
-	mustGuest(ctx, t, `python3 - `+strings.Join(tcpTargets, " ")+` <<'PY'
+	// A host address the guest also owns (Docker's 172.17.0.1 in an
+	// enable_docker workspace) never leaves the VM, so the broker cannot log it.
+	out := mustGuest(ctx, t, `python3 - `+strings.Join(tcpTargets, " ")+` <<'PY'
 import socket
 import sys
 for target in sys.argv[1:]:
     host, port = target.rsplit(":", 1)
     host = host.strip("[]")
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_DGRAM) as probe:
+        probe.connect((host, int(port)))
+        if probe.getsockname()[0] == host:
+            print("guest-local", target)
+            continue
     with socket.socket(family, socket.SOCK_STREAM) as conn:
         conn.settimeout(3)
         if conn.connect_ex((host, int(port))) == 0:
             raise SystemExit("connected to " + target)
 print("tcp-denied")
 PY`)
+	for line := range strings.Lines(out) {
+		if target, ok := strings.CutPrefix(strings.TrimSpace(line), "guest-local "); ok {
+			t.Logf("%s is a guest address too; the connection stays inside the VM", target)
+			delete(want, target)
+		}
+	}
 	mustGuest(ctx, t, `python3 - <<'PY'
 import socket
 import struct
