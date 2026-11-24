@@ -175,35 +175,59 @@ func sbplQuote(s string) (string, error) {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`, nil
 }
 
-// canonicalPath makes path absolute and resolves its symlinks. For a path
-// that does not exist yet (a log file, a socket) it resolves the longest
-// existing ancestor and appends the rest.
+// canonicalPath makes path absolute and resolves symlinks in component order
+// (so "symlink/../sibling" resolves symlink before applying "..", matching the
+// kernel rather than filepath.Clean). For a path that does not exist yet (a
+// log file, a socket) it resolves every existing prefix and appends the rest.
 func canonicalPath(path string) (string, error) {
 	if path == "" {
 		return "", errors.New("empty path")
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("absolute path of %s: %w", path, err)
+	raw := path
+	if !filepath.IsAbs(raw) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("working directory for %s: %w", path, err)
+		}
+		// Prepend wd without filepath.Join so ".." segments are not cleaned
+		// before symlinks are resolved.
+		raw = wd + string(filepath.Separator) + raw
 	}
-	return resolveExisting(abs)
+	if resolved, err := filepath.EvalSymlinks(raw); err == nil {
+		return resolved, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
+	}
+	return resolveComponentWise(raw)
 }
 
-func resolveExisting(abs string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err == nil {
-		return resolved, nil
+func resolveComponentWise(abs string) (string, error) {
+	cur := string(filepath.Separator)
+	missing := false
+	for _, seg := range strings.Split(abs, string(filepath.Separator)) {
+		if seg == "" || seg == "." {
+			continue
+		}
+		if missing {
+			cur = filepath.Join(cur, seg)
+			continue
+		}
+		if seg == ".." {
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, seg)
+		resolved, err := filepath.EvalSymlinks(next)
+		if err == nil {
+			cur = resolved
+			continue
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			missing = true
+			cur = next
+			continue
+		}
+		return "", fmt.Errorf("resolve %s: %w", next, err)
 	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("resolve %s: %w", abs, err)
-	}
-	parent := filepath.Dir(abs)
-	if parent == abs {
-		return abs, nil
-	}
-	resolvedParent, err := resolveExisting(parent)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(resolvedParent, filepath.Base(abs)), nil
+	return cur, nil
 }

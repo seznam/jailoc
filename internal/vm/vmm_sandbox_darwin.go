@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -108,11 +107,11 @@ func resolveSeatbeltRunner(configured string) (string, error) {
 		}
 		path = found
 	}
-	abs, err := filepath.Abs(path)
+	canon, err := canonicalPath(path)
 	if err != nil {
-		return "", fmt.Errorf("absolute path of runner binary: %w", err)
+		return "", fmt.Errorf("resolve runner binary: %w", err)
 	}
-	return abs, nil
+	return canon, nil
 }
 
 // seatbeltShim builds the shim command line.

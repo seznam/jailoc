@@ -248,6 +248,15 @@ func TestCanonicalPath(t *testing.T) {
 	if err := os.Symlink(filepath.Join(base, "real"), filepath.Join(base, "alias")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(base, "real", "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(base, "real", "lib"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "real", "nested"), filepath.Join(base, "nested-link")); err != nil {
+		t.Fatal(err)
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -265,6 +274,10 @@ func TestCanonicalPath(t *testing.T) {
 		{"existing symlink", filepath.Join(base, "alias"), filepath.Join(base, "real")},
 		{"missing leaf behind symlink", filepath.Join(base, "alias", "a", "b.sock"), filepath.Join(base, "real", "a", "b.sock")},
 		{"dot dot after symlink", filepath.Join(base, "alias", "x", "..", "y"), filepath.Join(base, "real", "y")},
+		// Literal "symlink/../..." strings (not cleaned by filepath.Join) must
+		// follow the symlink before applying "..".
+		{"literal dot dot through symlink to existing", filepath.Join(base, "nested-link") + "/../lib", filepath.Join(base, "real", "lib")},
+		{"literal dot dot through symlink to missing leaf", filepath.Join(base, "nested-link") + "/../missing/vm.log", filepath.Join(base, "real", "missing", "vm.log")},
 		{"relative path", "missing-leaf", filepath.Join(realCwd, "missing-leaf")},
 		{"plain missing path", filepath.Join(base, "none"), filepath.Join(base, "none")},
 		{"root", "/", "/"},

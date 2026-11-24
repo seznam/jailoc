@@ -462,6 +462,38 @@ func TestConfinedSpawnerFailsClosed(t *testing.T) {
 	})
 }
 
+func TestResolveSeatbeltRunnerFollowsSymlinkBeforeDotDot(t *testing.T) {
+	t.Parallel()
+	base := realDir(t)
+	actualDir := filepath.Join(base, "actual")
+	nestedDir := filepath.Join(actualDir, "nested")
+	if err := os.MkdirAll(nestedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	realRunner := filepath.Join(actualDir, RunnerBinary)
+	if err := os.WriteFile(realRunner, []byte("runner"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Plant an unrelated file at base/RunnerBinary so lexical cleaning of
+	// base/link/../RunnerBinary would pick the wrong binary.
+	wrongRunner := filepath.Join(base, RunnerBinary)
+	if err := os.WriteFile(wrongRunner, []byte("wrong"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(nestedDir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveSeatbeltRunner(link + "/../" + RunnerBinary)
+	if err != nil {
+		t.Fatalf("resolveSeatbeltRunner: %v", err)
+	}
+	if got != realRunner {
+		t.Errorf("resolveSeatbeltRunner = %q, want %q", got, realRunner)
+	}
+}
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
