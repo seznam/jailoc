@@ -158,8 +158,21 @@ func agentConfigSnapshots(h agent.Harness, home string, shares []vm.Share) []sna
 			continue
 		}
 		s := snapshot{Mount: mountOf(src, dest), exclude: cf.Exclude}
-		if info.IsDir() && dest == h.ConfigDir && h.ConfigGitignore != "" {
-			s.extra = map[string][]byte{".gitignore": []byte(h.ConfigGitignore)}
+		if info.IsDir() {
+			if len(cf.Extra) > 0 {
+				s.extra = make(map[string][]byte, len(cf.Extra)+1)
+				for name, content := range cf.Extra {
+					s.extra[name] = []byte(content)
+				}
+			}
+			if dest == h.ConfigDir && h.ConfigGitignore != "" {
+				if s.extra == nil {
+					s.extra = map[string][]byte{}
+				}
+				if _, ok := s.extra[".gitignore"]; !ok {
+					s.extra[".gitignore"] = []byte(h.ConfigGitignore)
+				}
+			}
 		}
 		out = append(out, s)
 	}

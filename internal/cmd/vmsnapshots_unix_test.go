@@ -129,45 +129,60 @@ func TestVMSnapshotsAgentConfig(t *testing.T) {
 	}
 }
 
-// The OpenCode configuration copy leaves out node_modules and carries the
-// .gitignore OpenCode would write, unless the host directory has one.
+// The OpenCode configuration copy leaves out node_modules and host
+// service.json, carries the .gitignore OpenCode would write unless the host
+// directory has one, and disables the OpenCode 2 background service so
+// non-standalone CLI commands do not fail with EROFS.
 func TestStageAgentConfigDirectory(t *testing.T) {
 	t.Parallel()
-	h, _ := agent.Lookup("opencode2")
-	for _, hostIgnore := range []string{"", "custom\n"} {
-		home := t.TempDir()
-		dir := filepath.Join(home, ".config", "opencode")
-		if err := os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		wantIgnore := h.ConfigGitignore
-		if hostIgnore != "" {
-			wantIgnore = hostIgnore
-			if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(hostIgnore), 0o600); err != nil {
+	for _, agentName := range []string{"opencode1", "opencode2"} {
+		h, _ := agent.Lookup(agentName)
+		for _, hostIgnore := range []string{"", "custom\n"} {
+			home := t.TempDir()
+			dir := filepath.Join(home, ".config", "opencode")
+			if err := os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0o700); err != nil {
 				t.Fatal(err)
 			}
-		}
-		snapshots := agentConfigSnapshots(h, home, nil)
-		if len(snapshots) != 1 || snapshots[0].Container != h.ConfigDir {
-			t.Fatalf("snapshots = %v, want the config directory", snapshots)
-		}
-		state := t.TempDir()
-		binds, err := stageSnapshots(state, snapshots, "")
-		if err != nil {
-			t.Fatalf("stageSnapshots: %v", err)
-		}
-		staged := filepath.Join(vm.GuestReadOnlyDir(state), snapshotsDir, snapshotGeneration(binds), "0")
-		if _, err := os.Stat(filepath.Join(staged, "opencode.json")); err != nil {
-			t.Fatalf("config file not copied: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(staged, "node_modules")); !os.IsNotExist(err) {
-			t.Fatalf("node_modules copied: %v", err)
-		}
-		if got, _ := os.ReadFile(filepath.Join(staged, ".gitignore")); string(got) != wantIgnore { //nolint:gosec // G304: test file
-			t.Fatalf(".gitignore = %q, want %q", got, wantIgnore)
+			if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "service.json"), []byte(`{"password":"host-secret"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			wantIgnore := h.ConfigGitignore
+			if hostIgnore != "" {
+				wantIgnore = hostIgnore
+				if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(hostIgnore), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			snapshots := agentConfigSnapshots(h, home, nil)
+			if len(snapshots) != 1 || snapshots[0].Container != h.ConfigDir {
+				t.Fatalf("%s: snapshots = %v, want the config directory", agentName, snapshots)
+			}
+			state := t.TempDir()
+			binds, err := stageSnapshots(state, snapshots, "")
+			if err != nil {
+				t.Fatalf("%s: stageSnapshots: %v", agentName, err)
+			}
+			staged := filepath.Join(vm.GuestReadOnlyDir(state), snapshotsDir, snapshotGeneration(binds), "0")
+			if _, err := os.Stat(filepath.Join(staged, "opencode.json")); err != nil {
+				t.Fatalf("%s: config file not copied: %v", agentName, err)
+			}
+			if _, err := os.Stat(filepath.Join(staged, "node_modules")); !os.IsNotExist(err) {
+				t.Fatalf("%s: node_modules copied: %v", agentName, err)
+			}
+			if got, _ := os.ReadFile(filepath.Join(staged, ".gitignore")); string(got) != wantIgnore { //nolint:gosec // G304: test file
+				t.Fatalf("%s: .gitignore = %q, want %q", agentName, got, wantIgnore)
+			}
+			servicePath := filepath.Join(staged, "service.json")
+			if agentName == "opencode2" {
+				if got, err := os.ReadFile(servicePath); err != nil || string(got) != "{\"disabled\":true}\n" { //nolint:gosec // G304: test file
+					t.Fatalf("%s: service.json = %q (err=%v), want %q", agentName, got, err, "{\"disabled\":true}\n")
+				}
+			} else if _, err := os.Stat(servicePath); !os.IsNotExist(err) {
+				t.Fatalf("%s: host service.json copied: %v", agentName, err)
+			}
 		}
 	}
 }
