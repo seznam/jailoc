@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -29,11 +28,16 @@ const (
 	maxOAuthCallbackPath      = 2048
 	maxOAuthRegisterBodyBytes = 4096
 	oauthProxyTimeout         = 30 * time.Second
+
+	defaultOAuthRegisterTimeout = 10 * time.Second
 )
 
 type oauthState struct {
 	mu     sync.Mutex
 	byPort map[uint16]*oauthCallback
+	// registerTimeout overrides defaultOAuthRegisterTimeout (nanoseconds) for
+	// the registration request body; zero keeps the default. Tests lower it.
+	registerTimeout atomic.Int64
 }
 
 type oauthCallback struct {
@@ -59,6 +63,11 @@ func (c *oauthCallback) stop() {
 		}
 		c.closeListeners()
 		if c.server != nil {
+			// Shutdown waits for the active handler to flush its response;
+			// Close then force-drops anything still open after the bound.
+			sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = c.server.Shutdown(sctx)
 			_ = c.server.Close()
 		}
 	})
@@ -69,6 +78,13 @@ func (b *Broker) oauthTTL() time.Duration {
 		return b.cfg.OAuthCallbackTTL
 	}
 	return defaultOAuthCallbackTTL
+}
+
+func (b *Broker) oauthRegisterTimeout() time.Duration {
+	if d := time.Duration(b.oauth.registerTimeout.Load()); d > 0 {
+		return d
+	}
+	return defaultOAuthRegisterTimeout
 }
 
 // startOAuthCallbackServer serves the gateway-side OAuth loopback callback
@@ -85,16 +101,55 @@ func (b *Broker) startOAuthCallbackServer(ctx context.Context) error {
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       defaultOAuthRegisterTimeout,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       10 * time.Second,
 	}
+	srv.SetKeepAlivesEnabled(false)
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
 		b.stopAllOAuthCallbacks()
 	}()
 	go func() {
-		_ = srv.Serve(ln)
+		_ = srv.Serve(&flowLimitListener{Listener: ln, b: b})
 	}()
 	return nil
+}
+
+// flowLimitListener counts every accepted registration connection against the
+// broker's TCP flow cap and drops connections beyond it.
+type flowLimitListener struct {
+	net.Listener
+	b *Broker
+}
+
+func (l *flowLimitListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err //nolint:wrapcheck // net.Listener contract: callers match net.ErrClosed
+		}
+		if !l.b.tcpFlows.acquire() {
+			l.b.record(map[string]any{"event": "flow-limit", "proto": ProtoTCP, "guest_port": l.b.cfg.OAuthCallbackPort})
+			_ = c.Close()
+			continue
+		}
+		return &flowLimitConn{Conn: c, release: l.b.tcpFlows.release}, nil
+	}
+}
+
+// flowLimitConn releases its flow slot once, on Close.
+type flowLimitConn struct {
+	net.Conn
+	release func()
+	once    sync.Once
+}
+
+func (c *flowLimitConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
+	return err //nolint:wrapcheck // thin net.Conn wrapper
 }
 
 func (b *Broker) stopAllOAuthCallbacks() {
@@ -124,18 +179,38 @@ func (b *Broker) cancelOAuthPort(port uint16) {
 
 func (b *Broker) isConfiguredForwardPort(port uint16) bool {
 	for _, f := range b.cfg.Forwards {
-		if f.UnixPath == "" && f.Host.IsValid() && f.Host.Port() == port {
+		if f.UnixPath == "" && f.Host.IsValid() && f.Host.Port() == port && f.GuestPort == port {
 			return true
 		}
 	}
 	b.runtime.mu.Lock()
 	defer b.runtime.mu.Unlock()
 	for f := range b.runtime.forwards {
-		if hp, err := netip.ParseAddrPort(f.Host); err == nil && hp.Port() == port {
+		if hp, err := netip.ParseAddrPort(f.Host); err == nil && hp.Port() == port && f.GuestPort == port {
 			return true
 		}
 	}
 	return false
+}
+
+// dialGuestOAuthPort dials the guest's loopback listener for an OAuth callback.
+// The loopback relay is tried first so a process bound to the guest NIC address
+// cannot shadow the 127.0.0.1 callback listener.
+func (b *Broker) dialGuestOAuthPort(ctx context.Context, port uint16) (net.Conn, error) {
+	if b.cfg.LoopbackRelayPort != 0 {
+		conn, err := b.dialGuestLoopback(ctx, port)
+		if err == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("dial guest oauth port %d: %w", port, ctx.Err())
+		}
+	}
+	conn, err := gonet.DialContextTCP(ctx, b.stack, *guestAddr(b.cfg.GuestIP, port), ipv4.ProtocolNumber)
+	if err != nil {
+		return nil, fmt.Errorf("dial guest oauth port %d: %w", port, err)
+	}
+	return conn, nil
 }
 
 func validOAuthPath(path string) bool {
@@ -154,6 +229,12 @@ func validOAuthPath(path string) bool {
 func (b *Broker) handleOAuthRegister(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Bound the whole request, body included, so a stalled client cannot pin
+	// the connection (and its flow slot).
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(b.oauthRegisterTimeout())); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxOAuthRegisterBodyBytes+1))
@@ -203,7 +284,14 @@ var (
 )
 
 func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string) error {
+	// Reserve the slot under the lock before binding so concurrent
+	// registrations cannot overshoot maxOAuthCallbacks.
+	cb := &oauthCallback{port: port, path: path}
 	b.oauth.mu.Lock()
+	if ctx.Err() != nil {
+		b.oauth.mu.Unlock()
+		return ctx.Err()
+	}
 	if b.oauth.byPort == nil {
 		b.oauth.byPort = map[uint16]*oauthCallback{}
 	}
@@ -212,9 +300,7 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 		b.oauth.mu.Unlock()
 		return errOAuthLimit
 	}
-	if prev != nil {
-		delete(b.oauth.byPort, port)
-	}
+	b.oauth.byPort[port] = cb
 	b.oauth.mu.Unlock()
 	if prev != nil {
 		prev.stop()
@@ -224,6 +310,7 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 	var lc net.ListenConfig
 	l4, err := lc.Listen(ctx, "tcp", net.JoinHostPort("127.0.0.1", p))
 	if err != nil {
+		b.removeOAuthCallback(port, cb)
 		return fmt.Errorf("%w: %w", errOAuthBind, err)
 	}
 	listeners := []net.Listener{l4}
@@ -231,31 +318,20 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 		listeners = append(listeners, l6)
 	}
 
-	targetURL := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", p)}
-	cb := &oauthCallback{
-		port:      port,
-		path:      path,
-		listeners: listeners,
-	}
+	targetHost := net.JoinHostPort("127.0.0.1", p)
 	transport := &http.Transport{
 		DialContext: func(dctx context.Context, _, _ string) (net.Conn, error) {
-			return b.dialGuestPort(dctx, port)
+			return b.dialGuestOAuthPort(dctx, port)
 		},
 		DisableKeepAlives:     true,
 		ResponseHeaderTimeout: 10 * time.Second,
 	}
-	proxy := &httputil.ReverseProxy{
-		Transport: transport,
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(targetURL)
-			if isLoopbackHostHeader(pr.In.Host) {
-				pr.Out.Host = pr.In.Host
-			}
-		},
-	}
 
-	cb.server = &http.Server{
+	srv := &http.Server{
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      35 * time.Second,
+		IdleTimeout:       10 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -278,26 +354,73 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 				http.Error(w, "callback already served", http.StatusGone)
 				return
 			}
+			defer func() {
+				b.removeOAuthCallback(port, cb)
+				b.record(map[string]any{
+					"event":      "oauth-callback",
+					"action":     "served",
+					"host":       l4.Addr().String(),
+					"guest_port": port,
+					"path":       path,
+				})
+				go cb.stop()
+			}()
 			// Stop accepting any further connections immediately while the single
 			// in-flight callback request completes.
 			cb.closeListeners()
 
 			pctx, cancel := context.WithTimeout(r.Context(), oauthProxyTimeout)
 			defer cancel()
-			proxy.ServeHTTP(w, r.WithContext(pctx))
 
-			b.removeOAuthCallback(port, cb)
-			b.record(map[string]any{
-				"event":      "oauth-callback",
-				"action":     "served",
-				"host":       l4.Addr().String(),
-				"guest_port": port,
-				"path":       path,
-			})
-			go cb.stop()
+			// Forward only the callback path and query. Host browser headers
+			// (cookies, credentials, origin) never reach the guest, and the
+			// guest's response never reaches the host browser.
+			out := &url.URL{Scheme: "http", Host: targetHost, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
+			req, err := http.NewRequestWithContext(pctx, http.MethodGet, out.String(), nil)
+			if err != nil {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
+			if isLoopbackHostHeader(r.Host) {
+				req.Host = r.Host
+			}
+			req.Header.Set("User-Agent", "")
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, "Authentication complete. You may close this tab.\n")
 		}),
 	}
+	srv.SetKeepAlivesEnabled(false)
 
+	// Publish the listeners, server and timer under the lock, and only if cb
+	// is still the registered callback: a cancel, supersede or shutdown that
+	// ran while binding removed it, and nothing may then be left running.
+	b.oauth.mu.Lock()
+	if ctx.Err() != nil || b.oauth.byPort[port] != cb {
+		if b.oauth.byPort[port] == cb {
+			delete(b.oauth.byPort, port)
+		}
+		b.oauth.mu.Unlock()
+		for _, l := range listeners {
+			_ = l.Close()
+		}
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // caller cancellation
+		}
+		return errOAuthBind
+	}
+	cb.listeners = listeners
+	cb.server = srv
 	cb.timer = time.AfterFunc(b.oauthTTL(), func() {
 		if cb.served.CompareAndSwap(false, true) {
 			b.removeOAuthCallback(port, cb)
@@ -311,17 +434,6 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 			})
 		}
 	})
-
-	b.oauth.mu.Lock()
-	if ctx.Err() != nil {
-		b.oauth.mu.Unlock()
-		cb.stop()
-		return ctx.Err()
-	}
-	if existing := b.oauth.byPort[port]; existing != nil {
-		defer existing.stop()
-	}
-	b.oauth.byPort[port] = cb
 	b.oauth.mu.Unlock()
 
 	b.record(map[string]any{
@@ -334,7 +446,7 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 
 	for _, l := range listeners {
 		go func(ln net.Listener) {
-			_ = cb.server.Serve(ln)
+			_ = srv.Serve(ln)
 		}(l)
 	}
 	return nil

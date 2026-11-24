@@ -122,7 +122,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | GPG agent | Guest to host | Ask the host gpg-agent to sign or decrypt with any key it holds while forwarded; the extra socket refuses key export and management; keys stay on the host | `gpg_agent` |
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
-| OAuth loopback callbacks | Host to guest | Register a single-shot HTTP `GET` reverse proxy on host `127.0.0.1:<port>` (ports 1024–65535, max 8 concurrent, 3-minute TTL) pinned to the exact `redirect_uri` path and requiring `code=` or `error=`; triggered only via `xdg-open` / `$BROWSER` when a guest loopback listener already exists, never from terminal output | fixed |
+| OAuth loopback callbacks | Host to guest | Register a single-shot HTTP `GET` forwarder on host `127.0.0.1:<port>` (ports 1024–65535, max 8 concurrent, 3-minute TTL) pinned to the exact `redirect_uri` path and requiring `code=` or `error=`, stripping browser request headers and answering the browser with a fixed confirmation; triggered via `xdg-open` / `$BROWSER` when a guest loopback listener already exists, never from terminal output | fixed |
 | CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |
 | Inspection CA | Host to guest | Trust certificates the broker signs for hosts matched by `http` rules, which lets the broker read their traffic | `network.rules` with `http` |
 | Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `network` |

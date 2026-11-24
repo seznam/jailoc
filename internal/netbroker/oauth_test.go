@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -199,13 +201,16 @@ func TestOAuthCallbackSingleShotAndFiltering(t *testing.T) {
 
 	var guestHits atomic.Int32
 	var receivedURL atomic.Value
+	var receivedHeaders atomic.Value
 	guestSrv := &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			guestHits.Add(1)
 			receivedURL.Store(r.URL.RequestURI())
-			w.Header().Set("Content-Type", "text/plain")
-			_, _ = io.WriteString(w, "login ok")
+			receivedHeaders.Store(r.Header.Clone())
+			w.Header().Set("Set-Cookie", "evil=1; Path=/")
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, "<script>alert(1)</script>")
 		}),
 	}
 
@@ -277,15 +282,43 @@ func TestOAuthCallbackSingleShotAndFiltering(t *testing.T) {
 		t.Fatalf("rejected requests reached guest %d times, want 0", hits)
 	}
 
-	// 5. Valid GET callback with code= must be forwarded once and return guest body.
-	resp, err = hostClient.Get(base + cbPath + "?code=secret123&state=xyz")
+	// 5. Valid GET callback with code= must be forwarded once, without host
+	// browser credentials, and answered with the broker's own inert response.
+	validReq, err := http.NewRequest(http.MethodGet, base+cbPath+"?code=secret123&state=xyz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validReq.Header.Set("Cookie", "sid=hostsecret")
+	validReq.Header.Set("Authorization", "Bearer hosttok")
+	validReq.Header.Set("Proxy-Authorization", "Basic abc")
+	validReq.Header.Set("Origin", "http://localhost:3000")
+	validReq.Header.Set("Referer", "http://localhost:3000/secret")
+	resp, err = hostClient.Do(validReq)
 	if err != nil {
 		t.Fatalf("valid GET callback: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || string(body) != "login ok" {
-		t.Fatalf("valid callback = %d %q, want 200 %q", resp.StatusCode, body, "login ok")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid callback status = %d, want 200", resp.StatusCode)
+	}
+	if strings.Contains(string(body), "<script>") || !strings.Contains(string(body), "Authentication complete") {
+		t.Fatalf("valid callback body = %q, want the broker's fixed confirmation", body)
+	}
+	if v := resp.Header.Get("Set-Cookie"); v != "" {
+		t.Fatalf("host response leaked guest Set-Cookie %q", v)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("host response Content-Type = %q, want text/plain", ct)
+	}
+	if v := resp.Header.Get("X-Content-Type-Options"); v != "nosniff" {
+		t.Fatalf("host response X-Content-Type-Options = %q, want nosniff", v)
+	}
+	gh, _ := receivedHeaders.Load().(http.Header)
+	for _, h := range []string{"Cookie", "Authorization", "Proxy-Authorization", "Origin", "Referer"} {
+		if v := gh.Get(h); v != "" {
+			t.Fatalf("guest received host header %s = %q, want empty", h, v)
+		}
 	}
 	if got := receivedURL.Load(); got != cbPath+"?code=secret123&state=xyz" {
 		t.Fatalf("guest received URI = %v, want %q", got, cbPath+"?code=secret123&state=xyz")
@@ -345,20 +378,218 @@ func TestOAuthCallbackValidationAndExpiry(t *testing.T) {
 	}
 }
 
-func TestOAuthCallbackConcurrencyCap(t *testing.T) {
+func TestOAuthRegisterRemappedForward(t *testing.T) {
+	t.Parallel()
+
+	t.Run("remapped forward is not an existing route", func(t *testing.T) {
+		t.Parallel()
+		port := freePort(t)
+		ctx, _, g, _ := startTestOAuthBroker(t, time.Minute, Forward{
+			Host:      netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port),
+			GuestPort: 3000,
+		})
+		if code := registerFromGuest(t, ctx, g, port, "/cb"); code != http.StatusConflict {
+			t.Fatalf("register status = %d, want 409", code)
+		}
+	})
+
+	t.Run("matching forward is an existing route", func(t *testing.T) {
+		t.Parallel()
+		port := freePort(t)
+		ctx, _, g, _ := startTestOAuthBroker(t, time.Minute, Forward{
+			Host:      netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port),
+			GuestPort: port,
+		})
+		if code := registerFromGuest(t, ctx, g, port, "/cb"); code != http.StatusOK {
+			t.Fatalf("register status = %d, want 200", code)
+		}
+	})
+}
+
+func TestOAuthCallbackPrefersLoopbackRelay(t *testing.T) {
 	t.Parallel()
 	ctx, _, g, _ := startTestOAuthBroker(t, time.Minute)
+	port := freePort(t)
 
-	for range maxOAuthCallbacks {
-		p := freePort(t)
-		if code := registerFromGuest(t, ctx, g, p, "/cb"); code != http.StatusOK {
-			t.Fatalf("register port %d status = %d, want 200", p, code)
+	var nicHits, loopbackHits atomic.Int32
+	nicLn, err := gonet.ListenTCP(g, tcpip.FullAddress{
+		NIC:  1,
+		Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 2}),
+		Port: port,
+	}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatalf("listen on fake guest NIC: %v", err)
+	}
+	t.Cleanup(func() { _ = nicLn.Close() })
+	go func() {
+		for {
+			c, err := nicLn.Accept()
+			if err != nil {
+				return
+			}
+			nicHits.Add(1)
+			_ = c.Close()
+		}
+	}()
+
+	startFakeGuestLoopbackRelay(t, g, map[uint16]func(net.Conn){
+		port: func(c net.Conn) {
+			loopbackHits.Add(1)
+			_, _ = http.ReadRequest(bufio.NewReader(c))
+			_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+		},
+	})
+
+	if code := registerFromGuest(t, ctx, g, port, "/cb"); code != http.StatusOK {
+		t.Fatalf("register status = %d, want 200", code)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(fmt.Sprintf("http://127.0.0.1:%d/cb?code=abc", port))
+	if err != nil {
+		t.Fatalf("GET callback: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("callback status = %d, want 200", resp.StatusCode)
+	}
+	if got := loopbackHits.Load(); got != 1 {
+		t.Fatalf("loopback relay hits = %d, want 1", got)
+	}
+	if got := nicHits.Load(); got != 0 {
+		t.Fatalf("guest NIC hits = %d, want 0 (NIC listener must not shadow loopback)", got)
+	}
+}
+
+func TestOAuthCallbackConcurrencyCap(t *testing.T) {
+	t.Parallel()
+	ctx, b, g, _ := startTestOAuthBroker(t, time.Minute)
+
+	const n = 24
+	ports := make([]uint16, n)
+	for i := range ports {
+		ports[i] = freePort(t)
+	}
+	codes := make([]int, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			codes[i] = registerFromGuest(t, ctx, g, ports[i], "/cb")
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	var okPorts []uint16
+	var tooMany int
+	for i, code := range codes {
+		switch code {
+		case http.StatusOK:
+			okPorts = append(okPorts, ports[i])
+		case http.StatusTooManyRequests:
+			tooMany++
+		default:
+			t.Fatalf("register port %d status = %d, want 200 or 429", ports[i], code)
 		}
 	}
-	extra := freePort(t)
-	if code := registerFromGuest(t, ctx, g, extra, "/cb"); code != http.StatusTooManyRequests {
-		t.Fatalf("over-cap register status = %d, want 429", code)
+	if len(okPorts) != maxOAuthCallbacks || tooMany != n-maxOAuthCallbacks {
+		t.Fatalf("200s = %d, 429s = %d, want %d and %d", len(okPorts), tooMany, maxOAuthCallbacks, n-maxOAuthCallbacks)
 	}
+	active := func() int {
+		b.oauth.mu.Lock()
+		defer b.oauth.mu.Unlock()
+		return len(b.oauth.byPort)
+	}
+	if got := active(); got != maxOAuthCallbacks {
+		t.Fatalf("active callbacks = %d, want %d", got, maxOAuthCallbacks)
+	}
+
+	// Re-registering an active port replaces it without growing the set.
+	if code := registerFromGuest(t, ctx, g, okPorts[0], "/cb2"); code != http.StatusOK {
+		t.Fatalf("re-register status = %d, want 200", code)
+	}
+	if got := active(); got != maxOAuthCallbacks {
+		t.Fatalf("active callbacks after re-register = %d, want %d", got, maxOAuthCallbacks)
+	}
+}
+
+func TestOAuthRegisterFlowLimitAndTimeouts(t *testing.T) {
+	t.Parallel()
+
+	dialRegister := func(t *testing.T, ctx context.Context, g *stack.Stack) net.Conn {
+		t.Helper()
+		c, err := gonet.DialContextTCP(ctx, g, tcpip.FullAddress{
+			NIC:  1,
+			Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 1}),
+			Port: testOAuthCallbackPort,
+		}, ipv4.ProtocolNumber)
+		if err != nil {
+			t.Fatalf("dial registration endpoint: %v", err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		return c
+	}
+
+	t.Run("flow limit", func(t *testing.T) {
+		t.Parallel()
+		ctx, b, g, logBuf := startTestOAuthBroker(t, time.Minute)
+		b.tcpFlows.n.Store(maxTCPFlows)
+		t.Cleanup(func() { b.tcpFlows.n.Store(0) })
+
+		c := dialRegister(t, ctx, g)
+		_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+		_, _ = io.WriteString(c, "POST /register HTTP/1.1\r\nHost: 192.168.127.1\r\nContent-Length: 2\r\n\r\n{}")
+		got, err := io.ReadAll(c)
+		if len(got) != 0 {
+			t.Fatalf("registration served at flow limit: %q", got)
+		}
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			t.Fatalf("connection stayed open at flow limit: %v", err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for !strings.Contains(logBuf.String(), `"event":"flow-limit"`) {
+			if time.Now().After(deadline) {
+				t.Fatalf("expected flow-limit event in broker log, got %s", logBuf.String())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+
+	t.Run("flow released on close", func(t *testing.T) {
+		t.Parallel()
+		ctx, b, g, _ := startTestOAuthBroker(t, time.Minute)
+		if code := registerFromGuest(t, ctx, g, freePort(t), "/cb"); code != http.StatusOK {
+			t.Fatalf("register status = %d, want 200", code)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for b.tcpFlows.n.Load() != 0 {
+			if time.Now().After(deadline) {
+				t.Fatalf("tcp flows held after registration closed: %d", b.tcpFlows.n.Load())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+
+	t.Run("body read timeout", func(t *testing.T) {
+		t.Parallel()
+		ctx, b, g, _ := startTestOAuthBroker(t, time.Minute)
+		b.oauth.registerTimeout.Store(int64(100 * time.Millisecond))
+
+		c := dialRegister(t, ctx, g)
+		_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+		if _, err := io.WriteString(c, "POST /register HTTP/1.1\r\nHost: 192.168.127.1:7025\r\nContent-Length: 10\r\n\r\n"); err != nil {
+			t.Fatal(err)
+		}
+		// The body never arrives; the server must give up and close.
+		_, err := io.ReadAll(c)
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			t.Fatalf("server held a stalled registration open: %v", err)
+		}
+	})
 }
 
 // chanListener feeds already-accepted connections to an http.Server in tests.
