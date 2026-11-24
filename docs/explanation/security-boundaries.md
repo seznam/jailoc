@@ -47,9 +47,8 @@ libkrun's virtio-fs server doesn't confine file requests to the shared directori
 
     Unlike Landlock, Seatbelt also confines metadata operations such as `stat` outside the granted paths. jailoc refuses to start a VM when it can't apply the profile.
 
-    !!! warning "Seatbelt is deprecated"
-
-        Apple marks `sandbox_init`, the call that applies the profile, as deprecated. Chromium and other macOS sandboxes still rely on it, but a future macOS release could remove or change it, and the VMM confinement would then stop working.
+    !!! note "Seatbelt is deprecated, but here to stay for now"
+        Apple has marked `sandbox_init`, the call that applies the profile, as deprecated since OS X 10.8 (2012), without shipping a replacement; App Sandbox entitlements can't express this profile model. Chromium, Codex CLI and Anthropic's sandbox runtime still rely on it, and Apple still uses Seatbelt internally. A future macOS release could remove or change it, which would end the VMM confinement on macOS.
 
 #### What the host does with guest-written data
 
