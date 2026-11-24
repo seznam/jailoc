@@ -261,31 +261,6 @@ curl --cacert "$ING/ca.crt" --resolve foo.demo.jailoc.local:443:127.0.0.1 \
 ```
 
 `200` shows that the certificate chain, the 443 redirect and the proxy work. It doesn't test DNS or the browser's trust store; run the resolver check above, then open the page in the browser.
-## Check the host primitives (experimental)
-
-`jailoc proxy host-proof` exercises the host mechanisms that a managed proxy would rely on, with throwaway data only. It is a foundation proof, not enrollment.
-
-```bash
-jailoc proxy host-proof
-```
-
-The command takes no arguments or command-specific flags, reads no configuration and takes no certificate or key paths. It runs unprivileged with a 15-second execution deadline followed by bounded cleanup, and refuses to run as root. It prints one `PASS` or `FAIL` row per check and exits with an error if a check or cleanup fails. It prints no private key or token.
-
-| Check | Covers |
-|-------|--------|
-| Broker listener | A broker bound to ephemeral loopback ports, which passes each accepted connection to the attached proxy. |
-| Private Unix socket | The broker's control socket (mode `0600`) in a temporary directory (mode `0700`), with the peer's UID verified on both sides. |
-| Proxy attachment | One proxy serves HTTPS through the broker; a second proxy is refused while the first is attached and serves once the first detaches. |
-| TLS trust | A dummy CA and a leaf for `proof.jl.local`, both held in memory only. The client trusts exactly that CA, with no `InsecureSkipVerify`. A wrong host name and an untrusted CA are both rejected. |
-| Marker rewrite | A hosts-file plan that adds and removes only marker-owned exact-host lines, applied to a temporary fixture file. The fixture is synced to disk, rolled back, and every unrelated byte is preserved. |
-
-The proof changes no host settings. It sets no DNS, and it changes no `/etc/hosts`, trust store, service, firewall, `sysctl` setting, browser setting or port 443. It installs no root helper and persists no CA.
-
-Normal CLI startup still initializes persistent logging and can check for updates in an interactive terminal. The temporary proof does not isolate those CLI hooks.
-
-It does not prove enrollment. The broker and both proxies run in one process on ephemeral ports; nothing in the proof covers port 443, root, a second UID or a browser trusting a `.local` name. The [manual host setup](#set-up-the-host) stays necessary for the foreground proxy and its `jailoc.local` names. Workspaces are not converted to `jl.local` names. No `jailoc` command sets up, checks or removes the host DNS, trust store or port 443 configuration.
-
-To pass a workspace named `host-proof` to the foreground proxy, put its name after `--`, following the proxy's TLS flags.
 ## Clean up
 
 Each command removes only what this guide added. Skip the lines for options you didn't use.

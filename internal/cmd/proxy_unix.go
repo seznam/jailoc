@@ -114,7 +114,6 @@ func newProxyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.keyFile, "tls-key", "", "PEM private key of the certificate")
 	_ = cmd.MarkFlagRequired("tls-cert")
 	_ = cmd.MarkFlagRequired("tls-key")
-	cmd.AddCommand(newProxyHostProofCmd())
 	return cmd
 }
 

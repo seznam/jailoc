@@ -928,17 +928,6 @@ func TestProxyListenerBrokerRefusesRoot(t *testing.T) {
 	}
 }
 
-func TestProxyListenerBrokerKeepsHostProofEscape(t *testing.T) {
-	// A workspace named host-proof is reached with `--`; the flag must not
-	// change how the command line is routed, so the run reaches the proxy
-	// itself (and stops at the root refusal), not the host-proof command.
-	useProxyBrokerHost(t, proxyBrokerTarget{uid: 0, socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
-	_, err := runProxyArgs(t, "--tls-cert", "c.pem", "--tls-key", "k.pem", "--listener-broker", "--", "host-proof")
-	if err == nil || !strings.Contains(err.Error(), "--listener-broker") || strings.Contains(err.Error(), "host proof") {
-		t.Fatalf("error = %v, want the proxy's own refusal", err)
-	}
-}
-
 func TestProxyListenerBrokerRequiresTLSFlags(t *testing.T) {
 	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
 	if _, err := runProxyArgs(t, "--listener-broker"); err == nil || !strings.Contains(err.Error(), `"tls-cert"`) {
