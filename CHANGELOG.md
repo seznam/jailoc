@@ -1,5 +1,62 @@
 # Changelog
 
+## [2.9.0](https://github.com/seznam/jailoc/compare/v2.8.1...v2.9.0) (2026-11-24)
+
+
+### Features
+
+* **network:** add agent_endpoints to replace the implicit agent rule hosts ([7832bde](https://github.com/seznam/jailoc/commit/7832bde7fe67c718da1040456022eb238f4d889b))
+* **network:** keep built-in endpoints for single-provider agents ([9f78150](https://github.com/seznam/jailoc/commit/9f7815029e8b384b6a4c23e2de303288d339b4f5))
+* **network:** require agent_endpoints for the agent rule ([d91c04e](https://github.com/seznam/jailoc/commit/d91c04e9c2aa6231bc1d0f1edd222800b68f7929))
+* **network:** require agent_endpoints for the agent rule ([e7d29a2](https://github.com/seznam/jailoc/commit/e7d29a20e0f7f8b19f47c60e3c6579aead7dc1e2))
+* **setup:** move setup and migrate wizards to huh prompts ([8957592](https://github.com/seznam/jailoc/commit/8957592e729b5414d40dc257166f10a0289bc49c))
+* **setup:** move setup and migrate wizards to huh prompts ([b43b477](https://github.com/seznam/jailoc/commit/b43b4773b18a71511c96d384209f719728da73ef))
+* **setup:** select model providers for agent_endpoints ([3854e31](https://github.com/seznam/jailoc/commit/3854e311b00ed61925ee91cd504b194ddcde8987))
+* **vm:** confine the VM runner on macOS with a Seatbelt profile ([1afe6f0](https://github.com/seznam/jailoc/commit/1afe6f00f0c150c3a662dea76801ae0452b6debb))
+* **vm:** confine the VM runner on macOS with a Seatbelt profile ([f3f1ae8](https://github.com/seznam/jailoc/commit/f3f1ae864865ae4d98ae8850298e7ccb383f2e24))
+
+
+### Bug Fixes
+
+* **agent:** disable opencode2 background service in read-only config ([2ab5bd0](https://github.com/seznam/jailoc/commit/2ab5bd0c087f6d5d42b472b0c30ee4cced9bc252))
+* **agent:** disable opencode2 background service in read-only config ([5b2f07d](https://github.com/seznam/jailoc/commit/5b2f07dcfc63435403d8bb9104f2ee4bce75f0b2))
+* **config:** clarify no-rules warning and test mixed-agent migration ([afda65c](https://github.com/seznam/jailoc/commit/afda65c8245c7c90a4c05106eb3d26420eabd8b2))
+* **config:** keep restricted agent_endpoints when adding workspaces ([6c26fcb](https://github.com/seznam/jailoc/commit/6c26fcb050231a062cfdf7cf24f26d1ec62d4645))
+* **config:** seed agent_endpoints for inherited agents ([b9aface](https://github.com/seznam/jailoc/commit/b9aface0e27079942f0a63a47fb69d53e57e2c68))
+* **release:** guard homebrew tap against downgrades and normalize re-release config ([5f79c07](https://github.com/seznam/jailoc/commit/5f79c07f8e743e0c455e434239299d34288e4371))
+* **release:** pin libkrun to a commit and GoReleaser to an exact version ([f68a27d](https://github.com/seznam/jailoc/commit/f68a27db5c7ab6a90d20eb954f0ea409fb109e05))
+* **release:** publish releases and the cask only after attestation ([0b9da03](https://github.com/seznam/jailoc/commit/0b9da0301db9f2855fda69032ecc4af248d4b1d2))
+* **release:** publish releases and the cask only after attestation ([1c44a06](https://github.com/seznam/jailoc/commit/1c44a06f2a4ae551a2d9972d41522d0e94dc8ab7))
+* **release:** read isPrerelease before publishing the draft release ([2eb24a4](https://github.com/seznam/jailoc/commit/2eb24a45fa0101029ca5d2ec4dce872f4f29ec51))
+* **release:** serialize per-tag release jobs and enforce draft/render-only GoReleaser ([98839c3](https://github.com/seznam/jailoc/commit/98839c3a19404b8702b29f59192f04a74b05ad40))
+* **setup:** honour hidden steps, defaults and cancellation in accessible prompts ([dd776a2](https://github.com/seznam/jailoc/commit/dd776a22d4f1d87e1f7e392691638b3b51fe0135))
+* **setup:** read stdin on demand, print descriptions in accessible prompts and escape review notes ([dc0633a](https://github.com/seznam/jailoc/commit/dc0633a0acc1cdd24180fe72d2b33941a9f18bd1))
+* **vm:** grant resolved targets of lib_dir dylib symlinks in Seatbelt profile ([c0f9ead](https://github.com/seznam/jailoc/commit/c0f9eadc3bca28c10aa5e2917d224e1922c20672))
+* **vmintegration:** expect gateway and guest-network reasons for host addresses ([0a37a31](https://github.com/seznam/jailoc/commit/0a37a31c972d3a232c8fdbbb85e0ca659c06ce26))
+* **vmintegration:** require EACCES and per-protocol DNS denials ([d3f8ed1](https://github.com/seznam/jailoc/commit/d3f8ed1e644423f25d604c229adfe9f5384ead07))
+* **vm:** reject vsock ports in VMM sandbox and verify no host vsock ([5811424](https://github.com/seznam/jailoc/commit/5811424fab7cd69f7c7e41269b33f6e557fa3675))
+* **vm:** reject vsock ports in VMM sandbox and verify no host vsock ([b6c8e0b](https://github.com/seznam/jailoc/commit/b6c8e0bed72577ad7968d304e67599b38e3380e9))
+* **vm:** resolve symlinks before dot-dot in Seatbelt path canonicalization ([80012d1](https://github.com/seznam/jailoc/commit/80012d13ffc109a52068422f709cd1876d9c54d8))
+* **vm:** unlock tmp disk flock before closing file descriptor ([19c34eb](https://github.com/seznam/jailoc/commit/19c34ebc0b5ca52ee0fae28f33fdce14545ce17f))
+
+
+### Documentation
+
+* **setup:** add screenshots of the setup and migrate prompts ([ab7b88c](https://github.com/seznam/jailoc/commit/ab7b88c7c044756f7f5d6067262acf45cb9d778c))
+
+
+### Tests
+
+* **cmd:** avoid /var/folders temp HOME on macOS in config test ([e2bc395](https://github.com/seznam/jailoc/commit/e2bc39505302372c3d2b70f75c87c02097cdf16c))
+* **cmd:** size huh form viewport so long macOS temp paths do not clip review title ([1bb096b](https://github.com/seznam/jailoc/commit/1bb096bbf177af1f19e4af39030cc7f7ba34ead6))
+* **vmintegration:** dispatch vm-seatbelt shim on macOS ([6c231f9](https://github.com/seznam/jailoc/commit/6c231f958d8e5d8ad993c7c2654bff6045df129a))
+* **vmintegration:** enable 1s tmp TTL only after fixture setup ([f52f8a3](https://github.com/seznam/jailoc/commit/f52f8a3aadb823d2c8da5ea2f5d3ea4fbfd7671e))
+* **vmintegration:** prove negative egress and confined runner access end to end ([f882ef3](https://github.com/seznam/jailoc/commit/f882ef3c9752618f0164736b289dd5420e589648))
+* **vmintegration:** prove negative egress and confined runner access end to end ([ed13c88](https://github.com/seznam/jailoc/commit/ed13c884e955e0252fe1702e44148bf25493a1bf))
+* **vmintegration:** restore embedded jailoc-guest after building test binary ([d71c005](https://github.com/seznam/jailoc/commit/d71c005a5b6daba0b207808db6b92b51d5d74c8c))
+* **vmintegration:** skip host addresses the guest also owns ([903fd84](https://github.com/seznam/jailoc/commit/903fd842b65277a03d8061da0950cdef27810b75))
+* **vmintegration:** use 5s /tmp TTL sweep interval in vmintegration builds ([8661be1](https://github.com/seznam/jailoc/commit/8661be1c3c22dc6f245ec44d701a8b990f11d503))
+
 ## [2.8.1](https://github.com/seznam/jailoc/compare/v2.8.0...v2.8.1) (2026-11-23)
 
 
