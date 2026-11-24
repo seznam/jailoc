@@ -32,7 +32,7 @@ func (g *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid authority", http.StatusBadRequest)
 		return
 	}
-	route, ok := g.routes[host]
+	route, ok := g.route(host)
 	if !ok || r.TLS == nil || r.TLS.ServerName != host {
 		http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
 		return

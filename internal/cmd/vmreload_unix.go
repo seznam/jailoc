@@ -101,8 +101,14 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s reloaded\n", ws.Name)
-	if changed := restartOnlyChanges(running, want); len(changed) > 0 {
+	changed := restartOnlyChanges(running, want)
+	if len(changed) > 0 {
 		_, _ = color.New(color.FgYellow).Printf("Changes to %s apply after `jailoc restart %s` (this ends running sessions)\n", joinList(changed), ws.Name)
+	}
+	if len(ws.Proxy) == 0 {
+		syncProxyAfterDown()
+	} else if !slices.Contains(changed, "proxy") {
+		autoManageProxyOnUp(ctx, ws, os.Stdout, os.Stderr)
 	}
 	return nil
 }

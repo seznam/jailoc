@@ -56,7 +56,11 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if st, err := runningVM(stateDir); err != nil {
 		return err
 	} else if st != nil {
-		return reloadVM(ctx, ws, false)
+		if err := reloadVM(ctx, ws, false); err != nil {
+			return err
+		}
+		autoManageProxyOnUp(ctx, ws, os.Stdout, os.Stderr)
+		return nil
 	}
 	stopUpLog, err := teeUpLog(stateDir)
 	if err != nil {
@@ -166,6 +170,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	recordAgentStateVersion(cfg, ws, shares)
 	logStep("up", upStart, "workspace", ws.Name)
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s started\n", ws.Name)
+	autoManageProxyOnUp(ctx, ws, os.Stdout, os.Stderr)
 	return nil
 }
 
@@ -988,9 +993,11 @@ func downVM(ctx context.Context, ws *workspace.Resolved, purge bool) error {
 			return purgeErr
 		}
 		_, _ = color.New(color.FgGreen).Printf("Workspace %s VM deleted\n", ws.Name)
+		syncProxyAfterDown()
 		return nil
 	}
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s stopped\n", ws.Name)
+	syncProxyAfterDown()
 	return nil
 }
 
@@ -1028,6 +1035,9 @@ func statusVM(ctx context.Context, ws *workspace.Resolved) error {
 	fmt.Printf("Resources: %s\n", resourcesLabel(*spec))
 	fmt.Printf("Profile:   %s\n", profileLabel(*spec))
 	fmt.Printf("Tmp:       %s\n", tmpStatus(ctx, stateDir, *spec))
+	if label := proxyStatusLabel(ws); label != "" {
+		fmt.Printf("Proxy:     %s\n", label)
+	}
 	sessionsCtx, cancel := context.WithTimeout(ctx, listSessionsTimeout)
 	defer cancel()
 	if infos, err := vmSessions(sessionsCtx, ws); err != nil {
