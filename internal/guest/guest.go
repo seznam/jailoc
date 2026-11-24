@@ -124,6 +124,9 @@ type Config struct {
 	// configuration read-only (ReadOnlyHostDir), persistent home
 	// directories read-write (HostDir).
 	Binds []Bind `json:"binds,omitempty"`
+	// Tmpfs are guest directories mounted as private tmpfs (owned by the
+	// agent user, mode 0700) after shares and binds are in place.
+	Tmpfs []string `json:"tmpfs,omitempty"`
 	// Snapshots are read-only host files and directories bound from the
 	// staged snapshots to their destinations.
 	Snapshots []Snapshot `json:"snapshots,omitempty"`

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -652,6 +653,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		Home:      "/home/agent",
 		WorkDir:   workDir,
 		Snapshots: snapshots,
+		Tmpfs:     slices.Clone(ws.Agent.TmpfsDirs),
 		Env:       append([]string{"JAILOC=1", "JAILOC_WORKSPACE=" + ws.Name}, ws.Agent.Env...),
 		IPv6:      ws.IPv6,
 		TimeZone:  workspaceTimeZone(ws.TimeZone),

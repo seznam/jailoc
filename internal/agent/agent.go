@@ -176,6 +176,10 @@ type Harness struct {
 	Env []string
 	// State are the home directories that survive VM restarts.
 	State []StateDir
+	// TmpfsDirs are guest directories mounted as ephemeral tmpfs on boot
+	// (for example Unix socket directories inside a virtio-fs StateDir,
+	// where macOS Seatbelt denies host bind(2) calls).
+	TmpfsDirs []string
 	// StateDefaults are values jailoc sets in files of the State
 	// directories.
 	StateDefaults []StateDefault
@@ -464,8 +468,13 @@ var harnesses = []Harness{
 		Resume:      "--session",
 		DefaultArgs: []string{"--permission-preset", "full-access"},
 		// The image runs Node.js; OMO_RUNTIME=node silences the Bun notice.
-		Env:               []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
-		State:             []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
+		Env:   []string{"PI_SKIP_VERSION_CHECK=1", "OMO_RUNTIME=node"},
+		State: []StateDir{{Name: "omo", Path: "/home/agent/.omo"}},
+		// OmO binds Unix sockets under ~/.omo/agent/rpc/ (TUI control
+		// endpoint and RPC host shards). Mount it as tmpfs so sockets
+		// stay ephemeral and do not hit macOS Seatbelt bind denials on
+		// virtio-fs shares.
+		TmpfsDirs:         []string{"/home/agent/.omo/agent/rpc"},
 		ConfigFiles:       omoConfig,
 		TUIPlugin:         OmOExtension,
 		Endpoints:         llmEndpoints,
