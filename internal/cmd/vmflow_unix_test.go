@@ -582,3 +582,77 @@ func TestWorkspaceSpecTmpfs(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceSpecProxy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		proxy     []workspace.ProxyRoute
+		wantPorts []uint16 // nil: no proxy relay
+	}{
+		{name: "none"},
+		{
+			name:      "proxy routes",
+			proxy:     []workspace.ProxyRoute{{Name: "api", Port: 8080}, {Name: "app", Port: 3000}},
+			wantPorts: []uint16{3000, 8080},
+		},
+		{
+			name:      "proxy routes with a shared port",
+			proxy:     []workspace.ProxyRoute{{Name: "a", Port: 3000}, {Name: "b", Port: 3000}, {Name: "c", Port: 6080}},
+			wantPorts: []uint16{3000, 6080},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", Proxy: tt.proxy}
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
+			if err != nil {
+				t.Fatalf("workspaceSpec: %v", err)
+			}
+			if tt.wantPorts == nil {
+				if spec.Guest.ProxyRelay != nil {
+					t.Errorf("Guest.ProxyRelay = %+v, want nil", spec.Guest.ProxyRelay)
+				}
+			} else if spec.Guest.ProxyRelay == nil || !slices.Equal(spec.Guest.ProxyRelay.Ports, tt.wantPorts) {
+				t.Errorf("Guest.ProxyRelay = %+v, want ports %v", spec.Guest.ProxyRelay, tt.wantPorts)
+			}
+		})
+	}
+}
+
+func TestStatusRestartChangesProxy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	base := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol}
+	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g"}
+	tests := []struct {
+		name    string
+		proxy   []workspace.ProxyRoute
+		running guest.Config
+		want    []string
+	}{
+		{name: "none"},
+		{name: "proxy added", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}, want: []string{"proxy"}},
+		{
+			name: "proxy port changed", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3001}},
+			running: guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
+		},
+		{
+			name: "proxy renamed on the same port", proxy: []workspace.ProxyRoute{{Name: "other", Port: 3000}},
+			running: guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000}}},
+		},
+		{
+			name: "proxy removed", running: guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
+		},
+	}
+	for _, tt := range tests {
+		w := *ws
+		w.Proxy = tt.proxy
+		running := base
+		g := tt.running
+		running.Guest = &g
+		if got := statusRestartChanges(&w, running); !slices.Equal(got, tt.want) {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

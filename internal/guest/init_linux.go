@@ -213,6 +213,16 @@ func Init(logger *slog.Logger) error {
 		}
 	}
 
+	stopProxyRelay := func() {}
+	if cfg.ProxyRelay != nil && len(cfg.ProxyRelay.Ports) > 0 {
+		stop, err := startProxyRelay(logger, cfg.ProxyRelay)
+		if err != nil {
+			return fmt.Errorf("proxy relay: %w", err)
+		}
+		stopProxyRelay = sync.OnceFunc(stop)
+		defer stopProxyRelay()
+	}
+
 	srv, err := newSSHServer(logger, cfg, acct, env)
 	if err != nil {
 		return err
@@ -238,6 +248,8 @@ func Init(logger *slog.Logger) error {
 		if _, err := os.Stat(filepath.Join(ControlDir, "shutdown")); err == nil {
 			logger.Info("shutdown requested")
 			srv.Close()
+			// Before the reaper stops, so the exits are collected.
+			stopProxyRelay()
 			docker.stop(logger)
 			syscall.Sync()
 			return nil

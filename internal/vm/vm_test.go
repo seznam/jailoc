@@ -7,9 +7,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/seznam/jailoc/internal/guest"
 )
 
 func TestEnsureDisk(t *testing.T) {
@@ -102,6 +106,64 @@ func TestWriteControlNudgesSSHSocket(t *testing.T) {
 	got, err := ReadControl(stateDir, "shutdown")
 	if err != nil || string(got) != "now" {
 		t.Fatalf("ReadControl = %q, %v; want %q", got, err, "now")
+	}
+}
+
+func TestBrokerArgsProxyForward(t *testing.T) {
+	t.Parallel()
+	proxy := func(stateDir string) string {
+		return ProxySocket(stateDir) + "=" + strconv.Itoa(guest.ProxyRelayPort)
+	}
+	tests := []struct {
+		name  string
+		spec  Spec
+		wantP bool
+	}{
+		{"workspace without proxy relay", Spec{Kind: KindWorkspace, Guest: &guest.Config{}}, false},
+		{"workspace with empty ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{}}}, false},
+		{"workspace with ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}, true},
+		{"workspace without guest config", Spec{Kind: KindWorkspace}, false},
+		{"builder ignores proxy relay", Spec{Kind: KindBuilder, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.spec.StateDir = "/state"
+			tt.spec.Broker = []string{"jailoc", "netbroker"}
+			args := brokerArgs(tt.spec, "/state/policy.json")
+			var forwards []string
+			for i, a := range args {
+				if a == "-forward-unix" && i+1 < len(args) {
+					forwards = append(forwards, args[i+1])
+				}
+			}
+			var gotP int
+			for _, f := range forwards {
+				if f == proxy("/state") {
+					gotP++
+				}
+			}
+			if tt.wantP && gotP != 1 || !tt.wantP && gotP != 0 {
+				t.Fatalf("proxy forwards = %d in %v, want proxy=%v", gotP, forwards, tt.wantP)
+			}
+			if len(forwards) != 1+gotP {
+				t.Fatalf("forwards = %v, want the primary forward plus optional proxy", forwards)
+			}
+		})
+	}
+}
+
+func TestSocketPathsIncludeProxy(t *testing.T) {
+	t.Parallel()
+	spec := Spec{Kind: KindWorkspace, StateDir: "/state", Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}
+	got := supervisorSockets(spec)
+	want := []string{nicSocket("/state"), SSHSocket("/state"), ProxySocket("/state")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("sockets = %v, want %v", got, want)
+	}
+	spec.Guest = nil
+	if got := supervisorSockets(spec); len(got) != 2 {
+		t.Fatalf("sockets without proxy relay = %v", got)
 	}
 }
 

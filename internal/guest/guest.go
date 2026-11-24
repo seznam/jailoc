@@ -21,8 +21,9 @@ package guest
 // Protocol 2: the guest configures IPv6 only when Config.IPv6 is set, and
 // the broker policy denies IPv6 unless its ipv6 field is set.
 // Protocol 3: the broker policy uses dns, allow and deny rules.
-// Protocol 4: the guest mounts /tmp from Config.Tmp, applies Reload.TmpTTL
-// and answers "jailoc-guest tmp-status".
+// Protocol 4: the guest mounts /tmp from Config.Tmp, applies Reload.TmpTTL,
+// answers "jailoc-guest tmp-status", and runs the proxy relay (Config.ProxyRelay),
+// which the host's private proxy socket reaches through the broker gateway.
 const Protocol = 4
 
 // Paths inside the guest root file system.
@@ -79,6 +80,10 @@ const (
 	OAuthCallbackPort = 7025
 	// XDGOpenPath is the xdg-open wrapper installed in the guest.
 	XDGOpenPath = "/usr/local/bin/xdg-open"
+	// ProxyRelayPort is the single guest NIC port of the proxy relay. The host
+	// connects to it and names the loopback port to reach in the first two
+	// bytes (see ProxyRelay).
+	ProxyRelayPort = 6081
 )
 
 // HostAliases resolve to the broker gateway in /etc/hosts, where host_ports
@@ -189,6 +194,19 @@ type Config struct {
 	CacheDir string `json:"cache_dir,omitempty"`
 	// Tmp configures the /tmp file system and the expiry of its entries.
 	Tmp TmpConfig `json:"tmp"`
+	// ProxyRelay, when set, runs the proxy relay on ProxyRelayPort so the host
+	// reaches allowlisted guest loopback web services.
+	ProxyRelay *ProxyRelay `json:"proxy_relay,omitempty"`
+}
+
+// ProxyRelay configures the proxy relay: one listener on the guest NIC at
+// ProxyRelayPort. A client first sends a 2-byte big-endian target port; the
+// relay answers with one status byte and, if the port is allowed and
+// listening, splices the connection to 127.0.0.1:<port> in the guest.
+type ProxyRelay struct {
+	// Ports is the allowlist of loopback target ports; any other port is
+	// denied.
+	Ports []uint16 `json:"ports,omitempty"`
 }
 
 // DockerDisk is the block device of the workspace VM's Docker data disk.
