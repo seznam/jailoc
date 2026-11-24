@@ -122,7 +122,7 @@ The guest mounts both under a root-only directory and binds their parts into pla
 #### Confinement
 
 - Read-only shares are enforced by the VMM: guest root can't remount them writable.
-- libkrun's virtio-fs server itself does not keep a guest inside a share. On Linux the VM process therefore runs under Landlock with access only to the shares, the VM's root filesystem, data directory and disks, the image's EROFS layer files (read-only), and the runtime (see [Threat model](threat-model.md#the-boundary-is-the-vm)).
+- libkrun's virtio-fs server itself does not keep a guest inside a share. The VM process therefore runs under Landlock on Linux and under a Seatbelt profile on macOS, with access only to the shares, the VM's root filesystem, data directory and disks, the image's EROFS layer files (read-only), and the runtime (see [Threat model](threat-model.md#the-boundary-is-the-vm)).
 
 #### File ownership in shares
 

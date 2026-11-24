@@ -34,7 +34,7 @@ A bug in the hypervisor, libkrun or the broker itself. Those run on the host as 
 
 #### Host file access through virtio-fs
 
-libkrun's virtio-fs server does not confine the guest to the exported directories: it resolves the names in the guest's file requests on the host without rejecting `..` or `/`. A guest kernel under the agent's control could therefore ask it for any file the host user can reach. What limits that depends on the host:
+libkrun's virtio-fs server does not confine the guest to the exported directories: it resolves the names in the guest's file requests on the host without rejecting `..` or `/`. A guest kernel under the agent's control could therefore ask it for any file the host user can reach. jailoc limits that by confining the VM process:
 
 - **Linux.** jailoc starts the VM process under a Landlock domain, so such requests fail. The domain grants only:
     - the VM runtime,
@@ -47,7 +47,17 @@ libkrun's virtio-fs server does not confine the guest to the exported directorie
 
     Landlock does not restrict metadata operations such as `stat`, `chmod` or extended attributes, so a compromised guest kernel can still read and change the metadata of host files outside the shares.
 
-- **macOS.** The VM process has no equivalent confinement, and the shares are only as strong as libkrun's handling of these names.
+- **macOS.** jailoc starts the VM process under a Seatbelt profile that denies everything by default, on top of Apple's `system.sb` base, so such requests fail. The profile grants only:
+    - read and execute access to the VM runtime,
+    - read and write access to the VM's root filesystem, read-write disks, log files and read-write shares,
+    - read-only access to read-only shares and read-only disks,
+    - outbound Unix-socket connections to the workspace's network broker socket.
+
+    Seatbelt also confines metadata operations such as `stat` outside those paths. jailoc refuses to start a VM when it can't apply the profile.
+
+    !!! warning "Seatbelt is deprecated"
+
+        Apple marks `sandbox_init`, the call that applies the profile, as deprecated. Chromium and other macOS sandboxes still rely on it, but a future macOS release could remove or change it, and the VM process confinement on macOS would then stop working.
 
 ### Restricting external communication
 

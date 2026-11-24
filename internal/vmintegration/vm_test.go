@@ -46,6 +46,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	maybeRunSeatbeltShim()
 	os.Exit(run(m))
 }
 

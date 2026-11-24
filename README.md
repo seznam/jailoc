@@ -25,7 +25,7 @@ Each workspace boots its own VM with its own kernel. Your project directories ar
 - ⚡ **One command to start**: `jailoc` unpacks its embedded VM runtime, builds the image, boots the VM and attaches you to the agent.
 
 > [!WARNING]
-> Shared directories are read-write: the agent's edits land on your host at once, including Git hooks that run the next time you use Git there; [`protect_git`](https://seznam.github.io/jailoc/reference/configuration/#protect_git) covers only the repositories it applies to. Anything the agent can read can leave through the destinations your rules allow. [Security boundaries](https://seznam.github.io/jailoc/explanation/security-boundaries/#outside-the-boundaries) lists the exact limits, including the VMM confinement gaps on Linux and macOS.
+> Shared directories are read-write: the agent's edits land on your host at once, including Git hooks that run the next time you use Git there; [`protect_git`](https://seznam.github.io/jailoc/reference/configuration/#protect_git) covers only the repositories it applies to. Anything the agent can read can leave through the destinations your rules allow. [Security boundaries](https://seznam.github.io/jailoc/explanation/security-boundaries/#outside-the-boundaries) lists the exact limits, including the VMM confinement gaps on Linux and the Seatbelt deprecation risk on macOS.
 
 ## Installation
 
