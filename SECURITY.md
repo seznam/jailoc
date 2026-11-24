@@ -40,7 +40,7 @@ Out of scope, because these are documented limitations:
 - the agent reading shared directories, snapshots or configured secrets, or becoming root in the guest without `protect_git`;
 - access gained through `host_ports`, a forwarded SSH agent, a shared agent profile or a read-write agent configuration mount;
 - Dockerfile build steps on the host Docker daemon;
-- virtio-fs confinement on macOS, and metadata operations on host files outside the shares on Linux;
+- metadata operations on host files outside the shares on Linux;
 - prompt injection against the coding agent itself;
 - resource exhaustion inside the VM.
 

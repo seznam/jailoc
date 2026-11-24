@@ -37,6 +37,13 @@ jailoc
 On the first run jailoc asks up to two questions:
 
 1. **First-time setup**: if `~/.config/jailoc/config.toml` doesn't exist or still matches the unmodified default template, jailoc offers to run the interactive [`jailoc setup`](../reference/cli.md#jailoc-setup) wizard (alias `jailoc wizard`). It chooses your coding agent, Git/SSH/GPG forwarding, network policy and initial workspace path. Run `jailoc setup` any time to add another workspace.
+
+    ![jailoc setup asking for the default coding agent, with OpenCode 2 selected](img/setup-agent.png)
+
+    The last step shows a summary of your answers. Confirm it to write `config.toml`, or press `Shift+Tab` to go back and change an answer.
+
+    ![jailoc setup review step listing the agent, providers, forwarding, network, VM resources and workspace before writing config.toml](img/setup-review.png)
+
 2. **Workspace prompt**: if the current directory isn't part of any configured workspace, jailoc asks whether to add it. Confirm, and it's saved to your config.
 
 jailoc then prepares the workspace and attaches your terminal to an agent session over SSH. The first run takes longer: jailoc unpacks the VM runtime embedded in its binary into `~/.cache/jailoc-vm/runtime/` (once) and builds the workspace image, with host Docker or in a builder VM. Later runs reuse both. The [startup sequence](../explanation/overview.md#the-startup-sequence) describes each step.

@@ -110,7 +110,8 @@ func PrepareTmpDisk(stateDir string, size int64) (release func() error, err erro
 			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 				releaseErr = fmt.Errorf("remove tmp disk: %w", err)
 			}
-			_ = lock.Close() // drops the flock after the image is gone
+			_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:gosec // G115: file descriptors fit in int; unlock before Close so a concurrent fork cannot hold the flock until exec
+			_ = lock.Close()                                   // drops the flock after the image is gone
 		})
 		return releaseErr
 	}, nil

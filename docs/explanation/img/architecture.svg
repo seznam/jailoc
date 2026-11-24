@@ -46,7 +46,7 @@
 <rect x="540" y="208" width="310" height="90" rx="6" fill="#FFFFFF" stroke="#DCE0E5"/>
 <rect x="540" y="218" width="3" height="70" rx="1.5" fill="#425CC7"/>
 <text x="554" y="230" fill="#425CC7" font-size="14" font-weight="700" font-family="JetBrains Mono,Menlo,monospace">jailoc-vm-runner</text>
-<text x="554" y="248" fill="#6E7180" font-size="12">libkrun VMM · Landlock on Linux</text>
+<text x="554" y="248" fill="#6E7180" font-size="12">libkrun VMM · Landlock · Seatbelt</text>
 <rect x="554" y="266" width="80.60000000000001" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>
 <text x="594.3" y="280" fill="#425CC7" font-size="11.5" font-weight="600" text-anchor="middle" font-family="JetBrains Mono,Menlo,monospace">virtio-fs</text>
 <rect x="642.6" y="266" width="88.0" height="20" rx="4" fill="#EEF1FB" stroke="#C9D1F0"/>

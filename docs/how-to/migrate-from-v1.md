@@ -48,6 +48,9 @@ For each Docker workspace, jailoc:
     - `mount`: keep it as a live directory share (offered for directories only; the default for a directory).
     - `snapshot`: turn it into a read-only entry in `snapshots` (the default for a file). Single-file mounts must become snapshots, because the VM shares directories only.
     - `drop`: remove it.
+
+    ![jailoc migrate asking how to carry over a file mount (snapshot or drop) and a directory mount (mount, snapshot or drop)](img/migrate-mounts.png)
+
 2. Lists the v1 settings from the table above per scope and asks to confirm removing them. Declining stops the migration.
 3. Asks to stop the running Docker workspaces, then stops them.
 4. Copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directory, so sessions and logins carry over to OpenCode 1.
@@ -76,7 +79,7 @@ This part of `jailoc migrate` applies to any configuration that uses the older n
 - moves `allowed_hosts`, `allowed_networks`, `dns_upstream` and `dns_blocked_zones` into `network.dns` and `[[*.network.rules]]`;
 - removes `filtered_dns`;
 - adds a rule with `allow = ["*"]` when the configuration had no `network.rules`;
-- adds `agent_endpoints` to `[defaults.network]` (when the default agent is OpenCode or OmO) and to OpenCode or OmO workspaces that need other endpoints, when no scope sets `agent_endpoints`. It asks which model providers you use (comma-separated, empty for all; `--yes` takes all) and writes their endpoints. Without it these agents can't reach their providers; Claude Code, Copilot CLI and Antigravity keep their built-in endpoints. See [`rule=agent`](../reference/configuration.md#ruleagent);
+- adds `agent_endpoints` to `[defaults.network]` (when the default agent is OpenCode or OmO) and to OpenCode or OmO workspaces that need other endpoints, when no scope sets `agent_endpoints`. It asks which model providers you use (all selected by default; `--yes` takes all) and writes their endpoints. Without it these agents can't reach their providers; Claude Code, Copilot CLI and Antigravity keep their built-in endpoints. See [`rule=agent`](../reference/configuration.md#ruleagent);
 - keeps the value of the new field and removes the old one when both are set.
 
 After converting deprecated settings, `jailoc migrate` asks for optional `internal_zones` when no non-empty `internal_zones` exists in `[defaults]` or any workspace and explicit `allow` rules include hostnames. Wildcard hostnames count; `*`, IP addresses, CIDRs and `deny` rules do not. Answer with comma- or whitespace-separated DNS zones; they are stored in `defaults.network.internal_zones` and apply to every workspace. A blank answer leaves the zones unset; `--yes` skips the question. `--dry-run` asks the question and previews the result without writing it. Zones added by the conversion of legacy `allowed_hosts` suppress the question. The question also applies to configurations without deprecated settings.

@@ -3,8 +3,9 @@ name: terminal-screenshots
 description: >
   Regenerate the terminal screenshots of `jailoc traffic`, `jailoc strace`,
   `jailoc sessions` and `jailoc shell` output used in the docs and blog (docs/blog/img/*.png)
+  and of the `jailoc setup` / `jailoc migrate` prompts (docs/tutorials/img, docs/how-to/img)
   without booting a VM. Use when adding, refreshing or restyling those images,
-  or after the traffic/strace/sessions output format changes.
+  or after the traffic/strace/sessions output format or the setup/migrate forms change.
 ---
 
 # Terminal screenshots
@@ -18,24 +19,29 @@ through `trafficFormatter` / `execFormatter` from `internal/cmd/inspectfmt.go`
 and replicates the `listSessionsVM` table from `internal/cmd/vmsession_unix.go`;
 the `jailoc shell` transcript is written by hand.
 It writes transcripts `traffic.ansi`, `strace.ansi`, `sessions.ansi` and
-`shell.ansi`: lines starting with `$ ` are prompts, the rest is command output. [`render.mjs`](render.mjs) turns each transcript into a 2x
+`shell.ansi`: lines starting with `$ ` are prompts, the rest is command output.
+[`tui_shots_test.go`](tui_shots_test.go) builds the real huh forms
+(`buildFirstTimeForm`, `buildMigrationForm`), presses Enter through them and
+writes single frames `setup-agent.ansi`, `setup-review.ansi` and
+`migrate-mounts.ansi`. [`render.mjs`](render.mjs) turns each transcript into a 2x
 macOS-style dark terminal window PNG with Playwright/Chromium.
 
 ## Steps
 
 Run from the repo root. `W` is a scratch dir outside the repo.
 
-1. **Generate ANSI** (the driver is temporary; it lives in `internal/cmd` only while it runs):
+1. **Generate ANSI** (the drivers are temporary; they live in `internal/cmd` only while they run):
 
    ```bash
    W=/tmp/opencode/shots
    cp .agents/skills/terminal-screenshots/shots_test.go internal/cmd/zz_shots_test.go
-   SHOTS_DIR=$W TZ=Europe/Prague go test ./internal/cmd -run TestZZShots -count=1
-   rm internal/cmd/zz_shots_test.go
+   cp .agents/skills/terminal-screenshots/tui_shots_test.go internal/cmd/zz_tui_shots_test.go
+   SHOTS_DIR=$W TZ=Europe/Prague go test ./internal/cmd -run 'TestZZShots|TestZZTUIShots' -count=1
+   rm internal/cmd/zz_shots_test.go internal/cmd/zz_tui_shots_test.go
    ```
 
    `TZ=Europe/Prague` is load-bearing: sample times are UTC and render as 14:31 CET.
-   Done when `$W` holds four non-empty `.ansi` files and `git status internal/` is clean.
+   Done when `$W` holds seven non-empty `.ansi` files and `git status internal/` is clean.
 
 2. **Prepare the renderer** (once per machine):
 
@@ -50,17 +56,22 @@ Run from the repo root. `W` is a scratch dir outside the repo.
    If `playwright install` fails while extracting, download the zip URL it prints and
    `unzip` it into `$PLAYWRIGHT_BROWSERS_PATH/chromium-<revision>/` (1.48.0 → `chromium-1140`).
 
-3. **Render** (needs network for the JetBrains Mono web font):
+3. **Render** (needs network for the JetBrains Mono web font, or the font installed locally,
+   for example in `~/.fonts`):
 
    ```bash
    cd $W/render
-   PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/pw-shots node render.mjs $W <repo>/docs/blog/img
+   PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/pw-shots node render.mjs $W <outdir>
+   mv <outdir>/setup-*.png <repo>/docs/tutorials/img/
+   mv <outdir>/migrate-*.png <repo>/docs/how-to/img/
+   mv <outdir>/*.png <repo>/docs/blog/img/
    ```
 
    Writes `<name>.png` per `<name>.ansi`. The first prompt titles the window; a
    transcript without a trailing newline ends with the cursor on its last line
    (the guest shell prompt); one whose last prompt ends in ` -f` ends on a bare
-   cursor (still following); others on a fresh `$` prompt.
+   cursor (still following); one ending in `ESC[?25l` (the TUI frames) has no
+   cursor; others end on a fresh `$` prompt.
 
 4. **Check** every PNG by viewing it: colours present, no wrapped lines, font is
    JetBrains Mono (a fallback font means the font request failed).
@@ -101,4 +112,8 @@ Read `internal/netbroker` and `internal/guest` when adding a new event kind.
 
 If the formatter output changes (a new column, different colours), just rerun the
 steps; if the `sessions` table changes, update the hand-made copy in
-`shots_test.go`.
+`shots_test.go`. The TUI frames pick up form changes on their own; if a
+frame stops matching (for example `migrate-mounts` looks for the
+"This path is a file" description), adjust the selection in `tui_shots_test.go`
+and the alt texts in `docs/tutorials/getting-started.md` and
+`docs/how-to/migrate-from-v1.md`.

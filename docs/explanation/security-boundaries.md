@@ -15,7 +15,7 @@ jailoc treats everything inside a workspace VM as hostile: the coding agent, eve
 
 ## The boundaries
 
-![Trust boundaries of one workspace: on the trusted host, the jailoc CLI reaches the guest over SSH through the network broker's socket, the broker sends policy-checked egress to the internet, and the VMM process (Landlock on Linux) serves host files. The untrusted workspace VM (agent, guest root, guest kernel) crosses the VM boundary only through virtio-net, whose only peer is the broker, and virtio-fs shares limited to declared directories.](img/security-boundaries.svg)
+![Trust boundaries of one workspace: on the trusted host, the jailoc CLI reaches the guest over SSH through the network broker's socket, the broker sends policy-checked egress to the internet, and the VMM process (Landlock on Linux, Seatbelt on macOS) serves host files. The untrusted workspace VM (agent, guest root, guest kernel) crosses the VM boundary only through virtio-net, whose only peer is the broker, and virtio-fs shares limited to declared directories.](img/security-boundaries.svg)
 
 ### VM and host
 
@@ -39,7 +39,17 @@ libkrun's virtio-fs server doesn't confine file requests to the shared directori
 
     jailoc refuses to start a VM when the kernel lacks Landlock. Landlock doesn't cover metadata operations such as `stat`, `chmod` or extended attributes.
 
-- **macOS.** The VMM process runs without equivalent confinement.
+- **macOS.** jailoc starts the VMM process under a Seatbelt profile that denies everything by default, on top of Apple's `system.sb` base. The profile grants:
+    - read and execute access to the VM runtime,
+    - read and write access to the VM's root filesystem, read-write disks, log files and read-write shares,
+    - read-only access to read-only shares and read-only disks,
+    - outbound Unix-socket connections only to the workspace's network broker socket.
+
+    Unlike Landlock, Seatbelt also confines metadata operations such as `stat` outside the granted paths. jailoc refuses to start a VM when it can't apply the profile.
+
+    !!! warning "Seatbelt is deprecated"
+
+        Apple marks `sandbox_init`, the call that applies the profile, as deprecated. Chromium and other macOS sandboxes still rely on it, but a future macOS release could remove or change it, and the VMM confinement would then stop working.
 
 #### What the host does with guest-written data
 
@@ -141,7 +151,7 @@ jailoc doesn't protect against:
 - **Changes to shared directories.** Writes land on the host immediately; `protect_git` covers Git hooks and configuration only.
 - **Services reached through `host_ports` or the SSH agent.** Their own access control is the only limit.
 - **Bugs in the hypervisor, libkrun, the VMM process or the broker.** These run on the host as your user.
-- **virtio-fs confinement on macOS**, and metadata operations on host files outside the shares on Linux, for a guest kernel under the agent's control.
+- **Metadata operations on host files outside the shares on Linux**, for a guest kernel under the agent's control.
 - **Prompt injection itself.** jailoc limits what a manipulated agent can reach, not whether it gets manipulated.
 - **Notifications OpenCode shows itself.** When OpenCode's own notifications are on, jailoc sends none, and OpenCode's follow its settings, not jailoc's focus check, fixed text or interval.
 - **Resource exhaustion inside the VM.** `cpu` and `memory` cap the whole VM; nothing limits processes inside it.
