@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -126,7 +127,13 @@ func startTestOAuthBroker(t *testing.T, ttl time.Duration, forwards ...Forward) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sock := filepath.Join(t.TempDir(), "nic.sock")
+	// Short socket path to stay under the 104-byte Unix socket sun_path limit on macOS.
+	sockDir, err := os.MkdirTemp("", "nb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	sock := filepath.Join(sockDir, "nic.sock")
 	l, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
