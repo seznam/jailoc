@@ -157,12 +157,12 @@ func TestSocketPathsIncludeProxy(t *testing.T) {
 	t.Parallel()
 	spec := Spec{Kind: KindWorkspace, StateDir: "/state", Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}
 	got := supervisorSockets(spec)
-	want := []string{nicSocket("/state"), SSHSocket("/state"), ProxySocket("/state")}
+	want := []string{nicSocket("/state"), SSHSocket("/state"), consoleSocket("/state"), ProxySocket("/state")}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sockets = %v, want %v", got, want)
 	}
 	spec.Guest = nil
-	if got := supervisorSockets(spec); len(got) != 2 {
+	if got := supervisorSockets(spec); len(got) != 3 {
 		t.Fatalf("sockets without proxy relay = %v", got)
 	}
 }
@@ -219,23 +219,27 @@ func staleConsoleSpec(t *testing.T) (Spec, string) {
 		t.Fatal(err)
 	}
 	stale := "level=fatal msg=\"docker: no space left on device\"\n"
-	if err := os.WriteFile(console, []byte(stale), 0o600); err != nil {
-		t.Fatal(err)
+	for _, p := range ConsoleLogPaths(stateDir) {
+		if err := os.WriteFile(p, []byte(stale), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return Spec{Kind: KindBuilder, Workspace: "builder", StateDir: stateDir, DiskSize: 1 << 20}, console
 }
 
 func TestRunResetsStaleConsoleBeforeDiskPreparation(t *testing.T) {
 	t.Parallel()
-	spec, console := staleConsoleSpec(t)
+	spec, _ := staleConsoleSpec(t)
 	err := Run(context.Background(), spec)
 	if err == nil || !strings.Contains(err.Error(), "cannot shrink") {
 		t.Fatalf("Run = %v, want the data disk shrink refusal", err)
 	}
-	if data, rerr := os.ReadFile(console); rerr == nil { //nolint:gosec // G304: console inside the test's own temporary directory
-		t.Errorf("stale console.log survived the failed Run: %q", data)
-	} else if !errors.Is(rerr, os.ErrNotExist) {
-		t.Fatal(rerr)
+	for _, p := range ConsoleLogPaths(spec.StateDir) {
+		if data, rerr := os.ReadFile(p); rerr == nil { //nolint:gosec // G304: console inside the test's own temporary directory
+			t.Errorf("stale %s survived the failed Run: %q", filepath.Base(p), data)
+		} else if !errors.Is(rerr, os.ErrNotExist) {
+			t.Fatal(rerr)
+		}
 	}
 	if st, serr := os.Stat(diskPath(spec.StateDir)); serr != nil || st.Size() != 2<<20 {
 		t.Errorf("data disk changed: %v, %v", st, serr)

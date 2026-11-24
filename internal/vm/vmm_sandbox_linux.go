@@ -43,21 +43,32 @@ type landlockRule struct {
 }
 
 // vmmSpawner starts the VM runner confined by Landlock.
-func vmmSpawner() runner.Spawner { return confinedSpawner{} }
+func vmmSpawner(redactor *consoleRedactor) runner.Spawner {
+	return confinedSpawner{redactor: redactor}
+}
 
-type confinedSpawner struct{}
+type confinedSpawner struct {
+	redactor *consoleRedactor
+}
 
 // runnerProbe, when set, runs on the confined thread right after the runner
 // started, so whatever it starts shares the runner's Landlock domain. Only VM
 // integration builds set it (vmm_sandbox_probe_linux.go).
 var runnerProbe func(cfg runner.Config, runnerPID int)
 
-func (confinedSpawner) Spawn(ctx context.Context, cfg runner.Config) (runner.ProcessHandle, error) {
+func (s confinedSpawner) Spawn(ctx context.Context, cfg runner.Config) (runner.ProcessHandle, error) {
 	if len(cfg.VsockPorts) > 0 {
 		return nil, fmt.Errorf("start confined VM runner: vsock ports are not permitted (%d configured)", len(cfg.VsockPorts))
 	}
+	pipePath, closeWrite, waitConsole, err := startConsolePipe(cfg.ConsoleLog, s.redactor)
+	if err != nil {
+		return nil, fmt.Errorf("start confined VM runner: %w", err)
+	}
+	if pipePath != "" {
+		cfg.ConsoleLog = pipePath
+	}
 	var proc *runner.Process
-	err := startConfined(vmmRules(cfg), func() error {
+	err = startConfined(vmmRules(cfg), func() error {
 		var err error
 		proc, err = runner.SpawnProcess(ctx, cfg)
 		if err == nil && runnerProbe != nil {
@@ -65,10 +76,12 @@ func (confinedSpawner) Spawn(ctx context.Context, cfg runner.Config) (runner.Pro
 		}
 		return err
 	})
+	closeWrite()
 	if err != nil {
+		waitConsole()
 		return nil, fmt.Errorf("start confined VM runner: %w", err)
 	}
-	return proc, nil
+	return consoleProcessHandle{ProcessHandle: proc, wait: waitConsole}, nil
 }
 
 // vmmRules lists what the runner of cfg may access.

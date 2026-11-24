@@ -428,10 +428,12 @@ func TestLogsVM(t *testing.T) {
 	}
 
 	writeLogFile(t, filepath.Join(stateDir, "supervisor.log"), "supervisor\n")
+	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log.2"), "console2\n")
+	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log.1"), "console1\n")
 	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log"), "console\n")
 	out.Reset()
-	if err := logsVM(context.Background(), ws, false, &out); err != nil || out.String() != "up\nsupervisor\nconsole\n" {
-		t.Fatalf("logsVM = %q, %v; want the up, supervisor and console logs in order", out.String(), err)
+	if err := logsVM(context.Background(), ws, false, &out); err != nil || out.String() != "up\nsupervisor\nconsole2\nconsole1\nconsole\n" {
+		t.Fatalf("logsVM = %q, %v; want the up, supervisor and rotated console logs in order", out.String(), err)
 	}
 }
 

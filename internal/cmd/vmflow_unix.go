@@ -1196,11 +1196,21 @@ func teeUpLog(stateDir string) (func(), error) {
 // and the next start after it.
 func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Writer) error {
 	stateDir := vmStateDir(ws.Name)
-	console := filepath.Join(stateDir, "microvm", "console.log")
-	if !fileExists(console) && !fileExists(upLogPath(stateDir)) {
+	consolePaths := vm.ConsoleLogPaths(stateDir)
+	hasConsole := false
+	for _, p := range consolePaths {
+		if fileExists(p) {
+			hasConsole = true
+			break
+		}
+	}
+	if !hasConsole && !fileExists(upLogPath(stateDir)) {
 		return fmt.Errorf("workspace %q has no VM logs; start it with 'jailoc up'", ws.Name)
 	}
-	tails := []*logTail{{path: upLogPath(stateDir)}, {path: filepath.Join(stateDir, "supervisor.log")}, {path: console}}
+	upTail := &logTail{path: upLogPath(stateDir)}
+	supTail := &logTail{path: filepath.Join(stateDir, "supervisor.log")}
+	conTail := &logTail{path: consolePaths[len(consolePaths)-1], once: consolePaths[:len(consolePaths)-1]}
+	tails := []*logTail{upTail, supTail, conTail}
 	defer func() {
 		for _, t := range tails {
 			t.close()
@@ -1220,9 +1230,11 @@ func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Write
 
 // logTail prints what is added to a log file. It starts from the beginning
 // again when the file is replaced or truncated, as the next `jailoc up` and
-// VM start do with theirs.
+// VM start do with theirs. once lists rotated backup files printed once before
+// the first read of path.
 type logTail struct {
 	path string
+	once []string
 	f    *os.File
 	off  int64
 }
@@ -1230,6 +1242,28 @@ type logTail struct {
 // copy prints what was added to the file since the last copy; a missing
 // file has nothing to print yet.
 func (t *logTail) copy(w io.Writer) error {
+	for _, p := range t.once {
+		data, err := os.ReadFile(p) //nolint:gosec // G304: jailoc-owned state path
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read %s: %w", p, err)
+		}
+		if _, err := w.Write(data); err != nil {
+			return err
+		}
+	}
+	t.once = nil
+	if t.f != nil {
+		// Drain anything appended to the open descriptor before checking
+		// whether t.path was rotated to a new file.
+		n, err := io.Copy(w, t.f)
+		t.off += n
+		if err != nil {
+			return fmt.Errorf("read %s: %w", t.path, err)
+		}
+	}
 	fi, err := os.Stat(t.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

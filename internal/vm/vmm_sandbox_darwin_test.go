@@ -383,16 +383,12 @@ func TestConfinedSpawnerRunsRunnerUnderProfile(t *testing.T) {
 		log, err := os.ReadFile(cfg.VMLogPath)
 		return err == nil && strings.Contains(string(log), "ready")
 	})
-	report, err := os.ReadFile(cfg.ConsoleLog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// DYLD_LIBRARY_PATH reaches the runner through the shim, and argv[0] is
-	// the configured process name.
-	want := "dyld=" + cfg.LibDir + "\nargv0=" + helperName + "\n"
-	if string(report) != want {
-		t.Errorf("runner report = %q, want %q", report, want)
-	}
+	var report []byte
+	waitFor(t, "console writer to flush the runner report", func() bool {
+		var err error
+		report, err = os.ReadFile(cfg.ConsoleLog)
+		return err == nil && string(report) == "dyld="+cfg.LibDir+"\nargv0="+helperName+"\n"
+	})
 
 	if err := proc.Stop(ctx); err != nil {
 		t.Fatalf("Stop: %v", err)

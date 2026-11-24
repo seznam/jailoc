@@ -39,8 +39,8 @@ func vmFailure(stateDir, logPath string) string {
 	if st, err := vm.ReadState(stateDir); err == nil {
 		stateErr = st.Error
 	}
-	consolePath := filepath.Join(stateDir, "microvm", "console.log")
-	console, consoleFound := readLogTail(consolePath, failureConsoleTail)
+	consolePath := vm.ConsoleLogPath(stateDir)
+	console, consoleFound := readLogsTail(vm.ConsoleLogPaths(stateDir), failureConsoleTail)
 	diag := consoleDiagnostics(console, stateErr)
 	switch {
 	case hasNoSpace(console):
@@ -84,29 +84,45 @@ func hasNoSpace(s string) bool {
 	return strings.Contains(strings.ToLower(s), noSpaceLeft)
 }
 
-// readLogTail returns the last limit bytes of the file, starting at a line
-// boundary, and whether the file could be read.
-func readLogTail(path string, limit int64) (string, bool) {
-	f, err := os.Open(path) //nolint:gosec // G304: jailoc-owned state path
-	if err != nil {
-		return "", false
+// readLogsTail returns the last limit bytes across paths (oldest first),
+// starting at a line boundary when truncated, and whether any of the files
+// could be read.
+func readLogsTail(paths []string, limit int64) (string, bool) {
+	type part struct {
+		path string
+		size int64
 	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return "", false
-	}
-	truncated := info.Size() > limit
-	if truncated {
-		if _, err := f.Seek(info.Size()-limit, io.SeekStart); err != nil {
-			return "", false
+	var parts []part
+	var total int64
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
+			parts = append(parts, part{path: p, size: info.Size()})
+			total += info.Size()
 		}
 	}
-	data, err := io.ReadAll(io.LimitReader(f, limit))
-	if err != nil {
+	if len(parts) == 0 {
 		return "", false
 	}
-	text := string(data)
+	truncated := total > limit
+	skip := max(total-limit, 0)
+	var b strings.Builder
+	readAny := false
+	for _, p := range parts {
+		if skip >= p.size {
+			skip -= p.size
+			continue
+		}
+		chunk, ok := readFileRange(p.path, skip, limit-int64(b.Len()))
+		skip = 0
+		if ok {
+			readAny = true
+			b.WriteString(chunk)
+		}
+	}
+	if !readAny {
+		return "", false
+	}
+	text := b.String()
 	if truncated {
 		// The first line is most likely cut in the middle.
 		_, rest, found := strings.Cut(text, "\n")
@@ -116,6 +132,33 @@ func readLogTail(path string, limit int64) (string, bool) {
 		text = rest
 	}
 	return text, true
+}
+
+func readFileRange(path string, offset, maxBytes int64) (string, bool) {
+	if maxBytes <= 0 {
+		return "", true
+	}
+	f, err := os.Open(path) //nolint:gosec // G304: jailoc-owned state path
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = f.Close() }()
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return "", false
+		}
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes))
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
+}
+
+// readLogTail returns the last limit bytes of the file, starting at a line
+// boundary, and whether the file could be read.
+func readLogTail(path string, limit int64) (string, bool) {
+	return readLogsTail([]string{path}, limit)
 }
 
 // diskFullFailure describes an out-of-space failure: what the guest

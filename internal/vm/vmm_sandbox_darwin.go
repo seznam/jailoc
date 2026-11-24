@@ -43,27 +43,45 @@ var seatbeltShimCommand = func() (string, []string, error) {
 }
 
 // vmmSpawner starts the VM runner confined by Seatbelt.
-func vmmSpawner() runner.Spawner { return confinedSpawner{} }
+func vmmSpawner(redactor *consoleRedactor) runner.Spawner {
+	return confinedSpawner{redactor: redactor}
+}
 
-type confinedSpawner struct{}
+type confinedSpawner struct {
+	redactor *consoleRedactor
+}
 
-func (confinedSpawner) Spawn(_ context.Context, cfg runner.Config) (runner.ProcessHandle, error) {
+func (s confinedSpawner) Spawn(_ context.Context, cfg runner.Config) (runner.ProcessHandle, error) {
 	// The runner is long-lived and outlives the calling context; its
 	// lifecycle is managed through Stop, so the context is not used.
 	runnerPath, err := resolveSeatbeltRunner(cfg.RunnerPath)
 	if err != nil {
 		return nil, err
 	}
+	pipePath, closeWrite, waitConsole, err := startConsolePipe(cfg.ConsoleLog, s.redactor)
+	if err != nil {
+		return nil, fmt.Errorf("start confined VM runner: %w", err)
+	}
+	if pipePath != "" {
+		cfg.ConsoleLog = pipePath
+	}
+	cleanupPipe := func() {
+		closeWrite()
+		waitConsole()
+	}
 	configJSON, err := json.Marshal(cfg)
 	if err != nil {
+		cleanupPipe()
 		return nil, fmt.Errorf("marshal runner config: %w", err)
 	}
 	profile, err := seatbeltProfile(cfg, runnerPath)
 	if err != nil {
+		cleanupPipe()
 		return nil, fmt.Errorf("build VM runner sandbox profile: %w", err)
 	}
 	cmd, err := seatbeltShim(runnerPath, cfg.ProcessName, configJSON)
 	if err != nil {
+		cleanupPipe()
 		return nil, err
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -73,6 +91,7 @@ func (confinedSpawner) Spawn(_ context.Context, cfg runner.Config) (runner.Proce
 	if cfg.VMLogPath != "" {
 		logFile, err := os.OpenFile(cfg.VMLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // G304: jailoc-owned state path
 		if err != nil {
+			cleanupPipe()
 			return nil, fmt.Errorf("open vm log file: %w", err)
 		}
 		cmd.Stdout = logFile
@@ -82,15 +101,18 @@ func (confinedSpawner) Spawn(_ context.Context, cfg runner.Config) (runner.Proce
 	}
 
 	if err := launchSeatbelt(cmd, profile); err != nil {
+		cleanupPipe()
 		return nil, fmt.Errorf("start confined VM runner: %w", err)
 	}
+	closeWrite()
 	proc := &seatbeltProcess{pid: cmd.Process.Pid, done: make(chan struct{})}
 	// Reap the runner when it exits so it does not stay a zombie.
 	go func() {
 		_ = cmd.Wait() // the exit status is not needed: IsAlive reports the exit
+		waitConsole()
 		close(proc.done)
 	}()
-	return proc, nil
+	return consoleProcessHandle{ProcessHandle: proc, wait: waitConsole}, nil
 }
 
 // resolveSeatbeltRunner returns the absolute path of the runner binary.

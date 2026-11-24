@@ -48,12 +48,11 @@ Inside the guest, `jailoc-guest` stores them in memory:
 
 jailoc never writes secret values to host disk. They aren't part of the image, the VM state directory, a share or a snapshot.
 
-One place needs care: the guest's process log (`jailoc strace`), which is kept in the VM state directory, records command lines. `jailoc-guest` replaces configured secret values of eight or more characters in them with `[redacted]`. These aren't covered:
+Two logs in the VM state directory receive guest text: the process log (`jailoc strace`), which records command lines, and the VM console log (`jailoc logs`). Both replace configured secret values of eight or more characters and common credential patterns with `[redacted]` before writing to disk. These aren't covered:
 
-- shorter values,
+- shorter values that don't match a credential pattern,
 - values transformed by a program,
-- anything the agent writes to shared directories or prints to the console.
-
+- anything the agent writes to shared directories.
 ### Restarts and interrupted starts
 
 A guest that stops for any reason takes the whole VM down, and every start delivers the secrets again. jailoc also records each delivery in the VM state directory: when a session attaches to a running VM that never received its secrets, for example because `jailoc up` was interrupted right after the boot, jailoc delivers them first.

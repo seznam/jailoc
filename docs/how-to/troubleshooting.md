@@ -50,7 +50,7 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 |------|---------|
 | `up.log` | The log records of the last `jailoc up`: each step with its duration, Docker pulls and builds with every build step (`build step finished`, with `cached` and its duration), the image's layer count and size, and the export from Docker and layer conversion |
 | `supervisor.log` | VM supervisor output: broker and VM start, readiness with the time each took, shutdown reason |
-| `microvm/console.log` | Guest console: boot, SSH connections and processes the kernel killed when the VM ran out of memory |
+| `microvm/console.log`, `.1`, `.2` | Guest console: boot, SSH connections and processes the kernel killed when the VM ran out of memory, rotated at 1 MiB (lines over 16 KiB are dropped and secrets are redacted); read them with `jailoc logs` |
 | `broker.jsonl`, `broker.jsonl.1` | Network broker decisions, one JSON object per line, rotated at 16 MiB; read them with `jailoc traffic` |
 | `guest/control/exec.jsonl` | Processes started in the guest and their exits; read it with `jailoc strace` |
 | `guest/` | The internal share the guest can write: control files and persistent home directories (`guest/home`) |
