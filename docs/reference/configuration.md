@@ -482,7 +482,7 @@ In addition to `[[defaults.network.rules]]` and `[[workspaces.<name>.network.rul
 
 Allow, `proto = "tcp"`, `ports = [443]`, to the coding agent's model and auth endpoints. A matching `deny` rule still overrides it.
 
-- `opencode`, `opencode1`, `opencode2`, `omo`: the hosts in [`agent_endpoints`](#defaultsnetwork); added only when the list is non-empty. The setup wizard and `jailoc migrate` ask which model providers to allow (comma-separated provider names, empty for all; `--yes` takes all) and write the endpoints of those providers plus `models.dev`.
+- `opencode`, `opencode1`, `opencode2`, `omo`: the hosts in [`agent_endpoints`](#defaultsnetwork); added only when the list is non-empty. The setup wizard and `jailoc migrate` ask which model providers to allow (all selected by default; `--yes` takes all) and write the endpoints of those providers plus `models.dev`.
 - `claude`, `copilot`, `agy`: the built-in endpoints below; `agent_endpoints` does not apply.
 
 Endpoints per `agent`:

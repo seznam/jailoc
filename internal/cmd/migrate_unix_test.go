@@ -3,25 +3,67 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"errors"
-	"io"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 )
 
-func scripted(answers ...string) (*prompter, *bytes.Buffer) {
+func testMigratePrompter(yes bool, steps ...string) (*migratePrompter, *bytes.Buffer) {
 	out := &bytes.Buffer{}
-	in := strings.NewReader(strings.Join(answers, "\n") + "\n")
-	return &prompter{in: bufio.NewReader(in), out: out, resolver: &fakeResolver{}}, out
+	idx := 0
+	return &migratePrompter{
+		promptIO: &promptIO{
+			out: out,
+			yes: yes,
+			runHook: func(form *huh.Form) error {
+				form.WithTheme(compactTheme())
+				if cmd := form.Init(); cmd != nil {
+					flushCmd(form, cmd)
+				}
+				_, cmd := form.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+				flushCmd(form, cmd)
+				_, _ = fmt.Fprintln(out, form.View())
+
+				for guard := 0; guard < 50 && form.State == huh.StateNormal; guard++ {
+					var step string
+					if idx < len(steps) {
+						step = steps[idx]
+						idx++
+					}
+					switch step {
+					case "n", "no":
+						_, cmd = form.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+						flushCmd(form, cmd)
+					case "y", "yes":
+						_, cmd = form.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+						flushCmd(form, cmd)
+					default:
+						if step != "" {
+							for _, r := range step {
+								_, cmd = form.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+								flushCmd(form, cmd)
+							}
+						}
+						_, cmd = form.Update(tea.KeyMsg{Type: tea.KeyEnter})
+						flushCmd(form, cmd)
+					}
+					_, _ = fmt.Fprintln(out, form.View())
+				}
+				return nil
+			},
+		},
+		resolver: &fakeResolver{},
+	}, out
 }
 
 func migrationFixture(t *testing.T) (string, string, *config.Config) {
@@ -50,12 +92,24 @@ func migrationFixture(t *testing.T) (string, string, *config.Config) {
 func TestPlanMigration(t *testing.T) {
 	t.Parallel()
 	file, data, cfg := migrationFixture(t)
-	// defaults: remove incompatible; api: remove incompatible, npmrc -> snapshot (default),
-	// data -> invalid answer, then "snapshot".
-	p, out := scripted("", "y", "", "maybe", "s")
-	m, err := planMigration(cfg, p, os.Stat)
+
+	ans, err := defaultMigrationAnswers(cfg, os.Stat)
 	if err != nil {
-		t.Fatalf("planMigration: %v\n%s", err, out)
+		t.Fatalf("defaultMigrationAnswers: %v", err)
+	}
+	// Check that form renders mount explanations including rw snapshot hint.
+	form := buildMigrationForm(cfg, &ans, os.Stat)
+	if len(form) == 0 {
+		t.Fatal("expected non-nil migration form")
+	}
+	views := driveFormViews(t, form)
+	assertContains(t, views, "workspace writes no longer reach the host")
+
+	// Set api's second host mount (data) to snapshot as well.
+	ans.mountChoices["[workspaces.api]"] = []string{"snapshot", "snapshot"}
+	m, err := applyMigrationAnswers(cfg, ans, os.Stat)
+	if err != nil {
+		t.Fatalf("applyMigrationAnswers: %v", err)
 	}
 	if !slices.Equal(m.workspaces, []string{"api"}) {
 		t.Fatalf("workspaces = %v", m.workspaces)
@@ -76,17 +130,13 @@ func TestPlanMigration(t *testing.T) {
 	if cfg.Workspaces["web"].Backend != "" {
 		t.Fatal("explicit vm backend override not removed")
 	}
-	if !strings.Contains(out.String(), "answer one of") || !strings.Contains(out.String(), "workspace writes no longer reach the host") {
-		t.Fatalf("prompt output missing hints:\n%s", out)
-	}
 }
 
 func TestPlanMigrationDefaults(t *testing.T) {
 	t.Parallel()
 	file, data, cfg := migrationFixture(t)
-	p, _ := scripted()
-	p.yes = true
-	if _, err := planMigration(cfg, p, os.Stat); err != nil {
+	p, _ := testMigratePrompter(true)
+	if _, err := planMigration(context.Background(), cfg, p, os.Stat); err != nil {
 		t.Fatalf("planMigration: %v", err)
 	}
 	api := cfg.Workspaces["api"]
@@ -101,9 +151,13 @@ func TestPlanMigrationDefaults(t *testing.T) {
 func TestPlanMigrationDeclined(t *testing.T) {
 	t.Parallel()
 	_, _, cfg := migrationFixture(t)
-	p, _ := scripted("n")
-	if _, err := planMigration(cfg, p, os.Stat); err == nil || !strings.Contains(err.Error(), "needs these settings removed") {
-		t.Fatalf("planMigration error = %v", err)
+	ans, err := defaultMigrationAnswers(cfg, os.Stat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans.removeIncompatible["[defaults]"] = false
+	if _, err := applyMigrationAnswers(cfg, ans, os.Stat); err == nil || !strings.Contains(err.Error(), "needs these settings removed") {
+		t.Fatalf("applyMigrationAnswers error = %v", err)
 	}
 }
 
@@ -114,7 +168,7 @@ func TestRunMigrateWritesBackup(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("", "y")
+	p, out := testMigratePrompter(false, "", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -130,7 +184,7 @@ func TestRunMigrateWritesBackup(t *testing.T) {
 		t.Fatalf("config not migrated: %+v", cfg.Defaults)
 	}
 
-	p, out = scripted()
+	p, out = testMigratePrompter(false)
 	if err := runMigrate(context.Background(), path, p); err != nil || !strings.Contains(out.String(), "nothing to migrate") {
 		t.Fatalf("second run = %v\n%s", err, out)
 	}
@@ -146,7 +200,7 @@ func TestRunMigrateWritesBackup(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	p, out = scripted("", "y")
+	p, out = testMigratePrompter(false, "y")
 	if err := runMigrate(context.Background(), path, p); err != nil || !strings.Contains(out.String(), "remove unknown setting") {
 		t.Fatalf("unknown-key run = %v\n%s", err, out)
 	}
@@ -195,7 +249,7 @@ paths = ["/src/inherited"]
 	if _, err := config.ReadRaw(path); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("", "", "y")
+	p, out := testMigratePrompter(false, "", "", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -267,7 +321,7 @@ paths = ["/src/inherited"]
 		t.Fatalf("migrated config invalid: %v", err)
 	}
 
-	p, out = scripted()
+	p, out = testMigratePrompter(false)
 	if err := runMigrate(context.Background(), path, p); err != nil || !strings.Contains(out.String(), "nothing to migrate") {
 		t.Fatalf("second run = %v\n%s", err, out)
 	}
@@ -277,11 +331,11 @@ func TestPlanMigrationNetworkOnly(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
 		name       string
-		answer     string
+		isV1Docker bool
 		workspaces []string
 	}{
-		{"current configuration", "", nil},
-		{"jailoc v1 configuration", "y", []string{"web"}},
+		{"current configuration", false, nil},
+		{"jailoc v1 configuration", true, []string{"web"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -292,22 +346,27 @@ func TestPlanMigrationNetworkOnly(t *testing.T) {
 					"web": {Paths: []string{"/src/web"}, Mounts: []string{data + ":/data"}},
 				},
 			}
-			p, out := scripted(tt.answer, "", "")
-			m, err := planMigration(cfg, p, os.Stat)
+			ans, err := defaultMigrationAnswers(cfg, os.Stat)
 			if err != nil {
-				t.Fatalf("planMigration: %v\n%s", err, out)
+				t.Fatal(err)
+			}
+			form := buildMigrationForm(cfg, &ans, os.Stat)
+			views := driveFormViews(t, form)
+			if !strings.Contains(views, "jailoc v1 (Docker) configuration") {
+				t.Fatalf("no v1 question:\n%s", views)
+			}
+			ans.isV1Docker = tt.isV1Docker
+			m, err := applyMigrationAnswers(cfg, ans, os.Stat)
+			if err != nil {
+				t.Fatalf("applyMigrationAnswers: %v", err)
 			}
 			if !slices.Equal(m.workspaces, tt.workspaces) {
-				t.Fatalf("workspaces = %v, want %v\n%s", m.workspaces, tt.workspaces, out)
-			}
-			if !strings.Contains(out.String(), "jailoc v1 (Docker) configuration") {
-				t.Fatalf("no v1 question:\n%s", out)
+				t.Fatalf("workspaces = %v, want %v", m.workspaces, tt.workspaces)
 			}
 			web := cfg.Workspaces["web"]
 			if tt.workspaces == nil && (!slices.Equal(web.Mounts, []string{data + ":/data"}) ||
-				!slices.Equal(cfg.Defaults.Mounts, []string{data + "/defaults:/defaults"}) || cfg.Defaults.Snapshots != nil ||
-				strings.Contains(out.String(), data)) {
-				t.Fatalf("mounts of a current configuration touched: %v %+v\n%s", web.Mounts, cfg.Defaults, out)
+				!slices.Equal(cfg.Defaults.Mounts, []string{data + "/defaults:/defaults"}) || cfg.Defaults.Snapshots != nil) {
+				t.Fatalf("mounts of a current configuration touched: %v %+v", web.Mounts, cfg.Defaults)
 			}
 			if cfg.Defaults.Network.FilteredDNS != nil || cfg.Defaults.LegacyFilteredDNS != nil {
 				t.Fatalf("filtered_dns not removed: %+v", cfg.Defaults)
@@ -343,7 +402,7 @@ filtered_dns = true
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("", "y")
+	p, out := testMigratePrompter(false, "", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -369,7 +428,7 @@ allowed_hosts = ["db.corp.example"]
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("", "y")
+	p, out := testMigratePrompter(false, "", "y")
 	p.resolver = &fakeResolver{
 		ips:    map[string]string{"db.corp.example": "10.0.0.5"},
 		cnames: map[string]string{"db.corp.example": "db-node.corp.example."},
@@ -424,12 +483,17 @@ func TestPlanMigrationAsksInternalZones(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			p, out := scripted("", "")
-			if _, err := planMigration(tt.cfg, p, os.Stat); err != nil {
-				t.Fatalf("planMigration: %v\n%s", err, out)
+			ans, err := defaultMigrationAnswers(tt.cfg, os.Stat)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if got := strings.Contains(out.String(), internalZonesPrompt); got != tt.asks {
-				t.Fatalf("asked = %v, want %v\n%s", got, tt.asks, out)
+			form := buildMigrationForm(tt.cfg, &ans, os.Stat)
+			var views string
+			if len(form) > 0 {
+				views = driveFormViews(t, form)
+			}
+			if got := strings.Contains(views, internalZonesPrompt); got != tt.asks {
+				t.Fatalf("asked = %v, want %v\n%s", got, tt.asks, views)
 			}
 		})
 	}
@@ -438,10 +502,12 @@ func TestPlanMigrationAsksInternalZones(t *testing.T) {
 func TestPlanMigrationInternalZonesExplanation(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
-	p, out := scripted("", "")
-	if _, err := planMigration(cfg, p, os.Stat); err != nil {
+	ans, err := defaultMigrationAnswers(cfg, os.Stat)
+	if err != nil {
 		t.Fatal(err)
 	}
+	form := buildMigrationForm(cfg, &ans, os.Stat)
+	views := driveFormViews(t, form)
 	for _, want := range []string{
 		"zones you control",
 		"subdomains",
@@ -450,8 +516,8 @@ func TestPlanMigrationInternalZonesExplanation(t *testing.T) {
 		"A zone alone grants no access",
 		"[defaults.network]",
 	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("explanation misses %q:\n%s", want, out)
+		if !strings.Contains(views, want) {
+			t.Fatalf("explanation misses %q:\n%s", want, views)
 		}
 	}
 }
@@ -461,20 +527,32 @@ func TestPlanMigrationInternalZonesSkipped(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		yes  bool
-		in   []string
+		raw  string
 	}{
-		{"blank answer", false, []string{"", ""}},
-		{"whitespace answer", false, []string{"", " , "}},
-		{"yes flag", true, nil},
+		{"blank answer", false, ""},
+		{"whitespace answer", false, " , "},
+		{"yes flag", true, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
-			p, out := scripted(tt.in...)
-			p.yes = tt.yes
-			m, err := planMigration(cfg, p, os.Stat)
+			var m *migration
+			var err error
+			var out *bytes.Buffer
+			if tt.yes {
+				var p *migratePrompter
+				p, out = testMigratePrompter(true)
+				m, err = planMigration(context.Background(), cfg, p, os.Stat)
+			} else {
+				ans, aerr := defaultMigrationAnswers(cfg, os.Stat)
+				if aerr != nil {
+					t.Fatal(aerr)
+				}
+				ans.internalZones = tt.raw
+				m, err = applyMigrationAnswers(cfg, ans, os.Stat)
+			}
 			if err != nil {
-				t.Fatalf("planMigration: %v\n%s", err, out)
+				t.Fatalf("planMigration: %v", err)
 			}
 			if got := cfg.Defaults.Network.InternalZones; len(got) != 0 {
 				t.Fatalf("internal_zones = %v, want none", got)
@@ -492,11 +570,14 @@ func TestPlanMigrationInternalZonesSkipped(t *testing.T) {
 func TestPlanMigrationProviders(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
-	p, out := scripted("mistral", "anthropic, openai", "")
-	if _, err := planMigration(cfg, p, os.Stat); err != nil {
-		t.Fatalf("planMigration: %v\n%s", err, out)
+	ans, err := defaultMigrationAnswers(cfg, os.Stat)
+	if err != nil {
+		t.Fatal(err)
 	}
-	assertContains(t, out.String(), `unknown provider "mistral"`)
+	ans.providers = []string{"anthropic", "openai"}
+	if _, err := applyMigrationAnswers(cfg, ans, os.Stat); err != nil {
+		t.Fatalf("applyMigrationAnswers: %v", err)
+	}
 	want := []string{"api.anthropic.com", "api.openai.com", "auth.openai.com", "chatgpt.com", "models.dev"}
 	if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, want) {
 		t.Fatalf("agent_endpoints = %v, want %v", got, want)
@@ -506,10 +587,14 @@ func TestPlanMigrationProviders(t *testing.T) {
 func TestPlanMigrationInternalZonesInput(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
-	p, out := scripted("", "Corp.Example., *.lab.example\tcorp.example,db.example")
-	m, err := planMigration(cfg, p, os.Stat)
+	ans, err := defaultMigrationAnswers(cfg, os.Stat)
 	if err != nil {
-		t.Fatalf("planMigration: %v\n%s", err, out)
+		t.Fatal(err)
+	}
+	ans.internalZones = "Corp.Example., *.lab.example\tcorp.example,db.example"
+	m, err := applyMigrationAnswers(cfg, ans, os.Stat)
+	if err != nil {
+		t.Fatalf("applyMigrationAnswers: %v", err)
 	}
 	if want := []string{"corp.example", "lab.example", "db.example"}; !slices.Equal(cfg.Defaults.Network.InternalZones, want) {
 		t.Fatalf("internal_zones = %v, want %v", cfg.Defaults.Network.InternalZones, want)
@@ -527,9 +612,13 @@ func TestPlanMigrationInternalZonesCreatesNetworkTable(t *testing.T) {
 			Rules: []config.NetworkRule{{Name: "r", Allow: []string{"git.corp.example"}, Proto: config.RuleProtoAny}},
 		}}},
 	}
-	p, out := scripted("", "corp.example")
-	if _, err := planMigration(cfg, p, os.Stat); err != nil {
-		t.Fatalf("planMigration: %v\n%s", err, out)
+	ans, err := defaultMigrationAnswers(cfg, os.Stat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans.internalZones = "corp.example"
+	if _, err := applyMigrationAnswers(cfg, ans, os.Stat); err != nil {
+		t.Fatalf("applyMigrationAnswers: %v", err)
 	}
 	if got := cfg.Defaults.Network.Get().InternalZones; !slices.Equal(got, []string{"corp.example"}) {
 		t.Fatalf("defaults internal_zones = %v", got)
@@ -539,38 +628,17 @@ func TestPlanMigrationInternalZonesCreatesNetworkTable(t *testing.T) {
 	}
 }
 
-func TestPlanMigrationInternalZonesRetry(t *testing.T) {
+func TestValidateInternalZonesInput(t *testing.T) {
 	t.Parallel()
-	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
-	// The first answer mixes a valid zone with a public suffix: nothing of it is kept.
-	p, out := scripted("", "corp.example, com", "app.nip.io", "10.0.0.1", "*", "lab.example")
-	if _, err := planMigration(cfg, p, os.Stat); err != nil {
-		t.Fatalf("planMigration: %v\n%s", err, out)
-	}
-	if want := []string{"lab.example"}; !slices.Equal(cfg.Defaults.Network.InternalZones, want) {
-		t.Fatalf("internal_zones = %v, want %v\n%s", cfg.Defaults.Network.InternalZones, want, out)
-	}
-	if n := strings.Count(out.String(), internalZonesPrompt); n != 5 {
-		t.Fatalf("prompted %d times, want 5\n%s", n, out)
-	}
-	for _, want := range []string{`"com"`, `"app.nip.io"`, `"10.0.0.1"`, `"*"`} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("output misses error for %s:\n%s", want, out)
+	for _, bad := range []string{"corp.example, com", "app.nip.io", "10.0.0.1", "*"} {
+		if err := validateInternalZonesInput(bad); err == nil {
+			t.Errorf("validateInternalZonesInput(%q) = nil, want error", bad)
 		}
 	}
-}
-
-func TestPlanMigrationInternalZonesEOF(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{Defaults: vmDefaultsWithRules([]string{"git.corp.example"}, nil, nil)}
-	out := &bytes.Buffer{}
-	p := &prompter{in: bufio.NewReader(strings.NewReader("")), out: out, resolver: &fakeResolver{}}
-	_, err := planMigration(cfg, p, os.Stat)
-	if err == nil || !strings.Contains(err.Error(), "read internal zones") || !errors.Is(err, io.EOF) {
-		t.Fatalf("planMigration error = %v, want wrapped read error\n%s", err, out)
-	}
-	if len(cfg.Defaults.Network.InternalZones) != 0 {
-		t.Fatalf("internal_zones = %v, want none", cfg.Defaults.Network.InternalZones)
+	for _, good := range []string{"", " , ", "lab.example", "Corp.Example., *.lab.example"} {
+		if err := validateInternalZonesInput(good); err != nil {
+			t.Errorf("validateInternalZonesInput(%q) = %v, want nil", good, err)
+		}
 	}
 }
 
@@ -588,7 +656,7 @@ func TestRunMigrateAddsInternalZones(t *testing.T) {
 	if err := os.WriteFile(path, []byte(internalZonesConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("", "corp.example", "y")
+	p, out := testMigratePrompter(false, "", "corp.example", "y")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -604,7 +672,7 @@ func TestRunMigrateAddsInternalZones(t *testing.T) {
 		t.Fatalf("internal_zones = %v\n%s", got, out)
 	}
 
-	p, out = scripted()
+	p, out = testMigratePrompter(false)
 	if err := runMigrate(context.Background(), path, p); err != nil || strings.Contains(out.String(), internalZonesPrompt) || !strings.Contains(out.String(), "nothing to migrate") {
 		t.Fatalf("second run = %v\n%s", err, out)
 	}
@@ -616,7 +684,7 @@ func TestRunMigrateDeclinedKeepsInternalZonesUnapplied(t *testing.T) {
 	if err := os.WriteFile(path, []byte(internalZonesConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, out := scripted("", "corp.example", "n")
+	p, out := testMigratePrompter(false, "", "corp.example", "n")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -637,7 +705,7 @@ func TestRunMigrateDryRunAsksInternalZones(t *testing.T) {
 	}
 	migrateDryRun = true
 	t.Cleanup(func() { migrateDryRun = false })
-	p, out := scripted("", "corp.example")
+	p, out := testMigratePrompter(false, "", "corp.example")
 	if err := runMigrate(context.Background(), path, p); err != nil {
 		t.Fatalf("runMigrate: %v\n%s", err, out)
 	}
@@ -667,7 +735,7 @@ func TestAddAgentEndpoints(t *testing.T) {
 			},
 		}
 		m := &migration{}
-		if err := addAgentEndpoints(cfg, []string{"api", "tool", "web"}, &prompter{yes: true, out: io.Discard}, m); err != nil {
+		if err := applyAgentEndpoints(cfg, []string{"api", "tool", "web"}, nil, m); err != nil {
 			t.Fatal(err)
 		}
 		if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, opencode.Endpoints) {
@@ -702,7 +770,7 @@ func TestAddAgentEndpoints(t *testing.T) {
 			},
 		}
 		m := &migration{}
-		if err := addAgentEndpoints(cfg, []string{"api", "tool", "web"}, &prompter{yes: true, out: io.Discard}, m); err != nil {
+		if err := applyAgentEndpoints(cfg, []string{"api", "tool", "web"}, nil, m); err != nil {
 			t.Fatal(err)
 		}
 		if cfg.Defaults.Network != nil {
@@ -728,11 +796,33 @@ func TestAddAgentEndpoints(t *testing.T) {
 			"web": {Network: &config.Network{AgentEndpoints: []string{}}},
 		}}
 		m := &migration{}
-		if err := addAgentEndpoints(cfg, []string{"web"}, &prompter{yes: true, out: io.Discard}, m); err != nil {
+		if err := applyAgentEndpoints(cfg, []string{"web"}, nil, m); err != nil {
 			t.Fatal(err)
 		}
 		if cfg.Defaults.Network != nil || len(m.changes) != 0 {
 			t.Fatalf("changed configured agent_endpoints: network %+v, changes %v", cfg.Defaults.Network, m.changes)
 		}
 	})
+}
+
+func TestPlanMigrationAccessibleSkipsHiddenSteps(t *testing.T) {
+	t.Parallel()
+
+	data := t.TempDir()
+	cfg := &config.Config{Workspaces: map[string]config.Workspace{
+		"api": {Paths: []string{"/src/api"}, AllowedHosts: []string{"example.com"}, Mounts: []string{data + ":/data:rw"}},
+	}}
+	var out bytes.Buffer
+	p := &migratePrompter{
+		promptIO: &promptIO{in: strings.NewReader("n\n0\n\n\n\n"), out: &out, accessible: true},
+		resolver: &fakeResolver{},
+	}
+
+	if _, err := planMigration(context.Background(), cfg, p, os.Stat); err != nil {
+		t.Fatalf("planMigration: %v\noutput:\n%s", err, out.String())
+	}
+	assertContains(t, out.String(), "jailoc v1 (Docker) configuration")
+	if strings.Contains(out.String(), "/data") {
+		t.Fatalf("mount question asked for a non-Docker configuration:\n%s", out.String())
+	}
 }

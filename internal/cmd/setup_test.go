@@ -1,24 +1,23 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
+	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 )
-
-func answers(lines ...string) *bufio.Reader {
-	return bufio.NewReader(strings.NewReader(strings.Join(lines, "\n") + "\n"))
-}
 
 type signalWriter struct {
 	mu     sync.Mutex
@@ -47,6 +46,60 @@ func writeCustomConfig(t *testing.T) string {
 	return cfgPath
 }
 
+// driveFormViews steps through every non-hidden step of the form by sending
+// Enter on each field and collects all rendered views.
+func driveFormViews(t *testing.T, steps formSteps) string {
+	t.Helper()
+	form := steps.form()
+	form.WithTheme(compactTheme())
+	if cmd := form.Init(); cmd != nil {
+		flushCmd(form, cmd)
+	}
+	_, cmd := form.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	flushCmd(form, cmd)
+
+	var views strings.Builder
+	views.WriteString(form.View())
+	views.WriteString("\n")
+
+	for steps := 0; steps < 50 && form.State == huh.StateNormal; steps++ {
+		_, cmd := form.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		flushCmd(form, cmd)
+		views.WriteString(form.View())
+		views.WriteString("\n")
+	}
+	if form.State != huh.StateCompleted {
+		t.Fatalf("form did not complete after stepping through fields (state=%v, errors=%v)", form.State, form.Errors())
+	}
+	return views.String()
+}
+
+func flushCmd(form *huh.Form, cmd tea.Cmd) {
+	for depth := 0; cmd != nil && depth < 20; depth++ {
+		ch := make(chan tea.Msg, 1)
+		go func(c tea.Cmd) {
+			ch <- c()
+		}(cmd)
+		var msg tea.Msg
+		select {
+		case msg = <-ch:
+		case <-time.After(5 * time.Millisecond):
+			return
+		}
+		if msg == nil {
+			return
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				flushCmd(form, sub)
+			}
+			return
+		}
+		_, next := form.Update(msg)
+		cmd = next
+	}
+}
+
 func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 	t.Parallel()
 
@@ -60,9 +113,9 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
 		var out bytes.Buffer
-		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+		p := &promptIO{out: &out, yes: true}
 
-		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true})
+		res, err := runSetup(context.Background(), p, setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true})
 		if err != nil {
 			t.Fatalf("runSetup failed: %v", err)
 		}
@@ -89,7 +142,6 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		if len(ws.Paths) != 1 || ws.Paths[0] != cwd {
 			t.Errorf("default workspace paths = %v, want [%s]", ws.Paths, cwd)
 		}
-		assertContains(t, out.String(), "Default VM memory [4g]: 4g")
 		for _, hint := range []string{
 			"A read-only copy, so commits in the VM use your name and email.",
 			"RAM limit per VM, not memory reserved on the host.",
@@ -101,19 +153,20 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("interactive first-time setup explains each question", func(t *testing.T) {
+	t.Run("first-time setup form renders explanations and review step", func(t *testing.T) {
 		t.Parallel()
 
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
-		var out bytes.Buffer
-		w := &wizardPrompter{in: answers("", "", "", "", "", "", "", "", "", "", "", "", ""), out: &out}
+		opts := setupOptions{configPath: cfgPath, targetDir: cwd}
+		ans := defaultFirstTimeAnswers(opts)
+		ans.agent = "opencode"
 
-		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd}); err != nil {
-			t.Fatalf("runSetup failed: %v", err)
-		}
-		output := out.String()
+		form := buildFirstTimeForm(&ans, opts)
+		output := driveFormViews(t, form)
+
 		for _, want := range []string{
 			"jailoc installs this agent in the VM and starts it in each session.",
+			"The agent reaches only the model and auth endpoints of the providers you select",
 			"A read-only copy, so commits in the VM use your name and email.",
 			"Lets SSH and Git in the VM use your keys and ~/.ssh/known_hosts.",
 			"processes in the VM can sign and decrypt with them.",
@@ -121,18 +174,54 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 			"such as gitlab.corp.example or 10.20.0.0/16.",
 			"the host Docker socket is not shared.",
 			"Virtual CPUs per VM, rounded up to a whole number.",
+			"RAM limit per VM, not memory reserved on the host.",
+			"Allocated as needed; freed pages and unused file cache return to the host.",
 			"Used in commands such as \"jailoc up <name>\".",
 			"The agent can modify any file in it.",
+			"Review configuration",
 		} {
 			assertContains(t, output, want)
 		}
 
-		cpuAt := strings.Index(output, "Default VM CPUs")
-		limitAt := strings.Index(output, "RAM limit per VM, not memory reserved on the host.")
-		freedAt := strings.Index(output, "Allocated as needed; freed pages and unused file cache return to the host.")
-		memoryAt := strings.Index(output, "Default VM memory")
-		if cpuAt < 0 || limitAt < cpuAt || freedAt < limitAt || memoryAt < freedAt {
-			t.Errorf("expected both RAM lines, in order, between the CPU and memory prompts, got:\n%s", output)
+		var out bytes.Buffer
+		p := &promptIO{out: &out, yes: true}
+		if _, err := applyFirstTimeSetup(context.Background(), p, opts, ans); err != nil {
+			t.Fatalf("applyFirstTimeSetup failed: %v", err)
+		}
+		if _, err := config.LoadFrom(cfgPath); err != nil {
+			t.Fatalf("LoadFrom: %v", err)
+		}
+	})
+
+	t.Run("first-time setup with custom answers and provider selection", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		opts := setupOptions{configPath: cfgPath, targetDir: cwd}
+		ans := defaultFirstTimeAnswers(opts)
+		ans.agent = "opencode"
+		ans.providers = []string{"anthropic", "openai"}
+		ans.extraHosts = "gitlab.corp.example, 10.20.0.0/16"
+		ans.enableDocker = true
+		ans.cpu = "4"
+		ans.memory = "8g"
+
+		var out bytes.Buffer
+		p := &promptIO{out: &out, yes: true}
+		if _, err := applyFirstTimeSetup(context.Background(), p, opts, ans); err != nil {
+			t.Fatalf("applyFirstTimeSetup: %v", err)
+		}
+
+		cfg, err := config.LoadFrom(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadFrom: %v", err)
+		}
+		wantEndpoints := []string{"api.anthropic.com", "api.openai.com", "auth.openai.com", "chatgpt.com", "models.dev"}
+		if got := cfg.Defaults.Network.Get().AgentEndpoints; !slices.Equal(got, wantEndpoints) {
+			t.Errorf("agent_endpoints = %v, want %v", got, wantEndpoints)
+		}
+		if cfg.Defaults.EnableDocker == nil || !*cfg.Defaults.EnableDocker || cfg.Defaults.CPU == nil || *cfg.Defaults.CPU != 4 || cfg.Defaults.Memory == nil || *cfg.Defaults.Memory != "8g" {
+			t.Errorf("defaults = %+v", cfg.Defaults)
 		}
 	})
 
@@ -141,9 +230,9 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 
 		cfgPath := writeCustomConfig(t)
 		var out bytes.Buffer
-		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+		p := &promptIO{out: &out, yes: true}
 
-		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd}); err != nil {
+		if _, err := runSetup(context.Background(), p, setupOptions{configPath: cfgPath, targetDir: cwd}); err != nil {
 			t.Fatalf("runSetup failed: %v", err)
 		}
 		if strings.Contains(out.String(), "Used in commands such as") {
@@ -156,9 +245,9 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
 		var out bytes.Buffer
-		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+		p := &promptIO{out: &out, yes: true}
 
-		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, defaultName: "project"})
+		res, err := runSetup(context.Background(), p, setupOptions{configPath: cfgPath, targetDir: cwd, defaultName: "project"})
 		if err != nil {
 			t.Fatalf("runSetup failed: %v", err)
 		}
@@ -178,21 +267,48 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		t.Parallel()
 
 		cfgPath := writeCustomConfig(t)
-		var out bytes.Buffer
-		w := &wizardPrompter{
-			in:  answers("agrologo", cwd, "claude", "yes", "custom", "gitlab.seznam.net, 10.10.0.0/16", "yes", "no"),
-			out: &out,
+		raw, err := os.ReadFile(cfgPath) //nolint:gosec // G304: test file
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.LoadFrom(cfgPath)
+		if err != nil {
+			t.Fatal(err)
 		}
 
-		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true})
+		opts := setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true}
+		ans := defaultWorkspaceSetupAnswers(opts)
+		ans.name = "agrologo"
+		ans.dir = cwd
+		ans.agent = "claude"
+		ans.docker = "yes"
+		ans.networkMode = "custom"
+		ans.extraHosts = "gitlab.seznam.net, 10.10.0.0/16"
+		ans.save = true
+
+		form := buildWorkspaceSetupForm(&ans, opts, cfg, raw)
+		output := driveFormViews(t, form)
+		for _, want := range []string{
+			"\"inherit\" uses the [defaults] agent.",
+			"\"internet\" adds all public hosts to them, \"custom\" the hosts you list.",
+			"such as *.corp.example or 10.20.0.0/16.",
+			"Review workspace",
+		} {
+			assertContains(t, output, want)
+		}
+
+		var out bytes.Buffer
+		// Feed "n\n" for the post-save "Start workspace now?" accessible confirm.
+		p := &promptIO{in: strings.NewReader("n\n"), out: &out, accessible: true}
+		res, err := applyWorkspaceSetup(context.Background(), p, opts, raw, ans)
 		if err != nil {
-			t.Fatalf("runSetup workspace mode failed: %v", err)
+			t.Fatalf("applyWorkspaceSetup failed: %v", err)
 		}
 		if res.name != "agrologo" || res.startNow {
 			t.Errorf("result = %+v, want name agrologo and startNow false", res)
 		}
 
-		cfg, err := config.LoadFrom(cfgPath)
+		cfg, err = config.LoadFrom(cfgPath)
 		if err != nil {
 			t.Fatalf("LoadFrom: %v", err)
 		}
@@ -209,13 +325,6 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		if len(ws.Paths) != 1 || ws.Paths[0] != cwd {
 			t.Errorf("ws.Paths = %v, want [%s]", ws.Paths, cwd)
 		}
-		for _, want := range []string{
-			"\"inherit\" uses the [defaults] agent.",
-			"\"internet\" adds all public hosts to them, \"custom\" the hosts you list.",
-			"such as *.corp.example or 10.20.0.0/16.",
-		} {
-			assertContains(t, out.String(), want)
-		}
 		rules := ws.Network.Get().Rules
 		if len(rules) != 1 || len(rules[0].Allow) != 2 {
 			t.Errorf("unexpected network rules: %+v", rules)
@@ -227,15 +336,21 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 
 		chosen := filepath.Dir(cwd)
 		cfgPath := writeCustomConfig(t)
-		var out bytes.Buffer
-		w := &wizardPrompter{
-			in:  answers("other", chosen, "inherit", "inherit", "inherit", "", "yes", "yes"),
-			out: &out,
+		raw, err := os.ReadFile(cfgPath) //nolint:gosec // G304: test file
+		if err != nil {
+			t.Fatal(err)
 		}
 
-		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true})
+		opts := setupOptions{configPath: cfgPath, targetDir: cwd, askStart: true}
+		ans := defaultWorkspaceSetupAnswers(opts)
+		ans.name = "other"
+		ans.dir = chosen
+
+		var out bytes.Buffer
+		p := &promptIO{in: strings.NewReader("y\n"), out: &out, accessible: true}
+		res, err := applyWorkspaceSetup(context.Background(), p, opts, raw, ans)
 		if err != nil {
-			t.Fatalf("runSetup failed: %v", err)
+			t.Fatalf("applyWorkspaceSetup failed: %v", err)
 		}
 		if res.dir != chosen || !res.startNow {
 			t.Errorf("result = %+v, want dir %s and startNow true", res, chosen)
@@ -246,15 +361,21 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		t.Parallel()
 
 		cfgPath := writeCustomConfig(t)
-		var out bytes.Buffer
-		w := &wizardPrompter{
-			in:  answers("embedded", cwd, "inherit", "inherit", "inherit", "", "yes"),
-			out: &out,
+		raw, err := os.ReadFile(cfgPath) //nolint:gosec // G304: test file
+		if err != nil {
+			t.Fatal(err)
 		}
 
-		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd})
+		opts := setupOptions{configPath: cfgPath, targetDir: cwd}
+		ans := defaultWorkspaceSetupAnswers(opts)
+		ans.name = "embedded"
+		ans.dir = cwd
+
+		var out bytes.Buffer
+		p := &promptIO{out: &out, accessible: true}
+		res, err := applyWorkspaceSetup(context.Background(), p, opts, raw, ans)
 		if err != nil {
-			t.Fatalf("runSetup failed: %v", err)
+			t.Fatalf("applyWorkspaceSetup failed: %v", err)
 		}
 		if res.name != "embedded" || res.startNow {
 			t.Errorf("result = %+v, want name embedded and startNow false", res)
@@ -269,9 +390,9 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
 		var out bytes.Buffer
-		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+		p := &promptIO{out: &out, yes: true}
 
-		_, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: "/"})
+		_, err := runSetup(context.Background(), p, setupOptions{configPath: cfgPath, targetDir: "/"})
 		if err == nil {
 			t.Fatal("expected an error for a broad workspace path with --yes")
 		}
@@ -281,24 +402,49 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("declined broad path asks for another directory", func(t *testing.T) {
+	t.Run("broad path step is shown for root, allows going back and refuses to save when declined", func(t *testing.T) {
 		t.Parallel()
 
 		cfgPath := writeCustomConfig(t)
-		var out bytes.Buffer
-		w := &wizardPrompter{
-			in:  answers("narrow", "/", "no", cwd, "inherit", "inherit", "inherit", "", "yes"),
-			out: &out,
+		raw, err := os.ReadFile(cfgPath) //nolint:gosec // G304: test file
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.LoadFrom(cfgPath)
+		if err != nil {
+			t.Fatal(err)
 		}
 
-		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: "/"})
-		if err != nil {
-			t.Fatalf("runSetup failed: %v", err)
+		opts := setupOptions{configPath: cfgPath, targetDir: "/"}
+		ans := defaultWorkspaceSetupAnswers(opts)
+		ans.name = "narrow"
+		ans.dir = "/"
+		ans.confirmBroad = false
+
+		form := buildWorkspaceSetupForm(&ans, opts, cfg, raw).form()
+		form.WithTheme(compactTheme())
+		if cmd := form.Init(); cmd != nil {
+			flushCmd(form, cmd)
 		}
-		assertContains(t, out.String(), "very broad path")
-		if res.dir != cwd {
-			t.Errorf("res.dir = %q, want %q", res.dir, cwd)
+		// Advance past name group and dir group to reach broad path confirm.
+		for range 2 {
+			_, cmd := form.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			flushCmd(form, cmd)
 		}
+		view := form.View()
+		assertContains(t, view, "very broad path")
+
+		// Declining and pressing Shift+Tab goes back to the directory input.
+		_, cmd := form.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+		flushCmd(form, cmd)
+		if _, ok := form.GetFocusedField().(*huh.Input); !ok {
+			t.Fatalf("expected focus back on the directory input, got %T", form.GetFocusedField())
+		}
+
+		if _, _, err := ans.toOptions(raw); err == nil {
+			t.Fatal("expected an error when sharing a broad path was not confirmed")
+		}
+		assertContains(t, ans.summary(cfgPath, raw), "was not confirmed")
 	})
 
 	t.Run("cancel while waiting for an answer stops without writing", func(t *testing.T) {
@@ -311,10 +457,10 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		defer cancel()
 
 		out := &signalWriter{needle: "Default coding agent", hit: make(chan struct{})}
-		w := &wizardPrompter{in: bufio.NewReader(pr), out: out}
+		p := &promptIO{in: pr, out: out}
 		errc := make(chan error, 1)
 		go func() {
-			_, err := runSetup(ctx, w, setupOptions{configPath: cfgPath, targetDir: cwd})
+			_, err := runSetup(ctx, p, setupOptions{configPath: cfgPath, targetDir: cwd})
 			errc <- err
 		}()
 
@@ -342,9 +488,9 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
 		var out bytes.Buffer
-		w := &wizardPrompter{in: answers(), out: &out, yes: true}
+		p := &promptIO{out: &out, yes: true}
 
-		if _, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: cwd, dryRun: true}); err != nil {
+		if _, err := runSetup(context.Background(), p, setupOptions{configPath: cfgPath, targetDir: cwd, dryRun: true}); err != nil {
 			t.Fatalf("runSetup dry-run failed: %v", err)
 		}
 		if _, statErr := os.Stat(cfgPath); !os.IsNotExist(statErr) {
@@ -371,21 +517,35 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 
 		cfgPath := writeCustomConfig(t)
-		var out bytes.Buffer
-		w := &wizardPrompter{
-			in:  answers("linked", link, "yes", "inherit", "inherit", "inherit", "", "yes"),
-			out: &out,
+		raw, err := os.ReadFile(cfgPath) //nolint:gosec // G304: test file
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.LoadFrom(cfgPath)
+		if err != nil {
+			t.Fatal(err)
 		}
 
-		res, err := runSetup(context.Background(), w, setupOptions{configPath: cfgPath, targetDir: link})
+		opts := setupOptions{configPath: cfgPath, targetDir: link}
+		ans := defaultWorkspaceSetupAnswers(opts)
+		ans.name = "linked"
+		ans.dir = link
+		ans.confirmBroad = true
+
+		form := buildWorkspaceSetupForm(&ans, opts, cfg, raw)
+		output := driveFormViews(t, form)
+		assertContains(t, output, "very broad path")
+
+		var out bytes.Buffer
+		p := &promptIO{out: &out, yes: true}
+		res, err := applyWorkspaceSetup(context.Background(), p, opts, raw, ans)
 		if err != nil {
-			t.Fatalf("runSetup failed: %v", err)
+			t.Fatalf("applyWorkspaceSetup failed: %v", err)
 		}
-		assertContains(t, out.String(), "very broad path")
 		if res.dir != link {
 			t.Errorf("res.dir = %q, want original symlink %q", res.dir, link)
 		}
-		cfg, err := config.LoadFrom(cfgPath)
+		cfg, err = config.LoadFrom(cfgPath)
 		if err != nil {
 			t.Fatalf("LoadFrom: %v", err)
 		}
@@ -394,32 +554,18 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("ambiguous single-letter shortcut is rejected while unique shortcut succeeds", func(t *testing.T) {
+	t.Run("normalizeProviders returns nil for all and preserves order for subsets", func(t *testing.T) {
 		t.Parallel()
 
-		var out bytes.Buffer
-		w := &wizardPrompter{
-			ctx: context.Background(),
-			in:  answers("c", "copilot"),
-			out: &out,
+		h, _ := agent.Lookup("opencode")
+		if got := normalizeProviders(h, h.ProviderNames()); got != nil {
+			t.Errorf("normalizeProviders(all) = %v, want nil", got)
 		}
-		idx, err := w.choose("Agent?", []string{"opencode", "claude", "copilot"}, 2)
-		if err != nil {
-			t.Fatalf("choose failed: %v", err)
+		if got := normalizeProviders(h, []string{"openai", "anthropic"}); !slices.Equal(got, []string{"anthropic", "openai"}) {
+			t.Errorf("normalizeProviders(subset) = %v, want [anthropic openai]", got)
 		}
-		if idx != 2 {
-			t.Errorf("idx = %d, want 2 (copilot)", idx)
-		}
-		assertContains(t, out.String(), "answer one of: opencode, claude, copilot")
-
-		out.Reset()
-		w.in = answers("o")
-		idx, err = w.choose("Agent?", []string{"opencode", "claude", "copilot"}, 2)
-		if err != nil {
-			t.Fatalf("choose unique shortcut failed: %v", err)
-		}
-		if idx != 0 {
-			t.Errorf("idx = %d, want 0 (opencode)", idx)
+		if got := normalizeProviders(h, []string{}); got == nil || len(got) != 0 {
+			t.Errorf("normalizeProviders(empty) = %v, want non-nil empty slice", got)
 		}
 	})
 
