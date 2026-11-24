@@ -168,7 +168,7 @@ jailoc reload [workspace] [flags]
 - `paths` and `mounts`, including `agents.<name>.mounts`
 - the agent's `profile`
 - `cpu`, `memory`
-- `enable_docker`, the set of guest ports the `proxy` routes use (renaming a route, changing `auth`, or adding one on a port already in the set needs only a restart of `jailoc proxy`), `protect_git`
+- `enable_docker`, the set of guest ports the `proxy` routes use (renaming a route, changing `auth`, or adding one on a port already in the set is applied by `jailoc reload`), `protect_git`
 - `tmp_storage`, `tmp_size`
 - the working directory (first entry of `paths`, or `/home/agent` when `paths` is empty)
 - the jailoc guest, after a jailoc upgrade that changed the protocol between jailoc and the guest

@@ -1127,7 +1127,7 @@ Validation:
 - `ports` and `host_ports` can't use guest port 6081.
 - A proxy route is not a published port: nothing listens on the host except the local HTTPS proxy.
 
-Changing the set of guest ports the `proxy` routes use takes effect after `jailoc restart` and a restart of `jailoc proxy`; `jailoc proxy` refuses a running VM that doesn't match. Renaming a route, changing `auth`, or adding a route on a guest port already in that set needs only a restart of `jailoc proxy`.
+Changing the set of guest ports the `proxy` routes use takes effect after `jailoc restart`; the proxy refuses a running VM that doesn't match. `jailoc reload` applies renaming a route, changing `auth`, or adding a route on a guest port already in that set. `jailoc up`, `jailoc restart` and `jailoc reload` start or update the background proxy, and `jailoc down` removes the workspace's routes from it.
 
 A running VM keeps the relay port 6081 and the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `proxy`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`.
 

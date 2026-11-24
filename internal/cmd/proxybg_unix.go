@@ -81,8 +81,6 @@ func proxyLogFile() string {
 type proxySavedOptions struct {
 	Listen         string `json:"listen,omitempty"`
 	ListenerBroker bool   `json:"listener_broker,omitempty"`
-	CertFile       string `json:"cert_file,omitempty"`
-	KeyFile        string `json:"key_file,omitempty"`
 }
 
 func writeProxySavedOptions(opts proxyOptions) error {
@@ -92,8 +90,6 @@ func writeProxySavedOptions(opts proxyOptions) error {
 	data, err := json.MarshalIndent(proxySavedOptions{
 		Listen:         opts.listen,
 		ListenerBroker: opts.listenerBroker,
-		CertFile:       opts.certFile,
-		KeyFile:        opts.keyFile,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -117,8 +113,6 @@ func loadProxySavedOptions() proxyOptions {
 	return proxyOptions{
 		listen:         listen,
 		listenerBroker: saved.ListenerBroker,
-		certFile:       saved.CertFile,
-		keyFile:        saved.KeyFile,
 	}
 }
 
@@ -328,7 +322,7 @@ func (m *proxyManager) sync(reqNames []string) proxyControlResponse {
 		targets = append(targets, proxyTarget{ws: &wsCopy, stateDir: inst.target.stateDir, id: inst.target.id})
 		routes = append(routes, inst.routesFor(m.wsRoutes[name])...)
 	}
-	cert, caPath, err := resolveProxyCert(m.opts, cfg, targets)
+	cert, caPath, err := ensureIngressCert(cfg, targets)
 	if err != nil {
 		return proxyControlResponse{Error: err.Error()}
 	}
@@ -454,22 +448,10 @@ func runBackgroundProxy(cmd *cobra.Command, names []string, opts proxyOptions) e
 			return err
 		}
 	}
-	if (opts.certFile == "") != (opts.keyFile == "") {
-		return errors.New("both --tls-cert and --tls-key must be set, or omit both to use the automatic certificate in ~/.config/jailoc/ingress")
-	}
-	if opts.certFile != "" {
-		if _, err := os.Stat(opts.certFile); err != nil {
-			return fmt.Errorf("load TLS certificate: %w", err)
-		}
-		if _, err := os.Stat(opts.keyFile); err != nil {
-			return fmt.Errorf("load TLS certificate: %w", err)
-		}
-	}
 
 	if st := runningProxy(); st != nil {
 		listenChanged := (cmd.Flags().Changed("listen") && st.Listen != listen) ||
-			(cmd.Flags().Changed("listener-broker") && st.ListenerBroker != opts.listenerBroker) ||
-			cmd.Flags().Changed("tls-cert") || cmd.Flags().Changed("tls-key")
+			(cmd.Flags().Changed("listener-broker") && st.ListenerBroker != opts.listenerBroker)
 		if listenChanged {
 			_ = stopBackgroundProxy()
 		} else {
@@ -524,9 +506,6 @@ func startBackgroundProxy(ctx context.Context, names []string, opts proxyOptions
 		childArgs = append(childArgs, "--listener-broker")
 	} else if opts.listen != "" {
 		childArgs = append(childArgs, "--listen", opts.listen)
-	}
-	if opts.certFile != "" {
-		childArgs = append(childArgs, "--tls-cert", opts.certFile, "--tls-key", opts.keyFile)
 	}
 	if len(names) > 0 {
 		childArgs = append(childArgs, "--")

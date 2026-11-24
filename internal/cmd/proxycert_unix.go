@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"maps"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,24 +42,6 @@ func ingressDir() string {
 
 func ingressCACertPath() string {
 	return filepath.Join(ingressDir(), ingressCACert)
-}
-
-// resolveProxyCert loads the user-supplied --tls-cert/--tls-key pair or,
-// when both flags are omitted, ensures the automatic CA and leaf certificate
-// in ~/.config/jailoc/ingress cover every route of targets. caPath is set when
-// the automatic CA was used.
-func resolveProxyCert(opts proxyOptions, cfg *config.Config, targets []proxyTarget) (tls.Certificate, string, error) {
-	if opts.certFile != "" || opts.keyFile != "" {
-		if opts.certFile == "" || opts.keyFile == "" {
-			return tls.Certificate{}, "", errors.New("both --tls-cert and --tls-key must be set, or omit both to use the automatic certificate in ~/.config/jailoc/ingress")
-		}
-		cert, err := tls.LoadX509KeyPair(opts.certFile, opts.keyFile)
-		if err != nil {
-			return tls.Certificate{}, "", fmt.Errorf("load TLS certificate: %w", err)
-		}
-		return cert, "", nil
-	}
-	return ensureIngressCert(cfg, targets)
 }
 
 // ensureIngressCert loads or generates the ingress CA and leaf certificate in
@@ -244,7 +227,7 @@ func loadOrCreateIngressCA(dir string, now time.Time) (*x509.Certificate, *ecdsa
 	if !errors.Is(errCert, os.ErrNotExist) || !errors.Is(errKey, os.ErrNotExist) {
 		caCert, caKey, caDER, err := readIngressCA(certPath, keyPath, now)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("existing ingress CA in %s is unusable (%w); remove %s and %s to generate a new CA", dir, err, certPath, keyPath)
+			return nil, nil, nil, fmt.Errorf("existing ingress CA in %s is unusable (%w); remove %s and %s to generate a new CA, then trust the new %s", dir, err, certPath, keyPath, certPath)
 		}
 		return caCert, caKey, caDER, nil
 	}
@@ -266,6 +249,10 @@ func loadOrCreateIngressCA(dir string, now time.Time) (*x509.Certificate, *ecdsa
 		IsCA:                  true,
 		MaxPathLen:            0,
 		MaxPathLenZero:        true,
+
+		PermittedDNSDomainsCritical: true,
+		PermittedDNSDomains:         []string{proxyDomain},
+		ExcludedIPRanges:            ingressCAExcludedIPRanges(),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
@@ -301,8 +288,8 @@ func readIngressCACertOnly(certPath string, now time.Time) (*x509.Certificate, [
 	if err != nil {
 		return nil, nil, err
 	}
-	if !caCert.IsCA || now.Before(caCert.NotBefore) || !now.Add(30*24*time.Hour).Before(caCert.NotAfter) {
-		return nil, nil, errors.New("ingress CA is expired or near expiry")
+	if err := checkIngressCA(caCert, now); err != nil {
+		return nil, nil, err
 	}
 	return caCert, block.Bytes, nil
 }
@@ -320,10 +307,40 @@ func readIngressCA(certPath, keyPath string, now time.Time) (*x509.Certificate, 
 	if !ok {
 		return nil, nil, nil, errors.New("ingress CA key is not ECDSA")
 	}
-	if !caCert.IsCA || now.Before(caCert.NotBefore) || !now.Add(30*24*time.Hour).Before(caCert.NotAfter) {
-		return nil, nil, nil, errors.New("ingress CA is expired or near expiry")
+	if err := checkIngressCA(caCert, now); err != nil {
+		return nil, nil, nil, err
 	}
 	return caCert, caKey, pair.Certificate[0], nil
+}
+
+// ingressCAExcludedIPRanges excludes every IPv4 and IPv6 address, so the
+// ingress CA can't vouch for an IP address SAN.
+func ingressCAExcludedIPRanges() []*net.IPNet {
+	return []*net.IPNet{
+		{IP: net.IPv4zero.To4(), Mask: net.CIDRMask(0, 32)},
+		{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
+	}
+}
+
+// checkIngressCA accepts a CA certificate that is valid for at least 30 more
+// days and is limited by critical name constraints to names under
+// jailoc.local and no IP address. A CA without these constraints, such as one
+// created by hand, would let its key vouch for any domain.
+func checkIngressCA(caCert *x509.Certificate, now time.Time) error {
+	if !caCert.IsCA || now.Before(caCert.NotBefore) || !now.Add(30*24*time.Hour).Before(caCert.NotAfter) {
+		return errors.New("ingress CA is expired or near expiry")
+	}
+	if !caCert.PermittedDNSDomainsCritical || !slices.Equal(caCert.PermittedDNSDomains, []string{proxyDomain}) {
+		return fmt.Errorf("ingress CA is not limited to %s by a critical name constraint", proxyDomain)
+	}
+	excluded := make([]string, 0, len(caCert.ExcludedIPRanges))
+	for _, r := range caCert.ExcludedIPRanges {
+		excluded = append(excluded, r.String())
+	}
+	if !slices.Contains(excluded, "0.0.0.0/0") || !slices.Contains(excluded, "::/0") {
+		return errors.New("ingress CA does not exclude IP addresses by a name constraint")
+	}
+	return nil
 }
 
 func loadValidIngressLeaf(certPath, keyPath string, caCert *x509.Certificate, checkHosts []string, now time.Time) (tls.Certificate, error) {

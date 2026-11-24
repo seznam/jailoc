@@ -517,68 +517,40 @@ func TestProxyCommandArguments(t *testing.T) {
 		err := cmd.ExecuteContext(t.Context())
 		return out.String(), err
 	}
-	if _, err := run("--tls-cert", "c.pem"); err == nil || !strings.Contains(err.Error(), "tls-key") {
-		t.Errorf("no key: error = %v, want tls-key named", err)
-	}
-	if _, err := run("--tls-key", "k.pem"); err == nil || !strings.Contains(err.Error(), "tls-cert") {
-		t.Errorf("no cert: error = %v, want tls-cert named", err)
-	}
-	for _, listen := range []string{"0.0.0.0:8443", "example.com:443", "8443"} {
-		if _, err := run("--tls-cert", "c.pem", "--tls-key", "k.pem", "--listen", listen); err == nil || !strings.Contains(err.Error(), "--listen") {
-			t.Errorf("--listen %s: error = %v, want a --listen error", listen, err)
+	for _, flag := range []string{"--tls-cert", "--tls-key"} {
+		if _, err := run(flag, "c.pem"); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+			t.Errorf("%s: error = %v, want unknown flag", flag, err)
 		}
 	}
-	dir := t.TempDir()
-	if _, err := run("--tls-cert", filepath.Join(dir, "missing.pem"), "--tls-key", filepath.Join(dir, "missing.key")); err == nil || !strings.Contains(err.Error(), "load TLS certificate") {
-		t.Errorf("missing certificate: error = %v", err)
+	for _, listen := range []string{"0.0.0.0:8443", "example.com:443", "8443"} {
+		if _, err := run("--listen", listen); err == nil || !strings.Contains(err.Error(), "--listen") {
+			t.Errorf("--listen %s: error = %v, want a --listen error", listen, err)
+		}
 	}
 	out, err := run("--help")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"proxy [workspace...]", "--foreground", "--listen", "--tls-cert", "--tls-key", proxyDefaultListen} {
+	for _, want := range []string{"proxy [workspace...]", "--foreground", "--listen", "limited to names under jailoc.local", proxyDefaultListen} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}
 	}
 }
 
-// writeTestCertificate writes a generated self-signed certificate for hosts
-// and its key to dir.
-func writeTestCertificate(t *testing.T, dir string, hosts ...string) (certFile, keyFile string, pool *x509.CertPool) {
+// ingressTestPool returns a pool holding the automatic ingress CA of the
+// current HOME.
+func ingressTestPool(t *testing.T) *x509.CertPool {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caPEM, err := os.ReadFile(ingressCACertPath()) //nolint:gosec // test fixture path.
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read ingress CA: %v", err)
 	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), DNSNames: hosts,
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("ingress CA holds no certificate")
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	certFile, keyFile = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	leaf, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool = x509.NewCertPool()
-	pool.AddCert(leaf)
-	return certFile, keyFile, pool
+	return pool
 }
 
 // fakeProxyRelay listens on the proxy socket of stateDir like the guest relay
@@ -679,9 +651,7 @@ func startProxyRun(t *testing.T, handler http.Handler) (*proxyRun, string) {
 // the route at host from a fake VM configured as g.
 func startProxyRunFor(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config) (*proxyRun, string) {
 	t.Helper()
-	return startProxyRunArgs(t, handler, cfgTOML, host, g, func(certFile, keyFile string) []string {
-		return []string{"--foreground", "--listen", "127.0.0.1:0", "--tls-cert", certFile, "--tls-key", keyFile}
-	})
+	return startProxyRunArgs(t, handler, cfgTOML, host, g, "--foreground", "--listen", "127.0.0.1:0")
 }
 
 // shortTempDir creates a temporary directory with a short path: unix socket
@@ -701,9 +671,9 @@ func shortTempDir(t *testing.T, pattern string) string {
 	return dir
 }
 
-// startProxyRunArgs is startProxyRunFor with the command line built by
-// mkArgs from the generated certificate and key paths.
-func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config, mkArgs func(certFile, keyFile string) []string) (*proxyRun, string) {
+// startProxyRunArgs is startProxyRunFor with the command line args. The
+// client trusts the automatic ingress CA.
+func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config, args ...string) (*proxyRun, string) {
 	t.Helper()
 	home := shortTempDir(t, "jp")
 	t.Setenv("HOME", home)
@@ -717,14 +687,13 @@ func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string,
 		t.Fatal(err)
 	}
 	fakeProxyRelay(t, stateDir, handler)
-	certFile, keyFile, pool := writeTestCertificate(t, home, host)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	run := &proxyRun{out: &syncBuffer{}, errOut: &syncBuffer{}, done: make(chan struct{}), cancel: cancel, host: host}
 	cmd := newProxyCmd()
 	cmd.SetOut(run.out)
 	cmd.SetErr(run.errOut)
-	cmd.SetArgs(mkArgs(certFile, keyFile))
+	cmd.SetArgs(args)
 	go func() {
 		run.err = cmd.ExecuteContext(ctx)
 		close(run.done)
@@ -755,7 +724,7 @@ func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string,
 		t.Fatalf("proxy printed no address and code:\n%s", run.out.String())
 	}
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: host, MinVersion: tls.VersionTLS12},
+		TLSClientConfig: &tls.Config{RootCAs: ingressTestPool(t), ServerName: host, MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", run.addr)
 		},
@@ -913,7 +882,7 @@ func runProxyArgs(t *testing.T, args ...string) (string, error) {
 func TestProxyListenerBrokerRefusesListen(t *testing.T) {
 	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
 	for _, listen := range []string{"127.0.0.1:8443", "127.0.0.1:443", proxyDefaultListen} {
-		_, err := runProxyArgs(t, "--tls-cert", "c.pem", "--tls-key", "k.pem", "--listener-broker", "--listen", listen)
+		_, err := runProxyArgs(t, "--listener-broker", "--listen", listen)
 		if err == nil || !strings.Contains(err.Error(), "--listener-broker") || !strings.Contains(err.Error(), "--listen") {
 			t.Errorf("--listen %s: error = %v, want a refusal naming both flags", listen, err)
 		}
@@ -922,16 +891,9 @@ func TestProxyListenerBrokerRefusesListen(t *testing.T) {
 
 func TestProxyListenerBrokerRefusesRoot(t *testing.T) {
 	useProxyBrokerHost(t, proxyBrokerTarget{uid: 0, socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
-	_, err := runProxyArgs(t, "--tls-cert", "c.pem", "--tls-key", "k.pem", "--listener-broker")
+	_, err := runProxyArgs(t, "--listener-broker")
 	if err == nil || !strings.Contains(err.Error(), "root") || !strings.Contains(err.Error(), "--listener-broker") {
 		t.Fatalf("error = %v, want a refusal to run as root", err)
-	}
-}
-
-func TestProxyListenerBrokerRequiresMatchingTLSFlags(t *testing.T) {
-	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
-	if _, err := runProxyArgs(t, "--listener-broker", "--tls-cert", "c.pem"); err == nil || !strings.Contains(err.Error(), "tls-key") {
-		t.Errorf("error = %v, want tls-key named", err)
 	}
 }
 
@@ -1027,9 +989,7 @@ func TestProxyListenerBrokerServesThroughBroker(t *testing.T) {
 	useProxyBrokerHost(t, target)
 	run, _ := startProxyRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "through the broker")
-	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), func(certFile, keyFile string) []string {
-		return []string{"--foreground", "--listener-broker", "--tls-cert", certFile, "--tls-key", keyFile}
-	})
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), "--foreground", "--listener-broker")
 	if run.addr != target.addr.String() {
 		t.Errorf("proxy reports %s, want the broker address %s", run.addr, target.addr)
 	}
@@ -1116,22 +1076,115 @@ func TestEnsureIngressCert(t *testing.T) {
 	}
 }
 
+func TestIngressCAIsLimitedToJailocLocal(t *testing.T) {
+	home := shortTempDir(t, "jc")
+	t.Setenv("HOME", home)
+	t.Setenv(config.PathEnv, filepath.Join(home, "config.toml"))
+	cfg := &config.Config{Workspaces: map[string]config.Workspace{
+		"one": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
+	}}
+	targets := []proxyTarget{{ws: &workspace.Resolved{Name: "one", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}}}
+	if _, _, err := ensureIngressCert(cfg, targets); err != nil {
+		t.Fatalf("ensureIngressCert: %v", err)
+	}
+	dir := ingressDir()
+	caCert, caKey, _, err := readIngressCA(filepath.Join(dir, ingressCACert), filepath.Join(dir, ingressCAKey), time.Now())
+	if err != nil {
+		t.Fatalf("readIngressCA: %v", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+
+	issue := func(dnsNames []string, ips []net.IP) *x509.Certificate {
+		t.Helper()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(2), DNSNames: dnsNames, IPAddresses: ips,
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+			KeyUsage:    x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, key.Public(), caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return leaf
+	}
+	verify := func(leaf *x509.Certificate, name string) error {
+		_, err := leaf.Verify(x509.VerifyOptions{DNSName: name, Roots: roots})
+		return err
+	}
+	if err := verify(issue([]string{"app.one.jailoc.local"}, nil), "app.one.jailoc.local"); err != nil {
+		t.Errorf("leaf under jailoc.local: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		dns   []string
+		ips   []net.IP
+		check string
+	}{
+		{"other domain", []string{"example.com"}, nil, "example.com"},
+		{"suffix lookalike", []string{"app.notjailoc.local"}, nil, "app.notjailoc.local"},
+		{"IPv4 address", nil, []net.IP{net.IPv4(127, 0, 0, 1)}, "127.0.0.1"},
+		{"IPv6 address", nil, []net.IP{net.IPv6loopback}, "::1"},
+	} {
+		if err := verify(issue(tc.dns, tc.ips), tc.check); err == nil {
+			t.Errorf("%s: a leaf for %s verified under the ingress CA", tc.name, tc.check)
+		}
+	}
+}
+
+func TestEnsureIngressCertRejectsUnconstrainedCA(t *testing.T) {
+	home := shortTempDir(t, "jc")
+	t.Setenv("HOME", home)
+	t.Setenv(config.PathEnv, filepath.Join(home, "config.toml"))
+	dir := ingressDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(1, 0, 0),
+		KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ingressCACert), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ingressCAKey), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Workspaces: map[string]config.Workspace{
+		"one": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
+	}}
+	targets := []proxyTarget{{ws: &workspace.Resolved{Name: "one", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}}}
+	_, _, err = ensureIngressCert(cfg, targets)
+	if err == nil || !strings.Contains(err.Error(), "not limited to jailoc.local") || !strings.Contains(err.Error(), "remove") {
+		t.Fatalf("error = %v, want a refusal of the unconstrained CA with a removal hint", err)
+	}
+}
+
 func TestProxySyncStatusAndStop(t *testing.T) {
 	run, _ := startProxyRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "hello")
-	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), func(_, _ string) []string {
-		return []string{"--foreground", "--listen", "127.0.0.1:0"}
-	})
-	// Trust the auto-generated CA in the test client.
-	caPEM, err := os.ReadFile(ingressCACertPath()) //nolint:gosec // test fixture path.
-	if err != nil {
-		t.Fatalf("ReadFile(ca.crt): %v", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		t.Fatal("AppendCertsFromPEM failed")
-	}
-	run.client.Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), "--foreground", "--listen", "127.0.0.1:0")
 	cookie := run.login(t)
 
 	// Re-running `jailoc proxy` (without --foreground) syncs the running proxy,

@@ -36,12 +36,14 @@ Guest port 6081 (the proxy relay) is reserved whenever any route exists. `ports`
 
 `jailoc up` and `jailoc restart` automatically start or update the background HTTPS proxy when a workspace has `proxy` routes, `jailoc reload` updates routes whose guest ports are already in the running VM's allowlist, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). `jailoc status` shows the running proxy and its route URLs.
 
-- jailoc generates and reuses a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local`.
-- The proxy listens on `127.0.0.1:8443` by default.
+- jailoc creates a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and a leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local` for every proxy workspace, and reuses them. It issues a new leaf when a workspace is added or the leaf is close to expiry. There is no option to supply your own certificate.
+- The CA carries a critical name constraint: it can only sign names under `jailoc.local` and no IP addresses.
+- The proxy listens on `127.0.0.1:8443` by default. `jailoc proxy status` shows it, and `jailoc proxy stop` stops it.
 - Routes close when a workspace VM stops or is replaced.
 
 1. Open `<origin>/.jailoc/login`, for example `https://foo.demo.jailoc.local/.jailoc/login`.
-2. Enter the code. The page posts it to the same origin.
+2. Enter the login code that `jailoc up` printed for the route. The page posts it to the same origin.
+
 A code works once and expires 10 minutes after the proxy starts. A successful login sets a `__Host-` cookie that lasts 8 hours. Every request must carry the route's `Host` and a matching TLS server name. A `GET` or `HEAD` needs no `Origin` header, but one that is present must be exactly the route's origin. Every other method, and every WebSocket upgrade, requires that exact `Origin`; cross-site requests are refused. Open the route without a port, or with `:443`; `:8443` is rejected.
 
 To keep one route from planting `Domain=jailoc.local` cookies on another, the proxy rewrites every upstream `Set-Cookie` name `<name>` to `__Host-jailoc-<host>-<name>` (with `Path=/`, `Secure` and no `Domain`), unwraps that prefix back to `<name>` on incoming `Cookie` headers, and drops any cookie without the route's `__Host-jailoc-<host>-` prefix. HTTP-only session cookies need no application change; client-side scripts that read a server-set cookie (for example a double-submit CSRF token) or write a cookie for the upstream via `document.cookie` must address it as `` `__Host-jailoc-${location.hostname}-<name>` `` with `; Path=/; Secure` and no `Domain` attribute.
@@ -61,51 +63,24 @@ Before you use the proxy on a development origin you have used before:
 jailoc doesn't clear browser state for you. Browser behaviour across restarts and VM replacement hasn't been checked in a real browser yet; that check must pass before this feature is merged.
 
 The proxy reaches the guest through a private socket (`proxy.sock`) on the host and the guest's proxy relay; nothing is published on the host except the listener you chose. See [Security Boundaries](../explanation/security-boundaries.md#https-proxy).
+
 ## Set up the host
 
 Browsers must reach `https://<name>.<workspace>.jailoc.local` on port 443 and trust its certificate. You do this once, by hand; jailoc doesn't verify it. Every command below that needs `sudo` is yours to run, so review each first. [Verify the setup](#verify-the-setup) when you are done.
 
-### Create an ingress CA and certificate
+### Keep the ingress CA private
 
-Use a dedicated CA for this. Never use the [network broker's inspection CA](network-access.md), which the guest trusts.
+jailoc creates the CA the first time a proxy starts. Its key, `~/.config/jailoc/ingress/ca.key`, stays on the host so jailoc can issue leaves for new workspaces.
 
 !!! danger "The CA is a trust anchor"
 
-    Don't count on a name constraint: clients may ignore constraints on a trust anchor. If `ca.key` leaks, assume anyone holding it can mint certificates for any domain in every client that trusts the CA. Keep the files outside every workspace `paths` entry, `mounts` entry and `snapshots` source, since anything the agent can read there is exposed. Delete `ca.key` once the leaf is issued if you don't need to issue more, and remove the CA from your trust stores when you stop using it.
+    Clients may ignore name constraints on a trust anchor. If `ca.key` leaks, assume anyone holding it can mint certificates that such clients accept for any domain. jailoc refuses to start the proxy when `~/.config/jailoc/ingress` overlaps a workspace `paths` entry, `mounts` entry or `snapshots` source; keep the directory out of every workspace. Remove the CA from your trust stores when you stop using the proxy.
 
-Pick a directory that holds nothing else. The first command must print nothing; if it lists files, choose another directory.
+Every command below reads the CA path from `ING`:
 
 ```bash
 ING=~/.config/jailoc/ingress
-mkdir -p "$ING" && cd "$ING"
-ls ca.ext ca.key ca.csr ca.crt ca.srl demo.ext demo.key demo.csr demo.crt 2>/dev/null
-
-umask 077
-# CA
-cat > ca.ext <<'EOF'
-basicConstraints = critical, CA:TRUE, pathlen:0
-keyUsage = critical, keyCertSign, cRLSign
-subjectKeyIdentifier = hash
-EOF
-openssl ecparam -name prime256v1 -genkey -noout -out ca.key
-openssl req -new -key ca.key -subj "/CN=jailoc ingress CA" -out ca.csr
-openssl x509 -req -in ca.csr -signkey ca.key -days 365 -extfile ca.ext -out ca.crt
-
-# leaf for one workspace
-cat > demo.ext <<'EOF'
-basicConstraints = critical, CA:FALSE
-keyUsage = critical, digitalSignature
-extendedKeyUsage = serverAuth
-subjectAltName = DNS:*.demo.jailoc.local
-EOF
-openssl ecparam -name prime256v1 -genkey -noout -out demo.key
-openssl req -new -key demo.key -subj "/CN=demo.jailoc.local" -out demo.csr
-openssl x509 -req -in demo.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 90 -extfile demo.ext -out demo.crt
-openssl verify -CAfile ca.crt demo.crt
 ```
-
-- `*.demo.jailoc.local` covers `foo.demo.jailoc.local`. A wildcard covers one label, so `*.jailoc.local` doesn't: issue one leaf per workspace, or list several `DNS:*.<workspace>.jailoc.local` names in one certificate.
-- macOS's `/usr/bin/openssl` is LibreSSL. If a command fails, use an OpenSSL 1.1.1 or later from your package manager.
 
 ### Trust the CA
 
@@ -230,10 +205,10 @@ On macOS, use `/Library/PrivilegedHelperTools` instead of `/usr/local/libexec`, 
 In another terminal, start the proxy with `--listener-broker` instead of `--listen`:
 
 ```bash
-jailoc proxy demo --listener-broker \
-  --tls-cert ~/.config/jailoc/ingress/demo.crt \
-  --tls-key ~/.config/jailoc/ingress/demo.key
-```
+jailoc proxy demo --listener-broker
+  ```
+
+The proxy runs in the background, and `jailoc up` and `jailoc restart` keep using the broker until `jailoc proxy stop`.
 
 - Only the UID given to `--uid` can attach, and only one proxy at a time. A second proxy is refused until the first exits.
 - While no proxy is attached, the broker closes incoming connections.
@@ -253,11 +228,15 @@ curl --cacert "$ING/ca.crt" --resolve foo.demo.jailoc.local:443:127.0.0.1 \
 ```
 
 `200` shows that the certificate chain, the 443 redirect and the proxy work. It doesn't test DNS or the browser's trust store; run the resolver check above, then open the page in the browser.
+
 ## Clean up
 
 Each command removes only what this guide added. Skip the lines for options you didn't use.
 
 ```bash
+# proxy
+jailoc proxy stop
+
 # redirect (Linux)
 sudo nft delete table ip jailoc_ingress
 
@@ -288,9 +267,8 @@ sudo rm /etc/pki/ca-trust/source/anchors/jailoc-ingress-ca.crt && sudo update-ca
 # trust (Chrome, Chromium on Linux)
 certutil -d sql:$HOME/.pki/nssdb -D -n "jailoc ingress CA"
 
-# files created in the ingress directory; the directory is removed only when empty
-(cd "$ING" && rm -f ca.ext ca.key ca.csr ca.crt ca.srl demo.ext demo.key demo.csr demo.crt)
-rmdir "$ING" 2>/dev/null
+# CA, key and leaf certificate
+rm -rf ~/.config/jailoc/ingress
 ```
 
 Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
@@ -299,13 +277,15 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 
 | Symptom | Check |
 |---------|-------|
-| Certificate warning | The CA isn't trusted by this browser; see [Trust the CA](#trust-the-ca). The leaf must list the route's host in `subjectAltName`. |
+| Certificate warning | The CA isn't trusted by this browser; see [Trust the CA](#trust-the-ca). |
 | Name doesn't resolve | Run the resolver check above; `.local` and secure DNS are the usual causes. Use `/etc/hosts`. |
-| Connection refused on 443 | The redirect isn't loaded, or `jailoc proxy` isn't running. |
+| Connection refused on 443 | The redirect isn't loaded, or the proxy isn't running; check `jailoc proxy status`. |
 | `:8443` URL rejected | Open the route without a port. |
-| Login code rejected | A code works once and expires 10 minutes after the proxy starts. Restart `jailoc proxy` for a new one. |
+| Login code rejected | A code works once and expires 10 minutes after the proxy starts. Run `jailoc proxy stop`, then `jailoc proxy <workspace>` for a new one. |
 | Proxy refuses the workspace | The running VM doesn't match the configured proxy ports. Run `jailoc restart <workspace>`. |
-| Route fails after the VM stopped or was replaced | Restart `jailoc proxy`. |
+| Route fails after the VM stopped or was replaced | Run `jailoc up <workspace>`. |
+| `existing ingress CA in ... is unusable` | The CA in `~/.config/jailoc/ingress` is expired, unreadable or not limited to `jailoc.local`. Remove `ca.crt` and `ca.key` there, remove the old CA from your trust stores, and trust the new `ca.crt` after the next start. |
+| Proxy fails to start | Read `~/.cache/jailoc-vm/proxy/proxy.log`. |
 | `the listener broker is not running for this user` | Start `jailoc-listener-broker --uid` with your UID as root; see [Use the listener broker](#use-the-listener-broker-experimental). |
 | `another proxy is attached to the listener broker` | Stop the other `jailoc proxy --listener-broker` first. |
 | Broker refuses its executable | Install it in a root-owned directory that group and others can't write. |

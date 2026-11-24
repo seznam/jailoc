@@ -49,8 +49,6 @@ var errProxyNoVMs = errors.New("every served workspace VM stopped or was replace
 
 type proxyOptions struct {
 	listen         string
-	certFile       string
-	keyFile        string
 	listenerBroker bool
 	foreground     bool
 }
@@ -94,7 +92,7 @@ func newProxyCmd() *cobra.Command {
 			"By default the proxy runs in the background (`--foreground` keeps it in the foreground).\n" +
 			"When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes.\n\n" +
 			"Each route is https://<route>.<workspace>.jailoc.local; routes with auth = true are protected by a one-time login code, printed once when the route is added.\n" +
-			"When --tls-cert and --tls-key are omitted, jailoc generates and reuses a local CA and leaf certificate in ~/.config/jailoc/ingress.\n" +
+			"jailoc generates and reuses a local CA and leaf certificate in ~/.config/jailoc/ingress; the CA is limited to names under jailoc.local.\n" +
 			"The proxy starts no VM, opens no browser and changes no host setting: make the names resolve to the listen address\n" +
 			"(for example with /etc/hosts entries) and trust ~/.config/jailoc/ingress/ca.crt in your browser.\n" +
 			"The proxy does not listen on privileged ports itself: browsers use port 443 for these URLs, so a --listen port\n" +
@@ -115,8 +113,6 @@ func newProxyCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&opts.foreground, "foreground", "f", false, "run the proxy in the foreground instead of the background")
 	cmd.Flags().StringVar(&opts.listen, "listen", proxyDefaultListen, "loopback address to listen on, host:port (port 0 picks a free port)")
 	cmd.Flags().BoolVar(&opts.listenerBroker, "listener-broker", false, "serve through jailoc-listener-broker on 127.0.0.1:443 instead of opening a listener")
-	cmd.Flags().StringVar(&opts.certFile, "tls-cert", "", "PEM certificate chain that covers every route host (default: automatic cert in ~/.config/jailoc/ingress)")
-	cmd.Flags().StringVar(&opts.keyFile, "tls-key", "", "PEM private key of the certificate (default: automatic key in ~/.config/jailoc/ingress)")
 	cmd.AddCommand(newProxyStatusCmd(), newProxyStopCmd())
 	return cmd
 }
@@ -144,17 +140,6 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 			return err
 		}
 	}
-	if (opts.certFile == "") != (opts.keyFile == "") {
-		return errors.New("both --tls-cert and --tls-key must be set, or omit both to use the automatic certificate in ~/.config/jailoc/ingress")
-	}
-	if opts.certFile != "" {
-		if _, err := os.Stat(opts.certFile); err != nil {
-			return fmt.Errorf("load TLS certificate: %w", err)
-		}
-		if _, err := os.Stat(opts.keyFile); err != nil {
-			return fmt.Errorf("load TLS certificate: %w", err)
-		}
-	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -164,7 +149,7 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	if err != nil {
 		return err
 	}
-	cert, caPath, err := resolveProxyCert(opts, cfg, targets)
+	cert, caPath, err := ensureIngressCert(cfg, targets)
 	if err != nil {
 		return err
 	}
