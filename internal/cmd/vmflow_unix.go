@@ -858,11 +858,16 @@ func appendUnsetEnv(env, add []string) []string {
 func secretsMarker(stateDir string) string { return filepath.Join(stateDir, "secrets-delivered") }
 
 // deliverSecrets sends payload to the guest over SSH, which replaces the
-// previous environment and secrets, and records the delivery.
+// previous environment and secrets, and records the delivery. The supervisor
+// learns the secret values first, so it redacts them from console.log before
+// the guest can print them.
 func deliverSecrets(ctx context.Context, stateDir string, payload guest.Secrets) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode secrets: %w", err)
+	}
+	if err := vm.SendConsoleSecrets(ctx, stateDir, guest.SecretsValues(payload)); err != nil {
+		return fmt.Errorf("register secrets for console redaction: %w", err)
 	}
 	client, err := vm.DialSSH(ctx, stateDir)
 	if err != nil {
@@ -1209,7 +1214,7 @@ func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Write
 	}
 	upTail := &logTail{path: upLogPath(stateDir)}
 	supTail := &logTail{path: filepath.Join(stateDir, "supervisor.log")}
-	conTail := &logTail{path: consolePaths[len(consolePaths)-1], once: consolePaths[:len(consolePaths)-1]}
+	conTail := &logTail{path: consolePaths[len(consolePaths)-1], backups: consolePaths[:len(consolePaths)-1]}
 	tails := []*logTail{upTail, supTail, conTail}
 	defer func() {
 		for _, t := range tails {
@@ -1230,31 +1235,26 @@ func logsVM(ctx context.Context, ws *workspace.Resolved, follow bool, w io.Write
 
 // logTail prints what is added to a log file. It starts from the beginning
 // again when the file is replaced or truncated, as the next `jailoc up` and
-// VM start do with theirs. once lists rotated backup files printed once before
-// the first read of path.
+// VM start do with theirs. backups lists the files path rotates into, oldest
+// first: they are printed before the first read of path, and the ones newer
+// than the open file after each rotation.
 type logTail struct {
-	path string
-	once []string
-	f    *os.File
-	off  int64
+	path    string
+	backups []string
+	started bool
+	f       *os.File
+	off     int64
 }
 
 // copy prints what was added to the file since the last copy; a missing
 // file has nothing to print yet.
 func (t *logTail) copy(w io.Writer) error {
-	for _, p := range t.once {
-		data, err := os.ReadFile(p) //nolint:gosec // G304: jailoc-owned state path
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("read %s: %w", p, err)
-		}
-		if _, err := w.Write(data); err != nil {
+	if !t.started {
+		t.started = true
+		if err := printFiles(w, t.backups); err != nil {
 			return err
 		}
 	}
-	t.once = nil
 	if t.f != nil {
 		// Drain anything appended to the open descriptor before checking
 		// whether t.path was rotated to a new file.
@@ -1272,8 +1272,17 @@ func (t *logTail) copy(w io.Writer) error {
 		return fmt.Errorf("stat %s: %w", t.path, err)
 	}
 	if t.f != nil {
-		if cur, err := t.f.Stat(); err != nil || !os.SameFile(cur, fi) || fi.Size() < t.off {
+		cur, err := t.f.Stat()
+		switch {
+		case err != nil, os.SameFile(cur, fi) && fi.Size() < t.off:
 			t.close()
+		case !os.SameFile(cur, fi):
+			// The open file was rotated away: print the backups newer than
+			// it, which a single poll misses when the log rotates twice.
+			t.close()
+			if err := printFiles(w, t.backups[t.backupIndex(cur)+1:]); err != nil {
+				return err
+			}
 		}
 	}
 	if t.f == nil {
@@ -1299,6 +1308,34 @@ func (t *logTail) close() {
 		_ = t.f.Close()
 		t.f = nil
 	}
+}
+
+// backupIndex returns the index in t.backups of the file fi, or -1 when it is
+// not one of them (it was rotated out, or removed at the next VM start).
+func (t *logTail) backupIndex(fi os.FileInfo) int {
+	for i, p := range t.backups {
+		if bi, err := os.Stat(p); err == nil && os.SameFile(bi, fi) {
+			return i
+		}
+	}
+	return -1
+}
+
+// printFiles prints the files in paths in order, skipping missing ones.
+func printFiles(w io.Writer, paths []string) error {
+	for _, p := range paths {
+		data, err := os.ReadFile(p) //nolint:gosec // G304: jailoc-owned state path
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read %s: %w", p, err)
+		}
+		if _, err := w.Write(data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // waitLogs waits for followed logs to grow and reports false once ctx is

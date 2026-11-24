@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -248,50 +249,44 @@ func (w *consoleWriter) rotate() error {
 
 // startConsolePipe creates a FIFO at consolePipePath(consoleLog), opens it
 // O_RDWR|O_NONBLOCK so the runner's open for writing does not block, and
-// streams what the runner writes into a consoleWriter for consoleLog. The
-// caller must call closeWrite after the runner process has started (or failed
-// to start) so the reader sees EOF when the runner exits, and wait when the
-// runner stops.
-func startConsolePipe(consoleLog string, redactor *consoleRedactor) (pipePath string, closeWrite func(), wait func(), err error) {
+// streams what the runner writes into a consoleWriter for consoleLog. A writer
+// end kept open by jailoc stops the reader from seeing EOF before the runner
+// opens the pipe. The caller must call wait only after the runner has exited
+// (or failed to start): it closes that writer end and waits until the reader
+// has drained the pipe into console.log.
+func startConsolePipe(consoleLog string, redactor *consoleRedactor) (pipePath string, wait func(), err error) {
 	if consoleLog == "" {
-		return "", func() {}, func() {}, nil
+		return "", func() {}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(consoleLog), 0o700); err != nil {
-		return "", nil, nil, fmt.Errorf("create console log dir: %w", err)
+		return "", nil, fmt.Errorf("create console log dir: %w", err)
 	}
 	// Pre-create console.log (0600) so callers and tests see the file as soon
 	// as the runner starts, even before the first newline arrives.
 	f, err := os.OpenFile(consoleLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // G304: jailoc-owned state path
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("create console log: %w", err)
+		return "", nil, fmt.Errorf("create console log: %w", err)
 	}
 	_ = f.Close()
 
 	pipePath = consolePipePath(consoleLog)
 	_ = os.Remove(pipePath)
 	if err := syscall.Mkfifo(pipePath, 0o600); err != nil {
-		return "", nil, nil, fmt.Errorf("create console pipe: %w", err)
+		return "", nil, fmt.Errorf("create console pipe: %w", err)
 	}
 	rfd, err := syscall.Open(pipePath, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		_ = os.Remove(pipePath)
-		return "", nil, nil, fmt.Errorf("open console pipe reader: %w", err)
+		return "", nil, fmt.Errorf("open console pipe reader: %w", err)
 	}
 	wfd, err := syscall.Open(pipePath, syscall.O_WRONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		_ = syscall.Close(rfd)
 		_ = os.Remove(pipePath)
-		return "", nil, nil, fmt.Errorf("open console pipe writer: %w", err)
+		return "", nil, fmt.Errorf("open console pipe writer: %w", err)
 	}
 	rf := os.NewFile(uintptr(rfd), pipePath)
 	wf := os.NewFile(uintptr(wfd), pipePath+"-keeper")
-
-	var closeOnce sync.Once
-	closeWrite = func() {
-		closeOnce.Do(func() {
-			_ = wf.Close()
-		})
-	}
 
 	cw := newConsoleWriter(consoleLog, redactor)
 	done := make(chan struct{})
@@ -307,16 +302,23 @@ func startConsolePipe(consoleLog string, redactor *consoleRedactor) (pipePath st
 	var waitOnce sync.Once
 	wait = func() {
 		waitOnce.Do(func() {
-			closeWrite()
+			_ = wf.Close()
 			<-done
 		})
 	}
-	return pipePath, closeWrite, wait, nil
+	return pipePath, wait, nil
 }
 
 // consoleSocket returns the Unix socket path where the supervisor accepts
 // secret values to redact from the console log.
 func consoleSocket(stateDir string) string { return filepath.Join(stateDir, "console.sock") }
+
+const (
+	// consoleSecretsOK is the supervisor's reply once it applied the values.
+	consoleSecretsOK = "ok"
+	// consoleSecretsMax caps the JSON list of values the supervisor reads.
+	consoleSecretsMax = 16 << 20
+)
 
 // SendConsoleSecrets sends secret values to the running VM supervisor at
 // stateDir so they are redacted from console.log before reaching disk. If the
@@ -354,9 +356,16 @@ func SendConsoleSecrets(ctx context.Context, stateDir string, values []string) e
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
 	}
-	// Wait for the supervisor to close the connection after applying the values,
-	// so any subsequent guest output is guaranteed to be redacted against them.
-	_, _ = io.Copy(io.Discard, conn)
+	// The supervisor answers once it has applied the values, so any later
+	// guest output is redacted against them. Anything but "ok" means the
+	// values are not registered.
+	reply, err := io.ReadAll(io.LimitReader(conn, 4<<10))
+	if err != nil {
+		return fmt.Errorf("read console redactor reply: %w", err)
+	}
+	if r := strings.TrimSpace(string(reply)); r != consoleSecretsOK {
+		return fmt.Errorf("console redactor rejected secrets: %q", r)
+	}
 	return nil
 }
 
@@ -380,9 +389,12 @@ func startConsoleSecretServer(stateDir string, redactor *consoleRedactor) (func(
 				defer func() { _ = conn.Close() }()
 				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 				var vals []string
-				if json.NewDecoder(io.LimitReader(conn, 1<<20)).Decode(&vals) == nil {
-					redactor.Add(vals)
+				if err := json.NewDecoder(io.LimitReader(conn, consoleSecretsMax)).Decode(&vals); err != nil {
+					_, _ = fmt.Fprintf(conn, "decode secrets: %v\n", err)
+					return
 				}
+				redactor.Add(vals)
+				_, _ = io.WriteString(conn, consoleSecretsOK+"\n")
 			}(c)
 		}
 	}()

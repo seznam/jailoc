@@ -155,12 +155,6 @@ func readFileRange(path string, offset, maxBytes int64) (string, bool) {
 	return string(data), true
 }
 
-// readLogTail returns the last limit bytes of the file, starting at a line
-// boundary, and whether the file could be read.
-func readLogTail(path string, limit int64) (string, bool) {
-	return readLogsTail([]string{path}, limit)
-}
-
 // diskFullFailure describes an out-of-space failure: what the guest
 // reported, where to look, and which setting grows the disk. guestEvidence
 // tells whether the guest console shows the Docker data filesystem full; without

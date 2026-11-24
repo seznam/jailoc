@@ -60,7 +60,7 @@ func (s confinedSpawner) Spawn(ctx context.Context, cfg runner.Config) (runner.P
 	if len(cfg.VsockPorts) > 0 {
 		return nil, fmt.Errorf("start confined VM runner: vsock ports are not permitted (%d configured)", len(cfg.VsockPorts))
 	}
-	pipePath, closeWrite, waitConsole, err := startConsolePipe(cfg.ConsoleLog, s.redactor)
+	pipePath, waitConsole, err := startConsolePipe(cfg.ConsoleLog, s.redactor)
 	if err != nil {
 		return nil, fmt.Errorf("start confined VM runner: %w", err)
 	}
@@ -76,11 +76,12 @@ func (s confinedSpawner) Spawn(ctx context.Context, cfg runner.Config) (runner.P
 		}
 		return err
 	})
-	closeWrite()
 	if err != nil {
 		waitConsole()
 		return nil, fmt.Errorf("start confined VM runner: %w", err)
 	}
+	// The pipe writer stays open until Stop, after the runner has exited, so
+	// the reader cannot see EOF before libkrun opens the pipe.
 	return consoleProcessHandle{ProcessHandle: proc, wait: waitConsole}, nil
 }
 

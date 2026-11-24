@@ -63,7 +63,7 @@ func TestRedactString(t *testing.T) {
 			in:   "Authorization: Bearer supersecretbearertoken123",
 			want: "Authorization: Bearer [redacted]",
 		},
-		{
+		{ //nolint:gosec // G101: fake credential for the redaction test
 			name: "url userinfo password",
 			in:   "https://user:hunter2password@example.com/repo.git",
 			want: "https://user:[redacted]@example.com/repo.git",

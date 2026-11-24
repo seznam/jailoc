@@ -1,11 +1,16 @@
 package vm
 
 import (
+	"bufio"
 	"context"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestConsoleWriterRotatesAndPermissions(t *testing.T) {
@@ -138,17 +143,19 @@ func TestStartConsolePipeAndSecretServer(t *testing.T) {
 	}
 
 	consoleLog := ConsoleLogPath(stateDir)
-	pipePath, closeWrite, wait, err := startConsolePipe(consoleLog, red)
+	pipePath, wait, err := startConsolePipe(consoleLog, red)
 	if err != nil {
 		t.Fatalf("startConsolePipe: %v", err)
 	}
 	defer wait()
 
-	runnerOut, err := os.OpenFile(pipePath, os.O_WRONLY, 0) //nolint:gosec // G304: test pipe
+	// libkrun opens the pipe some time after the runner process starts; the
+	// reader must still be there when it does.
+	time.Sleep(100 * time.Millisecond)
+	runnerOut, err := os.OpenFile(pipePath, os.O_WRONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: test pipe
 	if err != nil {
 		t.Fatalf("open pipe as runner: %v", err)
 	}
-	closeWrite()
 
 	if _, err := runnerOut.WriteString("booting with delivered-secret-value\n"); err != nil {
 		t.Fatalf("write to pipe: %v", err)
@@ -167,5 +174,54 @@ func TestStartConsolePipeAndSecretServer(t *testing.T) {
 	}
 	if _, err := os.Stat(pipePath); !os.IsNotExist(err) {
 		t.Errorf("pipe %s still exists after wait: %v", pipePath, err)
+	}
+}
+
+func TestSendConsoleSecretsRequiresAck(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		reply   string
+		wantErr bool
+	}{
+		{name: "ok", reply: "ok\n"},
+		{name: "error reply", reply: "decode secrets: unexpected EOF\n", wantErr: true},
+		{name: "closed without reply", reply: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			stateDir, err := os.MkdirTemp("/tmp", "jlc-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+			ln, err := net.Listen("unix", consoleSocket(stateDir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			go func() {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer func() { _ = c.Close() }()
+				_, _ = bufio.NewReader(c).ReadString('\n')
+				_, _ = io.WriteString(c, tt.reply)
+			}()
+
+			err = SendConsoleSecrets(context.Background(), stateDir, []string{"delivered-secret-value"})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("SendConsoleSecrets() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSendConsoleSecretsWithoutSocket(t *testing.T) {
+	t.Parallel()
+	if err := SendConsoleSecrets(context.Background(), t.TempDir(), []string{"delivered-secret-value"}); err != nil {
+		t.Fatalf("SendConsoleSecrets() without socket = %v, want nil", err)
 	}
 }

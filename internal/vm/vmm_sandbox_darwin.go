@@ -58,30 +58,26 @@ func (s confinedSpawner) Spawn(_ context.Context, cfg runner.Config) (runner.Pro
 	if err != nil {
 		return nil, err
 	}
-	pipePath, closeWrite, waitConsole, err := startConsolePipe(cfg.ConsoleLog, s.redactor)
+	pipePath, waitConsole, err := startConsolePipe(cfg.ConsoleLog, s.redactor)
 	if err != nil {
 		return nil, fmt.Errorf("start confined VM runner: %w", err)
 	}
 	if pipePath != "" {
 		cfg.ConsoleLog = pipePath
 	}
-	cleanupPipe := func() {
-		closeWrite()
-		waitConsole()
-	}
 	configJSON, err := json.Marshal(cfg)
 	if err != nil {
-		cleanupPipe()
+		waitConsole()
 		return nil, fmt.Errorf("marshal runner config: %w", err)
 	}
 	profile, err := seatbeltProfile(cfg, runnerPath)
 	if err != nil {
-		cleanupPipe()
+		waitConsole()
 		return nil, fmt.Errorf("build VM runner sandbox profile: %w", err)
 	}
 	cmd, err := seatbeltShim(runnerPath, cfg.ProcessName, configJSON)
 	if err != nil {
-		cleanupPipe()
+		waitConsole()
 		return nil, err
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -91,7 +87,7 @@ func (s confinedSpawner) Spawn(_ context.Context, cfg runner.Config) (runner.Pro
 	if cfg.VMLogPath != "" {
 		logFile, err := os.OpenFile(cfg.VMLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // G304: jailoc-owned state path
 		if err != nil {
-			cleanupPipe()
+			waitConsole()
 			return nil, fmt.Errorf("open vm log file: %w", err)
 		}
 		cmd.Stdout = logFile
@@ -101,12 +97,13 @@ func (s confinedSpawner) Spawn(_ context.Context, cfg runner.Config) (runner.Pro
 	}
 
 	if err := launchSeatbelt(cmd, profile); err != nil {
-		cleanupPipe()
+		waitConsole()
 		return nil, fmt.Errorf("start confined VM runner: %w", err)
 	}
-	closeWrite()
 	proc := &seatbeltProcess{pid: cmd.Process.Pid, done: make(chan struct{})}
-	// Reap the runner when it exits so it does not stay a zombie.
+	// Reap the runner when it exits so it does not stay a zombie. The pipe
+	// writer stays open until then, so the reader cannot see EOF before
+	// libkrun opens the pipe.
 	go func() {
 		_ = cmd.Wait() // the exit status is not needed: IsAlive reports the exit
 		waitConsole()
