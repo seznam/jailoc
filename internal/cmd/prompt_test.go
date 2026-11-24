@@ -119,9 +119,9 @@ func TestSetupReviewFollowsEdits(t *testing.T) {
 	ans := defaultFirstTimeAnswers(opts)
 	ans.agent = "claude"
 	form := buildFirstTimeForm(&ans, opts).form()
-	form.WithTheme(compactTheme())
+	form.WithTheme(compactTheme()).WithHeight(40)
 	flushCmd(form, form.Init())
-	_, cmd := form.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	_, cmd := form.Update(tea.WindowSizeMsg{Width: 200, Height: 40})
 	flushCmd(form, cmd)
 
 	for i := 0; i < 30 && !strings.Contains(form.View(), "Review configuration"); i++ {
@@ -134,7 +134,7 @@ func TestSetupReviewFollowsEdits(t *testing.T) {
 	// note markup characters must show literally.
 	ans.cpu = "8"
 	ans.extraHosts = "*.corp.example, my_host.example"
-	_, cmd = form.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	_, cmd = form.Update(tea.WindowSizeMsg{Width: 200, Height: 40})
 	flushCmd(form, cmd)
 	assertContains(t, form.View(), "8 CPUs")
 	assertContains(t, form.View(), "dev-deps + *.corp.example, my_host.example")

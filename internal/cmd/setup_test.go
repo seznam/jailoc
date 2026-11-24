@@ -51,11 +51,11 @@ func writeCustomConfig(t *testing.T) string {
 func driveFormViews(t *testing.T, steps formSteps) string {
 	t.Helper()
 	form := steps.form()
-	form.WithTheme(compactTheme())
+	form.WithTheme(compactTheme()).WithHeight(40)
 	if cmd := form.Init(); cmd != nil {
 		flushCmd(form, cmd)
 	}
-	_, cmd := form.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	_, cmd := form.Update(tea.WindowSizeMsg{Width: 200, Height: 40})
 	flushCmd(form, cmd)
 
 	var views strings.Builder
