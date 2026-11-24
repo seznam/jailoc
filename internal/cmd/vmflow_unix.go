@@ -1112,8 +1112,16 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 		out = append(out, "network.ipv6")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
-	if cmp.Or(running.Agent, agent.Default) != ws.Agent.Name {
+	agentChanged := cmp.Or(running.Agent, agent.Default) != ws.Agent.Name
+	if agentChanged {
 		out = append(out, "agent")
+	}
+	var runningTmpfs []string
+	if running.Guest != nil {
+		runningTmpfs = running.Guest.Tmpfs
+	}
+	if !agentChanged && !slices.Equal(runningTmpfs, ws.Agent.TmpfsDirs) {
+		out = append(out, "tmpfs mounts")
 	}
 	if !guestCompatible(running) {
 		out = append(out, "the upgraded jailoc guest")

@@ -282,6 +282,20 @@ func TestStatusRestartChanges(t *testing.T) {
 	if got := statusRestartChanges(ws, matching); !slices.Equal(got, []string{"network.ipv6", "the upgraded jailoc guest"}) {
 		t.Errorf("guest with another protocol: got %v", got)
 	}
+	omo, ok := agent.Lookup("omo")
+	if !ok {
+		t.Fatal("omo harness not found")
+	}
+	omoWS := &workspace.Resolved{Name: "omo", Agent: omo, CPU: 2, Memory: "4g"}
+	oldOmoSpec := vm.Spec{Agent: "omo", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol, Guest: &guest.Config{}}
+	if got := statusRestartChanges(omoWS, oldOmoSpec); !slices.Equal(got, []string{"tmpfs mounts"}) {
+		t.Errorf("omo spec without tmpfs: got %v, want [tmpfs mounts]", got)
+	}
+	newOmoSpec := oldOmoSpec
+	newOmoSpec.Guest = &guest.Config{Tmpfs: []string{"/home/agent/.omo/agent/rpc"}}
+	if got := statusRestartChanges(omoWS, newOmoSpec); len(got) != 0 {
+		t.Errorf("omo spec with matching tmpfs: got %v, want no changes", got)
+	}
 }
 
 func TestConfigLabel(t *testing.T) {
