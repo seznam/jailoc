@@ -650,7 +650,9 @@ func TestTmpTTLSweepAndDiscard(t *testing.T) {
 	settings := func(ttl string) string {
 		return fmt.Sprintf("tmp_storage = \"disk\"\ntmp_size = \"2g\"\ntmp_ttl = %q", ttl)
 	}
-	ctx := startTmpWorkspace(t, tmpWorkspace{Settings: settings("1s")}, 10*time.Minute)
+	// Boot with TTL disabled so the 5-second sweeps cannot race fixture setup;
+	// enable the 1s TTL via reload once every fixture and holder is in place.
+	ctx := startTmpWorkspace(t, tmpWorkspace{Settings: settings("0")}, 10*time.Minute)
 
 	// A big file written and deleted before the sweep: its blocks stay
 	// allocated on the host until the guest discards them.
@@ -718,6 +720,11 @@ rm -f ~/holder-ready
 setsid -f python3 ~/ttl-holder.py </dev/null >~/holder.log 2>&1
 for i in $(seq 1 100); do test -e ~/holder-ready && break; sleep 0.1; done
 test -e ~/holder-ready || { cat ~/holder.log; exit 1; }`)
+
+	writeTmpConfig(t, tmpWorkspace{Settings: settings("1s")})
+	if out := jailoc(ctx, t, "", "reload", workspaceName); strings.Contains(out, "jailoc restart") {
+		t.Fatalf("reload asks for a restart:\n%s", out)
+	}
 
 	t.Logf("waiting up to %s for the TTL sweep", tmpSweepWait)
 	sweepDeadline := time.Now().Add(tmpSweepWait)
