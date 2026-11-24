@@ -980,8 +980,7 @@ When `true`, jailoc adds read-only snapshots of the selected agent's host config
 | Agent | Host paths |
 |-------|------------|
 | `opencode`, `opencode2` | `~/.config/opencode`, without `node_modules` and `service.json` |
-| `opencode1` | `~/.config/opencode`, without `node_modules` and `service.json`;
-`~/.omo/omo.jsonc`, `~/.omo/omo.json` |
+| `opencode1` | `~/.config/opencode`, without `node_modules` and `service.json`; `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
 | `claude` | `~/.claude/CLAUDE.md`, `~/.claude/RTK.md`, `~/.claude/settings.json`, `~/.claude/agents`, `~/.claude/commands`, `~/.claude/hooks`, `~/.claude/skills`, `~/.claude/output-styles` |
 | `copilot` | `~/.copilot/copilot-instructions.md`, `~/.copilot/agents`, `~/.copilot/hooks`, `~/.copilot/skills`, `~/.copilot/mcp-config.json` |
 | `agy` | `~/.gemini/GEMINI.md` |
