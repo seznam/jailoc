@@ -3,6 +3,7 @@ package vm
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -223,5 +225,66 @@ func TestSendConsoleSecretsWithoutSocket(t *testing.T) {
 	t.Parallel()
 	if err := SendConsoleSecrets(context.Background(), t.TempDir(), []string{"delivered-secret-value"}); err != nil {
 		t.Fatalf("SendConsoleSecrets() without socket = %v, want nil", err)
+	}
+}
+
+type failingWriter struct{ writes int }
+
+func (w *failingWriter) Write([]byte) (int, error) {
+	w.writes++
+	return 0, errors.New("no space left on device")
+}
+
+func TestDrainConsoleKeepsReadingAfterWriteFailure(t *testing.T) {
+	t.Parallel()
+	src := strings.NewReader("first\nsecond\nthird\n")
+	dst := &failingWriter{}
+	drainConsole(dst, iotest.OneByteReader(src))
+	if src.Len() != 0 {
+		t.Errorf("drainConsole left %d bytes unread", src.Len())
+	}
+	if dst.writes != 1 {
+		t.Errorf("drainConsole wrote %d times after the sink failed, want 1", dst.writes)
+	}
+}
+
+type fakeProcess struct {
+	stopErr error
+	alive   bool
+}
+
+func (p fakeProcess) Stop(context.Context) error { return p.stopErr }
+func (p fakeProcess) IsAlive() bool              { return p.alive }
+func (p fakeProcess) PID() int                   { return 1 }
+
+func TestConsoleProcessHandleStopDoesNotHang(t *testing.T) {
+	t.Parallel()
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	tests := []struct {
+		name    string
+		proc    fakeProcess
+		wantErr bool
+	}{
+		{name: "failed stop with live runner", proc: fakeProcess{stopErr: errors.New("timed out"), alive: true}, wantErr: true},
+		{name: "drain bounded by context", proc: fakeProcess{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := consoleProcessHandle{ProcessHandle: tt.proc, wait: func() { <-block }}
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			returned := make(chan error, 1)
+			go func() { returned <- h.Stop(ctx) }()
+			select {
+			case err := <-returned:
+				if (err != nil) != tt.wantErr {
+					t.Fatalf("Stop() = %v, wantErr %v", err, tt.wantErr)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Stop() hung waiting for the console pipe")
+			}
+		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -292,10 +293,11 @@ func startConsolePipe(consoleLog string, redactor *consoleRedactor) (pipePath st
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		buf := make([]byte, 32<<10)
-		_, _ = io.CopyBuffer(cw, rf, buf)
+		drainConsole(cw, rf)
 		_ = rf.Close()
-		_ = cw.Close()
+		if err := cw.Close(); err != nil {
+			slog.Warn("vm console log write failed", "path", consoleLog, "error", err)
+		}
 		_ = os.Remove(pipePath)
 	}()
 
@@ -307,6 +309,25 @@ func startConsolePipe(consoleLog string, redactor *consoleRedactor) (pipePath st
 		})
 	}
 	return pipePath, wait, nil
+}
+
+// drainConsole copies src to dst until src ends. Once dst fails, for example
+// on a full host disk, it reports the error and keeps reading src without
+// writing, so the runner's console writes do not fail with EPIPE.
+func drainConsole(dst io.Writer, src io.Reader) {
+	buf := make([]byte, 32<<10)
+	var sinkErr error
+	for {
+		n, err := src.Read(buf)
+		if n > 0 && sinkErr == nil {
+			if _, sinkErr = dst.Write(buf[:n]); sinkErr != nil {
+				slog.Warn("vm console log write failed, discarding further console output", "error", sinkErr)
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // consoleSocket returns the Unix socket path where the supervisor accepts
@@ -412,10 +433,22 @@ type consoleProcessHandle struct {
 	wait func()
 }
 
+// Stop stops the runner and waits, at most until ctx ends, for its console
+// output to reach console.log. A runner that is still alive after a failed
+// Stop keeps the pipe open, so Stop then returns without waiting.
 func (p consoleProcessHandle) Stop(ctx context.Context) error {
 	err := p.ProcessHandle.Stop(ctx)
-	if p.wait != nil {
+	if p.wait == nil || err != nil && p.IsAlive() {
+		return err
+	}
+	drained := make(chan struct{})
+	go func() {
 		p.wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-ctx.Done():
 	}
 	return err
 }
