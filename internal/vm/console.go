@@ -360,7 +360,9 @@ func SendConsoleSecrets(ctx context.Context, stateDir string, values []string) e
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", sock)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+		// Only a missing socket means a supervisor without console redaction;
+		// a socket nobody listens on means the redactor is unavailable.
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("connect to console redactor: %w", err)
@@ -425,12 +427,30 @@ func startConsoleSecretServer(stateDir string, redactor *consoleRedactor) (func(
 	}, nil
 }
 
+// consoleDrainWait bounds how long IsAlive waits for the console output of a
+// runner that has exited to reach console.log.
+const consoleDrainWait = 5 * time.Second
+
 // consoleProcessHandle wraps a runner.ProcessHandle and waits for the
-// console pipe reader goroutine to finish draining into console.log when Stop
-// completes.
+// console pipe reader goroutine to finish draining into console.log once the
+// runner has exited, whether it was stopped or exited on its own.
 type consoleProcessHandle struct {
 	runner.ProcessHandle
 	wait func()
+}
+
+// IsAlive reports whether the runner is still running. Once it has exited,
+// IsAlive first lets its last console output (such as a crash diagnostic)
+// reach console.log, so a supervisor that returns when the VM exits does not
+// lose it.
+func (p consoleProcessHandle) IsAlive() bool {
+	if p.ProcessHandle.IsAlive() {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), consoleDrainWait)
+	defer cancel()
+	p.drain(ctx)
+	return false
 }
 
 // Stop stops the runner and waits, at most until ctx ends, for its console
@@ -438,8 +458,18 @@ type consoleProcessHandle struct {
 // Stop keeps the pipe open, so Stop then returns without waiting.
 func (p consoleProcessHandle) Stop(ctx context.Context) error {
 	err := p.ProcessHandle.Stop(ctx)
-	if p.wait == nil || err != nil && p.IsAlive() {
+	if err != nil && p.ProcessHandle.IsAlive() {
 		return err
+	}
+	p.drain(ctx)
+	return err
+}
+
+// drain closes jailoc's end of the console pipe and waits, at most until ctx
+// ends, for the reader to write what the exited runner left in it.
+func (p consoleProcessHandle) drain(ctx context.Context) {
+	if p.wait == nil {
+		return
 	}
 	drained := make(chan struct{})
 	go func() {
@@ -450,5 +480,4 @@ func (p consoleProcessHandle) Stop(ctx context.Context) error {
 	case <-drained:
 	case <-ctx.Done():
 	}
-	return err
 }

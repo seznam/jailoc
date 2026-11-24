@@ -288,3 +288,41 @@ func TestConsoleProcessHandleStopDoesNotHang(t *testing.T) {
 		})
 	}
 }
+
+func TestSendConsoleSecretsFailsWithoutListener(t *testing.T) {
+	t.Parallel()
+	stateDir, err := os.MkdirTemp("/tmp", "jlc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+	ln, err := net.Listen("unix", consoleSocket(stateDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Leave the socket file behind, as a supervisor that died would.
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := SendConsoleSecrets(context.Background(), stateDir, []string{"delivered-secret-value"}); err == nil {
+		t.Fatal("SendConsoleSecrets() with a socket nobody listens on = nil, want error")
+	}
+}
+
+func TestConsoleProcessHandleIsAliveDrainsExitedRunner(t *testing.T) {
+	t.Parallel()
+	drained := false
+	h := consoleProcessHandle{ProcessHandle: fakeProcess{}, wait: func() { drained = true }}
+	if h.IsAlive() {
+		t.Fatal("IsAlive() = true for an exited runner")
+	}
+	if !drained {
+		t.Error("IsAlive() returned before draining the console of the exited runner")
+	}
+
+	live := consoleProcessHandle{ProcessHandle: fakeProcess{alive: true}, wait: func() { t.Error("drained the console of a live runner") }}
+	if !live.IsAlive() {
+		t.Error("IsAlive() = false for a live runner")
+	}
+}
