@@ -3,12 +3,10 @@
 package cmd
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -18,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/charmbracelet/huh"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -56,10 +55,10 @@ to add internal_zones to [defaults.network]; enter only zones you control.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		interactive := term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: uintptr→int is safe for file descriptors
-		if !interactive && !migrateYes {
+		if !interactive && !migrateYes && !isAccessibleEnv() {
 			return errors.New("migrate asks questions; run it in a terminal or pass --yes to accept the defaults")
 		}
-		p := &prompter{in: bufio.NewReader(os.Stdin), out: os.Stdout, yes: migrateYes}
+		p := newMigratePrompter(migrateYes)
 		return runMigrate(cmd.Context(), config.ConfigPath(), p)
 	},
 }
@@ -70,58 +69,99 @@ func init() {
 	rootCmd.AddCommand(migrateCmd)
 }
 
-// prompter asks multiple-choice and yes/no questions; with yes set it
-// answers every question with its default.
-type prompter struct {
-	in  *bufio.Reader
-	out io.Writer
-	yes bool
+// migratePrompter drives migration forms and confirms, plus optional DNS
+// resolver overrides for legacy alias checks.
+type migratePrompter struct {
+	*promptIO
 	// resolver looks up legacy allowed_hosts names; nil uses hostResolver.
 	resolver legacyResolver
 }
 
-// choose returns the index of the chosen option. Options are matched by
-// their full name or first letter; an empty answer picks def.
-func (p *prompter) choose(question string, options []string, def int) (int, error) {
-	labels := make([]string, len(options))
-	for i, o := range options {
-		labels[i] = o
-		if i == def {
-			labels[i] = strings.ToUpper(o[:1]) + o[1:]
-		}
-	}
-	prompt := fmt.Sprintf("%s [%s] ", question, strings.Join(labels, "/"))
-	for {
-		_, _ = fmt.Fprint(p.out, prompt)
-		if p.yes {
-			_, _ = fmt.Fprintln(p.out, options[def])
-			return def, nil
-		}
-		line, err := p.in.ReadString('\n')
-		answer := strings.ToLower(strings.TrimSpace(line))
-		if answer == "" && err != nil {
-			return 0, fmt.Errorf("read answer: %w", err)
-		}
-		if answer == "" {
-			return def, nil
-		}
-		for i, o := range options {
-			if answer == o || answer == o[:1] {
-				return i, nil
-			}
-		}
-		_, _ = fmt.Fprintf(p.out, "  answer one of: %s\n", strings.Join(options, ", "))
+func newMigratePrompter(yes bool) *migratePrompter {
+	return &migratePrompter{
+		promptIO: newStdinPromptIO(yes),
 	}
 }
 
-func (p *prompter) confirm(question string, def bool) (bool, error) {
-	options := []string{"yes", "no"}
-	d := 1
-	if def {
-		d = 0
+// migrationAnswers holds the user's choices for planning a migration.
+type migrationAnswers struct {
+	// isV1Docker answers whether an unset-backend config with only deprecated
+	// network settings is a jailoc v1 Docker configuration.
+	isV1Docker bool
+	// removeIncompatible maps scope label ("[defaults]", "[workspaces.x]") to
+	// whether incompatible v1 settings should be removed.
+	removeIncompatible map[string]bool
+	// mountChoices maps scope label to the per-mount action ("mount",
+	// "snapshot", "drop") for mounts with a host source.
+	mountChoices map[string][]string
+	// blockedZonesTarget is "workspaces" or "defaults" when both default
+	// dns_blocked_zones and workspace overrides exist.
+	blockedZonesTarget string
+	// providers lists the selected model providers for multi-provider agents;
+	// nil or all providers selects every provider.
+	providers []string
+	// internalZones is the comma- or space-separated internal_zones input.
+	internalZones string
+}
+
+func defaultMigrationAnswers(cfg *config.Config, stat func(string) (fs.FileInfo, error)) (migrationAnswers, error) {
+	ans := migrationAnswers{
+		isV1Docker:         false,
+		removeIncompatible: map[string]bool{},
+		mountChoices:       map[string][]string{},
+		blockedZonesTarget: "workspaces",
 	}
-	i, err := p.choose(question, options, d)
-	return i == 0, err
+	if len(defaultsIncompatibilities(cfg)) > 0 {
+		ans.removeIncompatible["[defaults]"] = true
+	}
+	defaultChoices, err := defaultMountChoices("[defaults]", cfg.Defaults.Mounts, stat)
+	if err != nil {
+		return migrationAnswers{}, err
+	}
+	if len(defaultChoices) > 0 {
+		ans.mountChoices["[defaults]"] = defaultChoices
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Workspaces)) {
+		ws := cfg.Workspaces[name]
+		label := fmt.Sprintf("[workspaces.%s]", name)
+		if len(workspaceIncompatibilities(&ws)) > 0 {
+			ans.removeIncompatible[label] = true
+		}
+		choices, err := defaultMountChoices(label, ws.Mounts, stat)
+		if err != nil {
+			return migrationAnswers{}, err
+		}
+		if len(choices) > 0 {
+			ans.mountChoices[label] = choices
+		}
+	}
+	if h, ok := needsAgentEndpointsPrompt(cfg); ok {
+		ans.providers = h.ProviderNames()
+	}
+	return ans, nil
+}
+
+func defaultMountChoices(label string, mounts []string, stat func(string) (fs.FileInfo, error)) ([]string, error) {
+	var choices []string
+	for _, spec := range mounts {
+		mt, err := config.ParseMount(spec)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", label, err)
+		}
+		if mt.Host == "" {
+			continue
+		}
+		host, err := config.ExpandPath(mt.Host)
+		if err != nil {
+			return nil, fmt.Errorf("%s: expand %q: %w", label, mt.Host, err)
+		}
+		if info, err := stat(host); err == nil && !info.IsDir() {
+			choices = append(choices, "snapshot")
+		} else {
+			choices = append(choices, "mount")
+		}
+	}
+	return choices, nil
 }
 
 // migration is the outcome of planning: the rewritten configuration and the
@@ -161,18 +201,222 @@ func workspaceIncompatibilities(ws *config.Workspace) []incompatibility {
 	return out
 }
 
-// planMigration rewrites cfg in place for the VM backend, asking how to
-// carry over mounts and whether to remove incompatible settings.
-func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileInfo, error)) (*migration, error) {
-	m := &migration{cfg: cfg}
-	names := make([]string, 0, len(cfg.Workspaces))
-	for name := range cfg.Workspaces {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	docker, err := usesDocker(cfg, names, p)
+// planMigration asks any needed migration questions via p and applies the
+// resulting migrationAnswers to cfg in place.
+func planMigration(ctx context.Context, cfg *config.Config, p *migratePrompter, stat func(string) (fs.FileInfo, error)) (*migration, error) {
+	ans, err := defaultMigrationAnswers(cfg, stat)
 	if err != nil {
 		return nil, err
+	}
+	if p == nil || !p.yes {
+		if err := p.runForm(ctx, buildMigrationForm(cfg, &ans, stat)); err != nil {
+			return nil, err
+		}
+	}
+	return applyMigrationAnswers(cfg, ans, stat)
+}
+
+// buildMigrationForm builds the dynamic form steps for migration questions, or
+// returns nil when no interactive questions are needed.
+func buildMigrationForm(cfg *config.Config, ans *migrationAnswers, stat func(string) (fs.FileInfo, error)) formSteps {
+	names := slices.Sorted(maps.Keys(cfg.Workspaces))
+	var groups formSteps
+
+	askV1 := needsV1DockerQuestion(cfg, names)
+	if askV1 {
+		groups = append(groups, formStep{fields: []huh.Field{
+			huh.NewConfirm().
+				Title("The configuration names no backend. Is it a jailoc v1 (Docker) configuration whose workspaces should move to the VM backend?").
+				Value(&ans.isV1Docker),
+		}})
+	}
+
+	isDockerActive := func() bool {
+		if !askV1 {
+			return true
+		}
+		return ans.isV1Docker
+	}
+	isDockerWorkspace := func(name string) bool {
+		if !isDockerActive() {
+			return false
+		}
+		return cmp.Or(cfg.Workspaces[name].Backend, cfg.Defaults.Backend) != config.BackendVM
+	}
+	hasAnyDockerWorkspace := func() bool {
+		for _, name := range names {
+			if isDockerWorkspace(name) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if items := defaultsIncompatibilities(cfg); len(items) > 0 {
+		groups = append(groups, incompatibilityGroup("[defaults]", items, ans))
+	}
+	if g, ok := mountGroup("[defaults]", cfg.Defaults.Mounts, stat, ans, func() bool { return !hasAnyDockerWorkspace() }); ok {
+		groups = append(groups, g)
+	}
+
+	for _, name := range names {
+		wsName := name
+		ws := cfg.Workspaces[wsName]
+		label := fmt.Sprintf("[workspaces.%s]", wsName)
+		hideWs := func() bool { return !isDockerWorkspace(wsName) }
+		if items := workspaceIncompatibilities(&ws); len(items) > 0 {
+			g := incompatibilityGroup(label, items, ans)
+			g.hidden = hideWs
+			groups = append(groups, g)
+		}
+		if g, ok := mountGroup(label, ws.Mounts, stat, ans, hideWs); ok {
+			groups = append(groups, g)
+		}
+	}
+
+	defaultZones, defaultZonesSrc := effectiveBlockedZones(cfg.Defaults.Network, cfg.Defaults.LegacyDNSBlockedZones, "[defaults]")
+	var overridingWorkspaces []string
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		if ws.Network.Get().DNSBlockedZones != nil || ws.LegacyDNSBlockedZones != nil {
+			overridingWorkspaces = append(overridingWorkspaces, name)
+		}
+	}
+	if len(overridingWorkspaces) > 0 && len(blockedZonesToDeny(defaultZones)) > 0 {
+		desc := fmt.Sprintf("%s has dns_blocked_zones, and workspace(s) %s override dns_blocked_zones.",
+			defaultZonesSrc, strings.Join(overridingWorkspaces, ", "))
+		groups = append(groups, formStep{fields: []huh.Field{
+			huh.NewSelect[string]().
+				Title("Where should default dns_blocked_zones move?").
+				Description(desc).
+				Options(
+					huh.NewOption("workspaces (move only into inheriting workspaces; preserves overrides)", "workspaces"),
+					huh.NewOption("defaults (keep in [[defaults.network.rules]] for all workspaces)", "defaults"),
+				).
+				Value(&ans.blockedZonesTarget),
+		}})
+	}
+
+	if h, ok := needsAgentEndpointsPrompt(cfg); ok {
+		groups = append(groups, formStep{fields: []huh.Field{
+			providerMultiSelect("OpenCode and OmO model providers (agent_endpoints)", h, &ans.providers),
+		}})
+	}
+
+	if needsInternalZonesAfterNetworkMove(cfg) {
+		desc := strings.Join([]string{
+			"Allow rules name hosts, but no internal_zones are set.",
+			"internal_zones lists DNS zones you control and trust; only add zones you control.",
+			"Names in a zone and its subdomains may resolve to private addresses; outside the zones, private DNS answers are filtered to prevent DNS rebinding.",
+			"A zone alone grants no access — a matching allow rule is still needed.",
+			"The zones are written to [defaults.network] internal_zones and apply to every workspace.",
+		}, "\n")
+		groups = append(groups, formStep{fields: []huh.Field{
+			huh.NewInput().
+				Title("Internal zones (comma or space separated, empty to skip)").
+				Description(desc).
+				Placeholder("corp.example, lab.example").
+				Validate(validateInternalZonesInput).
+				Value(&ans.internalZones),
+		}})
+	}
+
+	return groups
+}
+
+func incompatibilityGroup(label string, items []incompatibility, ans *migrationAnswers) formStep {
+	lines := make([]string, len(items))
+	for i, it := range items {
+		lines[i] = fmt.Sprintf("%s: %s", it.setting, it.reason)
+	}
+	desc := fmt.Sprintf("%s has settings the VM backend does not support:\n  %s", label, strings.Join(lines, "\n  "))
+	val := true
+	if cur, ok := ans.removeIncompatible[label]; ok {
+		val = cur
+	}
+	ans.removeIncompatible[label] = val
+	return formStep{fields: []huh.Field{
+		huh.NewConfirm().
+			Title(fmt.Sprintf("Remove incompatible settings in %s?", label)).
+			Description(desc).
+			Accessor(&mapBoolAccessor{m: ans.removeIncompatible, k: label}),
+	}}
+}
+
+func mountGroup(label string, mounts []string, stat func(string) (fs.FileInfo, error), ans *migrationAnswers, hideFunc func() bool) (formStep, bool) {
+	var fields []huh.Field
+	// The accessible runner only offers a default for pointer-backed selects,
+	// so bind each select to its element of the per-scope choices slice.
+	choices := ans.mountChoices[label]
+	choiceIdx := 0
+	for _, spec := range mounts {
+		mt, err := config.ParseMount(spec)
+		if err != nil || mt.Host == "" {
+			continue
+		}
+		host, err := config.ExpandPath(mt.Host)
+		if err != nil {
+			continue
+		}
+		isFile := false
+		if info, err := stat(host); err == nil && !info.IsDir() {
+			isFile = true
+		}
+		title := fmt.Sprintf("%s mount %s -> %s (%s)", label, mt.Host, mt.Container, mt.Mode)
+		var desc string
+		var opts []huh.Option[string]
+		if isFile {
+			desc = "This path is a file; the VM shares directories only."
+			opts = []huh.Option[string]{
+				huh.NewOption("snapshot (read-only copy taken at every VM start)", "snapshot"),
+				huh.NewOption("drop (remove the mount)", "drop"),
+			}
+		} else {
+			snapDesc := "snapshot (read-only copy taken at every VM start)"
+			if mt.Mode == "rw" {
+				snapDesc = "snapshot (read-only copy taken at every VM start; workspace writes no longer reach the host)"
+			}
+			opts = []huh.Option[string]{
+				huh.NewOption("mount (live, two-way share of the directory)", "mount"),
+				huh.NewOption(snapDesc, "snapshot"),
+				huh.NewOption("drop (remove the mount)", "drop"),
+			}
+		}
+		if choiceIdx >= len(choices) {
+			break
+		}
+		sel := huh.NewSelect[string]().
+			Title(title).
+			Options(opts...).
+			Value(&choices[choiceIdx])
+		choiceIdx++
+		if desc != "" {
+			sel.Description(desc)
+		}
+		fields = append(fields, sel)
+	}
+	if len(fields) == 0 {
+		return formStep{}, false
+	}
+	return formStep{fields: fields, hidden: hideFunc}, true
+}
+
+type mapBoolAccessor struct {
+	m map[string]bool
+	k string
+}
+
+func (a *mapBoolAccessor) Get() bool  { return a.m[a.k] }
+func (a *mapBoolAccessor) Set(v bool) { a.m[a.k] = v }
+
+// applyMigrationAnswers rewrites cfg in place from ans, without prompting.
+func applyMigrationAnswers(cfg *config.Config, ans migrationAnswers, stat func(string) (fs.FileInfo, error)) (*migration, error) {
+	m := &migration{cfg: cfg}
+	names := slices.Sorted(maps.Keys(cfg.Workspaces))
+
+	docker := true
+	if needsV1DockerQuestion(cfg, names) {
+		docker = ans.isV1Docker
 	}
 	for _, name := range names {
 		// In jailoc v1 an unset backend meant Docker; only an explicit
@@ -182,23 +426,23 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		}
 	}
 
-	if err := resolveIncompatibilities(p, "[defaults]", defaultsIncompatibilities(cfg), m); err != nil {
+	if err := applyIncompatibilities("[defaults]", defaultsIncompatibilities(cfg), ans.removeIncompatible, m); err != nil {
 		return nil, err
 	}
 	// Default mounts are inherited by workspaces that already use the VM
 	// backend, so they are carried over only when Docker workspaces move.
 	if len(m.workspaces) > 0 {
-		if err := carryMounts(p, "[defaults]", &cfg.Defaults.Mounts, &cfg.Defaults.Snapshots, stat, m); err != nil {
+		if err := applyCarryMounts("[defaults]", &cfg.Defaults.Mounts, &cfg.Defaults.Snapshots, ans.mountChoices["[defaults]"], stat, m); err != nil {
 			return nil, err
 		}
 	}
 	for _, name := range m.workspaces {
 		ws := cfg.Workspaces[name]
 		label := fmt.Sprintf("[workspaces.%s]", name)
-		if err := resolveIncompatibilities(p, label, workspaceIncompatibilities(&ws), m); err != nil {
+		if err := applyIncompatibilities(label, workspaceIncompatibilities(&ws), ans.removeIncompatible, m); err != nil {
 			return nil, err
 		}
-		if err := carryMounts(p, label, &ws.Mounts, &ws.Snapshots, stat, m); err != nil {
+		if err := applyCarryMounts(label, &ws.Mounts, &ws.Snapshots, ans.mountChoices[label], stat, m); err != nil {
 			return nil, err
 		}
 		cfg.Workspaces[name] = ws
@@ -216,14 +460,7 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 	}
 	moveDefaultZonesToWorkspaces := false
 	if len(overridingWorkspaces) > 0 && len(blockedZonesToDeny(defaultZones)) > 0 {
-		_, _ = fmt.Fprintf(p.out, "\n%s has dns_blocked_zones, and workspace(s) %s override dns_blocked_zones.\n", defaultZonesSrc, strings.Join(overridingWorkspaces, ", "))
-		_, _ = fmt.Fprintln(p.out, "  workspaces: move default blocked-zones deny rules only into existing inheriting workspaces (preserves workspace overrides)")
-		_, _ = fmt.Fprintln(p.out, "  defaults: keep blocked-zones deny rule in [[defaults.network.rules]] (applies to all workspaces, including future ones)")
-		i, err := p.choose("Where should default dns_blocked_zones move?", []string{"workspaces", "defaults"}, 0)
-		if err != nil {
-			return nil, err
-		}
-		moveDefaultZonesToWorkspaces = i == 0
+		moveDefaultZonesToWorkspaces = cmp.Or(ans.blockedZonesTarget, "workspaces") == "workspaces"
 	}
 
 	moveNetwork("[defaults]", &d.Network, &d.AllowedHosts, &d.AllowedNetworks, &d.LegacyFilteredDNS, &d.LegacyDNSUpstream, &d.LegacyDNSBlockedZones, !moveDefaultZonesToWorkspaces, nil, m)
@@ -265,22 +502,45 @@ func planMigration(cfg *config.Config, p *prompter, stat func(string) (fs.FileIn
 		}}, d.Network.Rules...)
 		m.changes = append(m.changes, `[[defaults.network.rules]]: add allow = ["*"] (public internet)`)
 	}
-	if err := addAgentEndpoints(cfg, names, p, m); err != nil {
+	if err := applyAgentEndpoints(cfg, names, ans.providers, m); err != nil {
 		return nil, err
 	}
-	if err := askInternalZones(cfg, p, m); err != nil {
+	if err := applyInternalZones(cfg, ans.internalZones, m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-// addAgentEndpoints writes the endpoints of multi-provider agents (OpenCode,
+func needsAgentEndpointsPrompt(cfg *config.Config) (agent.Harness, bool) {
+	if cfg.Defaults.Network.Get().AgentEndpoints != nil {
+		return agent.Harness{}, false
+	}
+	names := slices.Sorted(maps.Keys(cfg.Workspaces))
+	for _, name := range names {
+		if cfg.Workspaces[name].Network.Get().AgentEndpoints != nil {
+			return agent.Harness{}, false
+		}
+	}
+	defaultName := cmp.Or(cfg.Defaults.Agent, agent.Default)
+	if h := builtinHarness(defaultName, cfg.Defaults.Agents[defaultName].From); h.ExplicitEndpoints {
+		return h, true
+	}
+	for _, name := range names {
+		ws := cfg.Workspaces[name]
+		agentName := cmp.Or(ws.Agent, defaultName)
+		if h := builtinHarness(agentName, cmp.Or(ws.Agents[agentName].From, cfg.Defaults.Agents[agentName].From)); h.ExplicitEndpoints {
+			return h, true
+		}
+	}
+	return agent.Harness{}, false
+}
+
+// applyAgentEndpoints writes the endpoints of multi-provider agents (OpenCode,
 // OmO) into agent_endpoints when no scope sets it, so they keep reaching the
 // model and auth endpoints that older jailoc allowed implicitly: the default
 // agent's in [defaults.network], and a workspace's own list when its agent has
-// other endpoints. It asks once which providers to keep. Single-provider
-// agents always reach theirs.
-func addAgentEndpoints(cfg *config.Config, names []string, p *prompter, m *migration) error {
+// other endpoints. Single-provider agents always reach theirs.
+func applyAgentEndpoints(cfg *config.Config, names []string, selectedProviders []string, m *migration) error {
 	if cfg.Defaults.Network.Get().AgentEndpoints != nil {
 		return nil
 	}
@@ -289,18 +549,8 @@ func addAgentEndpoints(cfg *config.Config, names []string, p *prompter, m *migra
 			return nil
 		}
 	}
-	var (
-		providers []string
-		asked     bool
-	)
 	endpoints := func(h agent.Harness) ([]string, error) {
-		if !asked {
-			var err error
-			if providers, err = askMigrateProviders(h, p); err != nil {
-				return nil, err
-			}
-			asked = true
-		}
+		providers := normalizeProviders(h, selectedProviders)
 		list, err := h.ProviderEndpoints(providers)
 		if err != nil {
 			return nil, fmt.Errorf("agent endpoints: %w", err)
@@ -347,31 +597,6 @@ func addAgentEndpoints(cfg *config.Config, names []string, p *prompter, m *migra
 	return nil
 }
 
-// askMigrateProviders asks which model providers multi-provider agents may reach;
-// nil, also for an empty answer, --yes or closed input, selects all of them.
-func askMigrateProviders(h agent.Harness, p *prompter) ([]string, error) {
-	if p.yes {
-		return nil, nil
-	}
-	_, _ = fmt.Fprintln(p.out, "OpenCode and OmO now reach only the model and auth endpoints listed in agent_endpoints.")
-	_, _ = fmt.Fprintf(p.out, "Providers: %s.\n", strings.Join(h.ProviderNames(), ", "))
-	for {
-		_, _ = fmt.Fprint(p.out, "Model providers (comma-separated, empty for all): ")
-		line, err := p.in.ReadString('\n')
-		if strings.TrimSpace(line) == "" && err != nil {
-			return nil, nil
-		}
-		providers, perr := h.ParseProviders(line)
-		if perr == nil {
-			return providers, nil
-		}
-		_, _ = fmt.Fprintf(p.out, "  %v\n", perr)
-		if err != nil {
-			return nil, fmt.Errorf("read model providers: %w", perr)
-		}
-	}
-}
-
 // builtinHarness returns the built-in agent name, or the built-in agent
 // from that a custom agent name is derived from.
 func builtinHarness(name, from string) agent.Harness {
@@ -409,49 +634,68 @@ func needsInternalZones(cfg *config.Config) bool {
 	return hasName
 }
 
-// askInternalZones offers to set [defaults.network] internal_zones when
-// allow rules name hosts but no zone is configured. An empty answer or
-// --yes keeps the configuration as it is.
-func askInternalZones(cfg *config.Config, p *prompter, m *migration) error {
-	if p.yes || !needsInternalZones(cfg) {
+// needsInternalZonesAfterNetworkMove checks whether needsInternalZones will be
+// true after legacy allowed_hosts are converted into rules and internal_zones.
+func needsInternalZonesAfterNetworkMove(cfg *config.Config) bool {
+	if len(cfg.Defaults.Network.Get().InternalZones) > 0 {
+		return false
+	}
+	if zones, _ := config.LegacyHostZones(cfg.Defaults.AllowedHosts); len(zones) > 0 {
+		return false
+	}
+	for _, ws := range cfg.Workspaces {
+		if len(ws.Network.Get().InternalZones) > 0 {
+			return false
+		}
+		if zones, _ := config.LegacyHostZones(ws.AllowedHosts); len(zones) > 0 {
+			return false
+		}
+	}
+	return needsInternalZones(cfg)
+}
+
+func validateInternalZonesInput(line string) error {
+	fields := strings.FieldsFunc(line, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	for _, f := range fields {
+		if err := config.ValidateInternalZone(f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseInternalZonesInput(line string) ([]string, error) {
+	fields := strings.FieldsFunc(line, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	zones := make([]string, len(fields))
+	for i, f := range fields {
+		if err := config.ValidateInternalZone(f); err != nil {
+			return nil, err
+		}
+		zones[i] = config.NormalizeInternalZone(f)
+	}
+	return uniqueStrings(zones), nil
+}
+
+func applyInternalZones(cfg *config.Config, rawZones string, m *migration) error {
+	if !needsInternalZones(cfg) {
 		return nil
 	}
-	_, _ = fmt.Fprintln(p.out, "\nAllow rules name hosts, but no internal_zones are set.")
-	_, _ = fmt.Fprintln(p.out, "  internal_zones lists DNS zones you control and trust; only add zones you control.")
-	_, _ = fmt.Fprintln(p.out, "  Names in a zone and its subdomains may resolve to private addresses.")
-	_, _ = fmt.Fprintln(p.out, "  Outside the zones, private DNS answers are filtered to prevent DNS rebinding.")
-	_, _ = fmt.Fprintln(p.out, "  A zone alone grants no access; a matching allow rule is still needed.")
-	_, _ = fmt.Fprintln(p.out, "  The zones are written to [defaults.network] internal_zones and apply to every workspace.")
-	for {
-		_, _ = fmt.Fprint(p.out, "Internal zones (comma or space separated, empty to skip): ")
-		line, err := p.in.ReadString('\n')
-		if strings.TrimSpace(line) == "" && err != nil {
-			return fmt.Errorf("read internal zones: %w", err)
-		}
-		fields := strings.FieldsFunc(line, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
-		if len(fields) == 0 {
-			return nil
-		}
-		zones := make([]string, len(fields))
-		valid := true
-		for i, f := range fields {
-			if err := config.ValidateInternalZone(f); err != nil {
-				_, _ = fmt.Fprintf(p.out, "  %v\n", err)
-				valid = false
-			}
-			zones[i] = config.NormalizeInternalZone(f)
-		}
-		if !valid {
-			continue
-		}
-		zones = uniqueStrings(zones)
-		if cfg.Defaults.Network == nil {
-			cfg.Defaults.Network = &config.Network{}
-		}
-		cfg.Defaults.Network.InternalZones = zones
-		m.changes = append(m.changes, fmt.Sprintf("[defaults.network]: add internal_zones (%s)", strings.Join(zones, ", ")))
+	zones, err := parseInternalZonesInput(rawZones)
+	if err != nil {
+		return err
+	}
+	if len(zones) == 0 {
 		return nil
 	}
+	if cfg.Defaults.Network == nil {
+		cfg.Defaults.Network = &config.Network{}
+	}
+	cfg.Defaults.Network.InternalZones = zones
+	m.changes = append(m.changes, fmt.Sprintf("[defaults.network]: add internal_zones (%s)", strings.Join(zones, ", ")))
+	return nil
 }
 
 func hasAnyNetworkRules(cfg *config.Config) bool {
@@ -466,26 +710,27 @@ func hasAnyNetworkRules(cfg *config.Config) bool {
 	return false
 }
 
-// usesDocker reports whether workspaces without backend = "vm" are jailoc
-// v1 Docker workspaces. An unset backend is also the VM backend of the
-// current jailoc, so a configuration that only has network settings to move
-// and nothing else of jailoc v1 is a v1 one only when the user says so.
-func usesDocker(cfg *config.Config, names []string, p *prompter) (bool, error) {
+// needsV1DockerQuestion reports whether migrate needs to ask if workspaces
+// without backend = "vm" are jailoc v1 Docker workspaces. An unset backend is
+// also the VM backend of the current jailoc, so a configuration that only has
+// network settings to move and nothing else of jailoc v1 is a v1 one only when
+// the user says so.
+func needsV1DockerQuestion(cfg *config.Config, names []string) bool {
 	if len(defaultsIncompatibilities(cfg)) > 0 || cfg.Defaults.Backend == config.BackendDocker {
-		return true, nil
+		return false
 	}
 	legacy := hasDeprecatedNetwork(&cfg.Defaults)
 	for _, name := range names {
 		ws := cfg.Workspaces[name]
 		if len(workspaceIncompatibilities(&ws)) > 0 || ws.Backend == config.BackendDocker {
-			return true, nil
+			return false
 		}
 		legacy = legacy || hasDeprecatedWorkspaceNetwork(&ws)
 	}
 	if !legacy || cfg.Defaults.Backend == config.BackendVM {
-		return true, nil
+		return false
 	}
-	return p.confirm("The configuration names no backend. Is it a jailoc v1 (Docker) configuration whose workspaces should move to the VM backend?", false)
+	return true
 }
 
 func hasDeprecatedNetwork(d *config.Defaults) bool {
@@ -702,19 +947,15 @@ func blockedZonesToDeny(zones []string) []string {
 	return deny
 }
 
-func resolveIncompatibilities(p *prompter, label string, items []incompatibility, m *migration) error {
+func applyIncompatibilities(label string, items []incompatibility, decisions map[string]bool, m *migration) error {
 	if len(items) == 0 {
 		return nil
 	}
-	_, _ = fmt.Fprintf(p.out, "\n%s has settings the VM backend does not support:\n", label)
-	for _, it := range items {
-		_, _ = fmt.Fprintf(p.out, "  %s: %s\n", it.setting, it.reason)
-	}
-	ok, err := p.confirm("Remove them?", true)
-	if err != nil {
-		return err
-	}
+	remove, ok := decisions[label]
 	if !ok {
+		remove = true
+	}
+	if !remove {
 		return fmt.Errorf("%s: the VM backend needs these settings removed; edit config.toml or answer yes", label)
 	}
 	for _, it := range items {
@@ -724,10 +965,11 @@ func resolveIncompatibilities(p *prompter, label string, items []incompatibility
 	return nil
 }
 
-// carryMounts asks for every mount with a host source whether it stays a
-// live mount (directories only) or becomes a read-only snapshot, or is dropped.
-func carryMounts(p *prompter, label string, mounts, snapshots *[]string, stat func(string) (fs.FileInfo, error), m *migration) error {
+// applyCarryMounts applies the chosen action ("mount", "snapshot", "drop") for
+// every mount with a host source.
+func applyCarryMounts(label string, mounts, snapshots *[]string, choices []string, stat func(string) (fs.FileInfo, error), m *migration) error {
 	var kept []string
+	choiceIdx := 0
 	for _, spec := range *mounts {
 		mt, err := config.ParseMount(spec)
 		if err != nil {
@@ -745,45 +987,34 @@ func carryMounts(p *prompter, label string, mounts, snapshots *[]string, stat fu
 		if info, err := stat(host); err == nil && !info.IsDir() {
 			isFile = true
 		}
-		snapshotSpec := mt.Host + ":" + mt.Container
-		desc := fmt.Sprintf("%s mount %s -> %s (%s)", label, mt.Host, mt.Container, mt.Mode)
-		var options []string
+		action := "mount"
 		if isFile {
-			_, _ = fmt.Fprintf(p.out, "\n%s is a file; the VM shares directories only.\n", desc)
-			_, _ = fmt.Fprintln(p.out, "  snapshot: read-only copy taken at every VM start")
-			_, _ = fmt.Fprintln(p.out, "  drop: remove the mount")
-			options = []string{"snapshot", "drop"}
-		} else {
-			_, _ = fmt.Fprintf(p.out, "\n%s\n", desc)
-			_, _ = fmt.Fprintln(p.out, "  mount: live, two-way share of the directory")
-			if mt.Mode == "rw" {
-				_, _ = fmt.Fprintln(p.out, "  snapshot: read-only copy taken at every VM start; workspace writes no longer reach the host")
-			} else {
-				_, _ = fmt.Fprintln(p.out, "  snapshot: read-only copy taken at every VM start")
-			}
-			_, _ = fmt.Fprintln(p.out, "  drop: remove the mount")
-			options = []string{"mount", "snapshot", "drop"}
+			action = "snapshot"
 		}
-		i, err := p.choose("Keep as", options, 0)
-		if err != nil {
-			return err
+		if choiceIdx < len(choices) && choices[choiceIdx] != "" {
+			action = choices[choiceIdx]
 		}
-		switch options[i] {
+		choiceIdx++
+		snapshotSpec := mt.Host + ":" + mt.Container
+		switch action {
 		case "mount":
+			if isFile {
+				return fmt.Errorf("%s: mount %s is a file; choose snapshot or drop", label, spec)
+			}
 			kept = append(kept, spec)
 		case "snapshot":
 			*snapshots = append(*snapshots, snapshotSpec)
 			m.changes = append(m.changes, fmt.Sprintf("%s: mount %s -> snapshot %s", label, spec, snapshotSpec))
 		case "drop":
 			m.changes = append(m.changes, fmt.Sprintf("%s: drop mount %s", label, spec))
+		default:
+			return fmt.Errorf("%s: unknown mount action %q", label, action)
 		}
 	}
 	*mounts = kept
 	return nil
 }
 
-// volumeTarget is a Docker volume of a workspace and the persistent VM home
-// directory it is copied to.
 // v1OpenCodeData is the guest path of the OpenCode data that jailoc v1 kept in
 // the opencode-data-<workspace> volume.
 const v1OpenCodeData = "/home/agent/.local/share/opencode"
@@ -821,30 +1052,35 @@ func migrationVolumes(cfg *config.Config, names []string) ([]volumeTarget, error
 	return out, nil
 }
 
-func runMigrate(ctx context.Context, path string, p *prompter) error {
+func runMigrate(ctx context.Context, path string, p *migratePrompter) error {
+	if p == nil {
+		p = newMigratePrompter(false)
+	}
+	out := p.writer()
+
 	cfg, err := config.ReadRaw(path)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
 	legacyHosts := legacyHostScopes(cfg)
-	m, err := planMigration(cfg, p, os.Stat)
+	m, err := planMigration(ctx, cfg, p, os.Stat)
 	if err != nil {
 		return err
 	}
 	if len(m.changes) == 0 && len(cfg.UnknownKeys()) == 0 {
-		_, _ = color.New(color.FgGreen).Fprintln(p.out, "The configuration is up to date; nothing to migrate.")
+		_, _ = color.New(color.FgGreen).Fprintln(out, "The configuration is up to date; nothing to migrate.")
 		return nil
 	}
 	if err := config.ValidateCopy(cfg); err != nil {
 		return fmt.Errorf("migrated configuration is invalid: %w", err)
 	}
 
-	_, _ = fmt.Fprintln(p.out, "\nChanges to config.toml:")
+	_, _ = fmt.Fprintln(out, "\nChanges to config.toml:")
 	for _, c := range m.changes {
-		_, _ = fmt.Fprintf(p.out, "  %s\n", c)
+		_, _ = fmt.Fprintf(out, "  %s\n", c)
 	}
 	for _, k := range cfg.UnknownKeys() {
-		_, _ = color.New(color.FgYellow).Fprintf(p.out, "  remove unknown setting %q\n", k)
+		_, _ = color.New(color.FgYellow).Fprintf(out, "  remove unknown setting %q\n", k)
 	}
 	resolver := p.resolver
 	if resolver == nil {
@@ -856,7 +1092,7 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 			zones = slices.Concat(zones, cfg.Workspaces[s.workspace].Network.Get().InternalZones)
 		}
 		for _, w := range legacyAliasWarnings(ctx, resolver, s.hosts, zones) {
-			_, _ = color.New(color.FgYellow).Fprintf(p.out, "  warning: %s: %s\n", s.label, w)
+			_, _ = color.New(color.FgYellow).Fprintf(out, "  warning: %s: %s\n", s.label, w)
 		}
 	}
 	if migrateDryRun {
@@ -864,12 +1100,12 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 		if err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(p.out, "\nMigrated config.toml (dry run, nothing changed):\n\n%s", data)
+		_, _ = fmt.Fprintf(out, "\nMigrated config.toml (dry run, nothing changed):\n\n%s", data)
 		return nil
 	}
-	if ok, err := p.confirm("\nApply the migration?", true); err != nil || !ok {
+	if ok, err := p.confirm(ctx, "Apply the migration?", "", true); err != nil || !ok {
 		if err == nil {
-			_, _ = fmt.Fprintln(p.out, "Nothing changed.")
+			_, _ = fmt.Fprintln(out, "Nothing changed.")
 		}
 		return err
 	}
@@ -894,19 +1130,20 @@ func runMigrate(ctx context.Context, path string, p *prompter) error {
 	if err := config.WriteRaw(path, cfg); err != nil {
 		return err
 	}
-	_, _ = color.New(color.FgGreen).Fprintf(p.out, "\nMigrated config.toml (previous version: %s).\n", backup)
+	_, _ = color.New(color.FgGreen).Fprintf(out, "\nMigrated config.toml (previous version: %s).\n", backup)
 	if len(m.workspaces) > 0 {
-		_, _ = fmt.Fprintln(p.out, "Start a workspace with `jailoc up <workspace>`; the first start builds the image in a VM.")
+		_, _ = fmt.Fprintln(out, "Start a workspace with `jailoc up <workspace>`; the first start builds the image in a VM.")
 	}
 	return nil
 }
 
 // migrateDockerState stops running Docker workspaces and copies their
 // OpenCode volumes into the VM home directories.
-func migrateDockerState(ctx context.Context, cfg *config.Config, names []string, p *prompter) error {
+func migrateDockerState(ctx context.Context, cfg *config.Config, names []string, p *migratePrompter) error {
+	out := p.writer()
 	if err := docker.Ping(ctx); err != nil {
-		_, _ = color.New(color.FgYellow).Fprintf(p.out, "\nDocker is not reachable (%v).\nRunning workspaces cannot be checked and OpenCode data in Docker volumes is not copied.\n", err)
-		ok, err := p.confirm("Continue without Docker?", true)
+		_, _ = color.New(color.FgYellow).Fprintf(out, "\nDocker is not reachable (%v).\nRunning workspaces cannot be checked and OpenCode data in Docker volumes is not copied.\n", err)
+		ok, err := p.confirm(ctx, "Continue without Docker?", "", true)
 		if err != nil {
 			return err
 		}
@@ -927,7 +1164,7 @@ func migrateDockerState(ctx context.Context, cfg *config.Config, names []string,
 		}
 	}
 	if len(running) > 0 {
-		ok, err := p.confirm(fmt.Sprintf("\nStop the running Docker workspaces %s?", strings.Join(running, ", ")), true)
+		ok, err := p.confirm(ctx, fmt.Sprintf("Stop the running Docker workspaces %s?", strings.Join(running, ", ")), "", true)
 		if err != nil {
 			return err
 		}
@@ -935,7 +1172,7 @@ func migrateDockerState(ctx context.Context, cfg *config.Config, names []string,
 			return errors.New("stop the running workspaces first (jailoc down), then run migrate again")
 		}
 		for _, name := range running {
-			_, _ = color.New(color.FgCyan).Fprintf(p.out, "Stopping workspace %s...\n", name)
+			_, _ = color.New(color.FgCyan).Fprintf(out, "Stopping workspace %s...\n", name)
 			if err := docker.StopComposeContainers(ctx, name); err != nil {
 				return fmt.Errorf("stop workspace %q: %w", name, err)
 			}
@@ -957,14 +1194,15 @@ func migrateDockerState(ctx context.Context, cfg *config.Config, names []string,
 // migrateVolume copies the volume of t into the guest data directory of
 // its workspace. The directory is shared with the VM, so every step goes
 // through an os.Root and no link in it leads a write elsewhere.
-func migrateVolume(ctx context.Context, p *prompter, t volumeTarget) error {
+func migrateVolume(ctx context.Context, p *migratePrompter, t volumeTarget) error {
+	out := p.writer()
 	root, err := vm.OpenGuestData(vmStateDir(t.workspace))
 	if err != nil {
 		return fmt.Errorf("workspace %q: %w", t.workspace, err)
 	}
 	defer func() { _ = root.Close() }()
 	if _, err := root.Lstat(t.dst); err == nil {
-		_, _ = fmt.Fprintf(p.out, "%s: %s already has VM data; keeping it\n", t.workspace, t.guestPath)
+		_, _ = fmt.Fprintf(out, "%s: %s already has VM data; keeping it\n", t.workspace, t.guestPath)
 		return nil
 	}
 	tmp := t.dst + ".migrating"
@@ -984,6 +1222,6 @@ func migrateVolume(ctx context.Context, p *prompter, t volumeTarget) error {
 	if err := root.Rename(tmp, t.dst); err != nil {
 		return fmt.Errorf("workspace %q: install %s: %w", t.workspace, t.dst, err)
 	}
-	_, _ = fmt.Fprintf(p.out, "%s: copied Docker volume %s to %s\n", t.workspace, t.volume, t.guestPath)
+	_, _ = fmt.Fprintf(out, "%s: copied Docker volume %s to %s\n", t.workspace, t.volume, t.guestPath)
 	return nil
 }
