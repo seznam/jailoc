@@ -60,16 +60,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  vm-integration:
-    name: VM Integration Test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # libkrun's own integration tests run on ubuntu-26.04 because of KVM
-        # bugs in older runner kernels (libkrun/libkrun#314).
-        os: [ubuntu-26.04]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+  runtime:
+    name: Build VM Runtime
+    # libkrun's own integration tests run on ubuntu-26.04 because of KVM
+    # bugs in older runner kernels (libkrun/libkrun#314).
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,8 +75,83 @@ jobs:
         with:
           go-version: "1.27.x"
 
+      - name: Resolve go-microvm revision
+        id: microvm
+        run: |
+          read -r path version < <(go list -m -f '{{if .Replace}}{{.Replace.Path}} {{.Replace.Version}}{{else}}{{.Path}} {{.Version}}{{end}}' github.com/stacklok/go-microvm)
+          echo "repo=${path}" >> "$GITHUB_OUTPUT"
+          echo "rev=${version##*-}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore VM runtime cache
+        id: runtime-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vm-runtime
+          key: vm-runtime-ubuntu-26.04-${{ steps.microvm.outputs.rev }}-${{ hashFiles('scripts/vm-runtime/**') }}
+
+      - name: Check out go-microvm
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        env:
+          REPO: ${{ steps.microvm.outputs.repo }}
+          REV: ${{ steps.microvm.outputs.rev }}
+        run: |
+          git clone --quiet "https://${REPO}" "$RUNNER_TEMP/go-microvm"
+          git -C "$RUNNER_TEMP/go-microvm" checkout --quiet "$REV"
+
+      - name: Build go-microvm runner, libkrun guest init and libkrun
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/go-microvm
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          task build-runner
+          "$GITHUB_WORKSPACE/scripts/vm-runtime/build-init.sh" "$PWD" "$RUNNER_TEMP/init"
+          "$GITHUB_WORKSPACE/scripts/vm-runtime/build-libkrun-linux.sh" "$PWD" "$RUNNER_TEMP/init/init.krun" bin
+          mkdir -p "$RUNNER_TEMP/vm-runtime"
+          cp -a bin/. "$RUNNER_TEMP/vm-runtime/"
+          ls -l "$RUNNER_TEMP/vm-runtime"
+
+      - name: Upload VM runtime
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vm-runtime
+          path: ${{ runner.temp }}/vm-runtime
+          retention-days: 1
+
+  vm-integration:
+    name: VM Integration Test (${{ matrix.suite }})
+    needs: runtime
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: workspace
+            # Runs TestWorkspaceVM and any future tests outside Builder/Tmp so
+            # new tests are never silently skipped by sharding.
+            flags: -skip '^Test(Builder|ParseDataDisk|Tmp)'
+          - suite: builder
+            flags: -run '^Test(Builder|ParseDataDisk)'
+          - suite: tmp
+            flags: -run '^TestTmp'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+
+      - name: Download VM runtime
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vm-runtime
+          path: ${{ runner.temp }}/vm-runtime
+
       - name: Enable KVM
         run: |
+          chmod +x "$RUNNER_TEMP/vm-runtime/go-microvm-runner"
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -91,34 +162,10 @@ jobs:
           grep -m1 -oE 'vmx|svm' /proc/cpuinfo || true
           test -w /dev/kvm || { echo "/dev/kvm is not available on this runner" >&2; exit 1; }
 
-      - name: Resolve go-microvm revision
-        id: microvm
-        run: |
-          read -r path version < <(go list -m -f '{{if .Replace}}{{.Replace.Path}} {{.Replace.Version}}{{else}}{{.Path}} {{.Version}}{{end}}' github.com/stacklok/go-microvm)
-          echo "repo=${path}" >> "$GITHUB_OUTPUT"
-          echo "rev=${version##*-}" >> "$GITHUB_OUTPUT"
-
-      - name: Check out go-microvm
-        env:
-          REPO: ${{ steps.microvm.outputs.repo }}
-          REV: ${{ steps.microvm.outputs.rev }}
-        run: |
-          git clone --quiet "https://${REPO}" "$RUNNER_TEMP/go-microvm"
-          git -C "$RUNNER_TEMP/go-microvm" checkout --quiet "$REV"
-
-      - name: Build go-microvm runner, libkrun guest init and libkrun
-        working-directory: ${{ runner.temp }}/go-microvm
-        run: |
-          go install github.com/go-task/task/v3/cmd/task@v3.54.0
-          task build-runner
-          "$GITHUB_WORKSPACE/scripts/vm-runtime/build-init.sh" "$PWD" "$RUNNER_TEMP/init"
-          "$GITHUB_WORKSPACE/scripts/vm-runtime/build-libkrun-linux.sh" "$PWD" "$RUNNER_TEMP/init/init.krun" bin
-          ls -l bin
-
       - name: Run VM integration tests
         env:
-          JAILOC_VM_RUNNER: ${{ runner.temp }}/go-microvm/bin/go-microvm-runner
-          JAILOC_VM_LIBDIR: ${{ runner.temp }}/go-microvm/bin
+          JAILOC_VM_RUNNER: ${{ runner.temp }}/vm-runtime/go-microvm-runner
+          JAILOC_VM_LIBDIR: ${{ runner.temp }}/vm-runtime
           # libkrun logs to microvm/vm.log, printed when the test fails.
           JAILOC_VM_LOG_LEVEL: "3"
-        run: go test -tags vmintegration -v -count=1 -timeout 50m ./internal/vmintegration/
+        run: go test -tags vmintegration -v -count=1 -timeout 25m ${{ matrix.flags }} ./internal/vmintegration/
