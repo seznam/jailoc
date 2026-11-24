@@ -123,14 +123,33 @@ func fakeGuestMTU(t *testing.T, ctx context.Context, sock string, mtu uint32) *s
 	return s
 }
 
+var (
+	usedPortsMu sync.Mutex
+	usedPorts   = map[uint16]bool{}
+)
+
 func freePort(t *testing.T) uint16 {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
+	usedPortsMu.Lock()
+	defer usedPortsMu.Unlock()
+	var held []net.Listener
+	defer func() {
+		for _, l := range held {
+			_ = l.Close()
+		}
+	}()
+	for {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		held = append(held, l)
+		p := uint16(l.Addr().(*net.TCPAddr).Port) //nolint:gosec // test port
+		if !usedPorts[p] {
+			usedPorts[p] = true
+			return p
+		}
 	}
-	defer func() { _ = l.Close() }()
-	return uint16(l.Addr().(*net.TCPAddr).Port) //nolint:gosec // test port
 }
 
 func TestBrokerEndToEnd(t *testing.T) {
