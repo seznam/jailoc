@@ -979,8 +979,8 @@ When `true`, jailoc adds read-only snapshots of the selected agent's host config
 
 | Agent | Host paths |
 |-------|------------|
-| `opencode`, `opencode2` | `~/.config/opencode`, without `node_modules` |
-| `opencode1` | `~/.config/opencode`, without `node_modules`; `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
+| `opencode`, `opencode2` | `~/.config/opencode`, without `node_modules` and `service.json` |
+| `opencode1` | `~/.config/opencode`, without `node_modules` and `service.json`; `~/.omo/omo.jsonc`, `~/.omo/omo.json` |
 | `claude` | `~/.claude/CLAUDE.md`, `~/.claude/RTK.md`, `~/.claude/settings.json`, `~/.claude/agents`, `~/.claude/commands`, `~/.claude/hooks`, `~/.claude/skills`, `~/.claude/output-styles` |
 | `copilot` | `~/.copilot/copilot-instructions.md`, `~/.copilot/agents`, `~/.copilot/hooks`, `~/.copilot/skills`, `~/.copilot/mcp-config.json` |
 | `agy` | `~/.gemini/GEMINI.md` |
@@ -989,6 +989,7 @@ When `true`, jailoc adds read-only snapshots of the selected agent's host config
 - Missing sources are skipped.
 - Logins, sessions and the agents' own `config.json` and `settings.json` of `copilot` stay in the persistent state directory.
 - The OpenCode copy gets the `.gitignore` OpenCode would write (unless the host directory has one).
+- The OpenCode 2 copy includes `service.json` with `{"disabled":true}` so CLI commands run without `--standalone` (such as `opencode debug config`) use a private server instead of failing on the read-only directory.
 - OpenCode doesn't install the dependencies of local plugins in the read-only directory: plugins listed in `plugin` still install into `~/.cache`, but a local plugin that imports a package needs it installed in the image.
 - The copies inside a persistent state directory (`~/.claude`, `~/.copilot`, `~/.omo`, `~/.gemini`) hide what is there in the VM: a skill the agent installs into `~/.claude/skills` is not visible while that directory is copied. When the snapshot is dropped, the empty mount points it left in the state directory are removed at the next start.
 

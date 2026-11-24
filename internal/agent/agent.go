@@ -131,6 +131,9 @@ type ConfigFile struct {
 	// Exclude are entries of the directory, relative to it, left out of
 	// the copy.
 	Exclude []string
+	// Extra are files added to a directory copy, by relative path, when
+	// the source does not have them or they are excluded.
+	Extra map[string]string
 }
 
 // StateDefault is a top-level value of a JSON file in a state directory that
@@ -220,10 +223,23 @@ var omoConfig = []ConfigFile{
 }
 
 // openCodeConfig is the configuration OpenCode 1 and 2 share. node_modules
-// holds packages OpenCode installed for the host's platform.
-var openCodeConfig = []ConfigFile{{Path: ".config/opencode", Exclude: []string{"node_modules"}}}
+// holds packages OpenCode installed for the host's platform; service.json
+// holds the host background service's password and environment.
+var openCodeConfig = []ConfigFile{{
+	Path:    ".config/opencode",
+	Exclude: []string{"node_modules", "service.json"},
+}}
 
 var openCode1Config = append(slices.Clone(openCodeConfig), omoConfig...)
+
+// openCode2Config disables the OpenCode 2 background service in the read-only
+// copy so CLI commands run without --standalone (such as opencode debug config)
+// use a private server instead of failing with EROFS while writing service.json.
+var openCode2Config = []ConfigFile{{
+	Path:    ".config/opencode",
+	Exclude: []string{"node_modules", "service.json"},
+	Extra:   map[string]string{"service.json": openCode2ServiceConfig},
+}}
 
 const (
 	openCodeConfigDir = "/home/agent/.config/opencode"
@@ -231,7 +247,12 @@ const (
 	// EROFS on a read-only config directory without it.
 	// See: https://github.com/anomalyco/opencode/issues/23040
 	openCodeConfigGitignore = "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore\n"
-	openCodePrintLogsFlag   = "--print-logs"
+	// OpenCode 2's background service writes a generated password to
+	// service.json in the config directory and crashes with EROFS when it is
+	// read-only. Disabling the service makes every CLI command run standalone.
+	// See: https://github.com/anomalyco/opencode/issues/56359
+	openCode2ServiceConfig = "{\"disabled\":true}\n"
+	openCodePrintLogsFlag  = "--print-logs"
 )
 
 // Provider is a model provider and the endpoints the agent reaches it at.
@@ -369,14 +390,14 @@ var harnesses = []Harness{
 			{Name: "opencode2-data", Path: "/home/agent/.local/share/opencode"},
 			{Name: "opencode2-state", Path: "/home/agent/.local/state/opencode"},
 		},
-		ConfigFiles:       openCodeConfig,
+		ConfigFiles:       openCode2Config,
 		TUIPlugin:         OpenCode2TUI,
 		ConfigDir:         openCodeConfigDir,
 		ConfigGitignore:   openCodeConfigGitignore,
 		Endpoints:         llmEndpoints,
 		ExplicitEndpoints: true,
 		Providers:         llmProviders,
-		Diagnose:          []string{openCodePrintLogsFlag},
+		Diagnose:          []string{"--standalone", openCodePrintLogsFlag},
 	},
 	{
 		Name:        "claude",
