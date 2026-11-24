@@ -63,7 +63,7 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	if err != nil {
 		return err
 	}
-	if err := checkReloadWebCollision(ws.Name, running, want); err != nil {
+	if err := checkReloadProxyCollision(ws.Name, running, want); err != nil {
 		return err
 	}
 	payload, err := secretsPayload(ctx, ws, want, purgeCache)
@@ -107,29 +107,28 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	return nil
 }
 
-// runningWebPorts are the guest ports the running VM reserves for the web
+// runningProxyPorts are the guest ports the running VM reserves for the proxy
 // relay: its immutable relay allowlist and the relay port itself. They stay
 // reserved whatever the configuration now says, until a restart.
-func runningWebPorts(g *guest.Config) map[int]string {
+func runningProxyPorts(g *guest.Config) map[int]string {
 	reserved := map[int]string{}
-	if g == nil || g.WebRelay == nil {
+	if g == nil || g.ProxyRelay == nil {
 		return reserved
 	}
-	reserved[guest.WebRelayPort] = "the web relay"
-	for _, p := range g.WebRelay.Ports {
-		reserved[int(p)] = "a web route of the running VM"
+	reserved[guest.ProxyRelayPort] = "the proxy relay"
+	for _, p := range g.ProxyRelay.Ports {
+		reserved[int(p)] = "a proxy route of the running VM"
 	}
 	return reserved
 }
 
-// checkReloadWebCollision fails a reload that would publish or mirror, as a
+// checkReloadProxyCollision fails a reload that would publish or mirror, as a
 // host port or a published port, a guest port that the running VM still
-// serves through its immutable web relay allowlist or its desktop. The
-// configuration may have dropped web or enable_desktop since the VM
-// started, so config validation does not catch it, and the guest keeps
-// serving those ports until a restart.
-func checkReloadWebCollision(name string, running, want vm.Spec) error {
-	reserved := runningWebPorts(running.Guest)
+// serves through its immutable proxy relay allowlist. The configuration may
+// have dropped proxy since the VM started, so config validation does not
+// catch it, and the guest keeps serving those ports until a restart.
+func checkReloadProxyCollision(name string, running, want vm.Spec) error {
+	reserved := runningProxyPorts(running.Guest)
 	if len(reserved) == 0 {
 		return nil
 	}
@@ -155,8 +154,8 @@ func checkReloadWebCollision(name string, running, want vm.Spec) error {
 }
 
 // reloadedGuest is the guest configuration of a reloaded VM: running with the
-// reloadable settings of want. The desktop and the web relay allowlist stay
-// those of the running VM; only a restart changes them.
+// reloadable settings of want. The proxy relay allowlist stays that of the
+// running VM; only a restart changes it.
 func reloadedGuest(running, want guest.Config, binds []guest.Snapshot) guest.Config {
 	g := running
 	g.CABundle = want.CABundle
@@ -304,7 +303,7 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if guestIPv6(running) != want.Guest.IPv6 {
 		out = append(out, "network.ipv6")
 	}
-	if !slices.Equal(guestWebPorts(running.Guest), guestWebPorts(want.Guest)) {
+	if !slices.Equal(guestProxyPorts(running.Guest), guestProxyPorts(want.Guest)) {
 		out = append(out, "proxy")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.

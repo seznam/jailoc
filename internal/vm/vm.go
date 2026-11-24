@@ -402,10 +402,10 @@ func imageRef(spec Spec) string {
 	return DefaultImage
 }
 
-// webRelayEnabled reports whether the guest serves the web relay, whose
+// proxyRelayEnabled reports whether the guest serves the proxy relay, whose
 // private host socket the broker then publishes.
-func webRelayEnabled(spec Spec) bool {
-	return spec.Kind == KindWorkspace && spec.Guest != nil && spec.Guest.WebRelay != nil && len(spec.Guest.WebRelay.Ports) > 0
+func proxyRelayEnabled(spec Spec) bool {
+	return spec.Kind == KindWorkspace && spec.Guest != nil && spec.Guest.ProxyRelay != nil && len(spec.Guest.ProxyRelay.Ports) > 0
 }
 
 // supervisorSockets lists the unix sockets the VM creates in its state
@@ -417,8 +417,8 @@ func supervisorSockets(spec Spec) []string {
 	} else {
 		sockets = append(sockets, DockerSocket(spec.StateDir))
 	}
-	if webRelayEnabled(spec) {
-		sockets = append(sockets, WebSocket(spec.StateDir))
+	if proxyRelayEnabled(spec) {
+		sockets = append(sockets, ProxySocket(spec.StateDir))
 	}
 	return sockets
 }
@@ -442,8 +442,8 @@ func brokerArgs(spec Spec, policyPath string) []string {
 	} else {
 		args = append(args, "-forward-unix", DockerSocket(spec.StateDir)+"="+strconv.Itoa(DockerPort))
 	}
-	if webRelayEnabled(spec) {
-		args = append(args, "-forward-unix", WebSocket(spec.StateDir)+"="+strconv.Itoa(guest.WebRelayPort))
+	if proxyRelayEnabled(spec) {
+		args = append(args, "-forward-unix", ProxySocket(spec.StateDir)+"="+strconv.Itoa(guest.ProxyRelayPort))
 	}
 	return args
 }

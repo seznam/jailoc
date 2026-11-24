@@ -611,11 +611,11 @@ func TestWorkspaceSpecProxy(t *testing.T) {
 				t.Fatalf("workspaceSpec: %v", err)
 			}
 			if tt.wantPorts == nil {
-				if spec.Guest.WebRelay != nil {
-					t.Errorf("Guest.WebRelay = %+v, want nil", spec.Guest.WebRelay)
+				if spec.Guest.ProxyRelay != nil {
+					t.Errorf("Guest.ProxyRelay = %+v, want nil", spec.Guest.ProxyRelay)
 				}
-			} else if spec.Guest.WebRelay == nil || !slices.Equal(spec.Guest.WebRelay.Ports, tt.wantPorts) {
-				t.Errorf("Guest.WebRelay = %+v, want ports %v", spec.Guest.WebRelay, tt.wantPorts)
+			} else if spec.Guest.ProxyRelay == nil || !slices.Equal(spec.Guest.ProxyRelay.Ports, tt.wantPorts) {
+				t.Errorf("Guest.ProxyRelay = %+v, want ports %v", spec.Guest.ProxyRelay, tt.wantPorts)
 			}
 		})
 	}
@@ -635,14 +635,14 @@ func TestStatusRestartChangesProxy(t *testing.T) {
 		{name: "proxy added", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}, want: []string{"proxy"}},
 		{
 			name: "proxy port changed", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3001}},
-			running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
+			running: guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
 		},
 		{
 			name: "proxy renamed on the same port", proxy: []workspace.ProxyRoute{{Name: "other", Port: 3000}},
-			running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}},
+			running: guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000}}},
 		},
 		{
-			name: "proxy removed", running: guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
+			name: "proxy removed", running: guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000}}}, want: []string{"proxy"},
 		},
 	}
 	for _, tt := range tests {

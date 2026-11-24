@@ -30,7 +30,7 @@ An agent on your host can reach everything your user account can. jailoc narrows
 - Install or upgrade: [Installation](how-to/installation.md), [Upgrade an existing installation](how-to/migrate-from-v1.md)
 - Shape a workspace: [Workspace Configuration](how-to/workspace-configuration.md), [Custom Images](how-to/custom-images.md)
 - Decide what the agent reaches: [Network Access](how-to/network-access.md), [Secrets](how-to/secrets.md), [SSH & Git Passthrough](how-to/ssh-git-passthrough.md)
-- Open web apps from the VM in your browser: [Web Routes](how-to/desktop-and-web.md)
+- Open web apps from the VM in your browser: [Proxy Routes](how-to/proxy-routes.md)
 - Work with agents: [Sessions](how-to/sessions.md), [Coding Agents](how-to/coding-agents.md), [Workspace Indicator](how-to/tui-plugin.md)
 - Fix a failing start: [Troubleshooting](how-to/troubleshooting.md)
 

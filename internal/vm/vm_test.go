@@ -109,21 +109,21 @@ func TestWriteControlNudgesSSHSocket(t *testing.T) {
 	}
 }
 
-func TestBrokerArgsWebForward(t *testing.T) {
+func TestBrokerArgsProxyForward(t *testing.T) {
 	t.Parallel()
-	web := func(stateDir string) string {
-		return WebSocket(stateDir) + "=" + strconv.Itoa(guest.WebRelayPort)
+	proxy := func(stateDir string) string {
+		return ProxySocket(stateDir) + "=" + strconv.Itoa(guest.ProxyRelayPort)
 	}
 	tests := []struct {
 		name  string
 		spec  Spec
-		wantW bool
+		wantP bool
 	}{
-		{"workspace without web relay", Spec{Kind: KindWorkspace, Guest: &guest.Config{}}, false},
-		{"workspace with empty ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{WebRelay: &guest.WebRelay{}}}, false},
-		{"workspace with ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}}, true},
+		{"workspace without proxy relay", Spec{Kind: KindWorkspace, Guest: &guest.Config{}}, false},
+		{"workspace with empty ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{}}}, false},
+		{"workspace with ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}, true},
 		{"workspace without guest config", Spec{Kind: KindWorkspace}, false},
-		{"builder ignores web relay", Spec{Kind: KindBuilder, Guest: &guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}}, false},
+		{"builder ignores proxy relay", Spec{Kind: KindBuilder, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -137,33 +137,33 @@ func TestBrokerArgsWebForward(t *testing.T) {
 					forwards = append(forwards, args[i+1])
 				}
 			}
-			var gotW int
+			var gotP int
 			for _, f := range forwards {
-				if f == web("/state") {
-					gotW++
+				if f == proxy("/state") {
+					gotP++
 				}
 			}
-			if tt.wantW && gotW != 1 || !tt.wantW && gotW != 0 {
-				t.Fatalf("web forwards = %d in %v, want web=%v", gotW, forwards, tt.wantW)
+			if tt.wantP && gotP != 1 || !tt.wantP && gotP != 0 {
+				t.Fatalf("proxy forwards = %d in %v, want proxy=%v", gotP, forwards, tt.wantP)
 			}
-			if len(forwards) != 1+gotW {
-				t.Fatalf("forwards = %v, want the primary forward plus optional web", forwards)
+			if len(forwards) != 1+gotP {
+				t.Fatalf("forwards = %v, want the primary forward plus optional proxy", forwards)
 			}
 		})
 	}
 }
 
-func TestSocketPathsIncludeWeb(t *testing.T) {
+func TestSocketPathsIncludeProxy(t *testing.T) {
 	t.Parallel()
-	spec := Spec{Kind: KindWorkspace, StateDir: "/state", Guest: &guest.Config{WebRelay: &guest.WebRelay{Ports: []uint16{6080}}}}
+	spec := Spec{Kind: KindWorkspace, StateDir: "/state", Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}
 	got := supervisorSockets(spec)
-	want := []string{nicSocket("/state"), SSHSocket("/state"), WebSocket("/state")}
+	want := []string{nicSocket("/state"), SSHSocket("/state"), ProxySocket("/state")}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sockets = %v, want %v", got, want)
 	}
 	spec.Guest = nil
 	if got := supervisorSockets(spec); len(got) != 2 {
-		t.Fatalf("sockets without web relay = %v", got)
+		t.Fatalf("sockets without proxy relay = %v", got)
 	}
 }
 

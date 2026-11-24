@@ -1103,7 +1103,7 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 
 ### `proxy`
 
-`proxy` serves guest ports to a browser on the host over HTTPS; see the [how-to](../how-to/desktop-and-web.md). The guest runs a proxy relay on NIC port 6081, forwarding to the loopback port of each route.
+`proxy` serves guest ports to a browser on the host over HTTPS; see the [how-to](../how-to/proxy-routes.md). The guest runs a proxy relay on NIC port 6081, forwarding to the loopback port of each route.
 
 ```toml
 [defaults.proxy]

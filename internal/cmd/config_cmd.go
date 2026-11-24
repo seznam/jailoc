@@ -257,9 +257,9 @@ func printHostPortTargets(ports []config.HostPortTarget, indent string) {
 	}
 }
 
-// webHostSuffix is the DNS zone of the workspace proxy routes: a route is served
+// proxyHostSuffix is the DNS zone of the workspace proxy routes: a route is served
 // at https://<route>.<workspace>.jailoc.local.
-const webHostSuffix = "jailoc.local"
+const proxyHostSuffix = "jailoc.local"
 
 func printProxyRoutes(name string, routes []workspace.ProxyRoute, indent string) {
 	if len(routes) == 0 {
@@ -268,9 +268,9 @@ func printProxyRoutes(name string, routes []workspace.ProxyRoute, indent string)
 	}
 	for _, r := range routes {
 		if r.Auth {
-			_, _ = fmt.Fprintf(os.Stdout, "%s- https://%s.%s.%s -> %d (auth)\n", indent, r.Name, name, webHostSuffix, r.Port)
+			_, _ = fmt.Fprintf(os.Stdout, "%s- https://%s.%s.%s -> %d (auth)\n", indent, r.Name, name, proxyHostSuffix, r.Port)
 		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "%s- https://%s.%s.%s -> %d\n", indent, r.Name, name, webHostSuffix, r.Port)
+			_, _ = fmt.Fprintf(os.Stdout, "%s- https://%s.%s.%s -> %d\n", indent, r.Name, name, proxyHostSuffix, r.Port)
 		}
 	}
 }

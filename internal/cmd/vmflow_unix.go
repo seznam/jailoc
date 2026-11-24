@@ -684,8 +684,8 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	}
 	// The relay allowlist is fixed for the life of the VM; a new proxy route
 	// port needs a restart.
-	if ports := webRelayPorts(ws.Proxy); len(ports) > 0 {
-		g.WebRelay = &guest.WebRelay{Ports: ports}
+	if ports := proxyRelayPorts(ws.Proxy); len(ports) > 0 {
+		g.ProxyRelay = &guest.ProxyRelay{Ports: ports}
 	}
 	spec := vm.Spec{
 		Kind:          vm.KindWorkspace,
@@ -1117,7 +1117,7 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 		out = append(out, "network.ipv6")
 	}
 	if running.Guest != nil {
-		out = append(out, webChanges(ws, running.Guest)...)
+		out = append(out, proxyChanges(ws, running.Guest)...)
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
 	agentChanged := cmp.Or(running.Agent, agent.Default) != ws.Agent.Name
@@ -1329,9 +1329,9 @@ func configureVMDocker(ws *workspace.Resolved, spec *vm.Spec) error {
 	return nil
 }
 
-// webRelayPorts returns the unique guest ports of routes in ascending order:
-// the allowlist of the guest's web relay.
-func webRelayPorts(routes []workspace.ProxyRoute) []uint16 {
+// proxyRelayPorts returns the unique guest ports of routes in ascending order:
+// the allowlist of the guest's proxy relay.
+func proxyRelayPorts(routes []workspace.ProxyRoute) []uint16 {
 	var ports []uint16
 	for _, r := range routes {
 		ports = append(ports, uint16(r.Port)) //nolint:gosec // G115: validated to 1-65535
@@ -1340,12 +1340,12 @@ func webRelayPorts(routes []workspace.ProxyRoute) []uint16 {
 	return slices.Compact(ports)
 }
 
-// guestWebPorts returns the web relay allowlist of g, in ascending order.
-func guestWebPorts(g *guest.Config) []uint16 {
-	if g == nil || g.WebRelay == nil {
+// guestProxyPorts returns the proxy relay allowlist of g, in ascending order.
+func guestProxyPorts(g *guest.Config) []uint16 {
+	if g == nil || g.ProxyRelay == nil {
 		return nil
 	}
-	return slices.Compact(slices.Sorted(slices.Values(g.WebRelay.Ports)))
+	return slices.Compact(slices.Sorted(slices.Values(g.ProxyRelay.Ports)))
 }
 
 func vmForwards(ports []config.PortForward) []vm.Forward {
