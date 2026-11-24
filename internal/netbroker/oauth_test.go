@@ -302,7 +302,7 @@ func TestOAuthCallbackSingleShotAndFiltering(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("valid callback status = %d, want 200", resp.StatusCode)
 	}
-	if strings.Contains(string(body), "<script>") || !strings.Contains(string(body), "Authentication complete") {
+	if strings.Contains(string(body), "<script>") || !strings.Contains(string(body), "OAuth callback received") {
 		t.Fatalf("valid callback body = %q, want the broker's fixed confirmation", body)
 	}
 	if v := resp.Header.Get("Set-Cookie"); v != "" {
@@ -456,6 +456,44 @@ func TestOAuthCallbackPrefersLoopbackRelay(t *testing.T) {
 	}
 	if got := nicHits.Load(); got != 0 {
 		t.Fatalf("guest NIC hits = %d, want 0 (NIC listener must not shadow loopback)", got)
+	}
+
+	// A port the loopback relay refuses must not fall back to the guest NIC
+	// address, where a different process could be listening.
+	port2 := freePort(t)
+	var nicHits2 atomic.Int32
+	nicLn2, err := gonet.ListenTCP(g, tcpip.FullAddress{
+		NIC:  1,
+		Addr: tcpip.AddrFrom4([4]byte{192, 168, 127, 2}),
+		Port: port2,
+	}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatalf("listen on fake guest NIC for refused port: %v", err)
+	}
+	t.Cleanup(func() { _ = nicLn2.Close() })
+	go func() {
+		for {
+			c, err := nicLn2.Accept()
+			if err != nil {
+				return
+			}
+			nicHits2.Add(1)
+			_ = c.Close()
+		}
+	}()
+	if code := registerFromGuest(t, ctx, g, port2, "/cb"); code != http.StatusOK {
+		t.Fatalf("register refused port status = %d, want 200", code)
+	}
+	resp, err = (&http.Client{Timeout: 5 * time.Second}).Get(fmt.Sprintf("http://127.0.0.1:%d/cb?code=abc", port2))
+	if err != nil {
+		t.Fatalf("GET callback on refused port: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("refused-port callback status = %d, want 502", resp.StatusCode)
+	}
+	if got := nicHits2.Load(); got != 0 {
+		t.Fatalf("guest NIC hits on refused port = %d, want 0 (no fallback when relay is configured)", got)
 	}
 }
 

@@ -177,14 +177,15 @@ func (b *Broker) cancelOAuthPort(port uint16) {
 	}
 }
 
-func (b *Broker) isConfiguredForwardPort(port uint16) bool {
+// isConfiguredForwardPortLocked reports whether a configured or runtime
+// forward already maps host port to the same guest port. The caller must hold
+// b.runtime.mu.
+func (b *Broker) isConfiguredForwardPortLocked(port uint16) bool {
 	for _, f := range b.cfg.Forwards {
 		if f.UnixPath == "" && f.Host.IsValid() && f.Host.Port() == port && f.GuestPort == port {
 			return true
 		}
 	}
-	b.runtime.mu.Lock()
-	defer b.runtime.mu.Unlock()
 	for f := range b.runtime.forwards {
 		if hp, err := netip.ParseAddrPort(f.Host); err == nil && hp.Port() == port && f.GuestPort == port {
 			return true
@@ -194,17 +195,12 @@ func (b *Broker) isConfiguredForwardPort(port uint16) bool {
 }
 
 // dialGuestOAuthPort dials the guest's loopback listener for an OAuth callback.
-// The loopback relay is tried first so a process bound to the guest NIC address
-// cannot shadow the 127.0.0.1 callback listener.
+// With a loopback relay configured it is the only path, so a process bound to
+// the guest NIC address can neither shadow nor substitute for the 127.0.0.1
+// callback listener.
 func (b *Broker) dialGuestOAuthPort(ctx context.Context, port uint16) (net.Conn, error) {
 	if b.cfg.LoopbackRelayPort != 0 {
-		conn, err := b.dialGuestLoopback(ctx, port)
-		if err == nil {
-			return conn, nil
-		}
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("dial guest oauth port %d: %w", port, ctx.Err())
-		}
+		return b.dialGuestLoopback(ctx, port)
 	}
 	conn, err := gonet.DialContextTCP(ctx, b.stack, *guestAddr(b.cfg.GuestIP, port), ipv4.ProtocolNumber)
 	if err != nil {
@@ -260,7 +256,12 @@ func (b *Broker) handleOAuthRegister(ctx context.Context, w http.ResponseWriter,
 		http.Error(w, "invalid port or path", http.StatusBadRequest)
 		return
 	}
-	if b.isConfiguredForwardPort(req.Port) {
+	// Hold the runtime lock across the configured-forward check and the host
+	// bind so a concurrent ApplyRuntime cannot cancel this callback and bind
+	// its forward in between. Lock order is runtime.mu, then oauth.mu.
+	b.runtime.mu.Lock()
+	defer b.runtime.mu.Unlock()
+	if b.isConfiguredForwardPortLocked(req.Port) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -321,6 +322,8 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 	targetHost := net.JoinHostPort("127.0.0.1", p)
 	transport := &http.Transport{
 		DialContext: func(dctx context.Context, _, _ string) (net.Conn, error) {
+			dctx, cancel := context.WithTimeout(dctx, dialTimeout)
+			defer cancel()
 			return b.dialGuestOAuthPort(dctx, port)
 		},
 		DisableKeepAlives:     true,
@@ -397,7 +400,7 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, "Authentication complete. You may close this tab.\n")
+			_, _ = io.WriteString(w, "OAuth callback received. You may close this tab.\n")
 		}),
 	}
 	srv.SetKeepAlivesEnabled(false)
