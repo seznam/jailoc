@@ -17,8 +17,6 @@ import (
 )
 
 const (
-	// tmpCleanInterval is the period of the /tmp expiry and trim passes.
-	tmpCleanInterval = 15 * time.Minute
 	// tmpMaxDepth bounds how deep a pass descends, and so the directory
 	// descriptors it holds; deeper entries are kept.
 	tmpMaxDepth = 128
@@ -34,6 +32,10 @@ const (
 	// directory are still visited.
 	tmpWalkSeen = 1 << 18
 )
+
+// tmpCleanInterval is the period of the /tmp expiry and trim passes.
+// Overridden to a shorter interval in vmintegration builds.
+var tmpCleanInterval = 15 * time.Minute
 
 // tmpResolve keeps every lookup of a pass on the /tmp mount: below the
 // directory it starts from, without symbolic links and without crossing

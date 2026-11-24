@@ -66,16 +66,29 @@ func run(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	binaryPath = filepath.Join(tmp, "jailoc")
-	for _, args := range [][]string{
-		{"generate", "./internal/guestbin"},
-		// The vmintegration tag adds the probe that runs in the runner's Landlock domain.
-		{"build", "-tags", "vmintegration", "-o", binaryPath, "./cmd/jailoc"},
-	} {
-		cmd := exec.Command("go", args...) //nolint:gosec // G204: fixed go subcommands
+	guestOut := filepath.Join("internal", "guestbin", "bin", runtime.GOARCH, "jailoc-guest")
+	builds := []struct {
+		args []string
+		env  []string
+	}{
+		{
+			// Build jailoc-guest for the host arch with vmintegration so the
+			// /tmp TTL cleaner uses a short sweep interval instead of 15 minutes.
+			args: []string{"build", "-tags", "vmintegration", "-trimpath", "-buildvcs=false", "-ldflags", "-s -w", "-o", guestOut, "./cmd/jailoc-guest"},
+			env:  []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=" + runtime.GOARCH},
+		},
+		{
+			// The vmintegration tag adds the probe that runs in the runner's Landlock domain.
+			args: []string{"build", "-tags", "vmintegration", "-o", binaryPath, "./cmd/jailoc"},
+			env:  []string{"CGO_ENABLED=0"},
+		},
+	}
+	for _, b := range builds {
+		cmd := exec.Command("go", b.args...) //nolint:gosec // G204: fixed go subcommands
 		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		cmd.Env = append(os.Environ(), b.env...)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			fmt.Fprintf(os.Stderr, "go %s: %v\n%s", strings.Join(args, " "), err, out)
+			fmt.Fprintf(os.Stderr, "go %s: %v\n%s", strings.Join(b.args, " "), err, out)
 			return 1
 		}
 	}

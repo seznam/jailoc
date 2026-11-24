@@ -14,8 +14,8 @@ package vmintegration
 //
 //	go test -tags vmintegration -v -timeout 45m -run 'TestTmp' ./internal/vmintegration/
 //
-// TestTmpTTLSweepAndDiscard waits up to 16 minutes for the fixed 15 minute
-// sweep and is skipped with -short.
+// TestTmpTTLSweepAndDiscard relies on the 5-second sweep interval enabled in
+// vmintegration builds of jailoc-guest.
 
 import (
 	"context"
@@ -37,14 +37,14 @@ const (
 	tmpMiB = int64(1) << 20
 	tmpGiB = int64(1) << 30
 
-	// tmpSweepWait is how long the TTL test waits for the sweep; the sweep
-	// interval is fixed at 15 minutes with no test hook.
-	tmpSweepWait = 16 * time.Minute
+	// tmpSweepWait is how long the TTL test waits for the sweep; vmintegration
+	// builds of jailoc-guest run the cleaner every 5 seconds instead of 15 minutes.
+	tmpSweepWait = 1 * time.Minute
 	// tmpDiscardGrace is the extra time the freed blocks of tmp.img get to
 	// reach the host after the sweep was seen.
-	tmpDiscardGrace = 2 * time.Minute
+	tmpDiscardGrace = 1 * time.Minute
 
-	tmpPollInterval = 20 * time.Second
+	tmpPollInterval = 1 * time.Second
 )
 
 // tmpWorkspace is the workspace the /tmp tests boot.
@@ -641,19 +641,16 @@ func TestTmpDiskWithDocker(t *testing.T) {
 	})
 }
 
-// TestTmpTTLSweepAndDiscard waits for the one real TTL sweep (fixed 15
-// minute interval, no test hook) of a 1s TTL and checks what it removed and
-// what it must leave alone, then that the freed blocks of tmp.img came back
-// to the host without a manual fstrim, and finally that reload with
-// tmp_ttl = "0" turns the sweep off.
+// TestTmpTTLSweepAndDiscard waits for a TTL sweep (5-second interval in
+// vmintegration builds) of a 1s TTL and checks what it removed and what it
+// must leave alone, then that the freed blocks of tmp.img came back to the
+// host without a manual fstrim, and finally that reload with tmp_ttl = "0"
+// turns the sweep off.
 func TestTmpTTLSweepAndDiscard(t *testing.T) {
-	if testing.Short() {
-		t.Skip("waits up to 16 minutes for the TTL sweep")
-	}
 	settings := func(ttl string) string {
 		return fmt.Sprintf("tmp_storage = \"disk\"\ntmp_size = \"2g\"\ntmp_ttl = %q", ttl)
 	}
-	ctx := startTmpWorkspace(t, tmpWorkspace{Settings: settings("1s")}, 45*time.Minute)
+	ctx := startTmpWorkspace(t, tmpWorkspace{Settings: settings("1s")}, 10*time.Minute)
 
 	// A big file written and deleted before the sweep: its blocks stay
 	// allocated on the host until the guest discards them.
