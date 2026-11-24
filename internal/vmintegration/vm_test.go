@@ -67,18 +67,9 @@ func run(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	binaryPath = filepath.Join(tmp, "jailoc")
-	for _, args := range [][]string{
-		{"generate", "./internal/guestbin"},
-		// The vmintegration tag adds the probe that runs in the runner's Landlock domain.
-		{"build", "-tags", "vmintegration", "-o", binaryPath, "./cmd/jailoc"},
-	} {
-		cmd := exec.Command("go", args...) //nolint:gosec // G204: fixed go subcommands
-		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			fmt.Fprintf(os.Stderr, "go %s: %v\n%s", strings.Join(args, " "), err, out)
-			return 1
-		}
+	if err := buildTestBinary(root, tmp, binaryPath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	// Workspace paths may not live under /tmp, so the test home is created
 	// in the real home directory.
@@ -95,6 +86,67 @@ func run(m *testing.M) int {
 	defer func() { _ = os.RemoveAll(home) }()
 	project = filepath.Join(home, "project")
 	return m.Run()
+}
+
+// buildTestBinary compiles a vmintegration-tagged jailoc-guest into the embed
+// path, builds jailoc with it, and always restores (or removes) the original
+// embedded guest binary so plain local builds never pick up the test guest.
+func buildTestBinary(root, tmp, outPath string) (retErr error) {
+	guestRel := filepath.Join("internal", "guestbin", "bin", runtime.GOARCH, "jailoc-guest")
+	guestAbs := filepath.Join(root, guestRel)
+
+	var origData []byte
+	var origPerm os.FileMode
+	hadOrig := false
+	if info, err := os.Stat(guestAbs); err == nil {
+		data, readErr := os.ReadFile(guestAbs) //nolint:gosec // G304: fixed repo path
+		if readErr != nil {
+			return fmt.Errorf("backup existing guest binary: %w", readErr)
+		}
+		origData = data
+		origPerm = info.Mode().Perm()
+		hadOrig = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat existing guest binary: %w", err)
+	}
+	defer func() {
+		if hadOrig {
+			if err := os.WriteFile(guestAbs, origData, origPerm); err != nil { //nolint:gosec // G306: restores original binary permissions
+				retErr = errors.Join(retErr, fmt.Errorf("restore guest binary: %w", err))
+			}
+			return
+		}
+		if err := os.Remove(guestAbs); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove test guest binary: %w", err))
+		}
+	}()
+
+	_ = tmp
+	builds := []struct {
+		args []string
+		env  []string
+	}{
+		{
+			// Build jailoc-guest for the host arch with vmintegration so the
+			// /tmp TTL cleaner uses a short sweep interval instead of 15 minutes.
+			args: []string{"build", "-tags", "vmintegration", "-trimpath", "-buildvcs=false", "-ldflags", "-s -w", "-o", guestRel, "./cmd/jailoc-guest"},
+			env:  []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=" + runtime.GOARCH},
+		},
+		{
+			// The vmintegration tag adds the probe that runs in the runner's Landlock domain.
+			args: []string{"build", "-tags", "vmintegration", "-o", outPath, "./cmd/jailoc"},
+			env:  []string{"CGO_ENABLED=0"},
+		},
+	}
+	for _, b := range builds {
+		cmd := exec.Command("go", b.args...) //nolint:gosec // G204: fixed go subcommands
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), b.env...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("go %s: %w\n%s", strings.Join(b.args, " "), err, out)
+		}
+	}
+	return nil
 }
 
 func projectRoot() (string, error) {
