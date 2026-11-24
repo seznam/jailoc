@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -703,10 +704,35 @@ func ownedDir(path string, acct account, mode os.FileMode) error {
 }
 
 func chown(path string, acct account) error {
-	if err := os.Lchown(path, int(acct.uid), int(acct.gid)); err != nil {
+	uid, gid, err := acct.chownIDs()
+	if err != nil {
+		return fmt.Errorf("chown %s: %w", path, err)
+	}
+	if err := os.Lchown(path, uid, gid); err != nil {
 		return fmt.Errorf("chown %s: %w", path, err)
 	}
 	return nil
+}
+
+// chownIDs returns the uid and gid of the account as the ints the chown
+// calls take.
+func (a account) chownIDs() (uid, gid int, err error) {
+	if uid, err = idToInt(a.uid); err != nil {
+		return 0, 0, fmt.Errorf("uid: %w", err)
+	}
+	if gid, err = idToInt(a.gid); err != nil {
+		return 0, 0, fmt.Errorf("gid: %w", err)
+	}
+	return uid, gid, nil
+}
+
+// idToInt converts a user or group ID to an int, refusing an ID that does
+// not fit the signed 32-bit range the kernel accepts.
+func idToInt(id uint32) (int, error) {
+	if id > math.MaxInt32 {
+		return 0, fmt.Errorf("id %d is out of range (max %d)", id, math.MaxInt32)
+	}
+	return int(id), nil
 }
 
 // sessionEnv is the base environment of every session: the image

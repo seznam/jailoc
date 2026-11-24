@@ -53,7 +53,7 @@ For each Docker workspace, jailoc:
 
 2. Lists the v1 settings from the table above per scope and asks to confirm removing them. Declining stops the migration.
 3. Asks to stop the running Docker workspaces, then stops them.
-4. Copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's persistent home directory, so sessions and logins carry over to OpenCode 1.
+4. Copies the Docker volumes `opencode-data-<workspace>` and `opencode-cache-<workspace>` into the VM's home directory data. The first start copies the OpenCode data (sessions and logins) to `state.img`; the cache copy stays in `legacy-home`, because `cache.img` starts empty (see [Persistent state](../reference/configuration.md#persistent-state)).
 5. Sets `backend = "vm"` in `[defaults]` and removes every workspace-level `backend`.
 
 The copy in step 4:

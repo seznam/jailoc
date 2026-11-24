@@ -56,6 +56,7 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 | `guest/` | The internal share the guest can write: control files such as `guest/control/exec.jsonl` |
 | `state.img` | The state disk (`state_disk`, 10 GiB by default): the agent's persistent home directories |
 | `cache.img` | The cache disk (`cache_disk`, 20 GiB by default): `~/.cache` |
+| `legacy-home/`, `legacy-home-<n>/` | The persistent home directories of a workspace that stored them as a directory, kept after the guest copied the agent state to `state.img`. The old `~/.cache` is not copied to `cache.img`. jailoc doesn't delete it |
 | `guest-ro/` | The read-only internal share: configuration copies and staged snapshots |
 | `state.json` | Supervisor PID and readiness |
 | `inspect-ca.pem`, `inspect-ca.key` | The workspace's TLS inspection CA, created when a network rule has `http`; the key stays on the host and is deleted by `jailoc down --purge` |
@@ -146,6 +147,14 @@ tail -n 50 ~/.cache/jailoc-vm/workspaces/<workspace>/supervisor.log
 - a stale VM left over from a crash.
 
 **Fix:** remove the cause. Clear a stale VM with `jailoc down <workspace>` and start again.
+
+## VM doesn't start: `needs mkfs.ext4`
+
+**Symptom:** `jailoc up` fails with `needs mkfs.ext4 (e2fsprogs) in the workspace image`, naming `state.img` or `cache.img`, or with an error naming `mkfs.ext4` for `/tmp`.
+
+**Cause:** the guest formats the state and cache disks, and a disk-backed `/tmp`, with `mkfs.ext4` from the workspace image. An image without `e2fsprogs` has neither `mkfs.ext4` nor `resize2fs`.
+
+**Fix:** add `e2fsprogs` to your base or overlay Dockerfile and run `jailoc up` again. See [what the image must provide](custom-images.md#know-what-the-image-must-provide).
 
 ## Processes die or the VM stops when memory runs out
 

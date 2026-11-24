@@ -186,7 +186,50 @@ func agentStateHostDir(cfg *config.Config, ws *workspace.Resolved, shares []vm.S
 	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
 		return ""
 	}
-	return canonicalHostPath(vm.StateDiskPath(vmStateDir(ws.Name))) + "#" + d.Name
+	return stateDiskVersionKey(ws.Name, d.Name)
+}
+
+// stateDiskVersionKey is the agent version record key of state directory name
+// on the state disk of workspace wsName.
+func stateDiskVersionKey(wsName, name string) string {
+	return canonicalHostPath(vm.StateDiskPath(vmStateDir(wsName))) + "#" + name
+}
+
+// legacyAgentStateKeys returns the keys under which agent version records were
+// kept when the agent state lived in <state>/guest/home/<name> on the host.
+// The directory may no longer exist, so besides the plain path they include
+// the path with its existing ancestors resolved, which is what a record made
+// while the directory existed was keyed by.
+func legacyAgentStateKeys(wsName, name string) []string {
+	stateDir := vmStateDir(wsName)
+	rel := filepath.Join("guest", guestDataHome, name)
+	keys := []string{canonicalHostPath(filepath.Join(stateDir, rel)), filepath.Join(canonicalHostPath(stateDir), rel)}
+	return slices.Compact(keys)
+}
+
+// migrateLegacyAgentVersion carries the version record of the legacy host
+// state directory over to the state disk key, keeping the higher version, so
+// the downgrade warning survives the move to the state disk. The legacy record
+// stays: purging the workspace removes it with the rest under the state dir.
+func migrateLegacyAgentVersion(versions map[string]string, wsName, name, newKey string) (changed bool) {
+	for _, legacy := range legacyAgentStateKeys(wsName, name) {
+		old := versions[legacy]
+		if old == "" || legacy == newKey {
+			continue
+		}
+		oldV, err := goversion.NewVersion(old)
+		if err != nil {
+			continue
+		}
+		if cur := versions[newKey]; cur != "" {
+			if curV, err := goversion.NewVersion(cur); err == nil && !oldV.GreaterThan(curV) {
+				continue
+			}
+		}
+		versions[newKey] = old
+		changed = true
+	}
+	return changed
 }
 
 func loadAgentVersions(file string) map[string]string {
@@ -242,6 +285,10 @@ func checkAgentStateVersion(cfg *config.Config, ws *workspace.Resolved, shares [
 	}
 	withAgentVersionsLock(func(file string) {
 		versions := loadAgentVersions(file)
+		if hostDir == stateDiskVersionKey(ws.Name, ws.Agent.State[0].Name) &&
+			migrateLegacyAgentVersion(versions, ws.Name, ws.Agent.State[0].Name, hostDir) {
+			saveAgentVersions(file, versions)
+		}
 		if prev := versions[hostDir]; prev != "" && prev != ws.Agent.Version {
 			if prevV, err := goversion.NewVersion(prev); err == nil && curV.LessThan(prevV) {
 				_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %s state was used with newer version %s (current: %s); if the agent fails to start, upgrade it or reset its state\n", ws.Name, ws.Agent.Title, prev, ws.Agent.Version)
@@ -361,15 +408,25 @@ const legacyHomeName = "legacy-home"
 // directory), and tells the user. jailoc never deletes the archive. It does
 // nothing when there is no legacy directory or no marker.
 func archiveLegacyHome(stateDir, wsName string) error {
-	data := vm.GuestDataDir(stateDir)
-	src := filepath.Join(data, guestDataHome)
-	if info, err := os.Lstat(src); err != nil || !info.IsDir() {
+	// The guest writes to the guest data directory while the VM runs and can
+	// replace home or control with links to host directories, so the checks and
+	// the marker removal go through an os.Root that never follows a link out.
+	root, err := vm.OpenGuestData(stateDir)
+	if err != nil {
+		return fmt.Errorf("open guest data dir: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if info, err := root.Lstat(guestDataHome); err != nil || !info.IsDir() {
 		return nil
 	}
-	marker := filepath.Join(data, vm.ControlName, "home-migrated")
-	if _, err := os.Lstat(marker); err != nil {
+	if info, err := root.Lstat(vm.ControlName); err != nil || !info.IsDir() {
 		return nil
 	}
+	marker := path.Join(vm.ControlName, "home-migrated")
+	if _, err := root.Lstat(marker); err != nil {
+		return nil
+	}
+	src := filepath.Join(vm.GuestDataDir(stateDir), guestDataHome)
 	dst := filepath.Join(stateDir, legacyHomeName)
 	for n := 1; ; n++ {
 		if _, err := os.Lstat(dst); errors.Is(err, os.ErrNotExist) {
@@ -379,13 +436,14 @@ func archiveLegacyHome(stateDir, wsName string) error {
 		}
 		dst = filepath.Join(stateDir, fmt.Sprintf("%s-%d", legacyHomeName, n))
 	}
+	// Renaming moves a link the guest swapped in after the check, not its target.
 	if err := os.Rename(src, dst); err != nil {
 		return fmt.Errorf("archive legacy home directories: %w", err)
 	}
-	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := root.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove migration marker: %w", err)
 	}
-	_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "Workspace %s: agent state and cache moved to state.img and cache.img; the previous files are kept at %s and can be deleted once you no longer need them\n", wsName, dst)
+	_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "Workspace %s: agent state copied to state.img; the cache in cache.img starts empty; the previous home directories, including the old cache, are kept at %s and can be deleted once you no longer need them\n", wsName, dst)
 	return nil
 }
 

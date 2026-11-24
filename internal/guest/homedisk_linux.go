@@ -93,17 +93,53 @@ func (h *homeDisks) mountAndPrepare(cfg *Config, acct account) error {
 			return err
 		}
 		h.dirs = append(h.dirs, CacheDiskDir)
-		if err := prepareCacheDir(h.logger, CacheDiskDir, legacyHome, acct); err != nil {
+		if err := prepareCacheDir(h.logger, CacheDiskDir, acct); err != nil {
 			return fmt.Errorf("cache disk: %w", err)
 		}
 	}
 	if hasState && !st.Ephemeral {
 		if info, err := os.Lstat(legacyHome); err == nil && info.IsDir() {
-			// The host moves the legacy directory out of the share once
-			// it sees the marker; a failure only repeats the check.
+			// The host archives the whole legacy home once it sees the
+			// marker, so every directory of it has to be on the disk first.
+			// A failure fails the boot and leaves the legacy home for the
+			// next boot to try again.
+			if err := migrateLegacyHome(StateDiskDir, legacyHome, acct); err != nil {
+				return fmt.Errorf("migrate legacy home: %w", err)
+			}
 			if err := writeMigratedMarker(ControlDir); err != nil {
 				h.logger.Warn("home migration marker", "error", err)
 			}
+		}
+	}
+	return nil
+}
+
+// migrateLegacyHome copies every directory of the legacy home directory
+// legacyHomeRoot, except the cache, that the state disk at stateRoot does
+// not have yet onto the disk. Entries that are not directories (symbolic
+// links included) are skipped. The cache is not copied: it can be rebuilt
+// and a large one would not copy within the boot deadline. Nothing under
+// legacyHomeRoot is changed.
+func migrateLegacyHome(stateRoot, legacyHomeRoot string, acct account) error {
+	entries, err := os.ReadDir(legacyHomeRoot)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", legacyHomeRoot, err)
+	}
+	root, err := os.OpenRoot(stateRoot)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", stateRoot, err)
+	}
+	defer func() { _ = root.Close() }()
+	for _, e := range entries {
+		name := e.Name()
+		if name == homeCacheDir || !e.IsDir() {
+			continue
+		}
+		if !validStateName(name) || strings.HasPrefix(name, migratingPrefix) {
+			continue
+		}
+		if err := migrateLegacyDir(root, stateRoot, name, filepath.Join(legacyHomeRoot, name), acct); err != nil {
+			return fmt.Errorf("directory %s: %w", name, err)
 		}
 	}
 	return nil
@@ -319,23 +355,76 @@ func prepareStateDir(logger *slog.Logger, stateRoot, legacyHomeRoot string, st *
 		if err := agentstate.AddStatusLine(root, rel, h); err != nil {
 			logger.Warn("agent status line", "error", err)
 		}
+		// The writers above run as root on a directory the agent owns.
+		if err := ownAgentWrites(root, rel, d, h, acct); err != nil {
+			return fmt.Errorf("state directory %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// ownAgentWrites gives acct the files that the agentstate writers create or
+// replace in state directory d at rel inside root (the state defaults and
+// the settings file with the status line) and the directories above them
+// below rel. Entries acct owns are left alone, so a normal boot changes
+// nothing, and only these paths are visited rather than the whole state.
+// Symbolic links are never followed.
+func ownAgentWrites(root *os.Root, rel string, d agent.StateDir, h agent.Harness, acct account) error {
+	var inner []string
+	for _, sd := range h.StateDefaults {
+		if p, ok := strings.CutPrefix(sd.File, d.Path+"/"); ok {
+			inner = append(inner, p)
+		}
+	}
+	if file, _, ok := h.TUIPlugin.SettingsFile(); ok {
+		inner = append(inner, file)
+	}
+	uid, gid, err := acct.chownIDs()
+	if err != nil {
+		return err
+	}
+	for _, p := range inner {
+		if err := ownPath(root, rel, p, uid, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ownPath gives the uid and gid to every component of inner below rel inside
+// root that exists and has another owner, stopping at a symbolic link.
+func ownPath(root *os.Root, rel, inner string, uid, gid int) error {
+	cur := rel
+	for part := range strings.SplitSeq(inner, "/") {
+		cur = path.Join(cur, part)
+		info, err := root.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", cur, err)
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && int64(st.Uid) == int64(uid) && int64(st.Gid) == int64(gid) {
+			continue
+		}
+		if err := root.Lchown(cur, uid, gid); err != nil {
+			return fmt.Errorf("chown %s: %w", cur, err)
+		}
 	}
 	return nil
 }
 
 // prepareCacheDir prepares the cache directory below cacheRoot, the mounted
-// cache disk, copying the legacy cache directory of legacyHomeRoot onto the
-// disk once.
-func prepareCacheDir(_ *slog.Logger, cacheRoot, legacyHomeRoot string, acct account) error {
-	root, err := os.OpenRoot(cacheRoot)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", cacheRoot, err)
-	}
-	defer func() { _ = root.Close() }()
-	if err := migrateLegacyDir(root, cacheRoot, homeCacheDir, filepath.Join(legacyHomeRoot, homeCacheDir), acct); err != nil {
+// cache disk. The legacy cache directory is not copied onto it: the cache
+// can be rebuilt and a large one would not copy within the boot deadline.
+func prepareCacheDir(_ *slog.Logger, cacheRoot string, acct account) error {
+	if err := ownedDir(filepath.Join(cacheRoot, homeCacheDir), acct, 0o700); err != nil {
 		return fmt.Errorf("cache directory: %w", err)
 	}
-	return ownedDir(filepath.Join(cacheRoot, homeCacheDir), acct, 0o700)
+	return nil
 }
 
 // migrateLegacyDir copies legacy, a directory of the legacy home directory,
@@ -443,7 +532,11 @@ func copyStateFile(src, dst string, info fs.FileInfo, acct account) (err error) 
 	if err := out.Chmod(info.Mode().Perm()); err != nil {
 		return err
 	}
-	if err := out.Chown(int(acct.uid), int(acct.gid)); err != nil {
+	uid, gid, err := acct.chownIDs()
+	if err != nil {
+		return fmt.Errorf("chown %s: %w", dst, err)
+	}
+	if err := out.Chown(uid, gid); err != nil {
 		return fmt.Errorf("chown %s: %w", dst, err)
 	}
 	return os.Chtimes(dst, info.ModTime(), info.ModTime())

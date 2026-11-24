@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -511,7 +512,7 @@ func TestPrepareCacheDir(t *testing.T) {
 	t.Run("creates the cache directory", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
-		if err := prepareCacheDir(homeTestLogger(), root, filepath.Join(root, "no-legacy"), acct); err != nil {
+		if err := prepareCacheDir(homeTestLogger(), root, acct); err != nil {
 			t.Fatal(err)
 		}
 		info, err := os.Stat(filepath.Join(root, "cache"))
@@ -531,7 +532,7 @@ func TestPrepareCacheDir(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
 		homeWrite(t, filepath.Join(root, "cache", "pip", "wheel"), "w", 0o600)
-		if err := prepareCacheDir(homeTestLogger(), root, "", acct); err != nil {
+		if err := prepareCacheDir(homeTestLogger(), root, acct); err != nil {
 			t.Fatal(err)
 		}
 		if got := homeRead(t, filepath.Join(root, "cache", "pip", "wheel")); got != "w" {
@@ -539,20 +540,195 @@ func TestPrepareCacheDir(t *testing.T) {
 		}
 	})
 
-	t.Run("migrates the legacy cache once", func(t *testing.T) {
+}
+
+func TestMigrateLegacyHome(t *testing.T) {
+	t.Parallel()
+	acct := homeTestAccount()
+
+	t.Run("migrates every directory except the cache", func(t *testing.T) {
 		t.Parallel()
-		root, legacy := t.TempDir(), t.TempDir()
+		legacy, root := t.TempDir(), t.TempDir()
+		homeWrite(t, filepath.Join(legacy, "claude", "a", "f"), "c", 0o600)
+		homeWrite(t, filepath.Join(legacy, "copilot", "g"), "p", 0o600)
+		homeWrite(t, filepath.Join(legacy, ".config", "h"), "d", 0o600)
 		homeWrite(t, filepath.Join(legacy, "cache", "go", "mod"), "m", 0o600)
-		if err := prepareCacheDir(homeTestLogger(), root, legacy, acct); err != nil {
+		homeWrite(t, filepath.Join(legacy, "plain-file"), "x", 0o600)
+		if err := os.Symlink("claude", filepath.Join(legacy, "link")); err != nil {
 			t.Fatal(err)
 		}
-		if got := homeRead(t, filepath.Join(root, "cache", "go", "mod")); got != "m" {
-			t.Fatalf("mod = %q", got)
+		if err := migrateLegacyHome(root, legacy, acct); err != nil {
+			t.Fatal(err)
+		}
+		for p, want := range map[string]string{"claude/a/f": "c", "copilot/g": "p", ".config/h": "d"} {
+			if got := homeRead(t, filepath.Join(root, p)); got != want {
+				t.Errorf("%s = %q, want %q", p, got, want)
+			}
+		}
+		for _, p := range []string{"cache", "plain-file", "link"} {
+			homeMissing(t, filepath.Join(root, p))
 		}
 		if got := homeRead(t, filepath.Join(legacy, "cache", "go", "mod")); got != "m" {
-			t.Fatalf("legacy mod = %q, want it untouched", got)
+			t.Fatalf("legacy cache = %q, want it untouched", got)
+		}
+		if got := homeRead(t, filepath.Join(legacy, "claude", "a", "f")); got != "c" {
+			t.Fatalf("legacy claude = %q, want it untouched", got)
 		}
 	})
+
+	t.Run("keeps directories the disk has", func(t *testing.T) {
+		t.Parallel()
+		legacy, root := t.TempDir(), t.TempDir()
+		homeWrite(t, filepath.Join(legacy, "claude", "old"), "old", 0o600)
+		homeWrite(t, filepath.Join(root, "claude", "new"), "new", 0o600)
+		if err := migrateLegacyHome(root, legacy, acct); err != nil {
+			t.Fatal(err)
+		}
+		homeMissing(t, filepath.Join(root, "claude", "old"))
+		if got := homeRead(t, filepath.Join(root, "claude", "new")); got != "new" {
+			t.Fatalf("new = %q", got)
+		}
+	})
+
+	t.Run("skips the temporary copy prefix", func(t *testing.T) {
+		t.Parallel()
+		legacy, root := t.TempDir(), t.TempDir()
+		homeWrite(t, filepath.Join(legacy, migratingPrefix+"x", "f"), "x", 0o600)
+		if err := migrateLegacyHome(root, legacy, acct); err != nil {
+			t.Fatal(err)
+		}
+		homeMissing(t, filepath.Join(root, migratingPrefix+"x"))
+	})
+
+	t.Run("a failed copy is an error and leaves the source", func(t *testing.T) {
+		t.Parallel()
+		if os.Geteuid() == 0 {
+			t.Skip("root reads every file")
+		}
+		legacy, root := t.TempDir(), t.TempDir()
+		homeWrite(t, filepath.Join(legacy, "copilot", "ok"), "ok", 0o600)
+		secret := filepath.Join(legacy, "other", "unreadable")
+		homeWrite(t, secret, "x", 0o000)
+		if err := migrateLegacyHome(root, legacy, acct); err == nil {
+			t.Fatal("want an error")
+		}
+		homeMissing(t, filepath.Join(root, "other"))
+		homeMissing(t, filepath.Join(root, migratingPrefix+"other"))
+		if _, err := os.Lstat(secret); err != nil {
+			t.Fatalf("source file: %v", err)
+		}
+	})
+
+	t.Run("a missing legacy home is an error", func(t *testing.T) {
+		t.Parallel()
+		if err := migrateLegacyHome(t.TempDir(), filepath.Join(t.TempDir(), "absent"), acct); err == nil {
+			t.Fatal("want an error")
+		}
+	})
+}
+
+func TestPrepareCacheDirIgnoresLegacyCache(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	legacy := t.TempDir()
+	homeWrite(t, filepath.Join(legacy, "cache", "go", "mod"), "m", 0o600)
+	if err := prepareCacheDir(homeTestLogger(), root, homeTestAccount()); err != nil {
+		t.Fatal(err)
+	}
+	homeMissing(t, filepath.Join(root, "cache", "go"))
+	if got := homeRead(t, filepath.Join(legacy, "cache", "go", "mod")); got != "m" {
+		t.Fatalf("legacy mod = %q, want it untouched", got)
+	}
+}
+
+func TestPrepareStateDirOwnsAgentWrites(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to give files to another owner")
+	}
+	const uid, gid = 4242, 4343
+	acct := account{name: "agent", uid: uid, gid: gid}
+	tests := []struct {
+		name  string
+		agent string
+		dir   string
+		// existing is a file the agent owns that the writers replace.
+		existing string
+		owned    []string
+	}{
+		{"claude defaults", "claude", "claude", ".claude.json", []string{"claude", "claude/.claude.json"}},
+		{"copilot settings", "copilot", "copilot", "settings.json", []string{"copilot", "copilot/settings.json"}},
+		{"agy settings dir", "agy", "antigravity", "", []string{"antigravity", "antigravity/antigravity-cli", "antigravity/antigravity-cli/settings.json"}},
+		{"agy existing settings", "agy", "antigravity", "antigravity-cli/settings.json", []string{"antigravity", "antigravity/antigravity-cli", "antigravity/antigravity-cli/settings.json"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			if tt.existing != "" {
+				p := filepath.Join(root, tt.dir, tt.existing)
+				homeWrite(t, p, `{"keep": 1}`, 0o600)
+				for q := p; q != root; q = filepath.Dir(q) {
+					if err := os.Lchown(q, uid, gid); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			st := &StateDisk{Agent: tt.agent, Dirs: []string{tt.dir}}
+			for run := 1; run <= 2; run++ {
+				if err := prepareStateDir(homeTestLogger(), root, "", st, acct); err != nil {
+					t.Fatalf("run %d: %v", run, err)
+				}
+				for _, p := range tt.owned {
+					u, g := homeOwner(t, filepath.Join(root, p))
+					if u != uid || g != gid {
+						t.Errorf("run %d: %s owned by %d:%d, want %d:%d", run, p, u, g, uid, gid)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestIDToInt(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		id      uint32
+		want    int
+		wantErr bool
+	}{
+		{"zero", 0, 0, false},
+		{"typical", 1000, 1000, false},
+		{"max int32", math.MaxInt32, math.MaxInt32, false},
+		{"above max int32", math.MaxInt32 + 1, 0, true},
+		{"max uint32", math.MaxUint32, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := idToInt(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("idToInt(%d) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("idToInt(%d) = %d, want %d", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAccountChownIDs(t *testing.T) {
+	t.Parallel()
+	if _, _, err := (account{uid: 1000, gid: 1000}).chownIDs(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := (account{uid: math.MaxUint32, gid: 1000}).chownIDs(); err == nil {
+		t.Fatal("uid: want an error")
+	}
+	if _, _, err := (account{uid: 1000, gid: math.MaxUint32}).chownIDs(); err == nil {
+		t.Fatal("gid: want an error")
+	}
 }
 
 func mapsEqual(a, b map[string]string) bool {

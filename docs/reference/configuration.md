@@ -1217,7 +1217,7 @@ With `disk`:
 
 - The disk is private to the workspace. It is the file `tmp.img` in the workspace state directory on the host, outside every guest share, and it is independent of the Docker data disk ([`docker_disk`](#cpu-memory-and-docker_disk)).
 - jailoc creates the disk empty at every VM start and formats it with `mkfs.ext4` from the workspace image. Nothing in `/tmp` survives a VM stop or restart.
-- The image must contain `mkfs.ext4` (package `e2fsprogs`). The embedded base image does. An image without it fails the VM start with an error that names `mkfs.ext4`; jailoc installs nothing. See [Use a custom image](../how-to/custom-images.md#know-what-the-image-must-provide).
+- The image must contain `mkfs.ext4` (package `e2fsprogs`), as it must for the [state and cache disks](#persistent-state). The embedded base image does. An image without it fails the VM start with an error that names `mkfs.ext4`; jailoc installs nothing. See [Use a custom image](../how-to/custom-images.md#know-what-the-image-must-provide).
 - The guest trims freed blocks periodically (`FITRIM`) so that the host can reclaim them, and jailoc removes the disk file when the VM stops.
 
 #### Mount options
@@ -1423,7 +1423,9 @@ Each workspace has two persistent disks in `~/.cache/jailoc-vm/workspaces/<works
 Both are sparse ext4 files, so the host stores only written blocks, and the guest periodically trims freed blocks so the host can take them back. A full `~/.cache` does not take space from the agent's state. Both disks grow with their setting after `jailoc restart` and never shrink.
 
 - `jailoc down --purge` deletes both disks.
+- The workspace image must contain `mkfs.ext4` and `resize2fs` (package `e2fsprogs`). The guest formats an unformatted disk with `mkfs.ext4` and grows the file system to a raised disk size with `resize2fs`. Without `mkfs.ext4` the VM does not start; without `resize2fs` the file system keeps its size. The embedded base image has both; see [Use a custom image](../how-to/custom-images.md#know-what-the-image-must-provide).
 - An agent [`profile`](#agent-profiles) moves the agent's directories to a shared profile or makes them ephemeral.
+- A workspace whose persistent home directories were stored as a directory (`guest/home`) keeps them there until its next start. The guest then copies the agent's state directories to `state.img`, and jailoc moves the old home to `legacy-home` next to the disks (`legacy-home-1`, `legacy-home-2` and so on when one exists), with a message. `cache.img` starts empty: the old `~/.cache` is not copied and stays in `legacy-home`. jailoc never deletes `legacy-home` on its own; delete it by hand once you no longer need it. `jailoc down --purge` removes it with the rest of the workspace's VM state.
 
 ### Tool caches
 
