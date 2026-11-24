@@ -55,9 +55,8 @@ libkrun's virtio-fs server does not confine the guest to the exported directorie
 
     Seatbelt also confines metadata operations such as `stat` outside those paths. jailoc refuses to start a VM when it can't apply the profile.
 
-    !!! warning "Seatbelt is deprecated"
-
-        Apple marks `sandbox_init`, the call that applies the profile, as deprecated. Chromium and other macOS sandboxes still rely on it, but a future macOS release could remove or change it, and the VM process confinement on macOS would then stop working.
+    !!! note "Seatbelt is deprecated, but here to stay for now"
+        Apple has marked `sandbox_init`, the call that applies the profile, as deprecated since OS X 10.8 (2012), without shipping a replacement; App Sandbox entitlements can't express this profile model. Chromium, Codex CLI and Anthropic's sandbox runtime still rely on it, and Apple still uses Seatbelt internally. A future macOS release could remove or change it, which would end the VM process confinement on macOS.
 
 ### Restricting external communication
 

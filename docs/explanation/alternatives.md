@@ -120,7 +120,7 @@ Process sandboxes restrict the agent's processes on the host kernel. They start 
 
 ### Seatbelt
 
-Seatbelt (`sandbox-exec`) is the macOS kernel sandbox, deprecated and undocumented but widely used. Profiles limit files and IP/port traffic; agent sandboxes usually allow only a local filtering proxy.
+Seatbelt (`sandbox-exec`) is the macOS kernel sandbox. The entry points are deprecated, and the SBPL profile language is undocumented, but it is widely used: Chromium, Codex CLI and Anthropic's sandbox runtime rely on it. Profiles limit files and IP/port traffic; agent sandboxes usually allow only a local filtering proxy.
 
 ### Built-in agent sandboxes
 

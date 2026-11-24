@@ -123,7 +123,7 @@ sudo usermod -aG kvm "$USER"
 **Fix:**
 
 - On Linux, use Linux 5.19 or later and check that `landlock` appears in `/sys/kernel/security/lsm`; if it doesn't, add it to the `lsm=` kernel parameter and reboot. See [How to install jailoc](installation.md#check-your-platform).
-- On macOS, read the exact error in `supervisor.log` and report it in a [GitHub issue](https://github.com/seznam/jailoc/issues). The profile is applied with `sandbox_init`, which Apple marks as deprecated.
+- On macOS, read the exact error in `supervisor.log` and report it in a [GitHub issue](https://github.com/seznam/jailoc/issues). The profile is applied with `sandbox_init`, which Apple marks as deprecated; the call still works on current macOS, so a failure here is a jailoc bug, not the deprecation.
 
 ## VM doesn't become ready
 
