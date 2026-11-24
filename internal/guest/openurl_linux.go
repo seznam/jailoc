@@ -95,7 +95,15 @@ func registerOAuthCallback(endpoint string, port uint16, path string) error {
 		return fmt.Errorf("open-url: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: openURLTimeout}
+	// The control endpoint is the host gateway; never route it through an
+	// HTTP_PROXY from the session environment.
+	client := &http.Client{
+		Timeout: openURLTimeout,
+		Transport: &http.Transport{
+			Proxy:             nil,
+			DisableKeepAlives: true,
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("open-url: register callback: %w", err)

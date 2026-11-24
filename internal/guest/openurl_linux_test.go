@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -56,5 +57,41 @@ func TestInstallXDGOpenAndRegister(t *testing.T) {
 	}
 	if gotPort != 19876 || gotPath != "/mcp/oauth/callback" {
 		t.Fatalf("registered (%d, %q), want (19876, /mcp/oauth/callback)", gotPort, gotPath)
+	}
+}
+
+// TestRegisterOAuthCallbackIgnoresHTTPProxy must not call t.Parallel: it uses
+// t.Setenv. 0.0.0.0 is not loopback, so http.ProxyFromEnvironment would route
+// it through HTTP_PROXY, while a direct dial on Linux reaches the loopback
+// test server.
+func TestRegisterOAuthCallbackIgnoresHTTPProxy(t *testing.T) {
+	var proxyHits atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyHits.Add(1)
+		http.Error(w, "proxied", http.StatusBadGateway)
+	}))
+	t.Cleanup(proxy.Close)
+
+	var hits atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(ts.Close)
+
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("http_proxy", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+
+	endpoint := strings.Replace(ts.URL, "127.0.0.1", "0.0.0.0", 1) + "/register"
+	if err := registerOAuthCallback(endpoint, 19876, "/cb"); err != nil {
+		t.Fatalf("registerOAuthCallback with HTTP_PROXY set: %v (proxy hits: %d)", err, proxyHits.Load())
+	}
+	if proxyHits.Load() != 0 {
+		t.Fatalf("proxy hits = %d, want 0", proxyHits.Load())
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("broker hits = %d, want 1", hits.Load())
 	}
 }
