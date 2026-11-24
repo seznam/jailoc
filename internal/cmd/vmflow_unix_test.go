@@ -282,6 +282,20 @@ func TestStatusRestartChanges(t *testing.T) {
 	if got := statusRestartChanges(ws, matching); !slices.Equal(got, []string{"network.ipv6", "the upgraded jailoc guest"}) {
 		t.Errorf("guest with another protocol: got %v", got)
 	}
+	omo, ok := agent.Lookup("omo")
+	if !ok {
+		t.Fatal("omo harness not found")
+	}
+	omoWS := &workspace.Resolved{Name: "omo", Agent: omo, CPU: 2, Memory: "4g"}
+	oldOmoSpec := vm.Spec{Agent: "omo", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol, Guest: &guest.Config{}}
+	if got := statusRestartChanges(omoWS, oldOmoSpec); !slices.Equal(got, []string{"tmpfs mounts"}) {
+		t.Errorf("omo spec without tmpfs: got %v, want [tmpfs mounts]", got)
+	}
+	newOmoSpec := oldOmoSpec
+	newOmoSpec.Guest = &guest.Config{Tmpfs: []string{"/home/agent/.omo/agent/rpc"}}
+	if got := statusRestartChanges(omoWS, newOmoSpec); len(got) != 0 {
+		t.Errorf("omo spec with matching tmpfs: got %v, want no changes", got)
+	}
 }
 
 func TestConfigLabel(t *testing.T) {
@@ -527,4 +541,44 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+func TestWorkspaceSpecTmpfs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	omo, ok := agent.Lookup("omo")
+	if !ok {
+		t.Fatal("omo harness not found")
+	}
+	claude, ok := agent.Lookup("claude")
+	if !ok {
+		t.Fatal("claude harness not found")
+	}
+
+	tests := []struct {
+		name  string
+		agent agent.Harness
+		want  []string
+	}{
+		{"omo", omo, []string{"/home/agent/.omo/agent/rpc"}},
+		{"claude", claude, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := &workspace.Resolved{
+				Name:       "test-" + tt.name,
+				Agent:      tt.agent,
+				CPU:        2,
+				Memory:     "4g",
+				DockerDisk: "20g",
+			}
+			spec, err := workspaceSpec(context.Background(), ws, vmRuntimeFiles{}, "img:latest", nil, nil)
+			if err != nil {
+				t.Fatalf("workspaceSpec: %v", err)
+			}
+			if !slices.Equal(spec.Guest.Tmpfs, tt.want) {
+				t.Fatalf("Guest.Tmpfs = %q, want %q", spec.Guest.Tmpfs, tt.want)
+			}
+		})
+	}
 }

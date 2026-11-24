@@ -151,6 +151,26 @@ func TestRestartOnlyChangesSession(t *testing.T) {
 	}
 }
 
+func TestRestartOnlyChangesTmpfs(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name                    string
+		runningAgent, wantAgent string
+		runningTmpfs, wantTmpfs []string
+		want                    []string
+	}{
+		{"unchanged", "omo", "omo", []string{"/home/agent/.omo/agent/rpc"}, []string{"/home/agent/.omo/agent/rpc"}, nil},
+		{"added tmpfs on upgrade", "omo", "omo", nil, []string{"/home/agent/.omo/agent/rpc"}, []string{"tmpfs mounts"}},
+		{"agent changed reports agent only", "opencode", "omo", nil, []string{"/home/agent/.omo/agent/rpc"}, []string{"agent"}},
+	} {
+		running := vm.Spec{Agent: tt.runningAgent, GuestProtocol: guest.Protocol, Guest: &guest.Config{Tmpfs: tt.runningTmpfs}}
+		want := vm.Spec{Agent: tt.wantAgent, GuestProtocol: guest.Protocol, Guest: &guest.Config{Tmpfs: tt.wantTmpfs}}
+		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.want) {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestReloadPolicyIPv6(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {

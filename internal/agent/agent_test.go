@@ -254,3 +254,23 @@ func TestProviderEndpoints(t *testing.T) {
 		t.Error("ProviderEndpoints with an unknown provider: want error")
 	}
 }
+
+func TestTmpfsDirs(t *testing.T) {
+	t.Parallel()
+
+	omo, ok := Lookup("omo")
+	if !ok {
+		t.Fatal("omo harness not found")
+	}
+	if want := []string{"/home/agent/.omo/agent/rpc"}; !slices.Equal(omo.TmpfsDirs, want) {
+		t.Fatalf("omo.TmpfsDirs = %q, want %q", omo.TmpfsDirs, want)
+	}
+	for _, h := range All() {
+		if h.Name == "omo" {
+			continue
+		}
+		if len(h.TmpfsDirs) != 0 {
+			t.Errorf("%s.TmpfsDirs = %q, want empty", h.Name, h.TmpfsDirs)
+		}
+	}
+}

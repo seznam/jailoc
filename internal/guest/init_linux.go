@@ -4,6 +4,7 @@ package guest
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -141,6 +142,9 @@ func Init(logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := mountTmpfsDirs(cfg.Tmpfs, acct); err != nil {
+		return err
 	}
 	live := &liveState{logger: logger, acct: acct, created: map[string]bool{}, hostPorts: map[uint16]func(){}, tmp: tmpClean}
 	if err := live.setSnapshots(cfg.Snapshots); err != nil {
@@ -557,6 +561,44 @@ func protectPaths(pins, readOnly []string) error {
 		flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV)
 		if err := syscall.Mount("", p, "", flags, ""); err != nil {
 			return fmt.Errorf("protect %s: remount read-only: %w", p, err)
+		}
+	}
+	return nil
+}
+
+const tmpfsDirSize = "16m"
+
+// mountTmpfsDirs mounts a private tmpfs owned by acct on each directory in
+// dirs, parents before children. Missing parents inside the agent's home
+// belong to the agent.
+func mountTmpfsDirs(dirs []string, acct account) error {
+	return mountTmpfsDirsWith(dirs, acct, func(target, opts string) error {
+		return syscall.Mount("tmpfs", target, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, opts)
+	})
+}
+
+func mountTmpfsDirsWith(dirs []string, acct account, mountFn func(target, opts string) error) error {
+	ordered := make([]string, 0, len(dirs))
+	for _, raw := range dirs {
+		dir := filepath.Clean(raw)
+		if !filepath.IsAbs(dir) || dir == "/" {
+			return fmt.Errorf("tmpfs %q: target must be an absolute path below /", raw)
+		}
+		ordered = append(ordered, dir)
+	}
+	slices.SortStableFunc(ordered, func(a, b string) int {
+		return cmp.Compare(strings.Count(a, "/"), strings.Count(b, "/"))
+	})
+	opts := fmt.Sprintf("mode=0700,uid=%d,gid=%d,size=%s", acct.uid, acct.gid, tmpfsDirSize)
+	for _, dir := range ordered {
+		if err := makeParents(filepath.Dir(dir), acct); err != nil {
+			return fmt.Errorf("tmpfs %s: %w", dir, err)
+		}
+		if err := mountPoint(dir, true); err != nil {
+			return fmt.Errorf("tmpfs %s: %w", dir, err)
+		}
+		if err := mountFn(dir, opts); err != nil {
+			return fmt.Errorf("tmpfs %s: %w", dir, err)
 		}
 	}
 	return nil

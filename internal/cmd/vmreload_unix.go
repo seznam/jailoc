@@ -259,6 +259,9 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if !agentChanged && running.Guest.WorkDir != want.Guest.WorkDir {
 		out = append(out, "the working directory")
 	}
+	if !agentChanged && !slices.Equal(running.Guest.Tmpfs, want.Guest.Tmpfs) {
+		out = append(out, "tmpfs mounts")
+	}
 	if !guestCompatible(running) {
 		out = append(out, "the jailoc guest (jailoc was upgraded)")
 	}
