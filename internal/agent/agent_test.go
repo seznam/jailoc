@@ -19,6 +19,11 @@ func TestLookup(t *testing.T) {
 	if _, ok := Lookup("vim"); ok {
 		t.Fatal("Lookup(vim) found a harness")
 	}
+	for name, want := range map[string]string{"opencode": "opencode2", "opencode2": "opencode2", "claude": "claude"} {
+		if h, _ := Lookup(name); h.Builtin != want {
+			t.Errorf("Lookup(%q).Builtin = %q, want %q", name, h.Builtin, want)
+		}
+	}
 	if _, ok := Lookup(Default); !ok {
 		t.Fatalf("default harness %q is not built in", Default)
 	}

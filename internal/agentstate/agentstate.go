@@ -151,7 +151,8 @@ func SetStateDefault(root *os.Root, file string, sd agent.StateDefault) error {
 }
 
 // replaceFile writes data to file inside root through a temporary file that
-// it renames over file, so a failed write leaves the old file intact.
+// it syncs and renames over file, so a failed write (for example ENOSPC on a
+// full state disk) leaves the old file intact.
 func replaceFile(root *os.Root, file string, data []byte) error {
 	tmp := file + ".jailoc-tmp"
 	if err := root.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -162,6 +163,9 @@ func replaceFile(root *os.Root, file string, data []byte) error {
 		return fmt.Errorf("create %s: %w", tmp, err)
 	}
 	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -231,10 +235,7 @@ func SetDefaultStatusLine(root *os.Root, file, harness string) error {
 	if err := root.MkdirAll(path.Dir(file), 0o700); err != nil {
 		return fmt.Errorf("create directory of %s: %w", file, err)
 	}
-	if err := root.WriteFile(file, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", file, err)
-	}
-	return nil
+	return replaceFile(root, file, append(data, '\n'))
 }
 
 func isLegacyStatusLine(raw json.RawMessage, harness string) bool {

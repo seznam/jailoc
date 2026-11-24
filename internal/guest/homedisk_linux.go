@@ -418,11 +418,21 @@ func ownPath(root *os.Root, rel, inner string, uid, gid int) error {
 }
 
 // prepareCacheDir prepares the cache directory below cacheRoot, the mounted
-// cache disk. The legacy cache directory is not copied onto it: the cache
-// can be rebuilt and a large one would not copy within the boot deadline.
+// cache disk, and gives it to acct, recursively when it belonged to other
+// IDs (for example after the account fell back to the host IDs). The legacy
+// cache directory is not copied onto it: the cache can be rebuilt and a
+// large one would not copy within the boot deadline.
 func prepareCacheDir(_ *slog.Logger, cacheRoot string, acct account) error {
-	if err := ownedDir(filepath.Join(cacheRoot, homeCacheDir), acct, 0o700); err != nil {
+	root, err := os.OpenRoot(cacheRoot)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", cacheRoot, err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := ensureStateDir(root, cacheRoot, homeCacheDir, acct); err != nil {
 		return fmt.Errorf("cache directory: %w", err)
+	}
+	if err := root.Chmod(homeCacheDir, 0o700); err != nil {
+		return fmt.Errorf("cache directory: chmod: %w", err)
 	}
 	return nil
 }
@@ -448,9 +458,11 @@ func migrateLegacyDir(root *os.Root, diskRoot, rel, legacy string, acct account)
 }
 
 // migrateDirToDisk copies the directory src to rel below diskRoot, owned by
-// acct. The copy is made under a temporary name and renamed into place, so an
-// interrupted copy never shows as the directory and the next boot starts it
-// again. src is left untouched.
+// acct. The copy is made under a temporary name, written back to the disk
+// and only then renamed into place, and the rename is written back too. An
+// interrupted copy therefore never shows as the directory, the next boot
+// starts it again, and a directory in place is complete even after a crash,
+// before the host archives src. src is left untouched.
 func migrateDirToDisk(diskRoot, rel, src string, acct account) error {
 	tmp := filepath.Join(diskRoot, migratingPrefix+rel)
 	if err := os.RemoveAll(tmp); err != nil {
@@ -460,11 +472,39 @@ func migrateDirToDisk(diskRoot, rel, src string, acct account) error {
 		_ = os.RemoveAll(tmp) // best effort; the copy error is reported
 		return fmt.Errorf("copy %s: %w", src, err)
 	}
+	if err := syncFS(diskRoot); err != nil {
+		_ = os.RemoveAll(tmp) // best effort; the write-back error is reported
+		return fmt.Errorf("write back %s: %w", migratingPrefix+rel, err)
+	}
 	if err := os.Rename(tmp, filepath.Join(diskRoot, rel)); err != nil {
 		_ = os.RemoveAll(tmp) // best effort; the rename error is reported
 		return fmt.Errorf("move %s into place: %w", migratingPrefix+rel, err)
 	}
+	if err := syncDir(diskRoot); err != nil {
+		return fmt.Errorf("write back the move of %s: %w", rel, err)
+	}
 	return nil
+}
+
+// syncFS writes back the filesystem that holds dir and returns a write-back
+// error of any of its files, such as ENOSPC or EIO from the host.
+func syncFS(dir string) error {
+	f, err := os.Open(dir) //nolint:gosec // G304: the mounted state disk
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }() // read-only
+	return unix.Syncfs(int(f.Fd()))
+}
+
+// syncDir writes back the entries of the directory dir.
+func syncDir(dir string) error {
+	f, err := os.Open(dir) //nolint:gosec // G304: the mounted state disk
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }() // read-only
+	return f.Sync()
 }
 
 // copyTree copies the directory src to dst, which must not exist. It keeps

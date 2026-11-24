@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -223,6 +224,31 @@ func TestAddStatusLine(t *testing.T) {
 		entries, err := os.ReadDir(data)
 		if err != nil || len(entries) != 0 {
 			t.Fatalf("directory = %v, %v; want empty", entries, err)
+		}
+	})
+
+	t.Run("settings replaced, not rewritten in place", func(t *testing.T) {
+		t.Parallel()
+		data := t.TempDir()
+		file := filepath.Join(data, "settings.json")
+		const old = `{"model":"m"}`
+		if err := os.WriteFile(file, []byte(old), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// A hard link keeps the old inode: an in-place write would change
+		// its content, a replacement by rename leaves it as it was.
+		link := filepath.Join(data, "old.json")
+		if err := os.Link(file, link); err != nil {
+			t.Fatal(err)
+		}
+		if err := AddStatusLine(openRoot(t, data), ".", copilot); err != nil {
+			t.Fatalf("AddStatusLine: %v", err)
+		}
+		if b, err := os.ReadFile(link); err != nil || string(b) != old { //nolint:gosec // G304: test file
+			t.Errorf("old inode = %q, %v; want %q", b, err, old)
+		}
+		if _, err := os.Lstat(file + ".jailoc-tmp"); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("temporary file left behind: %v", err)
 		}
 	})
 

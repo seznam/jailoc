@@ -729,7 +729,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if len(stateDirs) > 0 {
 		spec.StateDisk = true
 		spec.StateDiskSize = stateDiskSize
-		g.State = &guest.StateDisk{Agent: ws.Agent.Name, Dirs: stateDirs, Ephemeral: ws.AgentProfile != nil && ws.AgentProfile.Ephemeral()}
+		g.State = &guest.StateDisk{Agent: cmp.Or(ws.Agent.Builtin, ws.Agent.Name), Dirs: stateDirs, Ephemeral: ws.AgentProfile != nil && ws.AgentProfile.Ephemeral()}
 	}
 	if cache {
 		spec.CacheDisk = true

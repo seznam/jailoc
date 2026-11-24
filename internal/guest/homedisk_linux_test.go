@@ -542,6 +542,30 @@ func TestPrepareCacheDir(t *testing.T) {
 
 }
 
+func TestPrepareCacheDirOwnership(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to give files to another owner")
+	}
+	root := t.TempDir()
+	homeWrite(t, filepath.Join(root, "cache", "pip", "wheel"), "w", 0o600)
+	for _, p := range []string{"cache", "cache/pip", "cache/pip/wheel"} {
+		if err := os.Lchown(filepath.Join(root, p), 0, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acct := account{name: "agent", uid: 4242, gid: 4343}
+	if err := prepareCacheDir(homeTestLogger(), root, acct); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"cache", "cache/pip", "cache/pip/wheel"} {
+		uid, gid := homeOwner(t, filepath.Join(root, p))
+		if uid != 4242 || gid != 4343 {
+			t.Errorf("%s owned by %d:%d, want 4242:4343", p, uid, gid)
+		}
+	}
+}
+
 func TestMigrateLegacyHome(t *testing.T) {
 	t.Parallel()
 	acct := homeTestAccount()

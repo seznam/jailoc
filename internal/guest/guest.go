@@ -239,8 +239,9 @@ type StateDisk struct {
 	// Disk is the block device mounted at StateDiskDir; it is formatted
 	// as ext4 with label StateDiskLabel on first use.
 	Disk string `json:"disk"`
-	// Agent is the harness name (e.g. "opencode2", "claude") whose state
-	// defaults and status line are applied at boot.
+	// Agent is the built-in harness name (e.g. "opencode2", "claude", also
+	// for a custom agent derived from it) whose state defaults and status
+	// line are applied at boot.
 	Agent string `json:"agent,omitempty"`
 	// Dirs are the state directory names under StateDiskDir (or under
 	// StateDiskDir+"/ephemeral" when Ephemeral is set) prepared at boot.

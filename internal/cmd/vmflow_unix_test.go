@@ -838,6 +838,23 @@ func TestWorkspaceSpecStateAndCacheDisks(t *testing.T) {
 		})
 	}
 
+	t.Run("custom agent and alias use the built-in harness", func(t *testing.T) {
+		t.Parallel()
+		custom, _ := agent.Lookup("claude")
+		custom.Name = "claude-opus" // as workspace.Resolve derives a custom agent
+		alias, _ := agent.Lookup("opencode")
+		for h, want := range map[*agent.Harness]string{&custom: "claude", &alias: "opencode2"} {
+			ws := &workspace.Resolved{Name: "test", Agent: *h, CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g"}
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
+			if err != nil {
+				t.Fatalf("workspaceSpec: %v", err)
+			}
+			if st := spec.Guest.State; st == nil || st.Agent != want {
+				t.Errorf("agent %s: Guest.State = %+v, want agent %s", h.Name, st, want)
+			}
+		}
+	})
+
 	for _, bad := range []workspace.Resolved{
 		{Name: "t", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "1m", CacheDisk: "20g"},
 		{Name: "t", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "x"},
