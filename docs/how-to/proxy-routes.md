@@ -36,8 +36,8 @@ Guest port 6081 (the proxy relay) is reserved whenever any route exists. `ports`
 
 `jailoc up` and `jailoc restart` automatically start or update the background HTTPS proxy when a workspace has `proxy` routes, `jailoc reload` updates routes whose guest ports are already in the running VM's allowlist, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). `jailoc status` shows the running proxy and its route URLs.
 
-- jailoc creates a local ECDSA CA (`~/.config/jailoc/ingress/ca.crt`) and a leaf certificate (`~/.config/jailoc/ingress/cert.crt`) covering `*.<workspace>.jailoc.local` for every proxy workspace, and reuses them. It issues a new leaf when a workspace is added or the leaf is close to expiry. There is no option to supply your own certificate.
-- The CA carries a critical name constraint: it can only sign names under `jailoc.local` and no IP addresses.
+- jailoc creates a local CA in `~/.local/share/jailoc/proxy` and reuses it: a root certificate (`ca.crt`, the one you trust) and an intermediate that signs a leaf certificate (`cert.crt`) covering `*.<workspace>.jailoc.local` for every proxy workspace. It issues a new leaf when a workspace is added or the leaf is close to expiry. There is no option to supply your own certificate.
+- The root and the intermediate both carry a critical name constraint: they can only vouch for names under `jailoc.local` and no IP addresses.
 - The proxy listens on `127.0.0.1:8443` by default. `jailoc proxy status` shows it, and `jailoc proxy stop` stops it.
 - Routes close when a workspace VM stops or is replaced.
 
@@ -68,18 +68,18 @@ The proxy reaches the guest through a private socket (`proxy.sock`) on the host 
 
 Browsers must reach `https://<name>.<workspace>.jailoc.local` on port 443 and trust its certificate. You do this once, by hand; jailoc doesn't verify it. Every command below that needs `sudo` is yours to run, so review each first. [Verify the setup](#verify-the-setup) when you are done.
 
-### Keep the ingress CA private
+### Keep the proxy CA private
 
-jailoc creates the CA the first time a proxy starts. Its key, `~/.config/jailoc/ingress/ca.key`, stays on the host so jailoc can issue leaves for new workspaces.
+jailoc creates the CA the first time a proxy starts. The root key signs the intermediate once and is never written to disk. The intermediate key, `~/.local/share/jailoc/proxy/intermediate.key`, stays on the host so jailoc can issue leaves for new workspaces.
 
 !!! danger "The CA is a trust anchor"
 
-    Clients may ignore name constraints on a trust anchor. If `ca.key` leaks, assume anyone holding it can mint certificates that such clients accept for any domain. jailoc refuses to start the proxy when `~/.config/jailoc/ingress` overlaps a workspace `paths` entry, `mounts` entry or `snapshots` source; keep the directory out of every workspace. Remove the CA from your trust stores when you stop using the proxy.
+    The intermediate's name constraint applies in every client that checks the chain, so its key can only mint certificates for names under `jailoc.local`. Still keep it private: anyone holding it can impersonate every route. jailoc rejects `paths`, `mounts` and `snapshots` that contain `~/.local/share/jailoc`, and refuses to start the proxy when its CA directory overlaps a shared path. Remove the CA from your trust stores when you stop using the proxy.
 
-Every command below reads the CA path from `ING`:
+Every command below reads the CA directory from `CA_DIR`:
 
 ```bash
-ING=~/.config/jailoc/ingress
+CA_DIR=~/.local/share/jailoc/proxy
 ```
 
 ### Trust the CA
@@ -87,18 +87,18 @@ ING=~/.config/jailoc/ingress
 macOS (current user):
 
 ```bash
-security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db "$ING/ca.crt"
+security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db "$CA_DIR/ca.crt"
 ```
 
 Linux system store, which curl and most non-browser clients use:
 
 ```bash
 # Debian, Ubuntu
-sudo install -m 0644 "$ING/ca.crt" /usr/local/share/ca-certificates/jailoc-ingress-ca.crt
+sudo install -m 0644 "$CA_DIR/ca.crt" /usr/local/share/ca-certificates/jailoc-proxy-ca.crt
 sudo update-ca-certificates
 
 # Fedora, RHEL
-sudo install -m 0644 "$ING/ca.crt" /etc/pki/ca-trust/source/anchors/jailoc-ingress-ca.crt
+sudo install -m 0644 "$CA_DIR/ca.crt" /etc/pki/ca-trust/source/anchors/jailoc-proxy-ca.crt
 sudo update-ca-trust
 ```
 
@@ -107,7 +107,7 @@ sudo update-ca-trust
     Firefox keeps its own trust store on Linux, and Chrome and Chromium on Linux use the NSS database of your profile. The system store alone doesn't satisfy them. In Firefox, import `ca.crt` under Settings, Privacy & Security, View Certificates, Authorities, and trust it for websites. For Chrome or Chromium, with `certutil` from your NSS tools package:
 
     ```bash
-    certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "jailoc ingress CA" -i "$ING/ca.crt"
+    certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "jailoc proxy CA" -i "$CA_DIR/ca.crt"
     ```
 
 ### Resolve the names to 127.0.0.1
@@ -116,8 +116,8 @@ Point the route names at `127.0.0.1`, where the redirect and the proxy listen.
 **Exact names in `/etc/hosts` (macOS and Linux).** List every route, and add a name after each new route. Check first that no line of yours already carries the marker:
 
 ```bash
-grep -c '# jailoc-ingress' /etc/hosts    # 0 expected
-echo '127.0.0.1 foo.demo.jailoc.local # jailoc-ingress' | sudo tee -a /etc/hosts
+grep -c '# jailoc-proxy' /etc/hosts    # 0 expected
+echo '127.0.0.1 foo.demo.jailoc.local # jailoc-proxy' | sudo tee -a /etc/hosts
 ```
 
 This is the supported way on Linux. A per-link `resolvectl` route on the loopback interface doesn't work, because `systemd-resolved` ignores the loopback interface when it routes DNS queries.
@@ -154,9 +154,9 @@ An unprivileged process can't listen on 443, so the proxy listens on 8443 and th
 **Linux** with `nftables`, in a table of its own so cleanup removes only this:
 
 ```bash
-sudo nft add table ip jailoc_ingress
-sudo nft 'add chain ip jailoc_ingress output { type nat hook output priority -100 ; }'
-sudo nft add rule ip jailoc_ingress output ip daddr 127.0.0.1/32 tcp dport 443 redirect to :8443
+sudo nft add table ip jailoc_proxy
+sudo nft 'add chain ip jailoc_proxy output { type nat hook output priority -100 ; }'
+sudo nft add rule ip jailoc_proxy output ip daddr 127.0.0.1/32 tcp dport 443 redirect to :8443
 ```
 
 **macOS** with `pf`. This is the least certain step: nested anchors such as `com.apple/...` are reported not to be evaluated reliably on macOS 15, so the rule lives in a top-level anchor that you add to `/etc/pf.conf`. Every other line stays as it is.
@@ -165,14 +165,14 @@ sudo nft add rule ip jailoc_ingress output ip daddr 127.0.0.1/32 tcp dport 443 r
 
     ```bash
     sudo cp /etc/pf.conf /etc/pf.conf.jailoc-backup
-    echo 'rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 8443' | sudo tee /etc/pf.anchors/jailoc-ingress
+    echo 'rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 8443' | sudo tee /etc/pf.anchors/jailoc-proxy
     ```
 
 2. Edit `/etc/pf.conf` by hand. Add the first line directly after the existing `rdr-anchor "com.apple/*"` line (translation rules must precede filter rules) and the second directly after the existing `load anchor "com.apple" ...` line:
 
     ```text
-    rdr-anchor "jailoc-ingress"
-    load anchor "jailoc-ingress" from "/etc/pf.anchors/jailoc-ingress"
+    rdr-anchor "jailoc-proxy"
+    load anchor "jailoc-proxy" from "/etc/pf.anchors/jailoc-proxy"
     ```
 
 3. Check the syntax without loading, then load the file and enable `pf`. `pfctl -E` prints a token; keep it for cleanup.
@@ -187,7 +187,7 @@ sudo nft add rule ip jailoc_ingress output ip daddr 127.0.0.1/32 tcp dport 443 r
 
     Loading the main ruleset can remove rules that macOS installed dynamically, such as those of Internet Sharing. Don't load it while you rely on Internet Sharing, or switch that service off and on afterwards. Don't flush or disable `pf` as a whole.
 
-Confirm the rule is loaded with `sudo pfctl -a jailoc-ingress -s nat`, and confirm traffic with the [verification](#verify-the-setup) below. If the verification fails, remove the rule as described under [Clean up](#clean-up) rather than leaving it half working. The `nftables` redirect doesn't survive a reboot.
+Confirm the rule is loaded with `sudo pfctl -a jailoc-proxy -s nat`, and confirm traffic with the [verification](#verify-the-setup) below. If the verification fails, remove the rule as described under [Clean up](#clean-up) rather than leaving it half working. The `nftables` redirect doesn't survive a reboot.
 
 ### Use the listener broker (experimental)
 
@@ -223,7 +223,7 @@ The proxy runs in the background, and `jailoc up` and `jailoc restart` keep usin
 With the proxy running, request the login page with the CA as the only trust anchor and the name pinned to loopback. No `-k`: a certificate failure must fail the command.
 
 ```bash
-curl --cacert "$ING/ca.crt" --resolve foo.demo.jailoc.local:443:127.0.0.1 \
+curl --cacert "$CA_DIR/ca.crt" --resolve foo.demo.jailoc.local:443:127.0.0.1 \
   https://foo.demo.jailoc.local/.jailoc/login -sS -o /dev/null -w '%{http_code}\n'
 ```
 
@@ -238,14 +238,14 @@ Each command removes only what this guide added. Skip the lines for options you 
 jailoc proxy stop
 
 # redirect (Linux)
-sudo nft delete table ip jailoc_ingress
+sudo nft delete table ip jailoc_proxy
 
 # redirect (macOS): use the token that `pfctl -E` printed. Delete the two lines from
 # /etc/pf.conf by hand (or restore the backup if nothing else changed the file) before
 # removing the backup
-sudo pfctl -a jailoc-ingress -F nat
+sudo pfctl -a jailoc-proxy -F nat
 sudo pfctl -X <token>
-sudo rm /etc/pf.anchors/jailoc-ingress
+sudo rm /etc/pf.anchors/jailoc-proxy
 sudo rm /etc/pf.conf.jailoc-backup
 
 # listener broker: stop it with Ctrl+C first
@@ -253,22 +253,22 @@ sudo rm /usr/local/libexec/jailoc-listener-broker     # or /Library/PrivilegedHe
 sudo rmdir /var/run/jailoc-proxy/"$(id -u)" /var/run/jailoc-proxy
 
 # names: only the lines that carry the marker (on macOS use: sudo sed -i '' ...)
-sudo sed -i '/# jailoc-ingress$/d' /etc/hosts
+sudo sed -i '/# jailoc-proxy$/d' /etc/hosts
 # macOS wildcard: only if /etc/resolver/jailoc.local holds the two lines written above
 sudo rm /etc/resolver/jailoc.local
 
 # trust (macOS)
-security remove-trusted-cert "$ING/ca.crt"
-security delete-certificate -t -c "jailoc ingress CA" ~/Library/Keychains/login.keychain-db
+security remove-trusted-cert "$CA_DIR/ca.crt"
+security delete-certificate -t -c "jailoc proxy root CA" ~/Library/Keychains/login.keychain-db
 # trust (Debian, Ubuntu)
-sudo rm /usr/local/share/ca-certificates/jailoc-ingress-ca.crt && sudo update-ca-certificates --fresh
+sudo rm /usr/local/share/ca-certificates/jailoc-proxy-ca.crt && sudo update-ca-certificates --fresh
 # trust (Fedora, RHEL)
-sudo rm /etc/pki/ca-trust/source/anchors/jailoc-ingress-ca.crt && sudo update-ca-trust
+sudo rm /etc/pki/ca-trust/source/anchors/jailoc-proxy-ca.crt && sudo update-ca-trust
 # trust (Chrome, Chromium on Linux)
-certutil -d sql:$HOME/.pki/nssdb -D -n "jailoc ingress CA"
+certutil -d sql:$HOME/.pki/nssdb -D -n "jailoc proxy CA"
 
-# CA, key and leaf certificate
-rm -rf ~/.config/jailoc/ingress
+# CA, intermediate and leaf certificate
+rm -rf ~/.local/share/jailoc/proxy
 ```
 
 Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
@@ -284,7 +284,7 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 | Login code rejected | A code works once and expires 10 minutes after the proxy starts. Run `jailoc proxy stop`, then `jailoc proxy <workspace>` for a new one. |
 | Proxy refuses the workspace | The running VM doesn't match the configured proxy ports. Run `jailoc restart <workspace>`. |
 | Route fails after the VM stopped or was replaced | Run `jailoc up <workspace>`. |
-| `existing ingress CA in ... is unusable` | The CA in `~/.config/jailoc/ingress` is expired, unreadable or not limited to `jailoc.local`. Remove `ca.crt` and `ca.key` there, remove the old CA from your trust stores, and trust the new `ca.crt` after the next start. |
+| `existing proxy CA in ... is unusable` | The CA in `~/.local/share/jailoc/proxy` is expired, incomplete or not limited to `jailoc.local`. Remove that directory, remove the old CA from your trust stores, and trust the new `ca.crt` after the next start. |
 | Proxy fails to start | Read `~/.cache/jailoc-vm/proxy/proxy.log`. |
 | `the listener broker is not running for this user` | Start `jailoc-listener-broker --uid` with your UID as root; see [Use the listener broker](#use-the-listener-broker-experimental). |
 | `another proxy is attached to the listener broker` | Stop the other `jailoc proxy --listener-broker` first. |

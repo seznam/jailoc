@@ -322,7 +322,7 @@ func (m *proxyManager) sync(reqNames []string) proxyControlResponse {
 		targets = append(targets, proxyTarget{ws: &wsCopy, stateDir: inst.target.stateDir, id: inst.target.id})
 		routes = append(routes, inst.routesFor(m.wsRoutes[name])...)
 	}
-	cert, caPath, err := ensureIngressCert(cfg, targets)
+	cert, caPath, err := ensureProxyCert(cfg, targets)
 	if err != nil {
 		return proxyControlResponse{Error: err.Error()}
 	}

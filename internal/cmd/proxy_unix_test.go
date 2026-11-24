@@ -538,17 +538,17 @@ func TestProxyCommandArguments(t *testing.T) {
 	}
 }
 
-// ingressTestPool returns a pool holding the automatic ingress CA of the
+// proxyCATestPool returns a pool holding the automatic proxy CA of the
 // current HOME.
-func ingressTestPool(t *testing.T) *x509.CertPool {
+func proxyCATestPool(t *testing.T) *x509.CertPool {
 	t.Helper()
-	caPEM, err := os.ReadFile(ingressCACertPath()) //nolint:gosec // test fixture path.
+	caPEM, err := os.ReadFile(proxyCACertPath()) //nolint:gosec // test fixture path.
 	if err != nil {
-		t.Fatalf("read ingress CA: %v", err)
+		t.Fatalf("read proxy CA: %v", err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		t.Fatal("ingress CA holds no certificate")
+		t.Fatal("proxy CA holds no certificate")
 	}
 	return pool
 }
@@ -672,7 +672,7 @@ func shortTempDir(t *testing.T, pattern string) string {
 }
 
 // startProxyRunArgs is startProxyRunFor with the command line args. The
-// client trusts the automatic ingress CA.
+// client trusts the automatic proxy CA.
 func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config, args ...string) (*proxyRun, string) {
 	t.Helper()
 	home := shortTempDir(t, "jp")
@@ -724,7 +724,7 @@ func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string,
 		t.Fatalf("proxy printed no address and code:\n%s", run.out.String())
 	}
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: ingressTestPool(t), ServerName: host, MinVersion: tls.VersionTLS12},
+		TLSClientConfig: &tls.Config{RootCAs: proxyCATestPool(t), ServerName: host, MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", run.addr)
 		},
@@ -1035,7 +1035,8 @@ func TestProxyListenerBrokerServesThroughBroker(t *testing.T) {
 	}
 }
 
-func TestEnsureIngressCert(t *testing.T) {
+func proxyCertTestSetup(t *testing.T) (*config.Config, []proxyTarget) {
+	t.Helper()
 	home := shortTempDir(t, "jc")
 	t.Setenv("HOME", home)
 	t.Setenv(config.PathEnv, filepath.Join(home, "config.toml"))
@@ -1043,20 +1044,50 @@ func TestEnsureIngressCert(t *testing.T) {
 		"one": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
 	}}
 	targets := []proxyTarget{{ws: &workspace.Resolved{Name: "one", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}}}
-	cert1, caPath, err := ensureIngressCert(cfg, targets)
+	return cfg, targets
+}
+
+func TestEnsureProxyCert(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	cert1, caPath, err := ensureProxyCert(cfg, targets)
 	if err != nil {
-		t.Fatalf("ensureIngressCert: %v", err)
+		t.Fatalf("ensureProxyCert: %v", err)
 	}
-	if caPath == "" {
-		t.Fatal("caPath is empty")
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".local", "share", "jailoc", "proxy")
+	if caPath != filepath.Join(dir, "ca.crt") {
+		t.Fatalf("caPath = %q, want %q", caPath, filepath.Join(dir, "ca.crt"))
 	}
-	if err := cert1.Leaf.VerifyHostname("app.one.jailoc.local"); err != nil {
-		t.Fatalf("VerifyHostname: %v", err)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{".lock", "ca.crt", "cert.crt", "cert.key", "intermediate.crt", "intermediate.key"}; !slices.Equal(names, want) {
+		t.Fatalf("files in %s = %v, want %v (no root key)", dir, names, want)
+	}
+	if len(cert1.Certificate) != 2 {
+		t.Fatalf("served chain has %d certificates, want leaf and intermediate", len(cert1.Certificate))
+	}
+	inter, err := x509.ParseCertificate(cert1.Certificate[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediates := x509.NewCertPool()
+	intermediates.AddCert(inter)
+	if _, err := cert1.Leaf.Verify(x509.VerifyOptions{DNSName: "app.one.jailoc.local", Roots: proxyCATestPool(t), Intermediates: intermediates}); err != nil {
+		t.Fatalf("leaf does not chain to ca.crt: %v", err)
+	}
+	if _, err := cert1.Leaf.Verify(x509.VerifyOptions{DNSName: "app.one.jailoc.local", Roots: proxyCATestPool(t)}); err == nil {
+		t.Fatal("leaf verified without the intermediate; want the root to sign only the intermediate")
 	}
 	// Second call reuses the existing leaf and CA.
-	cert2, _, err := ensureIngressCert(cfg, targets)
+	cert2, _, err := ensureProxyCert(cfg, targets)
 	if err != nil {
-		t.Fatalf("second ensureIngressCert: %v", err)
+		t.Fatalf("second ensureProxyCert: %v", err)
 	}
 	if !bytes.Equal(cert1.Certificate[0], cert2.Certificate[0]) {
 		t.Fatal("existing valid leaf was regenerated")
@@ -1064,9 +1095,12 @@ func TestEnsureIngressCert(t *testing.T) {
 	// Adding a workspace not covered by the first leaf regenerates the leaf with the same CA.
 	cfg.Workspaces["two"] = config.Workspace{Proxy: config.ProxyMap(map[string]int{"api": 8080})}
 	targets = append(targets, proxyTarget{ws: &workspace.Resolved{Name: "two", Proxy: []workspace.ProxyRoute{{Name: "api", Port: 8080}}}})
-	cert3, _, err := ensureIngressCert(cfg, targets)
+	cert3, _, err := ensureProxyCert(cfg, targets)
 	if err != nil {
-		t.Fatalf("third ensureIngressCert: %v", err)
+		t.Fatalf("third ensureProxyCert: %v", err)
+	}
+	if !bytes.Equal(cert1.Certificate[1], cert3.Certificate[1]) {
+		t.Fatal("intermediate changed when the leaf was reissued")
 	}
 	if err := cert3.Leaf.VerifyHostname("api.two.jailoc.local"); err != nil {
 		t.Fatalf("VerifyHostname(api.two): %v", err)
@@ -1076,76 +1110,82 @@ func TestEnsureIngressCert(t *testing.T) {
 	}
 }
 
-func TestIngressCAIsLimitedToJailocLocal(t *testing.T) {
-	home := shortTempDir(t, "jc")
-	t.Setenv("HOME", home)
-	t.Setenv(config.PathEnv, filepath.Join(home, "config.toml"))
-	cfg := &config.Config{Workspaces: map[string]config.Workspace{
-		"one": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
-	}}
-	targets := []proxyTarget{{ws: &workspace.Resolved{Name: "one", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}}}
-	if _, _, err := ensureIngressCert(cfg, targets); err != nil {
-		t.Fatalf("ensureIngressCert: %v", err)
+func TestProxyCAIsLimitedToJailocLocal(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	if _, _, err := ensureProxyCert(cfg, targets); err != nil {
+		t.Fatalf("ensureProxyCert: %v", err)
 	}
-	dir := ingressDir()
-	caCert, caKey, _, err := readIngressCA(filepath.Join(dir, ingressCACert), filepath.Join(dir, ingressCAKey), time.Now())
+	dir := proxyCADir()
+	ca, err := readProxyCA(filepath.Join(dir, proxyCACert), filepath.Join(dir, proxyIntermediateCrt), filepath.Join(dir, proxyIntermediateKey), time.Now())
 	if err != nil {
-		t.Fatalf("readIngressCA: %v", err)
+		t.Fatalf("readProxyCA: %v", err)
 	}
-	roots := x509.NewCertPool()
-	roots.AddCert(caCert)
+	for name, c := range map[string]*x509.Certificate{"root": ca.root, "intermediate": ca.inter} {
+		if err := checkProxyCA(c, time.Now()); err != nil {
+			t.Errorf("%s CA: %v", name, err)
+		}
+	}
+	if ca.root.MaxPathLen != 1 || !ca.inter.MaxPathLenZero {
+		t.Errorf("path length: root %d, intermediate zero=%v; want 1 and true", ca.root.MaxPathLen, ca.inter.MaxPathLenZero)
+	}
 
-	issue := func(dnsNames []string, ips []net.IP) *x509.Certificate {
-		t.Helper()
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
+	// The intermediate key is the only CA key on disk: whatever it signs must
+	// stay under jailoc.local, even with the intermediate as trust anchor.
+	for anchorName, anchor := range map[string]*x509.Certificate{"root": ca.root, "intermediate": ca.inter} {
+		roots := x509.NewCertPool()
+		roots.AddCert(anchor)
+		intermediates := x509.NewCertPool()
+		intermediates.AddCert(ca.inter)
+		issue := func(dnsNames []string, ips []net.IP) *x509.Certificate {
+			t.Helper()
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tmpl := &x509.Certificate{
+				SerialNumber: big.NewInt(2), DNSNames: dnsNames, IPAddresses: ips,
+				NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+				KeyUsage:    x509.KeyUsageDigitalSignature,
+				ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			}
+			der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.inter, key.Public(), ca.interKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leaf, err := x509.ParseCertificate(der)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return leaf
 		}
-		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(2), DNSNames: dnsNames, IPAddresses: ips,
-			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-			KeyUsage:    x509.KeyUsageDigitalSignature,
-			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		verify := func(leaf *x509.Certificate, name string) error {
+			_, err := leaf.Verify(x509.VerifyOptions{DNSName: name, Roots: roots, Intermediates: intermediates})
+			return err
 		}
-		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, key.Public(), caKey)
-		if err != nil {
-			t.Fatal(err)
+		if err := verify(issue([]string{"app.one.jailoc.local"}, nil), "app.one.jailoc.local"); err != nil {
+			t.Errorf("%s anchor: leaf under jailoc.local: %v", anchorName, err)
 		}
-		leaf, err := x509.ParseCertificate(der)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return leaf
-	}
-	verify := func(leaf *x509.Certificate, name string) error {
-		_, err := leaf.Verify(x509.VerifyOptions{DNSName: name, Roots: roots})
-		return err
-	}
-	if err := verify(issue([]string{"app.one.jailoc.local"}, nil), "app.one.jailoc.local"); err != nil {
-		t.Errorf("leaf under jailoc.local: %v", err)
-	}
-	for _, tc := range []struct {
-		name  string
-		dns   []string
-		ips   []net.IP
-		check string
-	}{
-		{"other domain", []string{"example.com"}, nil, "example.com"},
-		{"suffix lookalike", []string{"app.notjailoc.local"}, nil, "app.notjailoc.local"},
-		{"IPv4 address", nil, []net.IP{net.IPv4(127, 0, 0, 1)}, "127.0.0.1"},
-		{"IPv6 address", nil, []net.IP{net.IPv6loopback}, "::1"},
-	} {
-		if err := verify(issue(tc.dns, tc.ips), tc.check); err == nil {
-			t.Errorf("%s: a leaf for %s verified under the ingress CA", tc.name, tc.check)
+		for _, tc := range []struct {
+			name  string
+			dns   []string
+			ips   []net.IP
+			check string
+		}{
+			{"other domain", []string{"example.com"}, nil, "example.com"},
+			{"suffix lookalike", []string{"app.notjailoc.local"}, nil, "app.notjailoc.local"},
+			{"IPv4 address", nil, []net.IP{net.IPv4(127, 0, 0, 1)}, "127.0.0.1"},
+			{"IPv6 address", nil, []net.IP{net.IPv6loopback}, "::1"},
+		} {
+			if err := verify(issue(tc.dns, tc.ips), tc.check); err == nil {
+				t.Errorf("%s anchor, %s: a leaf for %s verified under the proxy CA", anchorName, tc.name, tc.check)
+			}
 		}
 	}
 }
 
-func TestEnsureIngressCertRejectsUnconstrainedCA(t *testing.T) {
-	home := shortTempDir(t, "jc")
-	t.Setenv("HOME", home)
-	t.Setenv(config.PathEnv, filepath.Join(home, "config.toml"))
-	dir := ingressDir()
+func TestEnsureProxyCertRejectsUnconstrainedCA(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	dir := proxyCADir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1161,23 +1201,33 @@ func TestEnsureIngressCertRejectsUnconstrainedCA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
+	if err := os.WriteFile(filepath.Join(dir, proxyCACert), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ingressCACert), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ingressCAKey), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &config.Config{Workspaces: map[string]config.Workspace{
-		"one": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
-	}}
-	targets := []proxyTarget{{ws: &workspace.Resolved{Name: "one", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}}}
-	_, _, err = ensureIngressCert(cfg, targets)
-	if err == nil || !strings.Contains(err.Error(), "not limited to jailoc.local") || !strings.Contains(err.Error(), "remove") {
+	_, _, err = ensureProxyCert(cfg, targets)
+	if err == nil || !strings.Contains(err.Error(), "not limited to jailoc.local") || !strings.Contains(err.Error(), "remove "+dir) {
 		t.Fatalf("error = %v, want a refusal of the unconstrained CA with a removal hint", err)
+	}
+}
+
+func TestEnsureProxyCertReplacesIncompleteCA(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	dir := proxyCADir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// An interrupted first run leaves an intermediate without ca.crt; nobody
+	// can trust that yet, so jailoc starts over.
+	for _, name := range []string{proxyIntermediateCrt, proxyIntermediateKey} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := ensureProxyCert(cfg, targets); err != nil {
+		t.Fatalf("ensureProxyCert: %v", err)
+	}
+	if _, err := readProxyCA(filepath.Join(dir, proxyCACert), filepath.Join(dir, proxyIntermediateCrt), filepath.Join(dir, proxyIntermediateKey), time.Now()); err != nil {
+		t.Fatalf("readProxyCA after replacing the incomplete CA: %v", err)
 	}
 }
 

@@ -2770,6 +2770,11 @@ func TestValidateMountsForbiddenNonCredentialReason(t *testing.T) {
 			want: []string{"because ~/.cache/jailoc-vm holds jailoc VM state and keys", "outside ~/.cache/jailoc-vm"},
 		},
 		{
+			name: "jailoc data directory explains protected parent",
+			spec: "~/.local/share/jailoc/proxy:/home/agent/proxy:ro",
+			want: []string{"because ~/.local/share/jailoc holds the jailoc proxy CA key", "outside ~/.local/share/jailoc"},
+		},
+		{
 			name: "system directory explains protected system path",
 			spec: "/etc/ssl:/home/agent/ssl:ro",
 			want: []string{"because /etc is a host system directory"},
@@ -2815,6 +2820,7 @@ func TestValidateMountsForbiddenParentOfHomeEntry(t *testing.T) {
 		{name: "home mount", mount: "~:/home/agent/host:ro", wantError: "because it contains ~/.ssh, which holds credentials"},
 		{name: "config mount", mount: "~/.config:/home/agent/host-config:ro", wantError: "because it contains ~/.config/gcloud"},
 		{name: "cache mount", mount: "~/.cache:/home/agent/host-cache:rw", wantError: "because it contains ~/.cache/jailoc-vm"},
+		{name: "local share mount", mount: "~/.local/share:/home/agent/host-share:ro", wantError: "because it contains ~/.local/share/jailoc"},
 		{name: "config snapshot", snapshot: "~/.config:/home/agent/host-config", wantError: "because it contains ~/.config/gcloud"},
 		{name: "sibling of a forbidden entry", mount: "~/.config/opencode:/home/agent/.config/opencode:ro"},
 		{name: "sibling cache", mount: "~/.cache/pip:/home/agent/.cache/pip:rw"},

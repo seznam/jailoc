@@ -903,17 +903,17 @@ Format: `host:container[:mode]`, mode `ro` or `rw` (default `rw`). Mounts are vi
 
 - System directories: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`
 - Credential directories and files: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/.netrc`
-- jailoc configuration and state: `~/.config/jailoc`, `~/.cache/jailoc-vm`
+- jailoc configuration, state and proxy CA: `~/.config/jailoc`, `~/.cache/jailoc-vm`, `~/.local/share/jailoc`
 
 Matching details:
 
-- Parents of the entries under `~` are rejected too, so `~`, `~/.config` and `~/.cache` cannot be shared whole.
+- Parents of the entries under `~` are rejected too, so `~`, `~/.config`, `~/.cache`, `~/.local` and `~/.local/share` cannot be shared whole.
 - Entries under `~` are also compared after resolving symlinks, so a symlink to `~/.ssh`, or a dotfiles directory that `~/.ssh` links into, is rejected as well.
 
 **Error message.** The error explains why the matched entry is protected:
 
 - for credential directories it shows SSH or GPG agent forwarding or a [file secret](#secrets) holding the one file a tool needs;
-- for `~/.config/jailoc` and `~/.cache/jailoc-vm` it suggests keeping shared directories outside them or using an [agent profile](#agent-profiles).
+- for `~/.config/jailoc`, `~/.cache/jailoc-vm` and `~/.local/share/jailoc` it suggests keeping shared directories outside them or using an [agent profile](#agent-profiles).
 
 See [Pass a credential file](../how-to/secrets.md#pass-a-credential-file).
 

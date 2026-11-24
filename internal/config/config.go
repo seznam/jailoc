@@ -327,6 +327,7 @@ var forbiddenMountHostPaths = []forbiddenMountHostPath{
 	{path: "~/.netrc", reason: "holds credentials", hint: fileSecretHint("netrc", "~/.netrc", "NETRC")},
 	{path: "~/.config/jailoc", reason: "holds the jailoc configuration", hint: "keep directories shared with a workspace outside ~/.config/jailoc (for example ~/.config/<name>), or set profile on the agent to share its state across workspaces"},
 	{path: "~/.cache/jailoc-vm", reason: "holds jailoc VM state and keys", hint: "keep directories shared with a workspace outside ~/.cache/jailoc-vm"},
+	{path: "~/.local/share/jailoc", reason: "holds the jailoc proxy CA key", hint: "keep directories shared with a workspace outside ~/.local/share/jailoc"},
 }
 
 // fileSecretHint describes the file secret that delivers one credential file

@@ -92,9 +92,9 @@ func newProxyCmd() *cobra.Command {
 			"By default the proxy runs in the background (`--foreground` keeps it in the foreground).\n" +
 			"When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes.\n\n" +
 			"Each route is https://<route>.<workspace>.jailoc.local; routes with auth = true are protected by a one-time login code, printed once when the route is added.\n" +
-			"jailoc generates and reuses a local CA and leaf certificate in ~/.config/jailoc/ingress; the CA is limited to names under jailoc.local.\n" +
+			"jailoc generates and reuses a local CA and leaf certificate in ~/.local/share/jailoc/proxy; the CA is limited to names under jailoc.local.\n" +
 			"The proxy starts no VM, opens no browser and changes no host setting: make the names resolve to the listen address\n" +
-			"(for example with /etc/hosts entries) and trust ~/.config/jailoc/ingress/ca.crt in your browser.\n" +
+			"(for example with /etc/hosts entries) and trust ~/.local/share/jailoc/proxy/ca.crt in your browser.\n" +
 			"The proxy does not listen on privileged ports itself: browsers use port 443 for these URLs, so a --listen port\n" +
 			"other than 443 needs a forward from 443 to it that you set up.\n\n" +
 			"Without workspace arguments the proxy serves every running workspace that has routes. Naming a workspace that is\n" +
@@ -149,7 +149,7 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	if err != nil {
 		return err
 	}
-	cert, caPath, err := ensureIngressCert(cfg, targets)
+	cert, caPath, err := ensureProxyCert(cfg, targets)
 	if err != nil {
 		return err
 	}
