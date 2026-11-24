@@ -119,6 +119,14 @@ func Init(logger *slog.Logger) error {
 	// As soon as the network is up: the clock starts from the whole-second RTC
 	// and falls behind whenever the host sleeps.
 	defer startClockSync(logger)()
+	if stopLoopback, err := startLoopbackRelay(logger); err != nil {
+		logger.Warn("loopback relay disabled", "error", err)
+	} else {
+		defer stopLoopback()
+	}
+	if err := installXDGOpen("/"); err != nil {
+		logger.Warn("xdg-open wrapper disabled", "error", err)
+	}
 	acct, err := ensureAccount(cfg, "/etc")
 	if err != nil {
 		return err
@@ -699,7 +707,8 @@ func sessionEnv(cfg *Config) ([]string, *TimeZone) {
 	}
 	env = append(env, cfg.Env...)
 	env = append(env, cacheEnv(cfg.CacheDir, env)...)
-	return append(env, tmpEnv(env)...), zone
+	env = append(env, tmpEnv(env)...)
+	return append(env, browserEnv(env)...), zone
 }
 
 func newSSHServer(logger *slog.Logger, cfg *Config, acct account, env []string) (*sshd.Server, error) {

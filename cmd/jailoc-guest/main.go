@@ -5,7 +5,7 @@
 // "secrets" stores secrets read from stdin; "run [-C DIR] [-e KEY=VALUE]...
 // -- CMD..." executes a command with the workspace environment; "session"
 // manages detachable agent sessions; "tmp-status" prints the /tmp usage as
-// JSON.
+// JSON; "open-url" registers an OAuth loopback callback with the host broker.
 package main
 
 import (
@@ -37,6 +37,8 @@ func run(logger *slog.Logger, args []string) error {
 		return guest.Session(args[1:], os.Stdin, os.Stdout)
 	case "tmp-status":
 		return guest.TmpStatus(os.Stdout)
+	case "open-url":
+		return guest.OpenURL(args[1:])
 	case "run":
 		var dir string
 		var env []string

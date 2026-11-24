@@ -71,6 +71,14 @@ const (
 	// GPGAgentPort is the gateway port the broker relays to the host gpg
 	// agent's extra socket when the workspace forwards it.
 	GPGAgentPort = 7023
+	// LoopbackRelayPort is the guest NIC port where jailoc-guest relays
+	// host-initiated connections to guest loopback (127.0.0.1 / ::1).
+	LoopbackRelayPort = 7024
+	// OAuthCallbackPort is the gateway port where the broker accepts OAuth
+	// loopback callback registration requests from jailoc-guest open-url.
+	OAuthCallbackPort = 7025
+	// XDGOpenPath is the xdg-open wrapper installed in the guest.
+	XDGOpenPath = "/usr/local/bin/xdg-open"
 )
 
 // HostAliases resolve to the broker gateway in /etc/hosts, where host_ports

@@ -32,6 +32,8 @@ func TestParseHostPort(t *testing.T) {
 		{in: "2375", wantErr: true},
 		{in: "7022:/tmp/a.sock", wantErr: true},
 		{in: "7023:/tmp/a.sock", wantErr: true},
+		{in: "7024:/tmp/a.sock", wantErr: true},
+		{in: "7025:/tmp/a.sock", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.in), func(t *testing.T) {

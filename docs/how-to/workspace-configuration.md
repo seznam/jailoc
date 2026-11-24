@@ -150,7 +150,9 @@ To reach a service in the VM from the host, publish its port:
 ports = [3000, "8080:80"]
 ```
 
-`3000` makes guest port 3000 available on host `127.0.0.1:3000`; `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. The service must listen on `0.0.0.0` (or the guest address `192.168.127.2`), not on `127.0.0.1`. Containers started with `docker run -p` inside the guest are reachable the same way.
+`3000` makes guest port 3000 available on host `127.0.0.1:3000`; `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. Services listening on `0.0.0.0`, `192.168.127.2`, `127.0.0.1` or `[::1]` inside the guest are all reachable, as are containers started with `docker run -p`.
+
+OAuth browser login callbacks (`opencode mcp auth`, `claude mcp`, `gh auth login`, `gcloud`, `mcp-remote`) work without adding `ports` entries: when a tool inside the guest invokes `xdg-open` or `$BROWSER` with an authorization URL whose `redirect_uri` points to `http://127.0.0.1:<port>/<path>` or `http://localhost:<port>/<path>` while a guest listener is active on that port, jailoc opens a single-shot HTTP callback proxy on host `127.0.0.1:<port>` for that exact path and closes it after serving the callback (or after 3 minutes). Open the URL printed by the tool in your host browser to complete login.
 
 ## Reach host services
 

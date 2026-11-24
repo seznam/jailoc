@@ -3,8 +3,10 @@ package netbroker
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -485,7 +487,6 @@ func (b *Broker) startForward(ctx context.Context, f Forward) (func(), error) {
 		<-ctx.Done()
 		_ = l.Close()
 	}()
-	guest := tcpip.FullAddress{NIC: nicID, Addr: tcpip.AddrFrom4(b.cfg.GuestIP.As4()), Port: f.GuestPort}
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -495,7 +496,7 @@ func (b *Broker) startForward(ctx context.Context, f Forward) (func(), error) {
 			go func() {
 				dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 				defer cancel()
-				g, err := gonet.DialContextTCP(dctx, b.stack, guest, ipv4.ProtocolNumber)
+				g, err := b.dialGuestPort(dctx, f.GuestPort)
 				if err != nil {
 					_ = c.Close()
 					return
@@ -506,6 +507,51 @@ func (b *Broker) startForward(ctx context.Context, f Forward) (func(), error) {
 		}
 	}()
 	return func() { _ = l.Close() }, nil
+}
+
+const loopbackRelayStatusOK = 0x00
+
+// dialGuestPort connects to port on the guest NIC, falling back to the guest
+// loopback relay when configured so services bound only to 127.0.0.1 or ::1
+// inside the guest remain reachable.
+func (b *Broker) dialGuestPort(ctx context.Context, port uint16) (net.Conn, error) {
+	conn, err := gonet.DialContextTCP(ctx, b.stack, *guestAddr(b.cfg.GuestIP, port), ipv4.ProtocolNumber)
+	if err == nil {
+		return conn, nil
+	}
+	if b.cfg.LoopbackRelayPort == 0 || ctx.Err() != nil {
+		return nil, err
+	}
+	return b.dialGuestLoopback(ctx, port)
+}
+
+func (b *Broker) dialGuestLoopback(ctx context.Context, port uint16) (net.Conn, error) {
+	conn, err := gonet.DialContextTCP(ctx, b.stack, *guestAddr(b.cfg.GuestIP, b.cfg.LoopbackRelayPort), ipv4.ProtocolNumber)
+	if err != nil {
+		return nil, fmt.Errorf("dial guest loopback relay: %w", err)
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(dialTimeout)
+	}
+	_ = conn.SetDeadline(deadline)
+	var hdr [2]byte
+	binary.BigEndian.PutUint16(hdr[:], port)
+	if _, err := conn.Write(hdr[:]); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("write loopback relay header: %w", err)
+	}
+	var status [1]byte
+	if _, err := io.ReadFull(conn, status[:]); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read loopback relay status: %w", err)
+	}
+	_ = conn.SetDeadline(time.Time{})
+	if status[0] != loopbackRelayStatusOK {
+		_ = conn.Close()
+		return nil, fmt.Errorf("guest loopback port %d refused", port)
+	}
+	return conn, nil
 }
 
 // startService accepts guest connections to the gateway's s.GuestPort and

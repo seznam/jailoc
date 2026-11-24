@@ -21,6 +21,7 @@ import (
 type trafficEvent struct {
 	Time          time.Time `json:"time"`
 	Event         string    `json:"event"`
+	Action        string    `json:"action"`
 	Conn          uint64    `json:"conn"`
 	Proto         string    `json:"proto"`
 	Src           string    `json:"src"`
@@ -175,6 +176,8 @@ func (f *trafficFormatter) render(e trafficEvent) string {
 			return "" // jailoc's own SSH sessions
 		}
 		return fmt.Sprintf("%s  %s  tcp  %s → guest port %d", ts, colInfo.Sprint("IN   "), escapeVisible(e.Host), e.GuestPort)
+	case "oauth-callback":
+		return fmt.Sprintf("%s  %s  %s %s%s → guest port %d", ts, colInfo.Sprint("OAUTH"), escapeVisible(e.Action), escapeVisible(e.Host), escapeVisible(e.Path), e.GuestPort)
 	case "service":
 		if (e.GuestPort == guest.SSHAgentPort || e.GuestPort == guest.GPGAgentPort) && !f.all {
 			return "" // SSH and GPG agent forwarding

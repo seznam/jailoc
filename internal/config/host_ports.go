@@ -44,6 +44,8 @@ var reservedGuestPorts = map[int]string{
 	2375: "Docker",
 	7022: "SSH agent",
 	7023: "GPG agent",
+	7024: "guest loopback relay",
+	7025: "OAuth callback",
 }
 
 // ParseHostPort parses "PORT", "GUEST:HOST" or "GUEST:/path.sock".
