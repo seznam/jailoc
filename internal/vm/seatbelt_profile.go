@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -31,7 +32,7 @@ func seatbeltProfile(cfg runner.Config, runnerPath string) (string, error) {
 	r.allow("file-read* file-map-executable", "literal", runnerPath)
 	for _, d := range filepath.SplitList(cfg.LibDir) {
 		if d != "" {
-			r.allow("file-read* file-map-executable", "subpath", d)
+			r.allowLibDir(d)
 		}
 	}
 	if cfg.RootPath != "" {
@@ -74,8 +75,9 @@ func seatbeltProfile(cfg runner.Config, runnerPath string) (string, error) {
 
 // sbplRules accumulates rules and remembers the first error.
 type sbplRules struct {
-	b   strings.Builder
-	err error
+	b              strings.Builder
+	err            error
+	seenLibTargets map[string]bool
 }
 
 // allow adds (allow ops (filter path)) for the canonical form of path.
@@ -85,6 +87,57 @@ func (r *sbplRules) allow(ops, filter, path string) {
 		return
 	}
 	fmt.Fprintf(&r.b, "(allow %s (%s %s))\n", ops, filter, quoted)
+}
+
+// allowLibDir grants read+map-executable on dir and on the resolved targets of
+// any .dylib symlinks inside dir that point elsewhere (e.g. /opt/homebrew/lib
+// symlinks into /opt/homebrew/Cellar).
+func (r *sbplRules) allowLibDir(dir string) {
+	if r.err != nil {
+		return
+	}
+	canonDir, err := canonicalPath(dir)
+	if err != nil {
+		r.err = err
+		return
+	}
+	quotedDir, err := sbplQuote(canonDir)
+	if err != nil {
+		r.err = err
+		return
+	}
+	fmt.Fprintf(&r.b, "(allow file-read* file-map-executable (subpath %s))\n", quotedDir)
+
+	entries, err := os.ReadDir(canonDir)
+	if err != nil {
+		return
+	}
+	prefix := canonDir + string(filepath.Separator)
+	for _, entry := range entries {
+		if entry.Type()&fs.ModeSymlink == 0 || !strings.HasSuffix(entry.Name(), ".dylib") {
+			continue
+		}
+		target, err := filepath.EvalSymlinks(filepath.Join(canonDir, entry.Name()))
+		if err != nil {
+			continue // ignore broken symlinks in shared directories such as /opt/homebrew/lib
+		}
+		if target == canonDir || strings.HasPrefix(target, prefix) {
+			continue
+		}
+		if r.seenLibTargets == nil {
+			r.seenLibTargets = make(map[string]bool)
+		}
+		if r.seenLibTargets[target] {
+			continue
+		}
+		r.seenLibTargets[target] = true
+		quotedTarget, err := sbplQuote(target)
+		if err != nil {
+			r.err = err
+			return
+		}
+		fmt.Fprintf(&r.b, "(allow file-read* file-map-executable (literal %s))\n", quotedTarget)
+	}
 }
 
 // allowSocket adds a rule for the Unix socket at path; side is "remote" or

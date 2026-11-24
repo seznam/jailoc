@@ -173,7 +173,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 
-	for _, d := range []string{"ro", "rw", "outside", "lib", "rootfs", "state/microvm"} {
+	for _, d := range []string{"ro", "rw", "outside", "lib", "cellar", "rootfs", "state/microvm"} {
 		if err := os.MkdirAll(filepath.Join(base, d), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +181,7 @@ func newFixture(t *testing.T) fixture {
 	for _, f := range []string{
 		"ro/file", "ro/write-me", "ro/remove-me",
 		"rw/file", "rw/write-me", "rw/remove-me",
-		"outside/secret", "lib/libkrun.dylib", "rootfs/file",
+		"outside/secret", "lib/libkrun.dylib", "cellar/libkrunfw.5.dylib", "cellar/other.txt", "rootfs/file",
 		"state/docker.img", "state/tmp.img", "state/tmp.img.lock", "state/base.img",
 	} {
 		if err := os.WriteFile(filepath.Join(base, f), []byte("data"), 0o600); err != nil {
@@ -189,6 +189,9 @@ func newFixture(t *testing.T) fixture {
 		}
 	}
 	if err := os.Symlink(filepath.Join(base, "outside", "secret"), filepath.Join(base, "rw", "link-to-secret")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "cellar", "libkrunfw.5.dylib"), filepath.Join(base, "lib", "libkrunfw.5.dylib")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -300,6 +303,9 @@ func TestConfinedRunnerAccess(t *testing.T) {
 
 		{"read lib dir", "read", []string{f.path("lib/libkrun.dylib")}, codeOK},
 		{"write lib dir", "write", []string{f.path("lib/libkrun.dylib")}, codeDenied},
+		{"read symlinked dylib outside lib dir", "read", []string{f.path("lib/libkrunfw.5.dylib")}, codeOK},
+		{"write symlinked dylib outside lib dir", "write", []string{f.path("lib/libkrunfw.5.dylib")}, codeDenied},
+		{"read sibling next to symlinked dylib", "read", []string{f.path("cellar/other.txt")}, codeDenied},
 
 		{"write disk", "write", []string{f.path("state/docker.img")}, codeOK},
 		{"write tmp disk", "write", []string{f.path("state/tmp.img")}, codeOK},

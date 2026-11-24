@@ -189,6 +189,56 @@ func TestSeatbeltProfileCanonicalizesPaths(t *testing.T) {
 	assertNoRuleContaining(t, lines, `"`+fileLink+`"`)
 }
 
+func TestSeatbeltProfileFollowsLibDirDylibSymlinks(t *testing.T) {
+	t.Parallel()
+	base := realDir(t)
+	libDir := filepath.Join(base, "lib")
+	cellar := filepath.Join(base, "cellar", "libkrun", "lib")
+	for _, d := range []string{libDir, cellar} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	realLib := filepath.Join(cellar, "libkrun.1.dylib")
+	sibling := filepath.Join(cellar, "sibling.txt")
+	for _, f := range []string{realLib, sibling} {
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two symlinks to the same external dylib (should deduplicate), one
+	// non-dylib symlink (should be ignored), and one broken dylib symlink
+	// (should be ignored rather than failing profile generation).
+	for name, target := range map[string]string{
+		"libkrun.dylib":   realLib,
+		"libkrun.1.dylib": realLib,
+		"notes.txt":       sibling,
+		"broken.dylib":    filepath.Join(cellar, "missing.dylib"),
+	} {
+		if err := os.Symlink(target, filepath.Join(libDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := runner.Config{LibDir: libDir}
+	lines := profileLines(t, cfg, filepath.Join(base, RunnerBinary))
+
+	wantTargetRule := `(allow file-read* file-map-executable (literal "` + realLib + `"))`
+	assertRule(t, lines, `(allow file-read* file-map-executable (subpath "`+libDir+`"))`)
+	assertRule(t, lines, wantTargetRule)
+	count := 0
+	for _, l := range lines {
+		if l == wantTargetRule {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("resolved dylib rule appeared %d times, want 1", count)
+	}
+	assertNoRuleContaining(t, lines, sibling)
+	assertNoRuleContaining(t, lines, `(subpath "`+cellar+`")`)
+}
+
 func TestCanonicalPath(t *testing.T) {
 	t.Parallel()
 	base := realDir(t)
