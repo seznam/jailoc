@@ -104,7 +104,7 @@ func (h *homeDisks) mountAndPrepare(cfg *Config, acct account) error {
 			// A failure fails the boot and leaves the legacy home for the
 			// next boot to try again.
 			if err := migrateLegacyHome(StateDiskDir, legacyHome, acct); err != nil {
-				return fmt.Errorf("migrate legacy home: %w", err)
+				return fmt.Errorf("state disk: migrate legacy home: %w", err)
 			}
 			if err := writeMigratedMarker(ControlDir); err != nil {
 				h.logger.Warn("home migration marker", "error", err)

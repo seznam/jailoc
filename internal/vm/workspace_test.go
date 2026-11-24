@@ -1,6 +1,11 @@
 package vm
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+
+	"github.com/seznam/jailoc/internal/guest"
+)
 
 func TestMaxShares(t *testing.T) {
 	t.Parallel()
@@ -47,6 +52,30 @@ func TestMaxSharesExtraDisks(t *testing.T) {
 			t.Parallel()
 			if got := maxShares("amd64", tt.docker, tt.tmp, tt.extra...); got != tt.want {
 				t.Errorf("maxShares = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSpecMaxShares(t *testing.T) {
+	t.Parallel()
+	diskTmp := &guest.Config{Tmp: guest.TmpConfig{Storage: tmpStorageDisk}}
+	tests := []struct {
+		name string
+		spec Spec
+	}{
+		{"no disks (booted before state and cache disks)", Spec{}},
+		{"docker", Spec{Docker: true}},
+		{"disk tmp", Spec{Guest: diskTmp}},
+		{"state and cache", Spec{StateDisk: true, CacheDisk: true}},
+		{"all disks", Spec{Docker: true, Guest: diskTmp, StateDisk: true, CacheDisk: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			want := virtioIRQs[runtime.GOARCH] - fixedDevices - len(workspaceDisks(tt.spec))
+			if got := SpecMaxShares(tt.spec); got != want {
+				t.Errorf("SpecMaxShares = %d, want %d (one share less per attached disk)", got, want)
 			}
 		})
 	}

@@ -180,7 +180,7 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err := writeAgentFiles(ws, cacheDir); err != nil {
 		return vm.Spec{}, nil, err
 	}
-	shares, err := vmShares(ws)
+	shares, err := vmReloadShares(ws, running)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}

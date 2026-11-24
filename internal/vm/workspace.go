@@ -162,6 +162,13 @@ func MaxShares(docker, diskTmp bool, extraDisks ...bool) int {
 	return maxShares(runtime.GOARCH, docker, diskTmp, extraDisks...)
 }
 
+// SpecMaxShares returns how many shares the workspace VM described by spec
+// has room for: MaxShares less one per disk it attaches (workspaceDisks). A
+// running VM keeps that limit until it restarts.
+func SpecMaxShares(spec Spec) int {
+	return maxShares(runtime.GOARCH, spec.Docker, tmpOnDisk(spec), spec.StateDisk, spec.CacheDisk)
+}
+
 func maxShares(arch string, docker, diskTmp bool, extraDisks ...bool) int {
 	n := virtioIRQs[arch] - fixedDevices
 	if docker {

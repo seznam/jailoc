@@ -16,6 +16,7 @@ Find the symptom, then apply the fix. Start with [Find the logs](#find-the-logs)
 | TLS error on a host with an `http` rule | [Certificate error on an inspected host](#certificate-error-on-an-inspected-host) |
 | Image pull or build errors | [Image build fails](#image-build-fails) |
 | Build fails with `no space left on device`, or the builder VM is lost at startup | [Builder VM disk is full](#builder-vm-disk-is-full) |
+| `jailoc up` fails with `no space left on device` on the state or cache disk | [State or cache disk is full](#state-or-cache-disk-is-full) |
 | `docker` missing or failing in the guest | [Docker inside the VM fails](#docker-inside-the-vm-fails) |
 | OpenCode exits at startup | [OpenCode fails to start with a server or database error](#opencode-fails-to-start-with-a-server-or-database-error) |
 
@@ -302,6 +303,26 @@ jailoc up <workspace>
 ```
 
 The backup takes host disk space until you delete it, and the next build recreates the cache from scratch, so it takes longer. Delete the backup once the builder works. Image layers in the VM image cache and workspace homes are unaffected.
+
+## State or cache disk is full
+
+**Symptom:** `jailoc up` fails with `no space left on device`, and the error says the guest's agent state or `~/.cache` filesystem is full. It names the disk image, `state.img` or `cache.img`, and the setting that grows it. A failed copy of the previous home directories onto a new `state.img` ends the same way.
+
+jailoc reports a full state or cache disk only when the guest's console shows an out-of-space error about that disk or on a path on it. The guest writes to its own ext4 filesystem there, so the disk is full and not the host: a full host disk fails the guest's writes to the sparse image with I/O errors instead.
+
+**Fix:** raise the setting the error names, then start the workspace again:
+
+```toml
+[workspaces.myproject]
+state_disk = "20g"   # agent state
+cache_disk = "40g"   # ~/.cache
+```
+
+```bash
+jailoc up myproject
+```
+
+The disk and its filesystem grow and keep their content; they never shrink. A failed copy of the previous home directories leaves them where they were, and the next start copies them again. Pick a size the host disk can hold, since the sparse file can grow up to it.
 
 ## Docker inside the VM fails
 

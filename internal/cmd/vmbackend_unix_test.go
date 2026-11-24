@@ -309,6 +309,38 @@ func TestVMSharesLimit(t *testing.T) {
 	}
 }
 
+func TestVMReloadSharesLimit(t *testing.T) {
+	t.Parallel()
+	oc, _ := agent.Lookup("opencode1")
+	// A VM booted without state and cache disks has room for more shares than
+	// a fresh boot of the same workspace, which attaches both.
+	boot := vm.MaxShares(false, false, true, true)
+	running := vm.Spec{}
+	limit := vm.SpecMaxShares(running)
+	if limit <= boot {
+		t.Fatalf("running limit %d, boot limit %d: want room for more shares without the disks", limit, boot)
+	}
+	root := t.TempDir()
+	paths := make([]string, limit+1)
+	for i := range paths {
+		paths[i] = filepath.Join(root, fmt.Sprintf("p%02d", i))
+		if err := os.Mkdir(paths[i], 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws := &workspace.Resolved{Name: "w", Paths: paths[:limit], Agent: oc}
+	if _, err := vmShares(ws); err == nil {
+		t.Fatalf("boot with %d shares: want the limit error", limit)
+	}
+	if _, err := vmReloadShares(ws, running); err != nil {
+		t.Fatalf("reload with %d shares: %v", limit, err)
+	}
+	ws.Paths = paths
+	if _, err := vmReloadShares(ws, running); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("exceed the limit of %d", limit)) {
+		t.Fatalf("reload with %d shares: err = %v, want limit error", limit+1, err)
+	}
+}
+
 func TestVMSharesPaths(t *testing.T) {
 	t.Parallel()
 	oc, _ := agent.Lookup("opencode1")
@@ -1465,6 +1497,38 @@ func TestVMFailure(t *testing.T) {
 			}(),
 			notWant: []string{strings.Repeat("y", 400)},
 			want:    []string{"no space left on device"},
+		},
+		{
+			name:       "state disk full while migrating the previous home",
+			stateError: "guest did not become ready",
+			spec:       &vm.Spec{Kind: vm.KindWorkspace, Workspace: "w", StateDisk: true, StateDiskSize: 10 << 30},
+			console:    new("boot ok\njailoc-guest: state disk: migrate legacy home: copy opencode: write .migrating-opencode/db: no space left on device\n"),
+			want: []string{
+				"guest did not become ready", "guest: jailoc-guest: state disk: migrate legacy home",
+				"agent state filesystem is full", "not the host's free space", "state.img", "10 GiB",
+				`raise state_disk of workspace "w"`, "can only grow", "copied again at the next start",
+			},
+			notWant: []string{"docker.img", "docker_disk", "no guest console evidence", "root filesystem", "cache_disk"},
+		},
+		{
+			name:    "cache disk full on a path on it",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "w", CacheDisk: true},
+			console: new("level=ERROR msg=init error=\"open " + guest.CacheDiskDir + "/cache/x: no space left on device\"\n"),
+			want:    []string{"~/.cache filesystem is full", "cache.img", "20 GiB", `raise cache_disk of workspace "w"`},
+			notWant: []string{"docker.img", "docker_disk", "state_disk", "copied again", "no guest console evidence"},
+		},
+		{
+			name:    "state disk full without a spec",
+			console: new("jailoc-guest: state disk: state directory opencode: no space left on device\n"),
+			want:    []string{"agent state filesystem is full", "state.img", "raise state_disk of the workspace"},
+			notWant: []string{"docker_disk", "logical size", "copied again"},
+		},
+		{
+			name:    "a full Docker disk takes precedence",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "w", Docker: true, StateDisk: true},
+			console: new("jailoc-guest: state disk: x: no space left on device\n" + enospc + "\n"),
+			want:    []string{"Docker data filesystem is full", `raise docker_disk of workspace "w"`},
+			notWant: []string{"agent state filesystem", "raise state_disk"},
 		},
 		{
 			name:       "non-ENOSPC state error is unchanged",

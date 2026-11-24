@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
 )
 
@@ -31,9 +32,10 @@ const (
 )
 
 // vmFailure explains why a VM did not come up, from its state, guest console
-// or log. A full guest Docker disk gets its own explanation and remedy; an
-// out-of-space error without concrete evidence of it (the failing path or the
-// data disk's df) may be the guest root or the host filesystem.
+// or log. A full guest Docker disk, state disk or cache disk gets its own
+// explanation and remedy; an out-of-space error without concrete evidence of
+// one (the failing path or disk, or the data disk's df) may be the guest root
+// or the host filesystem.
 func vmFailure(stateDir, logPath string) string {
 	stateErr := ""
 	if st, err := vm.ReadState(stateDir); err == nil {
@@ -43,6 +45,8 @@ func vmFailure(stateDir, logPath string) string {
 	console, consoleFound := readLogsTail(vm.ConsoleLogPaths(stateDir), failureConsoleTail)
 	diag := consoleDiagnostics(console, stateErr)
 	switch {
+	case hasNoSpace(console) && !diag.dataFull && diag.homeFull != nil:
+		return homeDiskFullFailure(stateDir, stateErr, consolePath, diag, consoleFound)
 	case hasNoSpace(console):
 		return diskFullFailure(stateDir, stateErr, consolePath, diag, consoleFound, diag.dataFull)
 	case hasNoSpace(stateErr):
@@ -201,6 +205,85 @@ func diskFullFailure(stateDir, stateErr, consolePath string, diag consoleDiag, c
 	return strings.Join(parts, "; ")
 }
 
+// homeDisk is a persistent disk of a workspace VM's home directories.
+type homeDisk struct {
+	// what names the disk's contents, setting its size setting.
+	what, setting string
+	// mountDir is where the guest mounts it, errPrefix the prefix of the
+	// guest's errors about it.
+	mountDir, errPrefix string
+	path                func(stateDir string) string
+	size                func(spec *vm.Spec) int64
+}
+
+var (
+	stateHomeDisk = homeDisk{
+		what: "agent state", setting: "state_disk",
+		mountDir: guest.StateDiskDir, errPrefix: "state disk:",
+		path: vm.StateDiskPath,
+		size: func(spec *vm.Spec) int64 { return cmp.Or(spec.StateDiskSize, int64(vm.DefaultStateDiskSize)) },
+	}
+	cacheHomeDisk = homeDisk{
+		what: "~/.cache", setting: "cache_disk",
+		mountDir: guest.CacheDiskDir, errPrefix: "cache disk:",
+		path: vm.CacheDiskPath,
+		size: func(spec *vm.Spec) int64 { return cmp.Or(spec.CacheDiskSize, int64(vm.DefaultCacheDiskSize)) },
+	}
+)
+
+// homeDiskOf returns the state or cache disk that one console line reports
+// full: an out-of-space error of the guest about the disk or on a path on it.
+func homeDiskOf(line string) *homeDisk {
+	if !hasNoSpace(line) {
+		return nil
+	}
+	lower := strings.ToLower(line)
+	for _, d := range []*homeDisk{&stateHomeDisk, &cacheHomeDisk} {
+		if strings.Contains(lower, d.errPrefix) || strings.Contains(line, d.mountDir+"/") {
+			return d
+		}
+	}
+	return nil
+}
+
+// homeDiskFullFailure describes the guest filling its state or cache disk
+// (diag.homeFull) and names the setting that grows it. The guest reports the
+// error for its own ext4 filesystem: a full host filesystem fails the guest's
+// writes to the sparse image with I/O errors instead.
+func homeDiskFullFailure(stateDir, stateErr, consolePath string, diag consoleDiag, consoleFound bool) string {
+	d := diag.homeFull
+	parts := []string{}
+	if stateErr != "" {
+		parts = append(parts, stateErr)
+	}
+	for _, line := range diag.cause {
+		parts = append(parts, "guest: "+line)
+	}
+	parts = append(parts, noSpaceLeft+" inside the guest: its "+d.what+" filesystem is full, either of blocks or of inodes; this is the guest filesystem, not the host's free space")
+	consoleNote := consolePath
+	if !consoleFound {
+		consoleNote += " (not found)"
+	}
+	spec, err := vm.ReadSpec(stateDir)
+	if err != nil {
+		spec = nil
+	}
+	diskNote := d.path(stateDir)
+	remedy := "raise " + d.setting + " of the workspace"
+	if spec != nil {
+		diskNote += " (" + diskSizeLabel(d.size(spec)) + " logical size)"
+		remedy = fmt.Sprintf("raise %s of workspace %q", d.setting, spec.Workspace)
+	}
+	parts = append(parts,
+		"console log: "+consoleNote,
+		d.setting+": "+diskNote,
+		remedy+"; the disk can only grow and nothing is reset or deleted for you")
+	if diag.homeMigration {
+		parts = append(parts, "the previous home directories stay where they were and are copied again at the next start")
+	}
+	return strings.Join(parts, "; ")
+}
+
 // consoleDiag holds the lines worth quoting from the guest console.
 type consoleDiag struct {
 	// cause: out-of-space, fatal, panic and init failure lines.
@@ -214,6 +297,11 @@ type consoleDiag struct {
 	// tracked on its own), or an out-of-space error on a path below
 	// dockerDataDir came after the latest healthy df of it.
 	dataFull bool
+	// homeFull is the state or cache disk the latest out-of-space error of
+	// the guest names (nil when none does), homeMigration whether that error
+	// came from copying the previous home directories onto the state disk.
+	homeFull      *homeDisk
+	homeMigration bool
 }
 
 // dfKind is the kind of the df listing whose rows are being read.
@@ -231,6 +319,8 @@ const (
 func consoleDiagnostics(console, skip string) consoleDiag {
 	var cause, startup, df []string
 	var blocksFull, inodesFull, pathFull bool
+	var homeFull *homeDisk
+	homeMigration := false
 	kind := dfUnknown
 	for line := range strings.SplitSeq(console, "\n") {
 		line = cleanConsoleLine(line)
@@ -239,6 +329,10 @@ func consoleDiagnostics(console, skip string) consoleDiag {
 		}
 		if dataPathFull(line) {
 			pathFull = true
+		}
+		if d := homeDiskOf(line); d != nil {
+			homeFull = d
+			homeMigration = strings.Contains(line, "migrate legacy home")
 		}
 		if row, ok := dfLine(line); ok {
 			if k, header := dfHeaderKind(row); header {
@@ -272,10 +366,12 @@ func consoleDiagnostics(console, skip string) consoleDiag {
 		}
 	}
 	return consoleDiag{
-		cause:    lastN(cause, failureCauseLines),
-		startup:  lastN(startup, failureCauseLines),
-		df:       lastN(df, failureDiskLines),
-		dataFull: blocksFull || inodesFull || pathFull,
+		cause:         lastN(cause, failureCauseLines),
+		startup:       lastN(startup, failureCauseLines),
+		df:            lastN(df, failureDiskLines),
+		dataFull:      blocksFull || inodesFull || pathFull,
+		homeFull:      homeFull,
+		homeMigration: homeMigration,
 	}
 }
 
