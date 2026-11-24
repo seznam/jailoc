@@ -293,6 +293,12 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if running.Docker && want.Docker && cmp.Or(running.DiskSize, int64(vm.DefaultDiskSize)) != cmp.Or(want.DiskSize, int64(vm.DefaultDiskSize)) {
 		out = append(out, "docker_disk")
 	}
+	if running.StateDisk && want.StateDisk && cmp.Or(running.StateDiskSize, int64(vm.DefaultStateDiskSize)) != cmp.Or(want.StateDiskSize, int64(vm.DefaultStateDiskSize)) {
+		out = append(out, "state_disk")
+	}
+	if running.CacheDisk && want.CacheDisk && cmp.Or(running.CacheDiskSize, int64(vm.DefaultCacheDiskSize)) != cmp.Or(want.CacheDiskSize, int64(vm.DefaultCacheDiskSize)) {
+		out = append(out, "cache_disk")
+	}
 	if running.Docker != want.Docker {
 		out = append(out, "enable_docker")
 	}

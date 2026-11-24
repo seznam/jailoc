@@ -203,6 +203,8 @@ Defaults applied to all workspaces. A workspace can override or extend them; see
 | `cpu` | float | `2.0` | vCPUs of the workspace VM, rounded up. |
 | `memory` | string | `"4g"` | Memory of the workspace VM, at least `512m`. |
 | `docker_disk` | string | `"20g"` | Size of the Docker data disk of an `enable_docker` workspace and of its `isolated_build` builder VM, at least `1g`. The disk can grow but not shrink. |
+| `state_disk` | string | `"10g"` | Size of the state disk (`state.img`) that holds the agent's persistent home directories, at least `1g`. The disk can grow but not shrink. See [Persistent state](#persistent-state). |
+| `cache_disk` | string | `"20g"` | Size of the cache disk (`cache.img`) that holds `~/.cache`, at least `1g`. The disk can grow but not shrink. See [Persistent state](#persistent-state). |
 | `tmp_storage` | string | `"ram"` | Backing of the guest `/tmp`: `"ram"` or `"disk"`. Needs `jailoc restart`. See [`tmp_storage`, `tmp_size` and `tmp_ttl`](#tmp_storage-tmp_size-and-tmp_ttl). |
 | `tmp_size` | string | `"1g"` | Capacity of `/tmp`, at least `16m` with `tmp_storage = "disk"`. Needs `jailoc restart`. |
 | `tmp_ttl` | string | `"8h"` | Age after which `/tmp` entries are removed, or `"0"` to keep them. Applied by `jailoc reload`. |
@@ -620,7 +622,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 Fields with the same meaning as in [`[defaults]`](#defaults); the workspace value wins and the default is inherited. Each takes the type of its `[defaults]` field:
 
 - `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`
-- `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`
+- `cpu`, `memory`, `docker_disk`, `state_disk`, `cache_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`
 - `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`
 
 ### Merged fields
@@ -815,8 +817,8 @@ A mount at the destination of an [`import_agent_config`](#import_agent_config) c
 
 | Value | Storage | Lifetime |
 |-------|---------|----------|
-| unset | `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home/<dir>` | until `jailoc down --purge` |
-| `false` | per workspace | emptied on every VM start |
+| unset | `~/.cache/jailoc-vm/workspaces/<workspace>/state.img`, in `<dir>` | until `jailoc down --purge` |
+| `false` | the `ephemeral` directory on `state.img` | emptied on every VM start |
 | `"<name>"` | `~/.local/share/jailoc/profiles/<name>/<dir>` | until deleted by hand; `jailoc down --purge` keeps it |
 
 `<dir>` is the name of the harness's state directory:
@@ -832,7 +834,7 @@ A mount at the destination of an [`import_agent_config`](#import_agent_config) c
 | Antigravity | `antigravity` |
 
 - One profile can hold the state of several harnesses, and two agents of the same harness share it when they name the same profile.
-- `~/.cache` stays per workspace.
+- `~/.cache` stays per workspace, on `cache.img`.
 - A mount over a persistent home directory replaces it.
 - A named profile is used by one running workspace at a time: `jailoc up` and `jailoc restart` fail while another workspace using the profile is running.
 
@@ -1176,15 +1178,19 @@ protect_git = true
 - a hooks directory has more than 1024 entries;
 - a `commondir` points at another linked git directory.
 
-### `cpu`, `memory` and `docker_disk`
+<a id="cpu-memory-and-docker_disk"></a>
+
+### `cpu`, `memory`, `docker_disk`, `state_disk` and `cache_disk`
 
 | Field | Rule |
 |-------|------|
 | `cpu` | A finite number greater than 0. |
 | `memory` | Must match `^[1-9][0-9]*[kmgKMG]?$` (for example `512m`, `4g`). At `jailoc up`, at least `512m`. |
 | `docker_disk` | Must match `^[1-9][0-9]*[kmgKMG]?$` (for example `512m`, `4g`). At `jailoc up`, at least `1g`, and rounded up to whole MiB. |
+| `state_disk` | Same format and limits as `docker_disk`. |
+| `cache_disk` | Same format and limits as `docker_disk`. |
 
-When the existing data disk is larger than `docker_disk`, `jailoc up` fails instead of shrinking it.
+When an existing `docker_disk`, `state_disk` or `cache_disk` data disk is larger than its setting, `jailoc up` fails instead of shrinking it.
 
 `[vm] builder_disk` follows the same format and grow-only rule, with at least `1g`, checked when the shared builder VM starts for a build, not by validation.
 
@@ -1394,7 +1400,7 @@ See the [secrets how-to](../how-to/secrets.md).
 - A workspace secret replaces a default secret with the same name entirely, also across `env` and `file`.
 - An inherited default secret can't be unset in a workspace.
 
-**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
+**Scalar settings**: `agent`, `ssh_auth_sock`, `gpg_agent`, `git_config`, `import_agent_config`, `cpu`, `memory`, `docker_disk`, `state_disk`, `cache_disk`, `tmp_storage`, `tmp_size`, `tmp_ttl`, `timezone`, `notifications`, `enable_docker`, `protect_git`, `isolated_build`, `ca_bundle`, and `network.ipv6`, `network.filtered_dns` take the workspace value when set, otherwise `[defaults]`, otherwise the built-in default.
 
 **`agents.<name>`**:
 
@@ -1407,9 +1413,16 @@ See the [secrets how-to](../how-to/secrets.md).
 
 ## Persistent state
 
-`~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` keeps the agent's persistent home directories (see [Coding agents](#coding-agents)) and `~/.cache` across restarts.
+Each workspace has two persistent disks in `~/.cache/jailoc-vm/workspaces/<workspace>/`, which survive restarts:
 
-- `jailoc down --purge` deletes it.
+| Disk | Size setting | Default | Holds |
+|------|--------------|---------|-------|
+| `state.img` | [`state_disk`](#cpu-memory-and-docker_disk) | `10g` | The agent's persistent home directories (see [Coding agents](#coding-agents)) |
+| `cache.img` | [`cache_disk`](#cpu-memory-and-docker_disk) | `20g` | `~/.cache` |
+
+Both are sparse ext4 files, so the host stores only written blocks, and the guest periodically trims freed blocks so the host can take them back. A full `~/.cache` does not take space from the agent's state. Both disks grow with their setting after `jailoc restart` and never shrink.
+
+- `jailoc down --purge` deletes both disks.
 - An agent [`profile`](#agent-profiles) moves the agent's directories to a shared profile or makes them ephemeral.
 
 ### Tool caches

@@ -140,14 +140,31 @@ func Init(logger *slog.Logger) error {
 	// Shares and internal binds nest in both directions (a share inside a
 	// persistent home directory, a persistent directory inside a share), so
 	// they are mounted in one order, parents before children.
-	for _, m := range mountOrder(cfg.Shares, cfg.Binds) {
-		var err error
+	mountEntry := func(m guestMount) error {
 		if m.share != nil {
-			err = mountShare(logger, *m.share, acct, mapper)
-		} else {
-			err = bindInternal(*m.bind, acct)
+			return mountShare(logger, *m.share, acct, mapper)
 		}
-		if err != nil {
+		return bindInternal(*m.bind, acct)
+	}
+	ordered := mountOrder(cfg.Shares, cfg.Binds)
+	// The internal shares come first. The state and cache disks follow
+	// them, as their preparation reads the legacy home directories from
+	// HostDir and the binds that come next have sources on the disks.
+	internal := 0
+	for internal < len(ordered) && ordered[internal].share != nil && within(ordered[internal].target, PrivateDir) {
+		if err := mountEntry(ordered[internal]); err != nil {
+			return err
+		}
+		internal++
+	}
+	stopHomeDisks, err := mountHomeDisks(logger, cfg, acct)
+	if err != nil {
+		return err
+	}
+	stopHomeDisks = sync.OnceFunc(stopHomeDisks)
+	defer stopHomeDisks()
+	for _, m := range ordered[internal:] {
+		if err := mountEntry(m); err != nil {
 			return err
 		}
 	}
@@ -252,6 +269,7 @@ func Init(logger *slog.Logger) error {
 			stopProxyRelay()
 			docker.stop(logger)
 			syscall.Sync()
+			stopHomeDisks()
 			return nil
 		}
 		select {
@@ -443,7 +461,9 @@ func mountPrivate() error {
 // bindInternal binds b, a directory of an internal share, into place.
 // Missing parents inside the agent's home belong to the agent.
 func bindInternal(b Bind, acct account) error {
-	if (!within(b.Source, HostDir) && !within(b.Source, ReadOnlyHostDir)) || within(b.Source, ControlDir) {
+	inShare := within(b.Source, HostDir) || within(b.Source, ReadOnlyHostDir) ||
+		within(b.Source, StateDiskDir) || within(b.Source, CacheDiskDir)
+	if !inShare || within(b.Source, ControlDir) {
 		return fmt.Errorf("bind %s: source %s is outside the internal share", b.Target, b.Source)
 	}
 	if err := makeParents(b.Target, acct); err != nil {

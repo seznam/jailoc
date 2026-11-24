@@ -114,10 +114,10 @@ jailoc's own data uses two internal shares:
 
 | Share | Access | Holds |
 |-------|--------|-------|
-| `guest` | Read-write | The persistent home directories and the control files the host and guest exchange |
+| `guest` | Read-write | The control files the host and guest exchange |
 | `guest-ro` | Read-only | Copies of the workspace configuration and cache directories and the staged snapshots, so guest root can't change them either |
 
-The guest mounts both under a root-only directory and binds their parts into place. Because the guest can write the `guest` share, the host keeps nothing in it that it trusts, such as keys or the VM spec, and accesses it only in ways that cannot follow a link out of it. Few internal shares keep the number of virtio devices low; libkrun on x86_64 hosts can attach only about five shares besides them.
+The guest mounts both under a root-only directory and binds their parts into place. The persistent home directories and `~/.cache` are not in a share: they live on the `state.img` and `cache.img` virtio-blk disks (see [Persistent home](#persistent-home)). Because the guest can write the `guest` share, the host keeps nothing in it that it trusts, such as keys or the VM spec, and accesses it only in ways that cannot follow a link out of it. Few internal shares keep the number of virtio devices low; libkrun on x86_64 hosts can attach only about five shares besides them.
 
 #### Confinement
 
@@ -145,7 +145,12 @@ Only these survive a restart:
 - the state directories of the workspace's coding agent (for OpenCode `~/.local/share/opencode` and `~/.local/state/opencode`, for Claude Code `~/.claude`),
 - `~/.cache`.
 
-They live in `~/.cache/jailoc-vm/workspaces/<workspace>/guest/home` on the host, next to the Docker data disk of `enable_docker`. `jailoc down --purge` deletes them. Sessions point the download caches of Go modules, npm, Bun and NuGet into `~/.cache` (see [Tool caches](../reference/configuration.md#tool-caches)), so they survive a restart and stay out of VM memory.
+They live on two sparse ext4 disks in `~/.cache/jailoc-vm/workspaces/<workspace>/` on the host, next to the Docker data disk of `enable_docker`:
+
+- `state.img` (`state_disk`, 10 GiB by default) holds the agent's state directories.
+- `cache.img` (`cache_disk`, 20 GiB by default) holds `~/.cache`.
+
+`jailoc down --purge` deletes both. Sessions point the download caches of Go modules, npm, Bun and NuGet into `~/.cache` (see [Tool caches](../reference/configuration.md#tool-caches)), so they survive a restart and stay out of VM memory.
 
 ### Secrets
 

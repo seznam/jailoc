@@ -43,7 +43,7 @@ func tmpDiskSize(spec Spec) int64 {
 // order, which is the order of the guest's /dev/vdX names (go-microvm and the
 // runner keep the order of WithDisks): the Docker disk first, so it stays
 // guest.DockerDisk (/dev/vda), then the tmp disk (/dev/vdb, or /dev/vda when
-// the workspace has no Docker disk).
+// the workspace has no Docker disk), then the state and cache disks.
 func workspaceDisks(spec Spec) []microvm.Disk {
 	var disks []microvm.Disk
 	if spec.Docker {
@@ -52,7 +52,28 @@ func workspaceDisks(spec Spec) []microvm.Disk {
 	if tmpOnDisk(spec) {
 		disks = append(disks, tmpDiskDevice(spec))
 	}
+	if spec.StateDisk {
+		disks = append(disks, microvm.Disk{ID: "state", HostPath: StateDiskPath(spec.StateDir)})
+	}
+	if spec.CacheDisk {
+		disks = append(disks, microvm.Disk{ID: "cache", HostPath: CacheDiskPath(spec.StateDir)})
+	}
 	return disks
+}
+
+// workspaceDiskDevices returns the guest block devices (/dev/vdX) of the
+// state and cache disks, or "" for a disk the workspace does not have.
+func workspaceDiskDevices(spec Spec) (stateDev, cacheDev string) {
+	for i, d := range workspaceDisks(spec) {
+		dev := fmt.Sprintf("/dev/vd%c", 'a'+i)
+		switch d.ID {
+		case "state":
+			stateDev = dev
+		case "cache":
+			cacheDev = dev
+		}
+	}
+	return stateDev, cacheDev
 }
 
 // PrepareTmpDisk creates the fresh sparse image of a workspace VM's tmp disk,

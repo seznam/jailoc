@@ -50,6 +50,8 @@ const (
 # cpu = 2.0  # virtual CPU cores per workspace VM
 # memory = "4g"  # RAM limit per workspace VM
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
+# state_disk = "10g"  # agent state disk (state.img), can only grow
+# cache_disk = "20g"  # persistent ~/.cache disk (cache.img), can only grow
 # tmp_storage = "ram"  # /tmp backing: ram or disk
 # tmp_size = "1g"  # /tmp size (disk: at least 16m)
 # tmp_ttl = "8h"  # remove /tmp entries unused for this long; "0" never cleans up
@@ -171,6 +173,8 @@ paths = []
 # cpu = 2.0  # virtual CPU cores per workspace VM
 # memory = "4g"  # RAM limit per workspace VM
 # docker_disk = "20g"  # Docker data disk (enable_docker), can only grow
+# state_disk = "10g"  # agent state disk (state.img), can only grow
+# cache_disk = "20g"  # persistent ~/.cache disk (cache.img), can only grow
 # tmp_storage = "ram"  # /tmp backing: ram or disk
 # tmp_size = "1g"  # /tmp size (disk: at least 16m)
 # tmp_ttl = "8h"  # remove /tmp entries unused for this long; "0" never cleans up
@@ -463,6 +467,8 @@ type Defaults struct {
 	CPU               *float64                 `toml:"cpu,omitempty"`
 	Memory            *string                  `toml:"memory,omitempty"`
 	DockerDisk        *string                  `toml:"docker_disk,omitempty"`
+	StateDisk         *string                  `toml:"state_disk,omitempty"`
+	CacheDisk         *string                  `toml:"cache_disk,omitempty"`
 	TmpStorage        *string                  `toml:"tmp_storage,omitempty"`
 	TmpSize           *string                  `toml:"tmp_size,omitempty"`
 	TmpTTL            *string                  `toml:"tmp_ttl,omitempty"`
@@ -507,6 +513,8 @@ type Workspace struct {
 	CPU               *float64                 `toml:"cpu,omitempty"`
 	Memory            *string                  `toml:"memory,omitempty"`
 	DockerDisk        *string                  `toml:"docker_disk,omitempty"`
+	StateDisk         *string                  `toml:"state_disk,omitempty"`
+	CacheDisk         *string                  `toml:"cache_disk,omitempty"`
 	TmpStorage        *string                  `toml:"tmp_storage,omitempty"`
 	TmpSize           *string                  `toml:"tmp_size,omitempty"`
 	TmpTTL            *string                  `toml:"tmp_ttl,omitempty"`
@@ -1380,6 +1388,12 @@ func Validate(cfg *Config) error {
 	if cfg.Defaults.DockerDisk != nil && !validMemory.MatchString(*cfg.Defaults.DockerDisk) {
 		return fmt.Errorf("defaults: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", *cfg.Defaults.DockerDisk)
 	}
+	if cfg.Defaults.StateDisk != nil && !validMemory.MatchString(*cfg.Defaults.StateDisk) {
+		return fmt.Errorf("defaults: invalid state_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"10g\", \"10240m\")", *cfg.Defaults.StateDisk)
+	}
+	if cfg.Defaults.CacheDisk != nil && !validMemory.MatchString(*cfg.Defaults.CacheDisk) {
+		return fmt.Errorf("defaults: invalid cache_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"20480m\")", *cfg.Defaults.CacheDisk)
+	}
 	if _, err := ResolveTmp(cfg.Defaults, Workspace{}); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
@@ -1500,6 +1514,12 @@ func Validate(cfg *Config) error {
 		}
 		if ws.DockerDisk != nil && !validMemory.MatchString(*ws.DockerDisk) {
 			return fmt.Errorf("workspace %q: invalid docker_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"51200m\")", name, *ws.DockerDisk)
+		}
+		if ws.StateDisk != nil && !validMemory.MatchString(*ws.StateDisk) {
+			return fmt.Errorf("workspace %q: invalid state_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"10g\", \"10240m\")", name, *ws.StateDisk)
+		}
+		if ws.CacheDisk != nil && !validMemory.MatchString(*ws.CacheDisk) {
+			return fmt.Errorf("workspace %q: invalid cache_disk format %q: must be a positive integer optionally followed by k, m, or g (e.g. \"20g\", \"20480m\")", name, *ws.CacheDisk)
 		}
 		if _, err := ResolveTmp(cfg.Defaults, ws); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)

@@ -41,7 +41,7 @@ func TestWorkspaceSpecTmp(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ws := &workspace.Resolved{
-				Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g",
+				Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g",
 				TmpStorage: tt.storage, TmpSizeBytes: tt.size, TmpTTL: tt.ttl,
 			}
 			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)

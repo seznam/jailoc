@@ -16,6 +16,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/agent"
+	"github.com/seznam/jailoc/internal/agentstate"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/embed"
@@ -231,30 +232,12 @@ func writeAgentFiles(ws *workspace.Resolved, cacheDir string) error {
 }
 
 // workspaceStatusLineCommand is the status line command of GitHub Copilot
-// CLI and Antigravity CLI: it prints the workspace with the shell, so it
-// needs no Node.js in the image.
-const workspaceStatusLineCommand = `printf '🔒 jailoc / %s\n' "${JAILOC_WORKSPACE:-unknown}"`
-
-// scriptStatusLineCommand is the command that runs the jailoc status line
-// script for harness. Claude Code runs it to chain the user's status line;
-// GitHub Copilot CLI and Antigravity CLI settings may still hold it from
-// an older jailoc.
-func scriptStatusLineCommand(harness string) string {
-	return "node " + tuiPluginContainerDir + "/statusline.mjs " + harness
-}
-
-// statusLineCommand is the status line command of harness (claude, copilot
-// or agy).
-func statusLineCommand(harness string) string {
-	if harness == "claude" {
-		return scriptStatusLineCommand(harness)
-	}
-	return workspaceStatusLineCommand
-}
+// CLI and Antigravity CLI.
+const workspaceStatusLineCommand = agentstate.WorkspaceStatusLineCommand
 
 // statusLine is the statusLine setting of harness (claude, copilot or agy).
 func statusLine(harness string) map[string]string {
-	return map[string]string{"type": "command", "command": statusLineCommand(harness)}
+	return agentstate.StatusLine(harness)
 }
 
 // statusLineSettings returns the settings file of harness that sets the

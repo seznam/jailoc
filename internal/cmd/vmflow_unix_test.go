@@ -148,7 +148,7 @@ func TestWorkspaceSpecWorkDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ws := &workspace.Resolved{Name: "test", Paths: tt.paths, CPU: 2, Memory: "2G", DockerDisk: "20g"}
+			ws := &workspace.Resolved{Name: "test", Paths: tt.paths, CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g"}
 			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
@@ -575,7 +575,7 @@ func TestWorkspaceSpecTmpfs(t *testing.T) {
 				Agent:      tt.agent,
 				CPU:        2,
 				Memory:     "4g",
-				DockerDisk: "20g",
+				DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g",
 			}
 			spec, err := workspaceSpec(context.Background(), ws, vmRuntimeFiles{}, "img:latest", nil, nil)
 			if err != nil {
@@ -610,7 +610,7 @@ func TestWorkspaceSpecProxy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", Proxy: tt.proxy}
+			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g", Proxy: tt.proxy}
 			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
@@ -779,5 +779,88 @@ func TestLogTailFollowsDoubleRotation(t *testing.T) {
 	}
 	if got, want := out.String(), "a\na2\nb\nc\n"; got != want {
 		t.Fatalf("followed output = %q, want %q", got, want)
+	}
+}
+
+func TestWorkspaceSpecStateAndCacheDisks(t *testing.T) {
+	t.Parallel()
+	oc, _ := agent.Lookup("opencode1")
+	ephemeral := config.EphemeralProfile()
+	tests := []struct {
+		name          string
+		profile       *config.Profile
+		shares        []vm.Share
+		wantState     bool
+		wantDirs      []string
+		wantEphemeral bool
+		wantCache     bool
+	}{
+		{name: "defaults", wantState: true, wantDirs: []string{"opencode-data", "opencode-state", "opencode1-omo"}, wantCache: true},
+		{name: "ephemeral profile", profile: &ephemeral, wantState: true, wantDirs: []string{"opencode-data", "opencode-state", "opencode1-omo"}, wantEphemeral: true, wantCache: true},
+		{name: "cache share", shares: []vm.Share{{GuestPath: guestUserCache}}, wantState: true, wantDirs: []string{"opencode-data", "opencode-state", "opencode1-omo"}},
+		{name: "every directory shared", shares: func() []vm.Share {
+			out := []vm.Share{{GuestPath: guestUserCache}}
+			for _, d := range oc.State {
+				out = append(out, vm.Share{GuestPath: d.Path})
+			}
+			return out
+		}()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ws := &workspace.Resolved{Name: "test", Agent: oc, AgentProfile: tt.profile, CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "12g", CacheDisk: "30g"}
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", tt.shares, nil)
+			if err != nil {
+				t.Fatalf("workspaceSpec: %v", err)
+			}
+			if spec.StateDisk != tt.wantState || spec.CacheDisk != tt.wantCache {
+				t.Fatalf("StateDisk, CacheDisk = %v, %v, want %v, %v", spec.StateDisk, spec.CacheDisk, tt.wantState, tt.wantCache)
+			}
+			if tt.wantState {
+				if spec.StateDiskSize != 12<<30 {
+					t.Errorf("StateDiskSize = %d, want 12 GiB", spec.StateDiskSize)
+				}
+				st := spec.Guest.State
+				if st == nil || st.Agent != oc.Name || !slices.Equal(st.Dirs, tt.wantDirs) || st.Ephemeral != tt.wantEphemeral {
+					t.Errorf("Guest.State = %+v, want agent %s dirs %v ephemeral %v", st, oc.Name, tt.wantDirs, tt.wantEphemeral)
+				}
+			} else if spec.StateDiskSize != 0 || spec.Guest.State != nil {
+				t.Errorf("no state disk, got size %d and Guest.State %+v", spec.StateDiskSize, spec.Guest.State)
+			}
+			if tt.wantCache {
+				if spec.CacheDiskSize != 30<<30 || spec.Guest.Cache == nil {
+					t.Errorf("CacheDiskSize = %d, Guest.Cache = %+v, want 30 GiB and a cache disk", spec.CacheDiskSize, spec.Guest.Cache)
+				}
+			} else if spec.CacheDiskSize != 0 || spec.Guest.Cache != nil {
+				t.Errorf("no cache disk, got size %d and Guest.Cache %+v", spec.CacheDiskSize, spec.Guest.Cache)
+			}
+		})
+	}
+
+	for _, bad := range []workspace.Resolved{
+		{Name: "t", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "1m", CacheDisk: "20g"},
+		{Name: "t", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "x"},
+	} {
+		if _, err := workspaceSpec(t.Context(), &bad, vmRuntimeFiles{}, "image", nil, nil); err == nil {
+			t.Errorf("workspaceSpec accepted state_disk %q cache_disk %q", bad.StateDisk, bad.CacheDisk)
+		}
+	}
+}
+
+func TestStatusRestartChangesStateAndCacheDisk(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{Name: "ws", Agent: agent.Harness{Name: "opencode"}, CPU: 2, Memory: "4g", StateDisk: "10g", CacheDisk: "20g"}
+	running := vm.Spec{Agent: "opencode", CPUs: 2, MemoryMiB: 4096, GuestProtocol: guest.Protocol, Guest: &guest.Config{}, StateDisk: true, CacheDisk: true}
+	if got := statusRestartChanges(ws, running); len(got) != 0 {
+		t.Fatalf("defaults against a spec without sizes: got %v, want none", got)
+	}
+	ws.StateDisk, ws.CacheDisk = "20g", "40g"
+	if got := statusRestartChanges(ws, running); !slices.Equal(got, []string{"state_disk", "cache_disk"}) {
+		t.Fatalf("grown disks: got %v, want [state_disk cache_disk]", got)
+	}
+	running.StateDisk, running.CacheDisk = false, false
+	if got := statusRestartChanges(ws, running); len(got) != 0 {
+		t.Fatalf("spec without disks: got %v, want none", got)
 	}
 }

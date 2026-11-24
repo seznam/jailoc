@@ -53,7 +53,9 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 | `microvm/console.log`, `.1`, `.2` | Guest console: boot, SSH connections and processes the kernel killed when the VM ran out of memory, rotated at 1 MiB (lines over 16 KiB are dropped and secrets are redacted); read them with `jailoc logs` |
 | `broker.jsonl`, `broker.jsonl.1` | Network broker decisions, one JSON object per line, rotated at 16 MiB; read them with `jailoc traffic` |
 | `guest/control/exec.jsonl` | Processes started in the guest and their exits; read it with `jailoc strace` |
-| `guest/` | The internal share the guest can write: control files and persistent home directories (`guest/home`) |
+| `guest/` | The internal share the guest can write: control files such as `guest/control/exec.jsonl` |
+| `state.img` | The state disk (`state_disk`, 10 GiB by default): the agent's persistent home directories |
+| `cache.img` | The cache disk (`cache_disk`, 20 GiB by default): `~/.cache` |
 | `guest-ro/` | The read-only internal share: configuration copies and staged snapshots |
 | `state.json` | Supervisor PID and readiness |
 | `inspect-ca.pem`, `inspect-ca.key` | The workspace's TLS inspection CA, created when a network rule has `http`; the key stays on the host and is deleted by `jailoc down --purge` |

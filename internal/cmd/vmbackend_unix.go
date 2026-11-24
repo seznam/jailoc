@@ -362,7 +362,8 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 	for _, p := range guestPaths {
 		shares = append(shares, byGuest[p])
 	}
-	if limit := vm.MaxShares(ws.EnableDocker, ws.TmpStorage == config.TmpStorageDisk); len(shares) > limit {
+	stateDirs, cacheDisk := workspaceStorageDisks(ws, shares)
+	if limit := vm.MaxShares(ws.EnableDocker, ws.TmpStorage == config.TmpStorageDisk, len(stateDirs) > 0, cacheDisk); len(shares) > limit {
 		return nil, fmt.Errorf("workspace %q: %d shared directories (paths, mounts and profile state) exceed the limit of %d a VM on this host boots with; list a common parent directory in paths instead of its subdirectories", ws.Name, len(shares), limit)
 	}
 	if err := checkNestedShares(shares); err != nil {
@@ -611,6 +612,18 @@ func vmMemoryMiB(limit string) (uint32, error) {
 
 // vmMinDockerDiskSize is the smallest Docker data disk a workspace accepts.
 const vmMinDockerDiskSize = 1 << 30
+
+// vmStateDiskSize parses the state_disk setting into the size of the sparse
+// agent state disk.
+func vmStateDiskSize(size string) (int64, error) {
+	return vmDiskSize("state_disk", size)
+}
+
+// vmCacheDiskSize parses the cache_disk setting into the size of the sparse
+// ~/.cache disk.
+func vmCacheDiskSize(size string) (int64, error) {
+	return vmDiskSize("cache_disk", size)
+}
 
 // vmDockerDiskSize parses the docker_disk setting into the size of the sparse Docker
 // data disk in bytes, rounded up to whole MiB.

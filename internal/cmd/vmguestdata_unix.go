@@ -19,6 +19,7 @@ import (
 	goversion "github.com/hashicorp/go-version"
 
 	"github.com/seznam/jailoc/internal/agent"
+	"github.com/seznam/jailoc/internal/agentstate"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
@@ -42,10 +43,10 @@ func persistentHomeDirs(h agent.Harness) []agent.StateDir {
 // vmGuestData prepares the internal shares of the workspace VM and returns
 // the binds that place their parts in the guest: copies of the workspace's
 // jailoc config and cache directories read-only from the read-only share,
-// home directories read-write from the guest data directory unless a share
+// home directories read-write from the state and cache disks unless a share
 // covers them. The agent's state is persistent, or ephemeral with
-// profile = false: start (a new VM, not a reload) empties it. The copies are
-// refreshed on every up and reload.
+// profile = false: the guest empties it at boot. The copies are refreshed on
+// every up and reload.
 func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, start bool) ([]guest.Bind, error) {
 	stateDir := vmStateDir(ws.Name)
 	if err := migrateHomeDirs(stateDir); err != nil {
@@ -75,7 +76,6 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 	if err := syncDir(ro, guestDataCache, cacheDir); err != nil {
 		return nil, fmt.Errorf("workspace %q: copy jailoc cache: %w", ws.Name, err)
 	}
-	src := func(name string) string { return path.Join(guest.HostDir, name) }
 	roSrc := func(name string) string { return path.Join(guest.ReadOnlyHostDir, name) }
 	binds := []guest.Bind{
 		{Source: roSrc(guestDataConfig), Target: guestConfigDir, ReadOnly: true},
@@ -88,9 +88,11 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 		binds = append(binds, guest.Bind{Source: roSrc(guestDataCache + "/tui-plugin"), Target: tuiPluginContainerDir, ReadOnly: true})
 	}
 	ephemeral := ws.AgentProfile != nil && ws.AgentProfile.Ephemeral()
-	if ephemeral && start {
+	if start {
+		// An older layout kept the ephemeral agent state here; the state
+		// disk holds it now and the guest empties it.
 		if err := root.RemoveAll(guestDataEphemeral); err != nil {
-			return nil, fmt.Errorf("empty ephemeral agent state: %w", err)
+			return nil, fmt.Errorf("remove ephemeral agent state of an older layout: %w", err)
 		}
 	}
 	for _, d := range persistentHomeDirs(ws.Agent) {
@@ -102,23 +104,15 @@ func vmGuestData(ws *workspace.Resolved, cacheDir string, shares []vm.Share, sta
 			}
 			continue
 		}
-		rel := guestDataHome + "/" + d.Name
-		if ephemeral && slices.Contains(ws.Agent.State, d) {
-			rel = guestDataEphemeral + "/" + d.Name
+		// The disks hold the rest; the guest prepares the directories.
+		switch {
+		case d.Path == guestUserCache:
+			binds = append(binds, guest.Bind{Source: path.Join(guest.CacheDiskDir, d.Name), Target: d.Path})
+		case ephemeral:
+			binds = append(binds, guest.Bind{Source: path.Join(guest.StateDiskDir, guestDataEphemeral, d.Name), Target: d.Path})
+		default:
+			binds = append(binds, guest.Bind{Source: path.Join(guest.StateDiskDir, d.Name), Target: d.Path})
 		}
-		if err := root.MkdirAll(rel, 0o700); err != nil {
-			return nil, fmt.Errorf("create %s: %w", rel, err)
-		}
-		if start {
-			if err := removeConfigMountPoints(root, rel, d, ws.Agent); err != nil {
-				return nil, fmt.Errorf("workspace %q: %w", ws.Name, err)
-			}
-			addStateDefaults(root, rel, d, ws.Agent)
-		}
-		if slices.Contains(ws.Agent.State, d) {
-			addStatusLine(root, rel, ws.Agent)
-		}
-		binds = append(binds, guest.Bind{Source: src(rel), Target: d.Path})
 	}
 	return binds, nil
 }
@@ -177,7 +171,8 @@ func installsConfiguredAgent(cfg *config.Config, ws *workspace.Resolved) bool {
 
 // agentStateHostDir returns the canonical host directory that backs the
 // agent's primary state directory for ws: an explicit share covering it, or
-// the workspace's persistent guest home state directory.
+// the workspace's state disk image with the directory name, which stays
+// inside the state directory purgeWorkspaceAgentStateVersions cleans.
 func agentStateHostDir(cfg *config.Config, ws *workspace.Resolved, shares []vm.Share) string {
 	if !installsConfiguredAgent(cfg, ws) {
 		return ""
@@ -191,7 +186,7 @@ func agentStateHostDir(cfg *config.Config, ws *workspace.Resolved, shares []vm.S
 	if ws.AgentProfile != nil && ws.AgentProfile.Ephemeral() {
 		return ""
 	}
-	return canonicalHostPath(filepath.Join(vm.GuestDataDir(vmStateDir(ws.Name)), guestDataHome, d.Name))
+	return canonicalHostPath(vm.StateDiskPath(vmStateDir(ws.Name))) + "#" + d.Name
 }
 
 func loadAgentVersions(file string) map[string]string {
@@ -301,63 +296,18 @@ func purgeWorkspaceAgentStateVersions(stateDir string) {
 	})
 }
 
-// removeConfigMountPoints removes the empty files and directories the guest
-// created in state directory d, at dir inside root, as mount points of
-// import_agent_config snapshots. A snapshot that no longer applies, such as one
-// turned off or one whose host file is gone, would otherwise leave the agent
-// an empty settings file. The guest creates them again for the snapshots it
-// binds.
+// removeConfigMountPoints removes the empty mount points the guest created for
+// import_agent_config snapshots in state directory d, at dir inside root.
 func removeConfigMountPoints(root *os.Root, dir string, d agent.StateDir, h agent.Harness) error {
-	for _, cf := range h.ConfigFiles {
-		inner, ok := strings.CutPrefix(guestHome+"/"+cf.Path, d.Path+"/")
-		if !ok {
-			continue
-		}
-		p := path.Join(dir, inner)
-		info, err := root.Lstat(p)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("inspect %s: %w", p, err)
-		}
-		switch {
-		case info.Mode().IsRegular() && info.Size() == 0:
-		case info.IsDir():
-			entries, err := fs.ReadDir(root.FS(), p)
-			if err != nil {
-				return fmt.Errorf("read %s: %w", p, err)
-			}
-			if len(entries) > 0 {
-				continue
-			}
-		default:
-			continue
-		}
-		if err := root.Remove(p); err != nil {
-			return fmt.Errorf("remove mount point %s: %w", p, err)
-		}
-	}
-	return nil
+	return agentstate.RemoveConfigMountPoints(root, dir, d, h)
 }
 
-// maxAgentState bounds the agent state files jailoc edits; Claude Code keeps
-// per-project history in .claude.json.
-const maxAgentState = 64 << 20
-
 // addStateDefaults sets the StateDefaults of agent h that are in state
-// directory d, at dir inside root. It runs only before the VM starts, while
-// the agent cannot write the files. A failure leaves the agent without the
+// directory d, at dir inside root. A failure leaves the agent without the
 // defaults, so it is only reported.
 func addStateDefaults(root *os.Root, dir string, d agent.StateDir, h agent.Harness) {
-	for _, sd := range h.StateDefaults {
-		inner, ok := strings.CutPrefix(sd.File, d.Path+"/")
-		if !ok {
-			continue
-		}
-		if err := setStateDefault(root, path.Join(dir, inner), sd); err != nil {
-			_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not set %s in %s: %v\n", sd.Key, sd.File, err)
-		}
+	for _, err := range agentstate.AddStateDefaults(root, dir, d, h) {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %v\n", err)
 	}
 }
 
@@ -376,119 +326,67 @@ func addProfileStateDefaults(dir string, d agent.StateDir, h agent.Harness) {
 	addStateDefaults(root, ".", d, h)
 }
 
-func setStateDefault(root *os.Root, file string, sd agent.StateDefault) error {
-	values := map[string]json.RawMessage{}
-	data, err := readRegular(root, file, maxAgentState)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-	case err != nil:
-		return err
-	default:
-		if err := json.Unmarshal(data, &values); err != nil {
-			return fmt.Errorf("parse %s: %w", path.Base(file), err)
-		}
-	}
-	if values == nil {
-		values = map[string]json.RawMessage{}
-	}
-	if _, ok := values[sd.Key]; ok {
-		return nil
-	}
-	values[sd.Key] = json.RawMessage(sd.Value)
-	data, err = json.MarshalIndent(values, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := root.MkdirAll(path.Dir(file), 0o700); err != nil {
-		return err
-	}
-	return replaceFile(root, file, append(data, '\n'))
-}
-
-// replaceFile writes data to file inside root through a temporary file that
-// it renames over file, so a failed write leaves the old file intact.
-func replaceFile(root *os.Root, file string, data []byte) error {
-	tmp := file + ".jailoc-tmp"
-	if err := root.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("remove %s: %w", tmp, err)
-	}
-	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", tmp, err)
-	}
-	_, err = f.Write(data)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = root.Rename(tmp, file)
-	}
-	if err != nil {
-		_ = root.Remove(tmp) // best effort; the write error is reported
-		return fmt.Errorf("write %s: %w", file, err)
-	}
-	return nil
-}
-
 // addStatusLine sets the jailoc defaults in the settings file of agent h in
-// its state directory dir inside root: the status line (unless the file sets
-// one other than the script status line of an older jailoc) and, for GitHub
-// Copilot CLI, storeTokenPlaintext (when unset) so logins work without a
-// system keyring in the VM. A failure leaves the agent without the defaults,
-// so it is only reported.
+// its state directory dir inside root. A failure leaves the agent without the
+// defaults, so it is only reported.
 func addStatusLine(root *os.Root, dir string, h agent.Harness) {
-	file, harness, ok := h.TUIPlugin.SettingsFile()
-	if !ok {
-		return
-	}
-	if err := setDefaultStatusLine(root, path.Join(dir, file), harness); err != nil {
-		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not add the jailoc status line to the %s settings: %v\n", h.Title, err)
+	if err := agentstate.AddStatusLine(root, dir, h); err != nil {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: could not %v\n", err)
 	}
 }
 
-func setDefaultStatusLine(root *os.Root, file, harness string) error {
-	settings := map[string]json.RawMessage{}
-	data, err := readRegular(root, file, maxAgentConfig)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-	case err != nil:
-		return err
-	default:
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return fmt.Errorf("parse %s: %w", path.Base(file), err)
+// workspaceStorageDisks returns the names of the agent state directories the
+// state disk holds for ws and whether the cache disk holds ~/.cache: those
+// that no share covers.
+func workspaceStorageDisks(ws *workspace.Resolved, shares []vm.Share) (stateDirs []string, cache bool) {
+	covered := func(guestPath string) bool {
+		return slices.ContainsFunc(shares, func(s vm.Share) bool { return filepath.Clean(s.GuestPath) == filepath.Clean(guestPath) })
+	}
+	for _, d := range ws.Agent.State {
+		if !covered(d.Path) {
+			stateDirs = append(stateDirs, d.Name)
 		}
 	}
-	changed := false
-	if old, ok := settings["statusLine"]; !ok || isLegacyStatusLine(old, harness) {
-		line, err := json.Marshal(statusLine(harness))
-		if err != nil {
-			return err
-		}
-		settings["statusLine"] = line
-		changed = true
-	}
-	if harness == "copilot" {
-		if _, ok := settings["storeTokenPlaintext"]; !ok {
-			settings["storeTokenPlaintext"] = json.RawMessage("true")
-			changed = true
-		}
-	}
-	if !changed {
+	return stateDirs, !covered(guestUserCache)
+}
+
+// legacyHomeName is the directory next to the guest data directory that
+// keeps the persistent home directories of an older layout once the state
+// and cache disks hold their content.
+const legacyHomeName = "legacy-home"
+
+// archiveLegacyHome moves the persistent home directories of an older layout
+// (<state>/guest/home) to <state>/legacy-home once the guest has copied them
+// to the state disk (it leaves the home-migrated marker in the control
+// directory), and tells the user. jailoc never deletes the archive. It does
+// nothing when there is no legacy directory or no marker.
+func archiveLegacyHome(stateDir, wsName string) error {
+	data := vm.GuestDataDir(stateDir)
+	src := filepath.Join(data, guestDataHome)
+	if info, err := os.Lstat(src); err != nil || !info.IsDir() {
 		return nil
 	}
-	data, err = json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
+	marker := filepath.Join(data, vm.ControlName, "home-migrated")
+	if _, err := os.Lstat(marker); err != nil {
+		return nil
 	}
-	if err := root.MkdirAll(path.Dir(file), 0o700); err != nil {
-		return err
+	dst := filepath.Join(stateDir, legacyHomeName)
+	for n := 1; ; n++ {
+		if _, err := os.Lstat(dst); errors.Is(err, os.ErrNotExist) {
+			break
+		} else if err != nil {
+			return fmt.Errorf("inspect %s: %w", dst, err)
+		}
+		dst = filepath.Join(stateDir, fmt.Sprintf("%s-%d", legacyHomeName, n))
 	}
-	return root.WriteFile(file, append(data, '\n'), 0o600)
-}
-
-func isLegacyStatusLine(raw json.RawMessage, harness string) bool {
-	var line struct{ Command string }
-	return json.Unmarshal(raw, &line) == nil && line.Command == scriptStatusLineCommand(harness)
+	if err := os.Rename(src, dst); err != nil {
+		return fmt.Errorf("archive legacy home directories: %w", err)
+	}
+	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove migration marker: %w", err)
+	}
+	_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "Workspace %s: agent state and cache moved to state.img and cache.img; the previous files are kept at %s and can be deleted once you no longer need them\n", wsName, dst)
+	return nil
 }
 
 // migrateHomeDirs moves persistent home directories of an older layout

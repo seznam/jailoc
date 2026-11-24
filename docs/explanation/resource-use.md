@@ -71,11 +71,18 @@ jailoc never prunes the host Docker daemon, which other users and other jailoc h
 
 ### Data disks
 
-The builder VMs and workspaces with `enable_docker` have a data disk, 20 GiB by default. `docker_disk` sizes the disk of a workspace and of its `isolated_build` builder VM; `[vm] builder_disk` sizes the shared builder VM's.
+Each workspace has two persistent data disks, and the builder VMs and workspaces with `enable_docker` have a third:
 
-- Disks are sparse files, so they take host space only for blocks that have been written, but blocks freed inside the VM stay allocated on the host.
-- Raising `docker_disk` or `builder_disk` grows the disk and its file system on the next start, keeping the content; neither shrinks.
-- Workspaces without `enable_docker` get no Docker data disk and don't start a Docker daemon. A workspace with `tmp_storage = "disk"` has a second, separate disk for `/tmp`, described below.
+- `state.img`, sized by `state_disk` (10 GiB by default), holds the coding agent's state, such as its logins, history and databases.
+- `cache.img`, sized by `cache_disk` (20 GiB by default), holds `~/.cache`, including the download caches of Go modules, npm, Bun and NuGet.
+- The Docker data disk, 20 GiB by default, exists only with `enable_docker` and in builder VMs. `docker_disk` sizes the disk of a workspace and of its `isolated_build` builder VM; `[vm] builder_disk` sizes the shared builder VM's.
+
+The agent's state and `~/.cache` are on separate disks so that a full `~/.cache` can't starve the agent's state database of space. Builds and package managers can fill a cache quickly.
+
+- Disks are sparse files, so they take host space only for blocks that have been written. `state_disk`, `cache_disk` and `docker_disk` are caps, not reservations: the host sets nothing aside for them.
+- The guest periodically trims `state.img` and `cache.img` with `FITRIM`, so blocks freed inside the VM are returned to the host. Blocks freed on the Docker data disk stay allocated on the host.
+- Raising `state_disk`, `cache_disk`, `docker_disk` or `builder_disk` grows the disk and its file system on the next start, keeping the content; none of them shrinks.
+- Workspaces without `enable_docker` get no Docker data disk and don't start a Docker daemon. A workspace with `tmp_storage = "disk"` has a further, separate disk for `/tmp`, described below.
 
 ### Temporary files
 
@@ -108,7 +115,7 @@ A restart costs a VM boot and, after an image change, an export. Much of the con
 | Command | Applies |
 |---------|---------|
 | `jailoc reload` | Network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl` and secrets, to the running VM |
-| `jailoc restart` | Changes to `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `paths`, `mounts`, `enable_docker`, the guest ports of `proxy` routes, `protect_git` and the image |
+| `jailoc restart` | Changes to `cpu`, `memory`, `docker_disk`, `state_disk`, `cache_disk`, `tmp_storage`, `tmp_size`, `paths`, `mounts`, `enable_docker`, the guest ports of `proxy` routes, `protect_git` and the image |
 
 ## Host processes
 
