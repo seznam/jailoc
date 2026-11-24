@@ -1006,6 +1006,7 @@ Each entry is a port number or `"HOST:GUEST"`, with ports 1 to 65535.
 - A host port may appear only once per list.
 - A workspace entry replaces a `[defaults]` entry with the same host port.
 - Ports are published on host `127.0.0.1` only.
+- Guest services listening on `0.0.0.0`, `192.168.127.2`, `127.0.0.1` or `[::1]` are reachable.
 
 ### `host_ports`
 
@@ -1019,7 +1020,7 @@ Each entry makes a host service reachable from the guest:
 
 - Ports are 1 to 65535.
 - A guest port may appear only once per list; a workspace entry replaces a `[defaults]` entry with the same guest port.
-- Guest ports 22, 53, 2375, 7022 and 7023 are reserved.
+- Guest ports 22, 53, 2375, 7022, 7023, 7024 and 7025 are reserved.
 - Inside the guest each port is reachable on the gateway `192.168.127.1`, on the names `host.jailoc.internal` and `host.docker.internal`, and on `127.0.0.1` and `[::1]` when nothing in the guest already listens on that port.
 - TCP targets are always host loopback.
 - A Unix socket that does not exist yet produces a warning; connections fail until it exists.

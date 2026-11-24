@@ -417,7 +417,11 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 		"-mtu", strconv.Itoa(guest.MTU),
 	)
 	if spec.Kind == KindWorkspace {
-		args = append(args, "-forward-unix", SSHSocket(spec.StateDir)+"="+strconv.Itoa(guest.SSHPort))
+		args = append(args,
+			"-forward-unix", SSHSocket(spec.StateDir)+"="+strconv.Itoa(guest.SSHPort),
+			"-loopback-relay-port", strconv.Itoa(guest.LoopbackRelayPort),
+			"-oauth-callback-port", strconv.Itoa(guest.OAuthCallbackPort),
+		)
 	} else {
 		args = append(args, "-forward-unix", DockerSocket(spec.StateDir)+"="+strconv.Itoa(DockerPort))
 	}

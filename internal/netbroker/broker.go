@@ -64,8 +64,19 @@ type Config struct {
 	Forwards []Forward
 	// Services are gateway TCP ports relayed to host unix sockets, such as
 	// the SSH agent. They are the only gateway ports besides DNS.
-	Services    []Service
-	DNSFallback []netip.AddrPort // used when the policy names no upstream
+	Services []Service
+	// LoopbackRelayPort is the guest NIC port where jailoc-guest relays
+	// host-initiated connections to guest loopback (127.0.0.1 / ::1) when a
+	// direct dial to GuestIP:<port> fails. Zero disables the fallback.
+	LoopbackRelayPort uint16
+	// OAuthCallbackPort is the gateway port where the broker accepts OAuth
+	// loopback callback registration requests from jailoc-guest open-url.
+	// Zero disables the endpoint.
+	OAuthCallbackPort uint16
+	// OAuthCallbackTTL bounds how long an unserved single-shot OAuth callback
+	// listener stays open on the host. Zero defaults to 3 minutes.
+	OAuthCallbackTTL time.Duration
+	DNSFallback      []netip.AddrPort // used when the policy names no upstream
 	// HostDNS, when set, supplies the upstreams at query time if neither the
 	// policy nor DNSFallback names any, so host network changes apply.
 	HostDNS func() []netip.AddrPort
@@ -98,6 +109,7 @@ type Broker struct {
 	statusMu sync.Mutex
 
 	runtime runtimeState
+	oauth   oauthState
 
 	// connSeq numbers guest flows so l7 events refer to their flow event.
 	connSeq atomic.Uint64
@@ -272,6 +284,11 @@ func (b *Broker) Run(ctx context.Context, l net.Listener) error {
 	}
 	for _, s := range b.cfg.Services {
 		if err := b.startService(ctx, s); err != nil {
+			return err
+		}
+	}
+	if b.cfg.OAuthCallbackPort != 0 {
+		if err := b.startOAuthCallbackServer(ctx); err != nil {
 			return err
 		}
 	}

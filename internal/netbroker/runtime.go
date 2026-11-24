@@ -168,6 +168,7 @@ func (b *Broker) ApplyRuntime(ctx context.Context, rt *Runtime) []error {
 		}
 		fctx, cancel := context.WithCancel(ctx)
 		hp := netip.MustParseAddrPort(f.Host)
+		b.cancelOAuthPort(hp.Port())
 		closeL, err := b.startForward(fctx, Forward{Host: hp, GuestPort: f.GuestPort})
 		if err != nil {
 			cancel()
