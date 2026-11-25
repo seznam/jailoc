@@ -206,7 +206,7 @@ In another terminal, start the proxy with `--listener-broker` instead of `--list
 
 ```bash
 jailoc proxy demo --listener-broker
-  ```
+```
 
 The proxy runs in the background, and `jailoc up` and `jailoc restart` keep using the broker until `jailoc proxy stop`.
 
