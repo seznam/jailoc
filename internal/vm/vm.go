@@ -31,6 +31,7 @@ import (
 	"github.com/stacklok/go-microvm/hypervisor/libkrun"
 	"github.com/stacklok/go-microvm/image"
 	propnet "github.com/stacklok/go-microvm/net"
+	"github.com/stacklok/go-microvm/state"
 	"go.opentelemetry.io/otel"
 )
 
@@ -531,7 +532,7 @@ func commonOptions(spec Spec, redactor *consoleRedactor) []microvm.Option {
 		microvm.WithName("jailoc-" + spec.Workspace),
 		microvm.WithCPUs(spec.CPUs),
 		microvm.WithMemory(spec.MemoryMiB),
-		microvm.WithDataDir(filepath.Join(spec.StateDir, "microvm")),
+		microvm.WithDataDir(microVMDataDir(spec.StateDir)),
 		microvm.WithCleanDataDir(),
 		microvm.WithBackend(libkrun.NewBackend(backend...)),
 		microvm.WithNetProvider(brokerProvider{path: nicSocket(spec.StateDir)}),
@@ -743,6 +744,31 @@ const guestShutdownWait = 20 * time.Second
 // accesses it through OpenGuestData, which never follows a link out of it,
 // and never stores host-only state such as keys or the spec in it.
 func GuestDataDir(stateDir string) string { return filepath.Join(stateDir, "guest") }
+
+// microVMDataDir is the go-microvm data directory of the VM in stateDir.
+func microVMDataDir(stateDir string) string { return filepath.Join(stateDir, "microvm") }
+
+// BootRootDir is the directory the VM in stateDir boots from: go-microvm
+// fills it from the image and gives it to libkrun as the writable root, so
+// the guest can change anything inside it.
+func BootRootDir(stateDir string) string {
+	return filepath.Join(microVMDataDir(stateDir), "rootfs-work")
+}
+
+// RunnerPID returns the PID of the VM runner that go-microvm records as
+// active for the VM in stateDir, or 0 when none is. The runner keeps the
+// virtio-fs shares of the guest until it exits, also after the supervisor
+// that started it is gone.
+func RunnerPID(stateDir string) (int, error) {
+	st, err := state.NewManager(microVMDataDir(stateDir)).Load()
+	if err != nil {
+		return 0, fmt.Errorf("read runner state: %w", err)
+	}
+	if !st.Active || st.PID <= 1 {
+		return 0, nil
+	}
+	return st.PID, nil
+}
 
 // GuestReadOnlyDir is the per-VM directory the workspace VM mounts
 // read-only: staged snapshots and copies of jailoc configuration. The
