@@ -1215,6 +1215,51 @@ func TestResolveDockerDisk(t *testing.T) {
 	}
 }
 
+func TestResolveStateAndCacheDisk(t *testing.T) {
+	t.Parallel()
+
+	str := func(v string) *string { return &v }
+
+	tests := []struct {
+		name      string
+		defState  *string
+		wsState   *string
+		defCache  *string
+		wsCache   *string
+		wantState string
+		wantCache string
+	}{
+		{"fallback when both unset", nil, nil, nil, nil, "10g", "20g"},
+		{"defaults used when workspace unset", str("30g"), nil, str("40g"), nil, "30g", "40g"},
+		{"workspace overrides defaults", str("30g"), str("50g"), str("40g"), str("60g"), "50g", "60g"},
+		{"workspace without defaults", nil, str("15g"), nil, str("25g"), "15g", "25g"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Defaults: config.Defaults{StateDisk: tt.defState, CacheDisk: tt.defCache},
+				Workspaces: map[string]config.Workspace{
+					"test": {Paths: []string{"/data"}, StateDisk: tt.wsState, CacheDisk: tt.wsCache},
+				},
+			}
+
+			resolved, err := workspace.Resolve(cfg, "test")
+			if err != nil {
+				t.Fatalf("Resolve failed: %v", err)
+			}
+			if resolved.StateDisk != tt.wantState {
+				t.Errorf("StateDisk: got %q, want %q", resolved.StateDisk, tt.wantState)
+			}
+			if resolved.CacheDisk != tt.wantCache {
+				t.Errorf("CacheDisk: got %q, want %q", resolved.CacheDisk, tt.wantCache)
+			}
+		})
+	}
+}
+
 func TestResolveTimeZone(t *testing.T) {
 	t.Parallel()
 

@@ -16,6 +16,7 @@ Find the symptom, then apply the fix. Start with [Find the logs](#find-the-logs)
 | TLS error on a host with an `http` rule | [Certificate error on an inspected host](#certificate-error-on-an-inspected-host) |
 | Image pull or build errors | [Image build fails](#image-build-fails) |
 | Build fails with `no space left on device`, or the builder VM is lost at startup | [Builder VM disk is full](#builder-vm-disk-is-full) |
+| `jailoc up` fails with `no space left on device` on the state or cache disk | [State or cache disk is full](#state-or-cache-disk-is-full) |
 | `docker` missing or failing in the guest | [Docker inside the VM fails](#docker-inside-the-vm-fails) |
 | OpenCode exits at startup | [OpenCode fails to start with a server or database error](#opencode-fails-to-start-with-a-server-or-database-error) |
 
@@ -53,7 +54,10 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 | `microvm/console.log`, `.1`, `.2` | Guest console: boot, SSH connections and processes the kernel killed when the VM ran out of memory, rotated at 1 MiB (lines over 16 KiB are dropped and secrets are redacted); read them with `jailoc logs` |
 | `broker.jsonl`, `broker.jsonl.1` | Network broker decisions, one JSON object per line, rotated at 16 MiB; read them with `jailoc traffic` |
 | `guest/control/exec.jsonl` | Processes started in the guest and their exits; read it with `jailoc strace` |
-| `guest/` | The internal share the guest can write: control files and persistent home directories (`guest/home`) |
+| `guest/` | The internal share the guest can write: control files such as `guest/control/exec.jsonl` |
+| `state.img` | The state disk (`state_disk`, 10 GiB by default): the agent's persistent home directories |
+| `cache.img` | The cache disk (`cache_disk`, 20 GiB by default): `~/.cache` |
+| `legacy-home/`, `legacy-home-<n>/` | The persistent home directories of a workspace that stored them as a directory, kept after the guest copied the agent state to `state.img`. The old `~/.cache` is not copied to `cache.img`. jailoc doesn't delete it |
 | `guest-ro/` | The read-only internal share: configuration copies and staged snapshots |
 | `state.json` | Supervisor PID and readiness |
 | `inspect-ca.pem`, `inspect-ca.key` | The workspace's TLS inspection CA, created when a network rule has `http`; the key stays on the host and is deleted by `jailoc down --purge` |
@@ -144,6 +148,14 @@ tail -n 50 ~/.cache/jailoc-vm/workspaces/<workspace>/supervisor.log
 - a stale VM left over from a crash.
 
 **Fix:** remove the cause. Clear a stale VM with `jailoc down <workspace>` and start again.
+
+## VM doesn't start: `needs mkfs.ext4`
+
+**Symptom:** `jailoc up` fails with `needs mkfs.ext4 (e2fsprogs) in the workspace image`, naming `state.img` or `cache.img`, or with an error naming `mkfs.ext4` for `/tmp`.
+
+**Cause:** the guest formats the state and cache disks, and a disk-backed `/tmp`, with `mkfs.ext4` from the workspace image. An image without `e2fsprogs` has neither `mkfs.ext4` nor `resize2fs`.
+
+**Fix:** add `e2fsprogs` to your base or overlay Dockerfile and run `jailoc up` again. See [what the image must provide](custom-images.md#know-what-the-image-must-provide).
 
 ## Processes die or the VM stops when memory runs out
 
@@ -291,6 +303,26 @@ jailoc up <workspace>
 ```
 
 The backup takes host disk space until you delete it, and the next build recreates the cache from scratch, so it takes longer. Delete the backup once the builder works. Image layers in the VM image cache and workspace homes are unaffected.
+
+## State or cache disk is full
+
+**Symptom:** `jailoc up` fails with `no space left on device`, and the error says the guest's agent state or `~/.cache` filesystem is full. It names the disk image, `state.img` or `cache.img`, and the setting that grows it. A failed copy of the previous home directories onto a new `state.img` ends the same way.
+
+jailoc reports a full state or cache disk only when the guest's console shows an out-of-space error about that disk or on a path on it. The guest writes to its own ext4 filesystem there, so the disk is full and not the host: a full host disk fails the guest's writes to the sparse image with I/O errors instead.
+
+**Fix:** raise the setting the error names, then start the workspace again:
+
+```toml
+[workspaces.myproject]
+state_disk = "20g"   # agent state
+cache_disk = "40g"   # ~/.cache
+```
+
+```bash
+jailoc up myproject
+```
+
+The disk and its filesystem grow and keep their content; they never shrink. A failed copy of the previous home directories leaves them where they were, and the next start copies them again. Pick a size the host disk can hold, since the sparse file can grow up to it.
 
 ## Docker inside the VM fails
 

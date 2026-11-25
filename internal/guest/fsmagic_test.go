@@ -32,6 +32,38 @@ func TestExtMagicAt(t *testing.T) {
 	}
 }
 
+func TestExtVolumeLabelAt(t *testing.T) {
+	t.Parallel()
+	withLabel := func(label string) []byte {
+		b := make([]byte, 2048)
+		copy(b[1144:1160], label)
+		return b
+	}
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "state label", data: withLabel("jailoc-state"), want: "jailoc-state"},
+		{name: "cache label", data: withLabel("jailoc-cache"), want: "jailoc-cache"},
+		{name: "full 16 bytes", data: withLabel("0123456789abcdef"), want: "0123456789abcdef"},
+		{name: "no label", data: make([]byte, 2048), want: ""},
+		{name: "shorter than field", data: make([]byte, 1100), want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := extVolumeLabelAt(bytes.NewReader(tt.data))
+			if err != nil {
+				t.Fatalf("extVolumeLabelAt: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("extVolumeLabelAt = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLastWins(t *testing.T) {
 	t.Parallel()
 	got := lastWins([]string{"A=1", "B=2", "A=3", "C", "B=4"})

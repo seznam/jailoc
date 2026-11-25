@@ -234,7 +234,14 @@ cpu = 8.0
 memory = "16g"
 ```
 
-Workspace values override defaults. Without either, the VM gets 2 vCPUs and `4g`. `cpu` is rounded up to whole vCPUs. `memory` must be at least `512m`; see [`cpu`, `memory` and `docker_disk`](../reference/configuration.md#cpu-memory-and-docker_disk) for the format. The limits apply to the whole VM, including its Docker daemon.
+Workspace values override defaults. Without either, the VM gets 2 vCPUs and `4g`. `cpu` is rounded up to whole vCPUs. `memory` must be at least `512m`; see [`cpu`, `memory`, `docker_disk`, `state_disk` and `cache_disk`](../reference/configuration.md#cpu-memory-and-docker_disk) for the format. The limits apply to the whole VM, including its Docker daemon.
+
+The persistent disks have limits of their own: `state_disk` (`"10g"` by default) holds the agent's state and `cache_disk` (`"20g"` by default) holds `~/.cache`. Both are sparse, so they are caps, not reservations, and neither can shrink:
+
+```toml
+[workspaces.heavy-agent]
+cache_disk = "50g"
+```
 
 Inside the VM, jailoc swaps to compressed memory (zram, half of `memory`) and trims part of the file cache every minute; freed pages are reported to the host through the balloon device. See [Resource use](../explanation/resource-use.md).
 
@@ -276,6 +283,6 @@ jailoc reload myproject
 
 These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl` and secrets. Running sessions keep their old environment.
 
-Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `tmp_storage`, `tmp_size`, `enable_docker`, the set of guest ports used by `proxy` (see [proxy routes](proxy-routes.md#apply-changes)), `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
+Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `state_disk`, `cache_disk`, `tmp_storage`, `tmp_size`, `enable_docker`, the set of guest ports used by `proxy` (see [proxy routes](proxy-routes.md#apply-changes)), `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
 
 Concurrent reloads of one workspace run one at a time.

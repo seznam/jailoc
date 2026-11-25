@@ -108,6 +108,20 @@ func prepareGuest(spec Spec, layers []string) (map[string]fileContent, error) {
 	cfg.Shares = append(cfg.Shares,
 		guest.Share{Tag: internalTag, GuestPath: guest.HostDir},
 		guest.Share{Tag: internalROTag, GuestPath: guest.ReadOnlyHostDir, ReadOnly: true})
+	if spec.StateDisk || spec.CacheDisk {
+		stateDev, cacheDev := workspaceDiskDevices(spec)
+		if spec.StateDisk {
+			state := guest.StateDisk{}
+			if cfg.State != nil {
+				state = *cfg.State
+			}
+			state.Disk = stateDev
+			cfg.State = &state
+		}
+		if spec.CacheDisk {
+			cfg.Cache = &guest.CacheDisk{Disk: cacheDev}
+		}
+	}
 	cfg.RootShare = rootTag
 	cfg.RootLayers = layers
 	cfgJSON, err := json.MarshalIndent(cfg, "", "  ")
@@ -142,18 +156,31 @@ const fixedDevices = 8
 
 // MaxShares returns how many shares a workspace VM on this host boots with.
 // Beyond it libkrun runs out of interrupt lines for the devices; the Docker
-// data disk and the tmp disk (docker, diskTmp) each take one of them.
-func MaxShares(docker, diskTmp bool) int {
-	return maxShares(runtime.GOARCH, docker, diskTmp)
+// data disk and the tmp disk (docker, diskTmp) each take one of them, and so
+// does every true value of extraDisks (state disk, cache disk).
+func MaxShares(docker, diskTmp bool, extraDisks ...bool) int {
+	return maxShares(runtime.GOARCH, docker, diskTmp, extraDisks...)
 }
 
-func maxShares(arch string, docker, diskTmp bool) int {
+// SpecMaxShares returns how many shares the workspace VM described by spec
+// has room for: MaxShares less one per disk it attaches (workspaceDisks). A
+// running VM keeps that limit until it restarts.
+func SpecMaxShares(spec Spec) int {
+	return maxShares(runtime.GOARCH, spec.Docker, tmpOnDisk(spec), spec.StateDisk, spec.CacheDisk)
+}
+
+func maxShares(arch string, docker, diskTmp bool, extraDisks ...bool) int {
 	n := virtioIRQs[arch] - fixedDevices
 	if docker {
 		n--
 	}
 	if diskTmp {
 		n--
+	}
+	for _, extra := range extraDisks {
+		if extra {
+			n--
+		}
 	}
 	return n
 }

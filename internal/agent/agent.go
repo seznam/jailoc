@@ -150,6 +150,10 @@ type StateDefault struct {
 type Harness struct {
 	// Name is the value of agent in the configuration.
 	Name string
+	// Builtin is the name of the built-in harness that Name selects: Name
+	// itself, the harness of an alias, or the built-in agent a custom agent
+	// is derived from. Lookup sets it.
+	Builtin string
 	// Title is the human-readable name.
 	Title string
 	// Binary is the command that starts the agent.
@@ -523,6 +527,7 @@ func Lookup(name string) (Harness, bool) {
 	}
 	h := harnesses[i]
 	h.Name = name
+	h.Builtin = target
 	return h, true
 }
 

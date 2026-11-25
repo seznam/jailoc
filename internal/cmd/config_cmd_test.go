@@ -156,7 +156,9 @@ profile = "work"
 		}
 	})
 	assertContains(t, outDefault, "  Profile: workspace\n")
-	assertContains(t, outDefault, "    Profile Dir: "+filepath.Join(home, ".cache", "jailoc-vm", "workspaces", "ws-default", "guest", "home")+"\n")
+	assertContains(t, outDefault, "  State Disk: 10g\n")
+	assertContains(t, outDefault, "  Cache Disk: 20g\n")
+	assertContains(t, outDefault, "    Profile Dir: "+filepath.Join(home, ".cache", "jailoc-vm", "workspaces", "ws-default", "state.img")+"\n")
 
 	outEphemeral := captureStdout(t, func() {
 		cmd := &cobra.Command{}
@@ -166,7 +168,7 @@ profile = "work"
 		}
 	})
 	assertContains(t, outEphemeral, "  Profile: none (ephemeral)\n")
-	assertContains(t, outEphemeral, "    Profile Dir: "+filepath.Join(home, ".cache", "jailoc-vm", "workspaces", "ws-ephemeral", "guest", "ephemeral")+" (ephemeral)\n")
+	assertContains(t, outEphemeral, "    Profile Dir: "+filepath.Join(home, ".cache", "jailoc-vm", "workspaces", "ws-ephemeral", "state.img")+":ephemeral (ephemeral)\n")
 
 	outMounted := captureStdout(t, func() {
 		cmd := &cobra.Command{}

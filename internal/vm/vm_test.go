@@ -2,11 +2,13 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -310,6 +312,93 @@ func TestWaitDocker(t *testing.T) {
 		}
 		if got := context.Cause(ctx); !errors.Is(got, errStartupVMExited) {
 			t.Fatalf("cause = %v", got)
+		}
+	})
+}
+
+func TestStateAndCacheDiskPaths(t *testing.T) {
+	t.Parallel()
+	if got, want := StateDiskPath("/s"), "/s/state.img"; got != want {
+		t.Errorf("StateDiskPath = %q, want %q", got, want)
+	}
+	if got, want := CacheDiskPath("/s"), "/s/cache.img"; got != want {
+		t.Errorf("CacheDiskPath = %q, want %q", got, want)
+	}
+}
+
+func TestStateAndCacheDiskSize(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		spec      Spec
+		wantState int64
+		wantCache int64
+	}{
+		{"defaults", Spec{}, DefaultStateDiskSize, DefaultCacheDiskSize},
+		{"explicit", Spec{StateDiskSize: 1 << 30, CacheDiskSize: 2 << 30}, 1 << 30, 2 << 30},
+		{"negative falls back", Spec{StateDiskSize: -1, CacheDiskSize: -1}, DefaultStateDiskSize, DefaultCacheDiskSize},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := stateDiskSize(tt.spec); got != tt.wantState {
+				t.Errorf("stateDiskSize = %d, want %d", got, tt.wantState)
+			}
+			if got := cacheDiskSize(tt.spec); got != tt.wantCache {
+				t.Errorf("cacheDiskSize = %d, want %d", got, tt.wantCache)
+			}
+		})
+	}
+}
+
+func TestPrepareGuestStateAndCacheDevices(t *testing.T) {
+	t.Parallel()
+	bin := filepath.Join(t.TempDir(), "jailoc-guest")
+	if err := os.WriteFile(bin, []byte("guest"), 0o700); err != nil { //nolint:gosec // G306: test binary
+		t.Fatal(err)
+	}
+	readCfg := func(t *testing.T, spec Spec) guest.Config {
+		t.Helper()
+		spec.StateDir = t.TempDir()
+		spec.GuestBinary = bin
+		files, err := prepareGuest(spec, nil)
+		if err != nil {
+			t.Fatalf("prepareGuest: %v", err)
+		}
+		var cfg guest.Config
+		if err := json.Unmarshal(files[guest.ConfigPath].data, &cfg); err != nil {
+			t.Fatalf("decode guest config: %v", err)
+		}
+		return cfg
+	}
+	t.Run("no disks", func(t *testing.T) {
+		t.Parallel()
+		cfg := readCfg(t, Spec{Guest: &guest.Config{}})
+		if cfg.State != nil || cfg.Cache != nil {
+			t.Fatalf("State = %+v, Cache = %+v, want nil", cfg.State, cfg.Cache)
+		}
+	})
+	t.Run("devices follow attach order and keep state settings", func(t *testing.T) {
+		t.Parallel()
+		in := &guest.StateDisk{Agent: "claude", Dirs: []string{"a"}, Ephemeral: true}
+		spec := Spec{Docker: true, StateDisk: true, CacheDisk: true, Guest: &guest.Config{State: in}}
+		cfg := readCfg(t, spec)
+		want := guest.StateDisk{Disk: "/dev/vdb", Agent: "claude", Dirs: []string{"a"}, Ephemeral: true}
+		if cfg.State == nil || !reflect.DeepEqual(*cfg.State, want) {
+			t.Fatalf("State = %+v, want %+v", cfg.State, want)
+		}
+		if cfg.Cache == nil || cfg.Cache.Disk != "/dev/vdc" {
+			t.Fatalf("Cache = %+v, want disk /dev/vdc", cfg.Cache)
+		}
+		if in.Disk != "" {
+			t.Fatalf("input StateDisk mutated: %+v", in)
+		}
+	})
+	t.Run("state disk without prior config", func(t *testing.T) {
+		t.Parallel()
+		cfg := readCfg(t, Spec{StateDisk: true, Guest: &guest.Config{}})
+		if cfg.State == nil || cfg.State.Disk != "/dev/vda" || cfg.Cache != nil {
+			t.Fatalf("State = %+v, Cache = %+v", cfg.State, cfg.Cache)
 		}
 	})
 }

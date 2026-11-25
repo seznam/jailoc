@@ -360,7 +360,7 @@ func TestCABundleMaterializationPrecedesGeneratedWrites(t *testing.T) {
 		laterCalls []string
 	}{
 		{file: "vmflow_unix.go", laterCalls: []string{"writeAgentFiles", "vmShares"}},
-		{file: "vmreload_unix.go", laterCalls: []string{"writeAgentFiles", "vmShares"}},
+		{file: "vmreload_unix.go", laterCalls: []string{"writeAgentFiles", "vmReloadShares"}},
 	}
 
 	for _, tt := range tests {

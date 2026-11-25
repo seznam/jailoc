@@ -54,6 +54,8 @@ type Resolved struct {
 	CPU               float64
 	Memory            string
 	DockerDisk        string
+	StateDisk         string
+	CacheDisk         string
 	// TmpStorage is "ram" or "disk": what backs the guest /tmp.
 	TmpStorage string
 	// TmpSizeBytes is the capacity of /tmp.
@@ -219,6 +221,8 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		CPU:               floatWithDefault(cfg.Defaults.CPU, ws.CPU, 2.0),
 		Memory:            stringWithDefault(cfg.Defaults.Memory, ws.Memory, "4g"),
 		DockerDisk:        stringWithDefault(cfg.Defaults.DockerDisk, ws.DockerDisk, "20g"),
+		StateDisk:         stringWithDefault(cfg.Defaults.StateDisk, ws.StateDisk, "10g"),
+		CacheDisk:         stringWithDefault(cfg.Defaults.CacheDisk, ws.CacheDisk, "20g"),
 		TmpStorage:        tmp.Storage,
 		TmpSizeBytes:      tmp.SizeBytes,
 		TmpTTL:            tmp.TTL,

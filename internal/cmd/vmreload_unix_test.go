@@ -284,6 +284,8 @@ func TestReloadSpecRunningSharesExcludeSnapshots(t *testing.T) {
 		CPU:               2,
 		Memory:            "2g",
 		DockerDisk:        "20g",
+		StateDisk:         "10g",
+		CacheDisk:         "20g",
 	}
 	running := vm.Spec{
 		GuestProtocol: guest.Protocol,
@@ -402,7 +404,7 @@ func TestCheckReloadProxyCollision(t *testing.T) {
 func TestReloadWantAfterProxyRemovedKeepsCollisionVisible(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ws := &workspace.Resolved{
-		Name: "ws", CPU: 2, Memory: "2G", DockerDisk: "20g",
+		Name: "ws", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g",
 		HostPorts: []config.HostPortTarget{{Guest: 3000, HostPort: 9000}},
 		Ports:     []config.PortForward{{Host: 18000, Guest: 6081}},
 	}
@@ -416,5 +418,33 @@ func TestReloadWantAfterProxyRemovedKeepsCollisionVisible(t *testing.T) {
 	running := vm.Spec{Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000, 6080}}}}
 	if err := checkReloadProxyCollision("ws", running, want); err == nil {
 		t.Fatal("removing proxy from the configuration made its ports reloadable as host ports")
+	}
+}
+
+func TestRestartOnlyChangesStateAndCacheDisk(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	base := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &guest.Config{}}
+	tests := []struct {
+		name                string
+		stateOn, cacheOn    bool
+		runState, wantState int64
+		runCache, wantCache int64
+		changes             []string
+	}{
+		{name: "unchanged defaults", stateOn: true, cacheOn: true, wantState: 10 << 30, wantCache: 20 << 30},
+		{name: "state grown", stateOn: true, runState: 10 << 30, wantState: 20 << 30, changes: []string{"state_disk"}},
+		{name: "cache grown from a spec without size", cacheOn: true, wantCache: 40 << 30, changes: []string{"cache_disk"}},
+		{name: "both grown", stateOn: true, cacheOn: true, runState: 10 << 30, wantState: 11 << 30, runCache: 20 << 30, wantCache: 30 << 30, changes: []string{"state_disk", "cache_disk"}},
+		{name: "disks off", runState: 10 << 30, wantState: 20 << 30, runCache: 20 << 30, wantCache: 30 << 30},
+	}
+	for _, tt := range tests {
+		running, want := base, base
+		running.StateDisk, want.StateDisk = tt.stateOn, tt.stateOn
+		running.CacheDisk, want.CacheDisk = tt.cacheOn, tt.cacheOn
+		running.StateDiskSize, want.StateDiskSize = tt.runState, tt.wantState
+		running.CacheDiskSize, want.CacheDiskSize = tt.runCache, tt.wantCache
+		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.changes)
+		}
 	}
 }

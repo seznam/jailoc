@@ -154,6 +154,9 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 		return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
 	}
 	logStep("start workspace VM", start)
+	if err := archiveLegacyHome(stateDir, ws.Name); err != nil {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %q: %v\n", ws.Name, err)
+	}
 	start = time.Now()
 	if err := deliverSecrets(ctx, stateDir, payload); err != nil {
 		_ = stopSupervisor(stateDir)
@@ -636,6 +639,14 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if err != nil {
 		return vm.Spec{}, err
 	}
+	stateDiskSize, err := vmStateDiskSize(ws.StateDisk)
+	if err != nil {
+		return vm.Spec{}, err
+	}
+	cacheDiskSize, err := vmCacheDiskSize(ws.CacheDisk)
+	if err != nil {
+		return vm.Spec{}, err
+	}
 	policy, err := vmPolicy(ctx, ws)
 	if err != nil {
 		return vm.Spec{}, err
@@ -713,6 +724,17 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	}
 	if ws.TmpStorage == config.TmpStorageDisk {
 		spec.TmpDiskSize = ws.TmpSizeBytes
+	}
+	stateDirs, cache := workspaceStorageDisks(ws, shares)
+	if len(stateDirs) > 0 {
+		spec.StateDisk = true
+		spec.StateDiskSize = stateDiskSize
+		g.State = &guest.StateDisk{Agent: cmp.Or(ws.Agent.Builtin, ws.Agent.Name), Dirs: stateDirs, Ephemeral: ws.AgentProfile != nil && ws.AgentProfile.Ephemeral()}
+	}
+	if cache {
+		spec.CacheDisk = true
+		spec.CacheDiskSize = cacheDiskSize
+		g.Cache = &guest.CacheDisk{}
 	}
 	if ws.AgentProfile != nil {
 		spec.Profile, _ = ws.AgentProfile.Name()
@@ -1110,6 +1132,12 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	}
 	if size, err := vmDockerDiskSize(ws.DockerDisk); err == nil && running.Docker && ws.EnableDocker && cmp.Or(running.DiskSize, int64(vm.DefaultDiskSize)) != size {
 		out = append(out, "docker_disk")
+	}
+	if size, err := vmStateDiskSize(ws.StateDisk); err == nil && running.StateDisk && cmp.Or(running.StateDiskSize, int64(vm.DefaultStateDiskSize)) != size {
+		out = append(out, "state_disk")
+	}
+	if size, err := vmCacheDiskSize(ws.CacheDisk); err == nil && running.CacheDisk && cmp.Or(running.CacheDiskSize, int64(vm.DefaultCacheDiskSize)) != size {
+		out = append(out, "cache_disk")
 	}
 	if running.Docker != ws.EnableDocker {
 		out = append(out, "enable_docker")

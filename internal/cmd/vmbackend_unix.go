@@ -282,8 +282,25 @@ const (
 // vmShares lists the host directories the workspace VM mounts: workspace
 // paths read-write at their host paths and mount sources at their container
 // paths. jailoc's own directories reach the guest through the internal
-// share (see vmGuestData).
+// share (see vmGuestData). Their number is checked against the limit of a VM
+// booted with the workspace's disks.
 func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
+	return vmSharesWithin(ws, func(shares []vm.Share) int {
+		stateDirs, cacheDisk := workspaceStorageDisks(ws, shares)
+		return vm.MaxShares(ws.EnableDocker, ws.TmpStorage == config.TmpStorageDisk, len(stateDirs) > 0, cacheDisk)
+	})
+}
+
+// vmReloadShares is vmShares for reloading the running VM: shares change only
+// on restart, and the running VM keeps the devices it booted with, so the
+// limit is that of its disks, not of the disks a restart would attach.
+func vmReloadShares(ws *workspace.Resolved, running vm.Spec) ([]vm.Share, error) {
+	return vmSharesWithin(ws, func([]vm.Share) int { return vm.SpecMaxShares(running) })
+}
+
+// vmSharesWithin lists the shares of vmShares and checks their number against
+// limit, which gets the shares.
+func vmSharesWithin(ws *workspace.Resolved, limit func([]vm.Share) int) ([]vm.Share, error) {
 	byGuest := map[string]vm.Share{}
 	add := func(host, guestPath string, ro bool) {
 		guestPath = filepath.Clean(guestPath)
@@ -362,8 +379,8 @@ func vmShares(ws *workspace.Resolved) ([]vm.Share, error) {
 	for _, p := range guestPaths {
 		shares = append(shares, byGuest[p])
 	}
-	if limit := vm.MaxShares(ws.EnableDocker, ws.TmpStorage == config.TmpStorageDisk); len(shares) > limit {
-		return nil, fmt.Errorf("workspace %q: %d shared directories (paths, mounts and profile state) exceed the limit of %d a VM on this host boots with; list a common parent directory in paths instead of its subdirectories", ws.Name, len(shares), limit)
+	if n := limit(shares); len(shares) > n {
+		return nil, fmt.Errorf("workspace %q: %d shared directories (paths, mounts and profile state) exceed the limit of %d a VM on this host boots with; list a common parent directory in paths instead of its subdirectories", ws.Name, len(shares), n)
 	}
 	if err := checkNestedShares(shares); err != nil {
 		return nil, fmt.Errorf("workspace %q: %w", ws.Name, err)
@@ -611,6 +628,18 @@ func vmMemoryMiB(limit string) (uint32, error) {
 
 // vmMinDockerDiskSize is the smallest Docker data disk a workspace accepts.
 const vmMinDockerDiskSize = 1 << 30
+
+// vmStateDiskSize parses the state_disk setting into the size of the sparse
+// agent state disk.
+func vmStateDiskSize(size string) (int64, error) {
+	return vmDiskSize("state_disk", size)
+}
+
+// vmCacheDiskSize parses the cache_disk setting into the size of the sparse
+// ~/.cache disk.
+func vmCacheDiskSize(size string) (int64, error) {
+	return vmDiskSize("cache_disk", size)
+}
 
 // vmDockerDiskSize parses the docker_disk setting into the size of the sparse Docker
 // data disk in bytes, rounded up to whole MiB.

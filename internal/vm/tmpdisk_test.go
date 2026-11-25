@@ -395,3 +395,40 @@ func TestPrepareWorkspaceTmp(t *testing.T) {
 		_ = release()
 	})
 }
+
+func TestWorkspaceDisksStateAndCache(t *testing.T) {
+	t.Parallel()
+	const dir = "/state"
+	state := microvm.Disk{ID: "state", HostPath: filepath.Join(dir, "state.img")}
+	cache := microvm.Disk{ID: "cache", HostPath: filepath.Join(dir, "cache.img")}
+	docker := microvm.Disk{ID: "docker", HostPath: filepath.Join(dir, "docker.img")}
+	tmp := microvm.Disk{ID: "tmp", HostPath: filepath.Join(dir, "tmp.img")}
+	all := diskTmpSpec(dir, 1<<30)
+	all.Docker, all.StateDisk, all.CacheDisk = true, true, true
+	tests := []struct {
+		name     string
+		spec     Spec
+		want     []microvm.Disk
+		stateDev string
+		cacheDev string
+	}{
+		{"state only", Spec{StateDir: dir, StateDisk: true}, []microvm.Disk{state}, "/dev/vda", ""},
+		{"cache only", Spec{StateDir: dir, CacheDisk: true}, []microvm.Disk{cache}, "", "/dev/vda"},
+		{"state and cache", Spec{StateDir: dir, StateDisk: true, CacheDisk: true}, []microvm.Disk{state, cache}, "/dev/vda", "/dev/vdb"},
+		{"docker, state, cache", Spec{StateDir: dir, Docker: true, StateDisk: true, CacheDisk: true}, []microvm.Disk{docker, state, cache}, "/dev/vdb", "/dev/vdc"},
+		{"all in order", all, []microvm.Disk{docker, tmp, state, cache}, "/dev/vdc", "/dev/vdd"},
+		{"none", Spec{StateDir: dir}, nil, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := workspaceDisks(tt.spec); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("workspaceDisks = %+v, want %+v", got, tt.want)
+			}
+			stateDev, cacheDev := workspaceDiskDevices(tt.spec)
+			if stateDev != tt.stateDev || cacheDev != tt.cacheDev {
+				t.Fatalf("workspaceDiskDevices = %q, %q, want %q, %q", stateDev, cacheDev, tt.stateDev, tt.cacheDev)
+			}
+		})
+	}
+}

@@ -284,7 +284,8 @@ func TestVMSharesLimit(t *testing.T) {
 	t.Parallel()
 	oc, _ := agent.Lookup("opencode1")
 	for _, tc := range []struct{ docker, diskTmp bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
-		limit := vm.MaxShares(tc.docker, tc.diskTmp)
+		// The default workspace has a state disk and a cache disk.
+		limit := vm.MaxShares(tc.docker, tc.diskTmp, true, true)
 		root := t.TempDir()
 		paths := make([]string, limit+1)
 		for i := range paths {
@@ -305,6 +306,38 @@ func TestVMSharesLimit(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("exceed the limit of %d", limit)) {
 			t.Fatalf("%+v: %d shares: err = %v, want limit error", tc, limit+1, err)
 		}
+	}
+}
+
+func TestVMReloadSharesLimit(t *testing.T) {
+	t.Parallel()
+	oc, _ := agent.Lookup("opencode1")
+	// A VM booted without state and cache disks has room for more shares than
+	// a fresh boot of the same workspace, which attaches both.
+	boot := vm.MaxShares(false, false, true, true)
+	running := vm.Spec{}
+	limit := vm.SpecMaxShares(running)
+	if limit <= boot {
+		t.Fatalf("running limit %d, boot limit %d: want room for more shares without the disks", limit, boot)
+	}
+	root := t.TempDir()
+	paths := make([]string, limit+1)
+	for i := range paths {
+		paths[i] = filepath.Join(root, fmt.Sprintf("p%02d", i))
+		if err := os.Mkdir(paths[i], 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws := &workspace.Resolved{Name: "w", Paths: paths[:limit], Agent: oc}
+	if _, err := vmShares(ws); err == nil {
+		t.Fatalf("boot with %d shares: want the limit error", limit)
+	}
+	if _, err := vmReloadShares(ws, running); err != nil {
+		t.Fatalf("reload with %d shares: %v", limit, err)
+	}
+	ws.Paths = paths
+	if _, err := vmReloadShares(ws, running); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("exceed the limit of %d", limit)) {
+		t.Fatalf("reload with %d shares: err = %v, want limit error", limit+1, err)
 	}
 }
 
@@ -469,9 +502,9 @@ func TestVMShares(t *testing.T) {
 		{Source: guest.ReadOnlyHostDir + "/config", Target: guestConfigDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
-		{Source: guest.HostDir + "/home/opencode-state", Target: guestOpenCodeState},
-		{Source: guest.HostDir + "/home/opencode1-omo", Target: "/home/agent/.omo"},
-		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
+		{Source: guest.StateDiskDir + "/opencode-state", Target: guestOpenCodeState},
+		{Source: guest.StateDiskDir + "/opencode1-omo", Target: "/home/agent/.omo"},
+		{Source: guest.CacheDiskDir + "/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
 		t.Fatalf("binds =\n%+v\nwant\n%+v", binds, wantBinds)
@@ -480,8 +513,10 @@ func TestVMShares(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(vm.GuestReadOnlyDir(vmStateDir("w")), "cache", "tui-container.json")); err != nil || string(b) != "{}" { //nolint:gosec // G304: test file
 		t.Fatalf("cache not copied: %q %v", b, err)
 	}
-	if _, err := os.Stat(filepath.Join(data, "home", "opencode-data")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("opencode-data created although a mount covers it: %v", err)
+	for _, b := range binds {
+		if b.Target == guestOpenCodeDir {
+			t.Fatalf("opencode-data bound although a mount covers it: %+v", b)
+		}
 	}
 
 	ws.Agent, _ = agent.Lookup("claude")
@@ -493,91 +528,34 @@ func TestVMShares(t *testing.T) {
 		{Source: guest.ReadOnlyHostDir + "/config", Target: guestConfigDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
-		{Source: guest.HostDir + "/home/claude", Target: "/home/agent/.claude"},
-		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
+		{Source: guest.StateDiskDir + "/claude", Target: "/home/agent/.claude"},
+		{Source: guest.CacheDiskDir + "/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
 		t.Fatalf("claude binds =\n%+v\nwant\n%+v", binds, wantBinds)
 	}
-	if b, err := os.ReadFile(filepath.Join(data, "home", "claude", ".claude.json")); err != nil || !strings.Contains(string(b), `"bypassPermissionsModeAccepted": true`) { //nolint:gosec // G304: test file
-		t.Fatalf("claude global config = %q, %v", b, err)
+	// The guest prepares the state directories on the disks; the host
+	// creates nothing for them.
+	if _, err := os.Stat(filepath.Join(data, "home")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("home directory created in the guest data directory: %v", err)
 	}
 
-	ws.Agent, _ = agent.Lookup("copilot")
-	settings := filepath.Join(data, "home", "copilot", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(settings, []byte(`{"model":"m"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
-		t.Fatalf("vmGuestData: %v", err)
-	}
-	var got map[string]any
-	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
-		t.Fatalf("read copilot settings: %q %v", b, err)
-	}
-	line, _ := got["statusLine"].(map[string]any)
-	if got["model"] != "m" || got["storeTokenPlaintext"] != true || line["command"] != statusLineCommand("copilot") {
-		t.Fatalf("copilot settings = %v", got)
-	}
-	if err := os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"mine"},"storeTokenPlaintext":false}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
-		t.Fatalf("vmGuestData: %v", err)
-	}
-	got = nil
-	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
-		t.Fatalf("read copilot settings: %q %v", b, err)
-	}
-	if line, _ := got["statusLine"].(map[string]any); line["command"] != "mine" || got["storeTokenPlaintext"] != false {
-		t.Fatalf("user copilot settings replaced: %v", got)
-	}
-	// An existing status line without storeTokenPlaintext still gets storeTokenPlaintext = true.
-	if err := os.WriteFile(settings, []byte(`{"statusLine":{"type":"command","command":"mine"}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
-		t.Fatalf("vmGuestData: %v", err)
-	}
-	got = nil
-	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
-		t.Fatalf("read copilot settings: %q %v", b, err)
-	}
-	if line, _ := got["statusLine"].(map[string]any); line["command"] != "mine" || got["storeTokenPlaintext"] != true {
-		t.Fatalf("copilot settings after adding storeTokenPlaintext = %v", got)
-	}
-	// The script status line of an older jailoc gives way to the current one.
-	legacy, _ := json.Marshal(map[string]any{"statusLine": map[string]string{"type": "command", "command": scriptStatusLineCommand("copilot")}})
-	if err := os.WriteFile(settings, legacy, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
-		t.Fatalf("vmGuestData: %v", err)
-	}
-	got = nil
-	if b, err := os.ReadFile(settings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
-		t.Fatalf("read copilot settings: %q %v", b, err)
-	}
-	if line, _ := got["statusLine"].(map[string]any); line["command"] != workspaceStatusLineCommand {
-		t.Fatalf("legacy status line kept: %v", got)
-	}
-
-	// Antigravity CLI keeps its settings in a subdirectory, which a new
-	// state directory doesn't have yet.
-	ws.Agent, _ = agent.Lookup("agy")
-	if _, err := vmGuestData(ws, cacheDir, shares, true); err != nil {
-		t.Fatalf("vmGuestData: %v", err)
-	}
-	got = nil
-	agySettings := filepath.Join(data, "home", "antigravity", "antigravity-cli", "settings.json")
-	if b, err := os.ReadFile(agySettings); err != nil || json.Unmarshal(b, &got) != nil { //nolint:gosec // G304: test file
-		t.Fatalf("read agy settings: %q %v", b, err)
-	}
-	if line, _ := got["statusLine"].(map[string]any); line["command"] != statusLineCommand("agy") || got["storeTokenPlaintext"] != nil {
-		t.Fatalf("agy settings = %v", got)
+	// Every harness keeps its state directories on the state disk.
+	for _, name := range []string{"copilot", "agy"} {
+		ws.Agent, _ = agent.Lookup(name)
+		binds, err = vmGuestData(ws, cacheDir, shares, true)
+		if err != nil {
+			t.Fatalf("vmGuestData %s: %v", name, err)
+		}
+		for _, d := range ws.Agent.State {
+			want := guest.Bind{Source: guest.StateDiskDir + "/" + d.Name, Target: d.Path}
+			if !slices.Contains(binds, want) {
+				t.Fatalf("%s binds %+v lack %+v", name, binds, want)
+			}
+		}
+		if want := (guest.Bind{Source: guest.CacheDiskDir + "/cache", Target: guestUserCache}); !slices.Contains(binds, want) {
+			t.Fatalf("%s binds %+v lack %+v", name, binds, want)
+		}
 	}
 
 	ws.Mounts = []string{file + ":/opt/file.txt:ro"}
@@ -640,7 +618,7 @@ func TestVMAgentProfile(t *testing.T) {
 		{Source: guest.ReadOnlyHostDir + "/config", Target: guestConfigDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
-		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
+		{Source: guest.CacheDiskDir + "/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
 		t.Fatalf("named profile binds =\n%+v\nwant\n%+v", binds, wantBinds)
@@ -680,15 +658,19 @@ func TestVMAgentProfile(t *testing.T) {
 		{Source: guest.ReadOnlyHostDir + "/config", Target: guestConfigDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache", Target: guestCacheDir, ReadOnly: true},
 		{Source: guest.ReadOnlyHostDir + "/cache/tui-plugin", Target: tuiPluginContainerDir, ReadOnly: true},
-		{Source: guest.HostDir + "/ephemeral/opencode-data", Target: dataDir},
-		{Source: guest.HostDir + "/ephemeral/opencode-state", Target: stateDir},
-		{Source: guest.HostDir + "/ephemeral/opencode1-omo", Target: oc.State[2].Path},
-		{Source: guest.HostDir + "/home/cache", Target: guestUserCache},
+		{Source: guest.StateDiskDir + "/ephemeral/opencode-data", Target: dataDir},
+		{Source: guest.StateDiskDir + "/ephemeral/opencode-state", Target: stateDir},
+		{Source: guest.StateDiskDir + "/ephemeral/opencode1-omo", Target: oc.State[2].Path},
+		{Source: guest.CacheDiskDir + "/cache", Target: guestUserCache},
 	}
 	if !slices.Equal(binds, wantBinds) {
 		t.Fatalf("ephemeral binds =\n%+v\nwant\n%+v", binds, wantBinds)
 	}
+	// An older layout kept the ephemeral state in the guest data directory.
 	leftover := filepath.Join(vm.GuestDataDir(vmStateDir("w")), "ephemeral", "opencode-data", "session.json")
+	if err := os.MkdirAll(filepath.Dir(leftover), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(leftover, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1517,6 +1499,38 @@ func TestVMFailure(t *testing.T) {
 			want:    []string{"no space left on device"},
 		},
 		{
+			name:       "state disk full while migrating the previous home",
+			stateError: "guest did not become ready",
+			spec:       &vm.Spec{Kind: vm.KindWorkspace, Workspace: "w", StateDisk: true, StateDiskSize: 10 << 30},
+			console:    new("boot ok\njailoc-guest: state disk: migrate legacy home: copy opencode: write .migrating-opencode/db: no space left on device\n"),
+			want: []string{
+				"guest did not become ready", "guest: jailoc-guest: state disk: migrate legacy home",
+				"agent state filesystem is full", "not the host's free space", "state.img", "10 GiB",
+				`raise state_disk of workspace "w"`, "can only grow", "copied again at the next start",
+			},
+			notWant: []string{"docker.img", "docker_disk", "no guest console evidence", "root filesystem", "cache_disk"},
+		},
+		{
+			name:    "cache disk full on a path on it",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "w", CacheDisk: true},
+			console: new("level=ERROR msg=init error=\"open " + guest.CacheDiskDir + "/cache/x: no space left on device\"\n"),
+			want:    []string{"~/.cache filesystem is full", "cache.img", "20 GiB", `raise cache_disk of workspace "w"`},
+			notWant: []string{"docker.img", "docker_disk", "state_disk", "copied again", "no guest console evidence"},
+		},
+		{
+			name:    "state disk full without a spec",
+			console: new("jailoc-guest: state disk: state directory opencode: no space left on device\n"),
+			want:    []string{"agent state filesystem is full", "state.img", "raise state_disk of the workspace"},
+			notWant: []string{"docker_disk", "logical size", "copied again"},
+		},
+		{
+			name:    "a full Docker disk takes precedence",
+			spec:    &vm.Spec{Kind: vm.KindWorkspace, Workspace: "w", Docker: true, StateDisk: true},
+			console: new("jailoc-guest: state disk: x: no space left on device\n" + enospc + "\n"),
+			want:    []string{"Docker data filesystem is full", `raise docker_disk of workspace "w"`},
+			notWant: []string{"agent state filesystem", "raise state_disk"},
+		},
+		{
 			name:       "non-ENOSPC state error is unchanged",
 			stateError: "libkrun failed",
 			spec:       &vm.Spec{Kind: vm.KindBuilder, Workspace: "builder"},
@@ -1687,5 +1701,79 @@ func TestVMFailureReadsAcrossConsoleRotations(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("vmFailure = %q, want it to contain %q", got, want)
 		}
+	}
+}
+
+func TestVMStateAndCacheDiskSize(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		parse   func(string) (int64, error)
+		size    string
+		want    int64
+		wantErr string
+	}{
+		{name: "state", parse: vmStateDiskSize, size: "10g", want: 10 << 30},
+		{name: "cache", parse: vmCacheDiskSize, size: "20480m", want: 20 << 30},
+		{name: "state below minimum", parse: vmStateDiskSize, size: "512m", wantErr: "state_disk"},
+		{name: "cache invalid", parse: vmCacheDiskSize, size: "lots", wantErr: "cache_disk"},
+		{name: "state empty", parse: vmStateDiskSize, size: "", wantErr: "state_disk"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := tt.parse(tt.size)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) || strings.Contains(err.Error(), "docker_disk") {
+					t.Fatalf("size %q error = %v, want one naming %s only", tt.size, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("size %q = %d, %v, want %d", tt.size, got, err, tt.want)
+			}
+		})
+	}
+}
+
+// Shares that cover the state directories or ~/.cache leave their disks out
+// of a VM, which gives their device slots to shares.
+func TestVMSharesLimitCoveredDisks(t *testing.T) {
+	t.Parallel()
+	cc, _ := agent.Lookup("claude")
+	root := t.TempDir()
+	mount := func(name, guestPath string) string {
+		host := filepath.Join(root, name)
+		if err := os.Mkdir(host, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		return host + ":" + guestPath
+	}
+	// claude keeps all its state in one directory.
+	if len(cc.State) != 1 {
+		t.Fatalf("claude has %d state directories, test expects 1", len(cc.State))
+	}
+	ws := &workspace.Resolved{Name: "w", Agent: cc, Mounts: []string{mount("state", cc.State[0].Path), mount("cache", guestUserCache)}}
+	limit := vm.MaxShares(false, false)
+	paths := make([]string, limit-2)
+	for i := range paths {
+		paths[i] = filepath.Join(root, fmt.Sprintf("p%02d", i))
+		if err := os.Mkdir(paths[i], 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws.Paths = paths
+	if _, err := vmShares(ws); err != nil {
+		t.Fatalf("%d paths and 2 mounts without disks: %v", len(paths), err)
+	}
+	// Without the cache mount the VM has a cache disk and one share less.
+	extra := filepath.Join(root, "extra")
+	if err := os.Mkdir(extra, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	ws.Paths = append(slices.Clone(paths), extra)
+	ws.Mounts = ws.Mounts[:1]
+	if _, err := vmShares(ws); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("exceed the limit of %d", limit-1)) {
+		t.Fatalf("%d paths and 1 mount with a cache disk: err = %v, want the limit error", len(ws.Paths), err)
 	}
 }

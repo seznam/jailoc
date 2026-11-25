@@ -44,6 +44,16 @@ const (
 	// host's per-VM guest data directory with the control files and
 	// persistent home directories. The guest binds parts of it into place.
 	HostDir = PrivateDir + "/host"
+	// StateDiskDir is the mount point of the persistent agent state disk
+	// (Config.State); the guest binds its directories into place.
+	StateDiskDir = PrivateDir + "/state"
+	// CacheDiskDir is the mount point of the persistent cache disk
+	// (Config.Cache).
+	CacheDiskDir = PrivateDir + "/cache"
+	// StateDiskLabel is the ext4 volume label of the state disk.
+	StateDiskLabel = "jailoc-state"
+	// CacheDiskLabel is the ext4 volume label of the cache disk.
+	CacheDiskLabel = "jailoc-cache"
 	// ReadOnlyHostDir is the mount point of the VM's read-only internal
 	// share: staged snapshots and jailoc configuration copies. The host
 	// exports it read-only, so not even guest root can change them.
@@ -197,6 +207,11 @@ type Config struct {
 	// ProxyRelay, when set, runs the proxy relay on ProxyRelayPort so the host
 	// reaches allowlisted guest loopback web services.
 	ProxyRelay *ProxyRelay `json:"proxy_relay,omitempty"`
+	// State, when set, mounts the persistent agent state disk at
+	// StateDiskDir.
+	State *StateDisk `json:"state,omitempty"`
+	// Cache, when set, mounts the persistent ~/.cache disk at CacheDiskDir.
+	Cache *CacheDisk `json:"cache,omitempty"`
 }
 
 // ProxyRelay configures the proxy relay: one listener on the guest NIC at
@@ -216,6 +231,30 @@ const DockerDisk = "/dev/vda"
 type Docker struct {
 	// Disk is the block device mounted at /var/lib/docker; it is
 	// formatted as ext4 when it has no file system yet.
+	Disk string `json:"disk"`
+}
+
+// StateDisk configures the persistent agent state disk of a workspace VM.
+type StateDisk struct {
+	// Disk is the block device mounted at StateDiskDir; it is formatted
+	// as ext4 with label StateDiskLabel on first use.
+	Disk string `json:"disk"`
+	// Agent is the built-in harness name (e.g. "opencode2", "claude", also
+	// for a custom agent derived from it) whose state defaults and status
+	// line are applied at boot.
+	Agent string `json:"agent,omitempty"`
+	// Dirs are the state directory names under StateDiskDir (or under
+	// StateDiskDir+"/ephemeral" when Ephemeral is set) prepared at boot.
+	Dirs []string `json:"dirs,omitempty"`
+	// Ephemeral empties StateDiskDir+"/ephemeral" at boot while keeping
+	// the persistent subdirectories intact.
+	Ephemeral bool `json:"ephemeral,omitempty"`
+}
+
+// CacheDisk configures the persistent ~/.cache disk of a workspace VM.
+type CacheDisk struct {
+	// Disk is the block device mounted at CacheDiskDir; it is formatted
+	// as ext4 with label CacheDiskLabel on first use.
 	Disk string `json:"disk"`
 }
 

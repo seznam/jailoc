@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -252,4 +253,272 @@ func TestCheckAndRecordAgentStateVersion(t *testing.T) {
 	if got := versions[wantKey]; got != "2.2.5" {
 		t.Fatalf("versions[%q] = %q, want 2.2.5 (all: %v)", wantKey, got, versions)
 	}
+}
+
+func TestWorkspaceStorageDisks(t *testing.T) {
+	t.Parallel()
+	oc, _ := agent.Lookup("opencode1")
+	names := func(h agent.Harness) []string {
+		var out []string
+		for _, d := range h.State {
+			out = append(out, d.Name)
+		}
+		return out
+	}
+	tests := []struct {
+		name      string
+		shares    []vm.Share
+		wantState []string
+		wantCache bool
+	}{
+		{name: "no shares", wantState: names(oc), wantCache: true},
+		{name: "one state share", shares: []vm.Share{{GuestPath: oc.State[0].Path}}, wantState: names(oc)[1:], wantCache: true},
+		{name: "cache share", shares: []vm.Share{{GuestPath: guestUserCache + "/"}}, wantState: names(oc), wantCache: false},
+		{name: "everything shared", shares: func() []vm.Share {
+			out := []vm.Share{{GuestPath: guestUserCache}}
+			for _, d := range oc.State {
+				out = append(out, vm.Share{GuestPath: d.Path})
+			}
+			return out
+		}(), wantState: nil, wantCache: false},
+		{name: "unrelated share", shares: []vm.Share{{GuestPath: "/work"}}, wantState: names(oc), wantCache: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			state, cache := workspaceStorageDisks(&workspace.Resolved{Agent: oc}, tt.shares)
+			if !slices.Equal(state, tt.wantState) || cache != tt.wantCache {
+				t.Fatalf("workspaceStorageDisks = %v, %v, want %v, %v", state, cache, tt.wantState, tt.wantCache)
+			}
+		})
+	}
+}
+
+func TestAgentStateHostDirStateDisk(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oc, _ := agent.Lookup("opencode1")
+	oc.Version = "1.19.5"
+	ws := &workspace.Resolved{Name: "szn", Agent: oc, AgentInstall: true}
+	want := canonicalHostPath(vm.StateDiskPath(vmStateDir("szn"))) + "#" + oc.State[0].Name
+	if got := agentStateHostDir(nil, ws, nil); got != want {
+		t.Fatalf("agentStateHostDir = %q, want %q", got, want)
+	}
+	// purgeWorkspaceAgentStateVersions must clean it up.
+	recordAgentStateVersion(nil, ws, nil)
+	if versions := loadAgentVersions(agentVersionsPath()); versions[want] != "1.19.5" {
+		t.Fatalf("versions = %v, want %q recorded", versions, want)
+	}
+	purgeWorkspaceAgentStateVersions(vmStateDir("szn"))
+	if versions := loadAgentVersions(agentVersionsPath()); len(versions) != 0 {
+		t.Fatalf("versions after purge = %v, want empty", versions)
+	}
+	ephemeral := config.EphemeralProfile()
+	ws.AgentProfile = &ephemeral
+	if got := agentStateHostDir(nil, ws, nil); got != "" {
+		t.Fatalf("ephemeral agentStateHostDir = %q, want empty", got)
+	}
+}
+
+func TestCheckAgentStateVersionMigratesLegacyRecord(t *testing.T) {
+	// HOME decides the state directory; t.Setenv forbids t.Parallel.
+	oc, _ := agent.Lookup("opencode1")
+	oc.Version = "1.19.5"
+	name := oc.State[0].Name
+	tests := []struct {
+		name       string
+		legacy     string
+		current    string
+		want       string
+		wantRecord bool
+	}{
+		{name: "legacy only", legacy: "1.20.0", want: "1.20.0", wantRecord: true},
+		{name: "both, legacy higher", legacy: "1.20.0", current: "1.19.0", want: "1.20.0", wantRecord: true},
+		{name: "both, new higher", legacy: "1.18.0", current: "1.20.0", want: "1.20.0", wantRecord: true},
+		{name: "neither", wantRecord: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			ws := &workspace.Resolved{Name: "szn", Agent: oc, AgentInstall: true}
+			newKey := stateDiskVersionKey("szn", name)
+			legacyKey := canonicalHostPath(filepath.Join(vm.GuestDataDir(vmStateDir("szn")), guestDataHome, name))
+			versions := map[string]string{}
+			if tt.legacy != "" {
+				versions[legacyKey] = tt.legacy
+			}
+			if tt.current != "" {
+				versions[newKey] = tt.current
+			}
+			saveAgentVersions(agentVersionsPath(), versions)
+
+			checkAgentStateVersion(nil, ws, nil)
+
+			got := loadAgentVersions(agentVersionsPath())
+			if v, ok := got[newKey]; ok != tt.wantRecord || v != tt.want {
+				t.Fatalf("record %q = %q, %v, want %q, %v (all: %v)", newKey, v, ok, tt.want, tt.wantRecord, got)
+			}
+			if tt.legacy != "" && got[legacyKey] != tt.legacy {
+				t.Fatalf("legacy record changed: %v", got)
+			}
+		})
+	}
+}
+
+func TestCheckAgentStateVersionWarnsAfterLegacyMigration(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oc, _ := agent.Lookup("opencode1")
+	oc.Version = "1.19.5"
+	ws := &workspace.Resolved{Name: "szn", Agent: oc, AgentInstall: true}
+	legacyKey := canonicalHostPath(filepath.Join(vm.GuestDataDir(vmStateDir("szn")), guestDataHome, oc.State[0].Name))
+	saveAgentVersions(agentVersionsPath(), map[string]string{legacyKey: "1.20.0"})
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	checkAgentStateVersion(nil, ws, nil)
+	os.Stderr = orig
+	_ = w.Close()
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, buf.String(), "newer version 1.20.0")
+}
+
+func TestArchiveLegacyHome(t *testing.T) {
+	// Writes to os.Stderr through the notice; keep it sequential.
+	setup := func(t *testing.T, marker bool) (stateDir, home string) {
+		t.Helper()
+		stateDir = t.TempDir()
+		data := vm.GuestDataDir(stateDir)
+		home = filepath.Join(data, guestDataHome)
+		if err := os.MkdirAll(filepath.Join(home, "claude"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, "claude", "history"), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(data, vm.ControlName), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if marker {
+			if err := os.WriteFile(filepath.Join(data, vm.ControlName, "home-migrated"), []byte("ok\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return stateDir, home
+	}
+
+	t.Run("without the guest marker nothing moves", func(t *testing.T) {
+		stateDir, home := setup(t, false)
+		if err := archiveLegacyHome(stateDir, "w"); err != nil {
+			t.Fatalf("archiveLegacyHome: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(home, "claude", "history")); err != nil {
+			t.Fatalf("legacy home moved without a marker: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(stateDir, "legacy-home")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("legacy-home created without a marker: %v", err)
+		}
+	})
+
+	t.Run("moves the legacy home once migrated", func(t *testing.T) {
+		stateDir, home := setup(t, true)
+		if err := archiveLegacyHome(stateDir, "w"); err != nil {
+			t.Fatalf("archiveLegacyHome: %v", err)
+		}
+		if b, err := os.ReadFile(filepath.Join(stateDir, "legacy-home", "claude", "history")); err != nil || string(b) != "old" { //nolint:gosec // G304: test file
+			t.Fatalf("archived history = %q, %v", b, err)
+		}
+		if _, err := os.Lstat(home); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("legacy home still in the guest data directory: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(vm.GuestDataDir(stateDir), vm.ControlName, "home-migrated")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("marker kept: %v", err)
+		}
+		// A second run has nothing to do.
+		if err := archiveLegacyHome(stateDir, "w"); err != nil {
+			t.Fatalf("second archiveLegacyHome: %v", err)
+		}
+	})
+
+	t.Run("never replaces an earlier archive", func(t *testing.T) {
+		stateDir, _ := setup(t, true)
+		earlier := filepath.Join(stateDir, "legacy-home")
+		if err := os.MkdirAll(earlier, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(earlier, "keep"), []byte("kept"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := archiveLegacyHome(stateDir, "w"); err != nil {
+			t.Fatalf("archiveLegacyHome: %v", err)
+		}
+		if b, err := os.ReadFile(filepath.Join(earlier, "keep")); err != nil || string(b) != "kept" { //nolint:gosec // G304: test file
+			t.Fatalf("earlier archive = %q, %v", b, err)
+		}
+		if _, err := os.Stat(filepath.Join(stateDir, "legacy-home-1", "claude", "history")); err != nil {
+			t.Fatalf("second archive missing: %v", err)
+		}
+	})
+
+	t.Run("a symlinked control directory is not followed", func(t *testing.T) {
+		stateDir, home := setup(t, false)
+		outside := t.TempDir()
+		victim := filepath.Join(outside, "home-migrated")
+		if err := os.WriteFile(victim, []byte("host file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		control := filepath.Join(vm.GuestDataDir(stateDir), vm.ControlName)
+		if err := os.Remove(control); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, control); err != nil {
+			t.Fatal(err)
+		}
+		if err := archiveLegacyHome(stateDir, "w"); err != nil {
+			t.Fatalf("archiveLegacyHome: %v", err)
+		}
+		if b, err := os.ReadFile(victim); err != nil || string(b) != "host file" { //nolint:gosec // G304: test file
+			t.Fatalf("file outside the share = %q, %v", b, err)
+		}
+		if _, err := os.Stat(filepath.Join(home, "claude", "history")); err != nil {
+			t.Fatalf("legacy home moved: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(stateDir, "legacy-home")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("legacy-home created: %v", err)
+		}
+	})
+
+	t.Run("a symlinked home is not archived", func(t *testing.T) {
+		stateDir, home := setup(t, true)
+		outside := t.TempDir()
+		if err := os.RemoveAll(home); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, home); err != nil {
+			t.Fatal(err)
+		}
+		if err := archiveLegacyHome(stateDir, "w"); err != nil {
+			t.Fatalf("archiveLegacyHome: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(stateDir, "legacy-home")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("legacy-home created for a symlink: %v", err)
+		}
+		if info, err := os.Lstat(home); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("home link changed: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(vm.GuestDataDir(stateDir), vm.ControlName, "home-migrated")); err != nil {
+			t.Fatalf("marker removed: %v", err)
+		}
+	})
+
+	t.Run("no legacy home", func(t *testing.T) {
+		if err := archiveLegacyHome(t.TempDir(), "w"); err != nil {
+			t.Fatalf("archiveLegacyHome: %v", err)
+		}
+	})
 }

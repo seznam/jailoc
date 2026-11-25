@@ -72,6 +72,8 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  CPU: %g\n", ws.CPU)
 	_, _ = cyan.Fprintf(os.Stdout, "  Memory: %s\n", ws.Memory)
 	_, _ = cyan.Fprintf(os.Stdout, "  Docker Disk: %s\n", ws.DockerDisk)
+	_, _ = cyan.Fprintf(os.Stdout, "  State Disk: %s\n", ws.StateDisk)
+	_, _ = cyan.Fprintf(os.Stdout, "  Cache Disk: %s\n", ws.CacheDisk)
 	_, _ = cyan.Fprintf(os.Stdout, "  Tmp: %s\n", resolvedTmpLabel(ws))
 	_, _ = cyan.Fprintf(os.Stdout, "  Time Zone: %s\n", cmp.Or(ws.TimeZone, "(host time zone)"))
 	_, _ = cyan.Fprintf(os.Stdout, "  SSH Agent: %t\n", ws.SSHAuthSock)
@@ -162,11 +164,13 @@ func computedProfileDir(ws *workspace.Resolved) string {
 	}
 	name := workspaceProfile(ws)
 	ephemeral := ws.AgentProfile != nil && ws.AgentProfile.Ephemeral()
-	fallback := filepath.Join(vmStateDir(ws.Name), "guest", "home")
+	// Same file as vm.StateDiskPath; this file builds on hosts without VMs.
+	stateDisk := filepath.Join(vmStateDir(ws.Name), "state.img")
+	fallback := stateDisk
 	if name != "" {
 		fallback = filepath.Join(profilesDir(), name)
 	} else if ephemeral {
-		fallback = filepath.Join(vmStateDir(ws.Name), "guest", "ephemeral") + " (ephemeral)"
+		fallback = stateDisk + ":ephemeral (ephemeral)"
 	}
 	if len(ws.Agent.State) == 0 {
 		return fallback
@@ -183,9 +187,9 @@ func computedProfileDir(ws *workspace.Resolved) string {
 		case name != "":
 			sources = append(sources, filepath.Join(profilesDir(), name, d.Name))
 		case ephemeral:
-			sources = append(sources, filepath.Join(vmStateDir(ws.Name), "guest", "ephemeral", d.Name)+" (ephemeral)")
+			sources = append(sources, stateDisk+":ephemeral/"+d.Name+" (ephemeral)")
 		default:
-			sources = append(sources, filepath.Join(vmStateDir(ws.Name), "guest", "home", d.Name))
+			sources = append(sources, stateDisk+":"+d.Name)
 		}
 	}
 	if !anyOverridden {

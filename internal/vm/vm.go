@@ -48,6 +48,10 @@ const (
 	DefaultImage = "docker@sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977"
 	// DefaultDiskSize is the sparse data disk holding /var/lib/docker.
 	DefaultDiskSize = 20 << 30
+	// DefaultStateDiskSize is the sparse persistent agent state disk.
+	DefaultStateDiskSize = 10 << 30
+	// DefaultCacheDiskSize is the sparse persistent ~/.cache disk.
+	DefaultCacheDiskSize = 20 << 30
 
 	// maxSocketPath is the shortest sun_path limit of the supported hosts
 	// (macOS: 104 bytes including the terminating NUL).
@@ -125,6 +129,16 @@ type Spec struct {
 	// Docker attaches a persistent data disk for the Docker daemon of a
 	// workspace VM (the builder always has one).
 	Docker bool `json:"docker,omitempty"`
+	// StateDisk attaches a persistent agent state disk (state.img) to a
+	// workspace VM; StateDiskSize is its size in bytes, zero for
+	// DefaultStateDiskSize.
+	StateDisk     bool  `json:"state_disk,omitempty"`
+	StateDiskSize int64 `json:"state_disk_size,omitempty"`
+	// CacheDisk attaches a persistent ~/.cache disk (cache.img) to a
+	// workspace VM; CacheDiskSize is its size in bytes, zero for
+	// DefaultCacheDiskSize.
+	CacheDisk     bool  `json:"cache_disk,omitempty"`
+	CacheDiskSize int64 `json:"cache_disk_size,omitempty"`
 	// TmpDiskSize is the size in bytes of the sparse disk behind a
 	// disk-backed /tmp (Guest.Tmp.Storage "disk"); jailoc creates it fresh
 	// for every boot. Zero falls back to Guest.Tmp.SizeBytes.
@@ -300,6 +314,16 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	}
 	if !workspace || spec.Docker {
 		if err := ensureDisk(diskPath(spec.StateDir), diskSize(spec), diskSetting(spec)); err != nil {
+			return err
+		}
+	}
+	if workspace && spec.StateDisk {
+		if err := ensureDisk(StateDiskPath(spec.StateDir), stateDiskSize(spec), "state_disk"); err != nil {
+			return err
+		}
+	}
+	if workspace && spec.CacheDisk {
+		if err := ensureDisk(CacheDiskPath(spec.StateDir), cacheDiskSize(spec), "cache_disk"); err != nil {
 			return err
 		}
 	}
@@ -565,6 +589,28 @@ func diskSize(spec Spec) int64 {
 		return DefaultDiskSize
 	}
 	return spec.DiskSize
+}
+
+// StateDiskPath is the sparse image of a workspace VM's persistent agent
+// state disk in its state directory.
+func StateDiskPath(stateDir string) string { return filepath.Join(stateDir, "state.img") }
+
+// CacheDiskPath is the sparse image of a workspace VM's persistent cache disk
+// in its state directory.
+func CacheDiskPath(stateDir string) string { return filepath.Join(stateDir, "cache.img") }
+
+func stateDiskSize(spec Spec) int64 {
+	if spec.StateDiskSize <= 0 {
+		return DefaultStateDiskSize
+	}
+	return spec.StateDiskSize
+}
+
+func cacheDiskSize(spec Spec) int64 {
+	if spec.CacheDiskSize <= 0 {
+		return DefaultCacheDiskSize
+	}
+	return spec.CacheDiskSize
 }
 
 // diskSetting names the configuration setting that sizes the spec's data

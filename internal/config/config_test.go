@@ -3433,6 +3433,36 @@ paths = ["/data"]
 			},
 		},
 		{
+			name: "defaults and workspace state_disk and cache_disk",
+			content: `
+[defaults]
+state_disk = "12g"
+cache_disk = "24g"
+
+[workspaces.big]
+paths = ["/data"]
+state_disk = "50g"
+cache_disk = "100g"
+
+[workspaces.plain]
+paths = ["/data"]
+`,
+			checkFn: func(t *testing.T, cfg *Config) {
+				if cfg.Defaults.StateDisk == nil || *cfg.Defaults.StateDisk != "12g" {
+					t.Errorf("expected Defaults.StateDisk \"12g\", got %v", cfg.Defaults.StateDisk)
+				}
+				if cfg.Defaults.CacheDisk == nil || *cfg.Defaults.CacheDisk != "24g" {
+					t.Errorf("expected Defaults.CacheDisk \"24g\", got %v", cfg.Defaults.CacheDisk)
+				}
+				if ws := cfg.Workspaces["big"]; ws.StateDisk == nil || *ws.StateDisk != "50g" || ws.CacheDisk == nil || *ws.CacheDisk != "100g" {
+					t.Errorf("expected big workspace state 50g / cache 100g, got %v / %v", ws.StateDisk, ws.CacheDisk)
+				}
+				if ws := cfg.Workspaces["plain"]; ws.StateDisk != nil || ws.CacheDisk != nil {
+					t.Errorf("expected plain workspace state/cache disks nil, got %v / %v", ws.StateDisk, ws.CacheDisk)
+				}
+			},
+		},
+		{
 			name: "defaults and workspace timezone",
 			content: `
 [defaults]
@@ -3679,6 +3709,40 @@ func TestConfigCPUMemoryValidation(t *testing.T) {
 				},
 			},
 			errSubstrs: []string{"test", "invalid docker_disk format"},
+		},
+		{
+			name: "defaults state_disk invalid suffix",
+			cfg: &Config{
+				Defaults:   Defaults{StateDisk: ptrString("10gb")},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid state_disk format"},
+		},
+		{
+			name: "workspace state_disk zero",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {Paths: []string{"/data"}, StateDisk: ptrString("0g")},
+				},
+			},
+			errSubstrs: []string{"test", "invalid state_disk format"},
+		},
+		{
+			name: "defaults cache_disk invalid suffix",
+			cfg: &Config{
+				Defaults:   Defaults{CacheDisk: ptrString("20gb")},
+				Workspaces: map[string]Workspace{},
+			},
+			errSubstrs: []string{"defaults", "invalid cache_disk format"},
+		},
+		{
+			name: "workspace cache_disk zero",
+			cfg: &Config{
+				Workspaces: map[string]Workspace{
+					"test": {Paths: []string{"/data"}, CacheDisk: ptrString("0g")},
+				},
+			},
+			errSubstrs: []string{"test", "invalid cache_disk format"},
 		},
 		{
 			name: "defaults timezone empty",
