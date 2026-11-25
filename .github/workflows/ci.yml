@@ -72,6 +72,30 @@ jobs:
       - run: diff dist/tui-opencode1.js internal/embed/assets/tui-opencode1.js
       - run: diff dist/tui-opencode2.js internal/embed/assets/tui-opencode2.js
 
+  docs:
+    name: Docs Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.10"
+          checksum: bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c
+          enable-cache: false
+      - name: Install dependencies
+        env:
+          UV_PYTHON_DOWNLOADS: never
+        run: uv sync --locked --no-install-project --no-build --python 3.12
+      - name: Build docs
+        env:
+          JAILOC_DOCS_VERSION: v0.0.0-ci
+        run: uv run --no-sync zensical build --clean --strict
+
   judge-commits:
     name: git-judge-commits
     runs-on: ubuntu-latest

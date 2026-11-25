@@ -43,15 +43,23 @@ golangci-lint run
 nix build .#jailoc
 ```
 
+Build the documentation with [uv](https://docs.astral.sh/uv/) and Python 3.12; `uv.lock` pins the exact docs dependency versions CI uses:
+
+```bash
+export UV_PYTHON_DOWNLOADS=never UV_PROJECT_ENVIRONMENT=/tmp/jailoc-docs-venv
+uv sync --locked --no-install-project --no-build --python 3.12
+uv run --no-sync zensical build --clean --strict
+```
+
 ## CI/CD pipeline
 
 The pipeline runs on GitHub Actions. Most workflows trigger on every branch and pull request; release workflows are gated on version tags (`v*`).
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| CI | Pushes and pull requests to `main` | Unit tests (`go test`), golangci-lint, and a check that the embedded TUI plugin matches its source |
+| CI | Pushes and pull requests to `main` | Unit tests (`go test`), golangci-lint, a check that the embedded TUI plugin matches its source, and a strict docs build (`zensical build --strict`) |
 | Release | Tags matching `v*` — runs on `push` with `v*` ref | GoReleaser uploads static binaries to the draft GitHub Release with changelog, the workflow attests every asset, publishes the release and then updates the Homebrew cask in `seznam/homebrew-tap` |
-| Docs | Release Please creates a release and the GoReleaser job succeeds | Builds documentation with Zensical (`zensical build --strict`) and deploys to GitHub Pages |
+| Docs | Release Please creates a release | Builds documentation with Zensical (`zensical build --strict`) when a release is created, then deploys to GitHub Pages after the GoReleaser job succeeds |
 | Pre-release | Manual (`workflow_dispatch`) with a ref and a version such as `1.20.0-rc.1` | Tags the ref and publishes GoReleaser binaries as a GitHub pre-release; no docs deploy, no release-please involvement |
 | VM Integration | PRs and pushes to `main` touching VM code, manual | Builds the go-microvm runner and libkrun from the pinned revision and boots real workspace VMs on a GitHub-hosted x64 Linux runner with KVM (`go test -tags vmintegration ./internal/vmintegration/`) |
 | Nix | Pushes and pull requests to `main` | Formatting check (`nix fmt`) and `nix flake check --all-systems`, plus `nix build .#jailoc` and `nix run . -- --help` on x86_64 and aarch64 Linux runners |
