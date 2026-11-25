@@ -230,25 +230,47 @@ func TestProxyRelay(t *testing.T) {
 		}
 	})
 
-	t.Run("reload reports proxy changes as restart-only", func(t *testing.T) {
+	t.Run("reload applies proxy changes", func(t *testing.T) {
+		// A route added by a reload is allowed by the live relay allowlist.
 		d.writeConfig(t, "bar = 3002\n")
 		out := d.jailoc(ctx, t, "reload", proxyWorkspace)
-		for _, want := range []string{"proxy", "jailoc restart " + proxyWorkspace} {
-			if !strings.Contains(out, want) {
-				t.Fatalf("reload output misses %q:\n%s", want, out)
-			}
+		if strings.Contains(out, "jailoc restart") {
+			t.Fatalf("reload of a proxy change asks for a restart:\n%s", out)
 		}
-		// The running guest keeps its relay allowlist.
+		d.mustGuest(ctx, t, "mkdir -p /tmp/bar && cd /tmp/bar && echo bar-ok > index.html && setsid -f python3 -m http.server 3002 --bind 127.0.0.1 >/dev/null 2>&1")
+		var (
+			status int
+			body   string
+			err    error
+		)
+		for range 30 {
+			status, body, err = d.get(ctx, 3002, "/index.html")
+			if err == nil && status == http.StatusOK {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if err != nil || status != http.StatusOK || strings.TrimSpace(body) != "bar-ok" {
+			t.Fatalf("GET /index.html via 3002 after the reload = %d %q, %v", status, body, err)
+		}
+		// The route that stayed keeps working.
+		if status, body, err := d.get(ctx, 3000, "/index.html"); err != nil || status != http.StatusOK || strings.TrimSpace(body) != "proxy-ok" {
+			t.Fatalf("GET /index.html via 3000 after the reload = %d %q, %v", status, body, err)
+		}
+
+		// A route removed by a reload is denied again.
+		d.writeConfig(t, "")
+		if out := d.jailoc(ctx, t, "reload", proxyWorkspace); strings.Contains(out, "jailoc restart") {
+			t.Fatalf("reload of a removed route asks for a restart:\n%s", out)
+		}
 		if conn, err := vm.DialProxy(ctx, d.stateDir(), 3002); err == nil {
 			_ = conn.Close()
-			t.Fatal("DialProxy(3002) succeeded after a reload; the allowlist must change only on restart")
+			t.Fatal("DialProxy(3002) succeeded after its route was removed by a reload")
 		} else if !errors.Is(err, vm.ErrProxyDenied) {
 			t.Fatalf("DialProxy(3002) = %v, want ErrProxyDenied", err)
 		}
-
-		d.writeConfig(t, "")
-		if out := d.jailoc(ctx, t, "reload", proxyWorkspace); strings.Contains(out, "jailoc restart") {
-			t.Fatalf("reload of the unchanged settings asks for a restart:\n%s", out)
+		if status, _, err := d.get(ctx, 3000, "/index.html"); err != nil || status != http.StatusOK {
+			t.Fatalf("GET /index.html via 3000 after removing 3002 = %d, %v", status, err)
 		}
 	})
 }

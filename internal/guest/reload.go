@@ -24,6 +24,10 @@ type Reload struct {
 	// expiry pass that runs with the old value stops before the guest
 	// answers.
 	TmpTTL *time.Duration `json:"tmp_ttl_ns,omitempty"`
+	// ProxyPorts replaces the proxy relay allowlist when set; an empty
+	// list denies every port. The pointer keeps an empty list apart from an
+	// absent field.
+	ProxyPorts *[]uint16 `json:"proxy_ports,omitempty"`
 }
 
 // ReloadDone reports the result of applying the Reload with Seq.

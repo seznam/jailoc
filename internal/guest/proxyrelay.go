@@ -37,11 +37,9 @@ func dialProxyTarget(ctx context.Context, port uint16) (net.Conn, error) {
 	return d.DialContext(ctx, "tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
 }
 
-// proxyRelayAllowlist builds the immutable set of ports the relay may dial.
+// proxyRelayAllowlist builds the set of ports the relay may dial. An empty list
+// is valid and denies every port.
 func proxyRelayAllowlist(ports []uint16) (map[uint16]bool, error) {
-	if len(ports) == 0 {
-		return nil, errors.New("proxy relay: no ports")
-	}
 	allowed := make(map[uint16]bool, len(ports))
 	for _, p := range ports {
 		if p == 0 {
@@ -56,7 +54,7 @@ func proxyRelayAllowlist(ports []uint16) (map[uint16]bool, error) {
 // zero value is not usable; create it with newProxyRelay.
 type proxyRelay struct {
 	logger  *slog.Logger
-	allowed map[uint16]bool
+	allowed map[uint16]bool // guarded by mu
 	dial    proxyDialFunc
 
 	handshakeTimeout time.Duration
@@ -72,6 +70,14 @@ type proxyRelay struct {
 	active    int
 	listeners []net.Listener
 	conns     map[net.Conn]struct{}
+	// spliced maps each target connection to its accepted peer and port.
+	spliced map[net.Conn]splice
+}
+
+// splice records the accepted connection and the port of a target connection.
+type splice struct {
+	client net.Conn
+	port   uint16
 }
 
 func newProxyRelay(logger *slog.Logger, allowed map[uint16]bool, dial proxyDialFunc) *proxyRelay {
@@ -86,6 +92,7 @@ func newProxyRelay(logger *slog.Logger, allowed map[uint16]bool, dial proxyDialF
 		ctx:              ctx,
 		cancel:           cancel,
 		conns:            map[net.Conn]struct{}{},
+		spliced:          map[net.Conn]splice{},
 	}
 }
 
@@ -146,22 +153,55 @@ func (r *proxyRelay) release(c net.Conn) {
 	r.mu.Unlock()
 }
 
-// track registers an extra connection for shutdown; false means the relay is
-// stopped and the caller must close it.
-func (r *proxyRelay) track(c net.Conn) bool {
+// portAllowed reports whether port is in the current allowlist.
+func (r *proxyRelay) portAllowed(port uint16) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.stopped {
+	return r.allowed[port]
+}
+
+// track registers target t, spliced to the accepted connection c on port, for
+// shutdown and for SetPorts. False means the relay is stopped or port is no
+// longer allowed, and the caller must close t.
+func (r *proxyRelay) track(c, t net.Conn, port uint16) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped || !r.allowed[port] {
 		return false
 	}
-	r.conns[c] = struct{}{}
+	r.conns[t] = struct{}{}
+	r.spliced[t] = splice{client: c, port: port}
 	return true
 }
 
-func (r *proxyRelay) untrack(c net.Conn) {
+func (r *proxyRelay) untrack(t net.Conn) {
 	r.mu.Lock()
-	delete(r.conns, c)
+	delete(r.conns, t)
+	delete(r.spliced, t)
 	r.mu.Unlock()
+}
+
+// SetPorts replaces the allowlist and closes every connection spliced to a
+// port that is no longer allowed. On an invalid list the allowlist stays as it
+// was.
+func (r *proxyRelay) SetPorts(ports []uint16) error {
+	allowed, err := proxyRelayAllowlist(ports)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.allowed = allowed
+	var closing []net.Conn
+	for t, s := range r.spliced {
+		if !allowed[s.port] {
+			closing = append(closing, t, s.client)
+		}
+	}
+	r.mu.Unlock()
+	for _, c := range closing {
+		_ = c.Close()
+	}
+	return nil
 }
 
 func (r *proxyRelay) activeConns() int {
@@ -202,7 +242,7 @@ func (r *proxyRelay) handle(c net.Conn) {
 	}
 	_ = c.SetReadDeadline(time.Time{})
 	port := binary.BigEndian.Uint16(hdr[:])
-	if !r.allowed[port] {
+	if !r.portAllowed(port) {
 		r.logger.Warn("proxy relay: port denied", "port", port)
 		r.respond(c, proxyRelayDenied)
 		return
@@ -216,7 +256,11 @@ func (r *proxyRelay) handle(c net.Conn) {
 		return
 	}
 	defer func() { _ = t.Close() }()
-	if !r.track(t) {
+	// The allowlist may have changed while dialing: SetPorts only closes
+	// connections it already knows, so the port is checked again here.
+	if !r.track(c, t, port) {
+		r.logger.Warn("proxy relay: port denied", "port", port)
+		r.respond(c, proxyRelayDenied)
 		return
 	}
 	defer r.untrack(t)
@@ -259,7 +303,7 @@ func spliceProxy(a, b net.Conn) {
 }
 
 // startProxyRelayOn is startProxyRelay with an explicit listen address.
-func startProxyRelayOn(logger *slog.Logger, ports []uint16, addr string) (func(), error) {
+func startProxyRelayOn(logger *slog.Logger, ports []uint16, addr string) (*proxyRelay, error) {
 	allowed, err := proxyRelayAllowlist(ports)
 	if err != nil {
 		return nil, err
@@ -270,5 +314,5 @@ func startProxyRelayOn(logger *slog.Logger, ports []uint16, addr string) (func()
 	}
 	r := newProxyRelay(logger, allowed, dialProxyTarget)
 	r.Serve(l)
-	return r.Stop, nil
+	return r, nil
 }

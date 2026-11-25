@@ -19,22 +19,23 @@ admin = { port = 8080, auth = true }
 - By default (`auth = false`), routes require no login code. Setting `auth = true` on a route (or in `[workspaces.<name>.proxy]` / `[defaults.proxy]`) gates it behind a one-time login code and a `__Host-jailoc` session cookie.
 - The workspace name and every route name must be a lowercase DNS label (`a-z`, `0-9`, `-`).
 
-Guest port 6081 (the proxy relay) is reserved whenever any route exists. `ports` and `host_ports` can't use it, and a proxy route can't target a port that `host_ports` or `ports` also lists. See [`proxy`](../reference/configuration.md#proxy).
+Guest port 6081 (the proxy relay) is reserved in every workspace, with or without routes. `ports` and `host_ports` can't use it, and a proxy route can't target a port that `host_ports` or `ports` also lists. See [`proxy`](../reference/configuration.md#proxy).
 
 ### Apply changes
 
 | Change | Needed |
 |--------|--------|
-| The set of guest ports the `proxy` routes use | `jailoc restart` for the workspace |
-| Adding or renaming a route that uses a guest port already in that set, or changing `auth` | `jailoc reload` for the workspace |
+| Adding, renaming or removing a route, changing a route's port or `auth` | `jailoc reload` for the workspace |
 
-!!! note "Removing routes and `jailoc reload`"
+`jailoc reload` replaces the guest relay allowlist and updates the background proxy, so a new route works without ending sessions. Connections through a removed route's port are closed.
 
-    A running VM keeps serving the ports of its proxy routes until it restarts, even after you remove `proxy` from the configuration. Those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
+!!! note "VMs started by an older jailoc"
+
+    A VM started by a jailoc release whose guest protocol predates live proxy reloads needs `jailoc restart` once for any route change. Until then it keeps serving the ports of its proxy routes, even after you remove `proxy` from the configuration, and those ports stay reserved: `jailoc reload` rejects a `host_ports` or `ports` entry that uses one, and asks for `jailoc restart` first.
 
 ## How the proxy starts
 
-`jailoc up` and `jailoc restart` automatically start or update the background HTTPS proxy when a workspace has `proxy` routes, `jailoc reload` updates routes whose guest ports are already in the running VM's allowlist, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). `jailoc status` shows the running proxy and its route URLs.
+`jailoc up` and `jailoc restart` automatically start or update the background HTTPS proxy when a workspace has `proxy` routes, `jailoc reload` applies route changes, and `jailoc down` drops the workspace's routes (stopping the proxy when no proxy workspaces remain). `jailoc status` shows the running proxy and its route URLs.
 
 - jailoc creates a local CA in `~/.local/share/jailoc/proxy` and reuses it: a root certificate (`ca.crt`, the one you trust) and an intermediate that signs a leaf certificate (`cert.crt`) covering `*.<workspace>.jailoc.local` for every proxy workspace. It issues a new leaf when a workspace is added or the leaf is close to expiry. There is no option to supply your own certificate.
 - The root and the intermediate both carry a critical name constraint: they can only vouch for names under `jailoc.local` and no IP addresses.
@@ -282,7 +283,7 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 | Connection refused on 443 | The redirect isn't loaded, or the proxy isn't running; check `jailoc proxy status`. |
 | `:8443` URL rejected | Open the route without a port. |
 | Login code rejected | A code works once and expires 10 minutes after the proxy starts. Run `jailoc proxy stop`, then `jailoc proxy <workspace>` for a new one. |
-| Proxy refuses the workspace | The running VM doesn't match the configured proxy ports. Run `jailoc restart <workspace>`. |
+| Proxy refuses the workspace | The running VM doesn't match the configured proxy ports. Run `jailoc reload <workspace>`, or `jailoc restart <workspace>` when the VM was started by an older jailoc. |
 | Route fails after the VM stopped or was replaced | Run `jailoc up <workspace>`. |
 | `existing proxy CA in ... is unusable` | The CA in `~/.local/share/jailoc/proxy` is expired, incomplete or not limited to `jailoc.local`. Remove that directory, remove the old CA from your trust stores, and trust the new `ca.crt` after the next start. |
 | Proxy fails to start | Read `~/.cache/jailoc-vm/proxy/proxy.log`. |

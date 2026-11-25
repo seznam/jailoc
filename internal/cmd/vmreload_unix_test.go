@@ -307,44 +307,136 @@ func TestRestartOnlyChangesProxy(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
 		running, want guest.Config
-		changes       []string
+		// restart is whether a VM that cannot replace its relay allowlist
+		// lists proxy as restart-only; a VM that can never does.
+		restart bool
 	}{
-		{"unchanged none", guest.Config{}, guest.Config{}, nil},
-		{"unchanged proxy", guest.Config{ProxyRelay: relay(3000, 6080)}, guest.Config{ProxyRelay: relay(3000, 6080)}, nil},
-		{"proxy added", guest.Config{}, guest.Config{ProxyRelay: relay(3000)}, []string{"proxy"}},
-		{"proxy port changed", guest.Config{ProxyRelay: relay(3000)}, guest.Config{ProxyRelay: relay(3001)}, []string{"proxy"}},
-		{"proxy removed", guest.Config{ProxyRelay: relay(3000)}, guest.Config{}, []string{"proxy"}},
-		{"empty relay equals none", guest.Config{ProxyRelay: relay()}, guest.Config{}, nil},
+		{"unchanged none", guest.Config{}, guest.Config{}, false},
+		{"unchanged proxy", guest.Config{ProxyRelay: relay(3000, 6080)}, guest.Config{ProxyRelay: relay(3000, 6080)}, false},
+		{"proxy added", guest.Config{}, guest.Config{ProxyRelay: relay(3000)}, true},
+		{"proxy added to an empty relay", guest.Config{ProxyRelay: relay()}, guest.Config{ProxyRelay: relay(3000)}, true},
+		{"proxy port changed", guest.Config{ProxyRelay: relay(3000)}, guest.Config{ProxyRelay: relay(3001)}, true},
+		{"proxy removed", guest.Config{ProxyRelay: relay(3000)}, guest.Config{}, true},
+		{"proxy removed to an empty relay", guest.Config{ProxyRelay: relay(3000)}, guest.Config{ProxyRelay: relay()}, true},
+		{"empty relay equals none", guest.Config{ProxyRelay: relay()}, guest.Config{}, false},
 	} {
-		running := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &tt.running}
-		want := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &tt.want}
-		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
-			t.Errorf("%s: got %v, want %v", tt.name, got, tt.changes)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, c := range []struct {
+				name     string
+				protocol int
+				want     bool
+			}{
+				{"old guest", liveProxyGuestProtocol - 1, tt.restart},
+				{"live proxy guest", liveProxyGuestProtocol, false},
+			} {
+				running := vm.Spec{Agent: "opencode", GuestProtocol: c.protocol, Guest: &tt.running}
+				want := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &tt.want}
+				got := slices.Contains(restartOnlyChanges(running, want), "proxy")
+				if got != c.want {
+					t.Errorf("%s: proxy restart-only = %v, want %v", c.name, got, c.want)
+				}
+			}
+		})
 	}
 }
 
-func TestReloadedGuestRetainsProxy(t *testing.T) {
+func TestProxyReloadable(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		protocol int
+		want     bool
+	}{
+		{0, false},
+		{liveProxyGuestProtocol - 1, false},
+		{liveProxyGuestProtocol, true},
+		{liveProxyGuestProtocol + 1, true},
+	} {
+		if got := proxyReloadable(vm.Spec{GuestProtocol: tt.protocol}); got != tt.want {
+			t.Errorf("proxyReloadable(protocol %d) = %v, want %v", tt.protocol, got, tt.want)
+		}
+	}
+	if guest.Protocol < liveProxyGuestProtocol {
+		t.Errorf("guest.Protocol = %d is below liveProxyGuestProtocol %d", guest.Protocol, liveProxyGuestProtocol)
+	}
+}
+
+func TestReloadedGuestProxy(t *testing.T) {
 	t.Parallel()
 	running := guest.Config{
 		ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000, 6080}},
 		CABundle:   "/old.pem",
 		TimeZone:   &guest.TimeZone{},
 	}
-	// The configuration now asks for another proxy setup, which only a restart applies.
+	// The configuration asks for another proxy setup.
 	want := guest.Config{
 		ProxyRelay: &guest.ProxyRelay{Ports: []uint16{9000}},
 		CABundle:   "/new.pem",
 	}
 	binds := []guest.Snapshot{{Source: "/a", Target: "/snap"}}
-	got := reloadedGuest(running, want, binds)
-	if got.ProxyRelay == nil || !slices.Equal(got.ProxyRelay.Ports, []uint16{3000, 6080}) {
-		t.Errorf("reloaded guest lost proxy: %+v", got)
+	tests := []struct {
+		name      string
+		want      guest.Config
+		liveProxy bool
+		ports     []uint16
+	}{
+		{"old guest retains its allowlist", want, false, []uint16{3000, 6080}},
+		{"live proxy guest takes the wanted allowlist", want, true, []uint16{9000}},
+		{"live proxy guest without routes keeps an empty relay", guest.Config{CABundle: "/new.pem"}, true, nil},
 	}
-	if got.CABundle != "/new.pem" || got.TimeZone != nil || len(got.Snapshots) != 1 {
-		t.Errorf("reloaded guest did not take the reloadable settings: %+v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := reloadedGuest(running, tt.want, binds, tt.liveProxy)
+			if got.ProxyRelay == nil || !slices.Equal(got.ProxyRelay.Ports, tt.ports) {
+				t.Errorf("reloaded guest proxy = %+v, want ports %v", got.ProxyRelay, tt.ports)
+			}
+			if got.CABundle != "/new.pem" || got.TimeZone != nil || len(got.Snapshots) != 1 {
+				t.Errorf("reloaded guest did not take the reloadable settings: %+v", got)
+			}
+		})
+	}
+	if running.ProxyRelay.Ports[0] != 3000 {
+		t.Errorf("reloadedGuest changed the running configuration: %+v", running.ProxyRelay)
 	}
 }
+
+func TestReloadProxyPorts(t *testing.T) {
+	t.Parallel()
+	relay := func(ports ...uint16) guest.Config { return guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: ports}} }
+	tests := []struct {
+		name     string
+		protocol int
+		g        guest.Config
+		want     *string // JSON of the proxy_ports field; nil when it must be absent
+	}{
+		{"old guest sends nothing", liveProxyGuestProtocol - 1, relay(3000), nil},
+		{"ports", liveProxyGuestProtocol, relay(3000, 6080), ptr(`"proxy_ports":[3000,6080]`)},
+		{"empty relay sends an empty list", liveProxyGuestProtocol, relay(), ptr(`"proxy_ports":[]`)},
+		{"no relay sends an empty list", liveProxyGuestProtocol, guest.Config{}, ptr(`"proxy_ports":[]`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ports := reloadProxyPorts(vm.Spec{GuestProtocol: tt.protocol}, tt.g)
+			data, err := json.Marshal(guest.Reload{Seq: 1, ProxyPorts: ports})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.want == nil {
+				if strings.Contains(string(data), "proxy_ports") {
+					t.Fatalf("request %s has proxy_ports", data)
+				}
+				return
+			}
+			if !strings.Contains(string(data), *tt.want) {
+				t.Fatalf("request %s lacks %s", data, *tt.want)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 func TestCheckReloadProxyCollision(t *testing.T) {
 	t.Parallel()
@@ -399,6 +491,26 @@ func TestCheckReloadProxyCollision(t *testing.T) {
 	}
 }
 
+// A guest that replaces its relay allowlist on a reload reserves only the relay
+// port: the route ports follow the configuration, which validation checks.
+func TestCheckReloadProxyCollisionLiveProxy(t *testing.T) {
+	t.Parallel()
+	running := vm.Spec{GuestProtocol: liveProxyGuestProtocol, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000}}}}
+	hostPort := func(port uint16) vm.Spec {
+		return vm.Spec{HostServices: []vm.HostService{{GuestPort: port}}, Guest: &guest.Config{HostPorts: []uint16{port}}}
+	}
+	if err := checkReloadProxyCollision("ws", running, hostPort(3000)); err != nil {
+		t.Errorf("former route port as host port: %v", err)
+	}
+	if err := checkReloadProxyCollision("ws", running, hostPort(6081)); err == nil || !strings.Contains(err.Error(), "guest port 6081") {
+		t.Errorf("relay port as host port: err = %v, want a guest port 6081 error", err)
+	}
+	empty := vm.Spec{GuestProtocol: liveProxyGuestProtocol, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{}}}
+	if err := checkReloadProxyCollision("ws", empty, vm.Spec{Forwards: []vm.Forward{{HostPort: 18000, GuestPort: 6081}}, Guest: &guest.Config{}}); err == nil {
+		t.Error("relay port as forward with an empty relay was allowed")
+	}
+}
+
 // The reload that removes proxy from the configuration while the VM still runs
 // it must not turn its ports into host ports.
 func TestReloadWantAfterProxyRemovedKeepsCollisionVisible(t *testing.T) {
@@ -412,10 +524,10 @@ func TestReloadWantAfterProxyRemovedKeepsCollisionVisible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want.Guest.ProxyRelay != nil {
-		t.Fatalf("the wanted spec still has proxy: %+v", want.Guest)
+	if want.Guest.ProxyRelay == nil || len(want.Guest.ProxyRelay.Ports) != 0 {
+		t.Fatalf("the wanted spec still has proxy routes: %+v", want.Guest)
 	}
-	running := vm.Spec{Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000, 6080}}}}
+	running := vm.Spec{GuestProtocol: liveProxyGuestProtocol - 1, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000, 6080}}}}
 	if err := checkReloadProxyCollision("ws", running, want); err == nil {
 		t.Fatal("removing proxy from the configuration made its ports reloadable as host ports")
 	}

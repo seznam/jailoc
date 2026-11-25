@@ -374,7 +374,8 @@ func selectProxyTargets(cfg *config.Config, names []string, w io.Writer) ([]prox
 // checkProxyVM verifies that the running VM of ws was started with the
 // routes the configuration now has, so that mapping a route to its guest
 // port is safe: the guest relay allows every route port. A VM that does not
-// match needs a restart first.
+// match needs a reload first, or a restart when its guest cannot replace the
+// relay allowlist.
 func checkProxyVM(ws *workspace.Resolved, stateDir string) error {
 	running, err := vm.ReadSpec(stateDir)
 	if err != nil {
@@ -384,6 +385,9 @@ func checkProxyVM(ws *workspace.Resolved, stateDir string) error {
 		return fmt.Errorf("workspace %q: running VM has no guest configuration; run `jailoc restart %s`", ws.Name, ws.Name)
 	}
 	if changed := proxyChanges(ws, running.Guest); len(changed) > 0 {
+		if proxyReloadable(*running) {
+			return fmt.Errorf("workspace %q: the running VM does not match the configured %s; run `jailoc reload %s` first", ws.Name, joinList(changed), ws.Name)
+		}
 		return fmt.Errorf("workspace %q: the running VM does not match the configured %s; run `jailoc restart %s` first (this ends running sessions)", ws.Name, joinList(changed), ws.Name)
 	}
 	return nil

@@ -24,7 +24,9 @@ package guest
 // Protocol 4: the guest mounts /tmp from Config.Tmp, applies Reload.TmpTTL,
 // answers "jailoc-guest tmp-status", and runs the proxy relay (Config.ProxyRelay),
 // which the host's private proxy socket reaches through the broker gateway.
-const Protocol = 4
+// Protocol 5: the guest always runs the proxy relay, with an allowlist that may
+// be empty, and Reload.ProxyPorts replaces the allowlist.
+const Protocol = 5
 
 // Paths inside the guest root file system.
 const (
@@ -205,7 +207,8 @@ type Config struct {
 	// Tmp configures the /tmp file system and the expiry of its entries.
 	Tmp TmpConfig `json:"tmp"`
 	// ProxyRelay, when set, runs the proxy relay on ProxyRelayPort so the host
-	// reaches allowlisted guest loopback web services.
+	// reaches allowlisted guest loopback web services. The host sets it for
+	// every workspace VM, with an empty allowlist when no route exists.
 	ProxyRelay *ProxyRelay `json:"proxy_relay,omitempty"`
 	// State, when set, mounts the persistent agent state disk at
 	// StateDiskDir.
@@ -220,7 +223,8 @@ type Config struct {
 // listening, splices the connection to 127.0.0.1:<port> in the guest.
 type ProxyRelay struct {
 	// Ports is the allowlist of loopback target ports; any other port is
-	// denied.
+	// denied, so an empty list denies everything. Reload.ProxyPorts
+	// replaces it.
 	Ports []uint16 `json:"ports,omitempty"`
 }
 

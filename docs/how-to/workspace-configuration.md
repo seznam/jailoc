@@ -281,8 +281,8 @@ After editing the config, apply it without restarting:
 jailoc reload myproject
 ```
 
-These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl` and secrets. Running sessions keep their old environment.
+These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl`, `proxy` routes and secrets. Running sessions keep their old environment.
 
-Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `state_disk`, `cache_disk`, `tmp_storage`, `tmp_size`, `enable_docker`, the set of guest ports used by `proxy` (see [proxy routes](proxy-routes.md#apply-changes)), `protect_git` and the image. `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
+Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `state_disk`, `cache_disk`, `tmp_storage`, `tmp_size`, `enable_docker`, `protect_git` and the image. A VM started by a jailoc release that predates live proxy reloads also needs a restart for `proxy` changes (see [proxy routes](proxy-routes.md#apply-changes)). `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
 
 Concurrent reloads of one workspace run one at a time.
