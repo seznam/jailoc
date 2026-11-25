@@ -167,21 +167,26 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	defer cancelRun(nil)
 	var watchers sync.WaitGroup
 	mgr := &proxyManager{
-		runCtx:    runCtx,
-		cancelRun: cancelRun,
-		opts:      opts,
-		caCert:    caPath,
-		startedAt: time.Now(),
-		instances: make(map[string]*proxyInstance, len(targets)),
-		wsRoutes:  make(map[string][]workspace.ProxyRoute, len(targets)),
-		watchers:  &watchers,
-		errw:      cmd.ErrOrStderr(),
+		runCtx:     runCtx,
+		cancelRun:  cancelRun,
+		opts:       opts,
+		caCert:     caPath,
+		configPath: proxyConfigPath(),
+		startedAt:  time.Now(),
+		instances:  make(map[string]*proxyInstance, len(targets)),
+		wsRoutes:   make(map[string][]workspace.ProxyRoute, len(targets)),
+		watchers:   &watchers,
+		errw:       cmd.ErrOrStderr(),
 	}
+	// Watchers start in addInstanceLocked and may remove instances at once,
+	// so the maps are only touched under mgr.mu from here on.
 	var routes []proxy.Route
+	mgr.mu.Lock()
 	for _, t := range targets {
 		inst := mgr.addInstanceLocked(t)
 		routes = append(routes, inst.routes()...)
 	}
+	mgr.mu.Unlock()
 	gw, codes, err := proxy.New(proxy.Config{Cert: cert, Routes: routes})
 	if err != nil {
 		return fmt.Errorf("start proxy: %w", err)
@@ -204,7 +209,10 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	}()
 	mgr.sockPath = sockPath
 	_ = writeProxySavedOptions(opts)
-	_ = writeProxyState(mgr.stateLocked())
+	mgr.mu.Lock()
+	startState := mgr.stateLocked()
+	mgr.mu.Unlock()
+	_ = writeProxyState(startState)
 	go mgr.serveControl(ctrlLn)
 
 	bannerOut := cmd.OutOrStdout()

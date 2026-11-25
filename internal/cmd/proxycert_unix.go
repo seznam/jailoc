@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/vm"
 )
 
 // The proxy CA is a root and an intermediate, both limited to names under
@@ -104,6 +105,19 @@ func ensureProxyCert(cfg *config.Config, targets []proxyTarget) (tls.Certificate
 
 func checkProxyCADirNotShared(dir string, cfg *config.Config, targets []proxyTarget) error {
 	cleanDir := filepath.Clean(dir)
+	realDir := canonicalPath(cleanDir)
+	overlaps := func(wsName, hostPath string) error {
+		cleanShare := filepath.Clean(hostPath)
+		if !filepath.IsAbs(cleanShare) {
+			return nil
+		}
+		// Symlinks are resolved on both sides, so a share that links to the
+		// CA directory or one of its parents is caught as well.
+		if pathsOverlap(cleanDir, cleanShare) || pathsOverlap(realDir, canonicalPath(cleanShare)) {
+			return fmt.Errorf("proxy CA directory %q overlaps shared path %q of workspace %q", cleanDir, cleanShare, wsName)
+		}
+		return nil
+	}
 	check := func(wsName, share string) error {
 		if share == "" {
 			return nil
@@ -114,14 +128,12 @@ func checkProxyCADirNotShared(dir string, cfg *config.Config, targets []proxyTar
 				hostPath = filepath.Join(home, hostPath[2:])
 			}
 		}
-		cleanShare := filepath.Clean(hostPath)
-		if !filepath.IsAbs(cleanShare) {
-			return nil
-		}
-		if pathsOverlap(cleanDir, cleanShare) {
-			return fmt.Errorf("proxy CA directory %q overlaps shared path %q of workspace %q", cleanDir, cleanShare, wsName)
-		}
-		return nil
+		return overlaps(wsName, hostPath)
+	}
+	// A running VM keeps the shares it booted with until a restart, even
+	// when they were since removed from the configuration.
+	if err := checkRunningVMShares(overlaps); err != nil {
+		return err
 	}
 	if cfg != nil {
 		for _, s := range cfg.Defaults.Mounts {
@@ -170,6 +182,55 @@ func checkProxyCADirNotShared(dir string, cfg *config.Config, targets []proxyTar
 		}
 	}
 	return nil
+}
+
+// checkRunningVMShares calls overlaps for every share of every workspace VM
+// whose supervisor is alive.
+func checkRunningVMShares(overlaps func(wsName, hostPath string) error) error {
+	entries, err := os.ReadDir(filepath.Join(vmRootDir(), "workspaces"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("list workspace VMs: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		stateDir := vmStateDir(e.Name())
+		st, err := vm.ReadState(stateDir)
+		if err != nil || !processAlive(st.PID) {
+			continue // no VM runs from this state directory
+		}
+		spec, err := vm.ReadSpec(stateDir)
+		if err != nil {
+			return fmt.Errorf("read VM spec of running workspace %q: %w", e.Name(), err)
+		}
+		for _, sh := range spec.Shares {
+			if err := overlaps(e.Name(), sh.HostPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// canonicalPath resolves symlinks in the longest existing prefix of path and
+// appends the rest, so paths that do not exist yet compare by their location.
+func canonicalPath(path string) string {
+	rest := ""
+	for p := path; ; {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
 }
 
 func pathsOverlap(a, b string) bool {

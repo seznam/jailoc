@@ -74,7 +74,7 @@ jailoc creates the CA the first time a proxy starts. The root key signs the inte
 
 !!! danger "The CA is a trust anchor"
 
-    The intermediate's name constraint applies in every client that checks the chain, so its key can only mint certificates for names under `jailoc.local`. Still keep it private: anyone holding it can impersonate every route. jailoc rejects `paths`, `mounts` and `snapshots` that contain `~/.local/share/jailoc`, and refuses to start the proxy when its CA directory overlaps a shared path. Remove the CA from your trust stores when you stop using the proxy.
+    The intermediate's name constraint applies in every client that checks the chain, so its key can only mint certificates for names under `jailoc.local`. Still keep it private: anyone holding it can impersonate every route. jailoc rejects `paths`, `mounts` and `snapshots` that contain `~/.local/share/jailoc`, and refuses to start the proxy when its CA directory overlaps a shared path, through a symlink as well, or a share a running VM booted with. Remove the CA from your trust stores when you stop using the proxy.
 
 Every command below reads the CA directory from `CA_DIR`:
 
@@ -286,6 +286,8 @@ Also stop `dnsmasq` and remove the CA from Firefox's certificate manager.
 | Route fails after the VM stopped or was replaced | Run `jailoc up <workspace>`. |
 | `existing proxy CA in ... is unusable` | The CA in `~/.local/share/jailoc/proxy` is expired, incomplete or not limited to `jailoc.local`. Remove that directory, remove the old CA from your trust stores, and trust the new `ca.crt` after the next start. |
 | Proxy fails to start | Read `~/.cache/jailoc-vm/proxy/proxy.log`. |
+| `the background proxy serves workspaces of ...` | One proxy serves one configuration file. Run `jailoc proxy stop`, then start the workspaces of the other `--config`. |
+| `proxy CA directory ... overlaps shared path` | A workspace shares `~/.local/share/jailoc` or a parent of it, directly or through a symlink. Remove the path or mount, then `jailoc restart` that workspace if its VM still runs with the share. |
 | `the listener broker is not running for this user` | Start `jailoc-listener-broker --uid` with your UID as root; see [Use the listener broker](#use-the-listener-broker-experimental). |
 | `another proxy is attached to the listener broker` | Stop the other `jailoc proxy --listener-broker` first. |
 | Broker refuses its executable | Install it in a root-owned directory that group and others can't write. |

@@ -347,3 +347,32 @@ func TestServerUpdatePreservesSessionsAndRevokesRemovedRoutes(t *testing.T) {
 	r.AddCookie(cookieB)
 	request(t, x.client(t, hostB), r, 303)
 }
+
+func TestUnauthenticatedSessionRejectsRouteChangedByUpdate(t *testing.T) {
+	t.Parallel()
+	x := startServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}), nil)
+	dial := x.g.routes[hostA].Dial
+	if _, err := x.g.Update(Config{Cert: x.g.cert, Routes: []Route{{Host: hostA, Dial: dial}}}); err != nil {
+		t.Fatalf("Update to unauthenticated: %v", err)
+	}
+	request(t, x.client(t, hostA), newRequest(t, "GET", hostA, "/"), 200)
+
+	// A request that looked up the unauthenticated route before Update
+	// enabled authentication must not get a session that escaped revocation.
+	stale, _ := x.g.route(hostA)
+	if _, err := x.g.Update(Config{Cert: x.g.cert, Routes: []Route{{Host: hostA, Dial: dial, Auth: true}}}); err != nil {
+		t.Fatalf("Update to authenticated: %v", err)
+	}
+	if s, current := x.g.unauthenticatedSession(hostA, stale); current || s != nil {
+		t.Fatalf("unauthenticatedSession for a stale route = (%v, %v), want (nil, false)", s, current)
+	}
+	x.g.mu.Lock()
+	leaked := x.g.unauth[hostA]
+	x.g.mu.Unlock()
+	if leaked != nil {
+		t.Fatal("stale lookup registered an unauthenticated session")
+	}
+	request(t, x.client(t, hostA), newRequest(t, "GET", hostA, "/"), 303)
+}

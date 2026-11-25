@@ -76,7 +76,12 @@ func (g *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		s = g.unauthenticatedSession(host)
+		var current bool
+		s, current = g.unauthenticatedSession(host, route)
+		if !current {
+			http.Error(w, "proxy route changed, retry the request", http.StatusServiceUnavailable)
+			return
+		}
 		if s == nil {
 			http.Error(w, "proxy stopped", http.StatusServiceUnavailable)
 			return
@@ -111,19 +116,26 @@ func externalHostname(authority string) string {
 	return host
 }
 
-func (g *Server) unauthenticatedSession(host string) *session {
+// unauthenticatedSession returns the shared session of an unauthenticated
+// route. It reports false when Update changed or removed the route after the
+// caller looked it up, so no session outlives the revocation done by Update.
+func (g *Server) unauthenticatedSession(host string, route Route) (*session, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	cur, ok := g.routes[host]
+	if !ok || cur.Auth || cur.Generation != route.Generation {
+		return nil, false
+	}
 	if g.base == nil || g.base.Err() != nil {
-		return nil
+		return nil, true
 	}
 	if s := g.unauth[host]; s != nil && s.ctx.Err() == nil {
-		return s
+		return s, true
 	}
 	ctx, cancel := context.WithCancel(g.base)
 	s := &session{host: host, ctx: ctx, cancel: cancel, conns: make(map[*sessionConn]struct{})}
 	g.unauth[host] = s
-	return s
+	return s, true
 }
 
 func sameOriginRequest(r *http.Request, host string) bool {

@@ -1288,3 +1288,155 @@ func TestProxySyncStatusAndStop(t *testing.T) {
 		t.Fatalf("proxyStatusLabel(stopped) = %q", label)
 	}
 }
+
+func TestProxyPruneKeepsRoutesAndSyncRejectsOtherConfig(t *testing.T) {
+	run, _ := startProxyRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "hello")
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), "--foreground", "--listen", "127.0.0.1:0")
+	st := runningProxy()
+	if st == nil {
+		t.Fatal("runningProxy() = nil while the proxy serves")
+	}
+	if st.Config != proxyConfigPath() {
+		t.Fatalf("state config = %q, want %q", st.Config, proxyConfigPath())
+	}
+
+	resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Config: filepath.Join(t.TempDir(), "other.toml")})
+	if err != nil {
+		t.Fatalf("sync with another config: %v", err)
+	}
+	assertContains(t, resp.Error, "serves workspaces of "+proxyConfigPath())
+
+	// Turning auth off in the config must not be applied by a prune, which
+	// only drops stopped workspaces.
+	if err := os.WriteFile(config.ConfigPath(), []byte("[workspaces.e2e.proxy]\napp = { port = 3000, auth = false }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "prune"})
+	if err != nil || resp.Error != "" || resp.Stopped || len(resp.Codes) != 0 {
+		t.Fatalf("prune = %+v, %v; want unchanged state without codes", resp, err)
+	}
+	if res := run.do(t, "GET", "/", nil, nil); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("GET / without session after prune = %d, want %d (auth kept)", res.StatusCode, http.StatusSeeOther)
+	}
+	resp, err = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Config: proxyConfigPath()})
+	if err != nil || resp.Error != "" {
+		t.Fatalf("sync = %+v, %v", resp, err)
+	}
+	if res := run.do(t, "GET", "/", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("GET / without session after sync = %d, want 200", res.StatusCode)
+	}
+}
+
+func TestProxyStopIgnoresStaleStateOfAnotherProcess(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = sleeper.Process.Kill()
+		_ = sleeper.Wait()
+	})
+	// A crashed proxy left its state and socket path behind and the PID was reused.
+	sock := filepath.Join(proxyStateDir(), "control.sock")
+	if err := writeProxyState(proxyState{PID: sleeper.Process.Pid, ControlSocket: sock}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeProxySavedOptions(proxyOptions{listenerBroker: true}); err != nil {
+		t.Fatal(err)
+	}
+	if runningProxy() != nil {
+		t.Fatal("runningProxy() reports a proxy although none holds proxy.lock")
+	}
+
+	var out bytes.Buffer
+	stopCmd := newProxyCmd()
+	stopCmd.SetOut(&out)
+	stopCmd.SetErr(&out)
+	stopCmd.SetArgs([]string{"stop"})
+	if err := stopCmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("proxy stop: %v", err)
+	}
+	assertContains(t, out.String(), "Proxy is not running")
+	if !processAlive(sleeper.Process.Pid) {
+		t.Fatal("proxy stop signalled the unrelated process of a stale PID")
+	}
+	for _, path := range []string{proxyStateFile(), proxyOptionsFile()} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s after stop: %v, want removed", path, err)
+		}
+	}
+}
+
+func TestPrintSyncedProxyShowsNewCodesOutsideFilter(t *testing.T) {
+	t.Parallel()
+	st := proxyState{Listen: "127.0.0.1:8443", PID: 1, Workspaces: map[string][]string{
+		"a": {"app.a.jailoc.local"},
+		"b": {"app.b.jailoc.local"},
+		"c": {"app.c.jailoc.local"},
+	}}
+	var out bytes.Buffer
+	printSyncedProxy(&out, st, map[string]string{"app.b.jailoc.local": "secret"}, []string{"a"})
+	assertContains(t, out.String(), "Workspace a:")
+	assertContains(t, out.String(), "app.b.jailoc.local/  login code secret")
+	if strings.Contains(out.String(), "Workspace c:") {
+		t.Fatalf("output = %q, want workspace c filtered out", out.String())
+	}
+}
+
+func TestEnsureProxyCertRejectsSymlinkedShare(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	home, _ := os.UserHomeDir()
+	if err := os.MkdirAll(filepath.Join(home, ".local", "share"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "share-link")
+	if err := os.Symlink(filepath.Join(home, ".local", "share"), link); err != nil {
+		t.Fatal(err)
+	}
+	ws := cfg.Workspaces["one"]
+	ws.Paths = []string{link}
+	cfg.Workspaces["one"] = ws
+	_, _, err := ensureProxyCert(cfg, targets)
+	if err == nil {
+		t.Fatal("ensureProxyCert succeeded with a path that links to a parent of the proxy CA directory")
+	}
+	assertContains(t, err.Error(), "overlaps shared path")
+}
+
+func TestEnsureProxyCertRejectsRunningVMShare(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	home, _ := os.UserHomeDir()
+	// The VM booted with ~/.local/share shared; the configuration no
+	// longer lists it, but the share stays until the VM restarts.
+	stateDir := vmStateDir("old")
+	if err := vm.WriteSpec(vm.Spec{StateDir: stateDir, Shares: []vm.Share{{HostPath: filepath.Join(home, ".local", "share")}}}); err != nil {
+		t.Fatal(err)
+	}
+	writeRunning := func(pid int) {
+		t.Helper()
+		data, err := json.Marshal(vm.State{PID: pid, Ready: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(vm.StateFile(stateDir), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRunning(os.Getpid())
+	_, _, err := ensureProxyCert(cfg, targets)
+	if err == nil {
+		t.Fatal("ensureProxyCert succeeded while a running VM shares a parent of the proxy CA directory")
+	}
+	assertContains(t, err.Error(), `of workspace "old"`)
+
+	// A stopped VM no longer exposes its shares.
+	writeRunning(0)
+	if _, _, err := ensureProxyCert(cfg, targets); err != nil {
+		t.Fatalf("ensureProxyCert with a stopped VM: %v", err)
+	}
+}

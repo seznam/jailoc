@@ -40,14 +40,18 @@ type proxyState struct {
 	Listen         string              `json:"listen"`
 	ListenerBroker bool                `json:"listener_broker,omitempty"`
 	CACert         string              `json:"ca_cert,omitempty"`
+	Config         string              `json:"config,omitempty"`
 	ControlSocket  string              `json:"control_socket"`
 	StartedAt      time.Time           `json:"started_at"`
 	Workspaces     map[string][]string `json:"workspaces"`
 }
 
 type proxyControlRequest struct {
-	Action     string   `json:"action"` // "sync", "status", "stop"
+	Action     string   `json:"action"` // "sync", "prune", "status", "stop"
 	Workspaces []string `json:"workspaces,omitempty"`
+	// Config is the caller's configuration file. A proxy serves the
+	// workspaces of one configuration and rejects a sync for another.
+	Config string `json:"config,omitempty"`
 }
 
 type proxyControlResponse struct {
@@ -137,6 +141,32 @@ func acquireProxyLock() (func(), error) {
 		_ = f.Close()
 	}, nil
 }
+
+// proxyLockHeld reports whether a proxy process holds proxy.lock. A proxy
+// keeps the lock while it serves, so a free lock means state.json is stale
+// and its PID may already belong to an unrelated process.
+func proxyLockHeld() bool {
+	f, err := os.OpenFile(proxyLockFile(), os.O_RDWR, 0o600) //nolint:gosec // G304: jailoc-owned state path
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { //nolint:gosec // G115: file descriptors fit in int
+		return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) //nolint:gosec // G115: file descriptors fit in int
+	return false
+}
+
+// proxyConfigPath identifies the configuration a proxy serves.
+func proxyConfigPath() string {
+	p := config.ConfigPath()
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
 func readProxyState() (*proxyState, error) {
 	data, err := os.ReadFile(proxyStateFile()) //nolint:gosec // G304: jailoc-owned state path
 	if err != nil {
@@ -162,7 +192,7 @@ func writeProxyState(st proxyState) error {
 
 func runningProxy() *proxyState {
 	st, err := readProxyState()
-	if err != nil || st.PID <= 0 || !processAlive(st.PID) || st.ControlSocket == "" {
+	if err != nil || st.PID <= 0 || !processAlive(st.PID) || st.ControlSocket == "" || !proxyLockHeld() {
 		return nil
 	}
 	if _, err := os.Stat(st.ControlSocket); err != nil {
@@ -180,13 +210,15 @@ type proxyManager struct {
 	opts      proxyOptions
 	listen    string
 	caCert    string
-	sockPath  string
-	startedAt time.Time
-	gw        *proxy.Server
-	instances map[string]*proxyInstance
-	wsRoutes  map[string][]workspace.ProxyRoute
-	watchers  *sync.WaitGroup
-	errw      io.Writer
+	// configPath is the configuration file this proxy loads on every sync.
+	configPath string
+	sockPath   string
+	startedAt  time.Time
+	gw         *proxy.Server
+	instances  map[string]*proxyInstance
+	wsRoutes   map[string][]workspace.ProxyRoute
+	watchers   *sync.WaitGroup
+	errw       io.Writer
 }
 
 func (m *proxyManager) stateLocked() proxyState {
@@ -204,6 +236,7 @@ func (m *proxyManager) stateLocked() proxyState {
 		Listen:         m.listen,
 		ListenerBroker: m.opts.listenerBroker,
 		CACert:         m.caCert,
+		Config:         m.configPath,
 		ControlSocket:  m.sockPath,
 		StartedAt:      m.startedAt,
 		Workspaces:     ws,
@@ -239,7 +272,20 @@ func (m *proxyManager) onInstanceDone(name string, inst *proxyInstance) {
 	}
 }
 
-func (m *proxyManager) sync(reqNames []string) proxyControlResponse {
+func (m *proxyManager) checkConfig(path string) error {
+	if path == "" || path == m.configPath {
+		return nil
+	}
+	return fmt.Errorf("the background proxy serves workspaces of %s, not %s; stop it with `jailoc proxy stop` first", m.configPath, path)
+}
+
+// sync reloads the configuration, refreshes the routes of served workspaces,
+// adds running workspaces with routes (only the requested ones, if any) and
+// applies the result.
+func (m *proxyManager) sync(req proxyControlRequest) proxyControlResponse {
+	if err := m.checkConfig(req.Config); err != nil {
+		return proxyControlResponse{Error: err.Error()}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -247,6 +293,7 @@ func (m *proxyManager) sync(reqNames []string) proxyControlResponse {
 	if err != nil {
 		return proxyControlResponse{Error: fmt.Sprintf("load config: %v", err)}
 	}
+	reqNames := req.Workspaces
 	var notes bytes.Buffer
 	if len(reqNames) > 0 {
 		// Validate the explicitly requested workspaces first.
@@ -254,30 +301,7 @@ func (m *proxyManager) sync(reqNames []string) proxyControlResponse {
 			return proxyControlResponse{Error: err.Error()}
 		}
 	}
-
-	// Prune instances whose VM stopped, was replaced, or no longer matches config.
-	for name, inst := range m.instances {
-		if inst.check() != nil {
-			delete(m.instances, name)
-			delete(m.wsRoutes, name)
-			continue
-		}
-		_, exists := cfg.Workspaces[name]
-		if !exists {
-			delete(m.instances, name)
-			delete(m.wsRoutes, name)
-			inst.cancel(errProxyVMGone)
-			continue
-		}
-		ws, err := workspace.Resolve(cfg, name)
-		if err != nil || len(ws.Proxy) == 0 || checkProxyVM(ws, inst.target.stateDir) != nil {
-			delete(m.instances, name)
-			delete(m.wsRoutes, name)
-			inst.cancel(errProxyVMGone)
-			continue
-		}
-		m.wsRoutes[name] = slices.Clone(ws.Proxy)
-	}
+	m.pruneLocked(cfg, true)
 
 	// Discover all running workspaces with routes (or ensure reqNames are included).
 	discoverNames := reqNames
@@ -307,7 +331,59 @@ func (m *proxyManager) sync(reqNames []string) proxyControlResponse {
 		}
 		m.addInstanceLocked(proxyTarget{ws: ws, stateDir: stateDir, id: id})
 	}
+	return m.applyLocked(cfg, notes.String())
+}
 
+// prune drops workspaces whose VM stopped or whose routes were removed. It
+// neither adds workspaces nor changes the routes of the others, so it never
+// issues login codes that nobody would see.
+func (m *proxyManager) prune() proxyControlResponse {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cfg, err := config.Load()
+	if err != nil {
+		return proxyControlResponse{Error: fmt.Sprintf("load config: %v", err)}
+	}
+	if !m.pruneLocked(cfg, false) {
+		return proxyControlResponse{State: m.stateLocked()}
+	}
+	return m.applyLocked(cfg, "")
+}
+
+// pruneLocked removes instances whose VM stopped, was replaced, or no longer
+// has routes in cfg. With refresh, the remaining instances take their routes
+// from cfg. It reports whether it removed an instance.
+func (m *proxyManager) pruneLocked(cfg *config.Config, refresh bool) bool {
+	removed := false
+	for name, inst := range m.instances {
+		if inst.check() != nil {
+			delete(m.instances, name)
+			delete(m.wsRoutes, name)
+			removed = true
+			continue
+		}
+		var ws *workspace.Resolved
+		_, exists := cfg.Workspaces[name]
+		if exists {
+			ws, _ = workspace.Resolve(cfg, name) // an unresolvable workspace is dropped below
+		}
+		if ws == nil || len(ws.Proxy) == 0 || checkProxyVM(ws, inst.target.stateDir) != nil {
+			delete(m.instances, name)
+			delete(m.wsRoutes, name)
+			inst.cancel(errProxyVMGone)
+			removed = true
+			continue
+		}
+		if refresh {
+			m.wsRoutes[name] = slices.Clone(ws.Proxy)
+		}
+	}
+	return removed
+}
+
+// applyLocked installs the routes of the current instances, or stops the
+// proxy when none remain.
+func (m *proxyManager) applyLocked(cfg *config.Config, notes string) proxyControlResponse {
 	if len(m.instances) == 0 {
 		m.cancelRun(errProxyNoVMs)
 		return proxyControlResponse{Stopped: true}
@@ -333,7 +409,7 @@ func (m *proxyManager) sync(reqNames []string) proxyControlResponse {
 	}
 	st := m.stateLocked()
 	_ = writeProxyState(st)
-	return proxyControlResponse{State: st, Codes: codes, Notes: notes.String()}
+	return proxyControlResponse{State: st, Codes: codes, Notes: notes}
 }
 
 func openProxyControlListener() (*net.UnixListener, string, func(), error) {
@@ -406,7 +482,9 @@ func (m *proxyManager) serveControl(ul *net.UnixListener) {
 				m.cancelRun(context.Canceled)
 				resp = proxyControlResponse{Stopped: true}
 			case "sync":
-				resp = m.sync(req.Workspaces)
+				resp = m.sync(req)
+			case "prune":
+				resp = m.prune()
 			default:
 				resp = proxyControlResponse{Error: fmt.Sprintf("unknown action %q", req.Action)}
 			}
@@ -450,12 +528,15 @@ func runBackgroundProxy(cmd *cobra.Command, names []string, opts proxyOptions) e
 	}
 
 	if st := runningProxy(); st != nil {
+		if st.Config != "" && st.Config != proxyConfigPath() {
+			return fmt.Errorf("the background proxy serves workspaces of %s, not %s; stop it with `jailoc proxy stop` first", st.Config, proxyConfigPath())
+		}
 		listenChanged := (cmd.Flags().Changed("listen") && st.Listen != listen) ||
 			(cmd.Flags().Changed("listener-broker") && st.ListenerBroker != opts.listenerBroker)
 		if listenChanged {
 			_ = stopBackgroundProxy()
 		} else {
-			resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Workspaces: names})
+			resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Workspaces: names, Config: proxyConfigPath()})
 			if err == nil {
 				if resp.Error != "" {
 					return errors.New(resp.Error)
@@ -493,7 +574,8 @@ func startBackgroundProxy(ctx context.Context, names []string, opts proxyOptions
 		return fmt.Errorf("open proxy log: %w", err)
 	}
 	defer func() { _ = logFile.Close() }()
-	_ = os.Remove(proxyStateFile())
+	// state.json stays: the child replaces it once it holds proxy.lock, and
+	// removing it here could hide a proxy that won a concurrent start.
 
 	bannerR, bannerW, err := os.Pipe()
 	if err != nil {
@@ -501,7 +583,7 @@ func startBackgroundProxy(ctx context.Context, names []string, opts proxyOptions
 	}
 	defer func() { _ = bannerR.Close() }()
 
-	childArgs := []string{"--config", config.ConfigPath(), "proxy", "--foreground"}
+	childArgs := []string{"--config", proxyConfigPath(), "proxy", "--foreground"}
 	if opts.listenerBroker {
 		childArgs = append(childArgs, "--listener-broker")
 	} else if opts.listen != "" {
@@ -580,16 +662,33 @@ func stopBackgroundProxy() error {
 	if st.ControlSocket != "" {
 		_, _ = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "stop"})
 	}
-	if st.PID > 0 && st.PID != os.Getpid() && processAlive(st.PID) {
-		_ = syscall.Kill(st.PID, syscall.SIGTERM)
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) && processAlive(st.PID) {
-			time.Sleep(25 * time.Millisecond)
-		}
-		if processAlive(st.PID) {
-			_ = syscall.Kill(st.PID, syscall.SIGKILL)
-		}
+	// Signal the recorded PID only while a proxy holds proxy.lock: after a
+	// crash the lock is free and the PID may belong to an unrelated process.
+	if waitProxyLockReleased(3*time.Second) || st.PID <= 0 || st.PID == os.Getpid() {
+		return removeProxyState(st)
 	}
+	if processAlive(st.PID) {
+		_ = syscall.Kill(st.PID, syscall.SIGTERM)
+	}
+	if !waitProxyLockReleased(3*time.Second) && processAlive(st.PID) {
+		_ = syscall.Kill(st.PID, syscall.SIGKILL)
+	}
+	return removeProxyState(st)
+}
+
+// waitProxyLockReleased waits up to timeout for no proxy to hold proxy.lock.
+func waitProxyLockReleased(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for proxyLockHeld() {
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return true
+}
+
+func removeProxyState(st *proxyState) error {
 	_ = os.Remove(proxyStateFile())
 	if st.ControlSocket != "" {
 		_ = os.Remove(st.ControlSocket)
@@ -603,10 +702,13 @@ func printSyncedProxy(w io.Writer, st proxyState, codes map[string]string, filte
 		home, _ := os.UserHomeDir()
 		_, _ = fmt.Fprintf(w, "CA certificate: %s\n", shortenHome(st.CACert, home))
 	}
+	// A sync can issue codes for workspaces outside the filter (for example
+	// when another workspace's route turned on auth). Only hashes are kept,
+	// so a workspace with a new code is always printed.
 	wsNames := slices.Sorted(maps.Keys(st.Workspaces))
 	if len(filter) > 0 {
 		wsNames = slices.DeleteFunc(wsNames, func(name string) bool {
-			return !slices.Contains(filter, name)
+			return !slices.Contains(filter, name) && !hasProxyCode(st.Workspaces[name], codes)
 		})
 	}
 	for _, ws := range wsNames {
@@ -619,6 +721,10 @@ func printSyncedProxy(w io.Writer, st proxyState, codes map[string]string, filte
 			}
 		}
 	}
+}
+
+func hasProxyCode(hosts []string, codes map[string]string) bool {
+	return slices.ContainsFunc(hosts, func(host string) bool { return codes[host] != "" })
 }
 
 func newProxyStatusCmd() *cobra.Command {
@@ -650,15 +756,18 @@ func newProxyStopCmd() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			st := runningProxy()
-			if st == nil {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Proxy is not running")
-				return nil
-			}
+			running := runningProxy() != nil
+			// Also clears the state a crashed proxy left behind.
 			if err := stopBackgroundProxy(); err != nil {
 				return err
 			}
-			_ = os.Remove(proxyOptionsFile())
+			if err := os.Remove(proxyOptionsFile()); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remove saved proxy options: %w", err)
+			}
+			if !running {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Proxy is not running")
+				return nil
+			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Proxy stopped")
 			return nil
 		},
@@ -671,7 +780,7 @@ func autoManageProxyOnUp(ctx context.Context, ws *workspace.Resolved, out, errw 
 		return
 	}
 	if st := runningProxy(); st != nil {
-		resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Workspaces: []string{ws.Name}})
+		resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Workspaces: []string{ws.Name}, Config: proxyConfigPath()})
 		if err == nil {
 			if resp.Error != "" {
 				_, _ = color.New(color.FgYellow).Fprintf(errw, "WARNING: could not sync background proxy (%s); run `jailoc proxy %s`\n", resp.Error, ws.Name)
@@ -686,14 +795,15 @@ func autoManageProxyOnUp(ctx context.Context, ws *workspace.Resolved, out, errw 
 	}
 }
 
-// syncProxyAfterDown updates the running background proxy after a
-// workspace VM stops, or stops the proxy when no proxy workspaces remain.
-func syncProxyAfterDown() {
+// pruneBackgroundProxy drops the routes of stopped workspaces, or of
+// workspaces without routes, from the running background proxy. The proxy
+// stops when no workspace remains.
+func pruneBackgroundProxy() {
 	st := runningProxy()
 	if st == nil {
 		return
 	}
-	if resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync"}); err == nil && resp.Stopped {
+	if resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "prune"}); err == nil && resp.Stopped {
 		_ = os.Remove(proxyStateFile())
 	}
 }

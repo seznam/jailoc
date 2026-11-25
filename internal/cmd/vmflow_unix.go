@@ -993,11 +993,11 @@ func downVM(ctx context.Context, ws *workspace.Resolved, purge bool) error {
 			return purgeErr
 		}
 		_, _ = color.New(color.FgGreen).Printf("Workspace %s VM deleted\n", ws.Name)
-		syncProxyAfterDown()
+		pruneBackgroundProxy()
 		return nil
 	}
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s stopped\n", ws.Name)
-	syncProxyAfterDown()
+	pruneBackgroundProxy()
 	return nil
 }
 
