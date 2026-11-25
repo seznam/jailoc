@@ -1307,6 +1307,16 @@ func TestProxyPruneKeepsRoutesAndSyncRejectsOtherConfig(t *testing.T) {
 	}
 	assertContains(t, resp.Error, "serves workspaces of "+proxyConfigPath())
 
+	// A port change waits for `jailoc restart`; a prune must keep the
+	// running routes instead of dropping the workspace.
+	if err := os.WriteFile(config.ConfigPath(), []byte("[workspaces.e2e.proxy]\napp = { port = 3001, auth = true }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "prune"})
+	if err != nil || resp.Error != "" || resp.Stopped {
+		t.Fatalf("prune after a port change = %+v, %v; want the workspace kept", resp, err)
+	}
+
 	// Turning auth off in the config must not be applied by a prune, which
 	// only drops stopped workspaces.
 	if err := os.WriteFile(config.ConfigPath(), []byte("[workspaces.e2e.proxy]\napp = { port = 3000, auth = false }\n"), 0o600); err != nil {
@@ -1434,9 +1444,38 @@ func TestEnsureProxyCertRejectsRunningVMShare(t *testing.T) {
 	}
 	assertContains(t, err.Error(), `of workspace "old"`)
 
+	// A share of the host root exposes the CA directory as well.
+	if err := vm.WriteSpec(vm.Spec{StateDir: stateDir, Shares: []vm.Share{{HostPath: "/"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ensureProxyCert(cfg, targets); err == nil {
+		t.Fatal("ensureProxyCert succeeded while a running VM shares the host root")
+	}
+
 	// A stopped VM no longer exposes its shares.
 	writeRunning(0)
 	if _, _, err := ensureProxyCert(cfg, targets); err != nil {
 		t.Fatalf("ensureProxyCert with a stopped VM: %v", err)
+	}
+}
+
+func TestPathsOverlap(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"/", "/home/u/.local/share/jailoc/proxy", true},
+		{"/home/u/.local/share/jailoc/proxy", "/", true},
+		{"/", "/", true},
+		{"/home/u/.local", "/home/u/.local/share/jailoc/proxy", true},
+		{"/home/u/.local/share/jailoc/proxy", "/home/u/.local/share/jailoc/proxy/x", true},
+		{"/home/u/.local/share/jailoc/proxy", "/home/u/.local/share/jailoc/proxy2", false},
+		{"/home/u/src", "/home/u/.local/share/jailoc/proxy", false},
+	}
+	for _, tt := range tests {
+		if got := pathsOverlap(tt.a, tt.b); got != tt.want {
+			t.Errorf("pathsOverlap(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+		}
 	}
 }

@@ -1109,6 +1109,11 @@ func rawMode(spec, source, target string) string {
 // guest-internal directory or a protected host path (see
 // forbiddenMountHostPaths), including the home directory and the host root.
 func ValidateWorkspacePath(p string) error {
+	// Relative paths resolve against the working directory, as
+	// workspace.Resolve does, so they can't bypass the checks below.
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
 	for _, prefix := range forbiddenMountPrefixes {
 		if p == prefix || strings.HasPrefix(p, prefix+"/") {
 			return fmt.Errorf("path %q conflicts with container-internal directory %q", p, prefix)
@@ -1132,7 +1137,12 @@ func validateSharedHostPath(host, context, kind string) error {
 	if err != nil {
 		return withContext(context, fmt.Errorf("expand %s %q: %w", kind, host, err))
 	}
-	cleanHost := filepath.Clean(expandedHost)
+	// Relative paths resolve against the working directory, as
+	// workspace.Resolve does.
+	cleanHost, err := filepath.Abs(expandedHost)
+	if err != nil {
+		return withContext(context, fmt.Errorf("resolve absolute %s %q: %w", kind, expandedHost, err))
+	}
 	// A missing path has nothing to resolve: only the literal check applies.
 	realHost, _ := filepath.EvalSymlinks(cleanHost)
 

@@ -212,7 +212,9 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	mgr.mu.Lock()
 	startState := mgr.stateLocked()
 	mgr.mu.Unlock()
-	_ = writeProxyState(startState)
+	if err := writeProxyState(startState); err != nil {
+		return fmt.Errorf("write proxy state: %w", err)
+	}
 	go mgr.serveControl(ctrlLn)
 
 	bannerOut := cmd.OutOrStdout()

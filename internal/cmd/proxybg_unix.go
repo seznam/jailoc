@@ -185,7 +185,7 @@ func writeProxyState(st proxyState) error {
 	}
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("encode proxy state: %w", err)
 	}
 	return writePrivateFile(proxyStateFile(), append(data, '\n'))
 }
@@ -367,7 +367,10 @@ func (m *proxyManager) pruneLocked(cfg *config.Config, refresh bool) bool {
 		if exists {
 			ws, _ = workspace.Resolve(cfg, name) // an unresolvable workspace is dropped below
 		}
-		if ws == nil || len(ws.Proxy) == 0 || checkProxyVM(ws, inst.target.stateDir) != nil {
+		// Only a refresh installs the configured routes, so only a refresh
+		// needs the running VM to match them; a prune keeps the routes the
+		// instance was added with.
+		if ws == nil || len(ws.Proxy) == 0 || (refresh && checkProxyVM(ws, inst.target.stateDir) != nil) {
 			delete(m.instances, name)
 			delete(m.wsRoutes, name)
 			inst.cancel(errProxyVMGone)

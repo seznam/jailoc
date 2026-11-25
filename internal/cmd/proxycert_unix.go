@@ -237,9 +237,17 @@ func pathsOverlap(a, b string) bool {
 	if a == b {
 		return true
 	}
-	ap := a + string(filepath.Separator)
-	bp := b + string(filepath.Separator)
-	return strings.HasPrefix(ap, bp) || strings.HasPrefix(bp, ap)
+	return pathContains(a, b) || pathContains(b, a)
+}
+
+// pathContains reports whether dir is parent or an ancestor of p. Both paths
+// are clean and absolute; the root contains every path.
+func pathContains(dir, p string) bool {
+	sep := string(filepath.Separator)
+	if dir == sep {
+		return strings.HasPrefix(p, sep)
+	}
+	return p == dir || strings.HasPrefix(p, dir+sep)
 }
 
 func withProxyCALock(dir string, fn func() error) error {

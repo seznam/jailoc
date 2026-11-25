@@ -2845,6 +2845,33 @@ func TestValidateWorkspacePathsForbiddenHostPaths(t *testing.T) {
 	}
 }
 
+func TestValidateWorkspacePathsRejectsRelativeProtectedPath(t *testing.T) {
+	// Workspace paths may not lie under /tmp or /var, so HOME is a directory
+	// below the package directory.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.MkdirTemp(cwd, ".test-home-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".local", "share", "jailoc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(home)
+
+	for _, path := range []string{".local/share/jailoc", ".", "./.local"} {
+		cfg := &Config{Workspaces: map[string]Workspace{"default": {Paths: []string{path}}}}
+		err := Validate(cfg)
+		if err == nil || !strings.Contains(err.Error(), "is forbidden") {
+			t.Errorf("Validate(paths = [%q]) from $HOME = %v, want it rejected", path, err)
+		}
+	}
+}
+
 func TestValidateMountsRejectsSymlinkToRoot(t *testing.T) {
 	home := safeHome(t)
 	if err := os.Mkdir(filepath.Join(home, ".ssh"), 0o700); err != nil {
