@@ -1,5 +1,88 @@
 # Changelog
 
+## [2.10.0](https://github.com/seznam/jailoc/compare/v2.9.0...v2.10.0) (2026-11-25)
+
+
+### Features
+
+* **cmd:** add listener broker binary, gateway --listener-broker and host-proof ([93902cf](https://github.com/seznam/jailoc/commit/93902cff0e5755ce3db28efe56ef6ce2a0c1f2aa))
+* **cmd:** layer desktop tools into workspace images ([efa31a4](https://github.com/seznam/jailoc/commit/efa31a41837af792088cd5b3b1d2b0eacf8376f0))
+* **cmd:** wire desktop routes and foreground gateway ([1a6e906](https://github.com/seznam/jailoc/commit/1a6e9064c4230119790cf8bec5fe911880b7ecec))
+* **config:** add desktop and web route configuration ([a10a957](https://github.com/seznam/jailoc/commit/a10a957b02472635da884ae13d55bd1ac4139e40))
+* **docker:** add optional desktop image layer ([2990310](https://github.com/seznam/jailoc/commit/2990310a4515b5a9e32de0b21576d338779288c8))
+* **gatewayhost:** add isolated host proof over the broker ([d1583ef](https://github.com/seznam/jailoc/commit/d1583ef2c67a07cd13861bddc23f80e0d686d3da))
+* **gatewayhost:** add per-connection loopback listener broker ([07305b6](https://github.com/seznam/jailoc/commit/07305b6e74f5edd8f12796c511326612babb9c58))
+* **gatewayhost:** plan owned hosts records with exact rollback ([c939f2a](https://github.com/seznam/jailoc/commit/c939f2a7b039e1eb25d5169aa632e50fd54bbe51))
+* **guest:** open a terminal when the desktop starts ([072473d](https://github.com/seznam/jailoc/commit/072473d33e3ccbeafc0de3f3e906214aeed0e3ee))
+* **guest:** start native desktop and allowlisted web relay ([4711532](https://github.com/seznam/jailoc/commit/471153252d8ecd0ef45d4f514ca947e7c4e3f6d0))
+* **net:** forward OAuth loopback callbacks and guest 127.0.0.1 listeners ([7fd1d37](https://github.com/seznam/jailoc/commit/7fd1d374855dbc2fa1f36349bc079ead27bc2157))
+* **proxy:** add HTTPS proxy for workspace routes ([211ecc7](https://github.com/seznam/jailoc/commit/211ecc7c94659d7c57a040582fa219718752abf9))
+* **proxy:** limit the ingress CA to jailoc.local and always generate it ([d991d67](https://github.com/seznam/jailoc/commit/d991d6761d272ce610d0b245ca771d2535aa4592))
+* **proxy:** rename web/gateway to proxy and make route auth opt-in ([0c084e8](https://github.com/seznam/jailoc/commit/0c084e80f4f348171c7ec4857acb94c948253d5c))
+* **proxy:** run proxy in the background and auto-manage on up/down ([216580a](https://github.com/seznam/jailoc/commit/216580a46dc09e6fc53ffdc1761fa34adb162770))
+* **proxy:** run the proxy in the background with an automatic jailoc.local CA ([26c1671](https://github.com/seznam/jailoc/commit/26c16713df197b545363281a81b7364d32337683))
+* **proxy:** sign leaves with a constrained intermediate and keep the proxy CA in ~/.local/share/jailoc ([4b139da](https://github.com/seznam/jailoc/commit/4b139da9ceec7a4dfdaec12c7d2aa1e10225f5f0))
+* **vm:** forward private web relay socket ([00ca5f9](https://github.com/seznam/jailoc/commit/00ca5f9611a9b11643884a10d2e64aca76ef2740))
+* **vm:** host-side rotating and secret-redacting writer for console.log ([04adeeb](https://github.com/seznam/jailoc/commit/04adeeb7630e68185d244a4f4dd5c484cf2e5d83))
+* **vm:** interpose rotating and secret-redacting writer for console.log ([9a993c2](https://github.com/seznam/jailoc/commit/9a993c2eb1a4c5476074af87be18dcf47dadf0fc))
+* **vm:** move persistent agent state and ~/.cache onto sized state.img and cache.img disks ([7fa254a](https://github.com/seznam/jailoc/commit/7fa254a4b023cd08f1e818bd8706e21f9f7bac0d))
+* **vm:** move persistent agent state and ~/.cache onto sized state.img and cache.img disks ([180696e](https://github.com/seznam/jailoc/commit/180696e43d7248faf85fc59e44d315a22cd1f6aa))
+* **webgateway:** add authenticated HTTPS and WebSocket proxy ([f5cab08](https://github.com/seznam/jailoc/commit/f5cab08cf89d31381fc8919748f273675f8dcc3c))
+
+
+### Bug Fixes
+
+* **cmd:** detect tmpfs mount changes in restart and status checks ([936d3b5](https://github.com/seznam/jailoc/commit/936d3b5fab059faeaf243ea1db4dfb96ad6c0571))
+* **cmd:** share VM instance context across gateway routes ([039fa14](https://github.com/seznam/jailoc/commit/039fa1475f1aad1d88402880cc1b90128b5188fe))
+* **config:** reject protected host directories and symlinks to the root in workspace paths ([c195485](https://github.com/seznam/jailoc/commit/c195485c2d32a4b8866dda9fb9a7eaf9b1b66965))
+* **config:** reject published web target overlaps ([b3eb6da](https://github.com/seznam/jailoc/commit/b3eb6da511f3389eddcd79dafafc9acbc5be4dfa))
+* **gateway:** isolate route cookies, disable response caching and fix Linux CI ([d0d3bbf](https://github.com/seznam/jailoc/commit/d0d3bbf5e7820f3c18f1abcef978e83c112fc780))
+* **guest:** bypass HTTP_PROXY when registering OAuth callback ([0912c55](https://github.com/seznam/jailoc/commit/0912c555e30eeddf34db895736fc85e0a666e30e))
+* **guest:** mount tmpfs on OmO RPC directory for Unix sockets ([387ac55](https://github.com/seznam/jailoc/commit/387ac55e59645f501291d18541cbcd5bffc93129))
+* **guest:** mount tmpfs on OmO RPC directory for Unix sockets ([21eb819](https://github.com/seznam/jailoc/commit/21eb8190ad01acc7e756df419f03883d5bb2d5de))
+* **netbroker:** harden OAuth loopback callback proxy and registration ([cc53975](https://github.com/seznam/jailoc/commit/cc539756aceba460ff35f2f4249ef5707ed371be))
+* **netbroker:** serialize OAuth registration with forwards and avoid NIC fallback ([63068ef](https://github.com/seznam/jailoc/commit/63068effe624970a526dea435cd657334ecc3214))
+* **proxy:** address review feedback on proxy marshaling, headers and docs ([4c52d4c](https://github.com/seznam/jailoc/commit/4c52d4c40df68bcfa1634fbf55cb7423af8a4e36))
+* **proxy:** close review races, prune on down and bind the proxy to one config ([a87a02d](https://github.com/seznam/jailoc/commit/a87a02d0a24848144793e03e310fc9f9a2d2a1a4))
+* **proxy:** resolve relative workspace paths, root shares and prune port changes ([578e02a](https://github.com/seznam/jailoc/commit/578e02aa5a7965bc019daf5f5ee596a523bcc066))
+* **vm,gateway:** unlock tmp disk flock on release and satisfy gosec ([75fc482](https://github.com/seznam/jailoc/commit/75fc482c6a441e7ac75dee78c9f5dd2d2f3c326a))
+* **vm:** check reload shares against the running VM's disks and report full state and cache disks ([fb50025](https://github.com/seznam/jailoc/commit/fb5002572087fc92fd2d4f8eb15173559f9d6095))
+* **vm:** fail secret delivery without a redactor and drain the console when the runner exits ([b5b7920](https://github.com/seznam/jailoc/commit/b5b792064b4d554e50264e9f8aa66bdde60aa8ff))
+* **vm:** harden legacy home migration, ownership and version records for state disks ([33b35ca](https://github.com/seznam/jailoc/commit/33b35caae1704bd835cf091cef1848ee2814d185))
+* **vm:** keep agent settings on ENOSPC, prepare custom agents' state and make the migration durable ([d0e5199](https://github.com/seznam/jailoc/commit/d0e5199f7b93aa59f554942e3dcd9b8614b644a7))
+* **vm:** keep draining the console pipe on write errors and bound the stop drain ([a19b746](https://github.com/seznam/jailoc/commit/a19b746a0f707ef080f5315ff32dacdefb956d68))
+* **vm:** read the console pipe in blocking mode so macOS sees EOF ([83365f1](https://github.com/seznam/jailoc/commit/83365f18f60ad6d022e4057c0c721c550a0068ce))
+* **vm:** register console secrets before delivery and keep the console pipe open ([9149031](https://github.com/seznam/jailoc/commit/9149031a187dda4dce2c55230ba3f9cced6b096b))
+* **webgateway:** block persistent service worker registration ([4ada5e6](https://github.com/seznam/jailoc/commit/4ada5e6aa778ccf825edce2e9670665cf57bfac7))
+* **webgateway:** keep the login form origin with a same-origin referrer policy ([dba9c2c](https://github.com/seznam/jailoc/commit/dba9c2cb0fd5f611604031f1e89e011595b5ea2d))
+* **webgateway:** resolve gateway lint findings ([744d8e3](https://github.com/seznam/jailoc/commit/744d8e37591cb924c6aa2aa680853f7044187ea3))
+
+
+### Code Refactoring
+
+* **gateway:** split native desktop into stacked PR ([1b5ede3](https://github.com/seznam/jailoc/commit/1b5ede304f408b7942811b4ec887b18106e4b51b))
+* **proxy:** move host-proof and hosts planner into _test.go ([24eade4](https://github.com/seznam/jailoc/commit/24eade4404ed8411260aef6faf97ebaeed23ae88))
+* **proxy:** unify internal naming around proxy and close truncated rights on darwin ([ff7e9ea](https://github.com/seznam/jailoc/commit/ff7e9ead5fd456636c87a06c478e6812036445cd))
+
+
+### Documentation
+
+* **desktop:** document desktop and HTTPS route setup ([f0f6556](https://github.com/seznam/jailoc/commit/f0f6556754dcd8215b4c1b003fc6e4ea15dc5374))
+* **desktop:** document per-route __Host- cookie prefixing ([96ed281](https://github.com/seznam/jailoc/commit/96ed281f88abfc1763b80bf01fa000fa4da63bba))
+* **desktop:** document the listener broker and host proof ([0c75eb3](https://github.com/seznam/jailoc/commit/0c75eb37f0a7f6b7ba57f5cb4bdf0d9f86f0bd64))
+* explain that state and cache disks bound the host space of a workspace ([13ecec5](https://github.com/seznam/jailoc/commit/13ecec52258793385c5c1954f9b72f30b7f033ca))
+* **security:** soften Seatbelt deprecation warnings to match upstream ([d157e17](https://github.com/seznam/jailoc/commit/d157e1721340773f6b526def2a03a08d23cd0c88))
+
+
+### Tests
+
+* **guest:** scope desktop PID reads to temporary root ([385e9e6](https://github.com/seznam/jailoc/commit/385e9e6f15ffea4788b2aaa6ef5d1ccfd10985ff))
+* **netbroker:** avoid ephemeral port reuse across parallel tests ([0d85226](https://github.com/seznam/jailoc/commit/0d85226d68fe97687ab6c2e60f8d31a6aa7ed5c6))
+* **proxyhost:** skip stray connections in broker command serve test ([b0312f6](https://github.com/seznam/jailoc/commit/b0312f604d4490835b64346412546bead03afe7a))
+* **proxyhost:** skip stray connections in broker command serve test ([9714a5e](https://github.com/seznam/jailoc/commit/9714a5e174f43d7bc72439d7281705ccf17a700f))
+* **vmintegration:** cover native desktop and web relay ([2863a50](https://github.com/seznam/jailoc/commit/2863a50b1fb8d545188bf049aedda9e0c55af07a))
+* **webgateway:** document rejected TLS connection cleanup ([692c03e](https://github.com/seznam/jailoc/commit/692c03e50cec9ad099d410a6eaf4384e254702bf))
+
 ## [2.9.0](https://github.com/seznam/jailoc/compare/v2.8.1...v2.9.0) (2026-11-24)
 
 
