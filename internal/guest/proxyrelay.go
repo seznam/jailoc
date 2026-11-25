@@ -189,7 +189,35 @@ func (r *proxyRelay) SetPorts(ports []uint16) error {
 	if err != nil {
 		return err
 	}
+	r.replaceAllowed(func(map[uint16]bool) map[uint16]bool { return allowed })
+	return nil
+}
+
+// RetainPorts removes from the allowlist every port not in ports, adding none,
+// and closes the connections spliced to the removed ports. On an invalid list
+// the allowlist stays as it was.
+func (r *proxyRelay) RetainPorts(ports []uint16) error {
+	keep, err := proxyRelayAllowlist(ports)
+	if err != nil {
+		return err
+	}
+	r.replaceAllowed(func(cur map[uint16]bool) map[uint16]bool {
+		next := make(map[uint16]bool, len(cur))
+		for p := range cur {
+			if keep[p] {
+				next[p] = true
+			}
+		}
+		return next
+	})
+	return nil
+}
+
+// replaceAllowed sets the allowlist to next(current) and closes every
+// connection spliced to a port that left it.
+func (r *proxyRelay) replaceAllowed(next func(map[uint16]bool) map[uint16]bool) {
 	r.mu.Lock()
+	allowed := next(r.allowed)
 	r.allowed = allowed
 	var closing []net.Conn
 	for t, s := range r.spliced {
@@ -201,7 +229,6 @@ func (r *proxyRelay) SetPorts(ports []uint16) error {
 	for _, c := range closing {
 		_ = c.Close()
 	}
-	return nil
 }
 
 func (r *proxyRelay) activeConns() int {

@@ -574,6 +574,38 @@ func TestProxyRelaySetPortsToEmptyClosesAll(t *testing.T) {
 	}
 }
 
+func TestProxyRelayRetainPorts(t *testing.T) {
+	t.Parallel()
+	target := duplexTarget(t)
+	h := newProxyRelayHarness(t, []uint16{8080, 9090}, map[uint16]string{8080: target, 9090: target, 7070: target})
+	removed := openSplice(t, h, 8080)
+	kept := openSplice(t, h, 9090)
+	// 7070 is in the list but not allowed, so RetainPorts must not add it.
+	if err := h.relay.RetainPorts([]uint16{9090, 7070}); err != nil {
+		t.Fatal(err)
+	}
+	_ = removed.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := removed.Read(make([]byte, 1)); err == nil {
+		t.Fatal("removed splice still delivers data")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatal("removed splice still open")
+	}
+	if !echoRoundTrip(kept, "still") {
+		t.Fatal("splice to the kept port broke")
+	}
+	for _, p := range []uint16{8080, 7070} {
+		if h.relay.portAllowed(p) {
+			t.Errorf("port %d allowed after RetainPorts, want denied", p)
+		}
+	}
+	if err := h.relay.RetainPorts([]uint16{0}); err == nil {
+		t.Fatal("port 0 accepted")
+	}
+	if !h.relay.portAllowed(9090) {
+		t.Fatal("rejected RetainPorts changed the allowlist")
+	}
+}
+
 func TestProxyRelaySetPortsRejectsInvalid(t *testing.T) {
 	t.Parallel()
 	h := newProxyRelayHarness(t, []uint16{8080}, map[uint16]string{8080: duplexTarget(t)})

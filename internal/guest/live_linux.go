@@ -36,6 +36,8 @@ type liveState struct {
 	proxy *proxyRelay
 	// setCA overrides setCABundle in tests when non-nil.
 	setCA func(string) error
+	// setHosts overrides setHostPorts in tests when non-nil.
+	setHosts func([]uint16)
 }
 
 func (l *liveState) apply(r Reload) error {
@@ -79,9 +81,23 @@ func (l *liveState) apply(r Reload) error {
 		l.stopGPG()
 		l.stopGPG = nil
 	}
-	l.setHostPorts(r.HostPorts)
-	if r.ProxyPorts != nil && l.proxy != nil {
-		// Validated by checkProxyPorts, so it cannot fail here.
+	// A guest port can move between a proxy route and host_ports in one
+	// reload. The relay drops removed route ports before host port mirrors
+	// start and allows added ones only after obsolete mirrors stop, so a
+	// route never reaches a host service mirrored on its port. Both lists
+	// are validated by checkProxyPorts, so they cannot fail here.
+	proxyPorts := r.ProxyPorts != nil && l.proxy != nil
+	if proxyPorts {
+		if err := l.proxy.RetainPorts(*r.ProxyPorts); err != nil {
+			return fmt.Errorf("proxy ports: %w", err)
+		}
+	}
+	setHosts := l.setHosts
+	if setHosts == nil {
+		setHosts = l.setHostPorts
+	}
+	setHosts(r.HostPorts)
+	if proxyPorts {
 		if err := l.proxy.SetPorts(*r.ProxyPorts); err != nil {
 			return fmt.Errorf("proxy ports: %w", err)
 		}
