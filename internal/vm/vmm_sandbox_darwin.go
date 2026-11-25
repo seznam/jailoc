@@ -103,11 +103,12 @@ func (s confinedSpawner) Spawn(_ context.Context, cfg runner.Config) (runner.Pro
 	proc := &seatbeltProcess{pid: cmd.Process.Pid, done: make(chan struct{})}
 	// Reap the runner when it exits so it does not stay a zombie. The pipe
 	// writer stays open until then, so the reader cannot see EOF before
-	// libkrun opens the pipe.
+	// libkrun opens the pipe. The exit is reported first: consoleProcessHandle
+	// waits for the drain with a bound, so a stuck drain cannot block Stop.
 	go func() {
 		_ = cmd.Wait() // the exit status is not needed: IsAlive reports the exit
-		waitConsole()
 		close(proc.done)
+		waitConsole()
 	}()
 	return consoleProcessHandle{ProcessHandle: proc, wait: waitConsole}, nil
 }

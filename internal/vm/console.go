@@ -248,13 +248,13 @@ func (w *consoleWriter) rotate() error {
 	return w.open()
 }
 
-// startConsolePipe creates a FIFO at consolePipePath(consoleLog), opens it
-// O_RDWR|O_NONBLOCK so the runner's open for writing does not block, and
-// streams what the runner writes into a consoleWriter for consoleLog. A writer
-// end kept open by jailoc stops the reader from seeing EOF before the runner
-// opens the pipe. The caller must call wait only after the runner has exited
-// (or failed to start): it closes that writer end and waits until the reader
-// has drained the pipe into console.log.
+// startConsolePipe creates a FIFO at consolePipePath(consoleLog), opens both
+// ends without blocking, and streams what the runner writes into a
+// consoleWriter for consoleLog. A writer end kept open by jailoc stops the
+// reader from seeing EOF before the runner opens the pipe. The caller must
+// call wait only after the runner has exited (or failed to start): it closes
+// that writer end and waits until the reader has drained the pipe into
+// console.log.
 func startConsolePipe(consoleLog string, redactor *consoleRedactor) (pipePath string, wait func(), err error) {
 	if consoleLog == "" {
 		return "", func() {}, nil
@@ -286,8 +286,16 @@ func startConsolePipe(consoleLog string, redactor *consoleRedactor) (pipePath st
 		_ = os.Remove(pipePath)
 		return "", nil, fmt.Errorf("open console pipe writer: %w", err)
 	}
+	// Read in blocking mode: a blocking read on a FIFO returns EOF as soon as
+	// the last writer closes, while the macOS kqueue poller does not report
+	// that when the last writer is jailoc's own end.
+	if err := syscall.SetNonblock(rfd, false); err != nil {
+		_ = syscall.Close(rfd)
+		_ = syscall.Close(wfd)
+		_ = os.Remove(pipePath)
+		return "", nil, fmt.Errorf("set console pipe reader blocking: %w", err)
+	}
 	rf := os.NewFile(uintptr(rfd), pipePath)
-	wf := os.NewFile(uintptr(wfd), pipePath+"-keeper")
 
 	cw := newConsoleWriter(consoleLog, redactor)
 	done := make(chan struct{})
@@ -304,7 +312,7 @@ func startConsolePipe(consoleLog string, redactor *consoleRedactor) (pipePath st
 	var waitOnce sync.Once
 	wait = func() {
 		waitOnce.Do(func() {
-			_ = wf.Close()
+			_ = syscall.Close(wfd)
 			<-done
 		})
 	}
