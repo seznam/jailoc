@@ -433,7 +433,7 @@ jailoc add [path] [flags]
 ```
 
 - Appends `path` (default: the current working directory) to `workspaces.<name>.paths` in the configuration file.
-- The path must not be under a forbidden system prefix; see the [configuration reference](configuration.md#paths).
+- The path must be one `paths` accepts: not a guest-internal directory, the home directory, the host root or a protected path such as `~/.ssh`; see the [configuration reference](configuration.md#paths).
 - Secret sources of the target workspace are validated before the configuration changes.
 - If the workspace VM is running, it is restarted so the new share takes effect.
 - Without `--workspace`, the workspace is resolved from the path being added (longest prefix).
@@ -460,7 +460,7 @@ jailoc wizard [path] [flags]
 - **First-time onboarding** (when `config.toml` does not exist or still matches the unmodified default template): asks for `[defaults]` settings and configures the initial workspace for `path` (default: the current working directory). The settings are `agent`, model providers for OpenCode and OmO (`agent_endpoints`), `git_config`, `ssh_auth_sock`, `gpg_agent`, network egress policy `dev-deps` vs `internet` plus optional extra hostnames/CIDRs, `enable_docker`, `cpu` and `memory`, followed by a review summary before writing `config.toml`.
 - **Add-workspace mode** (when a customized `config.toml` already exists): asks for a workspace name (default: sanitized basename of `path` or `--workspace`), workspace directory path, optional agent override, Docker inside the VM, workspace network rules, and model providers when `agent_endpoints` is needed, then shows a review summary and patches `[workspaces.<name>]` while preserving existing comments in `config.toml`. Answering `inherit` removes the workspace's own `agent`, `enable_docker` or `network.rules`.
 - Interactive prompts run inline in the terminal (`Shift+Tab` moves back to previous fields or steps). Setting `ACCESSIBLE=1` or `TERM=dumb` switches to accessible plain-text prompts.
-- A workspace directory of `/` or the home directory needs explicit confirmation; with `--yes` it is refused.
+- A workspace directory that `paths` rejects, such as `/`, the home directory or `~/.ssh`, is refused; see [`paths`](configuration.md#paths).
 - When standard input and standard output are terminals and `config.toml` is missing or unmodified default, running `jailoc` or `jailoc up` offers to run `jailoc setup` first.
 - `jailoc up <workspace>` uses `<workspace>` as the default workspace name, and the command then starts the workspace the wizard created.
 

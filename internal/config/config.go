@@ -1105,14 +1105,32 @@ func rawMode(spec, source, target string) string {
 	return ""
 }
 
+// ValidateWorkspacePath rejects an expanded workspace path that is a
+// guest-internal directory or a protected host path (see
+// forbiddenMountHostPaths), including the home directory and the host root.
+func ValidateWorkspacePath(p string) error {
+	for _, prefix := range forbiddenMountPrefixes {
+		if p == prefix || strings.HasPrefix(p, prefix+"/") {
+			return fmt.Errorf("path %q conflicts with container-internal directory %q", p, prefix)
+		}
+	}
+	return validateSharedHostPath(p, "", "path")
+}
+
 func validateMountHostPath(host string, context string) error {
+	return validateSharedHostPath(host, context, "mount host path")
+}
+
+// validateSharedHostPath rejects a host directory shared with the VM (a mount
+// source or a workspace path) that is, contains or links to a protected path.
+func validateSharedHostPath(host, context, kind string) error {
 	if host == "" {
 		return nil
 	}
 
 	expandedHost, err := ExpandPath(host)
 	if err != nil {
-		return fmt.Errorf("%s: expand mount host path %q: %w", context, host, err)
+		return withContext(context, fmt.Errorf("expand %s %q: %w", kind, host, err))
 	}
 	cleanHost := filepath.Clean(expandedHost)
 	// A missing path has nothing to resolve: only the literal check applies.
@@ -1121,7 +1139,7 @@ func validateMountHostPath(host string, context string) error {
 	for _, forbidden := range forbiddenMountHostPaths {
 		expandedForbidden, err := ExpandPath(forbidden.path)
 		if err != nil {
-			return fmt.Errorf("%s: expand forbidden mount host path %q: %w", context, forbidden.path, err)
+			return withContext(context, fmt.Errorf("expand forbidden mount host path %q: %w", forbidden.path, err))
 		}
 
 		cleanForbidden := filepath.Clean(expandedForbidden)
@@ -1154,10 +1172,17 @@ func validateMountHostPath(host string, context string) error {
 		if forbidden.hint != "" {
 			why += "; " + forbidden.hint
 		}
-		return fmt.Errorf("%s: mount host path %s is forbidden because %s", context, shown, why)
+		return withContext(context, fmt.Errorf("%s %s is forbidden because %s", kind, shown, why))
 	}
 
 	return nil
+}
+
+func withContext(context string, err error) error {
+	if context == "" {
+		return err
+	}
+	return fmt.Errorf("%s: %w", context, err)
 }
 
 // mountOverlap reports whether host equals or lies inside forbidden, and,
@@ -1165,7 +1190,8 @@ func validateMountHostPath(host string, context string) error {
 func mountOverlap(host, forbidden string, parents bool) (inside, contains bool) {
 	sep := string(os.PathSeparator)
 	inside = host == forbidden || strings.HasPrefix(host, forbidden+sep)
-	contains = parents && strings.HasPrefix(forbidden, host+sep)
+	// host+sep is "//" for the root, which prefixes no clean path.
+	contains = parents && host != forbidden && (host == sep || strings.HasPrefix(forbidden, host+sep))
 	return inside, contains
 }
 
@@ -1446,10 +1472,8 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("workspace %q has empty path value %q", name, p)
 			}
 
-			for _, prefix := range forbiddenMountPrefixes {
-				if p == prefix || strings.HasPrefix(p, prefix+"/") {
-					return fmt.Errorf("workspace %q: path %q conflicts with container-internal directory %q", name, p, prefix)
-				}
+			if err := ValidateWorkspacePath(p); err != nil {
+				return fmt.Errorf("workspace %q: %w", name, err)
 			}
 		}
 

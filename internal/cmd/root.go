@@ -95,6 +95,9 @@ var rootCmd = &cobra.Command{
 		}
 
 		if !workspace.MatchesCWD(ws, targetPath) {
+			if err := config.ValidateWorkspacePath(targetPath); err != nil {
+				return fmt.Errorf("path %s is not in workspace %s and can't be added: %w", targetPath, ws.Name, err)
+			}
 			_, _ = color.New(color.FgYellow, color.Bold).Printf("Path %s is not in workspace %s. Add it? [y/N]: ", targetPath, ws.Name)
 			answer, err := readLineCtx(ctx)
 			if err != nil {
@@ -103,14 +106,6 @@ var rootCmd = &cobra.Command{
 
 			trimmed := strings.ToLower(strings.TrimSpace(answer))
 			if trimmed != "y" && trimmed != "yes" {
-				return nil
-			}
-
-			ok, err := confirmBroadPath(ctx, targetPath)
-			if err != nil {
-				return err
-			}
-			if !ok {
 				return nil
 			}
 
@@ -185,49 +180,6 @@ func resolveTargetPath(args []string) (string, error) {
 	}
 
 	return abs, nil
-}
-
-// isBroadPath reports whether path shares the whole filesystem or the home
-// directory. It follows symlinks, so a link to either counts as broad too.
-func isBroadPath(path string) bool {
-	if path == "" {
-		return false
-	}
-	resolved := resolveSymlinks(path)
-	if resolved == "/" {
-		return true
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	return path == home || resolved == resolveSymlinks(home)
-}
-
-// resolveSymlinks returns p with symlinks resolved, or p cleaned when it
-// cannot be resolved (for example because it does not exist).
-func resolveSymlinks(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	return filepath.Clean(p)
-}
-
-func confirmBroadPath(ctx context.Context, path string) (bool, error) {
-	if !isBroadPath(path) {
-		return true, nil
-	}
-
-	_, _ = color.New(color.FgYellow).Printf("WARNING: %q is a very broad path — this will share your entire directory tree with the VM.\n", path)
-	_, _ = color.New(color.FgYellow, color.Bold).Print("Are you sure? [y/N]: ")
-
-	answer, err := readLineCtx(ctx)
-	if err != nil {
-		return false, fmt.Errorf("read broad-path confirmation: %w", err)
-	}
-
-	trimmed := strings.ToLower(strings.TrimSpace(answer))
-	return trimmed == "y" || trimmed == "yes", nil
 }
 
 // readLineCtx reads a line from stdin, returning ctx.Err() on cancellation.

@@ -385,7 +385,7 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("broad path is refused with --yes", func(t *testing.T) {
+	t.Run("host root is refused with --yes", func(t *testing.T) {
 		t.Parallel()
 
 		cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -394,15 +394,15 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 
 		_, err := runSetup(context.Background(), p, setupOptions{configPath: cfgPath, targetDir: "/"})
 		if err == nil {
-			t.Fatal("expected an error for a broad workspace path with --yes")
+			t.Fatal("expected an error for the host root as workspace path with --yes")
 		}
-		assertContains(t, err.Error(), "very broad path")
+		assertContains(t, err.Error(), "/ is the host root filesystem")
 		if _, statErr := os.Stat(cfgPath); !os.IsNotExist(statErr) {
 			t.Errorf("expected %s not to be written", cfgPath)
 		}
 	})
 
-	t.Run("broad path step is shown for root, allows going back and refuses to save when declined", func(t *testing.T) {
+	t.Run("directory input rejects the host root", func(t *testing.T) {
 		t.Parallel()
 
 		cfgPath := writeCustomConfig(t)
@@ -419,32 +419,26 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		ans := defaultWorkspaceSetupAnswers(opts)
 		ans.name = "narrow"
 		ans.dir = "/"
-		ans.confirmBroad = false
 
 		form := buildWorkspaceSetupForm(&ans, opts, cfg, raw).form()
 		form.WithTheme(compactTheme())
 		if cmd := form.Init(); cmd != nil {
 			flushCmd(form, cmd)
 		}
-		// Advance past name group and dir group to reach broad path confirm.
+		// Advance past the name group; Enter on the directory input must not
+		// leave it.
 		for range 2 {
 			_, cmd := form.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			flushCmd(form, cmd)
 		}
-		view := form.View()
-		assertContains(t, view, "very broad path")
-
-		// Declining and pressing Shift+Tab goes back to the directory input.
-		_, cmd := form.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-		flushCmd(form, cmd)
 		if _, ok := form.GetFocusedField().(*huh.Input); !ok {
-			t.Fatalf("expected focus back on the directory input, got %T", form.GetFocusedField())
+			t.Fatalf("expected focus to stay on the directory input, got %T", form.GetFocusedField())
 		}
+		assertContains(t, form.View(), "host root filesystem")
 
 		if _, _, err := ans.toOptions(raw); err == nil {
-			t.Fatal("expected an error when sharing a broad path was not confirmed")
+			t.Fatal("expected an error for the host root as workspace path")
 		}
-		assertContains(t, ans.summary(cfgPath, raw), "was not confirmed")
 	})
 
 	t.Run("cancel while waiting for an answer stops without writing", func(t *testing.T) {
@@ -499,20 +493,20 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		assertContains(t, out.String(), "dry run, nothing written")
 	})
 
-	t.Run("symlink to home directory is treated as broad while retaining symlink path", func(t *testing.T) {
+	t.Run("symlinked directory keeps the symlink path", func(t *testing.T) {
 		t.Parallel()
 
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("cannot get home dir: %v", err)
-		}
 		tmpDir, err := os.MkdirTemp(cwd, ".test-symlink-*")
 		if err != nil {
 			t.Fatalf("mkdir temp in cwd: %v", err)
 		}
 		t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
-		link := filepath.Join(tmpDir, "home-link")
-		if err := os.Symlink(home, link); err != nil {
+		project := filepath.Join(tmpDir, "project")
+		if err := os.Mkdir(project, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(tmpDir, "project-link")
+		if err := os.Symlink(project, link); err != nil {
 			t.Fatalf("create symlink: %v", err)
 		}
 
@@ -530,11 +524,9 @@ func TestRunSetupFirstTimeAndWorkspace(t *testing.T) {
 		ans := defaultWorkspaceSetupAnswers(opts)
 		ans.name = "linked"
 		ans.dir = link
-		ans.confirmBroad = true
 
 		form := buildWorkspaceSetupForm(&ans, opts, cfg, raw)
-		output := driveFormViews(t, form)
-		assertContains(t, output, "very broad path")
+		assertContains(t, driveFormViews(t, form), link)
 
 		var out bytes.Buffer
 		p := &promptIO{out: &out, yes: true}

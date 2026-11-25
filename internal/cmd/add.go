@@ -58,12 +58,8 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	ok, err := confirmBroadPath(cmd.Context(), targetDir)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil
+	if err := config.ValidateWorkspacePath(targetDir); err != nil {
+		return fmt.Errorf("add path to workspace %q: %w", ws.Name, err)
 	}
 
 	if err := config.AddPath(workspaceFlag, targetDir); err != nil {

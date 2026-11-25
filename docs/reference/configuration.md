@@ -868,6 +868,7 @@ Any `backend` value other than `"vm"` and empty is rejected. For a config-load e
 - An empty list is allowed; empty entries are rejected.
 - Each path must exist on the host and be a directory. `jailoc up` and `jailoc reload` fail with an error naming the workspace and path otherwise; `jailoc` does not create a missing path. This differs from read-write [`mounts`](#mounts), whose missing host directories are created.
 - Paths equal to or under these prefixes are rejected: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`.
+- The [rejected host paths](#mounts) of `mounts` apply as well, so a path such as `~`, `~/.ssh` or `~/.local/share/jailoc`, or a symlink to one of them, is rejected.
 - Several workspaces may share a path, for example to run different agents in the same project. When the current directory matches several workspaces at the same depth, `jailoc` fails and asks for `-w`.
 
 **Share limit.** Each path is a separate virtio-fs share. A VM boots with at most:

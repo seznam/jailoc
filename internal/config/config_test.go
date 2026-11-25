@@ -2808,6 +2808,61 @@ func TestValidateMountsForbiddenNonCredentialReason(t *testing.T) {
 	}
 }
 
+func TestValidateWorkspacePathsForbiddenHostPaths(t *testing.T) {
+	// Workspace paths keep their host location in the guest, so HOME must lie
+	// outside guest-internal directories such as /tmp and /var. The paths do
+	// not exist; symlink resolution is covered by the mount tests.
+	home := "/data/home"
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		name      string
+		path      string
+		wantError string
+	}{
+		{name: "proxy CA directory", path: "~/.local/share/jailoc", wantError: `workspace "default": path "` + home + `/.local/share/jailoc" is forbidden because ~/.local/share/jailoc holds the jailoc proxy CA key`},
+		{name: "credential directory", path: "~/.ssh", wantError: "because ~/.ssh holds credentials"},
+		{name: "home directory", path: "~", wantError: "because it contains ~/.ssh, which holds credentials"},
+		{name: "parent of jailoc data", path: "~/.local", wantError: "because it contains ~/.local/share/jailoc"},
+		{name: "host root", path: "/", wantError: "because / is the host root filesystem"},
+		{name: "project directory", path: "~/src/app"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Workspaces: map[string]Workspace{"default": {Paths: []string{tt.path}}}}
+			err := Validate(cfg)
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate(paths = [%q]) = %v, want nil", tt.path, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate(paths = [%q]) = %v, want error containing %q", tt.path, err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestValidateMountsRejectsSymlinkToRoot(t *testing.T) {
+	home := safeHome(t)
+	if err := os.Mkdir(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(home, "root-link")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Workspaces: map[string]Workspace{"default": {
+		Paths:  []string{"/data/workspace"},
+		Mounts: []string{"~/root-link:/home/agent/host:ro"},
+	}}}
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), `(resolves to "/") is forbidden because it contains ~/.ssh`) {
+		t.Fatalf("Validate(mount of a symlink to /) = %v, want it rejected", err)
+	}
+}
+
 func TestValidateMountsForbiddenParentOfHomeEntry(t *testing.T) {
 	safeHome(t)
 
