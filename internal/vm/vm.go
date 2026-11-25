@@ -282,8 +282,8 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	// The console of the previous boot is evidence of that boot only; drop it
 	// before anything of this attempt can fail, so a host failure is not
 	// diagnosed from a stale guest console.
-	if err := os.Remove(filepath.Join(spec.StateDir, "microvm", "console.log")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("reset vm console log: %w", err)
+	if err := ResetConsoleLogs(spec.StateDir); err != nil {
+		return err
 	}
 	if spec.ImageCache != "" {
 		if err := privateCacheDir(spec.ImageCache); err != nil {
@@ -343,9 +343,19 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	st.BrokerPID = bp.PID()
 	logf("broker ready pid=%d after %s", bp.PID(), step())
 
-	opts := builderOptions(spec)
+	redactor := newConsoleRedactor(nil)
 	if workspace {
-		opts = workspaceOptions(spec, guestFiles, imgDir, img.Env)
+		stopConsoleSock, err := startConsoleSecretServer(spec.StateDir, redactor)
+		if err != nil {
+			_ = bp.Stop(5 * time.Second)
+			return err
+		}
+		defer stopConsoleSock()
+	}
+
+	opts := builderOptions(spec, redactor)
+	if workspace {
+		opts = workspaceOptions(spec, guestFiles, imgDir, img.Env, redactor)
 	}
 	vm, err := microvm.Run(ctx, imageRef(spec), opts...)
 	if err != nil {
@@ -413,7 +423,7 @@ func proxyRelayEnabled(spec Spec) bool {
 func supervisorSockets(spec Spec) []string {
 	sockets := []string{nicSocket(spec.StateDir)}
 	if spec.Kind == KindWorkspace {
-		sockets = append(sockets, SSHSocket(spec.StateDir))
+		sockets = append(sockets, SSHSocket(spec.StateDir), consoleSocket(spec.StateDir))
 	} else {
 		sockets = append(sockets, DockerSocket(spec.StateDir))
 	}
@@ -464,7 +474,7 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 }
 
 // commonOptions are shared by both VM kinds.
-func commonOptions(spec Spec) []microvm.Option {
+func commonOptions(spec Spec, redactor *consoleRedactor) []microvm.Option {
 	// Name the runner process after the VM (jailoc-<workspace>,
 	// jailoc-builder) so ps tells VMs apart.
 	backend := []libkrun.Option{libkrun.WithProcessName("jailoc-" + spec.Workspace)}
@@ -474,7 +484,7 @@ func commonOptions(spec Spec) []microvm.Option {
 	if spec.LibDir != "" {
 		backend = append(backend, libkrun.WithLibDir(spec.LibDir))
 	}
-	if s := vmmSpawner(); s != nil {
+	if s := vmmSpawner(redactor); s != nil {
 		backend = append(backend, libkrun.WithSpawner(s))
 	}
 	opts := []microvm.Option{
@@ -507,7 +517,7 @@ func renderBuilderInit(spec Spec) string {
 	).Replace(initScript)
 }
 
-func builderOptions(spec Spec) []microvm.Option {
+func builderOptions(spec Spec, redactor *consoleRedactor) []microvm.Option {
 	script := renderBuilderInit(spec)
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares))
 	var table strings.Builder
@@ -524,7 +534,7 @@ func builderOptions(spec Spec) []microvm.Option {
 	// the guest init; it is the only state-dir content the guest sees.
 	mounts = append(mounts, microvm.VirtioFSMount{Tag: "jailocctl", HostPath: controlDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership})
 	fmt.Fprintf(&table, "%s\t%s\t%s\n", "jailocctl", "rw", controlDir(spec.StateDir))
-	return append(commonOptions(spec),
+	return append(commonOptions(spec, redactor),
 		microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}),
 		microvm.WithVirtioFS(mounts...),
 		microvm.WithInitOverride("/bin/sh", "/jailoc-init.sh"),

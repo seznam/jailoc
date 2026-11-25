@@ -129,12 +129,13 @@ The DNS limits count the gateway resolver and direct DNS to allowed resolvers to
 
 ## Logs
 
-Logs that grow with VM activity are rotated, keeping one previous file:
+Logs that grow with VM activity are rotated:
 
-| Log | Rotated at |
-|-----|------------|
-| Broker traffic log (`broker.jsonl`) | 16 MiB |
-| Guest process log (`jailoc strace`) | 16 MiB |
-| jailoc's own log | 5 MiB |
+| Log | Rotated at | Backups kept |
+|-----|------------|--------------|
+| Broker traffic log (`broker.jsonl`) | 16 MiB | 1 (`.1`) |
+| Guest process log (`jailoc strace`) | 16 MiB | 1 (`.1`) |
+| VM console log (`microvm/console.log`) | 1 MiB | 2 (`.1`, `.2`) |
+| jailoc's own log | 5 MiB | 1 (`.1`) |
 
-The VM console log is kept for the life of the VM and isn't rotated. See [Troubleshooting](../how-to/troubleshooting.md) for where each file lives.
+Single lines on the VM console over 16 KiB are dropped before they reach `console.log`, so binary noise cannot evict boot and OOM output. See [Troubleshooting](../how-to/troubleshooting.md) for where each file lives.

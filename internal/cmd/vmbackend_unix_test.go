@@ -1654,3 +1654,38 @@ func TestVMFailureIgnoresStaleConsoleAfterHostENOSPC(t *testing.T) {
 		}
 	}
 }
+
+func TestVMFailureReadsAcrossConsoleRotations(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "supervisor.log")
+	data, err := json.Marshal(vm.State{PID: 1, Error: "docker not ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vm.StateFile(dir), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := vm.WriteSpec(vm.Spec{Kind: vm.KindBuilder, Workspace: "builder", StateDir: dir, DiskSize: 20 << 30}); err != nil {
+		t.Fatal(err)
+	}
+	console := vm.ConsoleLogPath(dir)
+	if err := os.MkdirAll(filepath.Dir(console), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(console+".2", []byte("jailoc-init: step 1 failed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(console+".1", []byte("jailoc-init: step 2 failed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(console, []byte("jailoc-init: step 3 failed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := vmFailure(dir, logPath)
+	for _, want := range []string{"docker not ready", "step 1 failed", "step 2 failed", "step 3 failed", "console.log"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("vmFailure = %q, want it to contain %q", got, want)
+		}
+	}
+}

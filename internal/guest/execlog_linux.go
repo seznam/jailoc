@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,35 +200,6 @@ func readExec(pid int) ExecRecord {
 	return e
 }
 
-// minSecretLen is the shortest secret value redacted from the exec log;
-// shorter values would mask ordinary arguments.
-const minSecretLen = 8
-
-// redacted replaces secret values in recorded arguments.
-const redacted = "[redacted]"
-
-// redact returns argv with every occurrence of a value replaced. argv is not
-// modified.
-func redact(argv, values []string) []string {
-	var out []string
-	for i, a := range argv {
-		r := a
-		for _, v := range values {
-			r = strings.ReplaceAll(r, v, redacted)
-		}
-		if r != a && out == nil {
-			out = slices.Clone(argv)
-		}
-		if out != nil {
-			out[i] = r
-		}
-	}
-	if out == nil {
-		return argv
-	}
-	return out
-}
-
 // secretValues collects the values of the secrets in SecretsDir and
 // EnvFile, rereading them when either changes. Values a reload replaced
 // stay in the set, because running sessions keep the old environment.
@@ -257,44 +226,22 @@ func (s *secretValues) current() []string {
 // replaced whole. Each value is also split into lines, for multi-line
 // secrets passed piecewise.
 func loadSecretValues(dir, envFile string) []string {
-	seen := map[string]bool{}
-	add := func(v string) {
-		for _, s := range append([]string{v}, strings.Split(v, "\n")...) {
-			if s = strings.TrimSpace(s); len(s) >= minSecretLen {
-				seen[s] = true
-			}
-		}
-	}
+	var files [][]byte
 	if entries, err := os.ReadDir(dir); err == nil {
 		for _, e := range entries {
 			if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".tmp-") {
 				continue
 			}
 			if data, err := readLimited(filepath.Join(dir, e.Name())); err == nil {
-				add(string(data))
+				files = append(files, data)
 			}
 		}
 	}
+	var env []string
 	if data, err := readLimited(envFile); err == nil {
-		for line := range strings.SplitSeq(string(data), "\n") {
-			if _, v, ok := strings.Cut(line, "="); ok {
-				add(v)
-			}
-		}
+		env = strings.Split(string(data), "\n")
 	}
-	values := slices.Collect(maps.Keys(seen))
-	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
-	return values
-}
-
-// mergeSecretValues returns the values of old and added without duplicates,
-// longest first.
-func mergeSecretValues(old, added []string) []string {
-	values := slices.Concat(old, added)
-	slices.Sort(values)
-	values = slices.Compact(values)
-	slices.SortStableFunc(values, func(a, b string) int { return len(b) - len(a) })
-	return values
+	return CollectSecretValues(files, env)
 }
 
 // readLimited reads up to 1 MiB of the regular file at path.

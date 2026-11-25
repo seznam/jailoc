@@ -5,7 +5,10 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -428,10 +431,12 @@ func TestLogsVM(t *testing.T) {
 	}
 
 	writeLogFile(t, filepath.Join(stateDir, "supervisor.log"), "supervisor\n")
+	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log.2"), "console2\n")
+	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log.1"), "console1\n")
 	writeLogFile(t, filepath.Join(stateDir, "microvm", "console.log"), "console\n")
 	out.Reset()
-	if err := logsVM(context.Background(), ws, false, &out); err != nil || out.String() != "up\nsupervisor\nconsole\n" {
-		t.Fatalf("logsVM = %q, %v; want the up, supervisor and console logs in order", out.String(), err)
+	if err := logsVM(context.Background(), ws, false, &out); err != nil || out.String() != "up\nsupervisor\nconsole2\nconsole1\nconsole\n" {
+		t.Fatalf("logsVM = %q, %v; want the up, supervisor and rotated console logs in order", out.String(), err)
 	}
 }
 
@@ -654,5 +659,125 @@ func TestStatusRestartChangesProxy(t *testing.T) {
 		if got := statusRestartChanges(&w, running); !slices.Equal(got, tt.want) {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestDeliverSecretsRegistersConsoleRedactionFirst(t *testing.T) {
+	t.Parallel()
+	// Unix socket paths are limited to about 100 bytes, so the state dir
+	// lives directly under /tmp.
+	stateDir, err := os.MkdirTemp("/tmp", "jlc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+	ln, err := net.Listen("unix", filepath.Join(stateDir, "console.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	got := make(chan []string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		var vals []string
+		if err := json.NewDecoder(c).Decode(&vals); err != nil {
+			return
+		}
+		got <- vals
+		_, _ = io.WriteString(c, "ok\n")
+	}()
+
+	payload := guest.Secrets{Env: []string{"API_TOKEN=delivered-secret-value"}}
+	// The state dir has no SSH keys, so delivery to the guest fails after the
+	// supervisor has received the values.
+	if err := deliverSecrets(context.Background(), stateDir, payload); err == nil {
+		t.Fatal("deliverSecrets() = nil, want SSH error")
+	}
+	select {
+	case vals := <-got:
+		if !slices.Contains(vals, "delivered-secret-value") {
+			t.Errorf("console redactor got %q, want delivered-secret-value", vals)
+		}
+	default:
+		t.Fatal("deliverSecrets did not register secret values for console redaction")
+	}
+}
+
+func TestDeliverSecretsFailsWhenConsoleRedactionRejects(t *testing.T) {
+	t.Parallel()
+	stateDir, err := os.MkdirTemp("/tmp", "jlc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+	ln, err := net.Listen("unix", filepath.Join(stateDir, "console.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_ = c.Close()
+	}()
+
+	payload := guest.Secrets{Env: []string{"API_TOKEN=delivered-secret-value"}}
+	err = deliverSecrets(context.Background(), stateDir, payload)
+	if err == nil || !strings.Contains(err.Error(), "console redaction") {
+		t.Fatalf("deliverSecrets() = %v, want console redaction error", err)
+	}
+}
+
+func TestLogTailFollowsDoubleRotation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	base := filepath.Join(dir, "console.log")
+	backups := []string{base + ".2", base + ".1"}
+	rotate := func(next string) {
+		t.Helper()
+		_ = os.Remove(backups[0])
+		if err := os.Rename(backups[1], backups[0]); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if err := os.Rename(base, backups[1]); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(base, []byte(next), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(base, []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tail := &logTail{path: base, backups: backups}
+	t.Cleanup(tail.close)
+	var out bytes.Buffer
+	if err := tail.copy(&out); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.OpenFile(base, os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // G304: test temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("a2\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rotate("b\n")
+	rotate("c\n")
+	if err := tail.copy(&out); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "a\na2\nb\nc\n"; got != want {
+		t.Fatalf("followed output = %q, want %q", got, want)
 	}
 }

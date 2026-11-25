@@ -162,7 +162,7 @@ func maxShares(arch string, docker, diskTmp bool) int {
 // The directory imageDir of the workspace image, with its EROFS layer
 // images, is shared read-only, and the guest assembles its root as an
 // overlay of them; env is the image's environment.
-func workspaceOptions(spec Spec, files map[string]fileContent, imageDir string, env []string) []microvm.Option {
+func workspaceOptions(spec Spec, files map[string]fileContent, imageDir string, env []string, redactor *consoleRedactor) []microvm.Option {
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares)+2)
 	for i, s := range spec.Shares {
 		mounts = append(mounts, microvm.VirtioFSMount{Tag: shareTag(i), HostPath: s.HostPath, ReadOnly: s.ReadOnly, SimplifiedOwnership: simplifiedOwnership})
@@ -170,7 +170,7 @@ func workspaceOptions(spec Spec, files map[string]fileContent, imageDir string, 
 	mounts = append(mounts,
 		microvm.VirtioFSMount{Tag: internalTag, HostPath: GuestDataDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership},
 		microvm.VirtioFSMount{Tag: internalROTag, HostPath: GuestReadOnlyDir(spec.StateDir), ReadOnly: true, SimplifiedOwnership: simplifiedOwnership})
-	opts := commonOptions(spec)
+	opts := commonOptions(spec, redactor)
 	if disks := workspaceDisks(spec); len(disks) > 0 {
 		// In attach order: the Docker disk is /dev/vda (guest.DockerDisk),
 		// the tmp disk the next one.
