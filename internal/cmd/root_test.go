@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/seznam/jailoc/internal/config"
 )
 
 func TestResolveTargetPath(t *testing.T) {
@@ -104,42 +106,56 @@ func TestResolveTargetPath(t *testing.T) {
 	})
 }
 
-func TestIsBroadPath(t *testing.T) {
-	home, err := os.UserHomeDir()
+func TestValidateWorkspacePathRejectsBroadPaths(t *testing.T) {
+	// Outside /tmp and /var, which workspace paths may not use.
+	cwd, err := os.Getwd()
 	if err != nil {
-		t.Skipf("cannot get home dir: %v", err)
+		t.Fatal(err)
 	}
-
-	homeLink := filepath.Join(t.TempDir(), "home-link")
+	base, err := os.MkdirTemp(cwd, ".test-broad-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	home := filepath.Join(base, "home")
+	for _, dir := range []string{filepath.Join(home, ".ssh"), filepath.Join(home, "projects")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	homeLink := filepath.Join(base, "home-link")
 	if err := os.Symlink(home, homeLink); err != nil {
 		t.Fatalf("create home symlink: %v", err)
 	}
-	rootLink := filepath.Join(t.TempDir(), "root-link")
+	rootLink := filepath.Join(base, "root-link")
 	if err := os.Symlink("/", rootLink); err != nil {
 		t.Fatalf("create root symlink: %v", err)
 	}
 
 	tests := []struct {
-		name string
-		path string
-		want bool
+		name    string
+		path    string
+		wantErr string
 	}{
-		{name: "root path", path: "/", want: true},
-		{name: "home directory", path: home, want: true},
-		{name: "symlink to home directory", path: homeLink, want: true},
-		{name: "symlink to root path", path: rootLink, want: true},
-		{name: "normal project path", path: "/home/user/projects/myapp", want: false},
-		{name: "subdirectory of home", path: filepath.Join(home, "projects"), want: false},
-		{name: "empty path", path: "", want: false},
+		{name: "root path", path: "/", wantErr: "/ is the host root filesystem"},
+		{name: "home directory", path: home, wantErr: "it contains ~/.ssh"},
+		{name: "symlink to home directory", path: homeLink, wantErr: "resolves to"},
+		{name: "symlink to root path", path: rootLink, wantErr: "resolves to"},
+		{name: "subdirectory of home", path: filepath.Join(home, "projects")},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := isBroadPath(tc.path)
-			if got != tc.want {
-				t.Errorf("isBroadPath(%q) = %v, want %v", tc.path, got, tc.want)
+			err := config.ValidateWorkspacePath(tc.path)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("ValidateWorkspacePath(%q) = %v, want nil", tc.path, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("ValidateWorkspacePath(%q) = %v, want error containing %q", tc.path, err, tc.wantErr)
 			}
 		})
 	}

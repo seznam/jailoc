@@ -135,7 +135,6 @@ type firstTimeAnswers struct {
 	memory       string
 	wsName       string
 	wsDir        string
-	confirmBroad bool
 	save         bool
 	startNow     bool
 }
@@ -182,8 +181,8 @@ func (a firstTimeAnswers) toOptions() (config.FirstTimeOptions, string, error) {
 	if err != nil {
 		return config.FirstTimeOptions{}, "", err
 	}
-	if isBroadPath(wsDir) && !a.confirmBroad {
-		return config.FirstTimeOptions{}, "", fmt.Errorf("%q is a very broad path and sharing it was not confirmed; run setup again and pick a narrower directory", wsDir)
+	if err := config.ValidateWorkspacePath(wsDir); err != nil {
+		return config.FirstTimeOptions{}, "", err
 	}
 	allowInternet := a.networkMode == "internet"
 	var extraHosts []string
@@ -242,9 +241,6 @@ func (a firstTimeAnswers) summary(configPath string) string {
 		dir = norm
 	}
 	fmt.Fprintf(&b, "  Workspace:     %s -> %s", a.wsName, dir)
-	if isBroadPath(dir) && !a.confirmBroad {
-		fmt.Fprintf(&b, "\n  WARNING: sharing %q was not confirmed; go back with Shift+Tab and pick a narrower directory, or nothing is written.", dir)
-	}
 	return b.String()
 }
 
@@ -253,7 +249,6 @@ type workspaceSetupAnswers struct {
 	name          string
 	confirmUpdate bool
 	dir           string
-	confirmBroad  bool
 	agent         string // "inherit" or agent name
 	providers     []string
 	docker        string // "inherit", "yes", "no"
@@ -290,8 +285,8 @@ func (a workspaceSetupAnswers) toOptions(raw []byte) (config.WorkspaceOptions, s
 	if err != nil {
 		return config.WorkspaceOptions{}, "", err
 	}
-	if isBroadPath(wsDir) && !a.confirmBroad {
-		return config.WorkspaceOptions{}, "", fmt.Errorf("%q is a very broad path and sharing it was not confirmed; run setup again and pick a narrower directory", wsDir)
+	if err := config.ValidateWorkspacePath(wsDir); err != nil {
+		return config.WorkspaceOptions{}, "", err
 	}
 	wsAgent := ""
 	if a.agent != "" && a.agent != "inherit" {
@@ -338,9 +333,6 @@ func (a workspaceSetupAnswers) summary(configPath string, raw []byte) string {
 	}
 	fmt.Fprintf(&b, "  Config file:   %s\n", configPath)
 	fmt.Fprintf(&b, "  Workspace:     %s -> %s\n", a.name, dir)
-	if isBroadPath(dir) && !a.confirmBroad {
-		fmt.Fprintf(&b, "  WARNING: sharing %q was not confirmed; go back with Shift+Tab and pick a narrower directory, or nothing is written.\n", dir)
-	}
 	fmt.Fprintf(&b, "  Agent:         %s\n", cmp.Or(a.agent, "inherit"))
 	probe := config.WorkspaceOptions{Name: a.name}
 	if a.agent != "inherit" {
@@ -424,8 +416,8 @@ func runFirstTimeSetup(ctx context.Context, p *promptIO, opts setupOptions) (set
 		if err != nil {
 			return setupResult{}, err
 		}
-		if isBroadPath(wsDir) {
-			return setupResult{}, fmt.Errorf("%q is a very broad path; run setup interactively or pass a narrower directory", wsDir)
+		if err := config.ValidateWorkspacePath(wsDir); err != nil {
+			return setupResult{}, err
 		}
 		return applyFirstTimeSetup(ctx, p, opts, ans)
 	}
@@ -525,17 +517,6 @@ func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) formSteps {
 			Value(&ans.wsDir),
 	}}
 
-	broadTitle := func() string { return broadPathTitle(ans.wsDir) }
-	broadConfirm := huh.NewConfirm().
-		TitleFunc(broadTitle, &ans.wsDir).
-		Description("Choose No and press Shift+Tab to pick a narrower directory.").
-		Value(&ans.confirmBroad)
-	broadStep := formStep{
-		fields:  []huh.Field{broadConfirm},
-		hidden:  func() bool { return !isBroadSetupDir(ans.wsDir) },
-		refresh: func() { broadConfirm.Title(broadTitle()) },
-	}
-
 	steps := formSteps{
 		agentStep,
 		providersStep,
@@ -544,7 +525,6 @@ func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) formSteps {
 		extraHostsStep,
 		vmStep,
 		workspaceStep,
-		broadStep,
 	}
 
 	if !opts.dryRun {
@@ -554,7 +534,7 @@ func buildFirstTimeForm(ans *firstTimeAnswers, opts setupOptions) formSteps {
 			DescriptionFunc(func() string { return escapeNoteMarkup(summary()) }, []any{
 				&ans.agent, &ans.providers, &ans.gitConfig, &ans.sshAuthSock, &ans.gpgAgent,
 				&ans.networkMode, &ans.extraHosts, &ans.enableDocker, &ans.cpu, &ans.memory,
-				&ans.wsName, &ans.wsDir, &ans.confirmBroad,
+				&ans.wsName, &ans.wsDir,
 			})
 		steps = append(steps, formStep{
 			fields: []huh.Field{
@@ -601,8 +581,8 @@ func runWorkspaceSetup(ctx context.Context, p *promptIO, opts setupOptions) (set
 		if err != nil {
 			return setupResult{}, err
 		}
-		if isBroadPath(wsDir) {
-			return setupResult{}, fmt.Errorf("%q is a very broad path; run setup interactively or pass a narrower directory", wsDir)
+		if err := config.ValidateWorkspacePath(wsDir); err != nil {
+			return setupResult{}, err
 		}
 		return applyWorkspaceSetup(ctx, p, opts, raw, ans)
 	}
@@ -658,17 +638,6 @@ func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg 
 			Validate(validateWorkspaceDir).
 			Value(&ans.dir),
 	}, hidden: skippedUpdate}
-
-	broadTitle := func() string { return broadPathTitle(ans.dir) }
-	broadConfirm := huh.NewConfirm().
-		TitleFunc(broadTitle, &ans.dir).
-		Description("Choose No and press Shift+Tab to pick a narrower directory.").
-		Value(&ans.confirmBroad)
-	broadStep := formStep{
-		fields:  []huh.Field{broadConfirm},
-		hidden:  func() bool { return skippedUpdate() || !isBroadSetupDir(ans.dir) },
-		refresh: func() { broadConfirm.Title(broadTitle()) },
-	}
 
 	optionsStep := formStep{fields: []huh.Field{
 		huh.NewSelect[string]().
@@ -726,7 +695,6 @@ func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg 
 		nameStep,
 		overwriteStep,
 		dirStep,
-		broadStep,
 		optionsStep,
 		extraHostsStep,
 		providersStep,
@@ -737,7 +705,7 @@ func buildWorkspaceSetupForm(ans *workspaceSetupAnswers, opts setupOptions, cfg 
 		reviewNote := huh.NewNote().
 			Title("Review workspace").
 			DescriptionFunc(func() string { return escapeNoteMarkup(summary()) }, []any{
-				&ans.name, &ans.dir, &ans.confirmBroad, &ans.agent, &ans.providers,
+				&ans.name, &ans.dir, &ans.agent, &ans.providers,
 				&ans.docker, &ans.networkMode, &ans.extraHosts,
 			})
 		saveTitle := func() string {
@@ -854,9 +822,14 @@ func splitCSV(s string) []string {
 	return out
 }
 
+// validateWorkspaceDir rejects a directory that does not exist or that a
+// workspace may not share, such as the home directory or the host root.
 func validateWorkspaceDir(p string) error {
-	_, err := normalizeSetupDir(p)
-	return err
+	dir, err := normalizeSetupDir(p)
+	if err != nil {
+		return err
+	}
+	return config.ValidateWorkspacePath(dir)
 }
 
 func normalizeSetupDir(p string) (string, error) {
@@ -882,18 +855,4 @@ func normalizeSetupDir(p string) (string, error) {
 		return "", fmt.Errorf("path %q is not a directory", abs)
 	}
 	return abs, nil
-}
-
-// isBroadSetupDir reports whether dir resolves to a path that shares a whole
-// directory tree (for example / or $HOME) with the VM.
-func isBroadSetupDir(dir string) bool {
-	norm, err := normalizeSetupDir(dir)
-	return err == nil && isBroadPath(norm)
-}
-
-func broadPathTitle(dir string) string {
-	if norm, err := normalizeSetupDir(dir); err == nil {
-		dir = norm
-	}
-	return fmt.Sprintf("WARNING: %q is a very broad path — this will share your entire directory tree with the VM. Are you sure?", dir)
 }

@@ -868,6 +868,7 @@ Any `backend` value other than `"vm"` and empty is rejected. For a config-load e
 - An empty list is allowed; empty entries are rejected.
 - Each path must exist on the host and be a directory. `jailoc up` and `jailoc reload` fail with an error naming the workspace and path otherwise; `jailoc` does not create a missing path. This differs from read-write [`mounts`](#mounts), whose missing host directories are created.
 - Paths equal to or under these prefixes are rejected: `/home/agent`, `/usr`, `/etc`, `/var`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/opt`, `/root`, `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/certs`.
+- The [rejected host paths](#mounts) of `mounts` apply as well, so a path such as `~`, `~/.ssh` or `~/.local/share/jailoc`, or a symlink to one of them, is rejected.
 - Several workspaces may share a path, for example to run different agents in the same project. When the current directory matches several workspaces at the same depth, `jailoc` fails and asks for `-w`.
 
 **Share limit.** Each path is a separate virtio-fs share. A VM boots with at most:
@@ -903,17 +904,17 @@ Format: `host:container[:mode]`, mode `ro` or `rw` (default `rw`). Mounts are vi
 
 - System directories: `/`, `/boot`, `/dev`, `/etc`, `/private`, `/proc`, `/sys`, `/run`, `/var`
 - Credential directories and files: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/.netrc`
-- jailoc configuration and state: `~/.config/jailoc`, `~/.cache/jailoc-vm`
+- jailoc configuration, state and proxy CA: `~/.config/jailoc`, `~/.cache/jailoc-vm`, `~/.local/share/jailoc`
 
 Matching details:
 
-- Parents of the entries under `~` are rejected too, so `~`, `~/.config` and `~/.cache` cannot be shared whole.
+- Parents of the entries under `~` are rejected too, so `~`, `~/.config`, `~/.cache`, `~/.local` and `~/.local/share` cannot be shared whole.
 - Entries under `~` are also compared after resolving symlinks, so a symlink to `~/.ssh`, or a dotfiles directory that `~/.ssh` links into, is rejected as well.
 
 **Error message.** The error explains why the matched entry is protected:
 
 - for credential directories it shows SSH or GPG agent forwarding or a [file secret](#secrets) holding the one file a tool needs;
-- for `~/.config/jailoc` and `~/.cache/jailoc-vm` it suggests keeping shared directories outside them or using an [agent profile](#agent-profiles).
+- for `~/.config/jailoc`, `~/.cache/jailoc-vm` and `~/.local/share/jailoc` it suggests keeping shared directories outside them or using an [agent profile](#agent-profiles).
 
 See [Pass a credential file](../how-to/secrets.md#pass-a-credential-file).
 
@@ -1127,7 +1128,7 @@ Validation:
 - `ports` and `host_ports` can't use guest port 6081.
 - A proxy route is not a published port: nothing listens on the host except the local HTTPS proxy.
 
-Changing the set of guest ports the `proxy` routes use takes effect after `jailoc restart` and a restart of `jailoc proxy`; `jailoc proxy` refuses a running VM that doesn't match. Renaming a route, changing `auth`, or adding a route on a guest port already in that set needs only a restart of `jailoc proxy`.
+Changing the set of guest ports the `proxy` routes use takes effect after `jailoc restart`; the proxy refuses a running VM that doesn't match. `jailoc reload` applies renaming a route, changing `auth`, or adding a route on a guest port already in that set. `jailoc up`, `jailoc restart` and `jailoc reload` start or update the background proxy, and `jailoc down` removes the workspace's routes from it.
 
 A running VM keeps the relay port 6081 and the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `proxy`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`.
 

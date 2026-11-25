@@ -517,68 +517,40 @@ func TestProxyCommandArguments(t *testing.T) {
 		err := cmd.ExecuteContext(t.Context())
 		return out.String(), err
 	}
-	if _, err := run(); err == nil || !strings.Contains(err.Error(), `"tls-cert"`) || !strings.Contains(err.Error(), `"tls-key"`) {
-		t.Errorf("no flags: error = %v, want the required TLS flags named", err)
-	}
-	if _, err := run("--tls-cert", "c.pem"); err == nil || !strings.Contains(err.Error(), `"tls-key"`) {
-		t.Errorf("no key: error = %v, want tls-key named", err)
-	}
-	for _, listen := range []string{"0.0.0.0:8443", "example.com:443", "8443"} {
-		if _, err := run("--tls-cert", "c.pem", "--tls-key", "k.pem", "--listen", listen); err == nil || !strings.Contains(err.Error(), "--listen") {
-			t.Errorf("--listen %s: error = %v, want a --listen error", listen, err)
+	for _, flag := range []string{"--tls-cert", "--tls-key"} {
+		if _, err := run(flag, "c.pem"); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+			t.Errorf("%s: error = %v, want unknown flag", flag, err)
 		}
 	}
-	dir := t.TempDir()
-	if _, err := run("--tls-cert", filepath.Join(dir, "missing.pem"), "--tls-key", filepath.Join(dir, "missing.key")); err == nil || !strings.Contains(err.Error(), "load TLS certificate") {
-		t.Errorf("missing certificate: error = %v", err)
+	for _, listen := range []string{"0.0.0.0:8443", "example.com:443", "8443"} {
+		if _, err := run("--listen", listen); err == nil || !strings.Contains(err.Error(), "--listen") {
+			t.Errorf("--listen %s: error = %v, want a --listen error", listen, err)
+		}
 	}
 	out, err := run("--help")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"proxy [workspace...]", "--listen", "--tls-cert", "--tls-key", proxyDefaultListen} {
+	for _, want := range []string{"proxy [workspace...]", "--foreground", "--listen", "limited to names under jailoc.local", proxyDefaultListen} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}
 	}
 }
 
-// writeTestCertificate writes a generated self-signed certificate for hosts
-// and its key to dir.
-func writeTestCertificate(t *testing.T, dir string, hosts ...string) (certFile, keyFile string, pool *x509.CertPool) {
+// proxyCATestPool returns a pool holding the automatic proxy CA of the
+// current HOME.
+func proxyCATestPool(t *testing.T) *x509.CertPool {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caPEM, err := os.ReadFile(proxyCACertPath()) //nolint:gosec // test fixture path.
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read proxy CA: %v", err)
 	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), DNSNames: hosts,
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("proxy CA holds no certificate")
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	certFile, keyFile = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	leaf, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool = x509.NewCertPool()
-	pool.AddCert(leaf)
-	return certFile, keyFile, pool
+	return pool
 }
 
 // fakeProxyRelay listens on the proxy socket of stateDir like the guest relay
@@ -679,9 +651,7 @@ func startProxyRun(t *testing.T, handler http.Handler) (*proxyRun, string) {
 // the route at host from a fake VM configured as g.
 func startProxyRunFor(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config) (*proxyRun, string) {
 	t.Helper()
-	return startProxyRunArgs(t, handler, cfgTOML, host, g, func(certFile, keyFile string) []string {
-		return []string{"--listen", "127.0.0.1:0", "--tls-cert", certFile, "--tls-key", keyFile}
-	})
+	return startProxyRunArgs(t, handler, cfgTOML, host, g, "--foreground", "--listen", "127.0.0.1:0")
 }
 
 // shortTempDir creates a temporary directory with a short path: unix socket
@@ -701,9 +671,9 @@ func shortTempDir(t *testing.T, pattern string) string {
 	return dir
 }
 
-// startProxyRunArgs is startProxyRunFor with the command line built by
-// mkArgs from the generated certificate and key paths.
-func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config, mkArgs func(certFile, keyFile string) []string) (*proxyRun, string) {
+// startProxyRunArgs is startProxyRunFor with the command line args. The
+// client trusts the automatic proxy CA.
+func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config, args ...string) (*proxyRun, string) {
 	t.Helper()
 	home := shortTempDir(t, "jp")
 	t.Setenv("HOME", home)
@@ -717,14 +687,13 @@ func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string,
 		t.Fatal(err)
 	}
 	fakeProxyRelay(t, stateDir, handler)
-	certFile, keyFile, pool := writeTestCertificate(t, home, host)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	run := &proxyRun{out: &syncBuffer{}, errOut: &syncBuffer{}, done: make(chan struct{}), cancel: cancel, host: host}
 	cmd := newProxyCmd()
 	cmd.SetOut(run.out)
 	cmd.SetErr(run.errOut)
-	cmd.SetArgs(mkArgs(certFile, keyFile))
+	cmd.SetArgs(args)
 	go func() {
 		run.err = cmd.ExecuteContext(ctx)
 		close(run.done)
@@ -755,7 +724,7 @@ func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string,
 		t.Fatalf("proxy printed no address and code:\n%s", run.out.String())
 	}
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: host, MinVersion: tls.VersionTLS12},
+		TLSClientConfig: &tls.Config{RootCAs: proxyCATestPool(t), ServerName: host, MinVersion: tls.VersionTLS12},
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", run.addr)
 		},
@@ -913,7 +882,7 @@ func runProxyArgs(t *testing.T, args ...string) (string, error) {
 func TestProxyListenerBrokerRefusesListen(t *testing.T) {
 	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
 	for _, listen := range []string{"127.0.0.1:8443", "127.0.0.1:443", proxyDefaultListen} {
-		_, err := runProxyArgs(t, "--tls-cert", "c.pem", "--tls-key", "k.pem", "--listener-broker", "--listen", listen)
+		_, err := runProxyArgs(t, "--listener-broker", "--listen", listen)
 		if err == nil || !strings.Contains(err.Error(), "--listener-broker") || !strings.Contains(err.Error(), "--listen") {
 			t.Errorf("--listen %s: error = %v, want a refusal naming both flags", listen, err)
 		}
@@ -922,16 +891,9 @@ func TestProxyListenerBrokerRefusesListen(t *testing.T) {
 
 func TestProxyListenerBrokerRefusesRoot(t *testing.T) {
 	useProxyBrokerHost(t, proxyBrokerTarget{uid: 0, socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
-	_, err := runProxyArgs(t, "--tls-cert", "c.pem", "--tls-key", "k.pem", "--listener-broker")
+	_, err := runProxyArgs(t, "--listener-broker")
 	if err == nil || !strings.Contains(err.Error(), "root") || !strings.Contains(err.Error(), "--listener-broker") {
 		t.Fatalf("error = %v, want a refusal to run as root", err)
-	}
-}
-
-func TestProxyListenerBrokerRequiresTLSFlags(t *testing.T) {
-	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
-	if _, err := runProxyArgs(t, "--listener-broker"); err == nil || !strings.Contains(err.Error(), `"tls-cert"`) {
-		t.Errorf("error = %v, want the required TLS flags named", err)
 	}
 }
 
@@ -1027,9 +989,7 @@ func TestProxyListenerBrokerServesThroughBroker(t *testing.T) {
 	useProxyBrokerHost(t, target)
 	run, _ := startProxyRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "through the broker")
-	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), func(certFile, keyFile string) []string {
-		return []string{"--listener-broker", "--tls-cert", certFile, "--tls-key", keyFile}
-	})
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), "--foreground", "--listener-broker")
 	if run.addr != target.addr.String() {
 		t.Errorf("proxy reports %s, want the broker address %s", run.addr, target.addr)
 	}
@@ -1072,5 +1032,450 @@ func TestProxyListenerBrokerServesThroughBroker(t *testing.T) {
 			t.Fatalf("the broker stayed busy after the proxy stopped: %v", err)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func proxyCertTestSetup(t *testing.T) (*config.Config, []proxyTarget) {
+	t.Helper()
+	home := shortTempDir(t, "jc")
+	t.Setenv("HOME", home)
+	t.Setenv(config.PathEnv, filepath.Join(home, "config.toml"))
+	cfg := &config.Config{Workspaces: map[string]config.Workspace{
+		"one": {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
+	}}
+	targets := []proxyTarget{{ws: &workspace.Resolved{Name: "one", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}}}
+	return cfg, targets
+}
+
+func TestEnsureProxyCert(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	cert1, caPath, err := ensureProxyCert(cfg, targets)
+	if err != nil {
+		t.Fatalf("ensureProxyCert: %v", err)
+	}
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".local", "share", "jailoc", "proxy")
+	if caPath != filepath.Join(dir, "ca.crt") {
+		t.Fatalf("caPath = %q, want %q", caPath, filepath.Join(dir, "ca.crt"))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{".lock", "ca.crt", "cert.crt", "cert.key", "intermediate.crt", "intermediate.key"}; !slices.Equal(names, want) {
+		t.Fatalf("files in %s = %v, want %v (no root key)", dir, names, want)
+	}
+	if len(cert1.Certificate) != 2 {
+		t.Fatalf("served chain has %d certificates, want leaf and intermediate", len(cert1.Certificate))
+	}
+	inter, err := x509.ParseCertificate(cert1.Certificate[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediates := x509.NewCertPool()
+	intermediates.AddCert(inter)
+	if _, err := cert1.Leaf.Verify(x509.VerifyOptions{DNSName: "app.one.jailoc.local", Roots: proxyCATestPool(t), Intermediates: intermediates}); err != nil {
+		t.Fatalf("leaf does not chain to ca.crt: %v", err)
+	}
+	if _, err := cert1.Leaf.Verify(x509.VerifyOptions{DNSName: "app.one.jailoc.local", Roots: proxyCATestPool(t)}); err == nil {
+		t.Fatal("leaf verified without the intermediate; want the root to sign only the intermediate")
+	}
+	// Second call reuses the existing leaf and CA.
+	cert2, _, err := ensureProxyCert(cfg, targets)
+	if err != nil {
+		t.Fatalf("second ensureProxyCert: %v", err)
+	}
+	if !bytes.Equal(cert1.Certificate[0], cert2.Certificate[0]) {
+		t.Fatal("existing valid leaf was regenerated")
+	}
+	// Adding a workspace not covered by the first leaf regenerates the leaf with the same CA.
+	cfg.Workspaces["two"] = config.Workspace{Proxy: config.ProxyMap(map[string]int{"api": 8080})}
+	targets = append(targets, proxyTarget{ws: &workspace.Resolved{Name: "two", Proxy: []workspace.ProxyRoute{{Name: "api", Port: 8080}}}})
+	cert3, _, err := ensureProxyCert(cfg, targets)
+	if err != nil {
+		t.Fatalf("third ensureProxyCert: %v", err)
+	}
+	if !bytes.Equal(cert1.Certificate[1], cert3.Certificate[1]) {
+		t.Fatal("intermediate changed when the leaf was reissued")
+	}
+	if err := cert3.Leaf.VerifyHostname("api.two.jailoc.local"); err != nil {
+		t.Fatalf("VerifyHostname(api.two): %v", err)
+	}
+	if err := cert3.Leaf.VerifyHostname("app.one.jailoc.local"); err != nil {
+		t.Fatalf("VerifyHostname(app.one): %v", err)
+	}
+}
+
+func TestProxyCAIsLimitedToJailocLocal(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	if _, _, err := ensureProxyCert(cfg, targets); err != nil {
+		t.Fatalf("ensureProxyCert: %v", err)
+	}
+	dir := proxyCADir()
+	ca, err := readProxyCA(filepath.Join(dir, proxyCACert), filepath.Join(dir, proxyIntermediateCrt), filepath.Join(dir, proxyIntermediateKey), time.Now())
+	if err != nil {
+		t.Fatalf("readProxyCA: %v", err)
+	}
+	for name, c := range map[string]*x509.Certificate{"root": ca.root, "intermediate": ca.inter} {
+		if err := checkProxyCA(c, time.Now()); err != nil {
+			t.Errorf("%s CA: %v", name, err)
+		}
+	}
+	if ca.root.MaxPathLen != 1 || !ca.inter.MaxPathLenZero {
+		t.Errorf("path length: root %d, intermediate zero=%v; want 1 and true", ca.root.MaxPathLen, ca.inter.MaxPathLenZero)
+	}
+
+	// The intermediate key is the only CA key on disk: whatever it signs must
+	// stay under jailoc.local, even with the intermediate as trust anchor.
+	for anchorName, anchor := range map[string]*x509.Certificate{"root": ca.root, "intermediate": ca.inter} {
+		roots := x509.NewCertPool()
+		roots.AddCert(anchor)
+		intermediates := x509.NewCertPool()
+		intermediates.AddCert(ca.inter)
+		issue := func(dnsNames []string, ips []net.IP) *x509.Certificate {
+			t.Helper()
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tmpl := &x509.Certificate{
+				SerialNumber: big.NewInt(2), DNSNames: dnsNames, IPAddresses: ips,
+				NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+				KeyUsage:    x509.KeyUsageDigitalSignature,
+				ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			}
+			der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.inter, key.Public(), ca.interKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leaf, err := x509.ParseCertificate(der)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return leaf
+		}
+		verify := func(leaf *x509.Certificate, name string) error {
+			_, err := leaf.Verify(x509.VerifyOptions{DNSName: name, Roots: roots, Intermediates: intermediates})
+			return err
+		}
+		if err := verify(issue([]string{"app.one.jailoc.local"}, nil), "app.one.jailoc.local"); err != nil {
+			t.Errorf("%s anchor: leaf under jailoc.local: %v", anchorName, err)
+		}
+		for _, tc := range []struct {
+			name  string
+			dns   []string
+			ips   []net.IP
+			check string
+		}{
+			{"other domain", []string{"example.com"}, nil, "example.com"},
+			{"suffix lookalike", []string{"app.notjailoc.local"}, nil, "app.notjailoc.local"},
+			{"IPv4 address", nil, []net.IP{net.IPv4(127, 0, 0, 1)}, "127.0.0.1"},
+			{"IPv6 address", nil, []net.IP{net.IPv6loopback}, "::1"},
+		} {
+			if err := verify(issue(tc.dns, tc.ips), tc.check); err == nil {
+				t.Errorf("%s anchor, %s: a leaf for %s verified under the proxy CA", anchorName, tc.name, tc.check)
+			}
+		}
+	}
+}
+
+func TestEnsureProxyCertRejectsUnconstrainedCA(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	dir := proxyCADir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(1, 0, 0),
+		KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, proxyCACert), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = ensureProxyCert(cfg, targets)
+	if err == nil || !strings.Contains(err.Error(), "not limited to jailoc.local") || !strings.Contains(err.Error(), "remove "+dir) {
+		t.Fatalf("error = %v, want a refusal of the unconstrained CA with a removal hint", err)
+	}
+}
+
+func TestEnsureProxyCertReplacesIncompleteCA(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	dir := proxyCADir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// An interrupted first run leaves an intermediate without ca.crt; nobody
+	// can trust that yet, so jailoc starts over.
+	for _, name := range []string{proxyIntermediateCrt, proxyIntermediateKey} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := ensureProxyCert(cfg, targets); err != nil {
+		t.Fatalf("ensureProxyCert: %v", err)
+	}
+	if _, err := readProxyCA(filepath.Join(dir, proxyCACert), filepath.Join(dir, proxyIntermediateCrt), filepath.Join(dir, proxyIntermediateKey), time.Now()); err != nil {
+		t.Fatalf("readProxyCA after replacing the incomplete CA: %v", err)
+	}
+}
+
+func TestProxySyncStatusAndStop(t *testing.T) {
+	run, _ := startProxyRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "hello")
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), "--foreground", "--listen", "127.0.0.1:0")
+	cookie := run.login(t)
+
+	// Re-running `jailoc proxy` (without --foreground) syncs the running proxy,
+	// preserves the existing session, and prints status without a new login code.
+	var syncOut bytes.Buffer
+	syncCmd := newProxyCmd()
+	syncCmd.SetOut(&syncOut)
+	syncCmd.SetErr(&syncOut)
+	if err := syncCmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("background sync: %v\n%s", err, syncOut.String())
+	}
+	if !strings.Contains(syncOut.String(), "existing session preserved") || strings.Contains(syncOut.String(), "login code") {
+		t.Fatalf("sync output = %q, want existing session preserved without a new login code", syncOut.String())
+	}
+	res := run.do(t, "GET", "/", nil, cookie)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET / after sync = %d, want 200", res.StatusCode)
+	}
+
+	// `jailoc proxy status` reports the running proxy.
+	var statusOut bytes.Buffer
+	statusCmd := newProxyCmd()
+	statusCmd.SetOut(&statusOut)
+	statusCmd.SetErr(&statusOut)
+	statusCmd.SetArgs([]string{"status"})
+	if err := statusCmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("proxy status: %v", err)
+	}
+	if !strings.Contains(statusOut.String(), "https://app.e2e.jailoc.local/") {
+		t.Fatalf("status output = %q, want route URL", statusOut.String())
+	}
+
+	ws := &workspace.Resolved{Name: "e2e", Proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}}
+	if label := proxyStatusLabel(ws); !strings.Contains(label, "running on "+run.addr) {
+		t.Fatalf("proxyStatusLabel(running) = %q", label)
+	}
+
+	// `jailoc proxy stop` stops the running proxy.
+	var stopOut bytes.Buffer
+	stopCmd := newProxyCmd()
+	stopCmd.SetOut(&stopOut)
+	stopCmd.SetErr(&stopOut)
+	stopCmd.SetArgs([]string{"stop"})
+	if err := stopCmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("proxy stop: %v", err)
+	}
+	if !strings.Contains(stopOut.String(), "stopped") {
+		t.Fatalf("stop output = %q", stopOut.String())
+	}
+	if label := proxyStatusLabel(ws); !strings.Contains(label, "proxy stopped") {
+		t.Fatalf("proxyStatusLabel(stopped) = %q", label)
+	}
+}
+
+func TestProxyPruneKeepsRoutesAndSyncRejectsOtherConfig(t *testing.T) {
+	run, _ := startProxyRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "hello")
+	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), "--foreground", "--listen", "127.0.0.1:0")
+	st := runningProxy()
+	if st == nil {
+		t.Fatal("runningProxy() = nil while the proxy serves")
+	}
+	if st.Config != proxyConfigPath() {
+		t.Fatalf("state config = %q, want %q", st.Config, proxyConfigPath())
+	}
+
+	resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Config: filepath.Join(t.TempDir(), "other.toml")})
+	if err != nil {
+		t.Fatalf("sync with another config: %v", err)
+	}
+	assertContains(t, resp.Error, "serves workspaces of "+proxyConfigPath())
+
+	// A port change waits for `jailoc restart`; a prune must keep the
+	// running routes instead of dropping the workspace.
+	if err := os.WriteFile(config.ConfigPath(), []byte("[workspaces.e2e.proxy]\napp = { port = 3001, auth = true }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "prune"})
+	if err != nil || resp.Error != "" || resp.Stopped {
+		t.Fatalf("prune after a port change = %+v, %v; want the workspace kept", resp, err)
+	}
+
+	// Turning auth off in the config must not be applied by a prune, which
+	// only drops stopped workspaces.
+	if err := os.WriteFile(config.ConfigPath(), []byte("[workspaces.e2e.proxy]\napp = { port = 3000, auth = false }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "prune"})
+	if err != nil || resp.Error != "" || resp.Stopped || len(resp.Codes) != 0 {
+		t.Fatalf("prune = %+v, %v; want unchanged state without codes", resp, err)
+	}
+	if res := run.do(t, "GET", "/", nil, nil); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("GET / without session after prune = %d, want %d (auth kept)", res.StatusCode, http.StatusSeeOther)
+	}
+	resp, err = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Config: proxyConfigPath()})
+	if err != nil || resp.Error != "" {
+		t.Fatalf("sync = %+v, %v", resp, err)
+	}
+	if res := run.do(t, "GET", "/", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("GET / without session after sync = %d, want 200", res.StatusCode)
+	}
+}
+
+func TestProxyStopIgnoresStaleStateOfAnotherProcess(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = sleeper.Process.Kill()
+		_ = sleeper.Wait()
+	})
+	// A crashed proxy left its state and socket path behind and the PID was reused.
+	sock := filepath.Join(proxyStateDir(), "control.sock")
+	if err := writeProxyState(proxyState{PID: sleeper.Process.Pid, ControlSocket: sock}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeProxySavedOptions(proxyOptions{listenerBroker: true}); err != nil {
+		t.Fatal(err)
+	}
+	if runningProxy() != nil {
+		t.Fatal("runningProxy() reports a proxy although none holds proxy.lock")
+	}
+
+	var out bytes.Buffer
+	stopCmd := newProxyCmd()
+	stopCmd.SetOut(&out)
+	stopCmd.SetErr(&out)
+	stopCmd.SetArgs([]string{"stop"})
+	if err := stopCmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("proxy stop: %v", err)
+	}
+	assertContains(t, out.String(), "Proxy is not running")
+	if !processAlive(sleeper.Process.Pid) {
+		t.Fatal("proxy stop signalled the unrelated process of a stale PID")
+	}
+	for _, path := range []string{proxyStateFile(), proxyOptionsFile()} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s after stop: %v, want removed", path, err)
+		}
+	}
+}
+
+func TestPrintSyncedProxyShowsNewCodesOutsideFilter(t *testing.T) {
+	t.Parallel()
+	st := proxyState{Listen: "127.0.0.1:8443", PID: 1, Workspaces: map[string][]string{
+		"a": {"app.a.jailoc.local"},
+		"b": {"app.b.jailoc.local"},
+		"c": {"app.c.jailoc.local"},
+	}}
+	var out bytes.Buffer
+	printSyncedProxy(&out, st, map[string]string{"app.b.jailoc.local": "secret"}, []string{"a"})
+	assertContains(t, out.String(), "Workspace a:")
+	assertContains(t, out.String(), "app.b.jailoc.local/  login code secret")
+	if strings.Contains(out.String(), "Workspace c:") {
+		t.Fatalf("output = %q, want workspace c filtered out", out.String())
+	}
+}
+
+func TestEnsureProxyCertRejectsSymlinkedShare(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	home, _ := os.UserHomeDir()
+	if err := os.MkdirAll(filepath.Join(home, ".local", "share"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "share-link")
+	if err := os.Symlink(filepath.Join(home, ".local", "share"), link); err != nil {
+		t.Fatal(err)
+	}
+	ws := cfg.Workspaces["one"]
+	ws.Paths = []string{link}
+	cfg.Workspaces["one"] = ws
+	_, _, err := ensureProxyCert(cfg, targets)
+	if err == nil {
+		t.Fatal("ensureProxyCert succeeded with a path that links to a parent of the proxy CA directory")
+	}
+	assertContains(t, err.Error(), "overlaps shared path")
+}
+
+func TestEnsureProxyCertRejectsRunningVMShare(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	home, _ := os.UserHomeDir()
+	// The VM booted with ~/.local/share shared; the configuration no
+	// longer lists it, but the share stays until the VM restarts.
+	stateDir := vmStateDir("old")
+	if err := vm.WriteSpec(vm.Spec{StateDir: stateDir, Shares: []vm.Share{{HostPath: filepath.Join(home, ".local", "share")}}}); err != nil {
+		t.Fatal(err)
+	}
+	writeRunning := func(pid int) {
+		t.Helper()
+		data, err := json.Marshal(vm.State{PID: pid, Ready: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(vm.StateFile(stateDir), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRunning(os.Getpid())
+	_, _, err := ensureProxyCert(cfg, targets)
+	if err == nil {
+		t.Fatal("ensureProxyCert succeeded while a running VM shares a parent of the proxy CA directory")
+	}
+	assertContains(t, err.Error(), `of workspace "old"`)
+
+	// A share of the host root exposes the CA directory as well.
+	if err := vm.WriteSpec(vm.Spec{StateDir: stateDir, Shares: []vm.Share{{HostPath: "/"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ensureProxyCert(cfg, targets); err == nil {
+		t.Fatal("ensureProxyCert succeeded while a running VM shares the host root")
+	}
+
+	// A stopped VM no longer exposes its shares.
+	writeRunning(0)
+	if _, _, err := ensureProxyCert(cfg, targets); err != nil {
+		t.Fatalf("ensureProxyCert with a stopped VM: %v", err)
+	}
+}
+
+func TestPathsOverlap(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"/", "/home/u/.local/share/jailoc/proxy", true},
+		{"/home/u/.local/share/jailoc/proxy", "/", true},
+		{"/", "/", true},
+		{"/home/u/.local", "/home/u/.local/share/jailoc/proxy", true},
+		{"/home/u/.local/share/jailoc/proxy", "/home/u/.local/share/jailoc/proxy/x", true},
+		{"/home/u/.local/share/jailoc/proxy", "/home/u/.local/share/jailoc/proxy2", false},
+		{"/home/u/src", "/home/u/.local/share/jailoc/proxy", false},
+	}
+	for _, tt := range tests {
+		if got := pathsOverlap(tt.a, tt.b); got != tt.want {
+			t.Errorf("pathsOverlap(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+		}
 	}
 }

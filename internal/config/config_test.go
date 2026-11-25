@@ -2770,6 +2770,11 @@ func TestValidateMountsForbiddenNonCredentialReason(t *testing.T) {
 			want: []string{"because ~/.cache/jailoc-vm holds jailoc VM state and keys", "outside ~/.cache/jailoc-vm"},
 		},
 		{
+			name: "jailoc data directory explains protected parent",
+			spec: "~/.local/share/jailoc/proxy:/home/agent/proxy:ro",
+			want: []string{"because ~/.local/share/jailoc holds the jailoc proxy CA key", "outside ~/.local/share/jailoc"},
+		},
+		{
 			name: "system directory explains protected system path",
 			spec: "/etc/ssl:/home/agent/ssl:ro",
 			want: []string{"because /etc is a host system directory"},
@@ -2803,6 +2808,88 @@ func TestValidateMountsForbiddenNonCredentialReason(t *testing.T) {
 	}
 }
 
+func TestValidateWorkspacePathsForbiddenHostPaths(t *testing.T) {
+	// Workspace paths keep their host location in the guest, so HOME must lie
+	// outside guest-internal directories such as /tmp and /var. The paths do
+	// not exist; symlink resolution is covered by the mount tests.
+	home := "/data/home"
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		name      string
+		path      string
+		wantError string
+	}{
+		{name: "proxy CA directory", path: "~/.local/share/jailoc", wantError: `workspace "default": path "` + home + `/.local/share/jailoc" is forbidden because ~/.local/share/jailoc holds the jailoc proxy CA key`},
+		{name: "credential directory", path: "~/.ssh", wantError: "because ~/.ssh holds credentials"},
+		{name: "home directory", path: "~", wantError: "because it contains ~/.ssh, which holds credentials"},
+		{name: "parent of jailoc data", path: "~/.local", wantError: "because it contains ~/.local/share/jailoc"},
+		{name: "host root", path: "/", wantError: "because / is the host root filesystem"},
+		{name: "project directory", path: "~/src/app"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Workspaces: map[string]Workspace{"default": {Paths: []string{tt.path}}}}
+			err := Validate(cfg)
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate(paths = [%q]) = %v, want nil", tt.path, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate(paths = [%q]) = %v, want error containing %q", tt.path, err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestValidateWorkspacePathsRejectsRelativeProtectedPath(t *testing.T) {
+	// Workspace paths may not lie under /tmp or /var, so HOME is a directory
+	// below the package directory.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.MkdirTemp(cwd, ".test-home-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".local", "share", "jailoc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(home)
+
+	for _, path := range []string{".local/share/jailoc", ".", "./.local"} {
+		cfg := &Config{Workspaces: map[string]Workspace{"default": {Paths: []string{path}}}}
+		err := Validate(cfg)
+		if err == nil || !strings.Contains(err.Error(), "is forbidden") {
+			t.Errorf("Validate(paths = [%q]) from $HOME = %v, want it rejected", path, err)
+		}
+	}
+}
+
+func TestValidateMountsRejectsSymlinkToRoot(t *testing.T) {
+	home := safeHome(t)
+	if err := os.Mkdir(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(home, "root-link")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Workspaces: map[string]Workspace{"default": {
+		Paths:  []string{"/data/workspace"},
+		Mounts: []string{"~/root-link:/home/agent/host:ro"},
+	}}}
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), `(resolves to "/") is forbidden because it contains ~/.ssh`) {
+		t.Fatalf("Validate(mount of a symlink to /) = %v, want it rejected", err)
+	}
+}
+
 func TestValidateMountsForbiddenParentOfHomeEntry(t *testing.T) {
 	safeHome(t)
 
@@ -2815,6 +2902,7 @@ func TestValidateMountsForbiddenParentOfHomeEntry(t *testing.T) {
 		{name: "home mount", mount: "~:/home/agent/host:ro", wantError: "because it contains ~/.ssh, which holds credentials"},
 		{name: "config mount", mount: "~/.config:/home/agent/host-config:ro", wantError: "because it contains ~/.config/gcloud"},
 		{name: "cache mount", mount: "~/.cache:/home/agent/host-cache:rw", wantError: "because it contains ~/.cache/jailoc-vm"},
+		{name: "local share mount", mount: "~/.local/share:/home/agent/host-share:ro", wantError: "because it contains ~/.local/share/jailoc"},
 		{name: "config snapshot", snapshot: "~/.config:/home/agent/host-config", wantError: "because it contains ~/.config/gcloud"},
 		{name: "sibling of a forbidden entry", mount: "~/.config/opencode:/home/agent/.config/opencode:ro"},
 		{name: "sibling cache", mount: "~/.cache/pip:/home/agent/.cache/pip:rw"},
