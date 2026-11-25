@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.10.1](https://github.com/seznam/jailoc/compare/v2.10.0...v2.10.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **ci:** isolate locked docs builds from Pages deployment ([c8d3d51](https://github.com/seznam/jailoc/commit/c8d3d517afb8e5fcd38c2c130a1b48d3f333583e))
+* **deps:** pin docs renderer with strict validation ([cea5442](https://github.com/seznam/jailoc/commit/cea54422e0f41dbeb8f9e94d92ccafe74d604e9e))
+* **docs:** catch documentation build failures in CI ([9458877](https://github.com/seznam/jailoc/commit/9458877bb8be36e25a7a1939440e07be6840fe08))
+
 ## [2.10.0](https://github.com/seznam/jailoc/compare/v2.9.0...v2.10.0) (2026-11-25)
 
 
