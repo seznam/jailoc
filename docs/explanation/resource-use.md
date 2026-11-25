@@ -77,6 +77,8 @@ Each workspace has two persistent data disks, and the builder VMs and workspaces
 - `cache.img`, sized by `cache_disk` (20 GiB by default), holds `~/.cache`, including the download caches of Go modules, npm, Bun and NuGet.
 - The Docker data disk, 20 GiB by default, exists only with `enable_docker` and in builder VMs. `docker_disk` sizes the disk of a workspace and of its `isolated_build` builder VM; `[vm] builder_disk` sizes the shared builder VM's.
 
+The disks exist to bound how much host space a workspace's home directories can take. A directory shared from the host has no quota, so a runaway agent or cache could fill the host disk; a disk image can't grow past its size, so a full disk fails writes inside the guest and leaves the host, its other directories and other workspaces untouched. All sparse images still share the host's free space: when the host disk fills, guest writes that need new blocks fail on every disk.
+
 The agent's state and `~/.cache` are on separate disks so that a full `~/.cache` can't starve the agent's state database of space. Builds and package managers can fill a cache quickly.
 
 - Disks are sparse files, so they take host space only for blocks that have been written. `state_disk`, `cache_disk` and `docker_disk` are caps, not reservations: the host sets nothing aside for them.

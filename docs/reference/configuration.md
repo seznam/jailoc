@@ -1420,7 +1420,7 @@ Each workspace has two persistent disks in `~/.cache/jailoc-vm/workspaces/<works
 | `state.img` | [`state_disk`](#cpu-memory-and-docker_disk) | `10g` | The agent's persistent home directories (see [Coding agents](#coding-agents)) |
 | `cache.img` | [`cache_disk`](#cpu-memory-and-docker_disk) | `20g` | `~/.cache` |
 
-Both are sparse ext4 files, so the host stores only written blocks, and the guest periodically trims freed blocks so the host can take them back. A full `~/.cache` does not take space from the agent's state. Both disks grow with their setting after `jailoc restart` and never shrink.
+Their size is the most host space each can take: a full disk fails writes inside the guest, not on the host. Both are sparse ext4 files, so the host stores only written blocks, and the guest periodically trims freed blocks so the host can take them back. A full `~/.cache` does not take space from the agent's state. Both disks grow with their setting after `jailoc restart` and never shrink.
 
 - `jailoc down --purge` deletes both disks.
 - The workspace image must contain `mkfs.ext4` and `resize2fs` (package `e2fsprogs`). The guest formats an unformatted disk with `mkfs.ext4` and grows the file system to a raised disk size with `resize2fs`. Without `mkfs.ext4` the VM does not start; without `resize2fs` the file system keeps its size. The embedded base image has both; see [Use a custom image](../how-to/custom-images.md#know-what-the-image-must-provide).
