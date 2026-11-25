@@ -82,12 +82,19 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.10"
+          checksum: bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c
+          enable-cache: false
       - name: Install dependencies
-        run: pip install .
+        env:
+          UV_PYTHON_DOWNLOADS: never
+        run: uv sync --locked --no-install-project --no-build --python 3.12
       - name: Build docs
         env:
           JAILOC_DOCS_VERSION: v0.0.0-ci
-        run: zensical build --clean --strict
+        run: uv run --no-sync zensical build --clean --strict
 
   judge-commits:
     name: git-judge-commits

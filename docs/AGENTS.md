@@ -7,7 +7,7 @@
 - **Plugins**: `macros` (native Jinja: `{{ version }}` and the `release` mapping from `include_yaml` of `.release-please-manifest.json`)
 - **Extensions**: `admonition`, `pymdownx.details`, `pymdownx.superfences` (with Mermaid custom fence)
 - **Custom CSS**: `stylesheets/extra.css` — hero image, code block, table, and typography overrides
-- **Build**: `zensical build --strict` → GitHub Pages after a successful GoReleaser job on release
+- **Build**: locked `uv sync --locked --no-install-project --no-build` (no local package), then `uv run --no-sync zensical build --clean --strict` in an unprivileged job; a separate privileged job deploys to GitHub Pages after a successful GoReleaser job on release
 
 ## Diátaxis Structure
 

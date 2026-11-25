@@ -25,18 +25,13 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  docs:
-    name: Docs
-    needs: [release-please, goreleaser]
+  docs-build:
+    name: Docs Build
+    needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,16 +40,36 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.10"
+          checksum: bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c
+          enable-cache: false
       - name: Install dependencies
-        run: pip install .
+        env:
+          UV_PYTHON_DOWNLOADS: never
+        run: uv sync --locked --no-install-project --no-build --python 3.12
       - name: Build docs
         env:
           JAILOC_DOCS_VERSION: ${{ needs.release-please.outputs.tag_name }}
-        run: zensical build --clean --strict
+        run: uv run --no-sync zensical build --clean --strict
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: public
+
+  docs-deploy:
+    name: Docs Deploy
+    needs: [release-please, goreleaser, docs-build]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
