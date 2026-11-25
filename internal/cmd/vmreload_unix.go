@@ -18,6 +18,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/agent"
+	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -30,16 +31,16 @@ const reloadTimeout = 15 * time.Second
 // the [network] DNS settings), published ports, host ports, the SSH agent,
 // the CA bundle, snapshots, the time zone, environment and secrets. Settings
 // that need a new VM are reported, not applied.
-func reloadVM(ctx context.Context, ws *workspace.Resolved, purgeCache bool) error {
+func reloadVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, purgeCache bool) error {
 	return withReloadLock(ctx, ws.Name, func() error {
-		return reloadVMLocked(ctx, ws, purgeCache)
+		return reloadVMLocked(ctx, cfg, ws, purgeCache)
 	})
 }
 
 // reloadVMLocked is the reload transaction; callers hold the workspace's
 // reload lock so concurrent reloads cannot overwrite each other's reload
 // request and acknowledgment files.
-func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool) error {
+func reloadVMLocked(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, purgeCache bool) error {
 	stateDir := vmStateDir(ws.Name)
 	st, err := runningVM(stateDir)
 	if err != nil {
@@ -101,6 +102,7 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 		return fmt.Errorf("deliver secrets to workspace %q: %w", ws.Name, err)
 	}
 	_, _ = color.New(color.FgGreen).Printf("Workspace %s reloaded\n", ws.Name)
+	warnBuildInputExposure(os.Stderr, cfg, ws.Name, running.Shares, vmRootDir())
 	changed := restartOnlyChanges(running, want)
 	if len(changed) > 0 {
 		_, _ = color.New(color.FgYellow).Printf("Changes to %s apply after `jailoc restart %s` (this ends running sessions)\n", joinList(changed), ws.Name)

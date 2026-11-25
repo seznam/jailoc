@@ -164,7 +164,7 @@ func TestReloadVMWaitsForReloadLock(t *testing.T) {
 	err := withReloadLock(context.Background(), "alpha", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		rerr := reloadVM(ctx, ws, false)
+		rerr := reloadVM(ctx, nil, ws, false)
 		if !errors.Is(rerr, context.DeadlineExceeded) {
 			t.Errorf("reloadVM behind a held lock = %v, want deadline exceeded", rerr)
 		}
@@ -179,7 +179,7 @@ func TestReloadVMCanceledContext(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := reloadVM(ctx, &workspace.Resolved{Name: "alpha"}, false)
+	err := reloadVM(ctx, nil, &workspace.Resolved{Name: "alpha"}, false)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("reloadVM with canceled context = %v, want context.Canceled", err)
 	}
@@ -187,7 +187,7 @@ func TestReloadVMCanceledContext(t *testing.T) {
 
 func TestReloadVMReleasesLockOnFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	err := reloadVM(context.Background(), &workspace.Resolved{Name: "alpha"}, false)
+	err := reloadVM(context.Background(), nil, &workspace.Resolved{Name: "alpha"}, false)
 	if err == nil {
 		t.Fatal("reloadVM of a stopped workspace succeeded")
 	}

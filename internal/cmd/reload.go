@@ -36,7 +36,7 @@ With --purge-cache, also rotates cached from_command secrets with a ttl.`,
 					return err
 				}
 			}
-			return reloadVM(ctx, ws, reloadPurgeCache)
+			return reloadVM(ctx, cfg, ws, reloadPurgeCache)
 		})
 	},
 }
