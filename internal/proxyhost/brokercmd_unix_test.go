@@ -494,15 +494,23 @@ func TestBrokerCmdRunServesAndStopsCleanly(t *testing.T) {
 		if _, err := io.WriteString(c, "ping"); err != nil {
 			t.Fatalf("write %d: %v", i, err)
 		}
+		// Parallel tests probe closed loopback ports, and a probe can land on
+		// a port this broker reused. Skip every connection that is not c.
 		accepted := make(chan net.Conn, 1)
 		go func() {
-			ac, err := gw.Accept()
-			if err != nil {
-				t.Errorf("Accept: %v", err)
-				close(accepted)
-				return
+			for {
+				ac, err := gw.Accept()
+				if err != nil {
+					t.Errorf("Accept: %v", err)
+					close(accepted)
+					return
+				}
+				if ac.RemoteAddr().String() == c.LocalAddr().String() {
+					accepted <- ac
+					return
+				}
+				_ = ac.Close() // a stray connection; close errors do not matter
 			}
-			accepted <- ac
 		}()
 		select {
 		case ac, ok := <-accepted:
