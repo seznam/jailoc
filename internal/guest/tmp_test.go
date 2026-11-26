@@ -136,8 +136,8 @@ func TestTmpUsage(t *testing.T) {
 
 func TestTmpJSONContract(t *testing.T) {
 	t.Parallel()
-	if Protocol != 4 {
-		t.Fatalf("Protocol = %d, want 4", Protocol)
+	if Protocol < 4 {
+		t.Fatalf("Protocol = %d, want at least 4", Protocol)
 	}
 	cfg, err := json.Marshal(Config{Tmp: TmpConfig{Storage: TmpStorageDisk, SizeBytes: 5, TTL: 2 * time.Second}})
 	if err != nil {

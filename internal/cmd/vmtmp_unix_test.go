@@ -414,7 +414,7 @@ func TestReloadGuestSendsTmpTTL(t *testing.T) {
 					return
 				}
 			}()
-			if err := reloadGuest(stateDir, guest.Config{}, tt.ttl); err != nil {
+			if err := reloadGuest(stateDir, guest.Config{}, tt.ttl, nil); err != nil {
 				t.Fatalf("reloadGuest: %v", err)
 			}
 			req := string(<-answered)

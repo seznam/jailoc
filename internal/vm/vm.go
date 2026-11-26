@@ -437,9 +437,11 @@ func imageRef(spec Spec) string {
 }
 
 // proxyRelayEnabled reports whether the guest serves the proxy relay, whose
-// private host socket the broker then publishes.
+// private host socket the broker then publishes. The relay may have an empty
+// allowlist; the broker arguments are fixed at boot, so the socket exists for
+// the routes a reload adds later.
 func proxyRelayEnabled(spec Spec) bool {
-	return spec.Kind == KindWorkspace && spec.Guest != nil && spec.Guest.ProxyRelay != nil && len(spec.Guest.ProxyRelay.Ports) > 0
+	return spec.Kind == KindWorkspace && spec.Guest != nil && spec.Guest.ProxyRelay != nil
 }
 
 // supervisorSockets lists the unix sockets the VM creates in its state

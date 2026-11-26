@@ -33,10 +33,14 @@ func (d proxyVM) stateDir() string {
 	return filepath.Join(d.home, ".cache", "jailoc-vm", "workspaces", proxyWorkspace)
 }
 
-// writeConfig writes the proxy workspace configuration. proxy holds the extra
-// lines of the proxy table (foo = 3000 is always there).
+// writeConfig writes the proxy workspace configuration. proxy holds the lines
+// of the proxy table; without any the workspace has no proxy table.
 func (d proxyVM) writeConfig(t *testing.T, proxy string) {
 	t.Helper()
+	table := ""
+	if proxy != "" {
+		table = fmt.Sprintf("[workspaces.%s.proxy]\n%s\n", proxyWorkspace, proxy)
+	}
 	cfg := fmt.Sprintf(`[vm]
 runner = %q
 lib_dir = %q
@@ -48,12 +52,9 @@ cpu = 2.0
 memory = "3g"
 protect_git = true
 
-[workspaces.%[3]s.proxy]
-foo = 3000
-%[5]s
-[workspaces.%[3]s.network]
+%[5]s[workspaces.%[3]s.network]
 ipv6 = false
-`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), proxyWorkspace, d.project, proxy)
+`, os.Getenv("JAILOC_VM_RUNNER"), os.Getenv("JAILOC_VM_LIBDIR"), proxyWorkspace, d.project, table)
 	dir := filepath.Join(d.home, ".config", "jailoc")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -158,8 +159,9 @@ func (d proxyVM) get(ctx context.Context, port uint16, path string) (int, string
 	return resp.StatusCode, string(body), nil
 }
 
-// TestProxyRelay boots a workspace with proxy routes and checks the guest proxy
-// relay from the host and from inside the guest.
+// TestProxyRelay boots a workspace without proxy routes, adds and removes
+// routes with reloads, and checks the guest proxy relay from the host and from
+// inside the guest.
 func TestProxyRelay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -190,6 +192,28 @@ func TestProxyRelay(t *testing.T) {
 	start := time.Now()
 	d.jailoc(ctx, t, "up", proxyWorkspace)
 	t.Logf("proxy vm up (image build included): %s", time.Since(start).Round(time.Second))
+
+	t.Run("relay without routes denies every port", func(t *testing.T) {
+		// The relay and its socket exist without routes: the dial reaches the
+		// relay, which denies the port.
+		for _, port := range []uint16{3000, 22} {
+			conn, err := vm.DialProxy(ctx, d.stateDir(), port)
+			if err == nil {
+				_ = conn.Close()
+				t.Fatalf("DialProxy(%d) without routes succeeded, want an error", port)
+			}
+			if !errors.Is(err, vm.ErrProxyDenied) {
+				t.Fatalf("DialProxy(%d) without routes = %v, want ErrProxyDenied", port, err)
+			}
+		}
+	})
+
+	t.Run("reload adds the first route", func(t *testing.T) {
+		d.writeConfig(t, "foo = 3000")
+		if out := d.jailoc(ctx, t, "reload", proxyWorkspace); strings.Contains(out, "jailoc restart") {
+			t.Fatalf("reload adding the first route asks for a restart:\n%s", out)
+		}
+	})
 
 	t.Run("proxy route to a guest loopback server", func(t *testing.T) {
 		// Nothing serves port 3000 yet: the route is allowed but unavailable.
@@ -230,25 +254,60 @@ func TestProxyRelay(t *testing.T) {
 		}
 	})
 
-	t.Run("reload reports proxy changes as restart-only", func(t *testing.T) {
-		d.writeConfig(t, "bar = 3002\n")
+	t.Run("reload applies proxy changes", func(t *testing.T) {
+		// A route added by a reload is allowed by the live relay allowlist.
+		d.writeConfig(t, "foo = 3000\nbar = 3002")
 		out := d.jailoc(ctx, t, "reload", proxyWorkspace)
-		for _, want := range []string{"proxy", "jailoc restart " + proxyWorkspace} {
-			if !strings.Contains(out, want) {
-				t.Fatalf("reload output misses %q:\n%s", want, out)
-			}
+		if strings.Contains(out, "jailoc restart") {
+			t.Fatalf("reload of a proxy change asks for a restart:\n%s", out)
 		}
-		// The running guest keeps its relay allowlist.
+		d.mustGuest(ctx, t, "mkdir -p /tmp/bar && cd /tmp/bar && echo bar-ok > index.html && setsid -f python3 -m http.server 3002 --bind 127.0.0.1 >/dev/null 2>&1")
+		var (
+			status int
+			body   string
+			err    error
+		)
+		for range 30 {
+			status, body, err = d.get(ctx, 3002, "/index.html")
+			if err == nil && status == http.StatusOK {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if err != nil || status != http.StatusOK || strings.TrimSpace(body) != "bar-ok" {
+			t.Fatalf("GET /index.html via 3002 after the reload = %d %q, %v", status, body, err)
+		}
+		// The route that stayed keeps working.
+		if status, body, err := d.get(ctx, 3000, "/index.html"); err != nil || status != http.StatusOK || strings.TrimSpace(body) != "proxy-ok" {
+			t.Fatalf("GET /index.html via 3000 after the reload = %d %q, %v", status, body, err)
+		}
+
+		// A route removed by a reload is denied again.
+		d.writeConfig(t, "foo = 3000")
+		if out := d.jailoc(ctx, t, "reload", proxyWorkspace); strings.Contains(out, "jailoc restart") {
+			t.Fatalf("reload of a removed route asks for a restart:\n%s", out)
+		}
 		if conn, err := vm.DialProxy(ctx, d.stateDir(), 3002); err == nil {
 			_ = conn.Close()
-			t.Fatal("DialProxy(3002) succeeded after a reload; the allowlist must change only on restart")
+			t.Fatal("DialProxy(3002) succeeded after its route was removed by a reload")
 		} else if !errors.Is(err, vm.ErrProxyDenied) {
 			t.Fatalf("DialProxy(3002) = %v, want ErrProxyDenied", err)
 		}
+		if status, _, err := d.get(ctx, 3000, "/index.html"); err != nil || status != http.StatusOK {
+			t.Fatalf("GET /index.html via 3000 after removing 3002 = %d, %v", status, err)
+		}
 
+		// Removing the last route leaves the relay running with an empty
+		// allowlist: the server on 3000 still runs, but the relay denies it.
 		d.writeConfig(t, "")
 		if out := d.jailoc(ctx, t, "reload", proxyWorkspace); strings.Contains(out, "jailoc restart") {
-			t.Fatalf("reload of the unchanged settings asks for a restart:\n%s", out)
+			t.Fatalf("reload removing the last route asks for a restart:\n%s", out)
+		}
+		if conn, err := vm.DialProxy(ctx, d.stateDir(), 3000); err == nil {
+			_ = conn.Close()
+			t.Fatal("DialProxy(3000) succeeded after the last route was removed by a reload")
+		} else if !errors.Is(err, vm.ErrProxyDenied) {
+			t.Fatalf("DialProxy(3000) = %v, want ErrProxyDenied", err)
 		}
 	})
 }

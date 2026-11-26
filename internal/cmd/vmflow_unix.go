@@ -698,11 +698,9 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	for _, s := range hostServices {
 		g.HostPorts = append(g.HostPorts, s.GuestPort)
 	}
-	// The relay allowlist is fixed for the life of the VM; a new proxy route
-	// port needs a restart.
-	if ports := proxyRelayPorts(ws.Proxy); len(ports) > 0 {
-		g.ProxyRelay = &guest.ProxyRelay{Ports: ports}
-	}
+	// The relay and its broker forward exist in every workspace VM, so a
+	// reload can add proxy routes later; without routes its allowlist is empty.
+	g.ProxyRelay = &guest.ProxyRelay{Ports: proxyRelayPorts(ws.Proxy)}
 	spec := vm.Spec{
 		Kind:          vm.KindWorkspace,
 		Workspace:     ws.Name,
@@ -1159,7 +1157,8 @@ func statusRestartChanges(ws *workspace.Resolved, running vm.Spec) []string {
 	if running.Guest != nil && guestIPv6(running) != ws.IPv6 {
 		out = append(out, "network.ipv6")
 	}
-	if running.Guest != nil {
+	// A reload replaces the relay allowlist of a VM whose guest supports it.
+	if running.Guest != nil && !proxyReloadable(running) {
 		out = append(out, proxyChanges(ws, running.Guest)...)
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.

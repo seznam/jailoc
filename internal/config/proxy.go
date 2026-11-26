@@ -148,8 +148,20 @@ func (p *ProxyTable) UnmarshalTOML(v any) error {
 }
 
 // validateProxy checks the proxy settings of workspace name against its
-// effective defaults, host_ports and ports.
+// effective defaults, host_ports and ports. The proxy relay listens on guest
+// port ProxyRelayPort in every workspace VM, whether or not it has routes.
 func validateProxy(cfg *Config, name string, ws Workspace) error {
+	hostGuest := map[int]bool{}
+	for _, t := range MergeHostPorts(cfg.Defaults.HostPorts, ws.HostPorts) {
+		hostGuest[t.Guest] = true
+	}
+	published := MergePorts(cfg.Defaults.Ports, ws.Ports)
+	if hostGuest[ProxyRelayPort] {
+		return fmt.Errorf("workspace %q: host_ports guest port %d is reserved for the proxy relay", name, ProxyRelayPort)
+	}
+	if slices.ContainsFunc(published, func(f PortForward) bool { return f.Guest == ProxyRelayPort }) {
+		return fmt.Errorf("workspace %q: ports must not publish guest port %d, reserved for the proxy relay", name, ProxyRelayPort)
+	}
 	proxy := ws.Proxy.Get()
 	if len(proxy.Routes) == 0 {
 		return nil
@@ -174,27 +186,16 @@ func validateProxy(cfg *Config, name string, ws Workspace) error {
 		return fmt.Errorf("workspace %q: name must be a DNS label (1-63 characters of a-z, 0-9 and -, not starting or ending with -) when proxy is used", name)
 	}
 
-	hostGuest := map[int]bool{}
-	for _, t := range MergeHostPorts(cfg.Defaults.HostPorts, ws.HostPorts) {
-		hostGuest[t.Guest] = true
-	}
 	for _, route := range routes {
 		if port := proxy.Routes[route].Port; hostGuest[port] {
 			return fmt.Errorf("workspace %q: proxy route %q: port %d is also a host_ports guest port", name, route, port)
 		}
 	}
-	published := MergePorts(cfg.Defaults.Ports, ws.Ports)
 	for _, route := range routes {
 		port := proxy.Routes[route].Port
 		if slices.ContainsFunc(published, func(f PortForward) bool { return f.Guest == port }) {
 			return fmt.Errorf("workspace %q: proxy route %q: port %d is also a ports guest port", name, route, port)
 		}
-	}
-	if hostGuest[ProxyRelayPort] {
-		return fmt.Errorf("workspace %q: host_ports guest port %d is reserved by proxy routes", name, ProxyRelayPort)
-	}
-	if slices.ContainsFunc(published, func(f PortForward) bool { return f.Guest == ProxyRelayPort }) {
-		return fmt.Errorf("workspace %q: ports must not publish guest port %d, reserved by proxy routes", name, ProxyRelayPort)
 	}
 	return nil
 }

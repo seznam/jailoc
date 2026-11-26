@@ -122,7 +122,7 @@ func TestBrokerArgsProxyForward(t *testing.T) {
 		wantP bool
 	}{
 		{"workspace without proxy relay", Spec{Kind: KindWorkspace, Guest: &guest.Config{}}, false},
-		{"workspace with empty ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{}}}, false},
+		{"workspace with empty ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{}}}, true},
 		{"workspace with ports", Spec{Kind: KindWorkspace, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}, true},
 		{"workspace without guest config", Spec{Kind: KindWorkspace}, false},
 		{"builder ignores proxy relay", Spec{Kind: KindBuilder, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}, false},
@@ -162,6 +162,10 @@ func TestSocketPathsIncludeProxy(t *testing.T) {
 	want := []string{nicSocket("/state"), SSHSocket("/state"), consoleSocket("/state"), ProxySocket("/state")}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sockets = %v, want %v", got, want)
+	}
+	spec.Guest.ProxyRelay.Ports = nil
+	if got := supervisorSockets(spec); !slices.Equal(got, want) {
+		t.Fatalf("sockets with an empty relay = %v, want %v", got, want)
 	}
 	spec.Guest = nil
 	if got := supervisorSockets(spec); len(got) != 3 {

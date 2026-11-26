@@ -237,6 +237,30 @@ func TestSelectProxyTargetsRejectsRunningMismatch(t *testing.T) {
 	})
 }
 
+// A VM whose guest replaces its relay allowlist on a reload is told to reload,
+// not to restart, when its routes differ from the configuration.
+func TestSelectProxyTargetsLiveProxyMismatchAsksForReload(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stateDir := fakeVM(t, "ws", relayGuest(3000))
+	if err := vm.WriteSpec(vm.Spec{StateDir: stateDir, Workspace: "ws", GuestProtocol: liveProxyGuestProtocol, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000}}}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Workspaces: map[string]config.Workspace{"ws": {Proxy: config.ProxyMap(map[string]int{"app": 3000, "api": 8080})}}}
+	for _, args := range [][]string{nil, {"ws"}} {
+		_, err := selectProxyTargets(cfg, args, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "jailoc reload ws") || strings.Contains(err.Error(), "jailoc restart") {
+			t.Errorf("args %v: error = %v, want a reload hint", args, err)
+		}
+	}
+	// After the reload the spec carries the new routes.
+	if err := vm.WriteSpec(vm.Spec{StateDir: stateDir, Workspace: "ws", GuestProtocol: liveProxyGuestProtocol, Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{3000, 8080}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selectProxyTargets(cfg, []string{"ws"}, io.Discard); err != nil {
+		t.Fatalf("after reload: %v", err)
+	}
+}
+
 func TestReadVMIdentity(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stateDir := vmStateDir("id")

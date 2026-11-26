@@ -593,7 +593,7 @@ func TestWorkspaceSpecProxy(t *testing.T) {
 	tests := []struct {
 		name      string
 		proxy     []workspace.ProxyRoute
-		wantPorts []uint16 // nil: no proxy relay
+		wantPorts []uint16 // nil: a relay that allows no port
 	}{
 		{name: "none"},
 		{
@@ -615,11 +615,8 @@ func TestWorkspaceSpecProxy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
 			}
-			if tt.wantPorts == nil {
-				if spec.Guest.ProxyRelay != nil {
-					t.Errorf("Guest.ProxyRelay = %+v, want nil", spec.Guest.ProxyRelay)
-				}
-			} else if spec.Guest.ProxyRelay == nil || !slices.Equal(spec.Guest.ProxyRelay.Ports, tt.wantPorts) {
+			// Every workspace VM runs the relay, so a reload can add routes.
+			if spec.Guest.ProxyRelay == nil || !slices.Equal(spec.Guest.ProxyRelay.Ports, tt.wantPorts) {
 				t.Errorf("Guest.ProxyRelay = %+v, want ports %v", spec.Guest.ProxyRelay, tt.wantPorts)
 			}
 		})
@@ -634,7 +631,10 @@ func TestStatusRestartChangesProxy(t *testing.T) {
 		name    string
 		proxy   []workspace.ProxyRoute
 		running guest.Config
-		want    []string
+		// want is what a guest that cannot replace its relay allowlist
+		// needs a restart for; a guest that can needs none (a reload applies
+		// the change).
+		want []string
 	}{
 		{name: "none"},
 		{name: "proxy added", proxy: []workspace.ProxyRoute{{Name: "app", Port: 3000}}, want: []string{"proxy"}},
@@ -656,8 +656,14 @@ func TestStatusRestartChangesProxy(t *testing.T) {
 		running := base
 		g := tt.running
 		running.Guest = &g
-		if got := statusRestartChanges(&w, running); !slices.Equal(got, tt.want) {
-			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		if got := statusRestartChanges(&w, running); len(got) != 0 {
+			t.Errorf("%s: live proxy guest: got %v, want no restart", tt.name, got)
+		}
+		old := running
+		old.GuestProtocol = liveProxyGuestProtocol - 1
+		wantOld := append(slices.Clone(tt.want), "the upgraded jailoc guest")
+		if got := statusRestartChanges(&w, old); !slices.Equal(got, wantOld) {
+			t.Errorf("%s: old guest: got %v, want %v", tt.name, got, wantOld)
 		}
 	}
 }

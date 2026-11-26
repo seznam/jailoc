@@ -74,9 +74,13 @@ func TestProxyValidation(t *testing.T) {
 		{name: "proxy port ports host side only is fine", in: ws + "ports = [\"3000:4000\"]\n[workspaces.w.proxy]\nweb = 3000\n"},
 		{name: "proxy port ports other guest is fine", in: ws + "ports = [\"8000:4000\"]\n[workspaces.w.proxy]\nweb = 3000\n"},
 		{name: "ports publish relay with proxy", in: ws + "ports = [\"8000:6081\"]\n[workspaces.w.proxy]\napp = 3000\n", wantErr: "6081"},
-		{name: "ports publish relay without proxy", in: ws + "ports = [\"8000:6081\"]\n"},
+		{name: "ports publish relay without proxy", in: ws + "ports = [\"8000:6081\"]\n", wantErr: "reserved for the proxy relay"},
+		{name: "ports publish relay from defaults without proxy", in: "[defaults]\nports = [\"8000:6081\"]\n" + ws, wantErr: "reserved for the proxy relay"},
+		{name: "ports host side 6081 without proxy is fine", in: ws + "ports = [\"6081:4000\"]\n"},
 		{name: "host_ports 6081 with proxy", in: ws + "host_ports = [6081]\n[workspaces.w.proxy]\napp = 3000\n", wantErr: "6081"},
-		{name: "host_ports 6081 inactive", in: ws + "host_ports = [6081]\n"},
+		{name: "host_ports 6081 without proxy", in: ws + "host_ports = [6081]\n", wantErr: "reserved for the proxy relay"},
+		{name: "host_ports 6081 from defaults without proxy", in: "[defaults]\nhost_ports = [6081]\n" + ws, wantErr: "reserved for the proxy relay"},
+		{name: "host_ports host side 6081 without proxy is fine", in: ws + "host_ports = [\"4000:6081\"]\n"},
 		{name: "host_ports 6080 with proxy only", in: ws + "host_ports = [6080]\n[workspaces.w.proxy]\napp = 3000\n"},
 	}
 	for _, tt := range tests {

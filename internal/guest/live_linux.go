@@ -2,6 +2,7 @@ package guest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,7 +13,7 @@ import (
 
 // liveState applies Reload requests: the CA bundle, the SSH and gpg agent
 // relays, the host port mirrors, the snapshot binds, the time zone and the
-// /tmp expiry.
+// /tmp expiry and the proxy relay allowlist.
 type liveState struct {
 	logger    *slog.Logger
 	acct      account
@@ -30,13 +31,21 @@ type liveState struct {
 	created map[string]bool
 	// tmp expires /tmp entries; Reload.TmpTTL replaces its TTL.
 	tmp *tmpCleaner
+	// proxy is the proxy relay; Reload.ProxyPorts replaces its allowlist. It
+	// is nil until the relay starts and when the guest runs none.
+	proxy *proxyRelay
 	// setCA overrides setCABundle in tests when non-nil.
 	setCA func(string) error
+	// setHosts overrides setHostPorts in tests when non-nil.
+	setHosts func([]uint16)
 }
 
 func (l *liveState) apply(r Reload) error {
 	if r.TmpTTL != nil && *r.TmpTTL < 0 {
 		return fmt.Errorf("tmp: negative ttl %s", *r.TmpTTL)
+	}
+	if err := l.checkProxyPorts(r.ProxyPorts); err != nil {
+		return err
 	}
 	setCA := l.setCA
 	if setCA == nil {
@@ -72,7 +81,27 @@ func (l *liveState) apply(r Reload) error {
 		l.stopGPG()
 		l.stopGPG = nil
 	}
-	l.setHostPorts(r.HostPorts)
+	// A guest port can move between a proxy route and host_ports in one
+	// reload. The relay drops removed route ports before host port mirrors
+	// start and allows added ones only after obsolete mirrors stop, so a
+	// route never reaches a host service mirrored on its port. Both lists
+	// are validated by checkProxyPorts, so they cannot fail here.
+	proxyPorts := r.ProxyPorts != nil && l.proxy != nil
+	if proxyPorts {
+		if err := l.proxy.RetainPorts(*r.ProxyPorts); err != nil {
+			return fmt.Errorf("proxy ports: %w", err)
+		}
+	}
+	setHosts := l.setHosts
+	if setHosts == nil {
+		setHosts = l.setHostPorts
+	}
+	setHosts(r.HostPorts)
+	if proxyPorts {
+		if err := l.proxy.SetPorts(*r.ProxyPorts); err != nil {
+			return fmt.Errorf("proxy ports: %w", err)
+		}
+	}
 	// A wrong zone only shifts displayed times; it does not fail the reload.
 	if r.TimeZone != nil {
 		if err := setTimeZone("/", *r.TimeZone); err != nil {
@@ -87,6 +116,21 @@ func (l *liveState) apply(r Reload) error {
 		l.tmp.SetTTL(*r.TmpTTL)
 	}
 	l.applied = r
+	return nil
+}
+
+// checkProxyPorts rejects a Reload.ProxyPorts the guest cannot apply: ports
+// without a running relay, or an invalid port.
+func (l *liveState) checkProxyPorts(ports *[]uint16) error {
+	if ports == nil {
+		return nil
+	}
+	if _, err := proxyRelayAllowlist(*ports); err != nil {
+		return err
+	}
+	if l.proxy == nil && len(*ports) > 0 {
+		return errors.New("proxy ports: the guest runs no proxy relay")
+	}
 	return nil
 }
 
@@ -135,13 +179,21 @@ func (l *liveState) poll() {
 		l.logger.Error("reload", "error", err)
 		done.Error = err.Error()
 	} else {
-		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "gpg_agent", r.GPGAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots), "time_zone", timeZoneName(r.TimeZone), "tmp_ttl", tmpTTLName(r.TmpTTL))
+		l.logger.Info("reload applied", "seq", r.Seq, "ca_bundle", r.CABundle != "", "ssh_agent", r.SSHAgent, "gpg_agent", r.GPGAgent, "host_ports", r.HostPorts, "snapshots", len(r.Snapshots), "time_zone", timeZoneName(r.TimeZone), "tmp_ttl", tmpTTLName(r.TmpTTL), "proxy_ports", proxyPortsName(r.ProxyPorts))
 	}
 	out, _ := json.Marshal(done)
 	tmp := filepath.Join(ControlDir, ReloadDoneFile+".tmp")
 	if err := os.WriteFile(tmp, out, 0o600); err == nil {
 		_ = os.Rename(tmp, filepath.Join(ControlDir, ReloadDoneFile))
 	}
+}
+
+// proxyPortsName describes a Reload.ProxyPorts for the log.
+func proxyPortsName(ports *[]uint16) any {
+	if ports == nil {
+		return "unchanged"
+	}
+	return *ports
 }
 
 // tmpTTLName describes a Reload.TmpTTL for the log.

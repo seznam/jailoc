@@ -32,8 +32,8 @@ Sessions run over SSH: `jailoc` attaches to a running agent session or starts a 
 
 | Command | What it applies |
 |---------|-----------------|
-| `jailoc reload` | Network policy, published ports, the SSH agent, the CA bundle, snapshots, environment and secrets, to the running VM |
-| `jailoc restart` | Changes to shares, CPU, memory, `enable_docker`, the guest ports of `proxy` routes or `protect_git`, which take effect only after a restart |
+| `jailoc reload` | Network policy, published ports, the SSH agent, the CA bundle, snapshots, `proxy` routes, environment and secrets, to the running VM |
+| `jailoc restart` | Changes to shares, CPU, memory, `enable_docker` or `protect_git`, which take effect only after a restart |
 
 ## Why a VM?
 

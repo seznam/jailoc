@@ -232,12 +232,13 @@ func Init(logger *slog.Logger) error {
 	}
 
 	stopProxyRelay := func() {}
-	if cfg.ProxyRelay != nil && len(cfg.ProxyRelay.Ports) > 0 {
-		stop, err := startProxyRelay(logger, cfg.ProxyRelay)
+	if cfg.ProxyRelay != nil {
+		relay, err := startProxyRelay(logger, cfg.ProxyRelay)
 		if err != nil {
 			return fmt.Errorf("proxy relay: %w", err)
 		}
-		stopProxyRelay = sync.OnceFunc(stop)
+		live.proxy = relay
+		stopProxyRelay = sync.OnceFunc(relay.Stop)
 		defer stopProxyRelay()
 	}
 

@@ -1106,7 +1106,7 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 
 ### `proxy`
 
-`proxy` serves guest ports to a browser on the host over HTTPS; see the [how-to](../how-to/proxy-routes.md). The guest runs a proxy relay on NIC port 6081, forwarding to the loopback port of each route.
+`proxy` serves guest ports to a browser on the host over HTTPS; see the [how-to](../how-to/proxy-routes.md). Every workspace VM runs a proxy relay on NIC port 6081, forwarding to the loopback port of each route; without routes its allowlist is empty and denies every port.
 
 ```toml
 [defaults.proxy]
@@ -1125,12 +1125,12 @@ Validation:
 - `proxy` route keys are lowercase DNS labels (1 to 63 characters of `a-z`, `0-9` and `-`, not starting or ending with `-`).
 - `proxy` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `proxy` port is fine; only the guest side counts.
 - With any `proxy` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
-- `ports` and `host_ports` can't use guest port 6081.
+- `ports` and `host_ports` can't use guest port 6081 in any workspace, with or without `proxy` routes: it is reserved for the proxy relay.
 - A proxy route is not a published port: nothing listens on the host except the local HTTPS proxy.
 
-Changing the set of guest ports the `proxy` routes use takes effect after `jailoc restart`; the proxy refuses a running VM that doesn't match. `jailoc reload` applies renaming a route, changing `auth`, or adding a route on a guest port already in that set. `jailoc up`, `jailoc restart` and `jailoc reload` start or update the background proxy, and `jailoc down` removes the workspace's routes from it.
+`jailoc reload` applies every change to `proxy` routes: adding, renaming or removing a route, changing its port or `auth`, and going from no routes to some or back. The guest relay allowlist is replaced live and connections through a removed route's port are closed; other sessions keep running. The proxy refuses a running VM whose routes don't match the configuration until it is reloaded. `jailoc up`, `jailoc restart` and `jailoc reload` start or update the background proxy, and `jailoc down` removes the workspace's routes from it.
 
-A running VM keeps the relay port 6081 and the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `proxy`. `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`.
+A VM started by a jailoc release whose guest protocol predates live proxy reloads applies route changes only after `jailoc restart`. Such a VM also keeps the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `proxy`; `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`. A VM started before the proxy feature has no relay and needs `jailoc restart` for any route.
 
 ### `protect_git`
 

@@ -83,13 +83,13 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	next.SSHAgent = want.SSHAgent
 	next.GPGAgent = want.GPGAgent
 	next.HostServices = want.HostServices
-	g := reloadedGuest(*running.Guest, *want.Guest, binds)
+	g := reloadedGuest(*running.Guest, *want.Guest, binds, proxyReloadable(running))
 	next.Guest = &g
 
 	if err := reloadBroker(next, st.BrokerPID); err != nil {
 		return fmt.Errorf("reload network broker of workspace %q: %w", ws.Name, err)
 	}
-	if err := reloadGuest(stateDir, g, tmpReloadTTL(running, want.Guest.Tmp)); err != nil {
+	if err := reloadGuest(stateDir, g, tmpReloadTTL(running, want.Guest.Tmp), reloadProxyPorts(running, g)); err != nil {
 		return fmt.Errorf("reload workspace %q: %w", ws.Name, err)
 	}
 	// The guest has applied tmp_ttl; record only it, the rest of /tmp needs a restart.
@@ -114,14 +114,20 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 }
 
 // runningProxyPorts are the guest ports the running VM reserves for the proxy
-// relay: its immutable relay allowlist and the relay port itself. They stay
-// reserved whatever the configuration now says, until a restart.
-func runningProxyPorts(g *guest.Config) map[int]string {
+// relay: the relay port itself and, when only a restart changes the relay
+// allowlist, that allowlist. They stay reserved whatever the configuration
+// now says, until a restart. A reload replaces the allowlist of a VM that
+// supports it, so the configuration alone decides its route ports.
+func runningProxyPorts(running vm.Spec) map[int]string {
 	reserved := map[int]string{}
+	g := running.Guest
 	if g == nil || g.ProxyRelay == nil {
 		return reserved
 	}
 	reserved[guest.ProxyRelayPort] = "the proxy relay"
+	if proxyReloadable(running) {
+		return reserved
+	}
 	for _, p := range g.ProxyRelay.Ports {
 		reserved[int(p)] = "a proxy route of the running VM"
 	}
@@ -130,11 +136,12 @@ func runningProxyPorts(g *guest.Config) map[int]string {
 
 // checkReloadProxyCollision fails a reload that would publish or mirror, as a
 // host port or a published port, a guest port that the running VM still
-// serves through its immutable proxy relay allowlist. The configuration may
-// have dropped proxy since the VM started, so config validation does not
-// catch it, and the guest keeps serving those ports until a restart.
+// serves through its proxy relay. The configuration may have dropped proxy
+// since the VM started, so config validation does not catch it, and a guest
+// whose relay allowlist a reload cannot change keeps serving those ports
+// until a restart.
 func checkReloadProxyCollision(name string, running, want vm.Spec) error {
-	reserved := runningProxyPorts(running.Guest)
+	reserved := runningProxyPorts(running)
 	if len(reserved) == 0 {
 		return nil
 	}
@@ -160,10 +167,18 @@ func checkReloadProxyCollision(name string, running, want vm.Spec) error {
 }
 
 // reloadedGuest is the guest configuration of a reloaded VM: running with the
-// reloadable settings of want. The proxy relay allowlist stays that of the
-// running VM; only a restart changes it.
-func reloadedGuest(running, want guest.Config, binds []guest.Snapshot) guest.Config {
+// reloadable settings of want. The proxy relay allowlist is that of want when
+// liveProxy says the running guest replaces it on a reload (the guest runs a
+// relay then, empty without routes); otherwise it stays that of the running
+// VM, and only a restart changes it.
+func reloadedGuest(running, want guest.Config, binds []guest.Snapshot, liveProxy bool) guest.Config {
 	g := running
+	if liveProxy {
+		g.ProxyRelay = &guest.ProxyRelay{}
+		if want.ProxyRelay != nil {
+			g.ProxyRelay.Ports = slices.Clone(want.ProxyRelay.Ports)
+		}
+	}
 	g.CABundle = want.CABundle
 	g.SSHAgent = want.SSHAgent
 	g.GPGAgent = want.GPGAgent
@@ -271,6 +286,30 @@ func reloadPolicy(ctx context.Context, ws *workspace.Resolved, running vm.Spec) 
 	return vmPolicy(ctx, ws)
 }
 
+// liveProxyGuestProtocol is the first guest protocol that always runs the proxy
+// relay and replaces its allowlist from Reload.ProxyPorts.
+const liveProxyGuestProtocol = 5
+
+// proxyReloadable reports whether a reload changes the proxy routes of the
+// running VM: its guest always runs the relay, behind a broker forward that
+// exists from boot, and replaces the relay allowlist live. Older VMs apply
+// proxy changes at the next restart.
+func proxyReloadable(running vm.Spec) bool {
+	return running.GuestProtocol >= liveProxyGuestProtocol
+}
+
+// reloadProxyPorts is the relay allowlist a reload sends to the running guest,
+// nil when the guest cannot replace it. The list is never nil when set, so it
+// encodes as [] rather than null.
+func reloadProxyPorts(running vm.Spec, g guest.Config) *[]uint16 {
+	if !proxyReloadable(running) {
+		return nil
+	}
+	ports := []uint16{}
+	ports = append(ports, guestProxyPorts(&g)...)
+	return &ports
+}
+
 // snapshotsReloadable reports whether the running VM can rebind snapshots:
 // its guest speaks the current protocol, which has the snapshots in its
 // internal share. Otherwise restartOnlyChanges reports the guest difference.
@@ -315,7 +354,7 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	if guestIPv6(running) != want.Guest.IPv6 {
 		out = append(out, "network.ipv6")
 	}
-	if !slices.Equal(guestProxyPorts(running.Guest), guestProxyPorts(want.Guest)) {
+	if !proxyReloadable(running) && !slices.Equal(guestProxyPorts(running.Guest), guestProxyPorts(want.Guest)) {
 		out = append(out, "proxy")
 	}
 	// Specs written before jailoc ran other agents than OpenCode name none.
@@ -462,9 +501,10 @@ func scanReloadEvent(r io.Reader) (brokerReload, bool) {
 
 // reloadGuest asks the guest init to apply the CA bundle, SSH and GPG agents,
 // host ports, snapshots and time zone of g and waits for its answer.
-// tmpTTL, when set, replaces the /tmp expiry.
-func reloadGuest(stateDir string, g guest.Config, tmpTTL *time.Duration) error {
-	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, GPGAgent: g.GPGAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots, TimeZone: g.TimeZone, TmpTTL: tmpTTL}
+// tmpTTL, when set, replaces the /tmp expiry; proxyPorts, when set, replaces
+// the proxy relay allowlist.
+func reloadGuest(stateDir string, g guest.Config, tmpTTL *time.Duration, proxyPorts *[]uint16) error {
+	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, GPGAgent: g.GPGAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots, TimeZone: g.TimeZone, TmpTTL: tmpTTL, ProxyPorts: proxyPorts}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode reload request: %w", err)
