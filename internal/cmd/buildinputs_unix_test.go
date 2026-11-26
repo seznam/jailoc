@@ -3,9 +3,11 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/seznam/jailoc/internal/config"
@@ -88,7 +90,7 @@ func TestEffectiveBuildInputs(t *testing.T) {
 			want: []buildInput{
 				{kind: inputBaseDockerfile, path: baseDockerfile},
 				{kind: inputDockerfile, path: wsDockerfile},
-				{kind: inputContext, path: context, dir: true},
+				{kind: inputContext, path: context + "/", dir: true},
 			},
 		},
 		{
@@ -217,5 +219,350 @@ func TestCheckBuildInputsReportsEveryConflict(t *testing.T) {
 		"mount them read-only",
 	} {
 		assertContains(t, err.Error(), want)
+	}
+}
+
+// TestEffectiveBuildInputsKeepsRawPaths pins that the paths the build reads
+// are reported exactly as the builder receives them: the base Dockerfile
+// trimmed, the workspace Dockerfile and context raw, the implicit context
+// filepath.Dir of the raw Dockerfile. Cleaning "link/.." lexically would
+// name a different file than the one the build opens.
+func TestEffectiveBuildInputsKeepsRawPaths(t *testing.T) {
+	t.Parallel()
+	const (
+		base       = "/trusted/link/../base.Dockerfile"
+		dockerfile = "/work/link/../build/overlay.Dockerfile"
+		buildCtx   = "/trusted/link/../context"
+	)
+	tests := []struct {
+		name string
+		base string
+		ws   workspace.Resolved
+		want []buildInput
+	}{
+		{
+			name: "base Dockerfile is trimmed but not cleaned",
+			base: "  " + base + "\t ",
+			want: []buildInput{{kind: inputBaseDockerfile, path: base}},
+		},
+		{
+			name: "workspace Dockerfile and context stay raw including trailing whitespace",
+			ws:   workspace.Resolved{Dockerfile: dockerfile + " ", BuildContext: buildCtx + " "},
+			want: []buildInput{
+				{kind: inputDockerfile, path: dockerfile + " "},
+				{kind: inputContext, path: buildCtx + " ", dir: true},
+			},
+		},
+		{
+			name: "workspace Dockerfile with link and parent stays raw",
+			ws:   workspace.Resolved{Dockerfile: dockerfile, BuildContext: buildCtx},
+			want: []buildInput{
+				{kind: inputDockerfile, path: dockerfile},
+				{kind: inputContext, path: buildCtx, dir: true},
+			},
+		},
+		{
+			name: "implicit context is the directory of the raw Dockerfile",
+			ws:   workspace.Resolved{Dockerfile: dockerfile},
+			want: []buildInput{
+				{kind: inputDockerfile, path: dockerfile},
+				{kind: inputContext, path: "/work/build", dir: true},
+			},
+		},
+		{
+			// The builder takes filepath.Dir of the raw value, whose last
+			// element here is the file " ". Trimming first would read "/work".
+			name: "implicit context of a Dockerfile named by whitespace",
+			ws:   workspace.Resolved{Dockerfile: "/work/build/ "},
+			want: []buildInput{
+				{kind: inputDockerfile, path: "/work/build/ "},
+				{kind: inputContext, path: "/work/build", dir: true},
+			},
+		},
+		{
+			name: "blank base and blank context change nothing",
+			base: " \t ",
+			ws:   workspace.Resolved{Dockerfile: dockerfile, BuildContext: "\t  "},
+			want: []buildInput{
+				{kind: inputDockerfile, path: dockerfile},
+				{kind: inputContext, path: "/work/build", dir: true},
+			},
+		},
+		{
+			name: "blank Dockerfile builds no overlay and ignores the context",
+			base: " ",
+			ws:   workspace.Resolved{Dockerfile: " \t", BuildContext: buildCtx},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{Base: config.BaseConfig{Dockerfile: tt.base}}
+			got, err := effectiveBuildInputs(cfg, &tt.ws)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("effectiveBuildInputs() = %+v\nwant                   %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildInputsOfLinkedPaths drives raw build input paths that contain
+// symbolic links, "..", or dangling targets through effectiveBuildInputs and
+// checkBuildInputs, and through checkBuildInputs alone. Every raw path is
+// built by concatenation so that nothing cleans it before the build opens it.
+func TestBuildInputsOfLinkedPaths(t *testing.T) {
+	t.Parallel()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		share     = dir + "/share"
+		trusted   = dir + "/trusted"
+		elsewhere = dir + "/elsewhere"
+	)
+	for _, d := range []string{share + "/sub", trusted + "/ctx", elsewhere} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		share + "/Dockerfile":        "FROM share\n",
+		share + "/base.Dockerfile":   "FROM share-base\n",
+		share + "/marker":            "share\n",
+		trusted + "/Dockerfile":      "FROM trusted\n",
+		trusted + "/base.Dockerfile": "FROM trusted-base\n",
+		trusted + "/marker":          "trusted\n",
+	}
+	for f, content := range files {
+		if err := os.WriteFile(f, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		// A trusted link into an existing subdirectory of the share: "link/.."
+		// is the share itself, not trusted.
+		trusted + "/link": share + "/sub",
+		// Dangling links whose targets the guest can create in the share.
+		trusted + "/dangling-abs":     share + "/missing/Dockerfile",
+		trusted + "/dangling-rel":     "../share/missing/Dockerfile",
+		trusted + "/dangling-ctx-abs": share + "/missing-ctx",
+		trusted + "/dangling-ctx-rel": "../share/missing-ctx",
+		trusted + "/deep":             "../share/a/b/c/Dockerfile",
+		// A dangling link to a missing target outside every share.
+		trusted + "/out-missing": "../elsewhere/x/y/Dockerfile",
+		// Trusted links whose targets contain "..", behind another link.
+		trusted + "/dots-existing": "link/../Dockerfile",
+		trusted + "/dots-missing":  "link/../missing/Dockerfile",
+		// A link the guest can repoint, followed by "..": "wl/.." is trusted.
+		share + "/wl": trusted + "/ctx",
+	}
+	for l, target := range links {
+		if err := os.Symlink(target, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rw := workspaceShare{workspace: "app", share: vm.Share{HostPath: share}}
+	ro := workspaceShare{workspace: "app", share: vm.Share{HostPath: share, ReadOnly: true}}
+	plainFile := buildInput{kind: inputDockerfile, path: trusted + "/Dockerfile"}
+	plainCtx := buildInput{kind: inputContext, path: trusted + "/ctx", dir: true}
+	file := func(p string) []buildInput { return []buildInput{{kind: inputDockerfile, path: p}, plainCtx} }
+	ctx := func(p string) []buildInput { return []buildInput{plainFile, {kind: inputContext, path: p, dir: true}} }
+	base := func(p string) []buildInput { return []buildInput{{kind: inputBaseDockerfile, path: p}} }
+
+	tests := []struct {
+		name    string
+		inputs  []buildInput
+		exports []workspaceShare
+		wantErr string
+		// read is a path the build opens and the content it must have, to
+		// show the raw path names the file the test claims it does.
+		read, content string
+	}{
+		{"Dockerfile through a link into the share and ..", file(trusted + "/link/../Dockerfile"), []workspaceShare{rw}, "lies in the read-write share", trusted + "/link/../Dockerfile", "FROM share\n"},
+		{"context through a link into the share and ..", ctx(trusted + "/link/.."), []workspaceShare{rw}, "read-write share", trusted + "/link/../marker", "share\n"},
+		{"base Dockerfile through a link into the share and ..", base(trusted + "/link/../base.Dockerfile"), []workspaceShare{rw}, "lies in the read-write share", trusted + "/link/../base.Dockerfile", "FROM share-base\n"},
+		{"dangling absolute link Dockerfile", file(trusted + "/dangling-abs"), []workspaceShare{rw}, "read-write share", "", ""},
+		{"dangling relative link Dockerfile", file(trusted + "/dangling-rel"), []workspaceShare{rw}, "read-write share", "", ""},
+		{"dangling absolute link context", ctx(trusted + "/dangling-ctx-abs"), []workspaceShare{rw}, "read-write share", "", ""},
+		{"dangling relative link context", ctx(trusted + "/dangling-ctx-rel"), []workspaceShare{rw}, "read-write share", "", ""},
+		{"dangling base Dockerfile link", base(trusted + "/dangling-rel"), []workspaceShare{rw}, "read-write share", "", ""},
+		{"link to a missing multi-component target", file(trusted + "/deep"), []workspaceShare{rw}, "read-write share", "", ""},
+		{"link target with .. behind a link, existing", file(trusted + "/dots-existing"), []workspaceShare{rw}, "lies in the read-write share", trusted + "/dots-existing", "FROM share\n"},
+		{"link target with .. behind a link, missing", file(trusted + "/dots-missing"), []workspaceShare{rw}, "read-write share", "", ""},
+		{"Dockerfile through a writable link and ..", file(share + "/wl/../Dockerfile"), []workspaceShare{rw}, "symbolic link", share + "/wl/../Dockerfile", "FROM trusted\n"},
+		{"context through a writable link and ..", ctx(share + "/wl/.."), []workspaceShare{rw}, "symbolic link", share + "/wl/../marker", "trusted\n"},
+		{"missing target outside the shares", file(trusted + "/out-missing"), []workspaceShare{rw}, "", "", ""},
+		{"dangling link into a read-only share", file(trusted + "/dangling-abs"), []workspaceShare{ro}, "", "", ""},
+		{"link and .. into a read-only share", file(trusted + "/link/../Dockerfile"), []workspaceShare{ro}, "", trusted + "/link/../Dockerfile", "FROM share\n"},
+		{"writable link and .. in a read-only share", ctx(share + "/wl/.."), []workspaceShare{ro}, "", "", ""},
+		{"dangling link without shares", file(trusted + "/dangling-abs"), nil, "", "", ""},
+		{"link and .. without shares", file(trusted + "/link/../Dockerfile"), nil, "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.read != "" {
+				got, err := os.ReadFile(tt.read)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != tt.content {
+					t.Fatalf("%s holds %q, want %q", tt.read, got, tt.content)
+				}
+			}
+			assertErr := func(t *testing.T, err error) {
+				t.Helper()
+				if tt.wantErr == "" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+				if err == nil {
+					t.Fatalf("check = nil, want %q", tt.wantErr)
+				}
+				assertContains(t, err.Error(), tt.wantErr)
+			}
+			t.Run("raw inputs", func(t *testing.T) {
+				assertErr(t, checkBuildInputs(tt.inputs, tt.exports))
+			})
+			t.Run("from the configuration", func(t *testing.T) {
+				cfg, ws := buildInputsConfig(tt.inputs)
+				inputs, err := effectiveBuildInputs(cfg, ws)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertErr(t, checkBuildInputs(inputs, tt.exports))
+			})
+		})
+	}
+}
+
+// buildInputsConfig returns the configuration and workspace whose build
+// reads exactly the raw inputs: the base Dockerfile padded with whitespace as
+// a user may write it, the workspace Dockerfile and context as they are.
+func buildInputsConfig(inputs []buildInput) (*config.Config, *workspace.Resolved) {
+	cfg, ws := &config.Config{}, &workspace.Resolved{}
+	for _, in := range inputs {
+		switch in.kind {
+		case inputBaseDockerfile:
+			cfg.Base.Dockerfile = "  " + in.path + "  "
+		case inputDockerfile:
+			ws.Dockerfile = in.path
+		case inputContext:
+			ws.BuildContext = in.path
+		}
+	}
+	return cfg, ws
+}
+
+func TestResolveBuildInputPath(t *testing.T) {
+	t.Parallel()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+"/sub", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/file", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for l, target := range map[string]string{
+		"link":     dir + "/sub",
+		"linkfile": "file",
+		"chain1":   dir + "/chain2",
+		"chain2":   "sub",
+		"dangling": "missing/x",
+		"dotmiss":  "missing/../y",
+		"relup":    "sub/../file",
+		"loopa":    "loopb",
+		"loopb":    "loopa",
+		"filedots": "file/..",
+	} {
+		if err := os.Symlink(target, dir+"/"+l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cwd, err = filepath.EvalSymlinks(cwd); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		path      string
+		want      string
+		wantLinks []string
+		// exists marks paths that EvalSymlinks must resolve to the same file.
+		exists  bool
+		wantErr error
+		anyErr  bool
+	}{
+		{name: "directory", path: dir + "/sub", want: dir + "/sub", exists: true},
+		{name: "dot and empty components", path: dir + "//sub/./", want: dir + "/sub", exists: true},
+		{name: "parent of a directory", path: dir + "/sub/../sub", want: dir + "/sub", exists: true},
+		{name: "link then parent", path: dir + "/link/..", want: dir, wantLinks: []string{dir + "/link"}, exists: true},
+		{name: "link to a file", path: dir + "/linkfile", want: dir + "/file", wantLinks: []string{dir + "/linkfile"}, exists: true},
+		{name: "absolute then relative link chain", path: dir + "/chain1", want: dir + "/sub", wantLinks: []string{dir + "/chain1", dir + "/chain2"}, exists: true},
+		{name: "relative target with parent", path: dir + "/relup", want: dir + "/file", wantLinks: []string{dir + "/relup"}, exists: true},
+		{name: "missing multi-component target", path: dir + "/missing/a/b", want: dir + "/missing/a/b"},
+		{name: "missing target ignores dot and empty", path: dir + "/missing//a/./b/", want: dir + "/missing/a/b"},
+		{name: "dangling link", path: dir + "/dangling", want: dir + "/missing/x", wantLinks: []string{dir + "/dangling"}},
+		{name: "missing then parent", path: dir + "/missing/../file", anyErr: true},
+		{name: "missing then trailing parent", path: dir + "/missing/..", anyErr: true},
+		{name: "dangling link target with parent", path: dir + "/dotmiss", anyErr: true},
+		{name: "file then slash", path: dir + "/file/", wantErr: syscall.ENOTDIR},
+		{name: "file then dot", path: dir + "/file/.", wantErr: syscall.ENOTDIR},
+		{name: "file then parent", path: dir + "/file/..", wantErr: syscall.ENOTDIR},
+		{name: "file then name", path: dir + "/file/x", wantErr: syscall.ENOTDIR},
+		{name: "link to a file then slash", path: dir + "/linkfile/", wantErr: syscall.ENOTDIR},
+		{name: "link target of file then parent", path: dir + "/filedots", wantErr: syscall.ENOTDIR},
+		{name: "link loop", path: dir + "/loopa", anyErr: true},
+		{name: "relative path starts at the physical working directory", path: "buildinputs_unix.go", want: cwd + "/buildinputs_unix.go", exists: true},
+		{name: "relative parent", path: "../cmd/./buildinputs_unix.go", want: cwd + "/buildinputs_unix.go", exists: true},
+		{name: "root", path: "/", want: "/", exists: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, links, err := resolveBuildInputPath(tt.path)
+			switch {
+			case tt.wantErr != nil:
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("resolveBuildInputPath(%q) error = %v, want %v", tt.path, err, tt.wantErr)
+				}
+				return
+			case tt.anyErr:
+				if err == nil {
+					t.Fatalf("resolveBuildInputPath(%q) = %q, nil, want an error", tt.path, got)
+				}
+				return
+			case err != nil:
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Errorf("resolveBuildInputPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+			if !slices.Equal(links, tt.wantLinks) {
+				t.Errorf("links = %q, want %q", links, tt.wantLinks)
+			}
+			if !tt.exists {
+				return
+			}
+			want, err := filepath.EvalSymlinks(tt.path)
+			if err == nil && !filepath.IsAbs(want) {
+				want = filepath.Join(cwd, want)
+			}
+			if err != nil || want != got {
+				t.Errorf("EvalSymlinks(%q) = %q, %v; want %q", tt.path, want, err, got)
+			}
+		})
 	}
 }
