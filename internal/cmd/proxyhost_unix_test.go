@@ -1163,7 +1163,10 @@ func TestProxyInstallChecksDestinationDirectories(t *testing.T) {
 }
 
 func TestProxyPrivilegedHelpersCheckInstallDirectories(t *testing.T) {
-	base := shortTempDir(t, "rc")
+	base, err := filepath.EvalSymlinks(shortTempDir(t, "rc"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	real := filepath.Join(base, "real")
 	if err := os.Mkdir(real, 0o755); err != nil { //nolint:gosec // G301: directory under test
 		t.Fatal(err)
