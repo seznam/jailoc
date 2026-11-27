@@ -260,6 +260,97 @@ func TestRedactKeepsSecretRedactionWithOAuthURLs(t *testing.T) {
 	}
 }
 
+// TestRedactOAuthURLsWithURLPrefixSecret guards OAuth recognition against a
+// secret value that is a prefix of the OAuth URL itself: its origin or its
+// authorization path. Masking such a value before the URL is recognized
+// replaces the scheme, so the URL is no longer seen and its query and
+// fragment, including the authorization state, stay in the log.
+func TestRedactOAuthURLsWithURLPrefixSecret(t *testing.T) {
+	t.Parallel()
+	const (
+		originPrefix = "https://claude.ai"
+		authPrefix   = "https://claude.ai/oauth/authorize"
+		fullURL      = testClaudeAuthURL + "#frag-secret"
+	)
+	tests := []struct {
+		name    string
+		secrets []string
+		argv    []string
+		want    []string
+	}{
+		{
+			name:    "direct argv origin prefix",
+			secrets: []string{originPrefix},
+			argv:    []string{"xdg-open", fullURL},
+			want:    []string{"xdg-open", "[redacted]/oauth/authorize?[redacted]"},
+		},
+		{
+			name:    "direct argv authorization path prefix",
+			secrets: []string{authPrefix},
+			argv:    []string{"xdg-open", fullURL},
+			want:    []string{"xdg-open", "[redacted]?[redacted]"},
+		},
+		{
+			name:    "sh -c embedded origin prefix",
+			secrets: []string{originPrefix},
+			argv:    []string{"sh", "-c", `xdg-open "` + fullURL + `"`},
+			want:    []string{"sh", "-c", `xdg-open "[redacted]/oauth/authorize?[redacted]"`},
+		},
+		{
+			name:    "sh -c embedded authorization path prefix",
+			secrets: []string{authPrefix},
+			argv:    []string{"sh", "-c", `xdg-open "` + fullURL + `"`},
+			want:    []string{"sh", "-c", `xdg-open "[redacted]?[redacted]"`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			orig := slices.Clone(tt.argv)
+			got := redact(tt.argv, tt.secrets)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("redact(%q) = %q, want %q", tt.argv, got, tt.want)
+			}
+			if !slices.Equal(tt.argv, orig) {
+				t.Errorf("redact mutated its input: %q, want %q", tt.argv, orig)
+			}
+			for _, a := range got {
+				for _, m := range oauthLeakMarkers {
+					if strings.Contains(a, m) {
+						t.Errorf("redact(%q) leaks %q in %q", tt.argv, m, a)
+					}
+				}
+			}
+			if again := redact(got, tt.secrets); !slices.Equal(again, got) {
+				t.Errorf("redact is not idempotent: %q then %q", got, again)
+			}
+			rec := ExecRecord{Time: time.Unix(0, 0).UTC(), PID: 1, UID: 1000, Argv: got}
+			data, err := json.Marshal(rec)
+			if err != nil {
+				t.Fatalf("marshal exec record: %v", err)
+			}
+			for _, m := range oauthLeakMarkers {
+				if strings.Contains(string(data), m) {
+					t.Errorf("serialized record %s leaks %q", data, m)
+				}
+			}
+		})
+	}
+}
+
+// TestRedactOrdinaryURLSecretValueKeepsURLShape checks that reordering OAuth
+// redaction before secret masking does not treat an ordinary URL as an OAuth
+// one; a secret value in its query is still masked and the rest is unchanged.
+func TestRedactOrdinaryURLSecretValueKeepsURLShape(t *testing.T) {
+	t.Parallel()
+	const secret = "ordinary-secret-value"
+	argv := []string{"curl", "https://example.com/search?q=" + secret + "&page=2"}
+	want := []string{"curl", "https://example.com/search?q=[redacted]&page=2"}
+	if got := redact(argv, []string{secret}); !slices.Equal(got, want) {
+		t.Errorf("redact(%q) = %q, want %q", argv, got, want)
+	}
+}
+
 func TestRedactOAuthURLInputUntouchedAndShared(t *testing.T) {
 	t.Parallel()
 	clean := []string{"ls", "https://example.com/a?b=c"}

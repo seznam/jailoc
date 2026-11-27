@@ -87,7 +87,7 @@ func redactCredentialPatterns(s string) string {
 func redact(argv, values []string) []string {
 	var out []string
 	for i, a := range argv {
-		r := redactOAuthURLs(RedactString(a, values))
+		r := RedactString(redactOAuthURLs(a), values)
 		if r != a && out == nil {
 			out = slices.Clone(argv)
 		}
