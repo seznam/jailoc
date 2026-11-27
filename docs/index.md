@@ -18,6 +18,7 @@ An agent on your host can reach everything your user account can. jailoc narrows
 - **Only the files you share.** The agent sees the directories you share as workspace paths or mounts, plus read-only snapshots of files you list. Your SSH keys, browser profiles and other projects aren't in the VM.
 - **Egress by rule.** A network broker on the host decides every connection. Destinations no allow rule matches are denied, apart from the coding agent's own endpoints, and private and reserved ranges stay closed unless a rule opens them. See [Network Access](how-to/network-access.md).
 - **Docker inside the VM.** With `enable_docker`, the Docker daemon runs in the workspace VM, so no host Docker socket is mounted.
+- **Your agent, your workflow.** jailoc provides the isolated computer, not the development process. Your instructions, tools, Git workflow and ticket system stay yours. See [A boundary, not a workflow](explanation/overview.md#a-boundary-not-a-workflow).
 
 !!! warning "What jailoc does not protect against"
 

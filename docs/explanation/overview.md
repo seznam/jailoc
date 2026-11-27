@@ -51,3 +51,9 @@ That boundary has two consequences:
 Docker on the host is used only to build images (unless the builder VM does it) and by `jailoc migrate`. Workspaces never run on it.
 
 See [Architecture](architecture.md) for the components and [Threat Model](threat-model.md) for what the boundary protects against. [Alternatives](alternatives.md) compares jailoc with containers, process sandboxes and other VMs.
+
+## A boundary, not a workflow
+
+jailoc provides the isolated computer, not the development process. The user chooses the instructions, tools, Git workflow and ticket system, and the coding agent's harness handles the agent's behavior. The built-in agents have their own installation and session handling, which jailoc adapts per harness (see [Coding agents](../reference/configuration.md#coding-agents)). A [custom agent](../reference/configuration.md#custom-agents) is a built-in agent under another name, so it isn't automatic support for an arbitrary harness.
+
+Existing tools and services still need installation, configuration, credentials and network access in the workspace. See [Workspace Configuration](../how-to/workspace-configuration.md), [Secrets](../how-to/secrets.md) and [Network Access](../how-to/network-access.md).
