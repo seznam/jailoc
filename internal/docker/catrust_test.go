@@ -30,7 +30,7 @@ func TestCAFrontend(t *testing.T) {
 		{"tag 1", "# syntax=docker/dockerfile:1\nFROM ubuntu\n", false},
 		{"tag 1-labs", "# syntax=docker/dockerfile:1-labs\nFROM ubuntu\n", false},
 		{"tag latest", "# syntax=docker/dockerfile:latest\nFROM ubuntu\n", false},
-		{"tag 1.2", "# syntax=docker/dockerfile:1.2\nFROM ubuntu\n", false},
+		{"tag 1.3", "# syntax=docker/dockerfile:1.3\nFROM ubuntu\n", false},
 		{"tag 1.7.1", "# syntax=docker/dockerfile:1.7.1\nFROM ubuntu\n", false},
 		{"tag 1.10-labs", "# syntax=docker/dockerfile:1.10-labs\nFROM ubuntu\n", false},
 		{"tag 1.4.0-labs", "# syntax=docker/dockerfile:1.4.0-labs\nFROM ubuntu\n", false},
@@ -41,6 +41,7 @@ func TestCAFrontend(t *testing.T) {
 		{"tag 1.0", "# syntax=docker/dockerfile:1.0\nFROM ubuntu\n", true},
 		{"tag 1.1", "# syntax=docker/dockerfile:1.1\nFROM ubuntu\n", true},
 		{"tag 1.1-labs", "# syntax=docker/dockerfile:1.1-labs\nFROM ubuntu\n", true},
+		{"tag 1.2", "# syntax=docker/dockerfile:1.2\nFROM ubuntu\n", true},
 		{"tag 2", "# syntax=docker/dockerfile:2\nFROM ubuntu\n", true},
 		{"tag 1.x", "# syntax=docker/dockerfile:1.x\nFROM ubuntu\n", true},
 		{"no tag", "# syntax=docker/dockerfile\nFROM ubuntu\n", true},
@@ -56,7 +57,7 @@ func TestCAFrontend(t *testing.T) {
 				t.Fatalf("checkCAFrontend() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err != nil {
-				for _, want := range []string{"dockerfile syntax", "ca_bundle", "docker/dockerfile frontend (1.2 or later)", "ca_bundle = false"} {
+				for _, want := range []string{"dockerfile syntax", "ca_bundle", "docker/dockerfile frontend (1.3 or later)", "ca_bundle = false"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("error %q lacks %q", err, want)
 					}
@@ -90,7 +91,7 @@ func TestCAPlanTrust(t *testing.T) {
 			name: "multistage skips stage alias",
 			dockerfile: "FROM golang:1.26 AS build\nARG VERSION\nRUN go build\n" +
 				"FROM build AS test\nRUN go test\n",
-			wantStages: []caStage{{fromEndLine: 1, base: "golang:1.26", name: "build", argKeys: map[string]bool{"VERSION": true}}},
+			wantStages: []caStage{{fromEndLine: 1, base: "golang:1.26", name: "build", argKeys: map[string]bool{}}},
 			wantImages: []string{"golang:1.26"},
 		},
 		{
@@ -250,9 +251,10 @@ func TestCAPlanTrust(t *testing.T) {
 			wantImages: []string{"alpine:3", "debian:12", "ext:3"},
 		},
 		{
-			name:       "ARG keys collected anywhere in the stage",
-			dockerfile: "FROM alpine:3\nARG A\nRUN true\nARG B=1 C\n",
-			wantStages: []caStage{{fromEndLine: 1, base: "alpine:3", name: "0", argKeys: map[string]bool{"A": true, "B": true, "C": true}}},
+			name:       "only valued ARG keys are recorded as overrides",
+			dockerfile: "ARG M=meta\nARG UNSET_META\nFROM alpine:3\nARG A\nRUN true\nARG B=1 C D M UNSET_META\n",
+			args:       map[string]*string{"D": str("from-build-arg")},
+			wantStages: []caStage{{fromEndLine: 3, base: "alpine:3", name: "0", argKeys: map[string]bool{"B": true, "D": true, "M": true}}},
 			wantImages: []string{"alpine:3"},
 		},
 	}
@@ -422,6 +424,7 @@ func TestCATrustInstructions(t *testing.T) {
 			"chmod 0644",
 			"/tmp/jailoc-old-ca.crt",
 			"/tmp/jailoc-prev-ca.crt",
+			"else cat /usr/local/share/ca-certificates/jailoc-build-ca-*.crt > /etc/ssl/certs/ca-certificates.crt; fi && if [ -s /tmp/jailoc-prev-ca.crt ]; then",
 		} {
 			if !strings.Contains(run, want) {
 				t.Errorf("RUN lacks %q: %s", want, run)
@@ -688,15 +691,15 @@ func TestPrepareCADockerfileInjectsTrust(t *testing.T) {
 		"ubuntu:26.04": {},
 		"golang:1.26":  {user: "agent", env: agentEnv},
 	}}
-	dockerfile := []byte("FROM golang:1.26 AS build\nARG VERSION\nRUN go build\nFROM ubuntu:26.04\nCOPY --from=build /app /app\n")
+	dockerfile := []byte("FROM golang:1.26 AS build\nARG VERSION\nARG PIP_CERT=/custom/pip.pem\nRUN go build\nFROM ubuntu:26.04\nCOPY --from=build /app /app\n")
 
 	got, err := prepareCADockerfile(context.Background(), e.client(t), dockerfile, nil, ca)
 	if err != nil {
 		t.Fatalf("prepareCADockerfile: %v", err)
 	}
 	want := injectAfterLines(dockerfile, map[int]string{
-		1: caTrustInstructions(ca.Digest(), "agent", agentEnv, map[string]bool{"VERSION": true}),
-		4: caTrustInstructions(ca.Digest(), "", nil, map[string]bool{}),
+		1: caTrustInstructions(ca.Digest(), "agent", agentEnv, map[string]bool{"PIP_CERT": true}),
+		5: caTrustInstructions(ca.Digest(), "", nil, map[string]bool{}),
 	})
 	if !bytes.Equal(got, want) {
 		t.Fatalf("Dockerfile =\n%s\nwant\n%s", got, want)

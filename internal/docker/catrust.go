@@ -39,7 +39,7 @@ func checkCAFrontend(dockerfile []byte) error {
 	if caFrontendSupportsSecrets(syntax) {
 		return nil
 	}
-	return fmt.Errorf("dockerfile syntax %q: ca_bundle forwarding requires the standard docker/dockerfile frontend (1.2 or later); remove # syntax or set ca_bundle = false", syntax)
+	return fmt.Errorf("dockerfile syntax %q: ca_bundle forwarding requires the standard docker/dockerfile frontend (1.3 or later); remove # syntax or set ca_bundle = false", syntax)
 }
 
 func caFrontendSupportsSecrets(syntax string) bool {
@@ -60,7 +60,7 @@ func caFrontendSupportsSecrets(syntax string) bool {
 		return false
 	}
 	minor, err := strconv.Atoi(v[1])
-	return err == nil && minor >= 2
+	return err == nil && minor >= 3
 }
 
 // caStage is an external build stage that receives the CA trust steps.
@@ -248,10 +248,11 @@ func (p *caPlanner) addStage(index int, st instructions.Stage) error {
 		switch c := cmd.(type) {
 		case *instructions.ArgCommand:
 			for _, kv := range c.Args {
-				argKeys[kv.Key] = true
 				if v, ok := p.argValue(kv, env); ok {
+					argKeys[kv.Key] = true
 					env[kv.Key] = v
 				} else if v, ok := p.meta[kv.Key]; ok {
+					argKeys[kv.Key] = true
 					env[kv.Key] = v
 				}
 			}
@@ -436,13 +437,13 @@ const caTrustScript = `if [ ! -f /etc/debian_version ]; then echo "jailoc: ca_bu
 	`awk 'BEGIN { n = 0; out = "" } /-----BEGIN CERTIFICATE-----/ { n++; out = sprintf("/usr/local/share/ca-certificates/jailoc-build-ca-%03d.crt", n) } out != "" { print > out } /-----END CERTIFICATE-----/ { if (out != "") close(out); out = "" }' /run/secrets/` + caSecretID + ` && ` +
 	`chmod 0644 /usr/local/share/ca-certificates/jailoc-build-ca-*.crt && ` +
 	`if command -v update-ca-certificates >/dev/null 2>&1; then ` +
-	`update-ca-certificates >/dev/null && ` +
+	`update-ca-certificates >/dev/null; ` +
+	`else cat /usr/local/share/ca-certificates/jailoc-build-ca-*.crt > /etc/ssl/certs/ca-certificates.crt; fi && ` +
 	`if [ -s /tmp/jailoc-prev-ca.crt ]; then ` +
 	`printf '` + caTrustMergeAwk + `\n' > /tmp/jailoc-merge.awk && ` +
 	`awk -f /tmp/jailoc-merge.awk /tmp/jailoc-old-ca.crt /etc/ssl/certs/ca-certificates.crt /tmp/jailoc-prev-ca.crt > /tmp/jailoc-merge.out && ` +
 	`cat /tmp/jailoc-merge.out >> /etc/ssl/certs/ca-certificates.crt; ` +
-	`fi; ` +
-	`else cat /usr/local/share/ca-certificates/jailoc-build-ca-*.crt >> /etc/ssl/certs/ca-certificates.crt; fi && ` +
+	`fi && ` +
 	`rm -f /tmp/jailoc-old-ca.crt /tmp/jailoc-prev-ca.crt /tmp/jailoc-merge.awk /tmp/jailoc-merge.out && ` +
 	`chmod 0644 /etc/ssl/certs/ca-certificates.crt`
 
