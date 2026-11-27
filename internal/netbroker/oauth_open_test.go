@@ -381,6 +381,51 @@ func TestOAuthRegisterShutdownContext(t *testing.T) {
 	}
 }
 
+func TestOAuthRegisterPreCanceledRequestNeverOpens(t *testing.T) {
+	t.Parallel()
+	// The request context is already canceled when the handler runs. The
+	// broker stays live, so the callback binds, but an asynchronous
+	// context.AfterFunc(reqCtx) may not fire before the opener is invoked:
+	// the request must be refused synchronously instead.
+	cases := []struct {
+		name     string
+		forward  func(port uint16) []Forward
+		wantLink bool
+	}{
+		{"ephemeral callback", func(uint16) []Forward { return nil }, true},
+		{"configured forward", func(port uint16) []Forward {
+			return []Forward{{Host: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port), GuestPort: port}}
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			port := freePort(t)
+			op := &fakeOpener{}
+			e := startPendingEnvOpen(t, time.Minute, op.open, tc.forward(port)...)
+			rctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			raw := pendingAuthURL(loopbackRedirect("localhost", port, "/cb"))
+
+			rec := directRegister(e.b, e.ctx, rctx, port, raw)
+			if rec.Code != http.StatusBadGateway || rec.Body.String() != wantBrowserErrBody {
+				t.Fatalf("status = %d body = %q, want 502 and the generic body", rec.Code, rec.Body.String())
+			}
+			if got := op.calls(); len(got) != 0 {
+				t.Fatalf("opener called for a pre-canceled request: %q", got)
+			}
+			links := getPending(t, e.sock)
+			if tc.wantLink {
+				if len(links) != 1 || links[0].URL != raw {
+					t.Fatalf("links = %+v, want the one link kept pending", links)
+				}
+			} else if len(links) != 0 {
+				t.Fatalf("links = %+v, want none for a forwarded port", links)
+			}
+		})
+	}
+}
+
 func TestOAuthRegisterBlockedOpenerHoldsNoLocks(t *testing.T) {
 	t.Parallel()
 	port := freePort(t)

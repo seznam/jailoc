@@ -328,12 +328,13 @@ func (b *Broker) registerOAuthCallback(ctx context.Context, port uint16, path, a
 
 // openOAuthURL hands rawURL to the configured host opener and reports whether
 // it accepted it. No lock is held: the opener may wait on the browser. An
-// absent opener, a stopped broker or an opener error all answer false; the
-// opener's error is discarded because it may carry the URL, which holds OAuth
-// state. The opener's context ends with the broker or with the request.
+// absent opener, a stopped broker, an ended request or an opener error all
+// answer false; the opener's error is discarded because it may carry the URL,
+// which holds OAuth state. The opener's context ends with the broker or with
+// the request.
 func (b *Broker) openOAuthURL(ctx, reqCtx context.Context, rawURL string) bool {
 	open := b.cfg.OpenURL
-	if open == nil || ctx.Err() != nil {
+	if open == nil || ctx.Err() != nil || reqCtx.Err() != nil {
 		return false
 	}
 	octx, cancel := context.WithCancel(ctx)
