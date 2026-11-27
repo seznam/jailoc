@@ -264,6 +264,17 @@ func TestExtractBinary(t *testing.T) {
 		manyEntries = append(manyEntries, fileEntry("f"+strings.Repeat("x", i+1), "x"))
 	}
 	manyEntries = append(manyEntries, fileEntry("jailoc", "bin"))
+	t.Run("accepts exactly the maximum number of entries", func(t *testing.T) {
+		t.Parallel()
+		entries := append(append([]tarEntry(nil), manyEntries[:maxArchiveHeaders-1]...), manyEntries[maxArchiveHeaders])
+		path, err := extractBinary(openArchive(t, tarGzBytes(t, entries)), t.TempDir())
+		if err != nil {
+			t.Fatalf("extractBinary at the entry limit: %v", err)
+		}
+		if got := readFile(t, path); got != "bin" {
+			t.Fatalf("extracted %q, want bin", got)
+		}
+	})
 
 	trailingGarbage := append(append([]byte{}, good...), []byte("garbage")...)
 	badCRC := append([]byte{}, good...)

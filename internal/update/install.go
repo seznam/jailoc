@@ -169,16 +169,15 @@ func extractBinary(archive *os.File, destDir string) (path string, err error) {
 	}()
 
 	for headers := 0; ; headers++ {
-		if headers >= maxArchiveHeaders {
-			return "", fmt.Errorf("archive has more than %d entries", maxArchiveHeaders)
-		}
-
 		hdr, nextErr := tr.Next()
 		if errors.Is(nextErr, io.EOF) {
 			break
 		}
 		if nextErr != nil {
 			return "", fmt.Errorf("read archive: %w", nextErr)
+		}
+		if headers >= maxArchiveHeaders {
+			return "", fmt.Errorf("archive has more than %d entries", maxArchiveHeaders)
 		}
 
 		if hdr.Name != binaryName {
