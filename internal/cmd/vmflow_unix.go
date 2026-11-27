@@ -78,12 +78,9 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if err := validateSecretSources(ws); err != nil {
 		return fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
 	}
-	if err := materializeCABundle(ws); err != nil {
-		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
-	}
-	// Snapshotted once: image builds, the builder VM and the recorded
-	// spec all see the same bundle.
-	buildCA, err := workspaceBuildCA(ws)
+	// Snapshotted once: the guest copy, image builds, the builder VM and
+	// the recorded spec all see the same bundle.
+	buildCA, err := prepareCABundle(ws)
 	if err != nil {
 		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}

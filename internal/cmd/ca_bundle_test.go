@@ -369,14 +369,14 @@ func TestCABundleMaterializationPrecedesGeneratedWrites(t *testing.T) {
 		t.Run(tt.file, func(t *testing.T) {
 			t.Parallel()
 			data := readTestFile(t, tt.file)
-			materializeAt := bytes.Index(data, []byte("materializeCABundle("))
+			materializeAt := bytes.Index(data, []byte("prepareCABundle("))
 			if materializeAt < 0 {
-				t.Fatalf("%s does not call materializeCABundle", tt.file)
+				t.Fatalf("%s does not call prepareCABundle", tt.file)
 			}
 			for _, call := range tt.laterCalls {
 				callAt := bytes.Index(data, []byte(call+"("))
 				if callAt < 0 || callAt < materializeAt {
-					t.Fatalf("%s must call materializeCABundle before %s", tt.file, call)
+					t.Fatalf("%s must call prepareCABundle before %s", tt.file, call)
 				}
 			}
 		})
@@ -441,5 +441,50 @@ func TestWorkspaceBuildCAAboveSecretLimit(t *testing.T) {
 	}
 	if err := ca.ValidateSecretSize(); err == nil || !strings.Contains(err.Error(), "500 KiB") {
 		t.Errorf("ValidateSecretSize() = %v, want 500 KiB error", err)
+	}
+}
+
+func TestPrepareCABundleSharesOneSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("NIX_SSL_CERT_FILE", "")
+	bundle := writeTestCABundle(t, filepath.Join(t.TempDir(), "company.pem"), "company")
+
+	buildCA, err := prepareCABundle(inspectingWorkspace(config.CustomCABundle(bundle.path)))
+	if err != nil {
+		t.Fatalf("prepareCABundle() error = %v", err)
+	}
+	if buildCA == nil || !bytes.Equal(buildCA.PEM(), bundle.data) {
+		t.Fatalf("prepareCABundle() BuildCA = %v, want only the external bundle", buildCA)
+	}
+	_, _, caPEM, err := ensureInspectCA("test")
+	if err != nil {
+		t.Fatalf("ensureInspectCA() error = %v", err)
+	}
+	if bytes.Contains(buildCA.PEM(), caPEM) {
+		t.Fatal("BuildCA contains the inspection CA")
+	}
+	guest := readTestFile(t, materializedBundlePath(home))
+	if want := append(append([]byte{}, bundle.data...), caPEM...); !bytes.Equal(guest, want) {
+		t.Fatalf("guest bundle = %q, want external bundle + inspection CA", guest)
+	}
+
+	// Without inspection the guest copy and BuildCA carry the same bytes.
+	buildCA, err = prepareCABundle(resolvedWorkspace(true, config.CustomCABundle(bundle.path)))
+	if err != nil {
+		t.Fatalf("prepareCABundle() without inspection error = %v", err)
+	}
+	if guest := readTestFile(t, materializedBundlePath(home)); !bytes.Equal(guest, buildCA.PEM()) {
+		t.Fatalf("guest bundle = %q, want %q", guest, buildCA.PEM())
+	}
+
+	// Inspection only: a guest file, but no BuildCA.
+	buildCA, err = prepareCABundle(inspectingWorkspace(config.DisabledCABundle()))
+	if err != nil || buildCA != nil {
+		t.Fatalf("prepareCABundle(inspection only) = %v, %v; want nil", buildCA, err)
+	}
+	if guest := readTestFile(t, materializedBundlePath(home)); !bytes.Equal(guest, caPEM) {
+		t.Fatalf("guest bundle = %q, want inspection CA", guest)
 	}
 }

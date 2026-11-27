@@ -194,10 +194,7 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err := validateSecretSources(ws); err != nil {
 		return vm.Spec{}, nil, fmt.Errorf("validate secrets for workspace %q: %w", ws.Name, err)
 	}
-	if err := materializeCABundle(ws); err != nil {
-		return vm.Spec{}, nil, fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
-	}
-	buildCA, err := workspaceBuildCA(ws)
+	buildCA, err := prepareCABundle(ws)
 	if err != nil {
 		return vm.Spec{}, nil, fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}
