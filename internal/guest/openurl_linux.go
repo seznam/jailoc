@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -41,7 +40,7 @@ func OpenURL(args []string) error {
 		return fmt.Errorf("open-url: no local listener on port %d", port)
 	}
 	endpoint := "http://" + net.JoinHostPort(topology.GatewayIP, strconv.Itoa(OAuthCallbackPort)) + "/register"
-	return registerOAuthCallback(endpoint, port, path)
+	return registerOAuthCallback(endpoint, port, path, rawURL)
 }
 
 func firstURLArg(args []string) string {
@@ -80,11 +79,12 @@ func hasLoopbackListener(port uint16) bool {
 	return false
 }
 
-func registerOAuthCallback(endpoint string, port uint16, path string) error {
+func registerOAuthCallback(endpoint string, port uint16, path string, rawURL string) error {
 	payload, err := json.Marshal(struct {
 		Port uint16 `json:"port"`
 		Path string `json:"path"`
-	}{Port: port, Path: path})
+		URL  string `json:"url"`
+	}{Port: port, Path: path, URL: rawURL})
 	if err != nil {
 		return fmt.Errorf("open-url: encode request: %w", err)
 	}
@@ -110,8 +110,9 @@ func registerOAuthCallback(endpoint string, port uint16, path string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("open-url: broker returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+		// The response body and status text are not echoed: they may reflect the
+		// authorization URL, which carries OAuth state.
+		return fmt.Errorf("open-url: broker rejected callback registration: status %d", resp.StatusCode)
 	}
 	return nil
 }

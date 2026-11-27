@@ -4,6 +4,7 @@ package guest
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,27 +37,67 @@ func TestInstallXDGOpenAndRegister(t *testing.T) {
 		t.Fatalf("script = %q, want open-url invocation", string(content))
 	}
 
+	const authURL = "https://auth.example.com/authorize?client_id=a%2Fb&redirect_uri=http%3A%2F%2Flocalhost%3A19876%2Fmcp%2Foauth%2Fcallback&scope=x+y%20z&state=%7E%2B"
+
 	var gotPort uint16
-	var gotPath string
+	var gotPath, gotURL string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Port uint16 `json:"port"`
 			Path string `json:"path"`
+			URL  string `json:"url"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		gotPort, gotPath = req.Port, req.Path
+		gotPort, gotPath, gotURL = req.Port, req.Path, req.URL
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(ts.Close)
 
-	if err := registerOAuthCallback(ts.URL+"/register", 19876, "/mcp/oauth/callback"); err != nil {
+	if err := registerOAuthCallback(ts.URL+"/register", 19876, "/mcp/oauth/callback", authURL); err != nil {
 		t.Fatalf("registerOAuthCallback: %v", err)
 	}
 	if gotPort != 19876 || gotPath != "/mcp/oauth/callback" {
 		t.Fatalf("registered (%d, %q), want (19876, /mcp/oauth/callback)", gotPort, gotPath)
+	}
+	if gotURL != authURL {
+		t.Fatalf("registered url = %q, want byte-exact %q", gotURL, authURL)
+	}
+}
+
+func TestRegisterOAuthCallbackNon2xxDoesNotEchoURLOrBody(t *testing.T) {
+	t.Parallel()
+
+	const authURL = "https://auth.example.com/authorize?state=secret-state-123&code_challenge=abc%2Fdef"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		http.Error(w, "reflected: "+string(body), http.StatusBadRequest)
+	}))
+	t.Cleanup(ts.Close)
+
+	err := registerOAuthCallback(ts.URL+"/register", 19876, "/cb", authURL)
+	if err == nil {
+		t.Fatal("registerOAuthCallback: want error for 400 response")
+	}
+	for _, leak := range []string{authURL, "secret-state-123", "abc%2Fdef", "reflected"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Fatalf("error %q leaks %q", err.Error(), leak)
+		}
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Fatalf("error %q, want status code", err.Error())
+	}
+}
+
+func TestFirstURLArgReturnsExactRawArgument(t *testing.T) {
+	t.Parallel()
+
+	const raw = "https://auth.example.com/a?x=%2F&y=a+b#frag"
+	if got := firstURLArg([]string{"--", "", raw, "other"}); got != raw {
+		t.Fatalf("firstURLArg = %q, want %q", got, raw)
 	}
 }
 
@@ -85,7 +126,7 @@ func TestRegisterOAuthCallbackIgnoresHTTPProxy(t *testing.T) {
 	t.Setenv("no_proxy", "")
 
 	endpoint := strings.Replace(ts.URL, "127.0.0.1", "0.0.0.0", 1) + "/register"
-	if err := registerOAuthCallback(endpoint, 19876, "/cb"); err != nil {
+	if err := registerOAuthCallback(endpoint, 19876, "/cb", "https://auth.example.com/authorize?state=1"); err != nil {
 		t.Fatalf("registerOAuthCallback with HTTP_PROXY set: %v (proxy hits: %d)", err, proxyHits.Load())
 	}
 	if proxyHits.Load() != 0 {
