@@ -105,7 +105,12 @@ type caPlanner struct {
 	lex       *shell.Lex
 	buildArgs map[string]*string
 	meta      lexEnv
-	known     map[string]bool
+	// known are the aliases of the stages visited so far; a FROM can inherit
+	// only from these.
+	known map[string]bool
+	// allStages are the aliases of all stages, including later ones: BuildKit
+	// resolves COPY --from and RUN --mount from= against any stage.
+	allStages map[string]bool
 	// runFlags are the flags of the RUN instructions, by the 1-based first
 	// line of the instruction.
 	runFlags map[int][]string
@@ -136,8 +141,14 @@ func planCATrust(dockerfile []byte, buildArgs map[string]*string) (caPlan, error
 			"BUILDARCH":      runtime.GOARCH,
 			"TARGETARCH":     runtime.GOARCH,
 		},
-		known:    make(map[string]bool),
-		runFlags: runFlagsByLine(res.AST),
+		known:     make(map[string]bool),
+		allStages: make(map[string]bool),
+		runFlags:  runFlagsByLine(res.AST),
+	}
+	for _, st := range stages {
+		if st.Name != "" {
+			p.allStages[strings.ToLower(st.Name)] = true
+		}
 	}
 	for _, a := range metaArgs {
 		for _, kv := range a.Args {
@@ -379,7 +390,7 @@ func (p *caPlanner) addFrom(stage, ref string, env lexEnv) error {
 	if err != nil {
 		return fmt.Errorf("stage %q: cannot resolve --from=%s: %w; ca_bundle forwarding needs resolvable images: give the ARG a default or a build argument, or set ca_bundle = false", stage, ref, err)
 	}
-	if got == "" || p.known[strings.ToLower(got)] || isStageIndex(got) || strings.EqualFold(got, "scratch") {
+	if got == "" || p.allStages[strings.ToLower(got)] || isStageIndex(got) || strings.EqualFold(got, "scratch") {
 		return nil
 	}
 	p.addImage(got)
@@ -397,14 +408,42 @@ func isStageIndex(s string) bool {
 	return err == nil && n >= 0 && strconv.Itoa(n) == s
 }
 
+// caTrustMergeAwk is the awk program that keeps the roots a base image or an
+// earlier step appended directly to the system bundle. It takes three files:
+// the jailoc certificates of an earlier run, the bundle update-ca-certificates
+// just wrote and the bundle from before it ran. It prints every certificate of
+// the last file that is in neither of the first two. caTrustScript writes it
+// with printf, where \044 is the $ that the script itself must not contain.
+const caTrustMergeAwk = `FILENAME == "/tmp/jailoc-prev-ca.crt" { prev = 1 } ` +
+	`/-----BEGIN CERTIFICATE-----/ { c = ""; inc = 1 } ` +
+	`inc { c = c \0440 "\\n" } ` +
+	`/-----END CERTIFICATE-----/ { if (inc) { if (!prev) { seen[c] = 1 } else if (!(c in seen)) { seen[c] = 1; printf "%%s", c } } inc = 0 }`
+
 // caTrustScript installs the secret CA bundle into the stage's system trust
 // store. It has no $, so BuildKit's variable expansion leaves it alone.
+//
+// update-ca-certificates rebuilds the bundle from the certificate files only,
+// so roots appended directly to the bundle by the base image or an earlier
+// step would be lost. The script saves the bundle and the jailoc certificates
+// of an earlier run first, and appends the roots that are in neither once the
+// bundle is rebuilt. This keeps those roots and drops stale jailoc ones, and
+// the certificate directory only ever holds single-certificate files.
 const caTrustScript = `if [ ! -f /etc/debian_version ]; then echo "jailoc: ca_bundle forwarding supports Debian/Ubuntu build stages only (missing /etc/debian_version)" >&2; exit 1; fi; ` +
 	`mkdir -p /usr/local/share/ca-certificates /etc/ssl/certs && ` +
+	`{ cat /usr/local/share/ca-certificates/jailoc-build-ca-*.crt > /tmp/jailoc-old-ca.crt 2>/dev/null || :; } && ` +
+	`{ cp /etc/ssl/certs/ca-certificates.crt /tmp/jailoc-prev-ca.crt 2>/dev/null || :; } && ` +
 	`rm -f /usr/local/share/ca-certificates/jailoc-build-ca-*.crt && ` +
 	`awk 'BEGIN { n = 0; out = "" } /-----BEGIN CERTIFICATE-----/ { n++; out = sprintf("/usr/local/share/ca-certificates/jailoc-build-ca-%03d.crt", n) } out != "" { print > out } /-----END CERTIFICATE-----/ { if (out != "") close(out); out = "" }' /run/secrets/` + caSecretID + ` && ` +
 	`chmod 0644 /usr/local/share/ca-certificates/jailoc-build-ca-*.crt && ` +
-	`if command -v update-ca-certificates >/dev/null 2>&1; then update-ca-certificates >/dev/null; else cat /usr/local/share/ca-certificates/jailoc-build-ca-*.crt >> /etc/ssl/certs/ca-certificates.crt; fi && ` +
+	`if command -v update-ca-certificates >/dev/null 2>&1; then ` +
+	`update-ca-certificates >/dev/null && ` +
+	`if [ -s /tmp/jailoc-prev-ca.crt ]; then ` +
+	`printf '` + caTrustMergeAwk + `\n' > /tmp/jailoc-merge.awk && ` +
+	`awk -f /tmp/jailoc-merge.awk /tmp/jailoc-old-ca.crt /etc/ssl/certs/ca-certificates.crt /tmp/jailoc-prev-ca.crt > /tmp/jailoc-merge.out && ` +
+	`cat /tmp/jailoc-merge.out >> /etc/ssl/certs/ca-certificates.crt; ` +
+	`fi; ` +
+	`else cat /usr/local/share/ca-certificates/jailoc-build-ca-*.crt >> /etc/ssl/certs/ca-certificates.crt; fi && ` +
+	`rm -f /tmp/jailoc-old-ca.crt /tmp/jailoc-prev-ca.crt /tmp/jailoc-merge.awk /tmp/jailoc-merge.out && ` +
 	`chmod 0644 /etc/ssl/certs/ca-certificates.crt`
 
 // caTrustInstructions returns the instructions that go right after a stage's
@@ -536,6 +575,9 @@ func isMissingFileError(err error) bool {
 func prepareCADockerfile(ctx context.Context, cli dockerclient.APIClient, dockerfile []byte, buildArgs map[string]*string, ca *BuildCA) ([]byte, error) {
 	if ca == nil {
 		return dockerfile, nil
+	}
+	if err := ca.ValidateSecretSize(); err != nil {
+		return nil, err
 	}
 	if err := checkCAFrontend(dockerfile); err != nil {
 		return nil, err

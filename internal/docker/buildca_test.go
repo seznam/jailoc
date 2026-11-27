@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"github.com/moby/buildkit/session/secrets/secretsprovider"
+	dockerclient "github.com/moby/moby/client"
+
+	"github.com/seznam/jailoc/internal/workspace"
 )
 
 func TestBuildCAEmptyInput(t *testing.T) {
@@ -155,21 +158,69 @@ func TestBuildCASizeLimit(t *testing.T) {
 		}
 	})
 
-	t.Run("over limit", func(t *testing.T) {
+	t.Run("over limit is accepted by NewBuildCA", func(t *testing.T) {
 		t.Parallel()
-		ca, err := NewBuildCA(bytes.Repeat([]byte("a"), secretsprovider.MaxSecretSize+1))
-		if err == nil {
-			t.Fatal("NewBuildCA succeeded, want size error")
+		pem := bytes.Repeat([]byte("a"), secretsprovider.MaxSecretSize+1)
+		ca, err := NewBuildCA(pem)
+		if err != nil {
+			t.Fatalf("NewBuildCA: %v", err)
 		}
-		if ca != nil {
-			t.Errorf("NewBuildCA = %+v, want nil", ca)
+		if ca == nil || ca.Digest() == "" {
+			t.Fatalf("NewBuildCA = %+v, want a BuildCA with a digest", ca)
 		}
-		for _, want := range []string{"500 KiB", "ca_bundle = false"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("error %q does not contain %q", err, want)
-			}
+		if ca.tagSuffix() == "" {
+			t.Error("tagSuffix is empty")
 		}
 	})
+
+	t.Run("over limit is rejected by ValidateSecretSize", func(t *testing.T) {
+		t.Parallel()
+		ca, err := NewBuildCA(bytes.Repeat([]byte("a"), secretsprovider.MaxSecretSize+1))
+		if err != nil {
+			t.Fatalf("NewBuildCA: %v", err)
+		}
+		assertSizeError(t, ca.ValidateSecretSize())
+	})
+
+	t.Run("at limit and nil are valid", func(t *testing.T) {
+		t.Parallel()
+		ca, err := NewBuildCA(bytes.Repeat([]byte("a"), secretsprovider.MaxSecretSize))
+		if err != nil {
+			t.Fatalf("NewBuildCA: %v", err)
+		}
+		if err := ca.ValidateSecretSize(); err != nil {
+			t.Errorf("ValidateSecretSize at limit: %v", err)
+		}
+		var none *BuildCA
+		if err := none.ValidateSecretSize(); err != nil {
+			t.Errorf("nil ValidateSecretSize: %v", err)
+		}
+	})
+
+	t.Run("image builds reject over limit", func(t *testing.T) {
+		t.Parallel()
+		ca, err := NewBuildCA(bytes.Repeat([]byte("a"), secretsprovider.MaxSecretSize+1))
+		if err != nil {
+			t.Fatalf("NewBuildCA: %v", err)
+		}
+		assertSizeError(t, imageBuild(t.Context(), nil, nil, "", dockerclient.ImageBuildOptions{}, ca))
+		_, err = BuildOverlayImage(t.Context(), "base:v1", workspace.Resolved{Name: "test", Dockerfile: "/nonexistent/Dockerfile"}, ca)
+		assertSizeError(t, err)
+		_, err = buildLayerImage(t.Context(), "base:v1", "repo", "layer", nil, nil, ca)
+		assertSizeError(t, err)
+	})
+}
+
+func assertSizeError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("got nil error, want size error")
+	}
+	for _, want := range []string{"500 KiB", "ca_bundle = false"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
 }
 
 func TestBuildCAHashArgs(t *testing.T) {

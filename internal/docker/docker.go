@@ -125,6 +125,9 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag, mi
 	if err != nil {
 		return fmt.Errorf("build embedded image: %w", err)
 	}
+	if err := ca.ValidateSecretSize(); err != nil {
+		return fmt.Errorf("build embedded image: %w", err)
+	}
 	tmpDir, err := os.MkdirTemp("", "jailoc-embedded-dockerfile-")
 	if err != nil {
 		return fmt.Errorf("create temp directory for embedded Dockerfile: %w", err)
@@ -186,6 +189,9 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	}
 	ca, err := optionalBuildCA(cas)
 	if err != nil {
+		return "", fmt.Errorf("build preset image: %w", err)
+	}
+	if err := ca.ValidateSecretSize(); err != nil {
 		return "", fmt.Errorf("build preset image: %w", err)
 	}
 
@@ -250,6 +256,9 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved, 
 	}
 	ca, err := optionalBuildCA(cas)
 	if err != nil {
+		return "", fmt.Errorf("build workspace overlay image: %w", err)
+	}
+	if err := ca.ValidateSecretSize(); err != nil {
 		return "", fmt.Errorf("build workspace overlay image: %w", err)
 	}
 
@@ -386,6 +395,9 @@ func BuildDockerImage(ctx context.Context, base, mirror string, cas ...*BuildCA)
 // ca adds the CA trust steps to the Dockerfile and its digest to the hash and
 // the tag.
 func buildLayerImage(ctx context.Context, base, repo, label string, buildArgs map[string]*string, dockerfile func(user string) []byte, ca *BuildCA) (string, error) {
+	if err := ca.ValidateSecretSize(); err != nil {
+		return "", fmt.Errorf("build %s image: %w", label, err)
+	}
 	if err := EnsureBuildImage(ctx, base, ca); err != nil {
 		return "", err
 	}

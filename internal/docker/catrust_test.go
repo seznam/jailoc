@@ -193,6 +193,27 @@ func TestCAPlanTrust(t *testing.T) {
 			wantImages: []string{"alpine:3", "debian:12"},
 		},
 		{
+			name: "COPY --from and RUN mount from a later stage are not images",
+			dockerfile: "FROM alpine:3\nCOPY --from=tools /bin/tool /usr/local/bin/tool\n" +
+				"RUN --mount=type=bind,from=tools,source=/src,target=/mnt true\n" +
+				"FROM debian:bookworm AS tools\n",
+			wantStages: []caStage{
+				{fromEndLine: 1, base: "alpine:3", name: "0", argKeys: map[string]bool{}},
+				{fromEndLine: 4, base: "debian:bookworm", name: "tools", argKeys: map[string]bool{}},
+			},
+			wantImages: []string{"alpine:3", "debian:bookworm"},
+		},
+		{
+			name: "FROM a later stage alias is an external image",
+			dockerfile: "FROM tools\n" +
+				"FROM debian:bookworm AS tools\n",
+			wantStages: []caStage{
+				{fromEndLine: 1, base: "tools", name: "0", argKeys: map[string]bool{}},
+				{fromEndLine: 2, base: "debian:bookworm", name: "tools", argKeys: map[string]bool{}},
+			},
+			wantImages: []string{"tools", "debian:bookworm"},
+		},
+		{
 			name:       "images deduplicated in order of appearance",
 			dockerfile: "FROM b:1 AS x\nCOPY --from=a:1 /a /a\nFROM a:1\nCOPY --from=b:1 /b /b\n",
 			wantStages: []caStage{
@@ -399,6 +420,8 @@ func TestCATrustInstructions(t *testing.T) {
 			"update-ca-certificates",
 			"/etc/ssl/certs/ca-certificates.crt",
 			"chmod 0644",
+			"/tmp/jailoc-old-ca.crt",
+			"/tmp/jailoc-prev-ca.crt",
 		} {
 			if !strings.Contains(run, want) {
 				t.Errorf("RUN lacks %q: %s", want, run)

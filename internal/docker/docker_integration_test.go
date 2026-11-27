@@ -245,6 +245,7 @@ RUN set -eu; \
 test "$UV_SYSTEM_CERTS" = true; \
 test "$NODE_USE_SYSTEM_CA" = 1; \
 test "$SSL_CERT_FILE" = "$bundle"; \
+    openssl verify -CAfile "$bundle" /opt/jailoc-base-root.crt >/dev/null; \
     openssl verify -CAfile "$bundle" "$t/server-present.pem" >/dev/null; \
     if openssl verify -CAfile "$bundle" "$t/server-absent.pem" >/dev/null 2>&1; then echo "foreign leaf verified" >&2; exit 1; fi; \
 if [ -e /run/secrets/jailoc-ca ]; then echo "CA secret leaked into a RUN step" >&2; exit 1; fi
@@ -389,6 +390,12 @@ func buildCATestBase(ctx context.Context, t *testing.T, cli *dockerclient.Client
 	dir := t.TempDir()
 	dockerfile := "FROM " + caTestDebianBase + "\n" +
 		"RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*\n" +
+		// A root appended straight to the bundle, not through
+		// /usr/local/share/ca-certificates: update-ca-certificates drops it
+		// unless jailoc preserves it.
+		"RUN openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout /dev/null " +
+		"-subj /CN=jailoc-base-root -days 2 -addext basicConstraints=critical,CA:TRUE -out /opt/jailoc-base-root.crt && " +
+		"cat /opt/jailoc-base-root.crt >> /etc/ssl/certs/ca-certificates.crt\n" +
 		"ENV CACHE_UID=65534\n" +
 		"USER nobody\n"
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {

@@ -29,16 +29,23 @@ type BuildCA struct {
 }
 
 // NewBuildCA wraps a PEM bundle for image builds. It returns nil for an empty
-// bundle and rejects one BuildKit cannot carry as a secret.
+// bundle. The size limit of a BuildKit secret applies only to actual image
+// builds; see ValidateSecretSize.
 func NewBuildCA(pem []byte) (*BuildCA, error) {
 	if len(pem) == 0 {
 		return nil, nil
 	}
-	if len(pem) > secretsprovider.MaxSecretSize {
-		return nil, fmt.Errorf("ca_bundle is %d bytes; image builds pass it as a BuildKit secret of at most %d KiB: use a smaller bundle or set ca_bundle = false", len(pem), secretsprovider.MaxSecretSize/1024)
-	}
 	sum := sha256.Sum256(pem)
 	return &BuildCA{pem: slices.Clone(pem), digest: hex.EncodeToString(sum[:])}, nil
+}
+
+// ValidateSecretSize rejects a bundle BuildKit cannot carry as a secret. Image
+// builds call it before using the bundle; a nil BuildCA is always valid.
+func (c *BuildCA) ValidateSecretSize() error {
+	if c != nil && len(c.pem) > secretsprovider.MaxSecretSize {
+		return fmt.Errorf("ca_bundle is %d bytes; image builds pass it as a BuildKit secret of at most %d KiB: use a smaller bundle or set ca_bundle = false", len(c.pem), secretsprovider.MaxSecretSize/1024)
+	}
+	return nil
 }
 
 // Digest returns the hex SHA-256 of the bundle, or "" for a nil BuildCA.

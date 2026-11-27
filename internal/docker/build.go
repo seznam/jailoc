@@ -72,6 +72,9 @@ func requireBuildKit(version build.BuilderVersion, ca *BuildCA) error {
 // on stderr. A non-nil ca is passed to the build as the BuildKit secret that
 // the CA trust steps mount; it needs BuildKit.
 func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Reader, version build.BuilderVersion, opts dockerclient.ImageBuildOptions, ca *BuildCA) error {
+	if err := ca.ValidateSecretSize(); err != nil {
+		return err
+	}
 	if err := requireBuildKit(version, ca); err != nil {
 		return err
 	}
