@@ -107,6 +107,10 @@ func TestValidateOAuthLink(t *testing.T) {
 		{"decoded NUL in value", link(base + okRedirect + "&a=%00")},
 		{"decoded bidi in key", link(base + okRedirect + "&%E2%80%AEa=b")},
 		{"decoded invalid utf8", link(base + okRedirect + "&a=%ff")},
+		{"decoded bidi override in host", link("https://auth%E2%80%AE.example.test/x?state=" + pendingSecretMark + "&redirect_uri=" + okRedirect)},
+		{"decoded C1 control in host", link("https://auth%C2%9B.example.test/x?state=" + pendingSecretMark + "&redirect_uri=" + okRedirect)},
+		{"decoded line separator in host", link("https://auth%E2%80%A8.example.test/x?state=" + pendingSecretMark + "&redirect_uri=" + okRedirect)},
+		{"decoded invalid utf8 in host", link("https://auth%ff.example.test/x?state=" + pendingSecretMark + "&redirect_uri=" + okRedirect)},
 		{"decoded control in url path", link("https://claude.ai/a%1bb?state=" + pendingSecretMark + "&redirect_uri=" + okRedirect)},
 		{"redirect https", link(base + enc(fmt.Sprintf("https://localhost:%d/callback", port)))},
 		{"redirect non-loopback host", link(base + enc(loopbackRedirect("evil.example", port, "/callback")))},
@@ -423,6 +427,43 @@ func TestOAuthRegisterInvalidURLRejectedBeforeBindOrReplace(t *testing.T) {
 		t.Fatalf("original host listener closed: %v", err)
 	} else {
 		_ = c.Close()
+	}
+}
+
+func TestOAuthRegisterRejectsEncodedAuthorityControlsBeforeReplace(t *testing.T) {
+	t.Parallel()
+	e := startPendingEnv(t, time.Minute)
+	port := freePort(t)
+	redirect := url.QueryEscape(loopbackRedirect("localhost", port, "/cb"))
+	good := "https://auth.example.test/x?state=" + pendingSecretMark + "&redirect_uri=" + redirect
+	if code := e.register(t, port, "/cb", good); code != http.StatusOK {
+		t.Fatalf("register status = %d, want 200", code)
+	}
+	first := e.callbackOf(port)
+
+	for _, host := range []string{"auth%E2%80%AE.example.test", "auth%C2%9B.example.test", "auth%E2%80%A8.example.test", "auth%ff.example.test"} {
+		hostile := "https://" + host + "/x?state=" + pendingSecretMark + "&redirect_uri=" + redirect
+		if code := e.register(t, port, "/cb", hostile); code != http.StatusBadRequest {
+			t.Fatalf("register host %q status = %d, want 400", host, code)
+		}
+		if got := e.callbackOf(port); got != first || first.served.Load() {
+			t.Fatalf("host %q replaced or stopped the active callback", host)
+		}
+		links := getPending(t, e.sock)
+		if len(links) != 1 || links[0].URL != good {
+			t.Fatalf("host %q: links = %+v, want the original link", host, links)
+		}
+	}
+
+	// On a fresh port nothing binds or is registered.
+	fresh := freePort(t)
+	freshRedirect := url.QueryEscape(loopbackRedirect("localhost", fresh, "/cb"))
+	hostile := "https://auth%E2%80%AE.example.test/x?redirect_uri=" + freshRedirect
+	if code := e.register(t, fresh, "/cb", hostile); code != http.StatusBadRequest {
+		t.Fatalf("fresh register status = %d, want 400", code)
+	}
+	if e.callbackOf(fresh) != nil {
+		t.Fatal("hostile host created a callback")
 	}
 }
 

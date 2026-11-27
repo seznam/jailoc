@@ -78,7 +78,9 @@ func validateOAuthAuthURL(raw string, port uint16, path string) error {
 	if s := strings.ToLower(u.Scheme); s != "http" && s != "https" {
 		return badOAuthURL("scheme")
 	}
-	if u.Opaque != "" || u.User != nil || u.Hostname() == "" {
+	// u.Host is percent-decoded by url.Parse, so a raw-printable URL can still
+	// carry a terminal-driving host the CLI would print as its origin.
+	if u.Opaque != "" || u.User != nil || u.Hostname() == "" || !printableURLText(u.Host) {
 		return badOAuthURL("authority")
 	}
 	if terminalUnsafe(u.Path) {

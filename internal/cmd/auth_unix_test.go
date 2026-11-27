@@ -120,6 +120,85 @@ func TestRunAuthLinks(t *testing.T) {
 	}
 }
 
+// TestRunAuthLinksRejectsEncodedAuthorityControls covers links whose raw text is
+// printable ASCII but whose host percent-decodes to a terminal-driving
+// character (bidi override, C1 CSI, line separator). The CLI must reject the
+// whole response with the generic invalid error before it prints, opens or
+// summarises anything.
+func TestRunAuthLinksRejectsEncodedAuthorityControls(t *testing.T) {
+	t.Parallel()
+	hosts := []struct{ name, host string }{
+		{name: "bidi override", host: "auth%E2%80%AE.example.test"},
+		{name: "C1 control", host: "auth%C2%9B.example.test"},
+		{name: "line separator", host: "auth%E2%80%A8.example.test"},
+	}
+	withHost := func(l netbroker.OAuthLink, host string) netbroker.OAuthLink {
+		l.URL = strings.Replace(l.URL, "claude.ai", host, 1)
+		return l
+	}
+	good := authTestLink(40002, time.Minute)
+	other := authTestLink(40003, 2*time.Minute)
+
+	modes := []struct {
+		name string
+		opts authOptions
+	}{
+		{name: "default", opts: authOptions{}},
+		{name: "open", opts: authOptions{open: true}},
+		{name: "open with port", opts: authOptions{open: true, port: 40002}},
+	}
+	for _, h := range hosts {
+		bad := withHost(authTestLink(40001, time.Minute), h.host)
+		lists := []struct {
+			name    string
+			links   []netbroker.OAuthLink
+			wantErr string
+		}{
+			{name: "only link", links: []netbroker.OAuthLink{bad}, wantErr: "authorization link 1 from the broker is invalid"},
+			{name: "bad before valid", links: []netbroker.OAuthLink{bad, good}, wantErr: "authorization link 1 from the broker is invalid"},
+			{name: "bad after valid", links: []netbroker.OAuthLink{good, bad}, wantErr: "authorization link 2 from the broker is invalid"},
+			// Without the bad link this list is ambiguous; validation of the
+			// whole list must win over the ambiguity listing.
+			{name: "bad among ambiguous valid links", links: []netbroker.OAuthLink{good, bad, other}, wantErr: "authorization link 2 from the broker is invalid"},
+		}
+		for _, l := range lists {
+			for _, m := range modes {
+				t.Run(h.name+"/"+l.name+"/"+m.name, func(t *testing.T) {
+					t.Parallel()
+					var out, errOut bytes.Buffer
+					opened := 0
+					err := runAuthLinks(t.Context(), &out, &errOut, l.links, m.opts, authNow, func(context.Context, string) error {
+						opened++
+						return nil
+					})
+					if err == nil {
+						t.Fatal("error = nil, want invalid link error")
+					}
+					if err.Error() != l.wantErr {
+						t.Fatalf("error = %q, want exactly %q", err.Error(), l.wantErr)
+					}
+					if out.Len() != 0 || errOut.Len() != 0 {
+						t.Fatalf("nothing may be printed: stdout=%q stderr=%q", out.String(), errOut.String())
+					}
+					if opened != 0 {
+						t.Fatalf("opener called %d times, want 0", opened)
+					}
+					all := err.Error() + errOut.String() + out.String()
+					for _, leak := range []string{
+						"SECRETSTATE", "https://", "example.test", "auth%", "claude.ai",
+						"%E2%80%AE", "%C2%9B", "%E2%80%A8",
+						"\u202e", "\u009b", "\u2028", "\xc2\x9b", "\xe2\x80",
+					} {
+						if strings.Contains(all, leak) {
+							t.Fatalf("leaked %q: %q", leak, all)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestRunAuthLinksOpenerFailureNeverCarriesURL(t *testing.T) {
 	t.Parallel()
 	link := authTestLink(40001, time.Minute)
