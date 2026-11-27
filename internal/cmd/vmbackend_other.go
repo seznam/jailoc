@@ -49,3 +49,5 @@ func execLogVM(context.Context, *workspace.Resolved, logView, bool, io.Writer) e
 }
 
 func execVM(*cobra.Command, *workspace.Resolved, []string) error { return errVMUnsupported }
+
+func authVM(*cobra.Command, *workspace.Resolved, authOptions) error { return errVMUnsupported }
