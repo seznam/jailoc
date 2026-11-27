@@ -226,14 +226,19 @@ This is the other direction: the broker rejected the upstream certificate becaus
 
 ## Browser login link is missing
 
-**Symptom:** `jailoc auth` fails with `no pending sign-in`, `has no sign-in socket`, or `the sign-in for callback port N expired`, or the tool opens no link at all.
+**Symptom:** the host browser doesn't open when a tool in the workspace starts a browser login, the tool reports that opening the browser failed, or `jailoc auth` fails with `no pending sign-in`, `has no sign-in socket`, or `the sign-in for callback port N expired`.
 
 | Message or cause | Fix |
 |------------------|-----|
+| Browser doesn't open, the opener in the guest exits non-zero | The host launch failed: `xdg-open` isn't in `PATH` on a Linux host, or `jailoc up` inherited no desktop session. Within 3 minutes run `jailoc auth <workspace> --open` from a terminal on the host desktop. A fake `DISPLAY` doesn't help. |
+| Linux VM started from a headless SSH session | The workspace supervisor has no desktop environment. Run `jailoc restart <workspace>` from the desktop session, then start the login again. |
+| Browser doesn't open, but `jailoc auth` finds the link | Several causes are possible, such as a workspace started before an upgrade or no usable opener on the host desktop. Run `jailoc restart <workspace>` for a workspace started before an upgrade, or run `jailoc auth <workspace> --open` from a terminal on the host desktop. |
 | `has no sign-in socket` | The running broker doesn't provide `oauth.sock`. Run `jailoc restart <workspace>`, then start the login again. |
-| `expired` | Start the login again in the workspace, then run `jailoc auth` within 3 minutes. |
-| `no pending sign-in` | The tool didn't call `xdg-open` or `$BROWSER` with an explicit `http` loopback `redirect_uri`, or no guest listener was active on that port. A tool with a device code or manual-code flow needs that flow. |
+| `expired` | Start the login again in the workspace. If the browser doesn't open, run `jailoc auth` within 3 minutes. |
+| `no pending sign-in` | The tool didn't call `xdg-open` or `$BROWSER` with an explicit `http` loopback `redirect_uri`, or no guest listener was active on that port, or a `ports` entry for the callback port is configured (it opens the browser but isn't listed). A tool with a device code or manual-code flow needs that flow. |
 | `several sign-ins are pending` | Select one with `--port`. |
+
+`jailoc auth` is only for retry and recovery. A normal login needs no command.
 
 To see what the broker did, look for `OAUTH` lines:
 

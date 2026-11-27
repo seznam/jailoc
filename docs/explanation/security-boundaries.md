@@ -121,7 +121,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | GPG agent | Guest to host | Ask the host gpg-agent to sign or decrypt with any key it holds while forwarded; the extra socket refuses key export and management; keys stay on the host | `gpg_agent` |
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
-| OAuth link handoff | Guest to host, then host to guest | Offer one authorization link through `xdg-open` or `$BROWSER` and register a single-use callback listener on host `127.0.0.1:<port>` (ports 1024-65535, at most 8 pending, 3-minute lifetime). `jailoc auth` prints or opens the link on request; a printed loopback URL can also be opened by hand. The listener is pinned to the exact `redirect_uri` path, requires `code=` or `error=`, strips browser request headers and answers the browser with a fixed confirmation | fixed |
+| OAuth link handoff | Guest to host, then host to guest | Offer one authorization link through `xdg-open` or `$BROWSER`; jailoc registers a single-use callback listener on host `127.0.0.1:<port>` (ports 1024-65535, at most 8 pending, 3-minute lifetime) and opens the link in the host browser automatically, with no prompt. The listener is pinned to the exact `redirect_uri` path, requires `code=` or `error=`, strips browser request headers and answers the browser with a fixed confirmation | fixed |
 | Proxy routes | Host to guest | Serve a guest port to a browser over HTTPS through the background proxy (with optional one-time login code when `auth = true`) | `proxy` |
 | CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |
 | Proxy CA | Host to browser | Not a jailoc channel: a CA that jailoc generates and you trust by hand, for the proxy's certificate | manual, see [HTTPS proxy](#https-proxy) |
@@ -136,15 +136,21 @@ A Chrome DevTools port or a container runtime socket gives the guest control of 
 
 ### OAuth link handoff
 
-A tool in the guest can ask for a browser login, but only you decide whether the link is shown or opened. The path has these properties:
+A tool in the guest can ask for a browser login, and jailoc opens the browser on the host without asking you.
+
+!!! warning
+    The guest chooses the provider origin and the rest of the URL. jailoc opens any validated `http` or `https` URL that comes with an explicit loopback `redirect_uri`, with no allowlist, no provider trust check and no consent prompt. A compromised guest can therefore make your host browser load pages from any origin, with the logins that browser already has. jailoc doesn't verify the provider and can't tell whether a login succeeded.
+
+The path has these properties:
 
 - The guest hands the link to the broker only through an opener call (`xdg-open` or `$BROWSER`) with an explicit `http` loopback `redirect_uri` and an existing guest listener on that port. Terminal output never triggers it.
-- Showing the link is an explicit host action: `jailoc auth` prints it, `jailoc auth --open` opens it. jailoc never launches a browser on its own.
-- `jailoc auth` reads the link over a private Unix socket (`oauth.sock`, mode `0600`, in a state directory with mode `0700`). That API isn't reachable from the guest. The guest still knows every URL it generated itself.
+- The broker binds the host callback listener first and then opens the exact captured URL with a fixed program, `/usr/bin/open` on macOS or `xdg-open` from `PATH` on Linux, started without a shell and with the desktop environment inherited from `jailoc up`. The guest opener exits 0 only when the host accepted the launch, which doesn't mean a window opened or the login succeeded.
+- The listener doesn't forward host cookies or other browser request headers into the guest. It strips them, passes only the callback and answers the browser with a fixed confirmation.
+- `jailoc auth` prints or re-opens the link over a private Unix socket (`oauth.sock`, mode `0600`, in a state directory with mode `0700`) when the automatic launch fails. That API isn't reachable from the guest. The guest still knows every URL it generated itself.
 - The broker keeps the link only in jailoc-managed memory, bound to its callback, and clears it when the callback is claimed, expires, is replaced on the same port, is cancelled or the broker shuts down. This doesn't cover copies the guest made, such as its own logs or a URL it re-registers.
-- Guest exec logs drop the query and fragment of recognized OAuth authorization URLs; other URLs and logs aren't redacted. Broker logs record only the callback host, port and path. A link you print or open stays in your terminal capture, browser history and the opener's argument list, which other processes of the same user can read. jailoc can't erase it from there.
+- Guest exec logs drop the query and fragment of recognized OAuth authorization URLs; other URLs and logs aren't redacted. Broker logs record only the callback host, port and path. The URL stays in host browser history, in the opener's argument list, which other processes of the same user can read, and in any terminal capture. jailoc can't erase it from there.
 
-The URL matches the registered callback, but the guest chooses the provider origin and the rest of the URL. Print the link with `jailoc auth`, check its origin and path, and only then open it. `--open` launches the browser at once and reports the origin only as it does, so it doesn't protect you from a link you haven't reviewed.
+Automatic opening gives you no chance to review the link first, and jailoc adds no limit on which origin the guest may choose.
 
 ### HTTPS proxy
 

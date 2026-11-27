@@ -25,10 +25,12 @@ var (
 
 var authCmd = &cobra.Command{
 	Use:   "auth [workspace]",
-	Short: "Print or open a pending sign-in link captured from a workspace VM",
-	Long: `Hand a sign-in link that an agent in the workspace VM tried to open to a
-browser on this host. The network broker keeps the link for a few minutes and
-forwards the sign-in callback back into the VM.
+	Short: "Print or retry a pending sign-in link",
+	Long: `Recover a sign-in link that an agent in the workspace VM tried to open. The
+host normally opens it in the default browser on its own, so a regular sign-in
+needs no command; use this one only to print or retry a pending link. The
+network broker keeps the link for a few minutes and forwards the sign-in
+callback back into the VM.
 
 By default the link is printed to standard output and nothing is launched;
 guidance goes to standard error. With --open it is opened in the default
