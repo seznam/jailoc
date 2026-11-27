@@ -573,9 +573,8 @@ RUN test "$PIP_CERT" = /explicit/base.pem
 	}
 
 	// A RUN before a valued ARG sees jailoc's default, and a RUN after sees the ARG.
-	_, env = build("ca-arg-after-run", `FROM ${BASE
-}
-RUN test "$REQUESTS_CA_BUNDLE" = /etc/ssl/certs/ca-certificates.crt && test "$CURL_CA_BUNDLE" = /etc/ssl/certs/ca-certificates.crt
+	_, env = build("ca-arg-after-run", "FROM $BASE\n"+
+		`RUN test "$REQUESTS_CA_BUNDLE" = /etc/ssl/certs/ca-certificates.crt && test "$CURL_CA_BUNDLE" = /etc/ssl/certs/ca-certificates.crt
 ARG REQUESTS_CA_BUNDLE=/custom/after-req.pem
 ARG CURL_CA_BUNDLE=/custom/after-curl.pem
 RUN test "$REQUESTS_CA_BUNDLE" = /custom/after-req.pem && test "$CURL_CA_BUNDLE" = /custom/after-curl.pem
