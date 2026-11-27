@@ -194,7 +194,10 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	if !ws.IsolatedBuild && cfg.VM.Builder != config.BuilderVM {
 		hostErr = docker.HostArchitecture(ctx)
 	}
-	host, err := useHostDocker(cfg.VM.Builder, ws.IsolatedBuild, ca != nil, hostErr)
+	// A configured image used as-is has no build for the bundle to drive, so
+	// it must not force the managed builder VM.
+	forwardCA := buildsImage(cfg, ws) && ca != nil
+	host, err := useHostDocker(cfg.VM.Builder, ws.IsolatedBuild, forwardCA, hostErr)
 	if err != nil {
 		return "", err
 	}

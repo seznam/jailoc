@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moby/buildkit/session/secrets/secretsprovider"
+
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -416,5 +418,28 @@ func TestWorkspaceBuildCA(t *testing.T) {
 	}
 	if _, err := workspaceBuildCA(resolvedWorkspace(true, config.CustomCABundle("relative.pem"))); err == nil {
 		t.Error("workspaceBuildCA() with an invalid bundle: error = nil, want error")
+	}
+}
+
+func TestWorkspaceBuildCAAboveSecretLimit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("NIX_SSL_CERT_FILE", "")
+	cert := newTestCertificate(t, "company")
+	data := bytes.Repeat(cert, secretsprovider.MaxSecretSize/len(cert)+2)
+	if len(data) <= secretsprovider.MaxSecretSize {
+		t.Fatalf("test bundle is %d bytes, want more than %d", len(data), secretsprovider.MaxSecretSize)
+	}
+	path := writeTestFile(t, filepath.Join(t.TempDir(), "big.pem"), data)
+
+	ca, err := workspaceBuildCA(resolvedWorkspace(true, config.CustomCABundle(path)))
+	if err != nil {
+		t.Fatalf("workspaceBuildCA() error = %v", err)
+	}
+	if ca == nil || buildCAState(ca) != "sha256:"+ca.Digest() {
+		t.Fatalf("workspaceBuildCA() = %v, want a BuildCA with state", ca)
+	}
+	if err := ca.ValidateSecretSize(); err == nil || !strings.Contains(err.Error(), "500 KiB") {
+		t.Errorf("ValidateSecretSize() = %v, want 500 KiB error", err)
 	}
 }

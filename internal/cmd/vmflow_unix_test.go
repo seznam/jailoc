@@ -977,3 +977,41 @@ func TestWorkspaceSpecBuildCA(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildWorkspaceImageCAForwardingFollowsImageStrategy(t *testing.T) {
+	t.Parallel()
+	ca, err := docker.NewBuildCA([]byte("bundle"))
+	if err != nil {
+		t.Fatalf("NewBuildCA: %v", err)
+	}
+	cfg := &config.Config{}
+	direct := &workspace.Resolved{Name: "ws", Image: "custom:latest"}
+	built := &workspace.Resolved{Name: "ws", EnableDocker: true}
+	if buildsImage(cfg, direct) {
+		t.Fatal("buildsImage(direct image) = true, want false")
+	}
+	if !buildsImage(cfg, built) {
+		t.Fatal("buildsImage(cascade image) = false, want true")
+	}
+	for _, tt := range []struct {
+		name    string
+		ws      *workspace.Resolved
+		builder string
+		want    bool
+		wantErr bool
+	}{
+		{name: "direct image with docker builder", ws: direct, builder: config.BuilderDocker, want: true},
+		{name: "direct image with auto uses host", ws: direct, builder: config.BuilderAuto, want: true},
+		{name: "built image with docker builder is rejected", ws: built, builder: config.BuilderDocker, wantErr: true},
+		{name: "built image with auto uses builder vm", ws: built, builder: config.BuilderAuto},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			forwardCA := buildsImage(cfg, tt.ws) && ca != nil
+			got, err := useHostDocker(tt.builder, tt.ws.IsolatedBuild, forwardCA, nil)
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Fatalf("useHostDocker = %v, %v; want %v, error %v", got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}

@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/moby/buildkit/session/secrets/secretsprovider"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -605,6 +608,26 @@ func TestReloadSpecBuildCA(t *testing.T) {
 	sum := sha256.Sum256(bundle.data)
 	if wantCA := "sha256:" + hex.EncodeToString(sum[:]); want.BuildCA != wantCA {
 		t.Errorf("BuildCA = %q, want %q", want.BuildCA, wantCA)
+	}
+	if got := restartOnlyChanges(running, want); !slices.Contains(got, "ca_bundle (for image builds)") {
+		t.Errorf("restartOnlyChanges = %v, want ca_bundle (for image builds)", got)
+	}
+}
+
+func TestReloadSpecBuildCAAboveSecretLimit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cert := newTestCertificate(t, "company")
+	data := bytes.Repeat(cert, secretsprovider.MaxSecretSize/len(cert)+2)
+	path := writeTestFile(t, filepath.Join(t.TempDir(), "big.pem"), data)
+	ws := &workspace.Resolved{Name: "ws", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g", CABundle: config.CustomCABundle(path)}
+	running := vm.Spec{Image: "image", BuildCA: "sha256:old", Guest: &guest.Config{}}
+
+	want, _, err := reloadSpec(t.Context(), ws, running)
+	if err != nil {
+		t.Fatalf("reloadSpec: %v", err)
+	}
+	if !strings.HasPrefix(want.BuildCA, "sha256:") || want.BuildCA == running.BuildCA {
+		t.Errorf("BuildCA = %q, want a new digest", want.BuildCA)
 	}
 	if got := restartOnlyChanges(running, want); !slices.Contains(got, "ca_bundle (for image builds)") {
 		t.Errorf("restartOnlyChanges = %v, want ca_bundle (for image builds)", got)
