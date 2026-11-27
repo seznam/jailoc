@@ -10,7 +10,7 @@ jailoc is built around five requirements:
 
 - **A separate kernel.** The agent runs as root with `sudo` and may run its own Docker daemon. A kernel bug or a misconfigured privilege must end in the guest, not on the host.
 - **Network policy enforced outside the sandbox.** Root in the guest must not be able to change it. Private and reserved networks, cloud metadata and the host itself are denied by default; the public internet is allowed. See [Network Isolation](network-isolation.md).
-- **Local and unmodified agents.** Workspaces run on the developer's machine, with the agent's own CLI and TUI, against the developer's checkout.
+- **Local and unmodified agents.** Workspaces run on the developer's machine, with the agent's own CLI and TUI, against the developer's checkout. jailoc does not prescribe the user's instructions, tools, Git workflow or ticket system.
 - **macOS and Linux hosts.** Apple silicon Macs and Linux with KVM, with the same behaviour.
 - **Ordinary Docker images.** Workspace images are Dockerfiles, so existing toolchains and presets carry over.
 
