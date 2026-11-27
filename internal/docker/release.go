@@ -24,12 +24,14 @@ var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // resolveRelease returns r for version: r itself when its checksums are for
 // version, otherwise r with the checksums GitHub publishes for the assets
-// of the release tagged version.
-func resolveRelease(ctx context.Context, apiBase string, r agent.Release, version string) (agent.Release, error) {
+// of the release tagged version. The optional trailing ca is an additional CA
+// bundle trusted, on top of the system roots, for that request; see
+// optionalBuildCA.
+func resolveRelease(ctx context.Context, apiBase string, r agent.Release, version string, ca ...*BuildCA) (agent.Release, error) {
 	if version == r.Version {
 		return r, nil
 	}
-	sums, err := releaseChecksums(ctx, apiBase, r, version)
+	sums, err := releaseChecksums(ctx, apiBase, r, version, ca...)
 	if err != nil {
 		return agent.Release{}, err
 	}
@@ -40,15 +42,30 @@ func resolveRelease(ctx context.Context, apiBase string, r agent.Release, versio
 
 // releaseChecksums returns the SHA-256 checksums of the assets of r's
 // release tagged version by architecture, from the asset digests of the
-// GitHub API.
-func releaseChecksums(ctx context.Context, apiBase string, r agent.Release, version string) (map[string]string, error) {
+// GitHub API. An optional trailing ca is trusted in addition to the system
+// roots, through a private clone of http.DefaultTransport.
+func releaseChecksums(ctx context.Context, apiBase string, r agent.Release, version string, ca ...*BuildCA) (map[string]string, error) {
+	buildCA, err := optionalBuildCA(ca)
+	if err != nil {
+		return nil, fmt.Errorf("fetch release %s of %s: %w", version, r.Repo, err)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	if buildCA != nil {
+		var transport *http.Transport
+		transport, err = buildcaHTTPTransport(buildCA)
+		if err != nil {
+			return nil, fmt.Errorf("fetch release %s of %s: %w", version, r.Repo, err)
+		}
+		defer transport.CloseIdleConnections()
+		client.Transport = transport
+	}
+
 	rawURL := fmt.Sprintf("%s/repos/%s/releases/tags/%s", apiBase, r.Repo, url.PathEscape(version))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request for %s: %w", rawURL, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req) //nolint:gosec // the URL is built from a built-in repository and a validated version
 	if err != nil {
 		return nil, fmt.Errorf("fetch release %s of %s: %w", version, r.Repo, err)

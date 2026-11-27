@@ -56,7 +56,10 @@ func readLocalDockerfile(path string) ([]byte, error) {
 	return data, nil
 }
 
-func loadDockerfile(ctx context.Context, source string) ([]byte, error) {
+// loadDockerfile reads the Dockerfile at source. The optional trailing ca is an
+// additional CA bundle trusted, on top of the system roots, when fetching an
+// HTTP(S) source; see optionalBuildCA.
+func loadDockerfile(ctx context.Context, source string, ca ...*BuildCA) ([]byte, error) {
 	st, err := detectSourceType(source)
 	if err != nil {
 		return nil, fmt.Errorf("load dockerfile: %w", err)
@@ -66,13 +69,29 @@ func loadDockerfile(ctx context.Context, source string) ([]byte, error) {
 	case sourceLocal:
 		return readLocalDockerfile(source)
 	case sourceHTTP:
-		return fetchDockerfile(ctx, source)
+		return fetchDockerfile(ctx, source, ca...)
 	default:
 		return nil, fmt.Errorf("load dockerfile: unknown source type for %q", source)
 	}
 }
 
-func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
+// fetchDockerfile downloads the Dockerfile at rawURL. An optional trailing ca
+// adds its certificates to the roots the TLS handshakes are verified with,
+// for the origin and for an HTTPS proxy alike; the host and redirect
+// restrictions are the same with and without it.
+func fetchDockerfile(ctx context.Context, rawURL string, ca ...*BuildCA) ([]byte, error) {
+	buildCA, err := optionalBuildCA(ca)
+	if err != nil {
+		return nil, fmt.Errorf("fetch dockerfile from %s: %w", rawURL, err)
+	}
+	rootCAs := fetchRootCAs
+	if buildCA != nil {
+		rootCAs, err = buildcaTLSRoots(buildCA)
+		if err != nil {
+			return nil, fmt.Errorf("fetch dockerfile from %s: %w", rawURL, err)
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create fetch request for %s: %w", rawURL, err)
@@ -122,7 +141,7 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 			tlsConn := tls.Client(rawConn, &tls.Config{
 				ServerName: tlsHost,
 				MinVersion: tls.VersionTLS12,
-				RootCAs:    fetchRootCAs,
+				RootCAs:    rootCAs,
 			})
 			if hsErr := tlsConn.HandshakeContext(dialCtx); hsErr != nil {
 				_ = rawConn.Close()
@@ -136,7 +155,7 @@ func fetchDockerfile(ctx context.Context, rawURL string) ([]byte, error) {
 		TLSClientConfig: &tls.Config{
 			ServerName: origin.Hostname(),
 			MinVersion: tls.VersionTLS12,
-			RootCAs:    fetchRootCAs,
+			RootCAs:    rootCAs,
 		},
 	}
 	defer transport.CloseIdleConnections()

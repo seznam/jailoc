@@ -2,9 +2,17 @@ package docker
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"io"
+	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -596,5 +604,291 @@ func TestCheckFetchDialAddr(t *testing.T) {
 				t.Fatalf("checkFetchDialAddr(%q, %q) error = %v, wantErr %v", tt.originHost, tt.address, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// newTLSTestCert returns a self-signed server certificate valid for 127.0.0.1
+// and dnsNames, and its PEM encoding. Each call produces a new key pair.
+func newTLSTestCert(t *testing.T, dnsNames ...string) (tls.Certificate, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		t.Fatalf("generate serial: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "jailoc test " + serial.String()},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              dnsNames,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key},
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// newTLSTestServer starts a TLS server presenting cert.
+func newTLSTestServer(t *testing.T, cert tls.Certificate, h http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(h)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func mustBuildCA(t *testing.T, pemData []byte) *BuildCA {
+	t.Helper()
+	ca, err := NewBuildCA(pemData)
+	if err != nil {
+		t.Fatalf("NewBuildCA: %v", err)
+	}
+	return ca
+}
+
+func TestBuildcaTLSRoots(t *testing.T) {
+	_, pemA := newTLSTestCert(t)
+	_, pemB := newTLSTestCert(t)
+	certA := mustParseCert(t, pemA)
+	certB := mustParseCert(t, pemB)
+
+	t.Run("nil CA adds no roots", func(t *testing.T) {
+		got, err := buildcaTLSRoots(nil)
+		if err != nil || got != nil {
+			t.Fatalf("buildcaTLSRoots(nil) = %v, %v; want nil, nil", got, err)
+		}
+	})
+
+	t.Run("trusts bundle on top of the fetch roots without mutating them", func(t *testing.T) {
+		orig := fetchRootCAs
+		t.Cleanup(func() { fetchRootCAs = orig })
+		base := x509.NewCertPool()
+		base.AddCert(certA)
+		fetchRootCAs = base
+		before := base.Clone()
+
+		got, err := buildcaTLSRoots(mustBuildCA(t, pemB))
+		if err != nil {
+			t.Fatalf("buildcaTLSRoots: %v", err)
+		}
+		for name, c := range map[string]*x509.Certificate{"original": certA, "supplied": certB} {
+			if _, err := c.Verify(x509.VerifyOptions{Roots: got, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
+				t.Errorf("%s root not trusted: %v", name, err)
+			}
+		}
+		if got == base {
+			t.Fatal("buildcaTLSRoots returned the fetchRootCAs pool itself")
+		}
+		if fetchRootCAs != base || !base.Equal(before) {
+			t.Fatal("buildcaTLSRoots mutated fetchRootCAs")
+		}
+		if _, err := certB.Verify(x509.VerifyOptions{Roots: base, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err == nil {
+			t.Fatal("supplied CA leaked into fetchRootCAs")
+		}
+	})
+
+	t.Run("falls back to a system pool clone", func(t *testing.T) {
+		orig := fetchRootCAs
+		t.Cleanup(func() { fetchRootCAs = orig })
+		fetchRootCAs = nil
+
+		got, err := buildcaTLSRoots(mustBuildCA(t, pemA))
+		if err != nil {
+			t.Fatalf("buildcaTLSRoots: %v", err)
+		}
+		if _, err := certA.Verify(x509.VerifyOptions{Roots: got, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
+			t.Fatalf("supplied root not trusted: %v", err)
+		}
+		if fetchRootCAs != nil {
+			t.Fatal("buildcaTLSRoots set fetchRootCAs")
+		}
+		sys, err := x509.SystemCertPool()
+		if err != nil {
+			t.Skipf("system pool unavailable: %v", err)
+		}
+		if _, err := certA.Verify(x509.VerifyOptions{Roots: sys, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err == nil {
+			t.Fatal("supplied CA leaked into the system pool")
+		}
+	})
+
+	t.Run("rejects a bundle without certificates", func(t *testing.T) {
+		if _, err := buildcaTLSRoots(mustBuildCA(t, []byte("not a certificate"))); err == nil || !strings.Contains(err.Error(), "no certificates") {
+			t.Fatalf("buildcaTLSRoots(junk) error = %v, want no certificates", err)
+		}
+	})
+}
+
+func mustParseCert(t *testing.T, pemData []byte) *x509.Certificate {
+	t.Helper()
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		t.Fatal("no PEM block")
+	}
+	c, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	return c
+}
+
+func TestOptionalBuildCA(t *testing.T) {
+	t.Parallel()
+	ca := mustBuildCA(t, []byte("x"))
+	if got, err := optionalBuildCA(nil); err != nil || got != nil {
+		t.Fatalf("optionalBuildCA(none) = %v, %v", got, err)
+	}
+	if got, err := optionalBuildCA([]*BuildCA{nil}); err != nil || got != nil {
+		t.Fatalf("optionalBuildCA(nil) = %v, %v", got, err)
+	}
+	if got, err := optionalBuildCA([]*BuildCA{ca}); err != nil || got != ca {
+		t.Fatalf("optionalBuildCA(ca) = %v, %v", got, err)
+	}
+	if _, err := optionalBuildCA([]*BuildCA{ca, ca}); err == nil {
+		t.Fatal("optionalBuildCA(two) error = nil")
+	}
+}
+
+func TestFetchDockerfileBuildCA(t *testing.T) {
+	t.Parallel()
+	cert, certPEM := newTLSTestCert(t)
+	_, wrongPEM := newTLSTestCert(t)
+	srv := newTLSTestServer(t, cert, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("FROM alpine:3.20\n"))
+	}))
+	dockerfileURL := srv.URL + "/Dockerfile"
+
+	t.Run("succeeds with only the supplied CA", func(t *testing.T) {
+		t.Parallel()
+		data, err := fetchDockerfile(t.Context(), dockerfileURL, mustBuildCA(t, certPEM))
+		if err != nil {
+			t.Fatalf("fetchDockerfile: %v", err)
+		}
+		if string(data) != "FROM alpine:3.20\n" {
+			t.Fatalf("got %q", data)
+		}
+	})
+
+	t.Run("loadDockerfile passes the CA through", func(t *testing.T) {
+		t.Parallel()
+		if _, err := loadDockerfile(t.Context(), dockerfileURL, mustBuildCA(t, certPEM)); err != nil {
+			t.Fatalf("loadDockerfile: %v", err)
+		}
+	})
+
+	t.Run("fails without a CA", func(t *testing.T) {
+		t.Parallel()
+		if _, err := fetchDockerfile(t.Context(), dockerfileURL); err == nil || !strings.Contains(err.Error(), "certificate") {
+			t.Fatalf("fetchDockerfile without CA error = %v, want certificate error", err)
+		}
+		if _, err := fetchDockerfile(t.Context(), dockerfileURL, nil); err == nil {
+			t.Fatal("fetchDockerfile with nil CA succeeded")
+		}
+	})
+
+	t.Run("fails with a wrong CA", func(t *testing.T) {
+		t.Parallel()
+		if _, err := fetchDockerfile(t.Context(), dockerfileURL, mustBuildCA(t, wrongPEM)); err == nil || !strings.Contains(err.Error(), "certificate") {
+			t.Fatalf("fetchDockerfile with wrong CA error = %v, want certificate error", err)
+		}
+	})
+
+	t.Run("does not widen host access", func(t *testing.T) {
+		t.Parallel()
+		localhostURL := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1) + "/Dockerfile"
+		_, err := fetchDockerfile(t.Context(), localhostURL, mustBuildCA(t, certPEM))
+		if err == nil || !strings.Contains(err.Error(), "refusing dial") {
+			t.Fatalf("fetchDockerfile(localhost) error = %v, want refusing dial", err)
+		}
+	})
+
+	t.Run("rejects more than one CA", func(t *testing.T) {
+		t.Parallel()
+		ca := mustBuildCA(t, certPEM)
+		if _, err := fetchDockerfile(t.Context(), dockerfileURL, ca, ca); err == nil {
+			t.Fatal("fetchDockerfile with two CAs succeeded")
+		}
+	})
+}
+
+func TestFetchDockerfileBuildCABehindHTTPSProxy(t *testing.T) {
+	originCert, originPEM := newTLSTestCert(t, "example.com")
+	proxyCert, proxyPEM := newTLSTestCert(t)
+	originSrv := newTLSTestServer(t, originCert, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("FROM alpine:3.21\n"))
+	}))
+	var connectHost atomic.Value
+	proxySrv := newTLSTestServer(t, proxyCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		connectHost.Store(r.Host)
+		upConn, err := net.Dial("tcp", originSrv.Listener.Addr().String())
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		clientConn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			_ = upConn.Close()
+			return
+		}
+		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		go func() {
+			defer func() { _ = upConn.Close() }()
+			_, _ = io.Copy(upConn, buf)
+		}()
+		go func() {
+			defer func() { _ = clientConn.Close() }()
+			_, _ = io.Copy(clientConn, upConn)
+		}()
+	}))
+
+	origRoots, origLookup, origProxy := fetchRootCAs, lookupFetchIPs, dockerfileProxy
+	t.Cleanup(func() { fetchRootCAs, lookupFetchIPs, dockerfileProxy = origRoots, origLookup, origProxy })
+	fetchRootCAs = nil
+	lookupFetchIPs = func(_ context.Context, host string) ([]netip.Addr, error) {
+		if host == "example.com" {
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		}
+		return nil, errors.New("dns failure")
+	}
+	proxyURL, err := url.Parse(proxySrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfileProxy = http.ProxyURL(proxyURL)
+	const target = "https://example.com:8443/Dockerfile"
+
+	if _, err := fetchDockerfile(t.Context(), target); err == nil {
+		t.Fatal("fetchDockerfile through HTTPS proxy without CA succeeded")
+	}
+
+	ca := mustBuildCA(t, append(append([]byte{}, proxyPEM...), originPEM...))
+	data, err := fetchDockerfile(t.Context(), target, ca)
+	if err != nil {
+		t.Fatalf("fetchDockerfile through HTTPS proxy with CA: %v", err)
+	}
+	if string(data) != "FROM alpine:3.21\n" {
+		t.Fatalf("got %q", data)
+	}
+	if got, _ := connectHost.Load().(string); got != "93.184.216.34:8443" {
+		t.Fatalf("proxy CONNECT host = %q, want pinned 93.184.216.34:8443", got)
+	}
+	if fetchRootCAs != nil {
+		t.Fatal("fetchDockerfile mutated fetchRootCAs")
 	}
 }
