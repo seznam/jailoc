@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	controlapi "github.com/moby/buildkit/api/services/control"
 	bkclient "github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/session"
+	"github.com/moby/buildkit/session/secrets/secretsprovider"
 	"github.com/moby/buildkit/util/progress/progressui"
 	"github.com/moby/moby/api/types/build"
 	"github.com/moby/moby/api/types/jsonstream"
@@ -57,9 +59,22 @@ func forBuilder(version build.BuilderVersion, dockerfile []byte, args map[string
 	return cacheMount.ReplaceAll(dockerfile, nil)
 }
 
+// requireBuildKit rejects a build with a CA bundle on the classic builder,
+// which has no secret mounts to carry the bundle.
+func requireBuildKit(version build.BuilderVersion, ca *BuildCA) error {
+	if ca != nil && version != build.BuilderBuildKit {
+		return errors.New("ca_bundle forwarding into image builds requires BuildKit, which the Docker daemon does not report; enable BuildKit or set ca_bundle = false")
+	}
+	return nil
+}
+
 // imageBuild builds buildCtx with the builder version and shows its progress
-// on stderr.
-func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Reader, version build.BuilderVersion, opts dockerclient.ImageBuildOptions) error {
+// on stderr. A non-nil ca is passed to the build as the BuildKit secret that
+// the CA trust steps mount; it needs BuildKit.
+func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Reader, version build.BuilderVersion, opts dockerclient.ImageBuildOptions, ca *BuildCA) error {
+	if err := requireBuildKit(version, ca); err != nil {
+		return err
+	}
 	start := time.Now()
 	opts.Version = version
 	if version == build.BuilderBuildKit {
@@ -68,6 +83,9 @@ func imageBuild(ctx context.Context, cli dockerclient.APIClient, buildCtx io.Rea
 		sess, err := session.NewSession(ctx, "")
 		if err != nil {
 			return fmt.Errorf("create BuildKit session: %w", err)
+		}
+		if ca != nil {
+			sess.Allow(secretsprovider.FromMap(ca.secrets()))
 		}
 		dial := func(ctx context.Context, proto string, meta map[string][]string) (net.Conn, error) {
 			return cli.DialHijack(ctx, "/session", proto, meta)

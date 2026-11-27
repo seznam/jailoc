@@ -27,13 +27,20 @@ func displayStream(r io.Reader) error {
 	return jsonmessage.DisplayJSONMessagesStream(r, os.Stderr, fd, isTerminal, nil)
 }
 
-func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (string, error) {
+// ResolveBaseImage builds the base image of cfg and returns its tag. The
+// optional trailing ca is the CA bundle forwarded into the build; see
+// optionalBuildCA.
+func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string, cas ...*BuildCA) (string, error) {
+	ca, err := optionalBuildCA(cas)
+	if err != nil {
+		return "", fmt.Errorf("resolve base image: %w", err)
+	}
 	slog.Debug("resolving base image", "version", version)
 
 	if cfg != nil && strings.TrimSpace(cfg.Base.Dockerfile) != "" {
 		source := strings.TrimSpace(cfg.Base.Dockerfile)
 		_, _ = color.New(color.FgCyan).Printf("Loading preset Dockerfile from %s...\n", source)
-		content, err := loadDockerfile(ctx, source)
+		content, err := loadDockerfile(ctx, source, ca)
 		if err != nil {
 			return "", fmt.Errorf("load dockerfile from %q: %w", source, err)
 		}
@@ -45,7 +52,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 		defer func() { _ = engineCli.Close() }()
 
 		_, _ = color.New(color.FgCyan).Printf("Building preset base image...\n")
-		tag, err := buildPresetImage(ctx, engineCli, content)
+		tag, err := buildPresetImage(ctx, engineCli, content, ca)
 		if err != nil {
 			return "", fmt.Errorf("build preset image: %w", err)
 		}
@@ -54,7 +61,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 		return tag, nil
 	}
 
-	const embeddedTag = "jailoc-base:embedded"
+	embeddedTag := "jailoc-base:embedded" + ca.tagSuffix()
 	engineCli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return "", fmt.Errorf("create Docker Engine client for embedded build: %w", err)
@@ -65,7 +72,7 @@ func ResolveBaseImage(ctx context.Context, cfg *config.Config, version string) (
 	if cfg != nil {
 		mirror = cfg.Base.UbuntuMirror
 	}
-	if err := buildEmbeddedImage(ctx, engineCli, embeddedTag, mirror); err != nil {
+	if err := buildEmbeddedImage(ctx, engineCli, embeddedTag, mirror, ca); err != nil {
 		return "", fmt.Errorf("build embedded base image: %w", err)
 	}
 
@@ -113,7 +120,11 @@ func setUbuntuMirror(args map[string]*string, mirror string) {
 	args[ubuntuMirrorArg] = &mirror
 }
 
-func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag, mirror string) error {
+func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag, mirror string, cas ...*BuildCA) error {
+	ca, err := optionalBuildCA(cas)
+	if err != nil {
+		return fmt.Errorf("build embedded image: %w", err)
+	}
 	tmpDir, err := os.MkdirTemp("", "jailoc-embedded-dockerfile-")
 	if err != nil {
 		return fmt.Errorf("create temp directory for embedded Dockerfile: %w", err)
@@ -127,13 +138,20 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag, mi
 	if err != nil {
 		return err
 	}
+	if err := requireBuildKit(version, ca); err != nil {
+		return err
+	}
 	buildArgs := proxyBuildArgs()
 	setUbuntuMirror(buildArgs, mirror)
 	content := forBuilder(version, embed.Dockerfile(), buildArgs)
-	hash := contentHash(content, buildArgs)
+	hash := contentHash(content, ca.hashArgs(buildArgs))
 	if haveImage(ctx, cli, tag, hash) {
 		slog.Info("image up to date", "image", tag)
 		return nil
+	}
+	content, err = prepareCADockerfile(ctx, cli, content, buildArgs, ca)
+	if err != nil {
+		return fmt.Errorf("prepare embedded Dockerfile: %w", err)
 	}
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
 	if err := os.WriteFile(dockerfilePath, content, 0o600); err != nil {
@@ -154,7 +172,7 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag, mi
 		BuildArgs: buildArgs,
 		Labels:    labels,
 		Remove:    true,
-	})
+	}, ca)
 	if err != nil {
 		return fmt.Errorf("build embedded image in %q: %w", tmpDir, err)
 	}
@@ -162,9 +180,30 @@ func buildEmbeddedImage(ctx context.Context, cli dockerclient.APIClient, tag, mi
 	return nil
 }
 
-func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfileContent []byte) (string, error) {
+func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfileContent []byte, cas ...*BuildCA) (string, error) {
 	if len(dockerfileContent) == 0 {
 		return "", fmt.Errorf("dockerfile content is empty")
+	}
+	ca, err := optionalBuildCA(cas)
+	if err != nil {
+		return "", fmt.Errorf("build preset image: %w", err)
+	}
+
+	version, err := builderVersion(ctx, cli)
+	if err != nil {
+		return "", err
+	}
+	if err := requireBuildKit(version, ca); err != nil {
+		return "", err
+	}
+	buildArgs := proxyBuildArgs()
+
+	hash := sha256.Sum256(dockerfileContent)
+	presetTag := fmt.Sprintf("jailoc-base:preset-%x%s", hash[:8], ca.tagSuffix())
+
+	dockerfileContent, err = prepareCADockerfile(ctx, cli, dockerfileContent, buildArgs, ca)
+	if err != nil {
+		return "", fmt.Errorf("prepare preset Dockerfile: %w", err)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "jailoc-preset-dockerfile-")
@@ -177,9 +216,6 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	if err := os.WriteFile(dockerfilePath, dockerfileContent, 0o600); err != nil {
 		return "", fmt.Errorf("write preset Dockerfile to %q: %w", dockerfilePath, err)
 	}
-
-	hash := sha256.Sum256(dockerfileContent)
-	presetTag := fmt.Sprintf("jailoc-base:preset-%x", hash[:8])
 	slog.Debug("building image", "tag", presetTag, "context", tmpDir)
 
 	buildCtx, err := archive.TarWithOptions(tmpDir, &archive.TarOptions{})
@@ -188,16 +224,12 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	}
 	defer func() { _ = buildCtx.Close() }()
 
-	version, err := builderVersion(ctx, cli)
-	if err != nil {
-		return "", err
-	}
 	err = imageBuild(ctx, cli, buildCtx, version, dockerclient.ImageBuildOptions{
 		Tags:      []string{presetTag},
-		BuildArgs: proxyBuildArgs(),
+		BuildArgs: buildArgs,
 		Labels:    buildLabels(),
 		Remove:    true,
-	})
+	}, ca)
 	if err != nil {
 		return "", fmt.Errorf("build preset image in %q: %w", tmpDir, err)
 	}
@@ -205,7 +237,10 @@ func buildPresetImage(ctx context.Context, cli dockerclient.APIClient, dockerfil
 	return presetTag, nil
 }
 
-func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) (string, error) {
+// BuildOverlayImage builds the workspace Dockerfile of ws on top of base and
+// returns the tag of the result. The optional trailing ca is the CA bundle
+// forwarded into the build; see optionalBuildCA.
+func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved, cas ...*BuildCA) (string, error) {
 	if strings.TrimSpace(base) == "" {
 		return "", fmt.Errorf("base image is empty")
 	}
@@ -213,14 +248,56 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 	if strings.TrimSpace(ws.Dockerfile) == "" {
 		return base, nil
 	}
+	ca, err := optionalBuildCA(cas)
+	if err != nil {
+		return "", fmt.Errorf("build workspace overlay image: %w", err)
+	}
 
 	_, _ = color.New(color.FgCyan).Printf("Loading workspace Dockerfile from %s...\n", ws.Dockerfile)
-	dockerfileContent, err := loadDockerfile(ctx, ws.Dockerfile)
+	dockerfileContent, err := loadDockerfile(ctx, ws.Dockerfile, ca)
 	if err != nil {
 		return "", fmt.Errorf("load workspace dockerfile from %q: %w", ws.Dockerfile, err)
 	}
 
 	dockerfileContent = injectBaseArg(dockerfileContent)
+
+	// Workspace overlays are rebuilt unconditionally on every workspace startup.
+	// We do NOT check whether overlayTag already exists locally and skip the build —
+	// that would silently run a stale image when the user edits their Dockerfile
+	// but the edit produces a build error. Build failure must abort startup.
+	// Daemon-side layer cache already provides the fast path for unchanged Dockerfiles;
+	// adding a second cache layer here would only mask user errors.
+	//
+	// The tag hashes the Dockerfile as the user wrote it; with a CA bundle its
+	// suffix carries the bundle digest.
+	hash := sha256.Sum256(dockerfileContent)
+	hashHex := fmt.Sprintf("%x", hash)
+	overlayTag := fmt.Sprintf("jailoc-%s:%s%s", ws.Name, hashHex[:8], ca.tagSuffix())
+
+	engineCli, err := dockerclient.New(dockerclient.FromEnv)
+	if err != nil {
+		return "", fmt.Errorf("create Docker Engine client for workspace %q overlay build: %w", ws.Name, err)
+	}
+	defer func() { _ = engineCli.Close() }()
+
+	baseArg := base
+	overlayBuildArgs := proxyBuildArgs()
+	overlayBuildArgs["BASE"] = &baseArg
+
+	version, err := builderVersion(ctx, engineCli)
+	if err != nil {
+		return "", err
+	}
+	if err := requireBuildKit(version, ca); err != nil {
+		return "", err
+	}
+
+	// The transformed Dockerfile only names the bundle by digest and mounts it
+	// as a BuildKit secret; the bundle itself never enters the build context.
+	dockerfileContent, err = prepareCADockerfile(ctx, engineCli, dockerfileContent, overlayBuildArgs, ca)
+	if err != nil {
+		return "", fmt.Errorf("prepare workspace %q Dockerfile: %w", ws.Name, err)
+	}
 
 	buildContextDir, cleanupCtx, err := resolveOverlayBuildContext(ws)
 	if err != nil {
@@ -243,36 +320,12 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		return "", fmt.Errorf("close temporary workspace Dockerfile %q: %w", tmpDockerfilePath, err)
 	}
 
-	// Workspace overlays are rebuilt unconditionally on every workspace startup.
-	// We do NOT check whether overlayTag already exists locally and skip the build —
-	// that would silently run a stale image when the user edits their Dockerfile
-	// but the edit produces a build error. Build failure must abort startup.
-	// Daemon-side layer cache already provides the fast path for unchanged Dockerfiles;
-	// adding a second cache layer here would only mask user errors.
-	hash := sha256.Sum256(dockerfileContent)
-	hashHex := fmt.Sprintf("%x", hash)
-	overlayTag := fmt.Sprintf("jailoc-%s:%s", ws.Name, hashHex[:8])
-
-	engineCli, err := dockerclient.New(dockerclient.FromEnv)
-	if err != nil {
-		return "", fmt.Errorf("create Docker Engine client for workspace %q overlay build: %w", ws.Name, err)
-	}
-	defer func() { _ = engineCli.Close() }()
-
 	buildCtx, err := archive.TarWithOptions(buildContextDir, &archive.TarOptions{})
 	if err != nil {
 		return "", fmt.Errorf("create build context tar for workspace %q from %q: %w", ws.Name, buildContextDir, err)
 	}
 	defer func() { _ = buildCtx.Close() }()
 
-	baseArg := base
-	overlayBuildArgs := proxyBuildArgs()
-	overlayBuildArgs["BASE"] = &baseArg
-
-	version, err := builderVersion(ctx, engineCli)
-	if err != nil {
-		return "", err
-	}
 	_, _ = color.New(color.FgCyan).Printf("Building workspace overlay image (sending build context to Docker daemon)...\n")
 	err = imageBuild(ctx, engineCli, buildCtx, version, dockerclient.ImageBuildOptions{
 		Tags:       []string{overlayTag},
@@ -280,7 +333,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 		Labels:     buildLabels(),
 		Dockerfile: filepath.Base(tmpDockerfilePath),
 		Remove:     true,
-	})
+	}, ca)
 	if err != nil {
 		return "", fmt.Errorf("build workspace overlay image %q from %q: %w", overlayTag, buildContextDir, err)
 	}
@@ -290,10 +343,16 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved) 
 
 // BuildAgentImage installs the pinned npm package or release binary of
 // harness h on top of base and returns the tag of the result.
-func BuildAgentImage(ctx context.Context, base string, h agent.Harness) (string, error) {
+// The optional trailing ca is the CA bundle forwarded into the build; see
+// optionalBuildCA.
+func BuildAgentImage(ctx context.Context, base string, h agent.Harness, cas ...*BuildCA) (string, error) {
+	ca, err := optionalBuildCA(cas)
+	if err != nil {
+		return "", fmt.Errorf("build agent image: %w", err)
+	}
 	label := fmt.Sprintf("%s %s", h.Title, h.Version)
 	if h.Release != nil {
-		r, err := resolveRelease(ctx, githubAPI, *h.Release, h.Version)
+		r, err := resolveRelease(ctx, githubAPI, *h.Release, h.Version, ca)
 		if err != nil {
 			return "", fmt.Errorf("resolve the %s release: %w", label, err)
 		}
@@ -301,26 +360,33 @@ func BuildAgentImage(ctx context.Context, base string, h agent.Harness) (string,
 	}
 	return buildLayerImage(ctx, base, "jailoc-agent-"+h.Name, label, proxyBuildArgs(), func(user string) []byte {
 		return agentDockerfile(h, user)
-	})
+	}, ca)
 }
 
 // BuildDockerImage adds the embedded Docker layer (Docker CE, buildx,
 // compose, nftables) on top of base and returns the tag of the result. The
 // stage that downloads Docker gets its apt packages from the Ubuntu archive
-// mirror, DefaultUbuntuMirror when it is empty.
-func BuildDockerImage(ctx context.Context, base, mirror string) (string, error) {
+// mirror, DefaultUbuntuMirror when it is empty. The optional trailing ca is the
+// CA bundle forwarded into the build; see optionalBuildCA.
+func BuildDockerImage(ctx context.Context, base, mirror string, cas ...*BuildCA) (string, error) {
+	ca, err := optionalBuildCA(cas)
+	if err != nil {
+		return "", fmt.Errorf("build Docker image: %w", err)
+	}
 	buildArgs := proxyBuildArgs()
 	setUbuntuMirror(buildArgs, mirror)
 	return buildLayerImage(ctx, base, "jailoc-docker", "Docker", buildArgs, func(user string) []byte {
 		return dockerLayerDockerfile(embed.DockerLayer(), user)
-	})
+	}, ca)
 }
 
 // buildLayerImage builds the Dockerfile that dockerfile returns for the user
 // of base, with buildArgs and base as the BASE build argument, and tags the
-// result repo with a hash of the base image ID and the Dockerfile.
-func buildLayerImage(ctx context.Context, base, repo, label string, buildArgs map[string]*string, dockerfile func(user string) []byte) (string, error) {
-	if err := EnsureImage(ctx, base); err != nil {
+// result repo with a hash of the base image ID and the Dockerfile. A non-nil
+// ca adds the CA trust steps to the Dockerfile and its digest to the hash and
+// the tag.
+func buildLayerImage(ctx context.Context, base, repo, label string, buildArgs map[string]*string, dockerfile func(user string) []byte, ca *BuildCA) (string, error) {
+	if err := EnsureBuildImage(ctx, base, ca); err != nil {
 		return "", err
 	}
 	cli, err := dockerclient.New(dockerclient.FromEnv)
@@ -340,14 +406,27 @@ func buildLayerImage(ctx context.Context, base, repo, label string, buildArgs ma
 	if err != nil {
 		return "", err
 	}
+	if err := requireBuildKit(version, ca); err != nil {
+		return "", err
+	}
 	content := forBuilder(version, dockerfile(user), buildArgs)
-	hash := sha256.Sum256(append([]byte(inspect.ID+"\n"), content...))
-	tag := fmt.Sprintf("%s:%x", repo, hash[:8])
+	hashInput := []byte(inspect.ID + "\n")
+	if ca != nil {
+		hashInput = append(hashInput, ca.Digest()+"\n"...)
+	}
+	hash := sha256.Sum256(append(hashInput, content...))
+	tag := fmt.Sprintf("%s:%x%s", repo, hash[:8], ca.tagSuffix())
 	// The tag names the base image and the Dockerfile, so an existing image
 	// is the result of this build.
 	if haveImage(ctx, cli, tag, "") {
 		slog.Info("image up to date", "image", tag)
 		return tag, nil
+	}
+
+	buildArgs["BASE"] = &base
+	content, err = prepareCADockerfile(ctx, cli, content, buildArgs, ca)
+	if err != nil {
+		return "", fmt.Errorf("prepare the %s image layer Dockerfile: %w", label, err)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "jailoc-layer-dockerfile-")
@@ -364,14 +443,13 @@ func buildLayerImage(ctx context.Context, base, repo, label string, buildArgs ma
 	}
 	defer func() { _ = buildCtx.Close() }()
 
-	buildArgs["BASE"] = &base
 	_, _ = color.New(color.FgCyan).Printf("Installing %s into the image...\n", label)
 	err = imageBuild(ctx, cli, buildCtx, version, dockerclient.ImageBuildOptions{
 		Tags:      []string{tag},
 		BuildArgs: buildArgs,
 		Labels:    buildLabels(),
 		Remove:    true,
-	})
+	}, ca)
 	if err != nil {
 		return "", fmt.Errorf("build the %s image layer: %w", label, err)
 	}
