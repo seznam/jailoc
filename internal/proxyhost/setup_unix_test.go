@@ -203,6 +203,9 @@ func TestInstallStateRoundTrip(t *testing.T) {
 		NSSDatabases:      []string{"/home/u/.pki/nssdb", "/home/u/.mozilla/firefox/x.default"},
 		HelperPath:        "/usr/local/libexec/jailoc-listener-broker",
 		ServiceUnitPath:   "/etc/systemd/system/jailoc-listener-broker.service",
+
+		PendingKeychainSHA1s:  []string{strings.Repeat("AB", 20)},
+		PendingNSSCertSHA256s: []string{strings.Repeat("cd", 32)},
 	}
 	tests := []struct {
 		name string
@@ -212,6 +215,7 @@ func TestInstallStateRoundTrip(t *testing.T) {
 		{"full", full},
 		{"ledger only", InstallState{HostsLedger: []byte("x\r\ny")}},
 		{"keychain only", InstallState{MacOSKeychainCert: true}},
+		{"pending only", InstallState{PendingKeychainSHA1s: []string{"AA"}, PendingNSSCertSHA256s: []string{"bb"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -229,6 +233,143 @@ func TestInstallStateRoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInstallStateHasAnything(t *testing.T) {
+	t.Parallel()
+
+	if (InstallState{}).HasAnything() {
+		t.Error("the zero state has nothing")
+	}
+	if (InstallState{HostsLedger: []byte{}, CACertPEM: []byte{}, NSSDatabases: []string{}}).HasAnything() {
+		t.Error("empty, non-nil fields have nothing")
+	}
+	for name, st := range map[string]InstallState{
+		"hosts ledger":     {HostsLedger: []byte("x")},
+		"CA fingerprint":   {CACertSHA256: "ab"},
+		"CA PEM":           {CACertPEM: []byte("x")},
+		"system CA path":   {SystemCACertPath: "/x"},
+		"system CA update": {SystemCAUpdateCmd: []string{"x"}},
+		"system CA remove": {SystemCARemoveCmd: []string{"x"}},
+		"keychain":         {MacOSKeychainCert: true},
+		"NSS database":     {NSSDatabases: []string{"/x"}},
+		"helper":           {HelperPath: "/x"},
+		"service unit":     {ServiceUnitPath: "/x"},
+		"pending keychain": {PendingKeychainSHA1s: []string{"AA"}},
+		"pending NSS":      {PendingNSSCertSHA256s: []string{"aa"}},
+	} {
+		if !st.HasAnything() {
+			t.Errorf("%s: HasAnything() = false", name)
+		}
+	}
+}
+
+func TestCheckTrustedDestDir(t *testing.T) {
+	t.Parallel()
+
+	owner := uint32(os.Getuid()) //nolint:gosec // G115: UIDs are 32-bit on Linux and Darwin
+	newTop := func(t *testing.T) string {
+		t.Helper()
+		top := filepath.Join(t.TempDir(), "top")
+		if err := os.Mkdir(top, 0o755); err != nil { //nolint:gosec // G301: directory under test
+			t.Fatal(err)
+		}
+		return top
+	}
+	mkdir := func(t *testing.T, mode os.FileMode, elems ...string) string {
+		t.Helper()
+		dir := filepath.Join(elems...)
+		if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: directory under test
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, mode); err != nil { //nolint:gosec // G302: the mode under test
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	t.Run("trusted chain", func(t *testing.T) {
+		t.Parallel()
+		top := newTop(t)
+		dir := mkdir(t, 0o755, top, "a", "b")
+		if err := CheckTrustedDestDir(filepath.Join(dir, "file"), owner, top); err != nil {
+			t.Errorf("CheckTrustedDestDir() = %v", err)
+		}
+	})
+	t.Run("directories that do not exist yet are skipped", func(t *testing.T) {
+		t.Parallel()
+		top := newTop(t)
+		if err := CheckTrustedDestDir(filepath.Join(top, "x", "y", "file"), owner, top); err != nil {
+			t.Errorf("CheckTrustedDestDir() = %v", err)
+		}
+	})
+	t.Run("group writable ancestor", func(t *testing.T) {
+		t.Parallel()
+		top := newTop(t)
+		mkdir(t, 0o775, top, "a")
+		dir := mkdir(t, 0o755, top, "a", "b")
+		err := CheckTrustedDestDir(filepath.Join(dir, "file"), owner, top)
+		if err == nil || !strings.Contains(err.Error(), "group or other writable") {
+			t.Errorf("CheckTrustedDestDir() = %v, want a writable-directory error", err)
+		}
+	})
+	t.Run("world writable top", func(t *testing.T) {
+		t.Parallel()
+		top := newTop(t)
+		if err := os.Chmod(top, 0o757); err != nil { //nolint:gosec // G302: the mode under test
+			t.Fatal(err)
+		}
+		if err := CheckTrustedDestDir(filepath.Join(top, "file"), owner, top); err == nil {
+			t.Error("CheckTrustedDestDir() = nil, want an error for the top itself")
+		}
+	})
+	t.Run("symlinked ancestor", func(t *testing.T) {
+		t.Parallel()
+		top := newTop(t)
+		real := mkdir(t, 0o755, top, "real")
+		if err := os.Symlink(real, filepath.Join(top, "link")); err != nil {
+			t.Fatal(err)
+		}
+		err := CheckTrustedDestDir(filepath.Join(top, "link", "file"), owner, top)
+		if err == nil || !strings.Contains(err.Error(), "is a symlink") {
+			t.Errorf("CheckTrustedDestDir() = %v, want a symlink error", err)
+		}
+	})
+	t.Run("file instead of directory", func(t *testing.T) {
+		t.Parallel()
+		top := newTop(t)
+		if err := os.WriteFile(filepath.Join(top, "f"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := CheckTrustedDestDir(filepath.Join(top, "f", "file"), owner, top)
+		if err == nil {
+			t.Error("CheckTrustedDestDir() = nil, want an error")
+		}
+	})
+	t.Run("other owner", func(t *testing.T) {
+		t.Parallel()
+		top := newTop(t)
+		err := CheckTrustedDestDir(filepath.Join(top, "file"), owner+1, top)
+		if err == nil || !strings.Contains(err.Error(), "owned by uid") {
+			t.Errorf("CheckTrustedDestDir() = %v, want an ownership error", err)
+		}
+	})
+	t.Run("relative paths", func(t *testing.T) {
+		t.Parallel()
+		if err := CheckTrustedDestDir("relative/file", owner, "/"); err == nil {
+			t.Error("CheckTrustedDestDir() = nil for a relative destination")
+		}
+	})
+	t.Run("ancestors above the top are not checked", func(t *testing.T) {
+		t.Parallel()
+		top := newTop(t)
+		if err := os.Chmod(filepath.Dir(top), 0o777); err != nil { //nolint:gosec // G302: the mode under test
+			t.Fatal(err)
+		}
+		if err := CheckTrustedDestDir(filepath.Join(top, "file"), owner, top); err != nil {
+			t.Errorf("CheckTrustedDestDir() = %v", err)
+		}
+	})
 }
 
 func TestReadInstallStateMissing(t *testing.T) {
@@ -325,7 +466,7 @@ func TestWriteInstallStateReplacesAtomically(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "install.json")
-	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	want := InstallState{HelperPath: "/new"}

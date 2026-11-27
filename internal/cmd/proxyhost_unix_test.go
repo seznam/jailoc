@@ -5,17 +5,28 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/proxyhost"
@@ -48,9 +59,21 @@ type hostHarness struct {
 
 	priv     []privCall
 	commands [][]string
-	deps     *proxyHostDeps
+	// files is what the privileged scripts installed, by destination.
+	files map[string][]byte
+	// proxy is the background proxy runningProxy reports.
+	proxy      *proxyState
+	restarted  [][]string
+	destChecks []string
 
-	privErr      error
+	privErr error
+	// privErrApplied makes a failing privileged call do its work first, like
+	// a script that fails halfway.
+	privErrApplied bool
+	// beforePriv runs when the privileged call starts, like something
+	// changing the host while the user confirms.
+	beforePriv   func()
+	destErr      error
 	commandErr   func(args []string) error
 	answers      string
 	stdinIsTTY   bool
@@ -82,7 +105,7 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 		t.Fatal(err)
 	}
 
-	h := &hostHarness{t: t, home: home, hostsPath: hostsPath, goos: goos, stdinIsTTY: true, certutil: true, systemStore: true}
+	h := &hostHarness{t: t, home: home, hostsPath: hostsPath, goos: goos, stdinIsTTY: true, certutil: true, systemStore: true, files: map[string][]byte{}}
 	old := currentProxyHostDeps
 	currentProxyHostDeps = proxyHostDeps{
 		goos:         goos,
@@ -112,6 +135,21 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 			return nil
 		},
 		probeBroker: func(context.Context) error { return h.brokerAnswer },
+		readFile: func(p string) ([]byte, error) {
+			if data, ok := h.files[p]; ok {
+				return data, nil
+			}
+			return nil, os.ErrNotExist
+		},
+		checkDestDir: func(p string) error {
+			h.destChecks = append(h.destChecks, p)
+			return h.destErr
+		},
+		runningProxy: func() *proxyState { return h.proxy },
+		restartProxy: func(_ context.Context, names []string) error {
+			h.restarted = append(h.restarted, names)
+			return nil
+		},
 		interactive: func() bool { return h.stdinIsTTY },
 		prompt: func(yes bool) *promptIO {
 			return &promptIO{in: strings.NewReader(h.answers), out: io.Discard, accessible: true, yes: yes}
@@ -133,7 +171,7 @@ func (h *hostHarness) runPrivileged(_ context.Context, script string, env []stri
 		if !strings.HasSuffix(k, "_SRC") {
 			continue
 		}
-		data, err := os.ReadFile(v)
+		data, err := os.ReadFile(v) //nolint:gosec // G304: staged file in the jailoc temporary directory
 		if err != nil {
 			h.t.Errorf("staged %s unreadable: %v", k, err)
 		}
@@ -144,16 +182,54 @@ func (h *hostHarness) runPrivileged(_ context.Context, script string, env []stri
 		}
 	}
 	h.priv = append(h.priv, call)
-	if h.privErr != nil {
+	if h.beforePriv != nil {
+		h.beforePriv()
+	}
+	if h.privErr != nil && !h.privErrApplied {
 		return h.privErr
 	}
+	if err := h.applyPrivileged(call); err != nil {
+		return err
+	}
+	return h.privErr
+}
+
+// applyPrivileged does what the privileged script does to the files the
+// tests look at: the hosts file, the service files and the system CA.
+func (h *hostHarness) applyPrivileged(call privCall) error {
 	if src, ok := call.files["JAILOC_HOSTS_SRC"]; ok {
 		if dst := call.env["JAILOC_HOSTS_DST"]; dst != h.hostsPath {
 			h.t.Errorf("JAILOC_HOSTS_DST = %q, want %q", dst, h.hostsPath)
 		}
+		if prev := call.env["JAILOC_HOSTS_PREV_SHA256"]; prev != "" {
+			cur, err := os.ReadFile(h.hostsPath)
+			switch {
+			case prev == "missing" && err == nil:
+				return errors.New("hosts file was created while waiting for confirmation")
+			case prev != "missing" && (err != nil || sha256Hex(cur) != prev):
+				return errors.New("hosts file changed while waiting for confirmation")
+			}
+		}
 		if err := os.WriteFile(h.hostsPath, src, 0o644); err != nil { //nolint:gosec // test hosts file
 			h.t.Fatal(err)
 		}
+	}
+	install := func(dstKey, srcKey string) {
+		if src, ok := call.files[srcKey]; ok {
+			h.files[call.env[dstKey]] = src
+		}
+	}
+	if strings.Contains(call.script, `install_file 0755 "$JAILOC_HELPER_SRC"`) {
+		install("JAILOC_HELPER_DST", "JAILOC_HELPER_SRC")
+		install("JAILOC_UNIT_DST", "JAILOC_UNIT_SRC")
+	}
+	install("JAILOC_CA_DST", "JAILOC_CA_SRC")
+	if strings.Contains(call.script, `rm -f "$JAILOC_CA_DST"`) {
+		delete(h.files, call.env["JAILOC_CA_DST"])
+	}
+	if strings.Contains(call.script, `rm -f "$JAILOC_HELPER_DST"`) {
+		delete(h.files, call.env["JAILOC_HELPER_DST"])
+		delete(h.files, call.env["JAILOC_UNIT_DST"])
 	}
 	return nil
 }
@@ -320,7 +396,7 @@ func TestProxyInstallDarwin(t *testing.T) {
 	}
 
 	st := h.installState()
-	caPEM, err := os.ReadFile(caPath)
+	caPEM, err := os.ReadFile(caPath) //nolint:gosec // G304: test path in t.TempDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,8 +426,8 @@ func TestProxyInstallDarwin(t *testing.T) {
 	if h.hosts() != hosts {
 		t.Error("an unchanged install rewrote /etc/hosts")
 	}
-	if strings.Contains(h.priv[0].script, `write_hosts "$`) || h.priv[0].env["JAILOC_HOSTS_SRC"] != "" {
-		t.Errorf("an unchanged install must not touch /etc/hosts:\n%s", h.priv[0].script)
+	if len(h.priv) != 0 {
+		t.Errorf("an unchanged install ran %d privileged call(s); the running service and /etc/hosts stay untouched", len(h.priv))
 	}
 	if h.hasCommand("security", "delete-certificate") {
 		t.Error("the CA did not change; it must not be removed from the keychain")
@@ -799,8 +875,9 @@ func TestProxyUninstallWithoutInstall(t *testing.T) {
 	if h.hosts() != hostTestOriginal {
 		t.Errorf("hosts changed:\n%q", h.hosts())
 	}
-	if len(h.priv) != 1 || strings.Contains(h.priv[0].script, `write_hosts "$`) {
-		t.Errorf("privileged calls = %+v, want only the service cleanup", h.priv)
+	assertContains(t, out, "Proxy host setup is not installed.")
+	if len(h.priv) != 0 || len(h.commands) != 0 {
+		t.Errorf("nothing is installed, yet %d privileged call(s) and commands %v ran", len(h.priv), h.commands)
 	}
 }
 
@@ -955,18 +1032,24 @@ func TestProxyScriptsAreConstant(t *testing.T) {
 	t.Parallel()
 	store := &proxyhost.LinuxCAStore{CertPath: "/x/ca.crt", UpdateCmd: []string{"update-ca-certificates"}, RemoveCmd: []string{"update-ca-certificates", "--fresh"}}
 	for _, goos := range []string{"darwin", "linux"} {
-		for _, withHosts := range []bool{false, true} {
-			for _, s := range []*proxyhost.LinuxCAStore{nil, store} {
-				scripts := map[string]string{
-					"install":   proxyInstallScript(goos, withHosts, s),
-					"uninstall": proxyUninstallScript(goos, withHosts, s),
-				}
-				for name, script := range scripts {
-					if strings.Contains(script, "/x/ca.crt") {
-						t.Errorf("%s/%s: store path interpolated into the script", goos, name)
+		for _, withService := range []bool{false, true} {
+			for _, withHosts := range []bool{false, true} {
+				for _, s := range []*proxyhost.LinuxCAStore{nil, store} {
+					scripts := map[string]string{
+						"install":   proxyInstallScript(goos, withService, withHosts, s),
+						"uninstall": proxyUninstallScript(goos, withService, withHosts, s),
 					}
-					if strings.Contains(script, "write_hosts \"$") != withHosts {
-						t.Errorf("%s/%s: write_hosts presence != %v", goos, name, withHosts)
+					for name, script := range scripts {
+						if strings.Contains(script, "/x/ca.crt") {
+							t.Errorf("%s/%s: store path interpolated into the script", goos, name)
+						}
+						if strings.Contains(script, "write_hosts \"$") != withHosts {
+							t.Errorf("%s/%s: write_hosts presence != %v", goos, name, withHosts)
+						}
+						hasService := strings.Contains(script, "launchctl") || strings.Contains(script, "systemctl")
+						if hasService != withService {
+							t.Errorf("%s/%s: service commands present = %v, want %v:\n%s", goos, name, hasService, withService, script)
+						}
 					}
 				}
 			}
@@ -988,4 +1071,877 @@ func mustResolveHostTestWorkspace(t *testing.T, name string) *workspace.Resolved
 		t.Fatal(err)
 	}
 	return ws
+}
+
+// Review hardening of the host setup.
+
+// testCertPEM returns a self-signed certificate PEM and its SHA-256.
+func testCertPEM(t *testing.T, cn string) (certPEM []byte, sum string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), sha256Hex(der)
+}
+
+// useNSSInspection answers `certutil -L -n "jailoc proxy CA" -a` with the PEM
+// in entries for the database, or with certutil's "not found" failure.
+func (h *hostHarness) useNSSInspection(entries map[string][]byte) {
+	h.t.Helper()
+	currentProxyHostDeps.runCommandOutput = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		i := slices.Index(args, "-d")
+		if i < 0 || i+1 >= len(args) {
+			h.t.Errorf("certutil without -d: %v", args)
+			return nil, errors.New("bad call")
+		}
+		if data, ok := entries[strings.TrimPrefix(args[i+1], "sql:")]; ok {
+			return data, nil
+		}
+		return []byte("certutil: Could not find cert: jailoc proxy CA\n"), errors.New("exit status 255")
+	}
+}
+
+func (h *hostHarness) rotateCA() {
+	h.t.Helper()
+	for _, f := range []string{"ca.crt", "intermediate.crt", "intermediate.key", "cert.crt", "cert.key"} {
+		if err := os.Remove(filepath.Join(proxyCADir(), f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			h.t.Fatal(err)
+		}
+	}
+}
+
+func (h *hostHarness) mustRun(args ...string) string {
+	h.t.Helper()
+	out, err := h.run(args...)
+	if err != nil {
+		h.t.Fatalf("%v: %v\n%s", args, err, out)
+	}
+	return out
+}
+
+func runHelperScript(t *testing.T, body string, env map[string]string) (string, error) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "sh", "-e", "-c", proxyPrivilegedHelpers+body) //nolint:gosec // G204: constant helper script under test
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func TestProxyInstallChecksDestinationDirectories(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	want := []string{"/usr/local/libexec/jailoc-listener-broker", "/etc/systemd/system/jailoc-listener-broker.service"}
+	if !slices.Equal(h.destChecks, want) {
+		t.Errorf("checked destinations = %v, want %v", h.destChecks, want)
+	}
+
+	h2 := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h2.destErr = errors.New("/usr/local is group writable")
+	out, err := h2.run("install", "--yes")
+	if err == nil || !strings.Contains(err.Error(), "/usr/local is group writable") {
+		t.Fatalf("error = %v\n%s", err, out)
+	}
+	if len(h2.priv) != 0 || h2.hosts() != hostTestOriginal {
+		t.Errorf("an untrusted destination reached the privileged step: %d call(s)", len(h2.priv))
+	}
+}
+
+func TestProxyPrivilegedHelpersCheckInstallDirectories(t *testing.T) {
+	base := shortTempDir(t, "rc")
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil { //nolint:gosec // G301: directory under test
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	writable := filepath.Join(base, "writable")
+	if err := os.Mkdir(writable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(writable, 0o775); err != nil { //nolint:gosec // G302: the mode under test
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, dir, want string
+	}{
+		{"symlink", link, "is a symlink; refusing to install into an untrusted directory"},
+		{"group writable", writable, "is writable by group or others; refusing to install"},
+	} {
+		out, err := runHelperScript(t, `check_root_dir_chain "$JAILOC_TEST_DIR"`, map[string]string{"JAILOC_TEST_DIR": tc.dir})
+		if err == nil || !strings.Contains(out, tc.want) {
+			t.Errorf("%s: err = %v, output %q, want %q", tc.name, err, out, tc.want)
+		}
+	}
+	if os.Geteuid() != 0 {
+		out, err := runHelperScript(t, `check_root_dir_chain "$JAILOC_TEST_DIR"`, map[string]string{"JAILOC_TEST_DIR": real})
+		if err == nil || !strings.Contains(out, "is not a root-owned directory; refusing to install") {
+			t.Errorf("a directory chain not owned by root: err = %v, output %q", err, out)
+		}
+	}
+	if !strings.Contains(proxyInstallScript("linux", true, false, nil), "install_file 0755") ||
+		strings.Count(proxyPrivilegedHelpers, `check_root_dir_chain "$(dirname "$3")"`) != 2 {
+		t.Error("install_file must check the directory chain before and after creating the directory")
+	}
+}
+
+func TestServiceOwnedByUID(t *testing.T) {
+	t.Parallel()
+	const (
+		linuxHelper  = "/usr/local/libexec/jailoc-listener-broker"
+		darwinHelper = "/Library/PrivilegedHelperTools/jailoc-listener-broker"
+	)
+	unitFor := func(t *testing.T, goos string, uid uint32) []byte {
+		t.Helper()
+		var data []byte
+		var err error
+		if goos == "darwin" {
+			data, err = proxyhost.RenderLaunchDaemonPlist(darwinHelper, uid)
+		} else {
+			data, err = proxyhost.RenderSystemdUnit(linuxHelper, uid)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	for _, goos := range []string{"darwin", "linux"} {
+		helper := linuxHelper
+		if goos == "darwin" {
+			helper = darwinHelper
+		}
+		for _, tc := range []struct {
+			name        string
+			onDisk      func(t *testing.T) []byte // nil: not installed
+			wantPresent bool
+			wantOwned   bool
+		}{
+			{"not installed", nil, false, false},
+			{"identical unit", func(t *testing.T) []byte { return unitFor(t, goos, 501) }, true, true},
+			{"unit with extra whitespace", func(t *testing.T) []byte { return append([]byte("\n"), append(unitFor(t, goos, 501), '\n', '\n')...) }, true, true},
+			{"other user", func(t *testing.T) []byte { return unitFor(t, goos, 502) }, true, false},
+			{"uid that starts with ours", func(t *testing.T) []byte { return unitFor(t, goos, 5010) }, true, false},
+			{"uid that ends with ours", func(t *testing.T) []byte { return unitFor(t, goos, 1501) }, true, false},
+			{"edited but still ours", func(t *testing.T) []byte {
+				return bytes.Replace(unitFor(t, goos, 501), []byte("jailoc"), []byte("my jailoc"), 1)
+			}, true, true},
+		} {
+			t.Run(goos+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				d := proxyHostDeps{goos: goos, readFile: func(string) ([]byte, error) {
+					if tc.onDisk == nil {
+						return nil, os.ErrNotExist
+					}
+					return tc.onDisk(t), nil
+				}}
+				present, owned := serviceOwnedByUID(d, proxyhost.ServiceUnitPath(goos), helper, 501)
+				if present != tc.wantPresent || owned != tc.wantOwned {
+					t.Errorf("serviceOwnedByUID() = (%v, %v), want (%v, %v)", present, owned, tc.wantPresent, tc.wantOwned)
+				}
+			})
+		}
+	}
+}
+
+func TestProxyUninstallLeavesServiceOfAnotherUser(t *testing.T) {
+	foreignUnit := func(t *testing.T) []byte {
+		t.Helper()
+		unit, err := proxyhost.RenderSystemdUnit("/usr/local/libexec/jailoc-listener-broker", 777)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return unit
+	}
+
+	t.Run("nothing of ours is installed", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.files[proxyhost.ServiceUnitPath("linux")] = foreignUnit(t)
+		_, err := h.run("uninstall", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "belongs to another user; refusing to uninstall it") {
+			t.Fatalf("error = %v", err)
+		}
+		if len(h.priv) != 0 {
+			t.Error("the service of another user reached the privileged step")
+		}
+	})
+
+	t.Run("our other changes are reverted", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		h.files[proxyhost.ServiceUnitPath("linux")] = foreignUnit(t)
+		h.priv = nil
+
+		out := h.mustRun("uninstall", "--yes")
+		if len(h.priv) != 1 {
+			t.Fatalf("privileged calls = %d, want 1", len(h.priv))
+		}
+		call := h.priv[0]
+		for _, bad := range []string{"systemctl", `rm -f "$JAILOC_HELPER_DST"`, `rm -f "$JAILOC_UNIT_DST"`, "JAILOC_SOCKET_DIR"} {
+			if strings.Contains(call.script, bad) {
+				t.Errorf("the service of another user is touched by %q:\n%s", bad, call.script)
+			}
+		}
+		for _, k := range []string{"JAILOC_HELPER_DST", "JAILOC_UNIT_DST", "JAILOC_SOCKET_DIR"} {
+			if _, ok := call.env[k]; ok {
+				t.Errorf("env %s is set for a service that stays", k)
+			}
+		}
+		if !strings.Contains(call.script, `write_hosts "$`) || h.hosts() != hostTestOriginal {
+			t.Errorf("the hosts block was not reverted:\n%s", h.hosts())
+		}
+		if _, ok := h.files[proxyhost.HelperBinaryPath("linux")]; !ok {
+			t.Error("the helper of the other user was removed")
+		}
+		assertContains(t, out, "belongs to another user and was left in place")
+		if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("install.json still exists (%v)", err)
+		}
+	})
+
+	t.Run("no privileged step needed", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		if err := os.WriteFile(h.hostsPath, []byte(hostTestOriginal), 0o644); err != nil { //nolint:gosec // test hosts file
+			t.Fatal(err)
+		}
+		unit, err := proxyhost.RenderLaunchDaemonPlist(proxyhost.HelperBinaryPath("darwin"), 777)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.files[proxyhost.ServiceUnitPath("darwin")] = unit
+		h.priv, h.commands = nil, nil
+
+		h.mustRun("uninstall", "--yes")
+		if len(h.priv) != 0 {
+			t.Errorf("sudo ran %d time(s) with nothing to do as root", len(h.priv))
+		}
+		if !h.hasCommand("security", "delete-certificate") {
+			t.Errorf("the keychain trust was not removed: %v", h.commands)
+		}
+	})
+}
+
+func TestProxyHostSetupRunsUnderTheCALock(t *testing.T) {
+	for _, verb := range []string{"install", "uninstall"} {
+		t.Run(verb, func(t *testing.T) {
+			h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+			if verb == "uninstall" {
+				h.mustRun("install", "--yes")
+				h.priv = nil
+			}
+			var lockErr error
+			h.beforePriv = func() {
+				f, err := os.OpenFile(filepath.Join(proxyCADir(), ".lock"), os.O_RDWR, 0o600) //nolint:gosec // G304: test lock path
+				if err != nil {
+					lockErr = err
+					return
+				}
+				defer func() { _ = f.Close() }()
+				lockErr = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) //nolint:gosec // G115: file descriptors fit in int
+			}
+			h.mustRun(verb, "--yes")
+			if len(h.priv) == 0 {
+				t.Fatal("no privileged call")
+			}
+			if !errors.Is(lockErr, syscall.EWOULDBLOCK) {
+				t.Errorf("another run could take the lock during the privileged step: %v", lockErr)
+			}
+		})
+	}
+}
+
+func TestProxyInstallRejectsStaleHostsSnapshot(t *testing.T) {
+	t.Run("hosts file changed while waiting", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		changed := hostTestOriginal + "10.0.0.1 corp.example\n"
+		h.beforePriv = func() {
+			if err := os.WriteFile(h.hostsPath, []byte(changed), 0o644); err != nil { //nolint:gosec // test hosts file
+				t.Fatal(err)
+			}
+		}
+		_, err := h.run("install", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "changed while waiting for confirmation") {
+			t.Fatalf("error = %v", err)
+		}
+		if h.hosts() != changed {
+			t.Errorf("a stale snapshot overwrote the hosts file:\n%s", h.hosts())
+		}
+		if got := h.priv[0].env["JAILOC_HOSTS_PREV_SHA256"]; got != sha256Hex([]byte(hostTestOriginal)) {
+			t.Errorf("JAILOC_HOSTS_PREV_SHA256 = %q, want the hash of the file jailoc planned against", got)
+		}
+	})
+	t.Run("hosts file missing at planning time", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		if err := os.Remove(h.hostsPath); err != nil {
+			t.Fatal(err)
+		}
+		h.mustRun("install", "--yes")
+		if got := h.priv[0].env["JAILOC_HOSTS_PREV_SHA256"]; got != "missing" {
+			t.Errorf("JAILOC_HOSTS_PREV_SHA256 = %q, want missing", got)
+		}
+	})
+	t.Run("uninstall", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		h.priv = nil
+		h.mustRun("uninstall", "--yes")
+		if got := h.priv[0].env["JAILOC_HOSTS_PREV_SHA256"]; got == "" || got == "missing" {
+			t.Errorf("JAILOC_HOSTS_PREV_SHA256 = %q, want the hash of the hosts file with the block", got)
+		}
+	})
+}
+
+func TestProxyPrivilegedWriteHostsChecksPreviousContent(t *testing.T) {
+	const old, replacement = "127.0.0.1 localhost\n", "127.0.0.1 localhost\n127.0.0.1 app.jailoc.local\n"
+	for _, tc := range []struct {
+		name    string
+		exists  bool
+		prev    func() string
+		wantErr string
+	}{
+		{"unchanged", true, func() string { return sha256Hex([]byte(old)) }, ""},
+		{"changed", true, func() string { return sha256Hex([]byte("other\n")) }, "changed while waiting for confirmation"},
+		{"created meanwhile", true, func() string { return "missing" }, "was created while waiting for confirmation"},
+		{"still missing", false, func() string { return "missing" }, ""},
+		{"removed meanwhile", false, func() string { return sha256Hex([]byte(old)) }, "changed while waiting for confirmation"},
+		{"no snapshot", true, func() string { return "" }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := shortTempDir(t, "wh")
+			src, dst := filepath.Join(dir, "src"), filepath.Join(dir, "hosts")
+			if err := os.WriteFile(src, []byte(replacement), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.exists {
+				if err := os.WriteFile(dst, []byte(old), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, err := runHelperScript(t, `write_hosts "$JAILOC_HOSTS_SRC" "$JAILOC_HOSTS_SHA256" "$JAILOC_HOSTS_DST"`, map[string]string{
+				"JAILOC_HOSTS_SRC":         src,
+				"JAILOC_HOSTS_SHA256":      sha256Hex([]byte(replacement)),
+				"JAILOC_HOSTS_DST":         dst,
+				"JAILOC_HOSTS_PREV_SHA256": tc.prev(),
+			})
+			got, _ := os.ReadFile(dst) //nolint:gosec // G304: test path in a temporary directory
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(out, tc.wantErr) {
+					t.Fatalf("err = %v, output %q, want %q", err, out, tc.wantErr)
+				}
+				if tc.exists && string(got) != old {
+					t.Errorf("hosts file = %q, want it untouched", got)
+				}
+				return
+			}
+			if err != nil || string(got) != replacement {
+				t.Errorf("err = %v, output %q, hosts file = %q, want the replacement", err, out, got)
+			}
+		})
+	}
+}
+
+func TestProxyInstallLeavesRunningServiceAlone(t *testing.T) {
+	t.Run("only hosts change", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		if err := os.WriteFile(config.ConfigPath(), []byte(hostTestConfig+"\n[workspaces.desk.proxy]\nweb = 6080\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h.priv, h.destChecks = nil, nil
+
+		h.mustRun("install", "--yes")
+		if len(h.priv) != 1 {
+			t.Fatalf("privileged calls = %d, want 1", len(h.priv))
+		}
+		call := h.priv[0]
+		for _, bad := range []string{"launchctl", "install_file 0"} {
+			if strings.Contains(call.script, bad) {
+				t.Errorf("a repeated install touches the running service with %q:\n%s", bad, call.script)
+			}
+		}
+		if !strings.Contains(call.script, `write_hosts "$`) {
+			t.Errorf("hosts were not updated:\n%s", call.script)
+		}
+		if _, ok := call.env["JAILOC_HELPER_SRC"]; ok || len(h.destChecks) != 0 {
+			t.Errorf("the unchanged helper was staged (%v) or its directory checked (%v)", call.env, h.destChecks)
+		}
+		if st := h.installState(); st.HelperPath == "" || st.ServiceUnitPath == "" {
+			t.Errorf("state lost the service: %+v", st)
+		}
+	})
+
+	t.Run("broker not running", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		h.priv = nil
+		h.brokerAnswer = errors.New("connection refused")
+		h.beforePriv = func() { h.brokerAnswer = nil }
+		h.mustRun("install", "--yes")
+		if len(h.priv) != 1 || !strings.Contains(h.priv[0].script, "launchctl kickstart -k") {
+			t.Errorf("a dead broker must be started again: %+v", h.priv)
+		}
+	})
+
+	t.Run("changed helper restarts the attached proxy", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		h.proxy = &proxyState{ListenerBroker: true, Workspaces: map[string][]string{"zeta": nil, "alpha": nil}}
+		h.mustRun("install", "--yes")
+		if len(h.restarted) != 0 {
+			t.Errorf("an unchanged install restarted the proxy: %v", h.restarted)
+		}
+
+		if err := os.WriteFile(filepath.Join(h.home, "jailoc-listener-broker"), []byte(hostTestBroker+"# v2\n"), 0o700); err != nil { //nolint:gosec // test stub binary
+			t.Fatal(err)
+		}
+		h.priv = nil
+		h.mustRun("install", "--yes")
+		if len(h.priv) != 1 || !strings.Contains(h.priv[0].script, "launchctl kickstart -k") {
+			t.Errorf("a new helper must be installed and the service restarted: %+v", h.priv)
+		}
+		if want := [][]string{{"alpha", "zeta"}}; !reflect.DeepEqual(h.restarted, want) {
+			t.Errorf("restarted proxies = %v, want %v", h.restarted, want)
+		}
+	})
+
+	t.Run("no proxy to restart", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.proxy = &proxyState{ListenerBroker: false, Workspaces: map[string][]string{"alpha": nil}}
+		h.mustRun("install", "--yes")
+		if len(h.restarted) != 0 {
+			t.Errorf("a proxy that does not use the broker was restarted: %v", h.restarted)
+		}
+	})
+}
+
+func TestProxyInstallRecordsPartialPrivilegedWork(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.privErr, h.privErrApplied = errors.New("systemctl restart failed"), true
+	_, err := h.run("install", "--yes")
+	if err == nil || !strings.Contains(err.Error(), "systemctl restart failed") {
+		t.Fatalf("error = %v", err)
+	}
+	st := h.installState()
+	if len(st.HostsLedger) == 0 || st.HelperPath != proxyhost.HelperBinaryPath("linux") ||
+		st.ServiceUnitPath != proxyhost.ServiceUnitPath("linux") || st.SystemCACertPath != "/usr/local/share/ca-certificates/jailoc-proxy-ca.crt" ||
+		!slices.Equal(st.SystemCARemoveCmd, []string{"update-ca-certificates", "--fresh"}) {
+		t.Errorf("state = %+v, want everything the script finished", st)
+	}
+
+	// What it recorded is enough for uninstall to revert it.
+	h.privErr = nil
+	h.priv = nil
+	h.mustRun("uninstall", "--yes")
+	if h.hosts() != hostTestOriginal {
+		t.Errorf("hosts not restored:\n%s", h.hosts())
+	}
+	if len(h.files) != 0 {
+		t.Errorf("installed files left behind: %v", h.files)
+	}
+}
+
+func TestProxyInstallRecordsOnlyFinishedPrivilegedWork(t *testing.T) {
+	h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+	h.privErr, h.privErrApplied = errors.New("boom"), true
+	h.beforePriv = func() {
+		// The script died before it wrote anything.
+		h.files = map[string][]byte{}
+		h.privErrApplied = false
+	}
+	if _, err := h.run("install", "--yes"); err == nil {
+		t.Fatal("want an error")
+	}
+	if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("install.json written although nothing was installed (%v)", err)
+	}
+}
+
+func TestProxyInstallRotationKeepsOldCAUntilItIsRemoved(t *testing.T) {
+	h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+	ffDB := h.addNSSDatabase("Library/Application Support/Firefox/Profiles/abc.default")
+	h.mustRun("install", "--yes")
+	first := h.installState()
+	oldSHA1 := pemSHA1(first.CACertPEM)
+
+	h.rotateCA()
+	h.commandErr = func(args []string) error {
+		if (args[0] == "security" && args[1] == "delete-certificate") || (args[0] == "certutil" && slices.Contains(args, "-A")) {
+			return errors.New("keychain is locked")
+		}
+		return nil
+	}
+	h.mustRun("install", "--yes")
+	second := h.installState()
+	if !slices.Equal(second.PendingKeychainSHA1s, []string{oldSHA1}) {
+		t.Errorf("pending keychain SHA-1s = %v, want [%s]", second.PendingKeychainSHA1s, oldSHA1)
+	}
+	if !slices.Equal(second.PendingNSSCertSHA256s, []string{first.CACertSHA256}) || !slices.Equal(second.NSSDatabases, []string{ffDB}) {
+		t.Errorf("state = %+v, want the old CA fingerprint kept for NSS", second)
+	}
+
+	// The next install retries both.
+	h.commandErr = nil
+	h.commands = nil
+	h.mustRun("install", "--yes")
+	if !h.hasCommand("security", "delete-certificate", "-Z", oldSHA1) {
+		t.Errorf("the old CA was not deleted again: %v", h.commands)
+	}
+	third := h.installState()
+	if len(third.PendingKeychainSHA1s) != 0 || len(third.PendingNSSCertSHA256s) != 0 {
+		t.Errorf("pending entries remain after cleanup: %+v", third)
+	}
+}
+
+func TestProxyInstallKeychainDeleteOfMissingCertIsDone(t *testing.T) {
+	h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	h.rotateCA()
+	h.commandErr = func(args []string) error {
+		if args[0] == "security" && args[1] == "delete-certificate" {
+			return errors.New("security: exit status 44: The specified item could not be found in the keychain.")
+		}
+		return nil
+	}
+	out := h.mustRun("install", "--yes")
+	if st := h.installState(); len(st.PendingKeychainSHA1s) != 0 {
+		t.Errorf("a certificate that is gone stays pending: %v\n%s", st.PendingKeychainSHA1s, out)
+	}
+}
+
+func TestProxyInstallVerifiesNSSCertificateOwnership(t *testing.T) {
+	foreignPEM, _ := testCertPEM(t, "someone else's jailoc proxy CA")
+
+	t.Run("foreign certificate is not replaced", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		db := h.addNSSDatabase(".pki/nssdb")
+		h.useNSSInspection(map[string][]byte{db: foreignPEM})
+
+		out := h.mustRun("install", "--yes")
+		if h.hasCommand("certutil", "-d", "sql:"+db, "-D") || h.hasCommand("certutil", "-d", "sql:"+db, "-A") {
+			t.Errorf("a certificate jailoc does not own was replaced: %v", h.commands)
+		}
+		assertContains(t, out, `refusing to replace existing certificate "jailoc proxy CA" in `+db+" because its fingerprint does not match jailoc's recorded CA")
+		assertContains(t, out, "by hand")
+		if st := h.installState(); len(st.NSSDatabases) != 0 {
+			t.Errorf("state claims a database whose certificate is not ours: %v", st.NSSDatabases)
+		}
+	})
+
+	t.Run("current certificate is kept", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		db := h.addNSSDatabase(".pki/nssdb")
+		h.mustRun("install", "--yes")
+		caPEM, err := os.ReadFile(proxyCACertPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.useNSSInspection(map[string][]byte{db: caPEM})
+		h.commands = nil
+
+		h.mustRun("install", "--yes")
+		if h.hasCommand("certutil", "-d", "sql:"+db, "-D") || h.hasCommand("certutil", "-d", "sql:"+db, "-A") {
+			t.Errorf("an up to date certificate was deleted and added again: %v", h.commands)
+		}
+		if st := h.installState(); !slices.Equal(st.NSSDatabases, []string{db}) {
+			t.Errorf("NSS databases = %v, want [%s]", st.NSSDatabases, db)
+		}
+	})
+
+	t.Run("previous jailoc CA is replaced", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		db := h.addNSSDatabase(".pki/nssdb")
+		h.mustRun("install", "--yes")
+		oldPEM, err := os.ReadFile(proxyCACertPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.rotateCA()
+		h.useNSSInspection(map[string][]byte{db: oldPEM})
+		h.commands = nil
+
+		h.mustRun("install", "--yes")
+		del := h.commandIndex("certutil", "-d", "sql:"+db, "-D", "-n", "jailoc proxy CA")
+		add := h.commandIndex("certutil", "-d", "sql:"+db, "-A")
+		if del < 0 || add < 0 || del > add {
+			t.Errorf("want the old CA deleted before the new one is added: %v", h.commands)
+		}
+	})
+
+	t.Run("old CA left by an earlier rotation is replaced", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		db := h.addNSSDatabase(".pki/nssdb")
+		h.mustRun("install", "--yes")
+		st := h.installState()
+		leftover, leftoverSHA := testCertPEM(t, "jailoc proxy CA before the last rotation")
+		st.PendingNSSCertSHA256s = []string{leftoverSHA}
+		if err := proxyhost.WriteInstallState(proxyInstallStatePath(), st); err != nil {
+			t.Fatal(err)
+		}
+		h.useNSSInspection(map[string][]byte{db: leftover})
+		h.commands = nil
+
+		h.mustRun("install", "--yes")
+		if !h.hasCommand("certutil", "-d", "sql:"+db, "-D") || !h.hasCommand("certutil", "-d", "sql:"+db, "-A") {
+			t.Errorf("a recorded old CA must be replaced: %v", h.commands)
+		}
+	})
+
+	t.Run("certutil cannot list the database", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		db := h.addNSSDatabase(".pki/nssdb")
+		currentProxyHostDeps.runCommandOutput = func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("certutil: function failed: SEC_ERROR_BAD_DATABASE"), errors.New("exit status 255")
+		}
+		out := h.mustRun("install", "--yes")
+		if h.hasCommand("certutil", "-d", "sql:"+db) {
+			t.Errorf("a database that could not be inspected was changed: %v", h.commands)
+		}
+		assertContains(t, out, "could not look at the certificates of "+db)
+	})
+}
+
+func TestProxyUninstallVerifiesNSSCertificateOwnership(t *testing.T) {
+	foreignPEM, _ := testCertPEM(t, "someone else's jailoc proxy CA")
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	foreignDB := h.addNSSDatabase(".pki/nssdb")
+	ownDB := h.addNSSDatabase(".mozilla/firefox/abc.default")
+	goneDB := h.addNSSDatabase(".mozilla/firefox/def.default")
+	h.mustRun("install", "--yes")
+	caPEM, err := os.ReadFile(proxyCACertPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A database added after install must not be touched.
+	newDB := h.addNSSDatabase(".mozilla/firefox/new.default")
+	h.useNSSInspection(map[string][]byte{foreignDB: foreignPEM, ownDB: caPEM, newDB: caPEM})
+	h.commands = nil
+
+	out := h.mustRun("uninstall", "--yes")
+	if h.hasCommand("certutil", "-d", "sql:"+foreignDB, "-D") {
+		t.Errorf("a certificate that is not ours was deleted: %v", h.commands)
+	}
+	assertContains(t, out, "not removing certificate \"jailoc proxy CA\" from "+foreignDB)
+	if !h.hasCommand("certutil", "-d", "sql:"+ownDB, "-D", "-n", "jailoc proxy CA") {
+		t.Errorf("our certificate was not deleted: %v", h.commands)
+	}
+	if h.hasCommand("certutil", "-d", "sql:"+goneDB, "-D") {
+		t.Errorf("a certificate that is not there was deleted: %v", h.commands)
+	}
+	if h.hasCommand("certutil", "-d", "sql:"+newDB) {
+		t.Errorf("a database that install did not record was touched: %v", h.commands)
+	}
+	if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("install.json still exists (%v)", err)
+	}
+}
+
+func TestProxyUninstallKeepsStateWhenTrustRemovalFails(t *testing.T) {
+	t.Run("keychain", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		before := h.installState()
+		h.commandErr = func(args []string) error {
+			if args[0] == "security" {
+				return errors.New("user canceled")
+			}
+			return nil
+		}
+		h.priv = nil
+		out, err := h.run("uninstall", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "user canceled") {
+			t.Fatalf("error = %v\n%s", err, out)
+		}
+		st := h.installState()
+		if !st.MacOSKeychainCert || st.CACertSHA256 != before.CACertSHA256 || !bytes.Equal(st.CACertPEM, before.CACertPEM) {
+			t.Errorf("state = %+v, want the keychain trust kept for a retry", st)
+		}
+		if len(st.HostsLedger) != 0 || st.HelperPath != "" || st.ServiceUnitPath != "" || st.SystemCACertPath != "" {
+			t.Errorf("state keeps what the privileged step removed: %+v", st)
+		}
+		if h.hosts() != hostTestOriginal || len(h.priv) != 1 {
+			t.Errorf("privileged part: %d call(s), hosts:\n%s", len(h.priv), h.hosts())
+		}
+
+		// The retry finishes without sudo.
+		h.commandErr = nil
+		h.commands = nil
+		h.mustRun("uninstall", "--yes")
+		if len(h.priv) != 1 {
+			t.Errorf("the retry ran %d privileged call(s) in total, want the 1 of the first run", len(h.priv))
+		}
+		if !h.hasCommand("security", "delete-certificate", "-Z", pemSHA1(before.CACertPEM)) {
+			t.Errorf("the retry did not remove the keychain trust: %v", h.commands)
+		}
+		if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("install.json still exists after the retry (%v)", err)
+		}
+	})
+
+	t.Run("pending keychain certificates", func(t *testing.T) {
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		st := h.installState()
+		st.PendingKeychainSHA1s = []string{"AA" + strings.Repeat("00", 19)}
+		if err := proxyhost.WriteInstallState(proxyInstallStatePath(), st); err != nil {
+			t.Fatal(err)
+		}
+		h.commandErr = func(args []string) error {
+			if args[0] == "security" && slices.Contains(args, st.PendingKeychainSHA1s[0]) {
+				return errors.New("keychain is locked")
+			}
+			return nil
+		}
+		if _, err := h.run("uninstall", "--yes"); err == nil {
+			t.Fatal("want an error")
+		}
+		got := h.installState()
+		if !slices.Equal(got.PendingKeychainSHA1s, st.PendingKeychainSHA1s) || got.MacOSKeychainCert {
+			t.Errorf("state = %+v, want only the pending certificate kept", got)
+		}
+	})
+
+	t.Run("NSS database", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		okDB := h.addNSSDatabase(".pki/nssdb")
+		badDB := h.addNSSDatabase(".mozilla/firefox/abc.default")
+		h.mustRun("install", "--yes")
+		h.commandErr = func(args []string) error {
+			if args[0] == "certutil" && slices.Contains(args, "-D") && slices.Contains(args, "sql:"+badDB) {
+				return errors.New("database is locked")
+			}
+			return nil
+		}
+		if _, err := h.run("uninstall", "--yes"); err == nil || !strings.Contains(err.Error(), "database is locked") {
+			t.Fatalf("error = %v", err)
+		}
+		st := h.installState()
+		if !slices.Equal(st.NSSDatabases, []string{badDB}) || st.CACertSHA256 == "" {
+			t.Errorf("state = %+v, want only %s kept", st, badDB)
+		}
+		_ = okDB
+	})
+
+	t.Run("certutil missing", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		db := h.addNSSDatabase(".pki/nssdb")
+		h.mustRun("install", "--yes")
+		h.certutil = false
+		if _, err := h.run("uninstall", "--yes"); err == nil {
+			t.Fatal("want an error")
+		}
+		if st := h.installState(); !slices.Equal(st.NSSDatabases, []string{db}) {
+			t.Errorf("state = %+v, want %s kept", st, db)
+		}
+	})
+}
+
+func TestProxyUninstallKeepsProgressWhenPrivilegedStepFails(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	h.privErr, h.privErrApplied = errors.New("systemctl failed"), true
+	h.priv = nil
+	if _, err := h.run("uninstall", "--yes"); err == nil || !strings.Contains(err.Error(), "systemctl failed") {
+		t.Fatalf("error = %v", err)
+	}
+	st := h.installState()
+	if len(st.HostsLedger) != 0 || st.HelperPath != "" || st.ServiceUnitPath != "" {
+		t.Errorf("state = %+v, want what the script finished dropped", st)
+	}
+	if st.SystemCACertPath == "" || st.CACertSHA256 == "" {
+		t.Errorf("state = %+v, want the rest kept", st)
+	}
+
+	// The retry works with the hosts block and the service already gone.
+	h.privErr = nil
+	out := h.mustRun("uninstall", "--yes")
+	assertContains(t, out, "Uninstalled the jailoc proxy host setup.")
+	if h.hosts() != hostTestOriginal {
+		t.Errorf("hosts = %q", h.hosts())
+	}
+	if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("install.json still exists (%v)", err)
+	}
+}
+
+func TestProxyUninstallAfterHostsBlockWasRemoved(t *testing.T) {
+	h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	if err := os.WriteFile(h.hostsPath, []byte(hostTestOriginal), 0o644); err != nil { //nolint:gosec // test hosts file
+		t.Fatal(err)
+	}
+	h.priv = nil
+	out := h.mustRun("uninstall", "--yes")
+	if strings.Contains(out, "Removed the proxy block") {
+		t.Errorf("the block was removed before:\n%s", out)
+	}
+	if len(h.priv) != 1 || strings.Contains(h.priv[0].script, `write_hosts "$`) {
+		t.Errorf("privileged calls = %+v, want only the service cleanup", h.priv)
+	}
+	if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("install.json still exists (%v)", err)
+	}
+}
+
+func TestProxyStatusNamesTrustStores(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.addNSSDatabase(".pki/nssdb")
+	h.mustRun("install", "--yes")
+	out := h.mustRun("status")
+	assertContains(t, out, "(trusted by `jailoc proxy install`: system store, 1 NSS database(s))")
+
+	st := h.installState()
+	st.SystemCACertPath, st.NSSDatabases = "", nil
+	if err := proxyhost.WriteInstallState(proxyInstallStatePath(), st); err != nil {
+		t.Fatal(err)
+	}
+	out = h.mustRun("status")
+	assertContains(t, out, "not trusted in any store by `jailoc proxy install`; trust it in your browser or run `jailoc proxy install`")
+
+	st.CACertSHA256 = ""
+	if err := proxyhost.WriteInstallState(proxyInstallStatePath(), st); err != nil {
+		t.Fatal(err)
+	}
+	out = h.mustRun("status")
+	assertContains(t, out, "not trusted in any store")
+
+	h2 := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+	h2.mustRun("install", "--yes")
+	assertContains(t, h2.mustRun("status"), "(trusted by `jailoc proxy install`: login keychain)")
+}
+
+func TestProxyInstallExplainsHowToReconcileHostsBlock(t *testing.T) {
+	h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal+"# BEGIN jailoc proxy hosts\n127.0.0.1 app.jailoc.local\n# END jailoc proxy hosts\n")
+	_, err := h.run("install", "--yes")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{
+		"run `jailoc proxy uninstall`",
+		"remove both the `# BEGIN/END jailoc proxy hosts` block in " + h.hostsPath + " and " + proxyInstallStatePath() + " to reconcile them",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q: %v", want, err)
+		}
+	}
+	if len(h.priv) != 0 {
+		t.Error("an unreconciled hosts file reached the privileged step")
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -155,12 +156,34 @@ type InstallState struct {
 	NSSDatabases      []string `json:"nss_databases,omitempty"`
 	HelperPath        string   `json:"helper_path,omitempty"`
 	ServiceUnitPath   string   `json:"service_unit_path,omitempty"`
+	// PendingKeychainSHA1s are the SHA-1s of earlier proxy CAs that a CA
+	// rotation could not delete from the macOS keychain yet.
+	PendingKeychainSHA1s []string `json:"pending_keychain_sha1s,omitempty"`
+	// PendingNSSCertSHA256s are the SHA-256s of earlier proxy CAs that may
+	// still be in NSS databases under NSSCertNickname.
+	PendingNSSCertSHA256s []string `json:"pending_nss_cert_sha256s,omitempty"`
+}
+
+// HasAnything reports whether st records any change to revert.
+func (st InstallState) HasAnything() bool {
+	return len(st.HostsLedger) > 0 ||
+		st.CACertSHA256 != "" ||
+		len(st.CACertPEM) > 0 ||
+		st.SystemCACertPath != "" ||
+		len(st.SystemCAUpdateCmd) > 0 ||
+		len(st.SystemCARemoveCmd) > 0 ||
+		st.MacOSKeychainCert ||
+		len(st.NSSDatabases) > 0 ||
+		st.HelperPath != "" ||
+		st.ServiceUnitPath != "" ||
+		len(st.PendingKeychainSHA1s) > 0 ||
+		len(st.PendingNSSCertSHA256s) > 0
 }
 
 // ReadInstallState reads the install state at path. A missing file yields
 // the zero state and no error.
 func ReadInstallState(path string) (InstallState, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: caller-supplied install state path
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return InstallState{}, nil
@@ -212,6 +235,29 @@ func WriteInstallState(path string, st InstallState) (err error) {
 		return fmt.Errorf("replace install state: %w", err)
 	}
 	return nil
+}
+
+// CheckTrustedDestDir verifies that every existing directory above
+// destFilePath, up to and including trustTop, is a directory (not a symlink)
+// owned by trustedOwner and not writable by group or others. Directories that
+// do not exist yet are skipped: they are created by the installer, which
+// checks them again.
+func CheckTrustedDestDir(destFilePath string, trustedOwner uint32, trustTop string) error {
+	dir := filepath.Dir(filepath.Clean(destFilePath))
+	top := filepath.Clean(trustTop)
+	if !filepath.IsAbs(dir) || !filepath.IsAbs(top) {
+		return fmt.Errorf("check destination %q: path is not absolute", destFilePath)
+	}
+	for {
+		if err := brokerCmdCheckNode(dir, trustedOwner, true); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("untrusted destination directory: %w", err)
+		}
+		parent := filepath.Dir(dir)
+		if dir == top || parent == dir {
+			return nil
+		}
+		dir = parent
+	}
 }
 
 func closeFile(f *os.File) error {

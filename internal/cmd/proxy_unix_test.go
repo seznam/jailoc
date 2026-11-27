@@ -1605,7 +1605,7 @@ func TestEnsureProxyCA(t *testing.T) {
 	if caPath != proxyCACertPath() {
 		t.Errorf("caPath = %q, want %q", caPath, proxyCACertPath())
 	}
-	onDisk, err := os.ReadFile(caPath)
+	onDisk, err := os.ReadFile(caPath) //nolint:gosec // G304: test CA path in t.TempDir()
 	if err != nil {
 		t.Fatal(err)
 	}

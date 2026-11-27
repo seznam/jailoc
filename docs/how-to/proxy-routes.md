@@ -90,7 +90,7 @@ The command lists the planned changes and asks once for confirmation before it m
 |--------|-------|-------|
 | Installs the embedded `jailoc-listener-broker` as a root-owned service that holds `127.0.0.1:443` and `[::1]:443` and passes each connection to your proxy over a private socket | `/Library/PrivilegedHelperTools/jailoc-listener-broker`, run by the `cz.seznam.jailoc.listener-broker` LaunchDaemon | `/usr/local/libexec/jailoc-listener-broker`, run by the `jailoc-listener-broker.service` systemd unit |
 | Syncs `/etc/hosts` so `<workspace>.jailoc.local` and `<route>.<workspace>.jailoc.local` resolve to loopback, inside a block between `# BEGIN jailoc proxy hosts` and `# END jailoc proxy hosts` | yes | yes |
-| Trusts `ca.crt` in the system trust store and in the NSS databases of Chrome, Chromium and Firefox | system keychain, Firefox profiles | Debian, Ubuntu, Fedora, RHEL and Arch trust stores, `~/.pki/nssdb`, Firefox profiles |
+| Trusts `ca.crt` in the OS trust store and in the NSS databases of Chrome, Chromium and Firefox | your login keychain (`~/Library/Keychains/login.keychain-db`), Firefox profiles | Debian, Ubuntu, Fedora, RHEL and Arch system trust stores, `~/.pki/nssdb`, Firefox profiles |
 
 Lines of `/etc/hosts` outside the block stay as they are. The broker service starts at boot and restarts when it exits. It holds no certificate and parses no HTTP, and only your user can attach a proxy to it, one proxy at a time.
 
