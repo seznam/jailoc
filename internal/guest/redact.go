@@ -265,17 +265,15 @@ func hasPrefixFold(s, prefix string) bool {
 
 // urlEnd returns the end of the URL candidate starting at start in a command
 // line, and the trailing text that is not part of it. A URL directly after a
-// quote (an escaped one included) runs to the next quote of that kind; the
-// backslashes that escape it are not part of the URL. Any other URL runs to
-// whitespace or a control character, so quotes and angle brackets in a
-// malformed query cannot cut it short and leave the rest in the log; the
-// sentence punctuation, parentheses and backticks closing it are left out.
+// quote (an escaped one included) runs to the closing quote of that kind at
+// the same quoting level (see closingQuote); the backslashes that escape it
+// are not part of the URL. Any other URL runs to whitespace or a control
+// character, so quotes and angle brackets in a malformed query cannot cut it
+// short and leave the rest in the log; the sentence punctuation, parentheses
+// and backticks closing it are left out.
 func urlEnd(s string, start int) (end int, tail string) {
-	if q := openingQuote(s, start); q != 0 {
-		end = len(s)
-		if i := strings.IndexByte(s[start:], q); i >= 0 {
-			end = start + i
-		}
+	if q, level := openingQuote(s, start); q != 0 {
+		end = closingQuote(s, start, q, level)
 		return end, s[start+len(strings.TrimRight(s[start:end], "\\")) : end]
 	}
 	end = len(s)
@@ -289,16 +287,43 @@ func urlEnd(s string, start int) (end int, tail string) {
 }
 
 // openingQuote returns the quote character right before start, looking past
-// escaping backslashes, or 0.
-func openingQuote(s string, start int) byte {
+// backslashes, and the number of backslashes escaping that quote (its quoting
+// level), or 0.
+func openingQuote(s string, start int) (q byte, level int) {
 	i := start - 1
 	for i >= 0 && s[i] == '\\' {
 		i--
 	}
-	if i >= 0 && (s[i] == '"' || s[i] == '\'' || s[i] == '`') {
-		return s[i]
+	if i < 0 || (s[i] != '"' && s[i] != '\'' && s[i] != '`') {
+		return 0, 0
 	}
-	return 0
+	for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
+		level++
+	}
+	return s[i], level
+}
+
+// closingQuote returns the index of the quote q that closes the one opened
+// at the given level (number of escaping backslashes), or len(s). Only a
+// quote at the active level closes: after an unescaped opening quote, one
+// preceded by an even number of backslashes; after an escaped one, one
+// preceded by exactly level backslashes. A quote with any other number of
+// backslashes is escaped at a deeper level and belongs to the URL, so an
+// ambiguous quote extends the URL (more is redacted), never shortens it.
+func closingQuote(s string, start int, q byte, level int) int {
+	for i := start; i < len(s); i++ {
+		if s[i] != q {
+			continue
+		}
+		run := 0
+		for j := i - 1; j >= start && s[j] == '\\'; j-- {
+			run++
+		}
+		if level == 0 && run%2 == 0 || level > 0 && run == level {
+			return i
+		}
+	}
+	return len(s)
 }
 
 // trailingPunct returns the run of sentence punctuation, closing parentheses

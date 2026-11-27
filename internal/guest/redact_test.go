@@ -357,6 +357,41 @@ func TestRedactOAuthURLRawDelimiters(t *testing.T) {
 			want: `xdg-open "` + want,
 		},
 		{
+			name: "escaped inner quotes in double quoted url",
+			in:   `xdg-open "https://auth.example/oauth/authorize?x=\"quoted\"&state=state-secret"`,
+			want: `xdg-open "` + want + `"`,
+		},
+		{
+			name: "multiple escaped inner quotes then more words",
+			in:   `xdg-open "https://auth.example/oauth/authorize?x=\"a\"&y=\"b\"&state=state-secret" >/dev/null`,
+			want: `xdg-open "` + want + `" >/dev/null`,
+		},
+		{
+			name: "odd backslash run before quote stays inside url",
+			in:   `xdg-open "https://auth.example/oauth/authorize?x=\\\"a&state=state-secret" done`,
+			want: `xdg-open "` + want + `" done`,
+		},
+		{
+			name: "even backslash run before quote closes url",
+			in:   `xdg-open "https://auth.example/oauth/authorize?x=a\\" then https://example.com/a?b=c`,
+			want: `xdg-open "` + want + `\\" then https://example.com/a?b=c`,
+		},
+		{
+			name: "escaped inner quotes in single quoted url",
+			in:   `xdg-open 'https://auth.example/oauth/authorize?x=\'a\'&state=state-secret' done`,
+			want: `xdg-open '` + want + `' done`,
+		},
+		{
+			name: "deeper escaped inner quotes in escaped outer quote",
+			in:   `sh -c \"xdg-open \'https://auth.example/oauth/authorize?x=\\\'q\\\'&state=state-secret\'\"`,
+			want: `sh -c \"xdg-open \'` + want + `\'\"`,
+		},
+		{
+			name: "escaped inner quotes in unclosed quoted url",
+			in:   `xdg-open "https://auth.example/oauth/authorize?x=\"quoted\"&state=state-secret`,
+			want: `xdg-open "` + want,
+		},
+		{
 			name: "ordinary url with angles untouched",
 			in:   "https://example.com/search?q=<b>go</b>&x='y'",
 			want: "https://example.com/search?q=<b>go</b>&x='y'",
@@ -415,5 +450,27 @@ func TestExecRecordSerializesRawDelimiterOAuthURL(t *testing.T) {
 		if strings.Contains(string(data), m) {
 			t.Errorf("serialized record %s leaks %q", data, m)
 		}
+	}
+}
+
+func TestExecRecordSerializesEscapedInnerQuoteOAuthURL(t *testing.T) {
+	t.Parallel()
+	argv := []string{
+		"sh", "-c",
+		`xdg-open "https://auth.example/oauth/authorize?x=\"quoted\"&state=state-secret"`,
+		`sh -c \"xdg-open \'https://auth.example/oauth/authorize?x=\\\'q\\\'&state=state-secret\'\"`,
+	}
+	rec := ExecRecord{Time: time.Unix(0, 0).UTC(), PID: 1, UID: 1000, Argv: redact(argv, nil)}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal exec record: %v", err)
+	}
+	for _, m := range oauthLeakMarkers {
+		if strings.Contains(string(data), m) {
+			t.Errorf("serialized record %s leaks %q", data, m)
+		}
+	}
+	if strings.Contains(string(data), "quoted") {
+		t.Errorf("serialized record %s keeps query values", data)
 	}
 }
