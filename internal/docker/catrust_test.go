@@ -1056,9 +1056,10 @@ func TestPrepareCADockerfileArgOverridesInheritedDefault(t *testing.T) {
 		t.Parallel()
 		baseEnv := append(jailocCAEnv(), "CA_DIR=/opt/company")
 		e := &fakeEngine{images: map[string]fakeImage{
-			"jailoc-base:1": {env: baseEnv
-},
-			"ubuntu:26.04":  {},
+			"jailoc-base:1": {
+				env: baseEnv,
+			},
+			"ubuntu:26.04": {},
 		}}
 		layer := []byte("FROM jailoc-base:1\nARG CA_DIR=/wrong\nARG SSL_CERT_FILE=${CA_DIR}/ca.pem\nRUN true\n")
 		got, err := prepareCADockerfile(context.Background(), e.client(t), layer, nil, ca)

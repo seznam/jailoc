@@ -587,8 +587,7 @@ RUN test "$REQUESTS_CA_BUNDLE" = /custom/after-req.pem && test "$CURL_CA_BUNDLE"
 	dirBase, _ := build("ca-arg-dir-base", "FROM $BASE\nENV CA_DIR=/opt/company\n", base)
 	_, env = build("ca-arg-dir-layer", "FROM $BASE\n"+
 		`ARG CA_DIR=/ignored
-ARG SSL_CERT_FILE=${CA_DIR
-}/ca.pem
+ARG SSL_CERT_FILE=$CA_DIR/ca.pem
 RUN test "$SSL_CERT_FILE" = /opt/company/ca.pem
 `, dirBase)
 	if env["SSL_CERT_FILE"] != "/opt/company/ca.pem" {
