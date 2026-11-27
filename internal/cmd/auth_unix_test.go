@@ -14,8 +14,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -505,34 +508,6 @@ func TestFetchOAuthLinksBypassesProxy(t *testing.T) {
 	}
 }
 
-func TestHostOpenerCommand(t *testing.T) {
-	t.Parallel()
-	found := func(name string) (string, error) { return "/opt/bin/" + name, nil }
-	missing := func(string) (string, error) { return "", fmt.Errorf("not found") }
-	tests := []struct {
-		name     string
-		goos     string
-		lookPath func(string) (string, error)
-		want     string
-		wantErr  string
-	}{
-		{name: "darwin is fixed", goos: "darwin", lookPath: missing, want: "/usr/bin/open"},
-		{name: "linux xdg-open", goos: "linux", lookPath: found, want: "/opt/bin/xdg-open"},
-		{name: "linux without xdg-open", goos: "linux", lookPath: missing, wantErr: "xdg-open was not found"},
-		{name: "other", goos: "plan9", lookPath: found, wantErr: "not supported"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got, err := hostOpenerCommand(tt.goos, tt.lookPath)
-			assertAuthErr(t, err, tt.wantErr)
-			if got != tt.want {
-				t.Fatalf("opener = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 // authOpenerScript writes an executable shell script and returns its path.
 func authOpenerScript(t *testing.T, dir, name, body string) string {
 	t.Helper()
@@ -543,47 +518,242 @@ func authOpenerScript(t *testing.T, dir, name, body string) string {
 	return path
 }
 
-func TestOpenURLWith(t *testing.T) {
-	t.Parallel()
-	u := authTestLink(40001, time.Minute).URL
+// authHoldOpener installs a fake xdg-open in PATH that appends "<argc>:<arg1>"
+// to urls and its pid to pids, then stays in the foreground until the release
+// file exists. Cleanup releases every child and waits until all are reaped, so
+// none outlives the test or keeps a launcher slot. Call it before any opener
+// runs: the script is fully written before the first fork (golang/go#22315).
+func authHoldOpener(t *testing.T) (pids, urls string) {
+	t.Helper()
 	dir := t.TempDir()
-	marker := filepath.Join(dir, "args")
-	record := authOpenerScript(t, dir, "record", `printf '%s\n' "$#" "$@" > `+marker)
-	if err := openURLWith(t.Context(), record, u, 5*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(marker) //nolint:gosec // G304: test temp path
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "1\n" + u + "\n"; string(got) != want {
-		t.Fatalf("opener args = %q, want %q", got, want)
-	}
+	release := filepath.Join(dir, "release")
+	pids = filepath.Join(dir, "pids")
+	urls = filepath.Join(dir, "urls")
+	authOpenerScript(t, dir, "xdg-open", fmt.Sprintf(
+		"echo \"$#:$1\" >> '%s'; echo $$ >> '%s'; while [ ! -e '%s' ]; do sleep 0.02; done",
+		urls, pids, release))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Cleanup(func() {
+		t.Helper()
+		if err := os.WriteFile(release, nil, 0o600); err != nil {
+			t.Errorf("release the held openers: %v", err)
+			// Without the release file the children never exit: stop only
+			// the openers this test started.
+			for _, line := range authReadLines(t, pids) {
+				_ = syscall.Kill(authParsePID(t, line), syscall.SIGKILL) // best effort: the child may have exited already
+			}
+		}
+		authEventually(t, "held openers reaped", func() bool {
+			for _, line := range authReadLines(t, pids) {
+				if syscall.Kill(authParsePID(t, line), 0) == nil {
+					return false
+				}
+			}
+			return true
+		})
+	})
+	return pids, urls
+}
 
-	t.Run("failure is generic and silent", func(t *testing.T) {
-		t.Parallel()
-		leaky := authOpenerScript(t, t.TempDir(), "leaky", `echo "$1"; echo "$1" >&2; exit 3`)
-		err := openURLWith(t.Context(), leaky, u, 5*time.Second)
-		assertAuthErr(t, err, "the browser opener failed")
-		if strings.Contains(err.Error(), "SECRETSTATE") {
-			t.Fatalf("opener output leaked: err=%v", err)
+// authReadLines returns the complete lines of path. Only a file that does not
+// exist yet means "no lines"; any other read error fails the test. Call it from
+// the test goroutine only.
+func authReadLines(t *testing.T, path string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path) //nolint:gosec // G304: test temp path
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read %s: %v", filepath.Base(path), err)
+	}
+	lines := strings.Split(string(b), "\n")
+	return lines[:len(lines)-1] // the last element is an unterminated line or empty
+}
+
+// authParsePID parses one pid line and fails the test unless it is positive.
+func authParsePID(t *testing.T, line string) int {
+	t.Helper()
+	pid, err := strconv.Atoi(line)
+	if err != nil || pid <= 0 {
+		t.Fatalf("invalid opener pid %q", line)
+	}
+	return pid
+}
+
+func authEventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
 		}
-	})
-	t.Run("timeout is bounded", func(t *testing.T) {
-		t.Parallel()
-		slow := authOpenerScript(t, t.TempDir(), "slow", `exec sleep 30`)
-		start := time.Now()
-		err := openURLWith(t.Context(), slow, u, 200*time.Millisecond)
-		assertAuthErr(t, err, "timed out")
-		if time.Since(start) > 5*time.Second {
-			t.Fatalf("not bounded: %v", time.Since(start))
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func authPIDs(t *testing.T, pidFile string, n int) []int {
+	t.Helper()
+	var pids []int
+	authEventually(t, "opener pids", func() bool {
+		lines := authReadLines(t, pidFile)
+		if len(lines) < n {
+			return false
 		}
+		pids = pids[:0]
+		for _, l := range lines {
+			pids = append(pids, authParsePID(t, l))
+		}
+		return true
 	})
-	t.Run("missing opener", func(t *testing.T) {
-		t.Parallel()
-		err := openURLWith(t.Context(), filepath.Join(t.TempDir(), "none"), u, time.Second)
-		assertAuthErr(t, err, "cannot be started")
-	})
+	return pids
+}
+
+// Not parallel: t.Setenv. A foreground opener (xdg-open stays alive for the
+// whole browser lifetime) must neither block --open nor be killed: the launcher
+// returns after its ~2s grace and leaves the child running.
+func TestAuthOpenKeepsForegroundOpener(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("PATH-resolved xdg-open is Linux only; macOS uses the fixed /usr/bin/open")
+	}
+	pids, urls := authHoldOpener(t)
+	link := authTestLink(40001, time.Minute)
+	var out, errOut bytes.Buffer
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := runAuthLinks(ctx, &out, &errOut, []netbroker.OAuthLink{link}, authOptions{open: true}, authNow, hostOpenURL)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("--open with a foreground opener = %v, want nil", err)
+	}
+	if elapsed < time.Second || elapsed > 5*time.Second {
+		t.Fatalf("--open returned after %v, want about 2s", elapsed)
+	}
+	pid := authPIDs(t, pids, 1)[0]
+	if syscall.Kill(pid, 0) != nil {
+		t.Fatal("the foreground opener was killed")
+	}
+	if got, want := authReadLines(t, urls), []string{"1:" + link.URL}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("opener calls = %q, want %q", got, want)
+	}
+	if out.Len() != 0 || strings.Contains(errOut.String(), "SECRETSTATE") {
+		t.Fatalf("URL leaked: stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+}
+
+// Not parallel: t.Setenv. Cancelling while the opener still runs returns at
+// once with a URL-free canceled error and leaves the child alone.
+func TestAuthOpenCancelDoesNotKillOpener(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("PATH-resolved xdg-open is Linux only; macOS uses the fixed /usr/bin/open")
+	}
+	pids, _ := authHoldOpener(t)
+	link := authTestLink(40001, time.Minute)
+	var out, errOut bytes.Buffer
+	ctx, cancel := context.WithCancel(t.Context())
+	// runAuthLinks blocks, so it runs in a goroutine and the test goroutine
+	// watches for the opener. The goroutine ends on cancel at the latest, which
+	// the deferred cancel guarantees even when the opener never starts.
+	result := make(chan error, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		result <- runAuthLinks(ctx, &out, &errOut, []netbroker.OAuthLink{link}, authOptions{open: true}, authNow, hostOpenURL)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("runAuthLinks did not return after cancellation")
+		}
+	}()
+	authPIDs(t, pids, 1)
+
+	cancelled := time.Now()
+	cancel()
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runAuthLinks did not return after cancellation")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if strings.Contains(err.Error(), "SECRETSTATE") {
+		t.Fatalf("error carries the URL: %v", err)
+	}
+	if time.Since(cancelled) > 1500*time.Millisecond {
+		t.Fatalf("cancellation took %v", time.Since(cancelled))
+	}
+	if syscall.Kill(authPIDs(t, pids, 1)[0], 0) != nil {
+		t.Fatal("cancellation killed the opener")
+	}
+}
+
+// Not parallel: t.Setenv. A fast nonzero exit stays a generic, silent error.
+func TestAuthOpenFastFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("PATH-resolved xdg-open is Linux only; macOS uses the fixed /usr/bin/open")
+	}
+	dir := t.TempDir()
+	authOpenerScript(t, dir, "xdg-open", `echo "$1"; echo "$1" >&2; exit 3`)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	u := authTestLink(40001, time.Minute).URL
+
+	start := time.Now()
+	err := hostOpenURL(t.Context(), u)
+	assertAuthErr(t, err, "the browser opener failed")
+	if strings.Contains(err.Error(), "SECRETSTATE") {
+		t.Fatalf("opener output leaked: %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("fast failure took %v", time.Since(start))
+	}
+}
+
+// Not parallel: t.Setenv. One process-wide launcher bounds the live openers
+// across hostOpenURL calls: the ninth concurrent opener is refused unstarted.
+func TestHostOpenURLSharesLauncherCapacity(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("PATH-resolved xdg-open is Linux only; macOS uses the fixed /usr/bin/open")
+	}
+	const live = 8
+	pids, urls := authHoldOpener(t)
+	u := authTestLink(40001, time.Minute).URL
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	errs := make(chan error, live)
+	var wg sync.WaitGroup
+	// Cancel first so the callers end even when the test fails early.
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+	for range live {
+		wg.Go(func() { errs <- hostOpenURL(ctx, u) })
+	}
+	authPIDs(t, pids, live)
+	err := hostOpenURL(ctx, u)
+	assertAuthErr(t, err, "too many browser openers")
+	if strings.Contains(err.Error(), "SECRETSTATE") {
+		t.Fatalf("error carries the URL: %v", err)
+	}
+	if n := len(authReadLines(t, urls)); n != live {
+		t.Fatalf("started %d openers, want %d", n, live)
+	}
+	for range live {
+		if err := <-errs; err != nil {
+			t.Fatalf("hostOpenURL = %v, want nil for a running opener", err)
+		}
+	}
+	for _, pid := range authPIDs(t, pids, live) {
+		if syscall.Kill(pid, 0) != nil {
+			t.Fatalf("opener %d was killed", pid)
+		}
+	}
 }
 
 // Not parallel: t.Setenv. The default path must never exec the opener; an

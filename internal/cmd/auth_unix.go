@@ -12,9 +12,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
-	"runtime"
 	"time"
 
 	"github.com/seznam/jailoc/internal/browser"
@@ -26,8 +23,6 @@ import (
 
 const (
 	authRequestTimeout = 5 * time.Second
-	authOpenTimeout    = 15 * time.Second
-	authOpenWaitDelay  = 2 * time.Second
 	// authMaxBody bounds a response: authMaxLinks entries, each a URL of at
 	// most 8 KiB and a path of at most 2 KiB whose every byte json.Marshal
 	// may escape to a 6-byte \u00XX (& < >), plus per-entry JSON overhead.
@@ -131,41 +126,13 @@ func decodeOAuthLinks(body []byte) ([]netbroker.OAuthLink, error) {
 	return links, nil
 }
 
-// hostOpenURL opens rawURL with the opener of this host OS.
+// hostLauncher is the one process-wide opener launcher, so its bound on live
+// openers holds across hostOpenURL calls.
+var hostLauncher = browser.NewLauncher()
+
+// hostOpenURL opens rawURL with the opener of this host OS. It waits about two
+// seconds for the opener and never kills it: a foreground opener may run for
+// the whole browser lifetime. Its errors never carry the URL.
 func hostOpenURL(ctx context.Context, rawURL string) error {
-	name, err := hostOpenerCommand(runtime.GOOS, exec.LookPath)
-	if err != nil {
-		return err
-	}
-	return openURLWith(ctx, name, rawURL, authOpenTimeout)
-}
-
-// hostOpenerCommand returns the executable that opens URLs on goos.
-func hostOpenerCommand(goos string, lookPath func(string) (string, error)) (string, error) {
-	return browser.Command(goos, lookPath)
-}
-
-// openURLWith runs the opener with rawURL as its only argument. Its output
-// is discarded and its errors never carry the URL.
-func openURLWith(ctx context.Context, opener, rawURL string, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	c := exec.CommandContext(ctx, opener, rawURL) //nolint:gosec // G204: fixed opener, the URL is one validated argument without a shell
-	c.Stdin, c.Stdout, c.Stderr = nil, nil, nil
-	c.WaitDelay = authOpenWaitDelay
-	err := c.Run()
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return errors.New("the browser opener timed out")
-	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return fmt.Errorf("the browser opener failed (%s)", exit.ProcessState)
-	}
-	if errors.Is(err, os.ErrPermission) || errors.Is(err, fs.ErrNotExist) {
-		return errors.New("the browser opener cannot be started")
-	}
-	return errors.New("the browser opener failed")
+	return hostLauncher.OpenURL(ctx, rawURL)
 }
