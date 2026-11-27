@@ -532,7 +532,7 @@ func TestResolveBuildInputPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, links, err := resolveBuildInputPath(tt.path)
+			got, links, _, err := resolveBuildInputPath(tt.path)
 			switch {
 			case tt.wantErr != nil:
 				if !errors.Is(err, tt.wantErr) {
@@ -563,6 +563,229 @@ func TestResolveBuildInputPath(t *testing.T) {
 			if err != nil || want != got {
 				t.Errorf("EvalSymlinks(%q) = %q, %v; want %q", tt.path, want, err, got)
 			}
+		})
+	}
+}
+
+// writeBuildInputTree creates dirs, then files with their content.
+func writeBuildInputTree(t *testing.T, dirs []string, files map[string]string) {
+	t.Helper()
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for f, content := range files {
+		if err := os.WriteFile(f, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestCheckBuildInputsReplaceableDirectory pins that an input may not run
+// through an ordinary directory of a read-write share: share/sub/../../trusted
+// opens the trusted tree until the guest replaces share/sub with the link
+// "evil/a/b", then share/evil/trusted. Each case owns its fixture.
+func TestCheckBuildInputsReplaceableDirectory(t *testing.T) {
+	t.Parallel()
+	const (
+		through  = "/sub/../../trusted"
+		atRoot   = "/../trusted"
+		rwErrMsg = "read-write share"
+	)
+	tests := []struct {
+		name string
+		kind string
+		via  string
+		mode string // "rw", "ro" or "none"
+		// attack replaces share/sub with a link after the check.
+		attack  bool
+		wantErr string
+	}{
+		{"Dockerfile through a replaceable directory", inputDockerfile, through, "rw", true, rwErrMsg},
+		{"base Dockerfile through a replaceable directory", inputBaseDockerfile, through, "rw", true, rwErrMsg},
+		{"build context through a replaceable directory", inputContext, through, "rw", true, rwErrMsg},
+		{"Dockerfile through a replaceable directory in a read-only share", inputDockerfile, through, "ro", false, ""},
+		{"base Dockerfile through a replaceable directory in a read-only share", inputBaseDockerfile, through, "ro", false, ""},
+		{"build context through a replaceable directory in a read-only share", inputContext, through, "ro", false, ""},
+		{"Dockerfile through a replaceable directory without shares", inputDockerfile, through, "none", false, ""},
+		{"build context through a replaceable directory without shares", inputContext, through, "none", false, ""},
+		// Stepping out of the share root itself names no directory the guest can replace.
+		{"Dockerfile stepping out of the share root", inputDockerfile, atRoot, "rw", false, ""},
+		{"base Dockerfile stepping out of the share root", inputBaseDockerfile, atRoot, "rw", false, ""},
+		{"build context stepping out of the share root", inputContext, atRoot, "rw", false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			share, trusted, evil := dir+"/share", dir+"/trusted", dir+"/share/evil/trusted"
+			file := map[string]string{
+				inputDockerfile:     "Dockerfile",
+				inputBaseDockerfile: "base.Dockerfile",
+				inputContext:        "marker",
+			}[tt.kind]
+			files := map[string]string{}
+			for _, d := range []string{trusted, evil} {
+				for _, f := range []string{"Dockerfile", "base.Dockerfile", "marker"} {
+					files[d+"/"+f] = d + "/" + f + "\n"
+				}
+			}
+			writeBuildInputTree(t, []string{share + "/sub", share + "/evil/a/b", trusted + "/ctx", evil}, files)
+
+			raw := share + tt.via
+			if tt.kind != inputContext {
+				raw += "/" + file
+			}
+			in := buildInput{kind: tt.kind, path: raw, dir: tt.kind == inputContext}
+			inputs := []buildInput{in}
+			switch tt.kind {
+			case inputDockerfile:
+				inputs = append(inputs, buildInput{kind: inputContext, path: trusted + "/ctx", dir: true})
+			case inputContext:
+				inputs = append(inputs, buildInput{kind: inputDockerfile, path: trusted + "/Dockerfile"})
+			}
+			var exports []workspaceShare
+			switch tt.mode {
+			case "rw":
+				exports = []workspaceShare{{workspace: "app", share: vm.Share{HostPath: share}}}
+			case "ro":
+				exports = []workspaceShare{{workspace: "app", share: vm.Share{HostPath: share, ReadOnly: true}}}
+			}
+
+			readPath := share + tt.via + "/" + file
+			wantContent := trusted + "/" + file + "\n"
+			got, err := os.ReadFile(readPath) //nolint:gosec // G304: path of a fixture this test owns; it must stay uncleaned
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != wantContent {
+				t.Fatalf("before the replacement %s holds %q, want %q", readPath, got, wantContent)
+			}
+
+			err = checkBuildInputs(inputs, exports)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("checkBuildInputs() = %v, want nil", err)
+			case tt.wantErr != "" && err == nil:
+				t.Errorf("checkBuildInputs() = nil before the replacement, want %q", tt.wantErr)
+			case tt.wantErr != "":
+				assertContains(t, err.Error(), tt.wantErr)
+			}
+			if !tt.attack {
+				return
+			}
+
+			if err := os.Remove(share + "/sub"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("evil/a/b", share+"/sub"); err != nil {
+				t.Fatal(err)
+			}
+			got, err = os.ReadFile(readPath) //nolint:gosec // G304: path of a fixture this test owns; it must stay uncleaned
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := evil + "/" + file + "\n"; string(got) != want {
+				t.Fatalf("after the replacement %s holds %q, want %q", readPath, got, want)
+			}
+		})
+	}
+}
+
+// TestCheckBuildInputsCaseInsensitive pins that a share and an input spelled
+// with different case conflict on a case-insensitive filesystem. It skips on
+// a case-sensitive one.
+func TestCheckBuildInputsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir+"/Build", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	physical, err := os.Stat(dir + "/Build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe, err := os.Stat(dir + "/build")
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		t.Skip("the temporary directory is on a case-sensitive filesystem")
+	case err != nil:
+		t.Fatal(err)
+	case !os.SameFile(physical, probe):
+		t.Skip("the temporary directory is on a filesystem that does not fold case")
+	}
+
+	var (
+		work    = dir + "/Work"
+		share   = work + "/Share"
+		trusted = work + "/Trusted"
+	)
+	writeBuildInputTree(t,
+		[]string{share + "/Sub", share + "/Same", trusted + "/ctx", work + "/Share2"},
+		map[string]string{
+			share + "/Dockerfile":       "FROM share\n",
+			share + "/Same/Dockerfile":  "FROM same\n",
+			trusted + "/Dockerfile":     "FROM trusted\n",
+			work + "/Share2/Dockerfile": "FROM share2\n",
+		})
+	if err := os.Symlink(trusted+"/ctx", share+"/Link"); err != nil {
+		t.Fatal(err)
+	}
+
+	rw := []workspaceShare{{workspace: "app", share: vm.Share{HostPath: share}}}
+	ro := []workspaceShare{{workspace: "app", share: vm.Share{HostPath: share, ReadOnly: true}}}
+	file := func(p string) []buildInput { return []buildInput{{kind: inputDockerfile, path: p}} }
+	ctx := func(p string) []buildInput { return []buildInput{{kind: inputContext, path: p, dir: true}} }
+
+	tests := []struct {
+		name    string
+		inputs  []buildInput
+		exports []workspaceShare
+		wantErr string
+	}{
+		{"existing input in a share spelled with other case", file(work + "/share/Dockerfile"), rw, "lies in the read-write share"},
+		{"existing input in a subdirectory spelled with other case", file(work + "/SHARE/same/Dockerfile"), rw, "lies in the read-write share"},
+		{"missing input suffix in a share spelled with other case", file(work + "/share/Missing/Dockerfile"), rw, "lies in the read-write share"},
+		{"context equal to the share with other case", ctx(work + "/share"), rw, "lies in the read-write share"},
+		{"context above the share with other case", ctx(work), rw, "contains the read-write share"},
+		{"context above the share spelled with other case", ctx(dir + "/work"), rw, "contains the read-write share"},
+		{"guest link reached through the share with other case", file(work + "/share/Link/Dockerfile"), rw, "symbolic link"},
+		{"guest link spelled with other case", file(work + "/Share/link/Dockerfile"), rw, "symbolic link"},
+		{"replaceable directory reached through the share with other case", file(work + "/share/Sub/../../Trusted/Dockerfile"), rw, "read-write share"},
+		{"input beside the share", file(trusted + "/Dockerfile"), rw, ""},
+		{"input beside the share spelled with other case", file(work + "/trusted/Dockerfile"), rw, ""},
+		{"input in a sibling that shares the name prefix", file(work + "/share2/Dockerfile"), rw, ""},
+		{"context equal to a sibling that shares the name prefix", ctx(work + "/SHARE2"), rw, ""},
+		{"read-only share with other case", file(work + "/share/Dockerfile"), ro, ""},
+		{"read-only share and replaceable directory with other case", file(work + "/share/Sub/../../Trusted/Dockerfile"), ro, ""},
+		{"no shares and other case", ctx(work + "/share"), nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, in := range tt.inputs {
+				if _, err := os.Stat(in.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatal(err)
+				}
+			}
+			err := checkBuildInputs(tt.inputs, tt.exports)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("checkBuildInputs() = nil, want %q", tt.wantErr)
+			}
+			assertContains(t, err.Error(), tt.wantErr)
 		})
 	}
 }
