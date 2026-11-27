@@ -260,7 +260,12 @@ The first matching image source wins, and a failure there is fatal. Common reaso
 - a URL Dockerfile returning an HTTP error;
 - a local Dockerfile path that doesn't exist;
 - `[vm] builder = "docker"` without a usable host Docker daemon;
-- the shared builder VM pulling from a private registry it can't reach (use `isolated_build = true` with the host in `allowed_hosts`).
+- the shared builder VM pulling from a private registry it can't reach (use `isolated_build = true` with the host in `allowed_hosts`);
+- a selected [`ca_bundle`](../reference/configuration.md#image-builds-with-a-ca-bundle) with `[vm] builder = "docker"`: set `builder = "auto"` or `"vm"`;
+- a selected `ca_bundle` with a base or `COPY --from` image that exists only in the host Docker daemon: push it to a registry the builder reaches;
+- a selected `ca_bundle` with a stage that isn't Debian or Ubuntu, has no shell, or needs a classic builder or custom Dockerfile frontend: use a supported stage or disable `ca_bundle` for the workspace;
+- a `ca_bundle` file over 500 KiB where it is passed as a build secret: reduce it to the roots you need;
+- a client in a `RUN` step that still fails with a certificate error although `ca_bundle` is selected: the base image or Dockerfile sets a variable such as `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE`, or the client pins its own roots. jailoc keeps those settings. Point the variable at `/etc/ssl/certs/ca-certificates.crt` or remove it.
 
 **Diagnose:**
 

@@ -82,7 +82,7 @@ jailoc up [workspace] [flags]
 ```
 
 1. Validates secret sources on the host.
-2. Builds the workspace image with the host Docker daemon or in a builder VM (see [Image Resolution](image-resolution.md)).
+2. Builds the workspace image with the host Docker daemon or in a builder VM (see [Image Resolution](image-resolution.md)). A selected external [`ca_bundle`](configuration.md#image-builds-with-a-ca-bundle) always builds in a builder VM and fails with `builder = "docker"`.
 3. Converts its layers into read-only EROFS images in the VM image cache.
 4. Boots them as the root file system of the workspace VM behind the host-side network broker.
 5. Delivers `env` and secrets to the guest.
@@ -132,7 +132,7 @@ Stop and start a workspace VM with the current configuration.
 jailoc restart [workspace] [flags]
 ```
 
-- Equivalent to `jailoc down` followed by `jailoc up`: rebuilds the workspace image and ends running sessions.
+- Equivalent to `jailoc down` followed by `jailoc up`: rebuilds the workspace image and ends running sessions. A rebuild applies a changed or disabled `ca_bundle` to the image's trust.
 - If the workspace is not running, starts it.
 
 | Flag | Short | Description |
@@ -155,7 +155,7 @@ jailoc reload [workspace] [flags]
 - Published `ports`
 - SSH agent: `ssh_auth_sock`, with the socket read again from `$SSH_AUTH_SOCK`
 - GPG agent: `gpg_agent`, with the socket looked up again with `gpgconf` and the public keys imported again
-- `ca_bundle`
+- `ca_bundle`, for the VM's trust store. A change that affects the image's trust (a changed bundle, or `ca_bundle = false`) is listed as needing `jailoc restart`; reload doesn't rebuild the image or interrupt sessions. See [Image builds with a CA bundle](configuration.md#image-builds-with-a-ca-bundle).
 - `snapshots`, including the Git configuration and `known_hosts`: every reload copies the sources again, adds new entries and removes dropped ones
 - `env`, `env_file` and secrets
 - `timezone`, or the host's current zone when it is unset

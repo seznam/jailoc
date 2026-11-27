@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/seznam/jailoc/internal/agent"
+	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/embed"
 	"github.com/seznam/jailoc/internal/workspace"
 )
@@ -454,6 +455,33 @@ func TestWorkspaceStatusLineCommand(t *testing.T) {
 			out, err := cmd.Output()
 			if err != nil || string(out) != tt.want {
 				t.Fatalf("status line = %q, %v; want %q", out, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildsImage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		wsImage       string
+		defaultsImage string
+		wsDockerfile  string
+		want          bool
+	}{
+		{name: "cascade", want: true},
+		{name: "workspace image as is", wsImage: "example/img:1"},
+		{name: "default image as is", defaultsImage: "example/img:1"},
+		{name: "overlay on default image", defaultsImage: "example/img:1", wsDockerfile: "Dockerfile", want: true},
+		{name: "workspace dockerfile", wsDockerfile: "Dockerfile", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{Defaults: config.Defaults{Image: tt.defaultsImage}}
+			ws := &workspace.Resolved{Image: tt.wsImage, Dockerfile: tt.wsDockerfile}
+			if got := buildsImage(cfg, ws); got != tt.want {
+				t.Errorf("buildsImage = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -23,28 +24,45 @@ type caBundleSource struct {
 }
 
 func materializeCABundle(ws *workspace.Resolved) error {
+	_, err := prepareCABundle(ws)
+	return err
+}
+
+// prepareCABundle reads the external CA bundle of ws once and uses that single
+// snapshot for both the guest file and the returned image-build CA, so a bundle
+// rotating mid-startup cannot leave them disagreeing. The workspace's HTTP
+// inspection CA is appended to the guest file only; the returned BuildCA is nil
+// when no external bundle is selected.
+func prepareCABundle(ws *workspace.Resolved) (*docker.BuildCA, error) {
 	destination := filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)
 	content, selected, err := sourceCABundle(ws)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	var buildCA *docker.BuildCA
+	if selected {
+		buildCA, err = docker.NewBuildCA(content)
+		if err != nil {
+			return nil, fmt.Errorf("prepare CA bundle for image builds: %w", err)
+		}
 	}
 	if ws.InspectsHTTP() {
 		// The broker signs inspected connections with the workspace CA, so
 		// the guest must trust it, also when no other bundle is forwarded.
 		_, _, caPEM, err := ensureInspectCA(ws.Name)
 		if err != nil {
-			return fmt.Errorf("prepare inspection CA: %w", err)
+			return nil, fmt.Errorf("prepare inspection CA: %w", err)
 		}
 		content = appendCABundle(content, caPEM)
 		selected = true
 	}
 	if !selected {
-		return removeCABundle(destination)
+		return buildCA, removeCABundle(destination)
 	}
 	if err := writeCABundleAtomically(destination, content); err != nil {
-		return fmt.Errorf("materialize CA bundle: %w", err)
+		return nil, fmt.Errorf("materialize CA bundle: %w", err)
 	}
-	return nil
+	return buildCA, nil
 }
 
 // sourceCABundle reads and validates the host CA bundle the workspace forwards
@@ -74,6 +92,30 @@ func sourceCABundle(ws *workspace.Resolved) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("validate CA bundle from %s %q: %w", source.origin, source.path, err)
 	}
 	return content, true, nil
+}
+
+// workspaceBuildCA snapshots the external CA bundle of ws for image builds. It
+// is nil when no bundle is selected: the workspace's HTTP inspection CA never
+// belongs here, jailoc's own builds do not go through the broker.
+func workspaceBuildCA(ws *workspace.Resolved) (*docker.BuildCA, error) {
+	content, selected, err := sourceCABundle(ws)
+	if err != nil || !selected {
+		return nil, err
+	}
+	ca, err := docker.NewBuildCA(content)
+	if err != nil {
+		return nil, fmt.Errorf("prepare CA bundle for image builds: %w", err)
+	}
+	return ca, nil
+}
+
+// buildCAState is the value of vm.Spec.BuildCA for ca: "none" without a
+// bundle, else the bundle's digest.
+func buildCAState(ca *docker.BuildCA) string {
+	if ca == nil {
+		return "none"
+	}
+	return "sha256:" + ca.Digest()
 }
 
 // appendCABundle appends extra PEM certificates to bundle, separated by a

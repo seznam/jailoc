@@ -77,11 +77,13 @@ Builds with none of these (other platforms, builds from source) require `runner`
 
 | Value | Where the image is built |
 |-------|--------------------------|
-| `"auto"` | The host Docker daemon when it answers and runs Linux on the host's CPU architecture, otherwise the shared builder VM. |
-| `"docker"` | The host Docker daemon; it is required. |
+| `"auto"` | The host Docker daemon when it answers and runs Linux on the host's CPU architecture, otherwise the shared builder VM. With an external [`ca_bundle`](#image-builds-with-a-ca-bundle) selected, always the shared builder VM. |
+| `"docker"` | The host Docker daemon; it is required. Rejected with an external [`ca_bundle`](#image-builds-with-a-ca-bundle) selected. |
 | `"vm"` | The shared builder VM, always. |
 
 A workspace with `isolated_build = true` always uses its own builder VM, whose data disk follows the workspace's [`docker_disk`](#vm-resource-and-docker-fields), not `builder_disk`.
+
+With an external `ca_bundle` selected, `"docker"` is rejected also when `isolated_build = true`. Without one, the table above applies.
 
 **`builder_disk`: details**
 
@@ -223,6 +225,7 @@ Defaults applied to all workspaces. A workspace can override or extend them; see
 
 - The workspace image is built in a builder VM of its own, with its own build cache and the workspace's network policy, instead of the host Docker daemon or the shared builder VM.
 - The build does not inspect HTTPS: `allow` rules with an [`http` table](#http-rules) open their hosts and ports for all methods and paths, and `deny` rules with `http` don't apply.
+- With an external [`ca_bundle`](#image-builds-with-a-ca-bundle) selected, the workspace's builder VM gets the bundle, and `[vm] builder = "docker"` is still rejected.
 
 ### Example
 
@@ -1068,7 +1071,7 @@ With filtering on, an effective `allowed_hosts` entry equal to or under an effec
 
 **Trust store.**
 
-- The bundle is added to the VM's system trust store, which its Docker daemon also uses, and to the builder VM's Docker daemon.
+- The bundle is added to the VM's system trust store, which its Docker daemon also uses, and to the builder VM's Docker daemon. It also reaches the image builds; see [Image builds with a CA bundle](#image-builds-with-a-ca-bundle).
 - In the VM, `/etc/ssl/certs/ca-certificates.crt` then holds the image's roots plus the forwarded certificates, also when the image keeps its own bundle elsewhere.
 - Each forwarded certificate is also written to `jailoc/` under `/usr/local/share/ca-certificates` or `/etc/pki/ca-trust/source/anchors`, if the image has that directory, so running `update-ca-certificates` or `update-ca-trust` in a session keeps it.
 - When a reload removes or replaces these certificates, jailoc runs that tool, if the image has it, so stores it generated stop trusting the old ones.
@@ -1077,6 +1080,8 @@ With filtering on, an effective `allowed_hosts` entry equal to or under an effec
 
 | Variable | Read by |
 |----------|---------|
+| `UV_SYSTEM_CERTS` | uv (`true`) |
+| `NODE_USE_SYSTEM_CA` | Node.js (`1`) |
 | `NODE_EXTRA_CA_CERTS` | Node.js, Bun and the agents built on them |
 | `SSL_CERT_FILE` | OpenSSL, Go, uv, httpx |
 | `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` | Python requests, curl |
@@ -1097,6 +1102,26 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 
 - When any network rule has an [`http` table](#http-rules), the workspace's inspection CA certificate is appended to the bundle, also with `ca_bundle = false` (the bundle then holds only that certificate), so the guest trusts it and the variables above are set.
 - A `ca_bundle` path is also the extra trust anchor for the broker's upstream certificate checks.
+
+#### Image builds with a CA bundle
+
+When `ca_bundle` selects an external bundle (a custom path, or a file picked by automatic discovery), jailoc forwards it to the image builds it starts. `ca_bundle = false`, and automatic discovery that selects no file, leave builds unchanged. The workspace inspection CA is not part of the forwarded bundle, and the builder does not inspect HTTPS.
+
+- **Builder.** The build runs in a builder VM, never on the host daemon; see [`builder`: values](#vm). jailoc doesn't change the trust or configuration of the host Docker daemon.
+- **Builds covered.** Every image jailoc builds (embedded, preset, Docker layer, agent layer and workspace overlay) and every stage of your Dockerfiles, including multi-stage ones. No Dockerfile edits, build flags, mounts or TLS variables are needed.
+- **Fetches covered.** External image pulls (`FROM`, `COPY --from`, frontend image resolution) and HTTPS remote `ADD` downloads trust the bundle, and so do the tools a `RUN` step starts.
+- **Client trust in a stage.** Each stage adds the bundle to the system trust store, which `apt`, `curl`, `git`, `uv` and Node.js with `npm` use on Debian and Ubuntu. For clients that read a variable, jailoc sets the missing variables from the [table above](#ca_bundle) in the stage. A variable that the base image or the Dockerfile sets wins, and a later `ENV` in the Dockerfile overrides the default. A client that a variable points at another file, or that pins its own roots, bypasses the system store, and jailoc doesn't force it.
+- **Roots.** The image's public roots stay trusted, including roots a build step adds. TLS verification stays on.
+- **Requirements.** Every stage is Debian or Ubuntu with a shell; a stage jailoc can't set up fails the build with an error. The build needs BuildKit and the standard Dockerfile frontend; classic builders and custom frontends fail with an error.
+- **Registry images.** External images in `FROM` and `COPY --from` must be available from a registry the builder reaches. An image that exists only in the host Docker daemon isn't transferred: the build fails with an error asking you to publish it. Stages built within the same build and images jailoc builds need no registry.
+- **Private networks.** The shared builder VM reaches public addresses only. A build that needs a private network needs `isolated_build = true` with the hosts in `allowed_hosts` or `allowed_networks`.
+- **Size.** A bundle larger than 500 KiB fails with a size error when it is passed as a build secret; it is not truncated.
+
+**Persistence.** The bundle becomes part of the image layers and stays in the image's trust store. The VM runtime keeps the image's own roots, so removing the bundle from the configuration, `ca_bundle = false` or `jailoc reload` doesn't revoke what the image holds, and a later layer that deletes the certificate doesn't remove it from the layers below.
+
+**Rotation.** jailoc compares the content of the bundle, so an edit at the same path counts. A changed bundle, or `ca_bundle = false`, rebuilds the affected images at the next image build without cache pruning, and the new images hold only the trust of the new setting plus the roots of their own base. The shared builder VM drops the roots of the previous bundle before the next build.
+
+**Running workspace.** `jailoc reload` applies the bundle to the VM's trust store as described above and reports that `jailoc restart` is needed to rebuild the image and apply its trust. It doesn't rebuild the image or interrupt sessions.
 
 ### `enable_docker`
 

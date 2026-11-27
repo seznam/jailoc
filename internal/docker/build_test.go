@@ -2,12 +2,15 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	bkclient "github.com/moby/buildkit/client"
+	"github.com/moby/moby/api/types/build"
+	dockerclient "github.com/moby/moby/client"
 )
 
 // TestLogBuildSteps swaps the default logger, so it does not run in
@@ -43,5 +46,41 @@ func TestLogBuildSteps(t *testing.T) {
 		if strings.Count(got, want) != 1 {
 			t.Errorf("log %q does not hold %q once", got, want)
 		}
+	}
+}
+
+func TestImageBuildRejectsClassicBuilderWithCA(t *testing.T) {
+	t.Parallel()
+	// The nil client proves the build is rejected before it starts.
+	err := imageBuild(context.Background(), nil, strings.NewReader(""), build.BuilderV1, dockerclient.ImageBuildOptions{}, testBuildCA(t))
+	if err == nil {
+		t.Fatal("imageBuild = nil, want error")
+	}
+	want := "ca_bundle forwarding into image builds requires BuildKit, which the Docker daemon does not report; enable BuildKit or set ca_bundle = false"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+}
+
+func TestRequireBuildKit(t *testing.T) {
+	t.Parallel()
+	ca := testBuildCA(t)
+	for _, tc := range []struct {
+		name    string
+		version build.BuilderVersion
+		ca      *BuildCA
+		wantErr bool
+	}{
+		{"classic with CA", build.BuilderV1, ca, true},
+		{"BuildKit with CA", build.BuilderBuildKit, ca, false},
+		{"classic without CA", build.BuilderV1, nil, false},
+		{"BuildKit without CA", build.BuilderBuildKit, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := requireBuildKit(tc.version, tc.ca); (err != nil) != tc.wantErr {
+				t.Errorf("requireBuildKit = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
 	}
 }

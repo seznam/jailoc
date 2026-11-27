@@ -13,11 +13,13 @@ During `jailoc up` and `jailoc restart`, jailoc resolves the workspace image wit
 | `"docker"` | `false` | Host daemon; `jailoc up` fails when it is unusable |
 | `"vm"` | `false` | Shared builder VM (`~/.cache/jailoc-vm/builder`) |
 
+With an external [`ca_bundle`](configuration.md#image-builds-with-a-ca-bundle) selected, the host daemon is never used: `"auto"` with `isolated_build = false` builds in the shared builder VM, `isolated_build = true` keeps the workspace's builder VM, and `"docker"` is rejected before the build starts, also with `isolated_build = true`. A builder VM that can't start fails the build, with no fallback to the host daemon. With `ca_bundle = false`, or when automatic discovery selects no file, the table applies unchanged.
+
 `jailoc down --purge` deletes the workspace's builder VM and its build cache.
 
 The data disk of the shared builder VM is sized by [`[vm] builder_disk`](configuration.md#vm) (default `20g`). The data disk of an `isolated_build` builder VM is sized by the workspace's `docker_disk`.
 
-- jailoc builds with BuildKit when the daemon reports it as its default builder, and with the classic builder otherwise.
+- jailoc builds with BuildKit when the daemon reports it as its default builder, and with the classic builder otherwise. A build with a forwarded `ca_bundle` requires BuildKit and the standard Dockerfile frontend, and fails with an error on a classic builder or a custom frontend.
 - With BuildKit, the embedded Dockerfile, the agent layer and the Docker layer keep apt and npm downloads in BuildKit cache mounts, which survive image pruning.
 - The classic builder gets the same Dockerfiles without the cache mounts.
 - Preset and overlay Dockerfiles are built as written.
@@ -113,6 +115,7 @@ After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (
 - `<content-hash>` is derived from the SHA-256 of the Dockerfile content: 8 hex characters for workspace overlays, 16 for `[base] dockerfile` presets.
 - The Docker and agent layer hashes also cover the base image ID, and a layer whose tag already exists is not built again.
 - Host proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `FTP_PROXY`, `ALL_PROXY` and lowercase variants) are passed as build arguments to every build.
+- With an external `ca_bundle` selected, every image jailoc builds (base, Docker and agent layers, workspace overlay) and every stage of your Dockerfiles gets the bundle's trust; see [Image builds with a CA bundle](configuration.md#image-builds-with-a-ca-bundle). Images used as is (steps 1 and 3) are not built. The bundle's digest is part of the tags of the images jailoc builds, of jailoc's build decisions and of the build's cache keys, so a changed bundle, including one edited in place, or `ca_bundle = false` rebuilds the affected images.
 - Overlay build context: `build_context` when set; otherwise the Dockerfile's parent directory for a local path, or an empty temporary directory for a URL.
 - Images from steps 1 and 3 are pulled for `linux/<host architecture>` when the daemon does not have them.
 
@@ -224,6 +227,8 @@ The image's `ENTRYPOINT`, `CMD`, `USER`, `WORKDIR` and `EXPOSE` are not used; se
 | Docker layer on step 2, 4 or 5 | `jailoc-docker:<content-hash>` |
 | Agent layer on step 2, 4 or 5 | `jailoc-agent-<agent>:<content-hash>` |
 | Workspace overlay on step 4 or 5 | `jailoc-<workspace>:<content-hash>` |
+
+With an external `ca_bundle` selected, the tags of the images jailoc builds also depend on the bundle's digest; the exact form is internal.
 
 ---
 

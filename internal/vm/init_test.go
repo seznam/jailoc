@@ -903,3 +903,15 @@ while :; do sleep 0.1; done`)
 		}
 	})
 }
+
+func TestInitInstallsCABundleFailClosed(t *testing.T) {
+	t.Parallel()
+	for _, want := range []string{
+		"cp /jailoc-ca.pem /usr/local/share/ca-certificates/jailoc-builder-ca.crt || fail",
+		`cat /jailoc-ca.pem >> /etc/ssl/certs/ca-certificates.crt || fail "install CA bundle failed"`,
+	} {
+		if !strings.Contains(initScript, want) {
+			t.Errorf("init.sh lacks %q", want)
+		}
+	}
+}

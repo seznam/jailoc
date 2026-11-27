@@ -102,6 +102,30 @@ const (
 // reach host services.
 var HostAliases = []string{"host.jailoc.internal", "host.docker.internal"}
 
+// CABundleVars are the variables that point TLS clients at a CA bundle
+// file. With a forwarded CA bundle, sessions get them set to the guest's
+// system bundle, which then holds the forwarded certificates, so clients
+// that ship their own roots or read only a variable trust them too:
+// NODE_EXTRA_CA_CERTS for Node and Bun, SSL_CERT_FILE for OpenSSL, Go, uv
+// and httpx, and the variables of requests, curl, pip, the AWS and Google
+// Cloud CLIs, httplib2, gRPC, cargo, git, Nix, Deno and Hex.
+var CABundleVars = []string{
+	"NODE_EXTRA_CA_CERTS",
+	"SSL_CERT_FILE",
+	"REQUESTS_CA_BUNDLE",
+	"CURL_CA_BUNDLE",
+	"PIP_CERT",
+	"AWS_CA_BUNDLE",
+	"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE",
+	"HTTPLIB2_CA_CERTS",
+	"GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
+	"CARGO_HTTP_CAINFO",
+	"GIT_SSL_CAINFO",
+	"NIX_SSL_CERT_FILE",
+	"DENO_CERT",
+	"HEX_CACERTS_PATH",
+}
+
 // IDMap holds the host user's IDs as virtio-fs reports them in the guest.
 type IDMap struct {
 	UID uint32 `json:"uid"`

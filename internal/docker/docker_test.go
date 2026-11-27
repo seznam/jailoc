@@ -1,13 +1,21 @@
 package docker
 
 import (
+	"archive/tar"
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/moby/moby/api/types/build"
+	dockerclient "github.com/moby/moby/client"
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
@@ -263,5 +271,254 @@ func TestForBuilder(t *testing.T) {
 				t.Fatalf("args[%s] = %v, %v, want set %v", cleanCachesArg, v, ok, tt.wantClean)
 			}
 		})
+	}
+}
+
+// fakeImage is an image of a fakeEngine.
+type fakeImage struct {
+	user    string
+	env     []string
+	onBuild []string
+	// nonDebian images have no /etc/debian_version.
+	nonDebian bool
+}
+
+// fakeEngine is a fake Docker daemon that knows a fixed set of images, fails
+// every pull and reports BuildKit as its builder when buildKit is set.
+type fakeEngine struct {
+	buildKit bool
+	images   map[string]fakeImage
+
+	mu         sync.Mutex
+	requests   []string
+	containers map[string]string // container ID -> image reference
+	// removals records, per DELETE /containers/{id}, whether it asked for the
+	// container's anonymous volumes to be removed too (v=1).
+	removals []bool
+}
+
+func (e *fakeEngine) handler(w http.ResponseWriter, r *http.Request) {
+	e.mu.Lock()
+	e.requests = append(e.requests, r.Method+" "+r.URL.Path)
+	e.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/v1.") {
+		path = path[strings.Index(path[1:], "/")+1:]
+	}
+	switch {
+	case path == "/_ping":
+		w.Header().Set("API-Version", "1.52")
+		w.Header().Set("OSType", "linux")
+		if e.buildKit {
+			w.Header().Set("Builder-Version", "2")
+		}
+		_, _ = w.Write([]byte("OK"))
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
+		ref := strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json")
+		img, ok := e.images[ref]
+		if !ok {
+			http.Error(w, `{"message":"No such image: `+ref+`"}`, http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Id":           hexID("a"),
+			"Os":           "linux",
+			"Architecture": runtime.GOARCH,
+			"Config":       map[string]any{"User": img.user, "Env": img.env, "OnBuild": img.onBuild},
+		})
+	case r.Method == http.MethodPost && path == "/containers/create":
+		e.createContainer(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/archive"):
+		e.containerArchive(w, strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/archive"))
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/containers/"):
+		e.mu.Lock()
+		e.removals = append(e.removals, r.URL.Query().Get("v") == "1")
+		e.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPost && path == "/images/create":
+		http.Error(w, `{"message":"pull access denied, repository does not exist"}`, http.StatusInternalServerError)
+	default:
+		http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
+	}
+}
+
+// createContainer creates a fake container of a known image. Its ID is
+// "fake-container-" plus the image reference, with path separators replaced.
+func (e *fakeEngine) createContainer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Image string
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"message":"bad request"}`, http.StatusBadRequest)
+		return
+	}
+	if _, ok := e.images[body.Image]; !ok {
+		http.Error(w, `{"message":"No such image: `+body.Image+`"}`, http.StatusNotFound)
+		return
+	}
+	id := "fake-container-" + strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(body.Image)
+	e.mu.Lock()
+	if e.containers == nil {
+		e.containers = make(map[string]string)
+	}
+	e.containers[id] = body.Image
+	e.mu.Unlock()
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{"Id": id, "Warnings": []string{}})
+}
+
+// containerArchive serves /etc/debian_version of a fake container, which
+// non-Debian images lack.
+func (e *fakeEngine) containerArchive(w http.ResponseWriter, id string) {
+	e.mu.Lock()
+	ref, ok := e.containers[id]
+	e.mu.Unlock()
+	if !ok {
+		http.Error(w, `{"message":"No such container: `+id+`"}`, http.StatusNotFound)
+		return
+	}
+	if e.images[ref].nonDebian {
+		http.Error(w, `{"message":"Could not find the file /etc/debian_version in container `+id+`"}`, http.StatusNotFound)
+		return
+	}
+	const content = "12.0\n"
+	stat, _ := json.Marshal(map[string]any{"name": "debian_version", "size": len(content), "mode": 0o644, "mtime": "2024-01-01T00:00:00Z", "linkTarget": ""})
+	w.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString(stat))
+	w.Header().Set("Content-Type", "application/x-tar")
+	tw := tar.NewWriter(w)
+	_ = tw.WriteHeader(&tar.Header{Name: "debian_version", Mode: 0o644, Size: int64(len(content))})
+	_, _ = tw.Write([]byte(content))
+	_ = tw.Close()
+}
+
+// start serves e and returns its address as a Docker host.
+func (e *fakeEngine) start(t *testing.T) string {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(e.handler))
+	t.Cleanup(ts.Close)
+	return "tcp://" + strings.TrimPrefix(ts.URL, "http://")
+}
+
+func (e *fakeEngine) client(t *testing.T) *dockerclient.Client {
+	t.Helper()
+	cli, err := dockerclient.New(dockerclient.WithHost(e.start(t)), dockerclient.WithAPIVersion("1.52"))
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	return cli
+}
+
+// requested returns the requests that start with prefix, as "METHOD path".
+func (e *fakeEngine) requested(prefix string) []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []string
+	for _, r := range e.requests {
+		if strings.Contains(r, prefix) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func testBuildCA(t *testing.T) *BuildCA {
+	t.Helper()
+	ca, err := NewBuildCA([]byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"))
+	if err != nil || ca == nil {
+		t.Fatalf("NewBuildCA = %v, %v", ca, err)
+	}
+	return ca
+}
+
+// TestEnsureBuildImage points the Docker environment at a fake daemon, so it
+// does not run in parallel.
+func TestEnsureBuildImage(t *testing.T) {
+	e := &fakeEngine{}
+	t.Setenv("DOCKER_HOST", e.start(t))
+	t.Setenv("DOCKER_API_VERSION", "1.52")
+	t.Setenv("DOCKER_TLS_VERIFY", "")
+	t.Setenv("DOCKER_CERT_PATH", "")
+
+	t.Run("with a CA bundle a pull failure points at registries", func(t *testing.T) {
+		err := EnsureBuildImage(context.Background(), "registry.example.com/base:v1", testBuildCA(t))
+		if err == nil {
+			t.Fatal("EnsureBuildImage = nil, want error")
+		}
+		for _, want := range []string{"registry.example.com/base:v1", "builder VM", "registry", "ca_bundle = false", "pull access denied"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q lacks %q", err, want)
+			}
+		}
+	})
+
+	t.Run("without a CA bundle the error is the pull error", func(t *testing.T) {
+		err := EnsureBuildImage(context.Background(), "registry.example.com/base:v1", nil)
+		if err == nil {
+			t.Fatal("EnsureBuildImage = nil, want error")
+		}
+		if strings.Contains(err.Error(), "builder VM") || strings.Contains(err.Error(), "ca_bundle") {
+			t.Errorf("error %q has CA guidance without a CA bundle", err)
+		}
+		if !strings.Contains(err.Error(), "pull image registry.example.com/base:v1") {
+			t.Errorf("error %q is not the pull error", err)
+		}
+	})
+
+	t.Run("prepareCADockerfile falls back to it for a missing image", func(t *testing.T) {
+		_, err := prepareCADockerfile(context.Background(), e.client(t), []byte("FROM registry.example.com/base:v1\n"), nil, testBuildCA(t))
+		if err == nil || !strings.Contains(err.Error(), "builder VM") {
+			t.Fatalf("prepareCADockerfile = %v, want the builder VM guidance", err)
+		}
+	})
+}
+
+func TestBuildImagesRejectClassicBuilderWithCA(t *testing.T) {
+	t.Parallel()
+	ca := testBuildCA(t)
+	ctx := context.Background()
+
+	t.Run("embedded", func(t *testing.T) {
+		t.Parallel()
+		e := &fakeEngine{}
+		err := buildEmbeddedImage(ctx, e.client(t), "jailoc-base:embedded"+ca.tagSuffix(), "", ca)
+		if err == nil || !strings.Contains(err.Error(), "requires BuildKit") {
+			t.Fatalf("buildEmbeddedImage = %v, want the BuildKit error", err)
+		}
+		if got := e.requested("/images/"); len(got) != 0 {
+			t.Errorf("rejected build still touched images: %v", got)
+		}
+	})
+
+	t.Run("preset", func(t *testing.T) {
+		t.Parallel()
+		e := &fakeEngine{}
+		_, err := buildPresetImage(ctx, e.client(t), []byte("FROM ubuntu:26.04\n"), ca)
+		if err == nil || !strings.Contains(err.Error(), "requires BuildKit") {
+			t.Fatalf("buildPresetImage = %v, want the BuildKit error", err)
+		}
+		if got := e.requested("/images/"); len(got) != 0 {
+			t.Errorf("rejected build still touched images: %v", got)
+		}
+	})
+}
+
+func TestOptionalBuildCAVariadicEntryPoints(t *testing.T) {
+	t.Parallel()
+	ca := testBuildCA(t)
+	ctx := context.Background()
+	if _, err := ResolveBaseImage(ctx, nil, "dev", ca, ca); err == nil || !strings.Contains(err.Error(), "at most one") {
+		t.Errorf("ResolveBaseImage with two CAs = %v, want error", err)
+	}
+	ws := workspace.Resolved{Name: "x", Dockerfile: "/nonexistent/Dockerfile"}
+	if _, err := BuildOverlayImage(ctx, "base", ws, ca, ca); err == nil || !strings.Contains(err.Error(), "at most one") {
+		t.Errorf("BuildOverlayImage with two CAs = %v, want error", err)
+	}
+	if _, err := BuildAgentImage(ctx, "base", agent.Harness{}, ca, ca); err == nil || !strings.Contains(err.Error(), "at most one") {
+		t.Errorf("BuildAgentImage with two CAs = %v, want error", err)
+	}
+	if _, err := BuildDockerImage(ctx, "base", "", ca, ca); err == nil || !strings.Contains(err.Error(), "at most one") {
+		t.Errorf("BuildDockerImage with two CAs = %v, want error", err)
 	}
 }

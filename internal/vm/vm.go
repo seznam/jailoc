@@ -153,6 +153,10 @@ type Spec struct {
 	// CABundle is a host PEM file the builder's Docker daemon trusts in
 	// addition to the image's CA certificates.
 	CABundle string `json:"ca_bundle,omitempty"`
+	// CABundleDigest is the SHA-256 hex digest of CABundle for builder VMs, so a content change at the same path restarts the builder.
+	CABundleDigest string `json:"ca_bundle_digest,omitempty"`
+	// BuildCA records the external CA bundle state ("none" or "sha256:<hex>") the workspace image was built with, or "" when jailoc did not build the image.
+	BuildCA string `json:"build_ca,omitempty"`
 	// Log receives lifecycle messages and the broker's output.
 	Log io.Writer `json:"-"`
 }
@@ -381,9 +385,14 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		defer stopConsoleSock()
 	}
 
-	opts := builderOptions(spec, redactor)
+	var opts []microvm.Option
 	if workspace {
 		opts = workspaceOptions(spec, guestFiles, imgDir, img.Env, redactor)
+	} else {
+		if opts, err = builderOptions(spec, redactor); err != nil {
+			_ = bp.Stop(5 * time.Second)
+			return err
+		}
 	}
 	vm, err := microvm.Run(ctx, imageRef(spec), opts...)
 	if err != nil {
@@ -548,7 +557,10 @@ func renderBuilderInit(spec Spec) string {
 	).Replace(initScript)
 }
 
-func builderOptions(spec Spec, redactor *consoleRedactor) []microvm.Option {
+// builderOptions are the microvm options of a builder VM. With a CA bundle the
+// builder's own image is pulled with a fetcher that trusts it, so a cold image
+// cache works behind a TLS-intercepting proxy.
+func builderOptions(spec Spec, redactor *consoleRedactor) ([]microvm.Option, error) {
 	script := renderBuilderInit(spec)
 	mounts := make([]microvm.VirtioFSMount, 0, len(spec.Shares))
 	var table strings.Builder
@@ -565,7 +577,7 @@ func builderOptions(spec Spec, redactor *consoleRedactor) []microvm.Option {
 	// the guest init; it is the only state-dir content the guest sees.
 	mounts = append(mounts, microvm.VirtioFSMount{Tag: "jailocctl", HostPath: controlDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership})
 	fmt.Fprintf(&table, "%s\t%s\t%s\n", "jailocctl", "rw", controlDir(spec.StateDir))
-	return append(commonOptions(spec, redactor),
+	opts := append(commonOptions(spec, redactor),
 		microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}),
 		microvm.WithVirtioFS(mounts...),
 		microvm.WithInitOverride("/bin/sh", "/jailoc-init.sh"),
@@ -588,6 +600,14 @@ func builderOptions(spec Spec, redactor *consoleRedactor) []microvm.Option {
 			return nil
 		}),
 	)
+	if spec.CABundle != "" {
+		fetcher, err := caImageFetcher(spec.CABundle)
+		if err != nil {
+			return nil, fmt.Errorf("builder image fetcher: %w", err)
+		}
+		opts = append(opts, microvm.WithImageFetcher(fetcher))
+	}
+	return opts, nil
 }
 
 // diskSize is the size of the spec's data disk.

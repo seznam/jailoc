@@ -19,6 +19,7 @@ import (
 
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -109,12 +110,14 @@ func TestUseHostDocker(t *testing.T) {
 	t.Parallel()
 	unusable := errors.New("docker daemon architecture is x86_64, VMs need aarch64")
 	tests := []struct {
-		name     string
-		builder  string
-		isolated bool
-		hostErr  error
-		want     bool
-		wantErr  bool
+		name      string
+		builder   string
+		isolated  bool
+		forwardCA bool
+		hostErr   error
+		want      bool
+		wantErr   bool
+		wantMsg   []string
 	}{
 		{name: "auto default uses host", builder: "", want: true},
 		{name: "auto uses host", builder: config.BuilderAuto, want: true},
@@ -123,15 +126,76 @@ func TestUseHostDocker(t *testing.T) {
 		{name: "docker without host fails", builder: config.BuilderDocker, hostErr: unusable, wantErr: true},
 		{name: "vm never uses host", builder: config.BuilderVM},
 		{name: "isolated build uses its vm", builder: config.BuilderDocker, isolated: true},
+		{name: "auto with CA routes to builder vm", builder: config.BuilderAuto, forwardCA: true},
+		{name: "default with CA routes to builder vm", builder: "", forwardCA: true},
+		{name: "vm with CA", builder: config.BuilderVM, forwardCA: true},
+		{name: "docker with CA is rejected", builder: config.BuilderDocker, forwardCA: true, wantErr: true, wantMsg: []string{`builder = "auto"`, "ca_bundle = false"}},
+		{name: "docker with CA and unusable host is rejected", builder: config.BuilderDocker, forwardCA: true, hostErr: unusable, wantErr: true, wantMsg: []string{"ca_bundle = false"}},
+		{name: "isolated docker with CA is rejected", builder: config.BuilderDocker, isolated: true, forwardCA: true, wantErr: true, wantMsg: []string{`builder = "auto"`, "ca_bundle = false"}},
+		{name: "isolated auto with CA uses its vm", builder: config.BuilderAuto, isolated: true, forwardCA: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := useHostDocker(tt.builder, tt.isolated, tt.hostErr)
+			got, err := useHostDocker(tt.builder, tt.isolated, tt.forwardCA, tt.hostErr)
 			if (err != nil) != tt.wantErr || got != tt.want {
 				t.Fatalf("useHostDocker = %v, %v; want %v, error %v", got, err, tt.want, tt.wantErr)
 			}
+			for _, msg := range tt.wantMsg {
+				if !strings.Contains(err.Error(), msg) {
+					t.Errorf("error %q does not mention %q", err, msg)
+				}
+			}
 		})
+	}
+}
+
+func TestWriteBuilderCABundle(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	pemData := []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+	ca, err := docker.NewBuildCA(pemData)
+	if err != nil {
+		t.Fatalf("NewBuildCA: %v", err)
+	}
+	want := filepath.Join(dir, caBundleFilename)
+
+	got, err := writeBuilderCABundle(dir, ca)
+	if err != nil {
+		t.Fatalf("writeBuilderCABundle: %v", err)
+	}
+	if got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+	content, err := os.ReadFile(want) //nolint:gosec // G304: test temp dir
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	if !bytes.Equal(content, pemData) {
+		t.Errorf("bundle content = %q, want %q", content, pemData)
+	}
+	info, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("stat bundle: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("bundle mode = %o, want 600", perm)
+	}
+
+	got, err = writeBuilderCABundle(dir, nil)
+	if err != nil {
+		t.Fatalf("writeBuilderCABundle(nil): %v", err)
+	}
+	if got != "" {
+		t.Errorf("path for nil CA = %q, want empty", got)
+	}
+	if _, err := os.Stat(want); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stale bundle still present: %v", err)
+	}
+
+	// Removing an already absent bundle is not an error.
+	if _, err := writeBuilderCABundle(dir, nil); err != nil {
+		t.Errorf("second writeBuilderCABundle(nil): %v", err)
 	}
 }
 
@@ -149,7 +213,7 @@ func TestWorkspaceSpecWorkDir(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ws := &workspace.Resolved{Name: "test", Paths: tt.paths, CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g"}
-			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
 			}
@@ -196,7 +260,7 @@ func TestSecretsPayloadCABundleEnv(t *testing.T) {
 	}{
 		{
 			name:     "no bundle",
-			absent:   append([]string{"NODE_USE_SYSTEM_CA"}, caBundleVars...),
+			absent:   append([]string{"NODE_USE_SYSTEM_CA"}, guest.CABundleVars...),
 			caBundle: "",
 		},
 		{
@@ -577,7 +641,7 @@ func TestWorkspaceSpecTmpfs(t *testing.T) {
 				Memory:     "4g",
 				DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g",
 			}
-			spec, err := workspaceSpec(context.Background(), ws, vmRuntimeFiles{}, "img:latest", nil, nil)
+			spec, err := workspaceSpec(context.Background(), ws, vmRuntimeFiles{}, "img:latest", nil, nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
 			}
@@ -611,7 +675,7 @@ func TestWorkspaceSpecProxy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ws := &workspace.Resolved{Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g", Proxy: tt.proxy}
-			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
 			}
@@ -816,7 +880,7 @@ func TestWorkspaceSpecStateAndCacheDisks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ws := &workspace.Resolved{Name: "test", Agent: oc, AgentProfile: tt.profile, CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "12g", CacheDisk: "30g"}
-			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", tt.shares, nil)
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", tt.shares, nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
 			}
@@ -851,7 +915,7 @@ func TestWorkspaceSpecStateAndCacheDisks(t *testing.T) {
 		alias, _ := agent.Lookup("opencode")
 		for h, want := range map[*agent.Harness]string{&custom: "claude", &alias: "opencode2"} {
 			ws := &workspace.Resolved{Name: "test", Agent: *h, CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g"}
-			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
 			}
@@ -865,7 +929,7 @@ func TestWorkspaceSpecStateAndCacheDisks(t *testing.T) {
 		{Name: "t", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "1m", CacheDisk: "20g"},
 		{Name: "t", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "x"},
 	} {
-		if _, err := workspaceSpec(t.Context(), &bad, vmRuntimeFiles{}, "image", nil, nil); err == nil {
+		if _, err := workspaceSpec(t.Context(), &bad, vmRuntimeFiles{}, "image", nil, nil, nil); err == nil {
 			t.Errorf("workspaceSpec accepted state_disk %q cache_disk %q", bad.StateDisk, bad.CacheDisk)
 		}
 	}
@@ -885,5 +949,69 @@ func TestStatusRestartChangesStateAndCacheDisk(t *testing.T) {
 	running.StateDisk, running.CacheDisk = false, false
 	if got := statusRestartChanges(ws, running); len(got) != 0 {
 		t.Fatalf("spec without disks: got %v, want none", got)
+	}
+}
+
+func TestWorkspaceSpecBuildCA(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws := &workspace.Resolved{Name: "ws", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g"}
+	ca, err := docker.NewBuildCA([]byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"))
+	if err != nil {
+		t.Fatalf("NewBuildCA: %v", err)
+	}
+	tests := []struct {
+		name string
+		ca   *docker.BuildCA
+		want string
+	}{
+		{name: "no bundle", want: "none"},
+		{name: "bundle", ca: ca, want: "sha256:" + ca.Digest()},
+	}
+	for _, tt := range tests {
+		spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil, tt.ca)
+		if err != nil {
+			t.Fatalf("%s: workspaceSpec: %v", tt.name, err)
+		}
+		if spec.BuildCA != tt.want {
+			t.Errorf("%s: BuildCA = %q, want %q", tt.name, spec.BuildCA, tt.want)
+		}
+	}
+}
+
+func TestBuildWorkspaceImageCAForwardingFollowsImageStrategy(t *testing.T) {
+	t.Parallel()
+	ca, err := docker.NewBuildCA([]byte("bundle"))
+	if err != nil {
+		t.Fatalf("NewBuildCA: %v", err)
+	}
+	cfg := &config.Config{}
+	direct := &workspace.Resolved{Name: "ws", Image: "custom:latest"}
+	built := &workspace.Resolved{Name: "ws", EnableDocker: true}
+	if buildsImage(cfg, direct) {
+		t.Fatal("buildsImage(direct image) = true, want false")
+	}
+	if !buildsImage(cfg, built) {
+		t.Fatal("buildsImage(cascade image) = false, want true")
+	}
+	for _, tt := range []struct {
+		name    string
+		ws      *workspace.Resolved
+		builder string
+		want    bool
+		wantErr bool
+	}{
+		{name: "direct image with docker builder", ws: direct, builder: config.BuilderDocker, want: true},
+		{name: "direct image with auto uses host", ws: direct, builder: config.BuilderAuto, want: true},
+		{name: "built image with docker builder is rejected", ws: built, builder: config.BuilderDocker, wantErr: true},
+		{name: "built image with auto uses builder vm", ws: built, builder: config.BuilderAuto},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			forwardCA := buildsImage(cfg, tt.ws) && ca != nil
+			got, err := useHostDocker(tt.builder, tt.ws.IsolatedBuild, forwardCA, nil)
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Fatalf("useHostDocker = %v, %v; want %v, error %v", got, err, tt.want, tt.wantErr)
+			}
+		})
 	}
 }

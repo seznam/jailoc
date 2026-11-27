@@ -80,3 +80,78 @@ func TestResolveRelease(t *testing.T) {
 		t.Fatal("resolveRelease changed the pinned checksums")
 	}
 }
+
+func TestResolveReleaseBuildCA(t *testing.T) {
+	t.Parallel()
+
+	sum := strings.Repeat("c", 64)
+	pinned := agent.Release{
+		Repo:    "owner/cli",
+		Asset:   "cli_linux_{arch}.tar.gz",
+		Binary:  "cli",
+		Version: "1.0.0",
+		SHA256:  map[string]string{"x64": "pinned-x64", "arm64": "pinned-arm64"},
+	}
+	cert, certPEM := newTLSTestCert(t)
+	_, wrongPEM := newTLSTestCert(t)
+	srv := newTLSTestServer(t, cert, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"assets":[
+			{"name":"cli_linux_x64.tar.gz","digest":"sha256:` + sum + `"},
+			{"name":"cli_linux_arm64.tar.gz","digest":"sha256:` + sum + `"}]}`))
+	}))
+
+	t.Run("succeeds with only the supplied CA", func(t *testing.T) {
+		t.Parallel()
+		got, err := resolveRelease(context.Background(), srv.URL, pinned, "2.0.0", mustBuildCA(t, certPEM))
+		if err != nil {
+			t.Fatalf("resolveRelease() error = %v", err)
+		}
+		want := map[string]string{"x64": sum, "arm64": sum}
+		if got.Version != "2.0.0" || !maps.Equal(got.SHA256, want) {
+			t.Fatalf("resolveRelease() = %+v, want checksums %v", got, want)
+		}
+	})
+
+	t.Run("fails without a CA", func(t *testing.T) {
+		t.Parallel()
+		for _, ca := range [][]*BuildCA{nil, {nil}} {
+			if _, err := resolveRelease(context.Background(), srv.URL, pinned, "2.0.0", ca...); err == nil || !strings.Contains(err.Error(), "certificate") {
+				t.Fatalf("resolveRelease() without CA error = %v, want certificate error", err)
+			}
+		}
+	})
+
+	t.Run("fails with a wrong CA", func(t *testing.T) {
+		t.Parallel()
+		if _, err := resolveRelease(context.Background(), srv.URL, pinned, "2.0.0", mustBuildCA(t, wrongPEM)); err == nil || !strings.Contains(err.Error(), "certificate") {
+			t.Fatalf("resolveRelease() with wrong CA error = %v, want certificate error", err)
+		}
+	})
+
+	t.Run("pinned version needs no fetch", func(t *testing.T) {
+		t.Parallel()
+		got, err := resolveRelease(context.Background(), srv.URL, pinned, "1.0.0", mustBuildCA(t, wrongPEM))
+		if err != nil || !maps.Equal(got.SHA256, pinned.SHA256) {
+			t.Fatalf("resolveRelease() = %+v, %v", got, err)
+		}
+	})
+
+	t.Run("does not touch the default transport", func(t *testing.T) {
+		t.Parallel()
+		before := http.DefaultTransport.(*http.Transport).TLSClientConfig
+		if _, err := resolveRelease(context.Background(), srv.URL, pinned, "2.0.0", mustBuildCA(t, certPEM)); err != nil {
+			t.Fatalf("resolveRelease() error = %v", err)
+		}
+		if http.DefaultTransport.(*http.Transport).TLSClientConfig != before {
+			t.Fatal("resolveRelease changed http.DefaultTransport")
+		}
+	})
+
+	t.Run("rejects more than one CA", func(t *testing.T) {
+		t.Parallel()
+		ca := mustBuildCA(t, certPEM)
+		if _, err := resolveRelease(context.Background(), srv.URL, pinned, "2.0.0", ca, ca); err == nil {
+			t.Fatal("resolveRelease() with two CAs succeeded")
+		}
+	})
+}

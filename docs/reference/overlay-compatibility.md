@@ -42,6 +42,8 @@ Severities:
 | Remove `nftables` while `enable_docker` is on | Breaking | `dockerd` cannot set up container networking |
 | Use the `docker` CLI in a `RUN` step with `enable_docker = false` | Fatal | The build fails: Docker is installed only for workspaces with `enable_docker` on |
 | Remove `ca-certificates` | Breaking | TLS fails, and a forwarded `ca_bundle` has no trust store to join |
+| Use a stage jailoc can't set up CA trust in (not Debian or Ubuntu, or no shell) while an external `ca_bundle` is selected | Fatal | The build fails with an error; see [Image builds with a CA bundle](configuration.md#image-builds-with-a-ca-bundle) |
+| Set `SSL_CERT_FILE` or another CA variable to a file without the bundle while an external `ca_bundle` is selected | Degraded | jailoc keeps your setting, so clients that read it don't trust the bundle |
 | Remove `sudo` | Degraded | The agent cannot install packages at runtime |
 | Remove `gpg` while `gpg_agent` is on | Degraded | The public keys are not imported and GPG signing is unavailable |
 | Build for a CPU architecture other than the host's | Fatal | The VM cannot run the image |
