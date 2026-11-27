@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/seznam/jailoc/internal/browser"
 	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -139,20 +140,9 @@ func hostOpenURL(ctx context.Context, rawURL string) error {
 	return openURLWith(ctx, name, rawURL, authOpenTimeout)
 }
 
-// hostOpenerCommand returns the executable that opens URLs on goos: the fixed
-// /usr/bin/open on macOS, xdg-open from PATH on Linux. No shell, no $BROWSER.
+// hostOpenerCommand returns the executable that opens URLs on goos.
 func hostOpenerCommand(goos string, lookPath func(string) (string, error)) (string, error) {
-	switch goos {
-	case "darwin":
-		return "/usr/bin/open", nil
-	case "linux":
-		path, err := lookPath("xdg-open")
-		if err != nil {
-			return "", errors.New("xdg-open was not found in PATH")
-		}
-		return path, nil
-	}
-	return "", fmt.Errorf("opening a browser is not supported on %s", goos)
+	return browser.Command(goos, lookPath)
 }
 
 // openURLWith runs the opener with rawURL as its only argument. Its output
