@@ -14,6 +14,7 @@ Find the symptom, then apply the fix. Start with [Find the logs](#find-the-logs)
 | Agent can't reach an internal service | [Network rules block a required host](#network-rules-block-a-required-host) |
 | `403` on an allowed host | [Request denied with `http-no-match`](#request-denied-with-http-no-match) |
 | TLS error on a host with an `http` rule | [Certificate error on an inspected host](#certificate-error-on-an-inspected-host) |
+| `jailoc auth` finds no browser login link | [Browser login link is missing](#browser-login-link-is-missing) |
 | Image pull or build errors | [Image build fails](#image-build-fails) |
 | Build fails with `no space left on device`, or the builder VM is lost at startup | [Builder VM disk is full](#builder-vm-disk-is-full) |
 | `jailoc up` fails with `no space left on device` on the state or cache disk | [State or cache disk is full](#state-or-cache-disk-is-full) |
@@ -60,6 +61,7 @@ Each workspace VM keeps its state in `~/.cache/jailoc-vm/workspaces/<workspace>/
 | `legacy-home/`, `legacy-home-<n>/` | The persistent home directories of a workspace that stored them as a directory, kept after the guest copied the agent state to `state.img`. The old `~/.cache` is not copied to `cache.img`. jailoc doesn't delete it |
 | `guest-ro/` | The read-only internal share: configuration copies and staged snapshots |
 | `state.json` | Supervisor PID and readiness |
+| `oauth.sock` | The broker's private socket (mode `0600`, in the `0700` state directory) that `jailoc auth` reads pending browser login links from; the guest has no access to it |
 | `inspect-ca.pem`, `inspect-ca.key` | The workspace's TLS inspection CA, created when a network rule has `http`; the key stays on the host and is deleted by `jailoc down --purge` |
 
 ### Inspect what runs inside the VM
@@ -221,6 +223,27 @@ Where an `http` rule with `paths` applies to the method, a path with `//`, `\`, 
 This is the other direction: the broker rejected the upstream certificate because it trusts only the host system roots and the `ca_bundle` path.
 
 **Fix:** add the issuing CA to the host's trust store or set `ca_bundle` to a bundle that contains it.
+
+## Browser login link is missing
+
+**Symptom:** `jailoc auth` fails with `no pending sign-in`, `has no sign-in socket`, or `the sign-in for callback port N expired`, or the tool opens no link at all.
+
+| Message or cause | Fix |
+|------------------|-----|
+| `has no sign-in socket` | The running broker doesn't provide `oauth.sock`. Run `jailoc restart <workspace>`, then start the login again. |
+| `expired` | Start the login again in the workspace, then run `jailoc auth` within 3 minutes. |
+| `no pending sign-in` | The tool didn't call `xdg-open` or `$BROWSER` with an explicit `http` loopback `redirect_uri`, or no guest listener was active on that port. A tool with a device code or manual-code flow needs that flow. |
+| `several sign-ins are pending` | Select one with `--port`. |
+
+To see what the broker did, look for `OAUTH` lines:
+
+```bash
+jailoc traffic myproject --lines 200 | grep OAUTH
+```
+
+`open` means a callback listener was registered, `expired` means nobody called it within 3 minutes, and `served` means the callback was claimed, not necessarily that the token exchange succeeded. The lines show the host, port and path, never the query.
+
+See [Complete browser login](workspace-configuration.md#complete-browser-login).
 
 ## Image build fails
 

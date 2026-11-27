@@ -152,7 +152,29 @@ ports = [3000, "8080:80"]
 
 `3000` makes guest port 3000 available on host `127.0.0.1:3000`; `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. Services listening on `0.0.0.0`, `192.168.127.2`, `127.0.0.1` or `[::1]` inside the guest are all reachable, as are containers started with `docker run -p`.
 
-OAuth browser login callbacks (`opencode mcp auth`, `claude mcp`, `gh auth login`, `gcloud`, `mcp-remote`) work without adding `ports` entries: when a tool inside the guest invokes `xdg-open` or `$BROWSER` with an authorization URL whose `redirect_uri` points to `http://127.0.0.1:<port>/<path>` or `http://localhost:<port>/<path>` while a guest listener is active on that port, jailoc opens a single-shot HTTP callback proxy on host `127.0.0.1:<port>` for that exact path and closes it after serving the callback (or after 3 minutes). Open the URL printed by the tool in your host browser to complete login.
+### Complete browser login
+
+A tool in the guest that signs in through a browser invokes `xdg-open` or `$BROWSER` with an authorization URL. jailoc captures that URL when it has an explicit `http` loopback `redirect_uri` (`localhost`, `127.0.0.1` or `[::1]`, port 1024-65535) and the tool already listens on that port in the guest. No `ports` entry is needed. jailoc keeps at most 8 pending logins, each valid for 3 minutes, and never opens a browser on its own.
+
+1. Start the login in the workspace, for example in a `jailoc shell` session.
+2. In another host terminal, print the captured link, or launch it:
+
+    ```bash
+    jailoc auth myproject
+    jailoc auth myproject --open
+    ```
+
+    The first command prints the exact URL to stdout, so you can check its origin before you open it. `--open` launches the default browser of the host immediately and prints only the origin.
+3. Finish the login in the host browser. A single-use listener on host `127.0.0.1:<port>` passes the callback to the guest and closes.
+
+With several pending logins, `jailoc auth` lists only the origin, port and expiry of each; select one with `--port`. See [`jailoc auth`](../reference/cli.md#jailoc-auth).
+
+Only a tool that calls an opener with such a loopback URL qualifies; jailoc doesn't promise that `gh auth login`, `gcloud` or any other tool does. Use the captured URL as is and don't rewrite it. Claude Code account login can print a hosted manual-code URL that differs from the URL it passes to the opener; use the captured loopback URL, not the manual-code one.
+
+!!! note
+    A `ports` entry for the same callback port stays compatible with the callback, but `jailoc auth` doesn't list it. Open a URL the tool printed only if its `redirect_uri` matches the forwarded loopback port, not a hosted manual-code URL. Otherwise remove the entry and restart the workspace to use the handoff.
+
+When `jailoc auth` finds nothing, see [Browser login link is missing](troubleshooting.md#browser-login-link-is-missing).
 
 ## Reach host services
 

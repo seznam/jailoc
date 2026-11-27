@@ -388,6 +388,29 @@ jailoc shell [workspace] [flags]
 
 ---
 
+### `jailoc auth`
+
+Print or open a pending browser login link that a tool in a workspace VM passed to `xdg-open` or `$BROWSER`.
+
+```text
+jailoc auth [workspace] [flags]
+```
+
+- The workspace must be running. The command reads the link from the network broker and doesn't boot the VM.
+- The broker keeps a link only when its `redirect_uri` is an explicit `http` loopback URL (`localhost`, `127.0.0.1` or `[::1]`, port 1024-65535) and a guest listener exists on that port. Each link expires after 3 minutes; at most 8 are pending.
+- By default the exact URL is printed to stdout and guidance to stderr. Nothing is launched.
+- With `--open`, the URL opens in the default browser of the host immediately. Only its origin, the callback port and the time left are printed, so use the default output when you want to check the link first.
+- With several pending links, the command lists the port, origin and time left of each, without the URL, and fails until `--port` selects one.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--open` | `false` | Open the link in the default browser of the host instead of printing it. |
+| `--port N` | | Select the pending link with this callback port (1-65535). |
+
+The URL is a credential: jailoc doesn't log it or store it on disk. The printed output, terminal capture, browser history and the opener's arguments are outside jailoc's control. See [Complete browser login](../how-to/workspace-configuration.md#complete-browser-login) and [Browser login link is missing](../how-to/troubleshooting.md#browser-login-link-is-missing).
+
+---
+
 ### `jailoc sessions`
 
 List the agent sessions running in a workspace VM, or stop one.
