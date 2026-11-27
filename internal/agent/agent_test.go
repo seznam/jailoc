@@ -279,3 +279,34 @@ func TestTmpfsDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestSandboxEnv(t *testing.T) {
+	t.Parallel()
+
+	claudeEnv := []string{
+		"CLAUDE_CONFIG_DIR=/home/agent/.claude",
+		"CLAUDE_CODE_SANDBOXED=1",
+		"DISABLE_AUTOUPDATER=1",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"IS_SANDBOX=1",
+	}
+	for _, h := range All() {
+		t.Run(h.Name, func(t *testing.T) {
+			t.Parallel()
+
+			if h.Name != "claude" {
+				for _, kv := range h.Env {
+					if strings.HasPrefix(kv, "IS_SANDBOX=") {
+						t.Errorf("%s.Env contains %q, want no IS_SANDBOX", h.Name, kv)
+					}
+				}
+				return
+			}
+			for _, want := range claudeEnv {
+				if !slices.Contains(h.Env, want) {
+					t.Errorf("claude.Env = %q, want %q", h.Env, want)
+				}
+			}
+		})
+	}
+}

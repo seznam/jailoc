@@ -420,7 +420,10 @@ var harnesses = []Harness{
 		// directory. CLAUDE_CODE_SANDBOXED makes Claude Code trust the
 		// working directory without its trust prompt, which background
 		// sessions (--bg, used to switch sessions) otherwise require.
-		Env:   []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "CLAUDE_CODE_SANDBOXED=1", "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"},
+		// IS_SANDBOX is the separate marker for the root guard on
+		// --dangerously-skip-permissions (bypassPermissions); it does not
+		// affect the directory trust above.
+		Env:   []string{"CLAUDE_CONFIG_DIR=/home/agent/.claude", "CLAUDE_CODE_SANDBOXED=1", "IS_SANDBOX=1", "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"},
 		State: []StateDir{{Name: "claude", Path: "/home/agent/.claude"}},
 		// Background sessions refuse --dangerously-skip-permissions until
 		// its disclaimer was accepted interactively once.
