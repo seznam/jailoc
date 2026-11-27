@@ -292,6 +292,9 @@ type fakeEngine struct {
 	mu         sync.Mutex
 	requests   []string
 	containers map[string]string // container ID -> image reference
+	// removals records, per DELETE /containers/{id}, whether it asked for the
+	// container's anonymous volumes to be removed too (v=1).
+	removals []bool
 }
 
 func (e *fakeEngine) handler(w http.ResponseWriter, r *http.Request) {
@@ -329,6 +332,9 @@ func (e *fakeEngine) handler(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/archive"):
 		e.containerArchive(w, strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/archive"))
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/containers/"):
+		e.mu.Lock()
+		e.removals = append(e.removals, r.URL.Query().Get("v") == "1")
+		e.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && path == "/images/create":
 		http.Error(w, `{"message":"pull access denied, repository does not exist"}`, http.StatusInternalServerError)

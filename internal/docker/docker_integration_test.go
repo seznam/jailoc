@@ -344,7 +344,7 @@ func writeCAOverlayContext(t *testing.T, dir string, present, absent, leafPresen
 		"server-absent.pem":  leafAbsent,
 	}
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil { //nolint:gosec // G306: copied into the image and read by USER nobody
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
@@ -499,6 +499,77 @@ func TestBuildOverlayImageCATrust(t *testing.T) {
 		if env[key] != want {
 			t.Errorf("%s = %q, want %q", key, env[key], want)
 		}
+	}
+}
+
+// TestBuildOverlayImageCAArgOverridesDefaults checks that an ARG with a value
+// beats the CA variable defaults jailoc injects: in a descendant stage of the
+// same Dockerfile and in an overlay built on an image jailoc built before,
+// where the defaults are inherited ENVs. A variable the base sets itself keeps
+// precedence over the ARG.
+func TestBuildOverlayImageCAArgOverridesDefaults(t *testing.T) {
+	skipWithoutDocker(t)
+	cli := newIntegrationDockerClient(t)
+	skipWithoutBuildKit(t, cli)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	base := buildCATestBase(ctx, t, cli)
+	buildCA, err := NewBuildCA(newIntegrationCA(t, "jailoc integration CA"))
+	if err != nil {
+		t.Fatalf("NewBuildCA: %v", err)
+	}
+
+	build := func(name, dockerfile, from string) (string, map[string]string) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name+".Dockerfile")
+		if err := os.WriteFile(path, []byte(dockerfile), 0o600); err != nil {
+			t.Fatalf("write %s Dockerfile: %v", name, err)
+		}
+		tag, err := BuildOverlayImage(ctx, from, workspace.Resolved{Name: name, Dockerfile: path, BuildContext: t.TempDir()}, buildCA)
+		if err != nil {
+			t.Fatalf("BuildOverlayImage(%s): %v", name, err)
+		}
+		removeIntegrationImage(t, cli, tag)
+		inspect, err := cli.ImageInspect(ctx, tag)
+		if err != nil || inspect.Config == nil {
+			t.Fatalf("inspect %s: %v", tag, err)
+		}
+		return tag, envMap(inspect.Config.Env)
+	}
+
+	// The build fails when the ARG does not win in the RUN of the child stage.
+	_, env := build("ca-arg-stage", `FROM ${BASE} AS parent
+FROM parent
+ARG REQUESTS_CA_BUNDLE=/custom/arg-ca.pem
+RUN test "$REQUESTS_CA_BUNDLE" = /custom/arg-ca.pem && test "$SSL_CERT_FILE" = /etc/ssl/certs/ca-certificates.crt
+`, base)
+	if env["REQUESTS_CA_BUNDLE"] != "/custom/arg-ca.pem" {
+		t.Errorf("stage: REQUESTS_CA_BUNDLE = %q, want the ARG value", env["REQUESTS_CA_BUNDLE"])
+	}
+	if env["SSL_CERT_FILE"] != guest.SystemCABundle {
+		t.Errorf("stage: SSL_CERT_FILE = %q, want the default %q", env["SSL_CERT_FILE"], guest.SystemCABundle)
+	}
+
+	// A layer on an image jailoc already injected the defaults into.
+	layerBase, _ := build("ca-arg-layer-base", "FROM ${BASE}\nRUN true\n", base)
+	_, env = build("ca-arg-layer", `FROM ${BASE}
+ARG CURL_CA_BUNDLE=/custom/overlay-arg.pem
+RUN test "$CURL_CA_BUNDLE" = /custom/overlay-arg.pem && test "$REQUESTS_CA_BUNDLE" = /etc/ssl/certs/ca-certificates.crt
+`, layerBase)
+	if env["CURL_CA_BUNDLE"] != "/custom/overlay-arg.pem" {
+		t.Errorf("layer: CURL_CA_BUNDLE = %q, want the ARG value", env["CURL_CA_BUNDLE"])
+	}
+
+	// A variable the base set itself is not replaced by an ARG.
+	explicitBase, _ := build("ca-arg-explicit-base", "FROM ${BASE}\nENV PIP_CERT=/explicit/base.pem\n", base)
+	_, env = build("ca-arg-explicit", `FROM ${BASE} AS mid
+ARG PIP_CERT=/custom/ignored.pem
+FROM mid
+RUN test "$PIP_CERT" = /explicit/base.pem
+`, explicitBase)
+	if env["PIP_CERT"] != "/explicit/base.pem" {
+		t.Errorf("explicit: PIP_CERT = %q, want the base's value", env["PIP_CERT"])
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -796,5 +797,254 @@ func TestPrepareCADockerfileRejects(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// jailocCAEnv returns the environment of an image that jailoc injected CA
+// trust into, with skip left out of the defaults.
+func jailocCAEnv(skip ...string) []string {
+	env := []string{"PATH=/usr/bin"}
+	var active []string
+	for _, k := range caEnvKeys() {
+		if containsString(skip, k) {
+			continue
+		}
+		v, _ := caDefaultEnvValue(k)
+		env = append(env, k+"="+v)
+		active = append(active, k)
+	}
+	return append(env, caEnvDefaultsVar+"="+strings.Join(active, ","))
+}
+
+func TestSplitBaseCAEnv(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		env          []string
+		wantDefaults []string
+		wantExplicit []string
+	}{
+		{"no env", nil, nil, nil},
+		{"without marker everything is explicit", []string{"SSL_CERT_FILE=" + guest.SystemCABundle, "PATH=/bin"}, nil, []string{"SSL_CERT_FILE", "PATH"}},
+		{"listed and at default", []string{"SSL_CERT_FILE=" + guest.SystemCABundle, "UV_SYSTEM_CERTS=true", caEnvDefaultsVar + "=SSL_CERT_FILE,UV_SYSTEM_CERTS"}, []string{"SSL_CERT_FILE", "UV_SYSTEM_CERTS"}, nil},
+		{"listed but changed", []string{"SSL_CERT_FILE=/x.pem", caEnvDefaultsVar + "=SSL_CERT_FILE"}, nil, []string{"SSL_CERT_FILE"}},
+		{"listed but absent", []string{caEnvDefaultsVar + "=SSL_CERT_FILE"}, nil, nil},
+		{"unlisted at default value", []string{"SSL_CERT_FILE=" + guest.SystemCABundle, "PIP_CERT=" + guest.SystemCABundle, caEnvDefaultsVar + "=PIP_CERT"}, []string{"PIP_CERT"}, []string{"SSL_CERT_FILE"}},
+		{"listed non-CA variable", []string{"PATH=/bin", caEnvDefaultsVar + "=PATH"}, nil, []string{"PATH"}},
+	}
+	keys := func(m map[string]bool) []string {
+		var out []string
+		for k := range m {
+			out = append(out, k)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			explicit, defaults := splitBaseCAEnv(tt.env)
+			wantD, wantE := slices.Clone(tt.wantDefaults), slices.Clone(tt.wantExplicit)
+			slices.Sort(wantD)
+			slices.Sort(wantE)
+			if got := keys(defaults); !slices.Equal(got, wantD) {
+				t.Errorf("defaults = %v, want %v", got, wantD)
+			}
+			if got := keys(explicit); !slices.Equal(got, wantE) {
+				t.Errorf("explicit = %v, want %v", got, wantE)
+			}
+		})
+	}
+}
+
+func TestCATrustInstructionsRecordsDefaults(t *testing.T) {
+	t.Parallel()
+
+	got := caTrustInstructions("abcd", "", nil, map[string]bool{"PIP_CERT": true})
+	var active []string
+	for _, k := range caEnvKeys() {
+		if k != "PIP_CERT" {
+			active = append(active, k)
+		}
+	}
+	if want := "ENV " + caEnvDefaultsVar + "=" + strings.Join(active, ",") + "\n"; !strings.Contains(got, want) {
+		t.Errorf("instructions lack %q:\n%s", want, got)
+	}
+
+	// Defaults of the base are kept, not repeated; an ARG removes its key
+	// from the recorded list.
+	got = caTrustInstructions("abcd", "", jailocCAEnv(), map[string]bool{"SSL_CERT_FILE": true})
+	if n := strings.Count(got, "ENV "); n != 1 {
+		t.Errorf("instructions have %d ENV lines, want only the updated list:\n%s", n, got)
+	}
+	if strings.Contains(got, "ENV SSL_CERT_FILE=") || recordedDefault(got, "SSL_CERT_FILE") {
+		t.Errorf("SSL_CERT_FILE is still a recorded default:\n%s", got)
+	}
+
+	// Nothing changed: the base's list stands.
+	if got := caTrustInstructions("abcd", "", jailocCAEnv(), nil); strings.Contains(got, "ENV ") {
+		t.Errorf("unchanged defaults produce ENV lines:\n%s", got)
+	}
+}
+
+// recordedDefault reports whether the last list of defaults in dockerfile
+// names key.
+func recordedDefault(dockerfile, key string) bool {
+	at := strings.LastIndex(dockerfile, "ENV "+caEnvDefaultsVar+"=")
+	if at < 0 {
+		return false
+	}
+	_, list, _ := strings.Cut(dockerfile[at:], "=")
+	list, _, _ = strings.Cut(list, "\n")
+	return slices.Contains(strings.Split(list, ","), key)
+}
+
+// envAfter reports whether the Dockerfile has line directly after an
+// instruction that starts with prev.
+func envAfter(dockerfile, prev, line string) bool {
+	lines := strings.Split(dockerfile, "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		if strings.HasPrefix(lines[i], prev) && lines[i+1] == line {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPrepareCADockerfileArgOverridesInheritedDefault(t *testing.T) {
+	t.Parallel()
+	ca := testBuildCA(t)
+	const override = `ENV SSL_CERT_FILE="/custom/arg.pem"`
+
+	t.Run("descendant stage of the same Dockerfile", func(t *testing.T) {
+		t.Parallel()
+		e := &fakeEngine{images: map[string]fakeImage{"ubuntu:26.04": {}}}
+		dockerfile := []byte("FROM ubuntu:26.04 AS parent\nFROM parent AS child\nARG SSL_CERT_FILE=/custom/arg.pem\nRUN true\nFROM child\nRUN true\n")
+		got, err := prepareCADockerfile(context.Background(), e.client(t), dockerfile, nil, ca)
+		if err != nil {
+			t.Fatalf("prepareCADockerfile: %v", err)
+		}
+		text := string(got)
+		if !envAfter(text, "ARG SSL_CERT_FILE=", override) {
+			t.Errorf("ENV does not follow the ARG:\n%s", text)
+		}
+		if n := strings.Count(text, override); n != 1 {
+			t.Errorf("override appears %d times, want once:\n%s", n, text)
+		}
+		// The child records that SSL_CERT_FILE is no longer a default, right
+		// after its FROM.
+		var rest []string
+		for _, k := range caEnvKeys() {
+			if k != "SSL_CERT_FILE" {
+				rest = append(rest, k)
+			}
+		}
+		if want := "FROM parent AS child\nENV " + caEnvDefaultsVar + "=" + strings.Join(rest, ",") + "\n"; !strings.Contains(text, want) {
+			t.Errorf("child lacks the updated list %q:\n%s", want, text)
+		}
+		// The grandchild inherits from child: no further override.
+		if strings.Count(text, "ENV "+caEnvDefaultsVar+"=") != 2 {
+			t.Errorf("want one list for the parent and one for the child:\n%s", text)
+		}
+	})
+
+	t.Run("descendant stage that sets the variable itself", func(t *testing.T) {
+		t.Parallel()
+		e := &fakeEngine{images: map[string]fakeImage{"ubuntu:26.04": {}}}
+		dockerfile := []byte("FROM ubuntu:26.04 AS parent\nFROM parent\nENV SSL_CERT_FILE=/own.pem\nARG SSL_CERT_FILE=/custom/arg.pem\n")
+		got, err := prepareCADockerfile(context.Background(), e.client(t), dockerfile, nil, ca)
+		if err != nil {
+			t.Fatalf("prepareCADockerfile: %v", err)
+		}
+		if strings.Contains(string(got), override) {
+			t.Errorf("an ENV of the stage must win over the later ARG:\n%s", got)
+		}
+	})
+
+	t.Run("descendant stage without a default to override", func(t *testing.T) {
+		t.Parallel()
+		e := &fakeEngine{images: map[string]fakeImage{"ubuntu:26.04": {}}}
+		// The parent's own ARG keeps jailoc from defaulting SSL_CERT_FILE.
+		dockerfile := []byte("FROM ubuntu:26.04 AS parent\nARG SSL_CERT_FILE=/parent.pem\nFROM parent\nARG SSL_CERT_FILE=/custom/arg.pem\n")
+		got, err := prepareCADockerfile(context.Background(), e.client(t), dockerfile, nil, ca)
+		if err != nil {
+			t.Fatalf("prepareCADockerfile: %v", err)
+		}
+		if strings.Contains(string(got), "ENV SSL_CERT_FILE") {
+			t.Errorf("no ENV expected for SSL_CERT_FILE:\n%s", got)
+		}
+	})
+
+	t.Run("separately built layer", func(t *testing.T) {
+		t.Parallel()
+		e := &fakeEngine{images: map[string]fakeImage{"jailoc-base:1": {env: jailocCAEnv()}}}
+		dockerfile := []byte("FROM jailoc-base:1\nARG SSL_CERT_FILE=/custom/arg.pem\nARG PIP_CERT\nRUN true\n")
+		got, err := prepareCADockerfile(context.Background(), e.client(t), dockerfile, nil, ca)
+		if err != nil {
+			t.Fatalf("prepareCADockerfile: %v", err)
+		}
+		text := string(got)
+		if !envAfter(text, "ARG SSL_CERT_FILE=", override) {
+			t.Errorf("ENV does not follow the ARG:\n%s", text)
+		}
+		if strings.Contains(text, "ENV PIP_CERT") || strings.Contains(text, "ENV REQUESTS_CA_BUNDLE") {
+			t.Errorf("defaults the base already has are repeated:\n%s", text)
+		}
+		if recordedDefault(text, "SSL_CERT_FILE") {
+			t.Errorf("SSL_CERT_FILE is still a recorded default:\n%s", text)
+		}
+	})
+
+	t.Run("separately built layer takes a build argument", func(t *testing.T) {
+		t.Parallel()
+		e := &fakeEngine{images: map[string]fakeImage{"jailoc-base:1": {env: jailocCAEnv()}}}
+		value := "/from/$build arg.pem"
+		dockerfile := []byte("FROM jailoc-base:1\nARG SSL_CERT_FILE\nRUN true\n")
+		got, err := prepareCADockerfile(context.Background(), e.client(t), dockerfile, map[string]*string{"SSL_CERT_FILE": &value}, ca)
+		if err != nil {
+			t.Fatalf("prepareCADockerfile: %v", err)
+		}
+		if want := `ENV SSL_CERT_FILE="/from/\$build arg.pem"`; !envAfter(string(got), "ARG SSL_CERT_FILE", want) {
+			t.Errorf("want %q after the ARG:\n%s", want, got)
+		}
+	})
+
+	t.Run("explicit ENV of the base stays", func(t *testing.T) {
+		t.Parallel()
+		// No list: the base set SSL_CERT_FILE itself, even at jailoc's value.
+		e := &fakeEngine{images: map[string]fakeImage{
+			"explicit-base:1": {env: []string{"SSL_CERT_FILE=/explicit/base.pem"}},
+			"listless:1":      {env: []string{"SSL_CERT_FILE=" + guest.SystemCABundle}},
+		}}
+		for _, base := range []string{"explicit-base:1", "listless:1"} {
+			dockerfile := []byte("FROM " + base + "\nARG SSL_CERT_FILE=/custom/arg.pem\nRUN true\n")
+			got, err := prepareCADockerfile(context.Background(), e.client(t), dockerfile, nil, ca)
+			if err != nil {
+				t.Fatalf("prepareCADockerfile(%s): %v", base, err)
+			}
+			if strings.Contains(string(got), "ENV SSL_CERT_FILE") {
+				t.Errorf("%s: explicit SSL_CERT_FILE must stay:\n%s", base, got)
+			}
+		}
+	})
+}
+
+func TestPrepareCADockerfileRemovesProbeVolumes(t *testing.T) {
+	t.Parallel()
+	e := &fakeEngine{images: map[string]fakeImage{"ubuntu:26.04": {}, "debian:12": {}}}
+	_, err := prepareCADockerfile(context.Background(), e.client(t), []byte("FROM ubuntu:26.04\nFROM debian:12\n"), nil, testBuildCA(t))
+	if err != nil {
+		t.Fatalf("prepareCADockerfile: %v", err)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.removals) != 2 {
+		t.Fatalf("containers removed = %d, want 2", len(e.removals))
+	}
+	for i, withVolumes := range e.removals {
+		if !withVolumes {
+			t.Errorf("removal %d did not ask for the anonymous volumes to go (v=1)", i)
+		}
 	}
 }

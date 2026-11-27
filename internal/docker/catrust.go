@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"runtime"
 	"slices"
@@ -82,6 +83,37 @@ type caPlan struct {
 	// images are the deduplicated external images the build pulls, in order
 	// of appearance.
 	images []string
+	// flow lists every stage, external or not, in Dockerfile order, with what
+	// it takes to keep jailoc's default CA variables from shadowing an ARG.
+	flow []caStageFlow
+}
+
+// caArgOverride is an ARG with a value that sets a CA variable.
+type caArgOverride struct {
+	// endLine is the 1-based last line of the ARG instruction.
+	endLine int
+	key     string
+	value   string
+}
+
+// caStageFlow is the part of a stage that decides which CA variables are
+// still jailoc defaults at its end.
+type caStageFlow struct {
+	// alias is the lowercased stage alias, or "".
+	alias string
+	// base is the expanded base: an image, or the name of an earlier stage.
+	base string
+	// external is true when base is an image, not an earlier stage.
+	external bool
+	// fromEndLine is the 1-based last line of the stage's FROM instruction.
+	fromEndLine int
+	// argKeys are the names of the ARG instructions that have a value.
+	argKeys map[string]bool
+	// envKeys are the names the stage sets with ENV.
+	envKeys map[string]bool
+	// argOverrides are the ARGs that set a CA variable before any ENV of the
+	// stage does.
+	argOverrides []caArgOverride
 }
 
 // lexEnv is a shell.EnvGetter over a map.
@@ -243,17 +275,26 @@ func (p *caPlanner) addStage(index int, st instructions.Stage) error {
 	}
 
 	argKeys := make(map[string]bool)
+	envKeys := make(map[string]bool)
+	var argOverrides []caArgOverride
 	env := lexEnv{}
 	for _, cmd := range st.Commands {
 		switch c := cmd.(type) {
 		case *instructions.ArgCommand:
 			for _, kv := range c.Args {
-				if v, ok := p.argValue(kv, env); ok {
-					argKeys[kv.Key] = true
-					env[kv.Key] = v
-				} else if v, ok := p.meta[kv.Key]; ok {
-					argKeys[kv.Key] = true
-					env[kv.Key] = v
+				v, ok := p.argValue(kv, env)
+				if !ok {
+					v, ok = p.meta[kv.Key]
+				}
+				if !ok {
+					continue
+				}
+				argKeys[kv.Key] = true
+				env[kv.Key] = v
+				if _, isCAKey := caDefaultEnvValue(kv.Key); isCAKey && !envKeys[kv.Key] {
+					if loc := c.Location(); len(loc) > 0 {
+						argOverrides = append(argOverrides, caArgOverride{endLine: loc[len(loc)-1].End.Line, key: kv.Key, value: v})
+					}
 				}
 			}
 		case *instructions.EnvCommand:
@@ -263,6 +304,7 @@ func (p *caPlanner) addStage(index int, st instructions.Stage) error {
 					v = kv.Value
 				}
 				env[kv.Key] = v
+				envKeys[kv.Key] = true
 			}
 		case *instructions.CopyCommand:
 			if err := p.addFrom(name, c.From, env); err != nil {
@@ -275,14 +317,27 @@ func (p *caPlanner) addStage(index int, st instructions.Stage) error {
 		}
 	}
 
+	if external && len(st.Location) == 0 {
+		return fmt.Errorf("stage %q: no source location for its FROM instruction", name)
+	}
+	fromEndLine := 0
+	if len(st.Location) > 0 {
+		fromEndLine = st.Location[len(st.Location)-1].End.Line
+	}
+	p.plan.flow = append(p.plan.flow, caStageFlow{
+		alias:        strings.ToLower(st.Name),
+		base:         base,
+		external:     external,
+		fromEndLine:  fromEndLine,
+		argKeys:      argKeys,
+		envKeys:      envKeys,
+		argOverrides: argOverrides,
+	})
 	if !external {
 		return nil
 	}
-	if len(st.Location) == 0 {
-		return fmt.Errorf("stage %q: no source location for its FROM instruction", name)
-	}
 	p.plan.stages = append(p.plan.stages, caStage{
-		fromEndLine: st.Location[len(st.Location)-1].End.Line,
+		fromEndLine: fromEndLine,
 		base:        base,
 		name:        name,
 		argKeys:     argKeys,
@@ -447,13 +502,68 @@ const caTrustScript = `if [ ! -f /etc/debian_version ]; then echo "jailoc: ca_bu
 	`rm -f /tmp/jailoc-old-ca.crt /tmp/jailoc-prev-ca.crt /tmp/jailoc-merge.awk /tmp/jailoc-merge.out && ` +
 	`chmod 0644 /etc/ssl/certs/ca-certificates.crt`
 
+// caEnvDefaultsVar names the ENV that records which CA variables of an image
+// are jailoc defaults, as a comma-separated list. A descendant stage or image
+// that declares an ARG for such a variable has to replace the default, since
+// an inherited ENV takes precedence over an ARG; a variable the image sets
+// itself is not listed and stays.
+const caEnvDefaultsVar = "JAILOC_CA_ENV_DEFAULTS"
+
+// caEnvKeys are the variables caTrustInstructions defaults, in the order it
+// writes them.
+func caEnvKeys() []string {
+	return append([]string{"UV_SYSTEM_CERTS", "NODE_USE_SYSTEM_CA"}, guest.CABundleVars...)
+}
+
+// caDefaultEnvValue returns the value jailoc defaults key to, and false when
+// key is not a CA variable jailoc defaults.
+func caDefaultEnvValue(key string) (string, bool) {
+	switch key {
+	case "UV_SYSTEM_CERTS":
+		return "true", true
+	case "NODE_USE_SYSTEM_CA":
+		return "1", true
+	}
+	if slices.Contains(guest.CABundleVars, key) {
+		return guest.SystemCABundle, true
+	}
+	return "", false
+}
+
+// splitBaseCAEnv sorts the variables of a base image's environment: defaults
+// are the CA variables that jailoc defaulted (listed in caEnvDefaultsVar and
+// still at their default value), explicit is every other variable.
+func splitBaseCAEnv(baseEnv []string) (explicit, defaults map[string]bool) {
+	vals := make(map[string]string, len(baseEnv))
+	for _, kv := range baseEnv {
+		key, val, _ := strings.Cut(kv, "=")
+		vals[key] = val
+	}
+	defaults = make(map[string]bool)
+	for k := range strings.SplitSeq(vals[caEnvDefaultsVar], ",") {
+		if want, ok := caDefaultEnvValue(k); ok {
+			if got, present := vals[k]; present && got == want {
+				defaults[k] = true
+			}
+		}
+	}
+	explicit = make(map[string]bool, len(vals))
+	for k := range vals {
+		if k != caEnvDefaultsVar && !defaults[k] {
+			explicit[k] = true
+		}
+	}
+	return explicit, defaults
+}
+
 // caTrustInstructions returns the instructions that go right after a stage's
 // FROM: a RUN that installs the CA bundle secret into the system trust store,
 // and ENV lines that point TLS clients at it. baseUser is the user of the base
 // image, restored after the RUN as the stage's user. baseEnv are the KEY=VALUE
 // entries of the base image and argKeys the stage's ARG names; neither's
-// variables are overridden. The digest sits literally in the RUN, so a changed
-// bundle changes the step and its cache key.
+// variables are overridden, except that defaults jailoc set in the base are
+// kept and recorded in caEnvDefaultsVar. The digest sits literally in the RUN,
+// so a changed bundle changes the step and its cache key.
 func caTrustInstructions(digest, baseUser string, baseEnv []string, argKeys map[string]bool) string {
 	var b strings.Builder
 	switchUser := asRoot(baseUser)
@@ -470,27 +580,46 @@ func caTrustInstructions(digest, baseUser string, baseEnv []string, argKeys map[
 	exec := `["/bin/sh", "-c", ` + strings.TrimSuffix(quoted.String(), "\n") + `]`
 	b.WriteString("RUN --network=none --mount=type=secret,id=" + caSecretID + ",required=true " + exec + "\n")
 
-	have := make(map[string]bool, len(baseEnv))
-	for _, kv := range baseEnv {
-		key, _, _ := strings.Cut(kv, "=")
-		have[key] = true
-	}
-	writeEnv := func(key, value string) {
-		if have[key] || argKeys[key] {
-			return
+	explicit, inherited := splitBaseCAEnv(baseEnv)
+	var active []string
+	var envLines strings.Builder
+	for _, key := range caEnvKeys() {
+		if explicit[key] || argKeys[key] {
+			continue
 		}
-		b.WriteString("ENV " + key + "=" + value + "\n")
+		active = append(active, key)
+		if !inherited[key] {
+			value, _ := caDefaultEnvValue(key)
+			envLines.WriteString("ENV " + key + "=" + value + "\n")
+		}
 	}
-	writeEnv("UV_SYSTEM_CERTS", "true")
-	writeEnv("NODE_USE_SYSTEM_CA", "1")
-	for _, key := range guest.CABundleVars {
-		writeEnv(key, guest.SystemCABundle)
+	// The list goes first: whatever the stage ends up with is what a later
+	// stage or image inherits.
+	joined := strings.Join(active, ",")
+	existing := ""
+	hasExisting := false
+	for _, kv := range baseEnv {
+		if v, ok := strings.CutPrefix(kv, caEnvDefaultsVar+"="); ok {
+			existing, hasExisting = v, true
+		}
 	}
+	if joined != existing && (len(active) > 0 || hasExisting) {
+		b.WriteString("ENV " + caEnvDefaultsVar + "=" + joined + "\n")
+	}
+	b.WriteString(envLines.String())
 
 	if switchUser {
 		b.WriteString("USER " + baseUser + "\n")
 	}
 	return b.String()
+}
+
+// caArgOverrideLine returns the ENV that gives key the value of an ARG of the
+// stage, replacing the jailoc default the stage inherits: an inherited ENV
+// would otherwise take precedence over the ARG.
+func caArgOverrideLine(key, value string) string {
+	quoted := strings.ReplaceAll(strconv.Quote(value), "$", `\$`)
+	return "ENV " + key + "=" + quoted + "\n"
 }
 
 // injectAfterLines returns dockerfile with each insert placed after its
@@ -525,6 +654,17 @@ func injectAfterLines(dockerfile []byte, inserts map[int]string) []byte {
 	return out
 }
 
+// joinCAKeys returns the keys of set in caEnvKeys order, comma-separated.
+func joinCAKeys(set map[string]bool) string {
+	var keys []string
+	for _, key := range caEnvKeys() {
+		if set[key] {
+			keys = append(keys, key)
+		}
+	}
+	return strings.Join(keys, ",")
+}
+
 // ensureImageWithClient makes sure the daemon behind cli has imageRef for the
 // VM platform. An image cli already has costs one inspect; anything else is
 // left to EnsureBuildImage.
@@ -548,7 +688,8 @@ func checkDebianBase(ctx context.Context, cli dockerclient.APIClient, st caStage
 	}
 	defer func() {
 		// Best effort: a leftover stopped container does not affect the build.
-		_, _ = cli.ContainerRemove(context.WithoutCancel(ctx), ctr.ID, dockerclient.ContainerRemoveOptions{Force: true})
+		// RemoveVolumes also drops the anonymous volumes of VOLUME declarations.
+		_, _ = cli.ContainerRemove(context.WithoutCancel(ctx), ctr.ID, dockerclient.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	}()
 
 	resp, err := cli.CopyFromContainer(ctx, ctr.ID, dockerclient.CopyFromContainerOptions{SourcePath: "/etc/debian_version"})
@@ -594,26 +735,70 @@ func prepareCADockerfile(ctx context.Context, cli dockerclient.APIClient, docker
 	}
 
 	inserts := make(map[int]string, len(plan.stages))
+	ext := make(map[int]caStage, len(plan.stages))
 	for _, st := range plan.stages {
-		// Every external stage is checked, even one BuildKit would never
-		// run, so the result doesn't depend on which stages the build reaches.
-		if err := checkDebianBase(ctx, cli, st); err != nil {
-			return nil, err
-		}
-		inspect, err := cli.ImageInspect(ctx, st.base)
-		if err != nil {
-			return nil, fmt.Errorf("inspect image %s of stage %q: %w", st.base, st.name, err)
-		}
-		var baseUser string
-		var baseEnv []string
-		if inspect.Config != nil {
-			if len(inspect.Config.OnBuild) > 0 {
-				return nil, fmt.Errorf("stage %q (base %s): base image has ONBUILD triggers, which run before jailoc can install ca_bundle trust; remove ONBUILD from the base image or set ca_bundle = false", st.name, st.base)
+		ext[st.fromEndLine] = st
+	}
+	// stageDefaults are, by stage alias, the CA variables that are still
+	// jailoc defaults at the end of the stage.
+	stageDefaults := make(map[string]map[string]bool)
+	for _, fl := range plan.flow {
+		var endDefaults map[string]bool
+		if fl.external {
+			st := ext[fl.fromEndLine]
+			// Every external stage is checked, even one BuildKit would never
+			// run, so the result doesn't depend on which stages the build reaches.
+			if err := checkDebianBase(ctx, cli, st); err != nil {
+				return nil, err
 			}
-			baseUser = inspect.Config.User
-			baseEnv = inspect.Config.Env
+			inspect, err := cli.ImageInspect(ctx, st.base)
+			if err != nil {
+				return nil, fmt.Errorf("inspect image %s of stage %q: %w", st.base, st.name, err)
+			}
+			var baseUser string
+			var baseEnv []string
+			if inspect.Config != nil {
+				if len(inspect.Config.OnBuild) > 0 {
+					return nil, fmt.Errorf("stage %q (base %s): base image has ONBUILD triggers, which run before jailoc can install ca_bundle trust; remove ONBUILD from the base image or set ca_bundle = false", st.name, st.base)
+				}
+				baseUser = inspect.Config.User
+				baseEnv = inspect.Config.Env
+			}
+			inserts[fl.fromEndLine] += caTrustInstructions(ca.Digest(), baseUser, baseEnv, st.argKeys)
+			explicit, inherited := splitBaseCAEnv(baseEnv)
+			for _, ov := range fl.argOverrides {
+				if inherited[ov.key] {
+					inserts[ov.endLine] += caArgOverrideLine(ov.key, ov.value)
+				}
+			}
+			endDefaults = make(map[string]bool)
+			for _, key := range caEnvKeys() {
+				if !explicit[key] && !fl.argKeys[key] && !fl.envKeys[key] {
+					endDefaults[key] = true
+				}
+			}
+		} else {
+			inherited := stageDefaults[strings.ToLower(fl.base)]
+			endDefaults = maps.Clone(inherited)
+			if endDefaults == nil {
+				endDefaults = make(map[string]bool)
+			}
+			for _, ov := range fl.argOverrides {
+				if inherited[ov.key] {
+					inserts[ov.endLine] += caArgOverrideLine(ov.key, ov.value)
+					delete(endDefaults, ov.key)
+				}
+			}
+			for key := range fl.envKeys {
+				delete(endDefaults, key)
+			}
+			if len(endDefaults) != len(inherited) && fl.fromEndLine > 0 {
+				inserts[fl.fromEndLine] += "ENV " + caEnvDefaultsVar + "=" + joinCAKeys(endDefaults) + "\n"
+			}
 		}
-		inserts[st.fromEndLine] = caTrustInstructions(ca.Digest(), baseUser, baseEnv, st.argKeys)
+		if fl.alias != "" {
+			stageDefaults[fl.alias] = endDefaults
+		}
 	}
 	return injectAfterLines(dockerfile, inserts), nil
 }
