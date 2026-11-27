@@ -81,6 +81,12 @@ type Config struct {
 	// directory must exist and be accessible to the current user only. Empty
 	// disables the endpoint.
 	OAuthSocket string
+	// OpenURL, when set, opens a validated OAuth authorization URL in the host
+	// browser for a registration that carries one. It returns nil only once the
+	// host accepted the URL for launch. Its errors are never shown to the
+	// guest and must not be relied on to keep the URL out of them: the broker
+	// discards them. Nil makes URL-bearing registrations answer 502.
+	OpenURL     func(ctx context.Context, rawURL string) error
 	DNSFallback []netip.AddrPort // used when the policy names no upstream
 	// HostDNS, when set, supplies the upstreams at query time if neither the
 	// policy nor DNSFallback names any, so host network changes apply.

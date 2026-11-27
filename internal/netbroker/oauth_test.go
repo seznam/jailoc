@@ -97,6 +97,14 @@ func registerFromGuestURL(t *testing.T, ctx context.Context, g *stack.Stack, por
 // registerPayloadFromGuest posts payload verbatim to the registration endpoint.
 func registerPayloadFromGuest(t *testing.T, ctx context.Context, g *stack.Stack, payload []byte) int {
 	t.Helper()
+	code, _ := registerPayloadFromGuestBody(t, ctx, g, payload)
+	return code
+}
+
+// registerPayloadFromGuestBody is registerPayloadFromGuest that also returns
+// the response body.
+func registerPayloadFromGuestBody(t *testing.T, ctx context.Context, g *stack.Stack, payload []byte) (int, string) {
+	t.Helper()
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(dctx context.Context, _, _ string) (net.Conn, error) {
@@ -119,9 +127,9 @@ func registerPayloadFromGuest(t *testing.T, ctx context.Context, g *stack.Stack,
 	if err != nil {
 		t.Fatalf("register from guest: %v", err)
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	return resp.StatusCode
+	return resp.StatusCode, string(body)
 }
 
 func startTestOAuthBroker(t *testing.T, ttl time.Duration, forwards ...Forward) (context.Context, *Broker, *stack.Stack, *syncBuf) {

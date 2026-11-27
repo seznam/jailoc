@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/seznam/jailoc/internal/browser"
 )
 
 type multi []string
@@ -67,6 +69,7 @@ func Main(args []string) error {
 	cfg.LoopbackRelayPort = uint16(*loopbackRelayPort) //nolint:gosec // G115: checked above
 	cfg.OAuthCallbackPort = uint16(*oauthCallbackPort) //nolint:gosec // G115: checked above
 	cfg.OAuthSocket = *oauthSocket
+	cfg.OpenURL = browser.NewLauncher().OpenURL
 	if cfg.Subnet, err = netip.ParsePrefix(*subnet); err != nil {
 		return fmt.Errorf("subnet: %w", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,22 +20,29 @@ import (
 
 const (
 	openURLTimeout = 5 * time.Second
-	xdgOpenScript  = "#!/bin/sh\n" + BinaryPath + " open-url \"$@\"\nexit 1\n"
+	// xdgOpenScript execs jailoc-guest so its exit status (0 once the host
+	// opened the URL) reaches the caller unchanged.
+	xdgOpenScript = "#!/bin/sh\nexec " + BinaryPath + " open-url \"$@\"\n"
 )
 
 // OpenURL handles "jailoc-guest open-url <url>", invoked by the xdg-open
 // wrapper. When <url> is an OAuth authorization URL whose redirect_uri targets
 // guest loopback and a local process is already listening on that port, it asks
-// the host broker to open a single-shot HTTP callback proxy for that port and
-// exact path. Non-OAuth URLs are ignored silently.
+// the host broker to bind a single-shot HTTP callback proxy for that port and
+// exact path and to open <url> in the host browser. It returns nil only after
+// the broker answers 202 Accepted, meaning the host accepted the URL for
+// launch (not that the browser finished loading it); any other status is an
+// error. A missing or non-OAuth URL is never opened, so it returns an error
+// rather than reporting success. The error text never includes the URL, which
+// carries OAuth state.
 func OpenURL(args []string) error {
 	rawURL := firstURLArg(args)
 	if rawURL == "" {
-		return nil
+		return errors.New("open-url: no URL argument")
 	}
 	port, path, ok := parseOAuthRedirect(rawURL)
 	if !ok {
-		return nil
+		return errors.New("open-url: not a loopback OAuth authorization URL; not opened")
 	}
 	if !hasLoopbackListener(port) {
 		return fmt.Errorf("open-url: no local listener on port %d", port)
@@ -109,10 +117,15 @@ func registerOAuthCallback(endpoint string, port uint16, path string, rawURL str
 		return fmt.Errorf("open-url: register callback: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// The response body and status text are not echoed: they may reflect the
-		// authorization URL, which carries OAuth state.
-		return fmt.Errorf("open-url: broker rejected callback registration: status %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusBadGateway {
+		return fmt.Errorf("open-url: host could not open browser (status %d); use jailoc auth on host", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		// Only 202 means the host accepted the URL for launch. Any other status,
+		// including a bare 200, never confirms an open. The response body and
+		// status text are not echoed: they may reflect the authorization URL,
+		// which carries OAuth state.
+		return fmt.Errorf("open-url: broker did not accept the URL for opening: status %d", resp.StatusCode)
 	}
 	return nil
 }

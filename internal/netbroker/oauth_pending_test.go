@@ -198,7 +198,18 @@ type pendingEnv struct {
 	sock   string
 }
 
+// acceptOpenURL is the opener of tests that only care about pending links: it
+// accepts every URL without launching anything.
+func acceptOpenURL(context.Context, string) error { return nil }
+
 func startPendingEnv(t *testing.T, ttl time.Duration, forwards ...Forward) *pendingEnv {
+	t.Helper()
+	return startPendingEnvOpen(t, ttl, acceptOpenURL, forwards...)
+}
+
+// startPendingEnvOpen is startPendingEnv with the host opener open (nil for
+// none).
+func startPendingEnvOpen(t *testing.T, ttl time.Duration, open func(context.Context, string) error, forwards ...Forward) *pendingEnv {
 	t.Helper()
 	// Short socket path to stay under the sun_path limit on macOS.
 	dir, err := os.MkdirTemp("", "np")
@@ -211,6 +222,7 @@ func startPendingEnv(t *testing.T, ttl time.Duration, forwards ...Forward) *pend
 		c.OAuthCallbackTTL = ttl
 		c.Forwards = forwards
 		c.OAuthSocket = sock
+		c.OpenURL = open
 	})
 	return &pendingEnv{ctx: ctx, cancel: cancel, b: b, g: g, log: logBuf, sock: sock}
 }
@@ -342,8 +354,8 @@ func TestOAuthPendingListsRegisteredURLByteExact(t *testing.T) {
 	// '&' sequence JSON would escape, repeated unrelated keys.
 	raw := pendingAuthURL(loopbackRedirect("localhost", port, "/mcp/cb")) + "&a=1&a=2&&x=&y&z=%7e%2b%2f&amp=<>&q=%e2%9c%93"
 	before := time.Now()
-	if code := e.register(t, port, "/mcp/cb", raw); code != http.StatusOK {
-		t.Fatalf("register status = %d, want 200", code)
+	if code := e.register(t, port, "/mcp/cb", raw); code != http.StatusAccepted {
+		t.Fatalf("register status = %d, want 202", code)
 	}
 	after := time.Now()
 
@@ -409,8 +421,8 @@ func TestOAuthRegisterInvalidURLRejectedBeforeBindOrReplace(t *testing.T) {
 	}
 
 	// ...and does not replace an active registration.
-	if code := e.register(t, port, "/cb", good); code != http.StatusOK {
-		t.Fatalf("register status = %d, want 200", code)
+	if code := e.register(t, port, "/cb", good); code != http.StatusAccepted {
+		t.Fatalf("register status = %d, want 202", code)
 	}
 	first := e.callbackOf(port)
 	if code := e.register(t, port, "/cb", bad); code != http.StatusBadRequest {
@@ -436,8 +448,8 @@ func TestOAuthRegisterRejectsEncodedAuthorityControlsBeforeReplace(t *testing.T)
 	port := freePort(t)
 	redirect := url.QueryEscape(loopbackRedirect("localhost", port, "/cb"))
 	good := "https://auth.example.test/x?state=" + pendingSecretMark + "&redirect_uri=" + redirect
-	if code := e.register(t, port, "/cb", good); code != http.StatusOK {
-		t.Fatalf("register status = %d, want 200", code)
+	if code := e.register(t, port, "/cb", good); code != http.StatusAccepted {
+		t.Fatalf("register status = %d, want 202", code)
 	}
 	first := e.callbackOf(port)
 
@@ -479,8 +491,8 @@ func TestOAuthRegisterBodyAndURLCaps(t *testing.T) {
 	if len(atCap) != maxOAuthURLBytes {
 		t.Fatalf("test URL length = %d, want %d", len(atCap), maxOAuthURLBytes)
 	}
-	if code := e.register(t, port, "/cb", atCap); code != http.StatusOK {
-		t.Fatalf("register at cap status = %d, want 200", code)
+	if code := e.register(t, port, "/cb", atCap); code != http.StatusAccepted {
+		t.Fatalf("register at cap status = %d, want 202", code)
 	}
 	if links := getPending(t, e.sock); len(links) != 1 || links[0].URL != atCap {
 		t.Fatalf("at-cap link not listed byte-exact")
@@ -509,8 +521,8 @@ func TestOAuthRegisterConfiguredForwardHasNoPendingEntry(t *testing.T) {
 		GuestPort: port,
 	})
 	raw := pendingAuthURL(loopbackRedirect("localhost", port, "/cb"))
-	if code := e.register(t, port, "/cb", raw); code != http.StatusOK {
-		t.Fatalf("register status = %d, want 200", code)
+	if code := e.register(t, port, "/cb", raw); code != http.StatusAccepted {
+		t.Fatalf("register status = %d, want 202", code)
 	}
 	if e.callbackOf(port) != nil {
 		t.Fatal("configured forward got a synthetic callback entry")
@@ -547,11 +559,11 @@ func TestOAuthPendingSupersede(t *testing.T) {
 	a := pendingAuthURL(loopbackRedirect("localhost", port, "/a")) + "&n=a"
 	b := pendingAuthURL(loopbackRedirect("localhost", port, "/b")) + "&n=b"
 
-	if code := e.register(t, port, "/a", a); code != http.StatusOK {
+	if code := e.register(t, port, "/a", a); code != http.StatusAccepted {
 		t.Fatalf("register a status = %d", code)
 	}
 	cbA := e.callbackOf(port)
-	if code := e.register(t, port, "/b", b); code != http.StatusOK {
+	if code := e.register(t, port, "/b", b); code != http.StatusAccepted {
 		t.Fatalf("register b status = %d", code)
 	}
 	if got := e.storedURL(cbA); got != "" {
@@ -579,7 +591,7 @@ func TestOAuthPendingExpiry(t *testing.T) {
 	t.Parallel()
 	e := startPendingEnv(t, 200*time.Millisecond)
 	port := freePort(t)
-	if code := e.register(t, port, "/cb", pendingAuthURL(loopbackRedirect("localhost", port, "/cb"))); code != http.StatusOK {
+	if code := e.register(t, port, "/cb", pendingAuthURL(loopbackRedirect("localhost", port, "/cb"))); code != http.StatusAccepted {
 		t.Fatalf("register status = %d", code)
 	}
 	cb := e.callbackOf(port)
@@ -594,7 +606,7 @@ func TestOAuthPendingExpiredNotListedBeforeTimerFires(t *testing.T) {
 	t.Parallel()
 	e := startPendingEnv(t, time.Minute)
 	port := freePort(t)
-	if code := e.register(t, port, "/cb", pendingAuthURL(loopbackRedirect("localhost", port, "/cb"))); code != http.StatusOK {
+	if code := e.register(t, port, "/cb", pendingAuthURL(loopbackRedirect("localhost", port, "/cb"))); code != http.StatusAccepted {
 		t.Fatalf("register status = %d", code)
 	}
 	cb := e.callbackOf(port)
@@ -611,7 +623,7 @@ func TestOAuthPendingCancelAndShutdown(t *testing.T) {
 	e := startPendingEnv(t, time.Minute)
 	p1, p2 := freePort(t), freePort(t)
 	for _, p := range []uint16{p1, p2} {
-		if code := e.register(t, p, "/cb", pendingAuthURL(loopbackRedirect("localhost", p, "/cb"))); code != http.StatusOK {
+		if code := e.register(t, p, "/cb", pendingAuthURL(loopbackRedirect("localhost", p, "/cb"))); code != http.StatusAccepted {
 			t.Fatalf("register %d status = %d", p, code)
 		}
 	}
@@ -662,7 +674,7 @@ func TestOAuthPendingClaimedBeforeSlowResponse(t *testing.T) {
 		}
 	})
 	raw := pendingAuthURL(loopbackRedirect("localhost", port, "/cb"))
-	if code := e.register(t, port, "/cb", raw); code != http.StatusOK {
+	if code := e.register(t, port, "/cb", raw); code != http.StatusAccepted {
 		t.Fatalf("register status = %d", code)
 	}
 	cb := e.callbackOf(port)
@@ -716,7 +728,7 @@ func TestOAuthPendingBridgeRegisterPendingCallbackNoURLInLog(t *testing.T) {
 		},
 	})
 	raw := pendingAuthURL(loopbackRedirect("localhost", port, "/cb"))
-	if code := e.register(t, port, "/cb", raw); code != http.StatusOK {
+	if code := e.register(t, port, "/cb", raw); code != http.StatusAccepted {
 		t.Fatalf("register status = %d", code)
 	}
 	links := getPending(t, e.sock)

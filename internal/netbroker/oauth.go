@@ -265,8 +265,10 @@ func (b *Broker) handleOAuthRegister(ctx context.Context, w http.ResponseWriter,
 	var req struct {
 		Port uint16 `json:"port"`
 		Path string `json:"path"`
-		// URL is the authorization URL the guest was asked to open. Older
-		// guests omit it; they still get a callback but no pending link.
+		// URL is the authorization URL the guest asked the host to open. Older
+		// guests omit it; they still get a callback, but no link is listed and
+		// nothing is opened (200). With a URL the answer is 202 once the host
+		// opener accepted it, else 502 and the link stays pending.
 		URL string `json:"url"`
 	}
 	if err := dec.Decode(&req); err != nil {
@@ -285,16 +287,7 @@ func (b *Broker) handleOAuthRegister(ctx context.Context, w http.ResponseWriter,
 			return
 		}
 	}
-	// Hold the runtime lock across the configured-forward check and the host
-	// bind so a concurrent ApplyRuntime cannot cancel this callback and bind
-	// its forward in between. Lock order is runtime.mu, then oauth.mu.
-	b.runtime.mu.Lock()
-	defer b.runtime.mu.Unlock()
-	if b.isConfiguredForwardPortLocked(req.Port) {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	if err := b.openOAuthCallback(ctx, req.Port, req.Path, req.URL); err != nil {
+	if err := b.registerOAuthCallback(ctx, req.Port, req.Path, req.URL); err != nil {
 		switch {
 		case errors.Is(err, errOAuthLimit):
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
@@ -305,7 +298,49 @@ func (b *Broker) handleOAuthRegister(ctx context.Context, w http.ResponseWriter,
 		}
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	// The callback is bound (or already forwarded) and runtime.mu is released:
+	// the host browser is opened last, so a sign-in that finishes at once
+	// finds its callback ready and a slow opener blocks no reload.
+	if req.URL == "" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if !b.openOAuthURL(ctx, r.Context(), req.URL) {
+		http.Error(w, "could not open the host browser", http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// registerOAuthCallback binds the callback unless a configured or runtime
+// forward already maps the same host and guest port. It holds the runtime lock
+// across that check and the host bind so a concurrent ApplyRuntime cannot
+// cancel this callback and bind its forward in between. Lock order is
+// runtime.mu, then oauth.mu.
+func (b *Broker) registerOAuthCallback(ctx context.Context, port uint16, path, authURL string) error {
+	b.runtime.mu.Lock()
+	defer b.runtime.mu.Unlock()
+	if b.isConfiguredForwardPortLocked(port) {
+		return nil
+	}
+	return b.openOAuthCallback(ctx, port, path, authURL)
+}
+
+// openOAuthURL hands rawURL to the configured host opener and reports whether
+// it accepted it. No lock is held: the opener may wait on the browser. An
+// absent opener, a stopped broker or an opener error all answer false; the
+// opener's error is discarded because it may carry the URL, which holds OAuth
+// state. The opener's context ends with the broker or with the request.
+func (b *Broker) openOAuthURL(ctx, reqCtx context.Context, rawURL string) bool {
+	open := b.cfg.OpenURL
+	if open == nil || ctx.Err() != nil {
+		return false
+	}
+	octx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(reqCtx, cancel)
+	defer stop()
+	return open(octx, rawURL) == nil
 }
 
 var (
