@@ -450,7 +450,12 @@ func TestFetchOAuthLinksLegitimateMaximumResponse(t *testing.T) {
 
 func TestFetchOAuthLinksMissingSocket(t *testing.T) {
 	t.Parallel()
-	_, err := fetchOAuthLinks(t.Context(), filepath.Join(t.TempDir(), "none.sock"), time.Second)
+	dir, err := os.MkdirTemp("/tmp", "jlauth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	_, err = fetchOAuthLinks(t.Context(), filepath.Join(dir, "none.sock"), time.Second)
 	if err != errAuthNoSocket {
 		t.Fatalf("err = %v, want errAuthNoSocket", err)
 	}
