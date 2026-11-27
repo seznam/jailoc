@@ -146,16 +146,20 @@ func RenderSystemdUnit(helperPath string, uid uint32) ([]byte, error) {
 // InstallState records what host setup changed so that uninstall can revert
 // exactly those changes and a CA rotation can replace the old certificate.
 type InstallState struct {
-	HostsLedger       []byte   `json:"hosts_ledger,omitempty"`
-	CACertSHA256      string   `json:"ca_cert_sha256,omitempty"`
-	CACertPEM         []byte   `json:"ca_cert_pem,omitempty"`
-	SystemCACertPath  string   `json:"system_ca_cert_path,omitempty"`
-	SystemCAUpdateCmd []string `json:"system_ca_update_cmd,omitempty"`
-	SystemCARemoveCmd []string `json:"system_ca_remove_cmd,omitempty"`
-	MacOSKeychainCert bool     `json:"macos_keychain_cert,omitempty"`
-	NSSDatabases      []string `json:"nss_databases,omitempty"`
-	HelperPath        string   `json:"helper_path,omitempty"`
-	ServiceUnitPath   string   `json:"service_unit_path,omitempty"`
+	HostsLedger      []byte `json:"hosts_ledger,omitempty"`
+	CACertSHA256     string `json:"ca_cert_sha256,omitempty"`
+	CACertPEM        []byte `json:"ca_cert_pem,omitempty"`
+	SystemCACertPath string `json:"system_ca_cert_path,omitempty"`
+	// SystemCACertSHA256 is the SHA-256 of the exact file jailoc installed at
+	// SystemCACertPath: the file is shared by every user of the host, so
+	// replacing or removing it requires finding this content there.
+	SystemCACertSHA256 string   `json:"system_ca_cert_sha256,omitempty"`
+	SystemCAUpdateCmd  []string `json:"system_ca_update_cmd,omitempty"`
+	SystemCARemoveCmd  []string `json:"system_ca_remove_cmd,omitempty"`
+	MacOSKeychainCert  bool     `json:"macos_keychain_cert,omitempty"`
+	NSSDatabases       []string `json:"nss_databases,omitempty"`
+	HelperPath         string   `json:"helper_path,omitempty"`
+	ServiceUnitPath    string   `json:"service_unit_path,omitempty"`
 	// PendingKeychainSHA1s are the SHA-1s of earlier proxy CAs that a CA
 	// rotation could not delete from the macOS keychain yet.
 	PendingKeychainSHA1s []string `json:"pending_keychain_sha1s,omitempty"`
@@ -170,6 +174,7 @@ func (st InstallState) HasAnything() bool {
 		st.CACertSHA256 != "" ||
 		len(st.CACertPEM) > 0 ||
 		st.SystemCACertPath != "" ||
+		st.SystemCACertSHA256 != "" ||
 		len(st.SystemCAUpdateCmd) > 0 ||
 		len(st.SystemCARemoveCmd) > 0 ||
 		st.MacOSKeychainCert ||

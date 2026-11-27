@@ -114,7 +114,11 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 		hostsPath:    hostsPath,
 		brokerBinary: func() (string, func(), error) { return brokerPath, func() {}, nil },
 		dirExists: func(p string) bool {
-			return h.systemStore && p == "/usr/local/share/ca-certificates"
+			if p == "/usr/local/share/ca-certificates" {
+				return h.systemStore
+			}
+			fi, err := os.Stat(p)
+			return err == nil && fi.IsDir() && strings.HasPrefix(p, home)
 		},
 		lookPath: func(name string) (string, error) {
 			switch {
@@ -223,13 +227,36 @@ func (h *hostHarness) applyPrivileged(call privCall) error {
 		install("JAILOC_HELPER_DST", "JAILOC_HELPER_SRC")
 		install("JAILOC_UNIT_DST", "JAILOC_UNIT_SRC")
 	}
+	if _, ok := call.files["JAILOC_CA_SRC"]; ok {
+		if err := h.checkSystemCA(call.env["JAILOC_CA_DST"], call.env["JAILOC_CA_PREV_SHA256"]); err != nil {
+			return err
+		}
+	}
 	install("JAILOC_CA_DST", "JAILOC_CA_SRC")
-	if strings.Contains(call.script, `rm -f "$JAILOC_CA_DST"`) {
+	if strings.Contains(call.script, `remove_ca_file "$JAILOC_CA_DST"`) {
+		if err := h.checkSystemCA(call.env["JAILOC_CA_DST"], call.env["JAILOC_CA_EXPECTED_SHA256"]); err != nil {
+			return err
+		}
 		delete(h.files, call.env["JAILOC_CA_DST"])
 	}
 	if strings.Contains(call.script, `rm -f "$JAILOC_HELPER_DST"`) {
 		delete(h.files, call.env["JAILOC_HELPER_DST"])
 		delete(h.files, call.env["JAILOC_UNIT_DST"])
+	}
+	return nil
+}
+
+// checkSystemCA is what the privileged script verifies before it replaces or
+// removes the system CA at dst: want is the SHA-256 it must still have, or
+// "missing" for no file. An empty want is not checked.
+func (h *hostHarness) checkSystemCA(dst, want string) error {
+	cur, ok := h.files[dst]
+	switch {
+	case want == "":
+	case want == "missing" && ok:
+		return fmt.Errorf("%s appeared while waiting for confirmation", dst)
+	case want != "missing" && ok && sha256Hex(cur) != want:
+		return fmt.Errorf("%s is not the certificate jailoc expected", dst)
 	}
 	return nil
 }
@@ -762,7 +789,7 @@ func TestProxyUninstallLinux(t *testing.T) {
 		t.Errorf("hosts not restored byte for byte:\n%q", h.hosts())
 	}
 	call := h.priv[0]
-	for _, want := range []string{`systemctl disable --now "$JAILOC_SERVICE_NAME"`, "systemctl daemon-reload", `rm -f "$JAILOC_CA_DST"`, "'update-ca-certificates' '--fresh'"} {
+	for _, want := range []string{`systemctl disable --now "$JAILOC_SERVICE_NAME"`, "systemctl daemon-reload", `remove_ca_file "$JAILOC_CA_DST" "$JAILOC_CA_EXPECTED_SHA256"`, "'update-ca-certificates' '--fresh'"} {
 		if !strings.Contains(call.script, want) {
 			t.Errorf("script lacks %q:\n%s", want, call.script)
 		}
@@ -1543,6 +1570,13 @@ func TestProxyInstallRecordsPartialPrivilegedWork(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	st := h.installState()
+	caPEM, err := os.ReadFile(proxyCACertPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SystemCACertSHA256 != sha256Hex(caPEM) {
+		t.Errorf("state records the system CA as %q, want the SHA-256 of the installed file", st.SystemCACertSHA256)
+	}
 	if len(st.HostsLedger) == 0 || st.HelperPath != proxyhost.HelperBinaryPath("linux") ||
 		st.ServiceUnitPath != proxyhost.ServiceUnitPath("linux") || st.SystemCACertPath != "/usr/local/share/ca-certificates/jailoc-proxy-ca.crt" ||
 		!slices.Equal(st.SystemCARemoveCmd, []string{"update-ca-certificates", "--fresh"}) {
@@ -1663,9 +1697,33 @@ func TestProxyInstallVerifiesNSSCertificateOwnership(t *testing.T) {
 		if h.hasCommand("certutil", "-d", "sql:"+db, "-D") || h.hasCommand("certutil", "-d", "sql:"+db, "-A") {
 			t.Errorf("an up to date certificate was deleted and added again: %v", h.commands)
 		}
+		if !h.hasCommand("certutil", "-d", "sql:"+db, "-M", "-t", "C,,", "-n", "jailoc proxy CA") {
+			t.Errorf("the trust flags of a matching certificate were not set: %v", h.commands)
+		}
 		if st := h.installState(); !slices.Equal(st.NSSDatabases, []string{db}) {
 			t.Errorf("NSS databases = %v, want [%s]", st.NSSDatabases, db)
 		}
+	})
+
+	t.Run("trust of a matching certificate cannot be set", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		db := h.addNSSDatabase(".pki/nssdb")
+		h.mustRun("install", "--yes")
+		caPEM, err := os.ReadFile(proxyCACertPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.useNSSInspection(map[string][]byte{db: caPEM})
+		h.commandErr = func(args []string) error {
+			if args[0] == "certutil" && slices.Contains(args, "-M") {
+				return errors.New("certutil: function failed")
+			}
+			return nil
+		}
+
+		out := h.mustRun("install", "--yes")
+		assertContains(t, out, "could not set the trust of the proxy CA in "+db)
+		assertContains(t, out, "by hand")
 	})
 
 	t.Run("previous jailoc CA is replaced", func(t *testing.T) {
@@ -1946,5 +2004,353 @@ func TestProxyInstallExplainsHowToReconcileHostsBlock(t *testing.T) {
 	}
 	if len(h.priv) != 0 {
 		t.Error("an unreconciled hosts file reached the privileged step")
+	}
+}
+
+const hostTestSystemCA = "/usr/local/share/ca-certificates/jailoc-proxy-ca.crt"
+
+func TestProxyInstallRecordsSystemCAIdentity(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	caPEM, err := os.ReadFile(proxyCACertPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.installState().SystemCACertSHA256; got != sha256Hex(caPEM) {
+		t.Errorf("SystemCACertSHA256 = %q, want %q", got, sha256Hex(caPEM))
+	}
+	if got := h.priv[0].env["JAILOC_CA_PREV_SHA256"]; got != "missing" {
+		t.Errorf("JAILOC_CA_PREV_SHA256 = %q, want missing for a first install", got)
+	}
+}
+
+func TestProxyInstallVerifiesSystemCAOwnership(t *testing.T) {
+	foreignPEM, _ := testCertPEM(t, "an administrator's CA")
+
+	t.Run("foreign certificate is not overwritten", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.files[hostTestSystemCA] = foreignPEM
+
+		_, err := h.run("install", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "not installed by this user; refusing to overwrite it") {
+			t.Fatalf("error = %v", err)
+		}
+		if len(h.priv) != 0 || !bytes.Equal(h.files[hostTestSystemCA], foreignPEM) {
+			t.Errorf("the foreign certificate reached the privileged step or was replaced (%d call(s))", len(h.priv))
+		}
+		if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("install.json written for an install that was refused (%v)", err)
+		}
+	})
+
+	t.Run("own certificate of an earlier CA is replaced", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		first := h.installState()
+		h.rotateCA()
+		h.priv = nil
+
+		h.mustRun("install", "--yes")
+		if got, want := h.priv[0].env["JAILOC_CA_PREV_SHA256"], sha256Hex(first.CACertPEM); got != want {
+			t.Errorf("JAILOC_CA_PREV_SHA256 = %q, want the hash of the file on disk %q", got, want)
+		}
+		if bytes.Equal(h.files[hostTestSystemCA], first.CACertPEM) {
+			t.Error("the system CA was not replaced after the rotation")
+		}
+	})
+
+	t.Run("partial install is still ours", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.privErr, h.privErrApplied = errors.New("systemctl restart failed"), true
+		if _, err := h.run("install", "--yes"); err == nil {
+			t.Fatal("want an error")
+		}
+		st := h.installState()
+		if len(st.CACertPEM) != 0 || st.SystemCACertSHA256 == "" {
+			t.Fatalf("state = %+v, want the system CA identity without a CA PEM", st)
+		}
+		h.privErr = nil
+		h.rotateCA()
+		h.mustRun("install", "--yes")
+		if got := h.priv[len(h.priv)-1].env["JAILOC_CA_PREV_SHA256"]; got != st.SystemCACertSHA256 {
+			t.Errorf("JAILOC_CA_PREV_SHA256 = %q, want the recorded %q", got, st.SystemCACertSHA256)
+		}
+	})
+}
+
+func TestProxyUninstallVerifiesSystemCAOwnership(t *testing.T) {
+	foreignPEM, _ := testCertPEM(t, "an administrator's CA")
+
+	t.Run("own certificate is removed with its hash", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		caPEM := h.files[hostTestSystemCA]
+		h.priv = nil
+
+		h.mustRun("uninstall", "--yes")
+		if got := h.priv[0].env["JAILOC_CA_EXPECTED_SHA256"]; got != sha256Hex(caPEM) {
+			t.Errorf("JAILOC_CA_EXPECTED_SHA256 = %q, want %q", got, sha256Hex(caPEM))
+		}
+		if _, ok := h.files[hostTestSystemCA]; ok {
+			t.Error("the system CA was not removed")
+		}
+	})
+
+	t.Run("foreign certificate stays", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		h.files[hostTestSystemCA] = foreignPEM
+		h.priv = nil
+
+		out := h.mustRun("uninstall", "--yes")
+		assertContains(t, out, "not removing "+hostTestSystemCA+" because its certificate does not match jailoc's recorded CA")
+		if !bytes.Equal(h.files[hostTestSystemCA], foreignPEM) {
+			t.Error("a certificate that is not ours was removed")
+		}
+		if len(h.priv) != 1 || strings.Contains(h.priv[0].script, "JAILOC_CA_DST") {
+			t.Errorf("the foreign certificate reached the privileged script: %+v", h.priv)
+		}
+		if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("install.json still exists (%v)", err)
+		}
+	})
+
+	t.Run("certificate without a recorded identity stays", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		st := h.installState()
+		st.SystemCACertSHA256, st.CACertPEM = "", nil
+		if err := proxyhost.WriteInstallState(proxyInstallStatePath(), st); err != nil {
+			t.Fatal(err)
+		}
+		caPEM := h.files[hostTestSystemCA]
+
+		h.mustRun("uninstall", "--yes")
+		if !bytes.Equal(h.files[hostTestSystemCA], caPEM) {
+			t.Error("a certificate whose owner cannot be shown was removed")
+		}
+	})
+
+	t.Run("certificate that is gone still refreshes the system bundle", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		delete(h.files, hostTestSystemCA)
+		h.priv = nil
+
+		h.mustRun("uninstall", "--yes")
+		if len(h.priv) != 1 || !strings.Contains(h.priv[0].script, "'update-ca-certificates' '--fresh'") {
+			t.Errorf("privileged calls = %+v, want the bundle refreshed", h.priv)
+		}
+	})
+}
+
+func TestProxyPrivilegedSystemCAHelpersCheckOwnership(t *testing.T) {
+	dir := shortTempDir(t, "ca")
+	dst := filepath.Join(dir, "jailoc-proxy-ca.crt")
+	src := filepath.Join(dir, "src.crt")
+	ours, theirs, fresh := []byte("ours\n"), []byte("theirs\n"), []byte("fresh\n")
+	if err := os.WriteFile(src, fresh, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reset := func(t *testing.T, content []byte) {
+		t.Helper()
+		_ = os.Remove(dst)
+		if content != nil {
+			if err := os.WriteFile(dst, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	env := func(extra map[string]string) map[string]string {
+		e := map[string]string{"SRC": src, "DST": dst, "SHA": sha256Hex(fresh)}
+		for k, v := range extra {
+			e[k] = v
+		}
+		return e
+	}
+	// install_file is root-only: its directory checks and install(1) -o 0 are
+	// replaced to run it here.
+	const stubs = "check_root_dir_chain() { :; }\ninstall() { cp \"$7\" \"$8\"; }\n"
+
+	for _, tc := range []struct {
+		name    string
+		onDisk  []byte
+		prev    string
+		wantErr bool
+	}{
+		{"first install", nil, "missing", false},
+		{"file appeared", theirs, "missing", true},
+		{"file is the recorded one", ours, sha256Hex(ours), false},
+		{"file is another one", theirs, sha256Hex(ours), true},
+		{"recorded file is gone", nil, sha256Hex(ours), true},
+	} {
+		t.Run("install/"+tc.name, func(t *testing.T) {
+			reset(t, tc.onDisk)
+			out, err := runHelperScript(t, stubs+`install_file 0644 "$SRC" "$DST" "$SHA" "$PREV"`, env(map[string]string{"PREV": tc.prev}))
+			got, _ := os.ReadFile(dst) //nolint:gosec // G304: test path
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, output %q, want error: %v", err, out, tc.wantErr)
+			}
+			if tc.wantErr && !bytes.Equal(got, tc.onDisk) {
+				t.Errorf("the file on disk was changed to %q", got)
+			}
+			if !tc.wantErr && !bytes.Equal(got, fresh) {
+				t.Errorf("the file on disk is %q, want the new certificate", got)
+			}
+			if _, statErr := os.Stat(dst + ".jailoc-new"); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("a staged copy was left behind (%v)", statErr)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name    string
+		onDisk  []byte
+		wantErr bool
+	}{
+		{"own certificate", ours, false},
+		{"certificate that is gone", nil, false},
+		{"foreign certificate", theirs, true},
+	} {
+		t.Run("remove/"+tc.name, func(t *testing.T) {
+			reset(t, tc.onDisk)
+			out, err := runHelperScript(t, `remove_ca_file "$DST" "$SHA"`, map[string]string{"DST": dst, "SHA": sha256Hex(ours)})
+			_, statErr := os.Stat(dst)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, output %q, want error: %v", err, out, tc.wantErr)
+			}
+			if exists := statErr == nil; exists != tc.wantErr {
+				t.Errorf("file exists = %v, want %v", exists, tc.wantErr)
+			}
+		})
+	}
+
+	t.Run("remove/symlink", func(t *testing.T) {
+		reset(t, nil)
+		if err := os.Symlink(src, dst); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runHelperScript(t, `remove_ca_file "$DST" "$SHA"`, map[string]string{"DST": dst, "SHA": sha256Hex(fresh)}); err == nil {
+			t.Error("a symlink at the system CA path was followed")
+		}
+		if _, err := os.Lstat(dst); err != nil {
+			t.Errorf("the symlink was removed: %v", err)
+		}
+	})
+}
+
+func TestProxyInstallRefusesServiceOfAnotherUser(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	unit, err := proxyhost.RenderSystemdUnit(proxyhost.HelperBinaryPath("linux"), 777)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.files[proxyhost.ServiceUnitPath("linux")] = unit
+
+	_, err = h.run("install", "--yes")
+	if err == nil || !strings.Contains(err.Error(), "belongs to another user; refusing to replace it") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(h.priv) != 0 || !bytes.Equal(h.files[proxyhost.ServiceUnitPath("linux")], unit) {
+		t.Errorf("the service of another user was replaced (%d privileged call(s))", len(h.priv))
+	}
+}
+
+func TestProxyInstallKeepsSystemCARecordWithoutStore(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	first := h.installState()
+
+	// The CA update tool is gone from PATH, nothing removed the certificate.
+	h.systemStore = false
+	h.mustRun("install", "--yes")
+	second := h.installState()
+	if second.SystemCACertPath != first.SystemCACertPath || second.SystemCACertSHA256 != first.SystemCACertSHA256 ||
+		!slices.Equal(second.SystemCAUpdateCmd, first.SystemCAUpdateCmd) || !slices.Equal(second.SystemCARemoveCmd, first.SystemCARemoveCmd) {
+		t.Fatalf("state = %+v, want the system CA of %+v kept", second, first)
+	}
+
+	h.mustRun("uninstall", "--yes")
+	if _, ok := h.files[hostTestSystemCA]; ok {
+		t.Error("uninstall did not remove the system CA that install recorded")
+	}
+}
+
+func TestProxyInstallPersistsOldCAIdentitiesBeforeRotating(t *testing.T) {
+	h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+	ffDB := h.addNSSDatabase("Library/Application Support/Firefox/Profiles/abc.default")
+	h.mustRun("install", "--yes")
+	first := h.installState()
+	oldSHA1 := pemSHA1(first.CACertPEM)
+	h.rotateCA()
+
+	// Saving the proxy options fails after the first state write.
+	if err := os.Remove(proxyOptionsFile()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(proxyOptionsFile(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.run("install", "--yes"); err == nil || !strings.Contains(err.Error(), "save proxy options") {
+		t.Fatalf("error = %v", err)
+	}
+	second := h.installState()
+	if second.CACertSHA256 == first.CACertSHA256 {
+		t.Fatal("the CA was not rotated")
+	}
+	if !slices.Equal(second.PendingKeychainSHA1s, []string{oldSHA1}) || !slices.Equal(second.PendingNSSCertSHA256s, []string{first.CACertSHA256}) ||
+		!slices.Equal(second.NSSDatabases, []string{ffDB}) {
+		t.Fatalf("state = %+v, want the old CA kept as pending", second)
+	}
+
+	// The next install retires them and clears the lists.
+	if err := os.Remove(proxyOptionsFile()); err != nil {
+		t.Fatal(err)
+	}
+	h.commands = nil
+	h.mustRun("install", "--yes")
+	if !h.hasCommand("security", "delete-certificate", "-Z", oldSHA1) {
+		t.Errorf("the old CA was not deleted: %v", h.commands)
+	}
+	if third := h.installState(); len(third.PendingKeychainSHA1s) != 0 || len(third.PendingNSSCertSHA256s) != 0 {
+		t.Errorf("pending entries remain after cleanup: %+v", third)
+	}
+}
+
+func TestProxyInstallPrunesDeletedNSSDatabases(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	keepDB := h.addNSSDatabase(".pki/nssdb")
+	goneDB := h.addNSSDatabase(".mozilla/firefox/abc.default")
+	h.mustRun("install", "--yes")
+	if err := os.RemoveAll(goneDB); err != nil {
+		t.Fatal(err)
+	}
+
+	h.mustRun("install", "--yes")
+	if st := h.installState(); !slices.Equal(st.NSSDatabases, []string{keepDB}) {
+		t.Errorf("NSS databases = %v, want [%s]", st.NSSDatabases, keepDB)
+	}
+}
+
+func TestProxyUninstallSkipsDeletedNSSDatabases(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	goneDB := h.addNSSDatabase(".mozilla/firefox/abc.default")
+	h.mustRun("install", "--yes")
+	if err := os.RemoveAll(goneDB); err != nil {
+		t.Fatal(err)
+	}
+	// certutil cannot open a database that is not there.
+	currentProxyHostDeps.runCommandOutput = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("certutil: function failed: SEC_ERROR_BAD_DATABASE"), errors.New("exit status 255")
+	}
+	h.commands = nil
+
+	out := h.mustRun("uninstall", "--yes")
+	if h.hasCommand("certutil", "-d", "sql:"+goneDB) {
+		t.Errorf("a deleted profile was inspected: %v", h.commands)
+	}
+	assertContains(t, out, "Uninstalled the jailoc proxy host setup.")
+	if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("install.json still exists (%v)", err)
 	}
 }
