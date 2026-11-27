@@ -406,3 +406,29 @@ func TestPrepareGuestStateAndCacheDevices(t *testing.T) {
 		}
 	})
 }
+
+func TestBuilderOptionsCABundle(t *testing.T) {
+	t.Parallel()
+	_, caPath := tlsRegistry(t)
+	base := Spec{Kind: KindBuilder, Workspace: "builder", StateDir: t.TempDir()}
+
+	plain, err := builderOptions(base, nil)
+	if err != nil {
+		t.Fatalf("builderOptions without CA bundle: %v", err)
+	}
+	withCA := base
+	withCA.CABundle = caPath
+	got, err := builderOptions(withCA, nil)
+	if err != nil {
+		t.Fatalf("builderOptions with CA bundle: %v", err)
+	}
+	if len(got) != len(plain)+1 {
+		t.Errorf("options with CA bundle = %d, want %d (one image fetcher more)", len(got), len(plain)+1)
+	}
+
+	missing := base
+	missing.CABundle = filepath.Join(t.TempDir(), "missing.pem")
+	if _, err := builderOptions(missing, nil); err == nil {
+		t.Error("builderOptions with an unreadable CA bundle: error = nil, want error")
+	}
+}

@@ -212,7 +212,9 @@ until udhcpc -i eth0 -n -q -t 10; do log "dhcp failed, retrying"; sleep 1; done
 # Trust the workspace's forwarded CA bundle before any download (apk, image
 # pulls during builds).
 if [ -s /jailoc-ca.pem ]; then
-	cat /jailoc-ca.pem >> /etc/ssl/certs/ca-certificates.crt
+	mkdir -p /usr/local/share/ca-certificates || fail "create CA directory failed"
+	cp /jailoc-ca.pem /usr/local/share/ca-certificates/jailoc-builder-ca.crt || fail "copy CA bundle failed"
+	cat /jailoc-ca.pem >> /etc/ssl/certs/ca-certificates.crt || fail "install CA bundle failed"
 	log "CA bundle installed"
 fi
 
