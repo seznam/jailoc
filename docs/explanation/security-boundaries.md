@@ -199,6 +199,8 @@ jailoc doesn't protect against:
 
 Release assets carry GitHub build provenance attestations and SPDX SBOMs, and every archive lists bundled components in `THIRD_PARTY_NOTICES`. Docker CE in the Docker layer is pinned and checksum-verified, and the builder VM image is pinned. See [Installation](../how-to/installation.md#check-the-runtime-licenses) for verifying a download.
 
+`jailoc self-update` checks the downloaded archive's SHA-256 against `checksums.txt` and the digest the GitHub API reports for the asset, before it parses the archive. It also requires the exact subject and the release workflow in the attestation metadata that the GitHub API reports. That metadata is an API response over HTTPS, not an independent cryptographic verification, so this check relies on trust in GitHub. When `gh` is installed, the updater runs `gh attestation verify` to verify the signature, timestamp, repository and release workflow, and any failure, including a `gh` too old to support it, stops the installation. Without `gh`, the updater warns that the attestation rests on what the GitHub API reports and that signatures were not verified locally. The 24-hour cooldown on new releases delays adoption; it does not prove a release is safe. See the [`jailoc self-update` reference](../reference/cli.md#jailoc-self-update).
+
 ## Reporting a vulnerability
 
 Report vulnerabilities privately through [GitHub security advisories](https://github.com/seznam/jailoc/security/advisories/new), not in public issues. [SECURITY.md](https://github.com/seznam/jailoc/blob/main/SECURITY.md) describes what is in scope.
