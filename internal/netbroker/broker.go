@@ -76,7 +76,12 @@ type Config struct {
 	// OAuthCallbackTTL bounds how long an unserved single-shot OAuth callback
 	// listener stays open on the host. Zero defaults to 3 minutes.
 	OAuthCallbackTTL time.Duration
-	DNSFallback      []netip.AddrPort // used when the policy names no upstream
+	// OAuthSocket, when set, is a private host unix socket serving GET /pending:
+	// the live OAuth authorization links the guest registered. Its parent
+	// directory must exist and be accessible to the current user only. Empty
+	// disables the endpoint.
+	OAuthSocket string
+	DNSFallback []netip.AddrPort // used when the policy names no upstream
 	// HostDNS, when set, supplies the upstreams at query time if neither the
 	// policy nor DNSFallback names any, so host network changes apply.
 	HostDNS func() []netip.AddrPort
@@ -291,6 +296,13 @@ func (b *Broker) Run(ctx context.Context, l net.Listener) error {
 		if err := b.startOAuthCallbackServer(ctx); err != nil {
 			return err
 		}
+	}
+	if b.cfg.OAuthSocket != "" {
+		stop, err := b.startOAuthPendingServer(ctx)
+		if err != nil {
+			return err
+		}
+		defer stop()
 	}
 	go func() {
 		<-ctx.Done()

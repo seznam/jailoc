@@ -37,6 +37,7 @@ func Main(args []string) error {
 	statusFD := fs.Int("status-fd", 0, "inherited file descriptor that receives lifecycle lines (ready, nic connected, nic disconnected) for a supervisor; 0 disables")
 	loopbackRelayPort := fs.Uint("loopback-relay-port", 0, "guest port of jailoc-guest loopback relay for 127.0.0.1 fallback; 0 disables")
 	oauthCallbackPort := fs.Uint("oauth-callback-port", 0, "gateway port for ephemeral OAuth loopback callback registration; 0 disables")
+	oauthSocket := fs.String("oauth-socket", "", "private unix socket serving GET /pending, the live OAuth authorization links for the host; empty disables")
 	var forwards, unixForwards, services, dnsFallback multi
 	fs.Var(&forwards, "forward", "publish a guest TCP port: 127.0.0.1:HOSTPORT=GUESTPORT (repeatable, loopback only)")
 	fs.Var(&unixForwards, "forward-unix", "publish a guest TCP port on a host unix socket: PATH=GUESTPORT (repeatable, mode 0600)")
@@ -65,6 +66,7 @@ func Main(args []string) error {
 	}
 	cfg.LoopbackRelayPort = uint16(*loopbackRelayPort) //nolint:gosec // G115: checked above
 	cfg.OAuthCallbackPort = uint16(*oauthCallbackPort) //nolint:gosec // G115: checked above
+	cfg.OAuthSocket = *oauthSocket
 	if cfg.Subnet, err = netip.ParsePrefix(*subnet); err != nil {
 		return fmt.Errorf("subnet: %w", err)
 	}

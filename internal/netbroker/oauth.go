@@ -22,11 +22,15 @@ import (
 )
 
 const (
-	defaultOAuthCallbackTTL   = 3 * time.Minute
-	maxOAuthCallbacks         = 8
-	minOAuthCallbackPort      = 1024
-	maxOAuthCallbackPath      = 2048
-	maxOAuthRegisterBodyBytes = 4096
+	defaultOAuthCallbackTTL = 3 * time.Minute
+	maxOAuthCallbacks       = 8
+	minOAuthCallbackPort    = 1024
+	maxOAuthCallbackPath    = 2048
+	// maxOAuthURLBytes caps the optional authorization URL of a registration.
+	maxOAuthURLBytes = 8192
+	// maxOAuthRegisterBodyBytes leaves room for a maximal URL whose every byte
+	// JSON-escapes to six ('&' becomes \u0026) plus the other members.
+	maxOAuthRegisterBodyBytes = 64 << 10
 	oauthProxyTimeout         = 30 * time.Second
 
 	defaultOAuthRegisterTimeout = 10 * time.Second
@@ -38,6 +42,9 @@ type oauthState struct {
 	// registerTimeout overrides defaultOAuthRegisterTimeout (nanoseconds) for
 	// the registration request body; zero keeps the default. Tests lower it.
 	registerTimeout atomic.Int64
+	// pendingTimeout overrides defaultOAuthPendingTimeout the same way for the
+	// host pending endpoint.
+	pendingTimeout atomic.Int64
 }
 
 type oauthCallback struct {
@@ -48,6 +55,13 @@ type oauthCallback struct {
 	server    *http.Server
 	timer     *time.Timer
 	closeOnce sync.Once
+
+	// authURL and expires are the authorization link handed to the host CLI.
+	// Both are guarded by oauthState.mu. authURL is only ever held while the
+	// callback is registered, unserved and live, and is cleared the moment the
+	// callback is claimed, expires, is replaced, cancelled or shut down.
+	authURL string
+	expires time.Time
 }
 
 func (c *oauthCallback) closeListeners() {
@@ -156,6 +170,7 @@ func (b *Broker) stopAllOAuthCallbacks() {
 	b.oauth.mu.Lock()
 	cbs := make([]*oauthCallback, 0, len(b.oauth.byPort))
 	for p, cb := range b.oauth.byPort {
+		cb.authURL = ""
 		cbs = append(cbs, cb)
 		delete(b.oauth.byPort, p)
 	}
@@ -171,6 +186,9 @@ func (b *Broker) cancelOAuthPort(port uint16) {
 	b.oauth.mu.Lock()
 	cb := b.oauth.byPort[port]
 	delete(b.oauth.byPort, port)
+	if cb != nil {
+		cb.authURL = ""
+	}
 	b.oauth.mu.Unlock()
 	if cb != nil {
 		cb.stop()
@@ -247,6 +265,9 @@ func (b *Broker) handleOAuthRegister(ctx context.Context, w http.ResponseWriter,
 	var req struct {
 		Port uint16 `json:"port"`
 		Path string `json:"path"`
+		// URL is the authorization URL the guest was asked to open. Older
+		// guests omit it; they still get a callback but no pending link.
+		URL string `json:"url"`
 	}
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -255,6 +276,14 @@ func (b *Broker) handleOAuthRegister(ctx context.Context, w http.ResponseWriter,
 	if req.Port < minOAuthCallbackPort || !validOAuthPath(req.Path) {
 		http.Error(w, "invalid port or path", http.StatusBadRequest)
 		return
+	}
+	// Validate before anything binds or replaces a registration. The reply is
+	// fixed text: the URL carries OAuth state and is never echoed.
+	if req.URL != "" {
+		if err := validateOAuthAuthURL(req.URL, req.Port, req.Path); err != nil {
+			http.Error(w, "invalid authorization url", http.StatusBadRequest)
+			return
+		}
 	}
 	// Hold the runtime lock across the configured-forward check and the host
 	// bind so a concurrent ApplyRuntime cannot cancel this callback and bind
@@ -265,7 +294,7 @@ func (b *Broker) handleOAuthRegister(ctx context.Context, w http.ResponseWriter,
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if err := b.openOAuthCallback(ctx, req.Port, req.Path); err != nil {
+	if err := b.openOAuthCallback(ctx, req.Port, req.Path, req.URL); err != nil {
 		switch {
 		case errors.Is(err, errOAuthLimit):
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
@@ -284,7 +313,7 @@ var (
 	errOAuthBind  = errors.New("host loopback port already in use")
 )
 
-func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string) error {
+func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path, authURL string) error {
 	// Reserve the slot under the lock before binding so concurrent
 	// registrations cannot overshoot maxOAuthCallbacks.
 	cb := &oauthCallback{port: port, path: path}
@@ -302,6 +331,9 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 		return errOAuthLimit
 	}
 	b.oauth.byPort[port] = cb
+	if prev != nil {
+		prev.authURL = ""
+	}
 	b.oauth.mu.Unlock()
 	if prev != nil {
 		prev.stop()
@@ -357,6 +389,9 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 				http.Error(w, "callback already served", http.StatusGone)
 				return
 			}
+			// Claimed: the link is spent from this instant, well before the
+			// guest's possibly slow answer lets the entry be removed.
+			b.clearOAuthURL(cb)
 			defer func() {
 				b.removeOAuthCallback(port, cb)
 				b.record(map[string]any{
@@ -424,7 +459,12 @@ func (b *Broker) openOAuthCallback(ctx context.Context, port uint16, path string
 	}
 	cb.listeners = listeners
 	cb.server = srv
-	cb.timer = time.AfterFunc(b.oauthTTL(), func() {
+	ttl := b.oauthTTL()
+	if authURL != "" {
+		cb.authURL = authURL
+		cb.expires = time.Now().Add(ttl)
+	}
+	cb.timer = time.AfterFunc(ttl, func() {
 		if cb.served.CompareAndSwap(false, true) {
 			b.removeOAuthCallback(port, cb)
 			cb.stop()
@@ -460,6 +500,15 @@ func (b *Broker) removeOAuthCallback(port uint16, cb *oauthCallback) {
 	if b.oauth.byPort[port] == cb {
 		delete(b.oauth.byPort, port)
 	}
+	cb.authURL = ""
+	b.oauth.mu.Unlock()
+}
+
+// clearOAuthURL drops the authorization link of cb while leaving the callback
+// itself registered.
+func (b *Broker) clearOAuthURL(cb *oauthCallback) {
+	b.oauth.mu.Lock()
+	cb.authURL = ""
 	b.oauth.mu.Unlock()
 }
 

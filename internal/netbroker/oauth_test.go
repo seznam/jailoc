@@ -76,10 +76,27 @@ func startFakeGuestLoopbackRelay(t *testing.T, g *stack.Stack, handlers map[uint
 // the fake guest stack.
 func registerFromGuest(t *testing.T, ctx context.Context, g *stack.Stack, port uint16, path string) int {
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{"port": port, "path": path})
+	return registerFromGuestURL(t, ctx, g, port, path, "")
+}
+
+// registerFromGuestURL registers like an updated guest: a non-empty authURL is
+// sent byte-exact as the optional "url" member.
+func registerFromGuestURL(t *testing.T, ctx context.Context, g *stack.Stack, port uint16, path, authURL string) int {
+	t.Helper()
+	body := map[string]any{"port": port, "path": path}
+	if authURL != "" {
+		body["url"] = authURL
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return registerPayloadFromGuest(t, ctx, g, payload)
+}
+
+// registerPayloadFromGuest posts payload verbatim to the registration endpoint.
+func registerPayloadFromGuest(t *testing.T, ctx context.Context, g *stack.Stack, payload []byte) int {
+	t.Helper()
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(dctx context.Context, _, _ string) (net.Conn, error) {
@@ -109,23 +126,41 @@ func registerFromGuest(t *testing.T, ctx context.Context, g *stack.Stack, port u
 
 func startTestOAuthBroker(t *testing.T, ttl time.Duration, forwards ...Forward) (context.Context, *Broker, *stack.Stack, *syncBuf) {
 	t.Helper()
+	return startTestOAuthBrokerCfg(t, func(c *Config) {
+		c.OAuthCallbackTTL = ttl
+		c.Forwards = forwards
+	})
+}
+
+// startTestOAuthBrokerCfg starts a broker with the test OAuth ports and lets
+// mutate adjust the configuration (TTL, forwards, OAuthSocket).
+func startTestOAuthBrokerCfg(t *testing.T, mutate func(*Config)) (context.Context, *Broker, *stack.Stack, *syncBuf) {
+	t.Helper()
+	ctx, _, b, g, logBuf := startTestOAuthBrokerCancel(t, mutate)
+	return ctx, b, g, logBuf
+}
+
+// startTestOAuthBrokerCancel is startTestOAuthBrokerCfg that also returns the
+// cancel function of the broker's context, to exercise shutdown.
+func startTestOAuthBrokerCancel(t *testing.T, mutate func(*Config)) (context.Context, context.CancelFunc, *Broker, *stack.Stack, *syncBuf) {
+	t.Helper()
 	var logBuf syncBuf
 	statusR, statusW := io.Pipe()
 	t.Cleanup(func() {
 		_ = statusR.Close()
 		_ = statusW.Close()
 	})
-	b, err := New(Config{
+	cfg := Config{
 		Subnet:            netip.MustParsePrefix("192.168.127.0/24"),
 		Gateway:           netip.MustParseAddr("192.168.127.1"),
 		GuestIP:           netip.MustParseAddr("192.168.127.2"),
-		Forwards:          forwards,
 		LoopbackRelayPort: testLoopbackRelayPort,
 		OAuthCallbackPort: testOAuthCallbackPort,
-		OAuthCallbackTTL:  ttl,
 		Log:               &logBuf,
 		Status:            statusW,
-	}, DenyAll("test"))
+	}
+	mutate(&cfg)
+	b, err := New(cfg, DenyAll("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +187,7 @@ func startTestOAuthBroker(t *testing.T, ttl time.Duration, forwards ...Forward) 
 		}
 	}()
 	g := fakeGuest(t, ctx, sock)
-	return ctx, b, g, &logBuf
+	return ctx, cancel, b, g, &logBuf
 }
 
 func TestForwardLoopbackRelayFallback(t *testing.T) {

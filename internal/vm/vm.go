@@ -216,6 +216,10 @@ func SSHSocket(stateDir string) string    { return filepath.Join(stateDir, "ssh.
 func nicSocket(stateDir string) string    { return filepath.Join(stateDir, "nic.sock") }
 func diskPath(stateDir string) string     { return filepath.Join(stateDir, "docker.img") }
 
+// OAuthSocket is the private socket where a workspace's network broker serves
+// the live OAuth authorization links (GET /pending).
+func OAuthSocket(stateDir string) string { return filepath.Join(stateDir, "oauth.sock") }
+
 // State is written by the supervisor and read by jailoc commands.
 type State struct {
 	PID          int       `json:"pid"`
@@ -449,7 +453,7 @@ func proxyRelayEnabled(spec Spec) bool {
 func supervisorSockets(spec Spec) []string {
 	sockets := []string{nicSocket(spec.StateDir)}
 	if spec.Kind == KindWorkspace {
-		sockets = append(sockets, SSHSocket(spec.StateDir), consoleSocket(spec.StateDir))
+		sockets = append(sockets, SSHSocket(spec.StateDir), consoleSocket(spec.StateDir), OAuthSocket(spec.StateDir))
 	} else {
 		sockets = append(sockets, DockerSocket(spec.StateDir))
 	}
@@ -474,6 +478,7 @@ func brokerArgs(spec Spec, policyPath string) []string {
 			"-forward-unix", SSHSocket(spec.StateDir)+"="+strconv.Itoa(guest.SSHPort),
 			"-loopback-relay-port", strconv.Itoa(guest.LoopbackRelayPort),
 			"-oauth-callback-port", strconv.Itoa(guest.OAuthCallbackPort),
+			"-oauth-socket", OAuthSocket(spec.StateDir),
 		)
 	} else {
 		args = append(args, "-forward-unix", DockerSocket(spec.StateDir)+"="+strconv.Itoa(DockerPort))
