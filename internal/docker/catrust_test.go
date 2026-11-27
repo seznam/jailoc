@@ -1051,6 +1051,33 @@ func TestPrepareCADockerfileArgOverridesInheritedDefault(t *testing.T) {
 			t.Errorf("overridden keys are still recorded as active defaults:\n%s", text)
 		}
 	})
+
+	t.Run("ARG default expands base image and parent stage ENV with ENV precedence", func(t *testing.T) {
+		t.Parallel()
+		baseEnv := append(jailocCAEnv(), "CA_DIR=/opt/company")
+		e := &fakeEngine{images: map[string]fakeImage{
+			"jailoc-base:1": {env: baseEnv
+},
+			"ubuntu:26.04":  {},
+		}}
+		layer := []byte("FROM jailoc-base:1\nARG CA_DIR=/wrong\nARG SSL_CERT_FILE=${CA_DIR}/ca.pem\nRUN true\n")
+		got, err := prepareCADockerfile(context.Background(), e.client(t), layer, nil, ca)
+		if err != nil {
+			t.Fatalf("prepareCADockerfile(layer): %v", err)
+		}
+		if want := `ENV SSL_CERT_FILE="/opt/company/ca.pem"`; !envAfter(string(got), "ARG SSL_CERT_FILE=", want) {
+			t.Errorf("layer want %q after ARG SSL_CERT_FILE:\n%s", want, got)
+		}
+
+		multistage := []byte("FROM ubuntu:26.04 AS parent\nENV CA_DIR=/opt/parent\nFROM parent\nARG CA_DIR=/wrong\nARG REQUESTS_CA_BUNDLE=${CA_DIR}/req.pem\nRUN true\n")
+		got, err = prepareCADockerfile(context.Background(), e.client(t), multistage, nil, ca)
+		if err != nil {
+			t.Fatalf("prepareCADockerfile(multistage): %v", err)
+		}
+		if want := `ENV REQUESTS_CA_BUNDLE="/opt/parent/req.pem"`; !envAfter(string(got), "ARG REQUESTS_CA_BUNDLE=", want) {
+			t.Errorf("multistage want %q after ARG REQUESTS_CA_BUNDLE:\n%s", want, got)
+		}
+	})
 }
 
 func TestPrepareCADockerfileRemovesProbeVolumes(t *testing.T) {

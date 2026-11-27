@@ -582,6 +582,18 @@ RUN test "$REQUESTS_CA_BUNDLE" = /custom/after-req.pem && test "$CURL_CA_BUNDLE"
 	if env["REQUESTS_CA_BUNDLE"] != "/custom/after-req.pem" || env["CURL_CA_BUNDLE"] != "/custom/after-curl.pem" {
 		t.Errorf("after-run: REQUESTS_CA_BUNDLE=%q CURL_CA_BUNDLE=%q, want ARG values", env["REQUESTS_CA_BUNDLE"], env["CURL_CA_BUNDLE"])
 	}
+
+	// An ARG default in a layer on a jailoc image expands the base image's ENV.
+	dirBase, _ := build("ca-arg-dir-base", "FROM $BASE\nENV CA_DIR=/opt/company\n", base)
+	_, env = build("ca-arg-dir-layer", "FROM $BASE\n"+
+		`ARG CA_DIR=/ignored
+ARG SSL_CERT_FILE=${CA_DIR
+}/ca.pem
+RUN test "$SSL_CERT_FILE" = /opt/company/ca.pem
+`, dirBase)
+	if env["SSL_CERT_FILE"] != "/opt/company/ca.pem" {
+		t.Errorf("dir-layer: SSL_CERT_FILE = %q, want /opt/company/ca.pem", env["SSL_CERT_FILE"])
+	}
 }
 
 // TestBuildOverlayImageCADigestCacheInvalidation rotates the CA bundle at the

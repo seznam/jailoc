@@ -85,7 +85,9 @@ type caPlan struct {
 	images []string
 	// flow lists every stage, external or not, in Dockerfile order, with what
 	// it takes to keep jailoc's default CA variables from shadowing an ARG.
-	flow []caStageFlow
+	flow        []caStageFlow
+	escapeToken rune
+	meta        lexEnv
 }
 
 // caArgOverride is an ARG with a value that sets a CA variable.
@@ -107,16 +109,8 @@ type caStageFlow struct {
 	external bool
 	// fromEndLine is the 1-based last line of the stage's FROM instruction.
 	fromEndLine int
-	// argKeys are the names of the ARG instructions that have a value.
-	argKeys map[string]bool
-	// preRunArgKeys are the valued ARG names declared before the stage's
-	// first RUN instruction.
-	preRunArgKeys map[string]bool
-	// envKeys are the names the stage sets with ENV.
-	envKeys map[string]bool
-	// argOverrides are the ARGs that set a CA variable before any ENV of the
-	// stage does.
-	argOverrides []caArgOverride
+	// commands are the parsed instructions of the stage.
+	commands []instructions.Command
 }
 
 // lexEnv is a shell.EnvGetter over a map.
@@ -192,6 +186,8 @@ func planCATrust(dockerfile []byte, buildArgs map[string]*string) (caPlan, error
 			}
 		}
 	}
+	p.plan.escapeToken = res.EscapeToken
+	p.plan.meta = p.meta
 	for i, st := range stages {
 		if err := p.addStage(i, st); err != nil {
 			return caPlan{}, err
@@ -278,10 +274,6 @@ func (p *caPlanner) addStage(index int, st instructions.Stage) error {
 	}
 
 	argKeys := make(map[string]bool)
-	preRunArgKeys := make(map[string]bool)
-	envKeys := make(map[string]bool)
-	var argOverrides []caArgOverride
-	seenRun := false
 	env := lexEnv{}
 	for _, cmd := range st.Commands {
 		switch c := cmd.(type) {
@@ -295,15 +287,7 @@ func (p *caPlanner) addStage(index int, st instructions.Stage) error {
 					continue
 				}
 				argKeys[kv.Key] = true
-				if !seenRun {
-					preRunArgKeys[kv.Key] = true
-				}
 				env[kv.Key] = v
-				if _, isCAKey := caDefaultEnvValue(kv.Key); isCAKey && !envKeys[kv.Key] {
-					if loc := c.Location(); len(loc) > 0 {
-						argOverrides = append(argOverrides, caArgOverride{endLine: loc[len(loc)-1].End.Line, key: kv.Key, value: v})
-					}
-				}
 			}
 		case *instructions.EnvCommand:
 			for _, kv := range c.Env {
@@ -312,14 +296,12 @@ func (p *caPlanner) addStage(index int, st instructions.Stage) error {
 					v = kv.Value
 				}
 				env[kv.Key] = v
-				envKeys[kv.Key] = true
 			}
 		case *instructions.CopyCommand:
 			if err := p.addFrom(name, c.From, env); err != nil {
 				return err
 			}
 		case *instructions.RunCommand:
-			seenRun = true
 			if err := p.addMounts(name, c, env); err != nil {
 				return err
 			}
@@ -334,14 +316,11 @@ func (p *caPlanner) addStage(index int, st instructions.Stage) error {
 		fromEndLine = st.Location[len(st.Location)-1].End.Line
 	}
 	p.plan.flow = append(p.plan.flow, caStageFlow{
-		alias:         strings.ToLower(st.Name),
-		base:          base,
-		external:      external,
-		fromEndLine:   fromEndLine,
-		argKeys:       argKeys,
-		preRunArgKeys: preRunArgKeys,
-		envKeys:       envKeys,
-		argOverrides:  argOverrides,
+		alias:       strings.ToLower(st.Name),
+		base:        base,
+		external:    external,
+		fromEndLine: fromEndLine,
+		commands:    st.Commands,
 	})
 	if !external {
 		return nil
@@ -753,11 +732,15 @@ func prepareCADockerfile(ctx context.Context, cli dockerclient.APIClient, docker
 	for _, st := range plan.stages {
 		ext[st.fromEndLine] = st
 	}
+	lex := shell.NewLex(plan.escapeToken)
 	// stageDefaults are, by stage alias, the CA variables that are still
-	// jailoc defaults at the end of the stage.
+	// jailoc defaults at the end of the stage. stageEnv are the effective ENV
+	// values at the end of the stage, inherited by descendant stages.
 	stageDefaults := make(map[string]map[string]bool)
+	stageEnv := make(map[string]map[string]string)
 	for _, fl := range plan.flow {
 		var endDefaults map[string]bool
+		var endEnv map[string]string
 		if fl.external {
 			st := ext[fl.fromEndLine]
 			// Every external stage is checked, even one BuildKit would never
@@ -778,17 +761,24 @@ func prepareCADockerfile(ctx context.Context, cli dockerclient.APIClient, docker
 				baseUser = inspect.Config.User
 				baseEnv = inspect.Config.Env
 			}
-			endOverrides := make(map[string]bool, len(fl.argKeys)+len(fl.envKeys))
-			for k := range fl.argKeys {
-				endOverrides[k] = true
-			}
-			for k := range fl.envKeys {
-				endOverrides[k] = true
-			}
-			inserts[fl.fromEndLine] += caTrustStageInstructions(ca.Digest(), baseUser, baseEnv, fl.preRunArgKeys, endOverrides)
 			explicit, inherited := splitBaseCAEnv(baseEnv)
-			for _, ov := range fl.argOverrides {
-				if !explicit[ov.key] && (inherited[ov.key] || !fl.preRunArgKeys[ov.key]) {
+			baseEnvMap := make(map[string]string, len(baseEnv))
+			for _, kv := range baseEnv {
+				k, v, _ := strings.Cut(kv, "=")
+				baseEnvMap[k] = v
+			}
+			argKeys, preRunArgKeys, envKeys, argOverrides, evaluatedEnv := evaluateStageCAEnv(lex, buildArgs, plan.meta, fl.commands, baseEnvMap, inherited, true)
+			endEnv = evaluatedEnv
+			endOverrides := make(map[string]bool, len(argKeys)+len(envKeys))
+			for k := range argKeys {
+				endOverrides[k] = true
+			}
+			for k := range envKeys {
+				endOverrides[k] = true
+			}
+			inserts[fl.fromEndLine] += caTrustStageInstructions(ca.Digest(), baseUser, baseEnv, preRunArgKeys, endOverrides)
+			for _, ov := range argOverrides {
+				if !explicit[ov.key] && (inherited[ov.key] || !preRunArgKeys[ov.key]) {
 					inserts[ov.endLine] += caArgOverrideLine(ov.key, ov.value)
 				}
 			}
@@ -799,18 +789,21 @@ func prepareCADockerfile(ctx context.Context, cli dockerclient.APIClient, docker
 				}
 			}
 		} else {
-			inherited := stageDefaults[strings.ToLower(fl.base)]
+			parent := strings.ToLower(fl.base)
+			inherited := stageDefaults[parent]
 			endDefaults = maps.Clone(inherited)
 			if endDefaults == nil {
 				endDefaults = make(map[string]bool)
 			}
-			for _, ov := range fl.argOverrides {
+			_, _, envKeys, argOverrides, evaluatedEnv := evaluateStageCAEnv(lex, buildArgs, plan.meta, fl.commands, stageEnv[parent], inherited, false)
+			endEnv = evaluatedEnv
+			for _, ov := range argOverrides {
 				if inherited[ov.key] {
 					inserts[ov.endLine] += caArgOverrideLine(ov.key, ov.value)
 					delete(endDefaults, ov.key)
 				}
 			}
-			for key := range fl.envKeys {
+			for key := range envKeys {
 				delete(endDefaults, key)
 			}
 			if len(endDefaults) != len(inherited) && fl.fromEndLine > 0 {
@@ -819,7 +812,94 @@ func prepareCADockerfile(ctx context.Context, cli dockerclient.APIClient, docker
 		}
 		if fl.alias != "" {
 			stageDefaults[fl.alias] = endDefaults
+			stageEnv[fl.alias] = endEnv
 		}
 	}
 	return injectAfterLines(dockerfile, inserts), nil
+}
+
+// evaluateStageCAEnv evaluates the ARG and ENV instructions of cmds against
+// the inherited image environment baseEnv. Explicit ENV values (from baseEnv
+// outside inheritedDefaults, or from ENV instructions in cmds) take precedence
+// over ARG declarations, matching Docker.
+func evaluateStageCAEnv(lex *shell.Lex, buildArgs map[string]*string, meta lexEnv, cmds []instructions.Command, baseEnv map[string]string, inheritedDefaults map[string]bool, injectMissingDefaults bool) (argKeys, preRunArgKeys, envKeys map[string]bool, overrides []caArgOverride, endEnv map[string]string) {
+	argKeys = make(map[string]bool)
+	preRunArgKeys = make(map[string]bool)
+	envKeys = make(map[string]bool)
+	env := make(lexEnv, len(baseEnv))
+	endEnv = make(map[string]string, len(baseEnv))
+	envLocked := make(map[string]bool, len(baseEnv))
+	for k, v := range baseEnv {
+		if k == caEnvDefaultsVar {
+			continue
+		}
+		env[k] = v
+		endEnv[k] = v
+		if !inheritedDefaults[k] {
+			envLocked[k] = true
+		}
+	}
+	if injectMissingDefaults {
+		for _, k := range caEnvKeys() {
+			if !envLocked[k] {
+				v, _ := caDefaultEnvValue(k)
+				env[k] = v
+				endEnv[k] = v
+			}
+		}
+	}
+
+	seenRun := false
+	for _, cmd := range cmds {
+		switch c := cmd.(type) {
+		case *instructions.ArgCommand:
+			for _, kv := range c.Args {
+				var v string
+				var ok bool
+				if b := buildArgs[kv.Key]; b != nil {
+					v, ok = *b, true
+				} else if kv.Value != nil {
+					expanded, _, err := lex.ProcessWord(*kv.Value, env)
+					if err != nil {
+						expanded = *kv.Value
+					}
+					v, ok = expanded, true
+				} else if mv, hasMeta := meta[kv.Key]; hasMeta {
+					v, ok = mv, true
+				}
+				if !ok || envLocked[kv.Key] {
+					continue
+				}
+				argKeys[kv.Key] = true
+				if !seenRun {
+					preRunArgKeys[kv.Key] = true
+				}
+				env[kv.Key] = v
+				if _, isCAKey := caDefaultEnvValue(kv.Key); isCAKey {
+					if inheritedDefaults[kv.Key] || seenRun {
+						endEnv[kv.Key] = v
+					} else {
+						delete(endEnv, kv.Key)
+					}
+					if loc := c.Location(); len(loc) > 0 {
+						overrides = append(overrides, caArgOverride{endLine: loc[len(loc)-1].End.Line, key: kv.Key, value: v})
+					}
+				}
+			}
+		case *instructions.EnvCommand:
+			for _, kv := range c.Env {
+				v, _, err := lex.ProcessWord(kv.Value, env)
+				if err != nil {
+					v = kv.Value
+				}
+				env[kv.Key] = v
+				endEnv[kv.Key] = v
+				envLocked[kv.Key] = true
+				envKeys[kv.Key] = true
+			}
+		case *instructions.RunCommand:
+			seenRun = true
+		}
+	}
+	return argKeys, preRunArgKeys, envKeys, overrides, endEnv
 }
