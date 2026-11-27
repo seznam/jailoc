@@ -388,6 +388,32 @@ jailoc shell [workspace] [flags]
 
 ---
 
+### `jailoc auth`
+
+Print or re-open a pending browser login link that a tool in a workspace VM passed to `xdg-open` or `$BROWSER`. Retry and recovery only: jailoc opens the browser on its own, so a normal login needs no command.
+
+```text
+jailoc auth [workspace] [flags]
+```
+
+- The workspace must be running. The command reads the link from the network broker and doesn't boot the VM.
+- The broker keeps a link only when its `redirect_uri` is an explicit `http` loopback URL (`localhost`, `127.0.0.1` or `[::1]`, port 1024-65535) and a guest listener exists on that port. Each link expires after 3 minutes; at most 8 are pending.
+- When the tool calls the opener, jailoc binds the host callback listener and opens the exact captured URL in the default browser of the host: `/usr/bin/open` on macOS, `xdg-open` from `PATH` on Linux, without a shell and with the environment that `jailoc up` inherited. The opener in the guest exits 0 only when the host accepted the launch; a window opening or the login completing isn't guaranteed. It exits non-zero when the launch fails, `xdg-open` is unsupported or the URL isn't loopback. After a failed launch of an eligible login, the callback and link stay available for 3 minutes.
+- A workspace running the binary of an older jailoc needs `jailoc restart` to get automatic opening. Recovery works only if a pending link is available.
+- By default the exact URL is printed to stdout and guidance to stderr. Nothing is launched.
+- With `--open`, the URL opens in the default browser of the host with the same fixed opener, in the environment of the invoking terminal. Only its origin, the callback port and the time left are printed.
+- With several pending links, the command lists the port, origin and time left of each, without the URL, and fails until `--port` selects one.
+- A `ports` entry for the same callback port also opens the browser automatically, but its login isn't listed as pending.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--open` | `false` | Re-open the link in the default browser of the host instead of printing it. |
+| `--port N` | | Select the pending link with this callback port (1-65535). |
+
+The URL is a credential: jailoc keeps it only in memory and doesn't log it or store it on disk. Recognized OAuth queries are redacted in guest exec logs, but the printed output, terminal capture, host browser history and the opener's arguments are outside jailoc's control. The guest picks the origin of the URL that is opened automatically; see the warning in [OAuth link handoff](../explanation/security-boundaries.md#oauth-link-handoff). For the walkthrough and Linux desktop requirements, see [Complete browser login](../how-to/workspace-configuration.md#complete-browser-login) and [Browser login link is missing](../how-to/troubleshooting.md#browser-login-link-is-missing).
+
+---
+
 ### `jailoc sessions`
 
 List the agent sessions running in a workspace VM, or stop one.

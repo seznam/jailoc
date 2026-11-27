@@ -159,7 +159,7 @@ func TestSocketPathsIncludeProxy(t *testing.T) {
 	t.Parallel()
 	spec := Spec{Kind: KindWorkspace, StateDir: "/state", Guest: &guest.Config{ProxyRelay: &guest.ProxyRelay{Ports: []uint16{6080}}}}
 	got := supervisorSockets(spec)
-	want := []string{nicSocket("/state"), SSHSocket("/state"), consoleSocket("/state"), ProxySocket("/state")}
+	want := []string{nicSocket("/state"), SSHSocket("/state"), consoleSocket("/state"), OAuthSocket("/state"), ProxySocket("/state")}
 	if !slices.Equal(got, want) {
 		t.Fatalf("sockets = %v, want %v", got, want)
 	}
@@ -168,8 +168,42 @@ func TestSocketPathsIncludeProxy(t *testing.T) {
 		t.Fatalf("sockets with an empty relay = %v, want %v", got, want)
 	}
 	spec.Guest = nil
-	if got := supervisorSockets(spec); len(got) != 3 {
+	if got := supervisorSockets(spec); len(got) != 4 {
 		t.Fatalf("sockets without proxy relay = %v", got)
+	}
+	builder := Spec{Kind: KindBuilder, StateDir: "/state"}
+	if got, want := supervisorSockets(builder), []string{nicSocket("/state"), DockerSocket("/state")}; !slices.Equal(got, want) {
+		t.Fatalf("builder sockets = %v, want %v (no OAuth socket)", got, want)
+	}
+}
+
+func TestOAuthSocketPath(t *testing.T) {
+	t.Parallel()
+	if got, want := OAuthSocket("/state"), filepath.Join("/state", "oauth.sock"); got != want {
+		t.Fatalf("OAuthSocket = %q, want %q", got, want)
+	}
+}
+
+func TestBrokerArgsOAuthSocket(t *testing.T) {
+	t.Parallel()
+	value := func(args []string, flag string) (string, int) {
+		var v string
+		var n int
+		for i, a := range args {
+			if a == flag && i+1 < len(args) {
+				v = args[i+1]
+				n++
+			}
+		}
+		return v, n
+	}
+	ws := brokerArgs(Spec{Kind: KindWorkspace, StateDir: "/state", Broker: []string{"jailoc", "netbroker"}}, "/state/policy.json")
+	if v, n := value(ws, "-oauth-socket"); n != 1 || v != OAuthSocket("/state") {
+		t.Fatalf("workspace -oauth-socket = %q (%d times) in %v, want %q once", v, n, ws, OAuthSocket("/state"))
+	}
+	bd := brokerArgs(Spec{Kind: KindBuilder, StateDir: "/state", Broker: []string{"jailoc", "netbroker"}}, "/state/policy.json")
+	if _, n := value(bd, "-oauth-socket"); n != 0 {
+		t.Fatalf("builder got -oauth-socket: %v", bd)
 	}
 }
 

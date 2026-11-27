@@ -152,7 +152,39 @@ ports = [3000, "8080:80"]
 
 `3000` makes guest port 3000 available on host `127.0.0.1:3000`; `"8080:80"` makes guest port 80 available on host `127.0.0.1:8080`. Services listening on `0.0.0.0`, `192.168.127.2`, `127.0.0.1` or `[::1]` inside the guest are all reachable, as are containers started with `docker run -p`.
 
-OAuth browser login callbacks (`opencode mcp auth`, `claude mcp`, `gh auth login`, `gcloud`, `mcp-remote`) work without adding `ports` entries: when a tool inside the guest invokes `xdg-open` or `$BROWSER` with an authorization URL whose `redirect_uri` points to `http://127.0.0.1:<port>/<path>` or `http://localhost:<port>/<path>` while a guest listener is active on that port, jailoc opens a single-shot HTTP callback proxy on host `127.0.0.1:<port>` for that exact path and closes it after serving the callback (or after 3 minutes). Open the URL printed by the tool in your host browser to complete login.
+### Complete browser login
+
+A tool in the guest that signs in through a browser invokes `xdg-open` or `$BROWSER` with an authorization URL. jailoc captures that URL when it has an explicit `http` loopback `redirect_uri` (`localhost`, `127.0.0.1` or `[::1]`, port 1024-65535) and the tool already listens on that port in the guest. No `ports` entry is needed. jailoc keeps at most 8 pending logins, each valid for 3 minutes.
+
+For such a login, jailoc binds the callback listener on host `127.0.0.1:<port>` and then opens the exact captured URL in the default browser of the host. It needs no extra command and shows no prompt. The host opener is a fixed program started without a shell: `/usr/bin/open` on macOS, `xdg-open` from `PATH` on Linux. It runs with the desktop environment that `jailoc up` inherited when it started the workspace.
+
+1. Start the login in the workspace, for example in a `jailoc shell` session.
+2. Finish the login in the host browser that opens. The single-use listener passes the callback to the guest and closes, so a tool such as Claude Code receives its loopback callback without you pasting anything.
+
+The opener in the guest exits 0 only when the host accepted the launch. That doesn't mean a browser window opened or the login completed.
+
+!!! warning
+    The guest chooses the URL, and jailoc opens it without an allowlist, provider check or consent prompt. A compromised guest can make your host browser, with its existing logins, load any validated `http` or `https` page. See [OAuth link handoff](../explanation/security-boundaries.md#oauth-link-handoff).
+
+Only opener calls with a loopback redirect qualify; device and manual-code flows stay manual. Claude Code account login can also print a hosted manual-code URL that differs from the browser URL it passes to the opener. jailoc opens the captured browser URL; don't rewrite it or swap in the printed one.
+
+If the host can't launch a browser, the opener exits non-zero and the tool sees a failed open. Unsupported `xdg-open` calls and non-loopback URLs also exit non-zero. When the launch of an eligible login fails, its callback and link stay available for 3 minutes. Recover from a host terminal; a normal login doesn't need these commands:
+
+```bash
+jailoc auth myproject
+jailoc auth myproject --open
+```
+
+The first command prints the exact URL to stdout; `--open` launches it again and prints only the origin. With several pending logins, select one with `--port`. See [`jailoc auth`](../reference/cli.md#jailoc-auth).
+
+On Linux, a VM started from a headless SSH session may have no desktop session or no `xdg-open`, so the automatic launch can fail. Run `jailoc auth --open` from a terminal on the host desktop, or run `jailoc restart` from the desktop session. A fake `DISPLAY` doesn't help.
+
+A running workspace keeps the binary it booted with. After upgrading jailoc, run `jailoc restart` for the workspace to get automatic opening. Until then, `jailoc auth --open` recovers a login only if a pending link is available.
+
+!!! note
+    A `ports` entry for the same callback port also opens the browser automatically, but `jailoc auth` doesn't list the login as pending. The login qualifies only if its `redirect_uri` matches the forwarded loopback port, not a hosted manual-code URL. Otherwise remove the entry and restart the workspace to use the handoff.
+
+When the browser doesn't open or `jailoc auth` finds nothing, see [Browser login link is missing](troubleshooting.md#browser-login-link-is-missing).
 
 ## Reach host services
 

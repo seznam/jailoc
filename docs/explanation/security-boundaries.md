@@ -123,7 +123,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | GPG agent | Guest to host | Ask the host gpg-agent to sign or decrypt with any key it holds while forwarded; the extra socket refuses key export and management; keys stay on the host | `gpg_agent` |
 | `host_ports` | Guest to host | Use the host service like a local host process, outside the network policy | `host_ports` |
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
-| OAuth loopback callbacks | Host to guest | Register a single-shot HTTP `GET` forwarder on host `127.0.0.1:<port>` (ports 1024–65535, max 8 concurrent, 3-minute TTL) pinned to the exact `redirect_uri` path and requiring `code=` or `error=`, stripping browser request headers and answering the browser with a fixed confirmation; triggered via `xdg-open` / `$BROWSER` when a guest loopback listener already exists, never from terminal output | fixed |
+| OAuth link handoff | Guest to host, then host to guest | Offer one authorization link through `xdg-open`, `$BROWSER` or the broker's `/register` endpoint; jailoc opens the link in the host browser automatically, with no prompt. The broker accepts only ports 1024-65535 and a valid URL. An ephemeral callback adds a single-use listener on host `127.0.0.1:<port>` (at most 8 pending, 3-minute lifetime) pinned to the exact `redirect_uri` path, requiring `code=` or `error=`, stripping browser request headers and answering with a fixed confirmation. A same-port configured or runtime-mapped forward is used as a raw TCP forward instead, without that ephemeral callback filtering, single-use, lifetime or pending limits | fixed |
 | Proxy routes | Host to guest | Serve a guest port to a browser over HTTPS through the background proxy (with optional one-time login code when `auth = true`) | `proxy` |
 | CA bundle | Host to guest | Trust the forwarded certificates, in the VM and in the images jailoc builds | `ca_bundle` |
 | Proxy CA | Host to browser | Not a jailoc channel: a CA that jailoc generates and you trust by hand, for the proxy's certificate | manual, see [HTTPS proxy](#https-proxy) |
@@ -135,6 +135,25 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 ### host_ports needs the most care
 
 A Chrome DevTools port or a container runtime socket gives the guest control of the browser or the host; jailoc warns about both.
+
+### OAuth link handoff
+
+A tool in the guest can ask for a browser login, and jailoc opens the browser on the host without asking you.
+
+!!! warning
+    The guest chooses the provider origin and the rest of the URL. jailoc opens any validated `http` or `https` URL that comes with an explicit loopback `redirect_uri`, with no allowlist, no provider trust check and no consent prompt. A compromised guest can therefore make your host browser load pages from any origin, with the logins that browser already has. jailoc doesn't verify the provider and can't tell whether a login succeeded.
+
+The path has these properties:
+
+- The normal `xdg-open` or `$BROWSER` wrapper opens a link only when it carries an explicit `http` loopback `redirect_uri` and a guest process listens on that port. These are wrapper checks, not host-enforced: any guest process can POST to the broker's `/register` endpoint, which doesn't prove an opener call or a listener. The broker validates the `http` or `https` URL, the loopback `redirect_uri` port and path and the characters it prints, and parses no terminal output.
+- For an ephemeral callback the broker binds the host callback listener first (a same-port configured forward already listens) and then opens the exact captured URL with a fixed program, `/usr/bin/open` on macOS or `xdg-open` from `PATH` on Linux, started without a shell and with the desktop environment inherited from `jailoc up`. The guest opener exits 0 only when the host accepted the launch, which doesn't mean a window opened or the login succeeded.
+- The ephemeral callback listener doesn't forward host cookies or other browser request headers into the guest. It strips them, passes only the callback path and query, and answers the browser with a fixed confirmation; the guest's response never reaches the browser.
+- When the callback port is already a configured (`ports`) or runtime-mapped forward with the same host and guest port, the broker registers no callback and keeps that raw TCP forward. It still opens the link, but the single-use limit, the 3-minute lifetime, the header and body isolation and the pending link state don't apply: host cookies and request headers can reach the guest listener, and its response can reach the browser.
+- `jailoc auth` prints or re-opens the link over a private Unix socket (`oauth.sock`, mode `0600`, in a state directory with mode `0700`) when the automatic launch fails. That API isn't reachable from the guest. The guest still knows every URL it generated itself.
+- For an ephemeral callback the broker keeps the link only in jailoc-managed memory, bound to that callback, and clears it when the callback is claimed, expires, is replaced on the same port, is cancelled or the broker shuts down. A configured or runtime-mapped port has no pending link. Neither covers copies the guest made, such as its own logs or a URL it re-registers.
+- Guest exec logs drop the query and fragment of recognized OAuth authorization URLs; other URLs and logs aren't redacted. Broker logs record only the callback host, port and path. The URL stays in host browser history, in the opener's argument list, which other processes of the same user can read, and in any terminal capture. jailoc can't erase it from there.
+
+Automatic opening gives you no chance to review the link first, and jailoc adds no limit on which origin the guest may choose.
 
 ### HTTPS proxy
 
