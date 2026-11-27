@@ -27,6 +27,8 @@ Workspace images are ordinary Docker images: the embedded Dockerfile, a `[base] 
 
 Building on the host daemon is fastest, but Dockerfile `RUN` steps then run with container isolation and unrestricted host networking. A builder VM keeps build steps behind a VM boundary. All workspaces share one builder VM, with one build cache, and it reaches public addresses only. With `isolated_build`, a workspace gets a builder of its own, with a separate data disk and the workspace's `allowed_hosts` and `allowed_networks`, so one workspace's build steps can't read another workspace's build cache or private network access. Builds on the same builder are serialized.
 
+When `ca_bundle` selects an external bundle, builds always use a builder VM, so that the builder's daemon and the build steps can trust the bundle without any change to the host Docker daemon's trust. See [Image builds with a CA bundle](../reference/configuration.md#image-builds-with-a-ca-bundle).
+
 ## Inside the guest
 
 The VM boots from a small root file system, the boot root, that holds only `jailoc-guest` and its configuration. The image's layers, one read-only EROFS file each, are shared into the VM as one read-only share. `jailoc-guest` mounts each layer file as EROFS, stacks the layers as overlay lower layers under the boot root with a tmpfs upper layer, and switches to the overlay.

@@ -254,6 +254,8 @@ ca_bundle = false
 
 `ca_bundle = true` requests automatic discovery explicitly. The bundle is added to the guest's system trust store, and sessions get `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and similar variables pointing at it, so Node.js, Python, curl, git and the coding agents trust it too; see [`ca_bundle`](../reference/configuration.md#ca_bundle) for the full list. A reload updates the store live, but processes that already loaded it, including the guest Docker daemon, keep the old one until they restart, and running sessions keep their old environment.
 
+The forwarded bundle also reaches the image builds, which then run in a builder VM; see [Build with a private CA](custom-images.md#build-with-a-private-ca). A changed bundle reaches the image only after `jailoc restart`.
+
 !!! note
     If the selected variable points at an invalid PEM bundle, `jailoc up` fails instead of falling through to the next variable. Set `ca_bundle = false` or a valid path to fix it.
 

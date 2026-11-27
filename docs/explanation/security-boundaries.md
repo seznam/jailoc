@@ -107,6 +107,8 @@ Dockerfile `RUN` steps run where the image is built:
 
 Build a Dockerfile you don't trust only in a builder VM.
 
+A forwarded `ca_bundle` is baked into the image layers, so the images trust that CA for as long as they exist. The VM runtime keeps the image's own roots, so removing the bundle or `jailoc reload` doesn't revoke it, and a later layer can't remove it from the layers below; only a rebuild with `jailoc restart` produces an image without it. Image builds with a forwarded bundle always run in a builder VM, never on the host daemon, so jailoc changes no trust of the host Docker daemon or of the host. The bundle holds only the external certificates you configure, not the workspace inspection CA.
+
 ## Channels across the boundaries
 
 Every way data or control crosses from the host into a workspace is opt-in or fixed by jailoc:
@@ -123,7 +125,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | `ports` | Host to guest | Serve on host `127.0.0.1` | `ports` |
 | OAuth loopback callbacks | Host to guest | Register a single-shot HTTP `GET` forwarder on host `127.0.0.1:<port>` (ports 1024–65535, max 8 concurrent, 3-minute TTL) pinned to the exact `redirect_uri` path and requiring `code=` or `error=`, stripping browser request headers and answering the browser with a fixed confirmation; triggered via `xdg-open` / `$BROWSER` when a guest loopback listener already exists, never from terminal output | fixed |
 | Proxy routes | Host to guest | Serve a guest port to a browser over HTTPS through the background proxy (with optional one-time login code when `auth = true`) | `proxy` |
-| CA bundle | Host to guest | Trust the forwarded certificates | `ca_bundle` |
+| CA bundle | Host to guest | Trust the forwarded certificates, in the VM and in the images jailoc builds | `ca_bundle` |
 | Proxy CA | Host to browser | Not a jailoc channel: a CA that jailoc generates and you trust by hand, for the proxy's certificate | manual, see [HTTPS proxy](#https-proxy) |
 | Inspection CA | Host to guest | Trust certificates the broker signs for hosts matched by `http` rules, which lets the broker read their traffic | `network.rules` with `http` |
 | Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `network` |

@@ -100,7 +100,7 @@ build_context = "~/projects/myproject"
 | Value | Builds with |
 |-------|-------------|
 | `"auto"` (default) | the host Docker daemon when it answers and builds Linux images for the host's CPU architecture, otherwise the builder VM |
-| `"docker"` | the host Docker daemon; `jailoc up` fails when it isn't usable |
+| `"docker"` | the host Docker daemon; `jailoc up` fails when it isn't usable, or when a [CA bundle](#build-with-a-private-ca) is selected |
 | `"vm"` | always the builder VM |
 
 ```toml
@@ -115,7 +115,27 @@ The shared builder VM serves all workspaces, keeps one build cache and reaches p
 isolated_build = true
 ```
 
-Images that pull from private registries need `isolated_build = true` with the hosts in `allowed_hosts`, or `builder = "docker"`.
+Images that pull from private registries need `isolated_build = true` with the hosts in `allowed_hosts`, or `builder = "docker"` (not available with a [CA bundle](#build-with-a-private-ca)).
+
+## Build with a private CA
+
+When [`ca_bundle`](../reference/configuration.md#ca_bundle) selects an external bundle, your builds trust it with no change to your Dockerfiles: no `COPY` of the certificate, no build flags, no TLS variables. Set it to a path, or leave it at the default and export `SSL_CERT_FILE` (or `NIX_SSL_CERT_FILE`) on the host:
+
+```toml
+[defaults]
+ca_bundle = "~/certs/company-ca.pem"
+```
+
+The next image build (`jailoc up` of a stopped workspace, or `jailoc restart`) then runs every image, including each stage of your Dockerfiles, in a builder VM, and the tools in your `RUN` steps (`apt`, `curl`, `git`, `uv`, Node.js and `npm`) trust the bundle on Debian and Ubuntu. The host Docker daemon and its trust settings are left alone.
+
+- With `builder = "docker"`, the build fails before it starts, also with `isolated_build`. Set `builder = "auto"` or `"vm"`.
+- Every stage must be Debian or Ubuntu with a shell. A stage jailoc can't set up fails the build with an error, as do classic builders and custom Dockerfile frontends.
+- Base images and `COPY --from` images from other registries must be available from a registry; an image that exists only in the host Docker daemon makes the build fail. Push it to a registry.
+- Builds that need a private network need `isolated_build = true` with the hosts in `allowed_hosts` or `allowed_networks`; the shared builder VM reaches public addresses only.
+- jailoc adds client variables (`SSL_CERT_FILE` and similar) only where the base image and your Dockerfile set none. A variable you set wins, so make it point at `/etc/ssl/certs/ca-certificates.crt` or remove it. A client that pins its own roots can't be fixed by jailoc.
+
+!!! warning
+    The certificate stays in the built image. Changing or disabling `ca_bundle` rebuilds the affected images at the next image build, but `jailoc reload` doesn't rebuild them: it reports that `jailoc restart` is required and leaves the VM and its sessions running. Until the restart, the image keeps the old trust. The [reference](../reference/configuration.md#image-builds-with-a-ca-bundle) has the full rules.
 
 ## Apply an image change
 

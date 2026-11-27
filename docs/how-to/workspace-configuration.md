@@ -283,6 +283,8 @@ jailoc reload myproject
 
 These apply live: network rules, DNS filtering, `ports`, `host_ports`, `ssh_auth_sock`, `gpg_agent`, `ca_bundle`, `snapshots`, `env`, `env_file`, `tmp_ttl`, `proxy` routes and secrets. Running sessions keep their old environment.
 
+`ca_bundle` applies live to the VM's trust store only. Trust that image builds baked into the image changes only with a rebuild: after you change or disable `ca_bundle`, `jailoc reload` reports that `jailoc restart` is required, and the VM and its sessions keep running until you restart. See [Build with a private CA](custom-images.md#build-with-a-private-ca).
+
 Other changes need a new VM: `paths`, `mounts`, `cpu`, `memory`, `docker_disk`, `state_disk`, `cache_disk`, `tmp_storage`, `tmp_size`, `enable_docker`, `protect_git` and the image. A VM started by a jailoc release that predates live proxy reloads also needs a restart for `proxy` changes (see [proxy routes](proxy-routes.md#apply-changes)). `jailoc reload` lists them. Apply them with `jailoc restart`, which ends running sessions.
 
 Concurrent reloads of one workspace run one at a time.
