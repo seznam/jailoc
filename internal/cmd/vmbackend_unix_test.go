@@ -1777,3 +1777,28 @@ func TestVMSharesLimitCoveredDisks(t *testing.T) {
 		t.Fatalf("%d paths and 1 mount with a cache disk: err = %v, want the limit error", len(ws.Paths), err)
 	}
 }
+
+func TestSameVMSpecDetectsCABundleDigest(t *testing.T) {
+	t.Parallel()
+	base := vm.Spec{Kind: vm.KindBuilder, Workspace: "builder", CABundle: "/state/ca-bundle.pem", CABundleDigest: "aaaa"}
+	tests := []struct {
+		name string
+		edit func(*vm.Spec)
+		want bool
+	}{
+		{name: "identical", edit: func(*vm.Spec) {}, want: true},
+		{name: "content changed at the same path", edit: func(s *vm.Spec) { s.CABundleDigest = "bbbb" }},
+		{name: "bundle removed", edit: func(s *vm.Spec) { s.CABundle, s.CABundleDigest = "", "" }},
+		{name: "build CA recorded", edit: func(s *vm.Spec) { s.BuildCA = "sha256:aaaa" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			other := base
+			tt.edit(&other)
+			if got := sameVMSpec(base, other); got != tt.want {
+				t.Errorf("sameVMSpec = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

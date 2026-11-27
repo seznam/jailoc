@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/workspace"
 )
 
@@ -74,6 +75,30 @@ func sourceCABundle(ws *workspace.Resolved) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("validate CA bundle from %s %q: %w", source.origin, source.path, err)
 	}
 	return content, true, nil
+}
+
+// workspaceBuildCA snapshots the external CA bundle of ws for image builds. It
+// is nil when no bundle is selected: the workspace's HTTP inspection CA never
+// belongs here, jailoc's own builds do not go through the broker.
+func workspaceBuildCA(ws *workspace.Resolved) (*docker.BuildCA, error) {
+	content, selected, err := sourceCABundle(ws)
+	if err != nil || !selected {
+		return nil, err
+	}
+	ca, err := docker.NewBuildCA(content)
+	if err != nil {
+		return nil, fmt.Errorf("prepare CA bundle for image builds: %w", err)
+	}
+	return ca, nil
+}
+
+// buildCAState is the value of vm.Spec.BuildCA for ca: "none" without a
+// bundle, else the bundle's digest.
+func buildCAState(ca *docker.BuildCA) string {
+	if ca == nil {
+		return "none"
+	}
+	return "sha256:" + ca.Digest()
 }
 
 // appendCABundle appends extra PEM certificates to bundle, separated by a

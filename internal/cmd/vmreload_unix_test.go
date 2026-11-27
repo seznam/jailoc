@@ -4,6 +4,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -520,7 +522,7 @@ func TestReloadWantAfterProxyRemovedKeepsCollisionVisible(t *testing.T) {
 		HostPorts: []config.HostPortTarget{{Guest: 3000, HostPort: 9000}},
 		Ports:     []config.PortForward{{Host: 18000, Guest: 6081}},
 	}
-	want, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
+	want, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -558,5 +560,53 @@ func TestRestartOnlyChangesStateAndCacheDisk(t *testing.T) {
 		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.changes)
 		}
+	}
+}
+
+func TestRestartOnlyChangesBuildCA(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	base := vm.Spec{Agent: "opencode", GuestProtocol: guest.Protocol, Guest: &guest.Config{}}
+	const bundleA, bundleB = "sha256:aaaa", "sha256:bbbb"
+	const label = "ca_bundle (for image builds)"
+	tests := []struct {
+		name          string
+		running, want string
+		changes       []string
+	}{
+		{name: "unchanged", running: bundleA, want: bundleA},
+		{name: "unchanged without bundle", running: "none", want: "none"},
+		{name: "bundle replaced", running: bundleA, want: bundleB, changes: []string{label}},
+		{name: "bundle removed", running: bundleA, want: "none", changes: []string{label}},
+		{name: "bundle added", running: "none", want: bundleA, changes: []string{label}},
+		{name: "legacy VM without a record", running: "", want: bundleA},
+		{name: "legacy VM without a record, no bundle", running: "", want: "none"},
+		{name: "image not built by jailoc", running: bundleA, want: ""},
+	}
+	for _, tt := range tests {
+		running, want := base, base
+		running.BuildCA, want.BuildCA = tt.running, tt.want
+		if got := restartOnlyChanges(running, want); !slices.Equal(got, tt.changes) {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.changes)
+		}
+	}
+}
+
+func TestReloadSpecBuildCA(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bundle := writeTestCABundle(t, filepath.Join(t.TempDir(), "company.pem"), "company")
+	ws := &workspace.Resolved{Name: "ws", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g", CABundle: config.CustomCABundle(bundle.path)}
+	running := vm.Spec{Image: "image", BuildCA: "sha256:old", Guest: &guest.Config{}}
+
+	want, _, err := reloadSpec(t.Context(), ws, running)
+	if err != nil {
+		t.Fatalf("reloadSpec: %v", err)
+	}
+	sum := sha256.Sum256(bundle.data)
+	if wantCA := "sha256:" + hex.EncodeToString(sum[:]); want.BuildCA != wantCA {
+		t.Errorf("BuildCA = %q, want %q", want.BuildCA, wantCA)
+	}
+	if got := restartOnlyChanges(running, want); !slices.Contains(got, "ca_bundle (for image builds)") {
+		t.Errorf("restartOnlyChanges = %v, want ca_bundle (for image builds)", got)
 	}
 }

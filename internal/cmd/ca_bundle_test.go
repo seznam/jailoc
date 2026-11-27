@@ -380,3 +380,41 @@ func TestCABundleMaterializationPrecedesGeneratedWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceBuildCA(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	bundle := writeTestCABundle(t, filepath.Join(t.TempDir(), "company.pem"), "company")
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("NIX_SSL_CERT_FILE", "")
+
+	ca, err := workspaceBuildCA(resolvedWorkspace(true, config.CustomCABundle(bundle.path)))
+	if err != nil {
+		t.Fatalf("workspaceBuildCA() error = %v", err)
+	}
+	if ca == nil || !bytes.Equal(ca.PEM(), bundle.data) {
+		t.Fatalf("workspaceBuildCA() = %v, want the bundle", ca)
+	}
+	if got, want := buildCAState(ca), "sha256:"+ca.Digest(); got != want {
+		t.Errorf("buildCAState = %q, want %q", got, want)
+	}
+
+	// The workspace's inspection CA is not an external bundle.
+	if ca, err := workspaceBuildCA(inspectingWorkspace(config.DisabledCABundle())); err != nil || ca != nil {
+		t.Errorf("workspaceBuildCA(inspection only) = %v, %v; want nil", ca, err)
+	}
+	for name, policy := range map[string]config.CABundle{
+		"disabled":                  config.DisabledCABundle(),
+		"automatic without sources": config.AutomaticCABundle(),
+	} {
+		ca, err := workspaceBuildCA(resolvedWorkspace(true, policy))
+		if err != nil || ca != nil {
+			t.Errorf("%s: workspaceBuildCA() = %v, %v; want nil", name, ca, err)
+		}
+		if got := buildCAState(ca); got != "none" {
+			t.Errorf("%s: buildCAState = %q, want none", name, got)
+		}
+	}
+	if _, err := workspaceBuildCA(resolvedWorkspace(true, config.CustomCABundle("relative.pem"))); err == nil {
+		t.Error("workspaceBuildCA() with an invalid bundle: error = nil, want error")
+	}
+}

@@ -44,7 +44,7 @@ func TestWorkspaceSpecTmp(t *testing.T) {
 				Name: "test", CPU: 2, Memory: "2G", DockerDisk: "20g", StateDisk: "10g", CacheDisk: "20g",
 				TmpStorage: tt.storage, TmpSizeBytes: tt.size, TmpTTL: tt.ttl,
 			}
-			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil)
+			spec, err := workspaceSpec(t.Context(), ws, vmRuntimeFiles{}, "image", nil, nil, nil)
 			if err != nil {
 				t.Fatalf("workspaceSpec: %v", err)
 			}

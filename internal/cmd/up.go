@@ -110,9 +110,21 @@ func resolveImageStrategy(wsImage, defaultsImage, wsDockerfile string) (imageStr
 	return strategyCascade, ""
 }
 
+// buildsImage reports whether jailoc builds the image of ws, as opposed to
+// using a configured image as is.
+func buildsImage(cfg *config.Config, ws *workspace.Resolved) bool {
+	strategy, _ := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
+	return strategy != strategyDirectImage && strategy != strategyDefaultsDirect
+}
+
 // ResolveAndLayerImage resolves and builds the workspace image. It returns
 // the final image and the images it is built from, the final one last.
-func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, version string) (string, []string, error) {
+// The optional ca is the external CA bundle every build trusts.
+func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, version string, cas ...*docker.BuildCA) (string, []string, error) {
+	var ca *docker.BuildCA
+	if len(cas) > 0 {
+		ca = cas[0]
+	}
 	strategy, strategyImage := resolveImageStrategy(ws.Image, cfg.Defaults.Image, ws.Dockerfile)
 	slog.Debug("image strategy resolved", "strategy", strategy, "image", strategyImage)
 	switch strategy {
@@ -124,12 +136,12 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 		return strategyImage, []string{strategyImage}, nil
 	case strategyDefaultsOverlay:
 		_, _ = color.New(color.FgCyan).Printf("Building overlay on default image %s...\n", strategyImage)
-		chain, err := workspaceLayers(ctx, cfg, ws, []string{strategyImage})
+		chain, err := workspaceLayers(ctx, cfg, ws, []string{strategyImage}, ca)
 		if err != nil {
 			return "", nil, err
 		}
 		start := time.Now()
-		final, err := docker.BuildOverlayImage(ctx, chain[len(chain)-1], *ws)
+		final, err := docker.BuildOverlayImage(ctx, chain[len(chain)-1], *ws, ca)
 		if err != nil {
 			return "", nil, fmt.Errorf("build workspace overlay image: %w", err)
 		}
@@ -140,19 +152,19 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 	default: // strategyCascade
 		_, _ = color.New(color.FgCyan).Printf("Resolving base image...\n")
 		start := time.Now()
-		base, err := docker.ResolveBaseImage(ctx, cfg, version)
+		base, err := docker.ResolveBaseImage(ctx, cfg, version, ca)
 		if err != nil {
 			return "", nil, fmt.Errorf("resolve base image: %w", err)
 		}
 		logStep("resolve base image", start, "image", base)
-		chain, err := workspaceLayers(ctx, cfg, ws, []string{base})
+		chain, err := workspaceLayers(ctx, cfg, ws, []string{base}, ca)
 		if err != nil {
 			return "", nil, err
 		}
 
 		slog.Debug("building workspace layer", "base", chain[len(chain)-1], "dockerfile", ws.Dockerfile)
 		start = time.Now()
-		final, err := docker.BuildOverlayImage(ctx, chain[len(chain)-1], *ws)
+		final, err := docker.BuildOverlayImage(ctx, chain[len(chain)-1], *ws, ca)
 		if err != nil {
 			return "", nil, fmt.Errorf("build workspace overlay image: %w", err)
 		}
@@ -166,10 +178,10 @@ func ResolveAndLayerImage(ctx context.Context, cfg *config.Config, ws *workspace
 // workspaceLayers adds the layers jailoc builds for ws on top of the last
 // image of chain: Docker when enable_docker is on, then the agent. It returns
 // chain with the images it built appended.
-func workspaceLayers(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, chain []string) ([]string, error) {
+func workspaceLayers(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, chain []string, ca *docker.BuildCA) ([]string, error) {
 	if ws.EnableDocker {
 		start := time.Now()
-		image, err := docker.BuildDockerImage(ctx, chain[len(chain)-1], cfg.Base.UbuntuMirror)
+		image, err := docker.BuildDockerImage(ctx, chain[len(chain)-1], cfg.Base.UbuntuMirror, ca)
 		if err != nil {
 			return nil, fmt.Errorf("add Docker to the workspace image: %w", err)
 		}
@@ -180,7 +192,7 @@ func workspaceLayers(ctx context.Context, cfg *config.Config, ws *workspace.Reso
 		return chain, nil
 	}
 	start := time.Now()
-	image, err := docker.BuildAgentImage(ctx, chain[len(chain)-1], ws.Agent)
+	image, err := docker.BuildAgentImage(ctx, chain[len(chain)-1], ws.Agent, ca)
 	if err != nil {
 		return nil, fmt.Errorf("install %s into the workspace image: %w", ws.Agent.Title, err)
 	}

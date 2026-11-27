@@ -81,6 +81,12 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if err := materializeCABundle(ws); err != nil {
 		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}
+	// Snapshotted once: image builds, the builder VM and the recorded
+	// spec all see the same bundle.
+	buildCA, err := workspaceBuildCA(ws)
+	if err != nil {
+		return fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
+	}
 	cacheDir := workspaceCacheDir(ws.Name)
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		return fmt.Errorf("create cache directory %q: %w", cacheDir, err)
@@ -117,7 +123,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	pruneRuntimeCache(rt)
 	logStep("prepare VM runtime", start)
 	start = time.Now()
-	ref, err := buildWorkspaceImage(ctx, cfg, ws, rt)
+	ref, err := buildWorkspaceImage(ctx, cfg, ws, rt, buildCA)
 	if err != nil {
 		return err
 	}
@@ -127,9 +133,15 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if err != nil {
 		return fmt.Errorf("workspace %q: %w", ws.Name, err)
 	}
-	spec, err := workspaceSpec(ctx, ws, rt, ref, shares, binds)
+	spec, err := workspaceSpec(ctx, ws, rt, ref, shares, binds, buildCA)
 	if err != nil {
 		return err
+	}
+	if buildsImage(cfg, ws) {
+		spec.BuildCA = buildCAState(buildCA)
+	} else {
+		// jailoc built nothing, so a changed bundle changes nothing.
+		spec.BuildCA = ""
 	}
 	spec.Guest.Binds = internal
 	if err := configureVMDocker(ws, &spec); err != nil {
@@ -176,18 +188,19 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 
 // buildWorkspaceImage runs the image cascade in a builder VM and converts the
 // result into the image cache. It returns the image-cache reference.
-func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, rt vmRuntimeFiles) (string, error) {
+// With ca, builds run in the managed builder VM, which trusts it.
+func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, rt vmRuntimeFiles, ca *docker.BuildCA) (string, error) {
 	var hostErr error
 	if !ws.IsolatedBuild && cfg.VM.Builder != config.BuilderVM {
 		hostErr = docker.HostArchitecture(ctx)
 	}
-	host, err := useHostDocker(cfg.VM.Builder, ws.IsolatedBuild, hostErr)
+	host, err := useHostDocker(cfg.VM.Builder, ws.IsolatedBuild, ca != nil, hostErr)
 	if err != nil {
 		return "", err
 	}
 	if host {
 		_, _ = color.New(color.FgCyan).Printf("Building image for workspace %s with the host Docker daemon...\n", ws.Name)
-		return importWorkspaceImage(ctx, cfg, ws)
+		return importWorkspaceImage(ctx, cfg, ws, ca)
 	}
 	if hostErr != nil {
 		slog.Debug("host Docker not used for the image build", "reason", hostErr)
@@ -222,6 +235,10 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	if err != nil {
 		return "", err
 	}
+	caPath, err := writeBuilderCABundle(dir, ca)
+	if err != nil {
+		return "", err
+	}
 	spec := vm.Spec{
 		Kind:       vm.KindBuilder,
 		Workspace:  "builder",
@@ -235,9 +252,11 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		LibDir:     rt.libDir,
 		ImageCache: filepath.Join(vmRootDir(), "images"),
 		Broker:     []string{exe, "netbroker"},
-		// The builder restarts with each workspace's bundle, so pulls behind
-		// a TLS-intercepting proxy work in the shared builder too.
-		CABundle: workspaceCABundle(ws),
+		// The builder restarts with each workspace's external bundle, so
+		// pulls behind a TLS-intercepting proxy work in the shared builder
+		// too. The digest restarts it when the bundle changes at the same path.
+		CABundle:       caPath,
+		CABundleDigest: ca.Digest(),
 	}
 	if ws.IsolatedBuild {
 		spec.Workspace = ws.Name + "-builder"
@@ -264,16 +283,22 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	return withBuilderMaintenance(ctx, func(ctx context.Context, phase string) {
 		maintainBuilderDaemon(ctx, spec.DiskSize, phase, os.Stdout, os.Stderr)
 	}, func() (string, error) {
-		return importWorkspaceImage(ctx, cfg, ws)
+		return importWorkspaceImage(ctx, cfg, ws, ca)
 	})
 }
 
 // useHostDocker reports whether the workspace image is built with the host
 // Docker daemon. isolated_build always uses its own builder VM; "auto" uses
-// the host daemon when hostErr is nil.
-func useHostDocker(builder string, isolated bool, hostErr error) (bool, error) {
+// the host daemon when hostErr is nil. With ca_bundle forwarding the build
+// runs in the managed builder VM, and builder = "docker" is rejected because
+// jailoc never modifies the host Docker daemon.
+func useHostDocker(builder string, isolated, forwardCA bool, hostErr error) (bool, error) {
 	switch {
+	case forwardCA && builder == config.BuilderDocker:
+		return false, fmt.Errorf("[vm] builder = \"docker\" cannot be used when ca_bundle forwarding is active: jailoc forwards ca_bundle into its builder VM and never modifies the host Docker daemon; set [vm] builder = \"auto\" or \"vm\", or set ca_bundle = false")
 	case isolated || builder == config.BuilderVM:
+		return false, nil
+	case forwardCA:
 		return false, nil
 	case builder == config.BuilderDocker && hostErr != nil:
 		return false, fmt.Errorf(`[vm] builder = "docker": %w`, hostErr)
@@ -282,17 +307,36 @@ func useHostDocker(builder string, isolated bool, hostErr error) (bool, error) {
 	}
 }
 
+// writeBuilderCABundle writes ca into dir for the builder VM and returns its
+// path. With a nil ca it removes any bundle a previous workspace left in the
+// shared builder directory and returns an empty path.
+func writeBuilderCABundle(dir string, ca *docker.BuildCA) (string, error) {
+	destination := filepath.Join(dir, caBundleFilename)
+	if ca == nil {
+		return "", removeCABundle(destination)
+	}
+	if err := writeCABundleAtomically(destination, ca.PEM()); err != nil {
+		return "", fmt.Errorf("write builder CA bundle: %w", err)
+	}
+	return destination, nil
+}
+
 // importWorkspaceImage resolves and builds the workspace image with the
 // Docker daemon selected by DOCKER_HOST and converts it into the VM image
 // cache.
-func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (string, error) {
+// The optional ca is the external CA bundle the builds and pulls trust.
+func importWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.Resolved, cas ...*docker.BuildCA) (string, error) {
+	var ca *docker.BuildCA
+	if len(cas) > 0 {
+		ca = cas[0]
+	}
 	_, _ = color.New(color.FgCyan).Printf("Resolving image for workspace %s...\n", ws.Name)
-	finalImage, chain, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion)
+	finalImage, chain, err := ResolveAndLayerImage(ctx, cfg, ws, appVersion, ca)
 	if err != nil {
 		return "", fmt.Errorf("resolve image for workspace %q: %w", ws.Name, err)
 	}
 	start := time.Now()
-	if err := docker.EnsureImage(ctx, finalImage); err != nil {
+	if err := docker.EnsureBuildImage(ctx, finalImage, ca); err != nil {
 		return "", err
 	}
 	logStep("ensure image", start, "image", finalImage)
@@ -631,7 +675,7 @@ func pruneRuntimeCache(rt vmRuntimeFiles) {
 }
 
 // workspaceSpec describes the workspace VM booting ref.
-func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFiles, ref string, shares []vm.Share, snapshots []guest.Snapshot) (vm.Spec, error) {
+func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFiles, ref string, shares []vm.Share, snapshots []guest.Snapshot, ca *docker.BuildCA) (vm.Spec, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return vm.Spec{}, fmt.Errorf("locate jailoc executable: %w", err)
@@ -724,6 +768,7 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		SSHAgent:      agent,
 		GPGAgent:      gpgAgent,
 		HostServices:  hostServices,
+		BuildCA:       buildCAState(ca),
 	}
 	if ws.TmpStorage == config.TmpStorageDisk {
 		spec.TmpDiskSize = ws.TmpSizeBytes
@@ -784,15 +829,6 @@ func vmHostServices(ws *workspace.Resolved) []vm.HostService {
 	return out
 }
 
-// workspaceCABundle is the materialized CA bundle of the workspace, or "".
-func workspaceCABundle(ws *workspace.Resolved) string {
-	path := filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)
-	if _, err := os.Stat(path); err != nil {
-		return ""
-	}
-	return path
-}
-
 // secretsPayload reads the workspace environment and secret values on the
 // host. Env secrets go to the session environment only, file secrets to
 // /run/secrets. Values stay in memory.
@@ -829,34 +865,10 @@ func secretsPayload(ctx context.Context, ws *workspace.Resolved, spec vm.Spec, p
 	return payload, nil
 }
 
-// caBundleVars are the variables that point TLS clients at a CA bundle
-// file. With a forwarded CA bundle, sessions get them set to the guest's
-// system bundle, which then holds the forwarded certificates, so clients
-// that ship their own roots or read only a variable trust them too:
-// NODE_EXTRA_CA_CERTS for Node and Bun, SSL_CERT_FILE for OpenSSL, Go, uv
-// and httpx, and the variables of requests, curl, pip, the AWS and Google
-// Cloud CLIs, httplib2, gRPC, cargo, git, Nix, Deno and Hex.
-var caBundleVars = []string{
-	"NODE_EXTRA_CA_CERTS",
-	"SSL_CERT_FILE",
-	"REQUESTS_CA_BUNDLE",
-	"CURL_CA_BUNDLE",
-	"PIP_CERT",
-	"AWS_CA_BUNDLE",
-	"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE",
-	"HTTPLIB2_CA_CERTS",
-	"GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
-	"CARGO_HTTP_CAINFO",
-	"GIT_SSL_CAINFO",
-	"NIX_SSL_CERT_FILE",
-	"DENO_CERT",
-	"HEX_CACERTS_PATH",
-}
-
-// caBundleEnv sets caBundleVars to the guest's system CA bundle.
+// caBundleEnv sets guest.CABundleVars to the guest's system CA bundle.
 func caBundleEnv() []string {
-	env := make([]string, 0, len(caBundleVars))
-	for _, k := range caBundleVars {
+	env := make([]string, 0, len(guest.CABundleVars))
+	for _, k := range guest.CABundleVars {
 		env = append(env, k+"="+guest.SystemCABundle)
 	}
 	return env

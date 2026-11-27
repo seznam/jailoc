@@ -197,6 +197,10 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	if err := materializeCABundle(ws); err != nil {
 		return vm.Spec{}, nil, fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
 	}
+	buildCA, err := workspaceBuildCA(ws)
+	if err != nil {
+		return vm.Spec{}, nil, fmt.Errorf("prepare CA bundle for workspace %q: %w", ws.Name, err)
+	}
 	cacheDir := workspaceCacheDir(ws.Name)
 	if err := writeAgentFiles(ws, cacheDir); err != nil {
 		return vm.Spec{}, nil, err
@@ -221,7 +225,7 @@ func reloadSpec(ctx context.Context, ws *workspace.Resolved, running vm.Spec) (v
 	// Paths and mounts change only on restart, so check the running shares.
 	warnDanglingShareLinks(ws, running.Shares, snapshots)
 	rt := vmRuntimeFiles{runner: running.RunnerPath, libDir: running.LibDir, guest: running.GuestBinary}
-	spec, err := workspaceSpec(ctx, ws, rt, running.Image, shares, nil)
+	spec, err := workspaceSpec(ctx, ws, rt, running.Image, shares, nil, buildCA)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
@@ -328,6 +332,11 @@ func restartOnlyChanges(running, want vm.Spec) []string {
 	}
 	if !profileChanged && (!slices.Equal(sortedShares(running.Shares), sortedShares(want.Shares)) || !slices.Equal(running.Guest.Binds, want.Guest.Binds)) {
 		out = append(out, "paths and mounts")
+	}
+	// The image was built with the bundle of its first start. A VM that
+	// predates the record, or runs an image jailoc did not build, has none.
+	if running.BuildCA != "" && want.BuildCA != "" && running.BuildCA != want.BuildCA {
+		out = append(out, "ca_bundle (for image builds)")
 	}
 	if running.CPUs != want.CPUs {
 		out = append(out, "cpu")
