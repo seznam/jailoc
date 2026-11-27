@@ -165,6 +165,8 @@ Set it in `[workspaces.<ws>.agents.<name>]` for one workspace, or in `[defaults.
 
 New, resumed and continued sessions use the current configuration. A session that's already running is unchanged. No `jailoc restart` is needed.
 
+Claude Code also receives `IS_SANDBOX=1` in the workspace VM, declaring the existing isolation for its root `bypassPermissions` guard; the separate `CLAUDE_CODE_SANDBOXED=1` marker suppresses directory-trust prompts. Standard jailoc sessions run as the non-root `agent` user, and neither marker creates isolation or changes the host environment. Restart an already-running workspace with `jailoc restart <name>` to pick up built-in environment changes.
+
 !!! warning
     `default_args` is not an access control. Imported agent settings or explicit `args` can still enable a permission bypass. The VM stays the security boundary.
 
