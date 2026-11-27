@@ -1028,6 +1028,29 @@ func TestPrepareCADockerfileArgOverridesInheritedDefault(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("ARG after RUN keeps early default and overrides after ARG", func(t *testing.T) {
+		t.Parallel()
+		e := &fakeEngine{images: map[string]fakeImage{"ubuntu:26.04": {}}}
+		dockerfile := []byte("FROM ubuntu:26.04\nRUN true\nARG REQUESTS_CA_BUNDLE=/custom/req.pem\nARG CURL_CA_BUNDLE=/custom/curl.pem\nRUN true\n")
+		got, err := prepareCADockerfile(context.Background(), e.client(t), dockerfile, nil, ca)
+		if err != nil {
+			t.Fatalf("prepareCADockerfile: %v", err)
+		}
+		text := string(got)
+		if !strings.Contains(text, "ENV REQUESTS_CA_BUNDLE="+guest.SystemCABundle+"\n") || !strings.Contains(text, "ENV CURL_CA_BUNDLE="+guest.SystemCABundle+"\n") {
+			t.Errorf("early RUN lacks the initial defaults:\n%s", text)
+		}
+		if !envAfter(text, "ARG REQUESTS_CA_BUNDLE=", `ENV REQUESTS_CA_BUNDLE="/custom/req.pem"`) {
+			t.Errorf("override does not follow ARG REQUESTS_CA_BUNDLE:\n%s", text)
+		}
+		if !envAfter(text, "ARG CURL_CA_BUNDLE=", `ENV CURL_CA_BUNDLE="/custom/curl.pem"`) {
+			t.Errorf("override does not follow ARG CURL_CA_BUNDLE:\n%s", text)
+		}
+		if recordedDefault(text, "REQUESTS_CA_BUNDLE") || recordedDefault(text, "CURL_CA_BUNDLE") {
+			t.Errorf("overridden keys are still recorded as active defaults:\n%s", text)
+		}
+	})
 }
 
 func TestPrepareCADockerfileRemovesProbeVolumes(t *testing.T) {

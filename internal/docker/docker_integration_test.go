@@ -571,6 +571,18 @@ RUN test "$PIP_CERT" = /explicit/base.pem
 	if env["PIP_CERT"] != "/explicit/base.pem" {
 		t.Errorf("explicit: PIP_CERT = %q, want the base's value", env["PIP_CERT"])
 	}
+
+	// A RUN before a valued ARG sees jailoc's default, and a RUN after sees the ARG.
+	_, env = build("ca-arg-after-run", `FROM ${BASE
+}
+RUN test "$REQUESTS_CA_BUNDLE" = /etc/ssl/certs/ca-certificates.crt && test "$CURL_CA_BUNDLE" = /etc/ssl/certs/ca-certificates.crt
+ARG REQUESTS_CA_BUNDLE=/custom/after-req.pem
+ARG CURL_CA_BUNDLE=/custom/after-curl.pem
+RUN test "$REQUESTS_CA_BUNDLE" = /custom/after-req.pem && test "$CURL_CA_BUNDLE" = /custom/after-curl.pem
+`, base)
+	if env["REQUESTS_CA_BUNDLE"] != "/custom/after-req.pem" || env["CURL_CA_BUNDLE"] != "/custom/after-curl.pem" {
+		t.Errorf("after-run: REQUESTS_CA_BUNDLE=%q CURL_CA_BUNDLE=%q, want ARG values", env["REQUESTS_CA_BUNDLE"], env["CURL_CA_BUNDLE"])
+	}
 }
 
 // TestBuildOverlayImageCADigestCacheInvalidation rotates the CA bundle at the
