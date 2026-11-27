@@ -35,6 +35,8 @@ type Route struct {
 	StartPath  string
 	Auth       bool
 	Generation string
+	// StaticBody, when non-empty and Dial is nil, is served directly as a 200 text/plain; charset=utf-8 response to GET and HEAD requests on "/", and 404 on other paths.
+	StaticBody string
 }
 
 // Config supplies an already trusted certificate and the exact hostname allowlist.
@@ -93,7 +95,7 @@ func (g *Server) Update(cfg Config) (map[string]string, error) {
 	}
 	nextRoutes := make(map[string]Route, len(cfg.Routes))
 	for _, route := range cfg.Routes {
-		if !validHostname(route.Host) || route.Dial == nil {
+		if !validHostname(route.Host) || (route.Dial != nil) == (route.StaticBody != "") {
 			return nil, fmt.Errorf("invalid proxy route %q", route.Host)
 		}
 		if err := validStartPath(route.StartPath); err != nil {

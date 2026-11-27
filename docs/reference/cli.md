@@ -414,6 +414,90 @@ The URL is a credential: jailoc keeps it only in memory and doesn't log it or st
 
 ---
 
+### `jailoc proxy`
+
+Serve the `proxy` routes of running workspaces over HTTPS on a loopback address, and set up the host for them.
+
+```text
+jailoc proxy [workspace...] [flags]
+jailoc proxy install [flags]
+jailoc proxy uninstall [flags]
+jailoc proxy status
+jailoc proxy stop
+```
+
+- Without workspace arguments, the proxy serves every running workspace that has `proxy` routes. Naming a workspace that is not running, has no routes, or whose running VM does not match its configuration is an error.
+- By default the proxy runs in the background. When it already runs, the command keeps existing browser sessions and prints the active routes.
+- It starts no VM, opens no browser and changes no host setting. Host setup is [`jailoc proxy install`](#jailoc-proxy-install).
+- Each route is served at `https://<route>.<workspace>.jailoc.local`. The workspace itself answers `GET` and `HEAD` of `/` at `https://<workspace>.jailoc.local/` with `200 OK` and the body `OK`.
+- The proxy refuses to run as root.
+- `jailoc up`, `jailoc restart`, `jailoc reload` and `jailoc down` start, update and stop the background proxy for the workspaces they handle. See the [proxy routes how-to](../how-to/proxy-routes.md).
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--foreground` | `-f` | `false` | Run the proxy in the foreground instead of the background. |
+| `--listen ADDR` | | `127.0.0.1:8443` | Loopback address to listen on, `host:port`. Port `0` picks a free port. A port other than 443 needs a forward from 443 to it. Can't be combined with `--listener-broker`. |
+| `--listener-broker` | | `false` | Serve through `jailoc-listener-broker` on `127.0.0.1:443` and `[::1]:443` instead of opening a listener. Only one proxy can attach to the broker at a time. |
+
+#### `jailoc proxy install`
+
+Set up the host once so browsers reach the proxy routes over HTTPS on port 443.
+
+```text
+jailoc proxy install [flags]
+```
+
+- Installs the `jailoc-listener-broker` embedded in jailoc as a root-owned service on `127.0.0.1:443` and `[::1]:443`. On macOS the binary is `/Library/PrivilegedHelperTools/jailoc-listener-broker`, run by the `cz.seznam.jailoc.listener-broker` LaunchDaemon. On Linux it is `/usr/local/libexec/jailoc-listener-broker`, run by the `jailoc-listener-broker.service` systemd unit.
+- Syncs `/etc/hosts` so `<workspace>.jailoc.local` and `<route>.<workspace>.jailoc.local` resolve to loopback. jailoc owns only the block between `# BEGIN jailoc proxy hosts` and `# END jailoc proxy hosts`.
+- Trusts the proxy CA certificate `ca.crt` in the system trust store (the keychain on macOS; the Debian, Fedora or Arch store on Linux) and in the NSS databases of Chrome, Chromium and Firefox. NSS databases need `certutil` on `PATH`; without it, import `ca.crt` into Firefox by hand.
+- Lists the planned changes and asks once for confirmation before making them.
+- Configures `jailoc up`, `jailoc restart` and `jailoc proxy` to attach to the listener broker by default.
+- Running it again updates the `/etc/hosts` block to the current workspaces and proxy routes, and replaces the trusted CA if `ca.crt` was regenerated.
+- Uses the `jailoc-listener-broker` embedded in release builds, or a `jailoc-listener-broker` binary next to `jailoc`.
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--yes` | `-y` | Accept every confirmation. |
+
+#### `jailoc proxy uninstall`
+
+Remove what `jailoc proxy install` added.
+
+```text
+jailoc proxy uninstall [flags]
+```
+
+- Stops the background proxy, then removes the listener broker service and binary, the jailoc block of `/etc/hosts`, and the CA certificate from the system trust store and the NSS databases.
+- Lists the planned changes and asks once for confirmation before making them.
+- Keeps the CA directory `~/.local/share/jailoc/proxy`.
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--yes` | `-y` | Accept every confirmation. |
+
+#### `jailoc proxy status`
+
+Show the background proxy and the host setup.
+
+```text
+jailoc proxy status
+```
+
+- Shows the running proxy, its listener and its route URLs.
+- Checks the listener broker, the CA certificate and the `/etc/hosts` entries of the configured workspaces and proxy routes.
+
+#### `jailoc proxy stop`
+
+Stop the background proxy.
+
+```text
+jailoc proxy stop
+```
+
+- Closes every route and browser session of the proxy.
+- Leaves the host setup of `jailoc proxy install` in place.
+
+---
+
 ### `jailoc sessions`
 
 List the agent sessions running in a workspace VM, or stop one.

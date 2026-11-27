@@ -338,8 +338,19 @@ func TestProxyRoutes(t *testing.T) {
 	for _, r := range inst.routes() {
 		hosts = append(hosts, r.Host)
 	}
-	if want := []string{"api.ws.jailoc.local", "app.ws.jailoc.local"}; !slices.Equal(hosts, want) {
+	if want := []string{"api.ws.jailoc.local", "app.ws.jailoc.local", "ws.jailoc.local"}; !slices.Equal(hosts, want) {
 		t.Errorf("hosts = %v, want %v", hosts, want)
+	}
+	routes := inst.routes()
+	if last := routes[len(routes)-1]; last.StaticBody != "OK" || last.Dial != nil || last.Auth {
+		t.Errorf("bare workspace route = %+v, want a static OK route without auth", last)
+	}
+	if got := proxyWorkspaceHost("ws"); got != "ws.jailoc.local" {
+		t.Errorf("proxyWorkspaceHost = %q", got)
+	}
+	noRoutes := inst.routesFor(nil)
+	if len(noRoutes) != 0 {
+		t.Errorf("routesFor(nil) = %v, want none", noRoutes)
 	}
 }
 
@@ -1501,5 +1512,117 @@ func TestPathsOverlap(t *testing.T) {
 		if got := pathsOverlap(tt.a, tt.b); got != tt.want {
 			t.Errorf("pathsOverlap(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
 		}
+	}
+}
+
+func TestProxyServesWorkspaceHostOK(t *testing.T) {
+	run, _ := startProxyRun(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "from the guest")
+	}))
+	bare := "e2e.jailoc.local"
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: proxyCATestPool(t), ServerName: bare, MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", run.addr)
+		},
+	}
+	t.Cleanup(tr.CloseIdleConnections)
+	run.client = &http.Client{Transport: tr, Timeout: 5 * time.Second}
+	run.host = bare
+
+	res := run.do(t, "GET", "/", nil, nil)
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK || string(body) != "OK" {
+		t.Fatalf("GET https://%s/: status %d, body %q, want 200 OK", bare, res.StatusCode, body)
+	}
+	if res := run.do(t, "GET", "/other", nil, nil); res.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /other: status %d, want 404", res.StatusCode)
+	}
+}
+
+func TestProxyCertSANsIncludeWorkspaceHost(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Workspaces: map[string]config.Workspace{
+		"one":   {Proxy: config.ProxyMap(map[string]int{"app": 3000})},
+		"Bad_1": {},
+	}}
+	targets := []proxyTarget{{ws: &workspace.Resolved{Name: "two", Proxy: []workspace.ProxyRoute{{Name: "api", Port: 8080}}}}}
+	names, hosts := proxyCertSANs(cfg, targets)
+	for _, want := range []string{"one.jailoc.local", "*.one.jailoc.local", "two.jailoc.local", "*.two.jailoc.local", "api.two.jailoc.local"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("SAN names %v lack %q", names, want)
+		}
+	}
+	for _, want := range []string{"one.jailoc.local", "two.jailoc.local", "api.two.jailoc.local"} {
+		if !slices.Contains(hosts, want) {
+			t.Errorf("checked hosts %v lack %q", hosts, want)
+		}
+	}
+	for _, n := range names {
+		if strings.Contains(strings.ToLower(n), "bad_1") {
+			t.Errorf("invalid DNS label in SANs: %q", n)
+		}
+	}
+}
+
+func TestEnsureProxyCertCoversWorkspaceHostAndReissuesOldLeaf(t *testing.T) {
+	cfg, targets := proxyCertTestSetup(t)
+	cert, _, err := ensureProxyCert(cfg, targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cert.Leaf.VerifyHostname("one.jailoc.local"); err != nil {
+		t.Fatalf("leaf does not cover the bare workspace host: %v", err)
+	}
+	// A leaf from before the bare host existed is replaced, keeping the CA.
+	dir := proxyCADir()
+	ca, err := loadOrCreateProxyCA(dir, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := createProxyLeaf(filepath.Join(dir, proxyLeafCert), filepath.Join(dir, proxyLeafKey), ca, []string{"*.one.jailoc.local", "app.one.jailoc.local"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed, _, err := ensureProxyCert(cfg, targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(old.Certificate[0], renewed.Certificate[0]) {
+		t.Fatal("a leaf without the bare workspace host was reused")
+	}
+	if err := renewed.Leaf.VerifyHostname("one.jailoc.local"); err != nil {
+		t.Fatalf("renewed leaf: %v", err)
+	}
+}
+
+func TestEnsureProxyCA(t *testing.T) {
+	cfg, _ := proxyCertTestSetup(t)
+	caPath, root, rootPEM, err := ensureProxyCA(cfg)
+	if err != nil {
+		t.Fatalf("ensureProxyCA: %v", err)
+	}
+	if caPath != proxyCACertPath() {
+		t.Errorf("caPath = %q, want %q", caPath, proxyCACertPath())
+	}
+	onDisk, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(onDisk, rootPEM) {
+		t.Error("returned PEM differs from ca.crt")
+	}
+	if !root.IsCA || root.Subject.CommonName != "jailoc proxy root CA" {
+		t.Errorf("root = %v, want the jailoc proxy root CA", root.Subject)
+	}
+	if _, err := os.Stat(filepath.Join(proxyCADir(), proxyLeafCert)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ensureProxyCA issued a leaf certificate (stat err %v)", err)
+	}
+	_, again, _, err := ensureProxyCA(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(again.Raw, root.Raw) {
+		t.Error("second call replaced the CA")
 	}
 }

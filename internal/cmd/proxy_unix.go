@@ -85,13 +85,15 @@ func init() {
 func newProxyCmd() *cobra.Command {
 	var opts proxyOptions
 	cmd := &cobra.Command{
-		Use:    "proxy [workspace...]",
-		Hidden: true,
-		Short:  "Serve the proxy routes of running workspaces over HTTPS",
+		Use:   "proxy [workspace...]",
+		Short: "Serve the proxy routes of running workspaces over HTTPS (see also: proxy install, uninstall, status, stop)",
 		Long: "Serve the proxy routes of running workspaces over HTTPS on a loopback address.\n\n" +
+			"Subcommands: `jailoc proxy install` sets up the host once (privileged listener broker on port 443, /etc/hosts entries,\n" +
+			"CA trust), `jailoc proxy uninstall` reverts it, `jailoc proxy status` shows the proxy and the host setup, and\n" +
+			"`jailoc proxy stop` stops the background proxy.\n\n" +
 			"By default the proxy runs in the background (`--foreground` keeps it in the foreground).\n" +
 			"When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes.\n\n" +
-			"Each route is https://<route>.<workspace>.jailoc.local; routes with auth = true are protected by a one-time login code, printed once when the route is added.\n" +
+			"Each route is https://<route>.<workspace>.jailoc.local; https://<workspace>.jailoc.local answers \"OK\" and shows the host setup works; routes with auth = true are protected by a one-time login code, printed once when the route is added.\n" +
 			"jailoc generates and reuses a local CA and leaf certificate in ~/.local/share/jailoc/proxy; the CA is limited to names under jailoc.local.\n" +
 			"The proxy starts no VM, opens no browser and changes no host setting: make the names resolve to the listen address\n" +
 			"(for example with /etc/hosts entries) and trust ~/.local/share/jailoc/proxy/ca.crt in your browser.\n" +
@@ -113,7 +115,7 @@ func newProxyCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&opts.foreground, "foreground", "f", false, "run the proxy in the foreground instead of the background")
 	cmd.Flags().StringVar(&opts.listen, "listen", proxyDefaultListen, "loopback address to listen on, host:port (port 0 picks a free port)")
 	cmd.Flags().BoolVar(&opts.listenerBroker, "listener-broker", false, "serve through jailoc-listener-broker on 127.0.0.1:443 instead of opening a listener")
-	cmd.AddCommand(newProxyStatusCmd(), newProxyStopCmd())
+	cmd.AddCommand(newProxyInstallCmd(), newProxyUninstallCmd(), newProxyStatusCmd(), newProxyStopCmd())
 	return cmd
 }
 
@@ -121,6 +123,12 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	names := args
 	if len(names) == 0 && workspaceExplicit {
 		names = []string{workspaceFlag}
+	}
+	if !cmd.Flags().Changed("listen") && !cmd.Flags().Changed("listener-broker") {
+		if saved := loadProxySavedOptions(); saved.listenerBroker {
+			opts.listenerBroker = true
+			opts.listen = ""
+		}
 	}
 	if !opts.foreground {
 		return runBackgroundProxy(cmd, names, opts)
@@ -315,6 +323,12 @@ func parseProxyListen(s string) (string, error) {
 // proxyHost is the host name of a proxy route of a workspace.
 func proxyHost(route, workspace string) string {
 	return route + "." + workspace + "." + proxyDomain
+}
+
+// proxyWorkspaceHost is the bare host name of a workspace. It answers "OK"
+// while the workspace has proxy routes, so a browser can check the host setup.
+func proxyWorkspaceHost(workspace string) string {
+	return workspace + "." + proxyDomain
 }
 
 // proxyTarget is a workspace VM the proxy serves, as it was when the
@@ -518,10 +532,13 @@ func (i *proxyInstance) routes() []proxy.Route {
 }
 
 func (i *proxyInstance) routesFor(proxyRoutes []workspace.ProxyRoute) []proxy.Route {
-	out := make([]proxy.Route, 0, len(proxyRoutes))
+	out := make([]proxy.Route, 0, len(proxyRoutes)+1)
 	for _, r := range proxyRoutes {
 		route := &proxyRoute{inst: i, port: uint16(r.Port), ctx: i.ctx} //nolint:gosec // G115: validated to 1-65535
 		out = append(out, proxy.Route{Host: proxyHost(r.Name, i.target.ws.Name), Dial: route.dialContext, Auth: r.Auth, Generation: i.gen})
+	}
+	if len(proxyRoutes) > 0 {
+		out = append(out, proxy.Route{Host: proxyWorkspaceHost(i.target.ws.Name), StaticBody: "OK", Generation: i.gen})
 	}
 	return out
 }

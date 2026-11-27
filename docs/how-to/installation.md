@@ -116,12 +116,12 @@ Extract the archive and place `jailoc` (and `jl`, if you want the alias) on your
 
 ## Build from source
 
-`go install github.com/seznam/jailoc/cmd/jailoc@...` produces a binary without `jailoc-guest`, the VM init, and cannot start workspaces. Build from a checkout instead, embedding the guest binary with `go generate`:
+`go install github.com/seznam/jailoc/cmd/jailoc@...` produces a binary without `jailoc-guest`, the VM init, and cannot start workspaces. Build from a checkout instead, embedding the guest binary and the listener broker (`jailoc-listener-broker`, installed by `jailoc proxy install`) with `go generate`:
 
 ```bash
 git clone https://github.com/seznam/jailoc.git
 cd jailoc
-go generate ./internal/guestbin
+go generate ./internal/guestbin ./internal/brokerbin
 go install ./cmd/jailoc
 ```
 

@@ -51,7 +51,7 @@ Other ways to install:
 ## 🛠️ Development
 
 ```bash
-go generate ./internal/guestbin   # embed the jailoc-guest VM init
+go generate ./internal/guestbin ./internal/brokerbin   # embed the jailoc-guest VM init and the listener broker
 go build ./cmd/jailoc
 go test ./...
 ```

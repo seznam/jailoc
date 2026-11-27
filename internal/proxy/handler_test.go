@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"context"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -419,4 +421,63 @@ func TestLoginPageReferrerPolicyKeepsFormOrigin(t *testing.T) {
 	if got := res.Header.Get("Referrer-Policy"); got != "same-origin" {
 		t.Fatalf("login Referrer-Policy = %q, want same-origin", got)
 	}
+}
+
+func TestStaticBodyRoute(t *testing.T) {
+	t.Parallel()
+	const host = "ws-one.jailoc.local"
+	cert, pool := testCertificate(t, host)
+	g, _, err := New(Config{Cert: cert, Routes: []Route{{Host: host, StaticBody: "OK"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- g.Serve(ctx, ln) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("Serve: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("Serve did not stop")
+		}
+	})
+	x := &testServer{g: g, addr: ln.Addr().String(), pool: pool}
+	client := x.client(t, host)
+
+	res := request(t, client, newRequest(t, "GET", host, "/"), 200)
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "OK" {
+		t.Fatalf("GET / body %q", body)
+	}
+	if got := res.Header.Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("Content-Type %q", got)
+	}
+
+	res = request(t, client, newRequest(t, "HEAD", host, "/"), 200)
+	if body, err = io.ReadAll(res.Body); err != nil || len(body) != 0 {
+		t.Fatalf("HEAD / body %q, err %v", body, err)
+	}
+
+	request(t, client, newRequest(t, "GET", host, "/other"), 404)
+
+	r := newRequest(t, "POST", host, "/")
+	r.Header.Set("Origin", "https://"+host)
+	request(t, client, r, 405)
+
+	r = newRequest(t, "GET", host, "/")
+	r.Header.Set("Origin", "https://"+host)
+	r.Header.Set("Upgrade", "websocket")
+	r.Header.Set("Connection", "Upgrade")
+	request(t, client, r, 400)
 }

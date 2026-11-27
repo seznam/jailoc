@@ -31,6 +31,7 @@ buildGoModule {
   # GoReleaser before hook does; without it jailoc cannot boot a VM.
   preBuild = ''
     go generate ./internal/guestbin
+    go generate ./internal/brokerbin
   '';
   # The vendored-modules derivation runs preBuild too, before vendor/ exists.
   overrideModAttrs = _: {preBuild = "";};

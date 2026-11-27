@@ -103,6 +103,42 @@ func ensureProxyCert(cfg *config.Config, targets []proxyTarget) (tls.Certificate
 	return cert, filepath.Join(dir, proxyCACert), nil
 }
 
+// ensureProxyCA loads or generates the proxy CA without issuing a leaf
+// certificate. It returns the path of the root certificate, the certificate
+// and its PEM bytes.
+func ensureProxyCA(cfg *config.Config) (string, *x509.Certificate, []byte, error) {
+	dir := proxyCADir()
+	if err := checkProxyCADirNotShared(dir, cfg, nil); err != nil {
+		return "", nil, nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", nil, nil, fmt.Errorf("create proxy CA directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // proxy CA directory must be 0700.
+		return "", nil, nil, fmt.Errorf("chmod proxy CA directory: %w", err)
+	}
+	var (
+		root    *x509.Certificate
+		rootPEM []byte
+	)
+	err := withProxyCALock(dir, func() error {
+		ca, err := loadOrCreateProxyCA(dir, time.Now())
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(filepath.Join(dir, proxyCACert)) //nolint:gosec // G304: jailoc-owned proxy CA path
+		if err != nil {
+			return fmt.Errorf("read proxy root CA: %w", err)
+		}
+		root, rootPEM = ca.root, data
+		return nil
+	})
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return filepath.Join(dir, proxyCACert), root, rootPEM, nil
+}
+
 func checkProxyCADirNotShared(dir string, cfg *config.Config, targets []proxyTarget) error {
 	cleanDir := filepath.Clean(dir)
 	realDir := canonicalPath(cleanDir)
@@ -275,14 +311,15 @@ func proxyCertSANs(cfg *config.Config, targets []proxyTarget) (dnsNames, checkHo
 	if cfg != nil {
 		for _, ws := range slices.Sorted(maps.Keys(cfg.Workspaces)) {
 			if config.ValidProxyLabel(ws) {
-				names = append(names, "*."+ws+"."+proxyDomain)
-				hosts = append(hosts, "probe."+ws+"."+proxyDomain)
+				names = append(names, proxyWorkspaceHost(ws), "*."+ws+"."+proxyDomain)
+				hosts = append(hosts, proxyWorkspaceHost(ws), "probe."+ws+"."+proxyDomain)
 			}
 		}
 	}
 	for _, t := range targets {
 		if config.ValidProxyLabel(t.ws.Name) {
-			names = append(names, "*."+t.ws.Name+"."+proxyDomain)
+			names = append(names, proxyWorkspaceHost(t.ws.Name), "*."+t.ws.Name+"."+proxyDomain)
+			hosts = append(hosts, proxyWorkspaceHost(t.ws.Name))
 		}
 		for _, r := range t.ws.Proxy {
 			h := proxyHost(r.Name, t.ws.Name)
