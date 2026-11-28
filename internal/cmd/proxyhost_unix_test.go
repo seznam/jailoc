@@ -1113,6 +1113,36 @@ func TestLoadProxySavedOptionsUsesInstalledBroker(t *testing.T) {
 	}
 }
 
+func TestLoadProxySavedOptionsKeepsInstalledServiceWhenBrokerDown(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		state proxyhost.InstallState
+		saved *proxyOptions
+		want  proxyOptions
+	}{
+		{"recorded service, broker down", proxyhost.InstallState{HelperPath: "/h", ServiceUnitPath: "/u"}, nil, proxyOptions{listenerBroker: true}},
+		{"recorded helper only, broker down", proxyhost.InstallState{HelperPath: "/h"}, nil, proxyOptions{listenerBroker: true}},
+		{"install state without a service, broker down", proxyhost.InstallState{HostsLedger: []byte("x")}, nil, proxyOptions{listen: proxyDefaultListen}},
+		{"recorded service, explicit saved listen", proxyhost.InstallState{HelperPath: "/h", ServiceUnitPath: "/u"}, &proxyOptions{listen: "127.0.0.1:9000"}, proxyOptions{listen: "127.0.0.1:9000"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", shortTempDir(t, "po"))
+			useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
+			if err := proxyhost.WriteInstallState(proxyInstallStatePath(), tt.state); err != nil {
+				t.Fatal(err)
+			}
+			if tt.saved != nil {
+				if err := writeProxySavedOptions(*tt.saved); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := loadProxySavedOptions(); got.listenerBroker != tt.want.listenerBroker || got.listen != tt.want.listen {
+				t.Errorf("loadProxySavedOptions() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProxyScriptsAreConstant(t *testing.T) {
 	t.Parallel()
 	store := &proxyhost.LinuxCAStore{CertPath: "/x/ca.crt", UpdateCmd: []string{"update-ca-certificates"}, RemoveCmd: []string{"update-ca-certificates", "--fresh"}}

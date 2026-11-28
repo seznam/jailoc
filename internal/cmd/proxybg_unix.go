@@ -104,8 +104,10 @@ func writeProxySavedOptions(opts proxyOptions) error {
 
 func loadProxySavedOptions() proxyOptions {
 	data, err := os.ReadFile(proxyOptionsFile()) //nolint:gosec // G304: jailoc-owned state path
-	if errors.Is(err, os.ErrNotExist) && proxyBrokerAnswers() {
-		// A host set up with `jailoc proxy install` needs no saved options.
+	if errors.Is(err, os.ErrNotExist) && (proxyServiceInstalled() || proxyBrokerAnswers()) {
+		// A host set up with `jailoc proxy install` needs no saved options,
+		// and a broker that is down right now is still the installed one.
+		// A broker started by hand has no install state, so it is probed.
 		return proxyOptions{listenerBroker: true}
 	}
 	if err != nil {
@@ -123,6 +125,14 @@ func loadProxySavedOptions() proxyOptions {
 		listen:         listen,
 		listenerBroker: saved.ListenerBroker,
 	}
+}
+
+// proxyServiceInstalled reports whether `jailoc proxy install` recorded the
+// listener broker service. It reads the install state only: it does not ask
+// the broker, which may be stopped or restarting.
+func proxyServiceInstalled() bool {
+	st, err := proxyhost.ReadInstallState(proxyInstallStatePath())
+	return err == nil && (st.HelperPath != "" || st.ServiceUnitPath != "")
 }
 
 // proxyBrokerAnswers reports whether the listener broker of the running user
