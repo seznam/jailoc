@@ -111,12 +111,13 @@ func TestBrokerCmdParseArgs(t *testing.T) {
 			got, err := brokerCmdParseArgs(tt.args)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("brokerCmdParseArgs(%q) = %d, %v; want an error containing %q", tt.args, got, err, tt.wantErr)
+					t.Fatalf("brokerCmdParseArgs(%q) = %+v, %v; want an error containing %q", tt.args, got, err, tt.wantErr)
 				}
 				return
 			}
-			if err != nil || got != tt.want {
-				t.Fatalf("brokerCmdParseArgs(%q) = %d, %v; want %d", tt.args, got, err, tt.want)
+			want := brokerCmdArgs{uid: tt.want, httpPort: 80, httpsPort: 443}
+			if err != nil || got != want {
+				t.Fatalf("brokerCmdParseArgs(%q) = %+v, %v; want %+v", tt.args, got, err, want)
 			}
 		})
 	}
@@ -262,10 +263,13 @@ func bcNewHarness(t *testing.T) *bcHarness {
 		executable:   func() (string, error) { return tr.exe, nil },
 		trustedOwner: bcUID(),
 		trustTop:     tr.root,
-		binds:        []brokerCmdBind{{"tcp4", "127.0.0.1:0"}, {"tcp6", "[::1]:0"}},
-		listen:       h.listen,
-		socketPath:   func(uint32) string { return h.sock },
-		stderr:       h.stderr,
+		// Ephemeral ports, HTTPS pair first like brokerCmdBinds.
+		bindsFor: func(uint16, uint16) []brokerCmdBind {
+			return []brokerCmdBind{{"tcp4", "127.0.0.1:0"}, {"tcp6", "[::1]:0"}, {"tcp4", "127.0.0.1:0"}, {"tcp6", "[::1]:0"}}
+		},
+		listen:     h.listen,
+		socketPath: func(uint32) string { return h.sock },
+		stderr:     h.stderr,
 	}
 	return h
 }
@@ -479,13 +483,13 @@ func TestBrokerCmdRunServesAndStopsCleanly(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- brokerCmdRun(ctx, []string{"--uid", itoa(bcUID())}, h.deps) }()
-	bcWaitListeners(t, h, 2)
+	bcWaitListeners(t, h, 4)
 
 	gwCtx, gwCancel := context.WithTimeout(t.Context(), bcTimeout)
 	defer gwCancel()
 	gw := bcAttach(t, gwCtx, h.sock, h.addr(0))
 
-	for i, addr := range []*net.TCPAddr{h.addr(0), h.addr(1)} {
+	for i, addr := range []*net.TCPAddr{h.addr(0), h.addr(1), h.addr(2), h.addr(3)} {
 		c, err := net.DialTimeout("tcp", addr.String(), bcTimeout)
 		if err != nil {
 			t.Fatalf("dial %s: %v", addr, err)
@@ -550,7 +554,7 @@ func TestBrokerCmdRunServesAndStopsCleanly(t *testing.T) {
 	if _, err := os.Lstat(h.sock); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("control socket still exists after stop: %v", err)
 	}
-	for _, addr := range []*net.TCPAddr{h.addr(0), h.addr(1)} {
+	for _, addr := range []*net.TCPAddr{h.addr(0), h.addr(1), h.addr(2), h.addr(3)} {
 		if c, err := net.DialTimeout("tcp", addr.String(), time.Second); err == nil {
 			_ = c.Close() // the dial must not succeed; nothing to report on close
 			t.Errorf("%s still accepts connections after stop", addr)
@@ -610,7 +614,7 @@ func TestBrokerCmdControlSocketFailureClosesListeners(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "control socket") {
 		t.Fatalf("brokerCmdRun error = %v, want a control socket error", err)
 	}
-	for _, addr := range []*net.TCPAddr{h.addr(0), h.addr(1)} {
+	for _, addr := range []*net.TCPAddr{h.addr(0), h.addr(1), h.addr(2), h.addr(3)} {
 		if c, err := net.DialTimeout("tcp", addr.String(), time.Second); err == nil {
 			_ = c.Close() // the dial must not succeed; nothing to report on close
 			t.Errorf("%s is still open after the control socket failed", addr)

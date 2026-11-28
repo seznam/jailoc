@@ -92,10 +92,36 @@ func validateServiceArgs(helperPath string, uid uint32) error {
 	return nil
 }
 
+// brokerPortArgs returns the broker arguments for optionalPorts, which are
+// either empty (the broker uses its defaults, 80 and 443, exactly as a unit
+// written before ports were configurable did) or the HTTP port followed by
+// the HTTPS port, which are then always written out. Writing them even when
+// they equal the defaults keeps a unit with ports distinguishable from an
+// older one.
+func brokerPortArgs(optionalPorts []int) ([]string, error) {
+	switch len(optionalPorts) {
+	case 0:
+		return nil, nil
+	case 2:
+		if err := ValidateBrokerPorts(optionalPorts[0], optionalPorts[1]); err != nil {
+			return nil, err
+		}
+		return []string{"--http-port", strconv.Itoa(optionalPorts[0]), "--https-port", strconv.Itoa(optionalPorts[1])}, nil
+	default:
+		return nil, fmt.Errorf("got %d ports, want none or the HTTP port followed by the HTTPS port", len(optionalPorts))
+	}
+}
+
 // RenderLaunchDaemonPlist renders the macOS LaunchDaemon that runs the
 // listener broker at boot for uid and restarts it when it exits.
-func RenderLaunchDaemonPlist(helperPath string, uid uint32) ([]byte, error) {
+// optionalPorts is empty or the HTTP port followed by the HTTPS port; see
+// brokerPortArgs.
+func RenderLaunchDaemonPlist(helperPath string, uid uint32, optionalPorts ...int) ([]byte, error) {
 	if err := validateServiceArgs(helperPath, uid); err != nil {
+		return nil, fmt.Errorf("render launch daemon plist: %w", err)
+	}
+	portArgs, err := brokerPortArgs(optionalPorts)
+	if err != nil {
 		return nil, fmt.Errorf("render launch daemon plist: %w", err)
 	}
 	var escaped bytes.Buffer
@@ -114,6 +140,9 @@ func RenderLaunchDaemonPlist(helperPath string, uid uint32) ([]byte, error) {
 	b.WriteString("\t\t<string>" + escaped.String() + "</string>\n")
 	b.WriteString("\t\t<string>--uid</string>\n")
 	b.WriteString("\t\t<string>" + strconv.FormatUint(uint64(uid), 10) + "</string>\n")
+	for _, a := range portArgs {
+		b.WriteString("\t\t<string>" + a + "</string>\n")
+	}
 	b.WriteString("\t</array>\n")
 	b.WriteString("\t<key>RunAtLoad</key>\n")
 	b.WriteString("\t<true/>\n")
@@ -125,9 +154,14 @@ func RenderLaunchDaemonPlist(helperPath string, uid uint32) ([]byte, error) {
 }
 
 // RenderSystemdUnit renders the systemd unit that runs the listener broker
-// for uid and restarts it when it exits.
-func RenderSystemdUnit(helperPath string, uid uint32) ([]byte, error) {
+// for uid and restarts it when it exits. optionalPorts is empty or the HTTP
+// port followed by the HTTPS port; see brokerPortArgs.
+func RenderSystemdUnit(helperPath string, uid uint32, optionalPorts ...int) ([]byte, error) {
 	if err := validateServiceArgs(helperPath, uid); err != nil {
+		return nil, fmt.Errorf("render systemd unit: %w", err)
+	}
+	portArgs, err := brokerPortArgs(optionalPorts)
+	if err != nil {
 		return nil, fmt.Errorf("render systemd unit: %w", err)
 	}
 	// ExecStart splits on whitespace and expands quotes, escapes and
@@ -143,7 +177,7 @@ func RenderSystemdUnit(helperPath string, uid uint32) ([]byte, error) {
 	b.WriteString("\n")
 	b.WriteString("[Service]\n")
 	b.WriteString("Type=simple\n")
-	b.WriteString("ExecStart=" + helperPath + " --uid " + strconv.FormatUint(uint64(uid), 10) + "\n")
+	b.WriteString("ExecStart=" + strings.Join(append([]string{helperPath, "--uid", strconv.FormatUint(uint64(uid), 10)}, portArgs...), " ") + "\n")
 	b.WriteString("Restart=always\n")
 	b.WriteString("RestartSec=1\n")
 	b.WriteString("\n")
@@ -415,13 +449,45 @@ func hasAnyFile(dir string, names ...string) bool {
 // it cannot take the gateway slot, whether or not another gateway is
 // attached. addr is validated like the one of AttachBroker. A broker that
 // predates the health endpoint is refused, not attached to: restart or
-// reinstall it.
+// reinstall it. It does not look at ports; ProbeBrokerPair does.
 func ProbeBroker(ctx context.Context, socketPath string, brokerUID uint32, addr *net.TCPAddr) error {
 	if _, err := brokerListenAddr(addr); err != nil {
 		return fmt.Errorf("probe listener broker: %w", err)
 	}
-	if err := checkBrokerHealth(ctx, socketPath, brokerUID); err != nil {
+	if _, err := checkBrokerHealth(ctx, socketPath, brokerUID, false); err != nil {
 		return fmt.Errorf("probe listener broker: %w", err)
+	}
+	return nil
+}
+
+// ProbeBrokerPair is ProbeBroker for a broker that serves an HTTP and an
+// HTTPS port: besides answering, the broker must report exactly the ports of
+// httpAddr and httpsAddr (the same address rules as AttachBrokerPair). A
+// broker that reports other ports, or none because it predates HTTP support
+// or was installed with an old unit, is refused with an error that says to
+// reinstall it. Like ProbeBroker it never takes the gateway slot.
+func ProbeBrokerPair(ctx context.Context, socketPath string, brokerUID uint32, httpAddr, httpsAddr *net.TCPAddr) error {
+	httpAP, err := brokerListenAddr(httpAddr)
+	if err != nil {
+		return fmt.Errorf("probe listener broker: HTTP listener: %w", err)
+	}
+	httpsAP, err := brokerListenAddr(httpsAddr)
+	if err != nil {
+		return fmt.Errorf("probe listener broker: HTTPS listener: %w", err)
+	}
+	if err := ValidateBrokerPorts(int(httpAP.Port()), int(httpsAP.Port())); err != nil {
+		return fmt.Errorf("probe listener broker: %w", err)
+	}
+	got, err := checkBrokerHealth(ctx, socketPath, brokerUID, true)
+	if err != nil {
+		return fmt.Errorf("probe listener broker: %w", err)
+	}
+	if !got.reported {
+		return fmt.Errorf("probe listener broker: broker at %s does not report its ports: it predates HTTP support; reinstall jailoc-listener-broker and restart its service", socketPath)
+	}
+	if got.http != httpAP.Port() || got.https != httpsAP.Port() {
+		return fmt.Errorf("probe listener broker: broker serves HTTP port %d and HTTPS port %d, this proxy uses %d and %d; reinstall jailoc-listener-broker with matching ports",
+			got.http, got.https, httpAP.Port(), httpsAP.Port())
 	}
 	return nil
 }

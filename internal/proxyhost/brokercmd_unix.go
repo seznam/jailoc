@@ -42,18 +42,23 @@ type brokerCmdDeps struct {
 	// is the last directory of that chain.
 	trustedOwner uint32
 	trustTop     string
-	// binds are the addresses to listen on, all required, in order.
-	binds  []brokerCmdBind
-	listen func(network, addr string) (*net.TCPListener, error)
+	// bindsFor returns the addresses to listen on for the HTTP and HTTPS
+	// ports, all required, in order.
+	bindsFor func(httpPort, httpsPort uint16) []brokerCmdBind
+	listen   func(network, addr string) (*net.TCPListener, error)
 	// socketPath returns the control socket path of the served user.
 	socketPath func(uid uint32) string
 	stderr     io.Writer
 }
 
 // RunListenerBroker runs the privileged listener broker of jailoc-listener-broker
-// for the user named by args ("--uid N"). It listens on 127.0.0.1:443 and
-// [::1]:443, forwards each accepted connection to the gateway of that user
-// over the broker control socket, and returns nil after ctx ends. It refuses
+// for the user named by args ("--uid N", optionally "--http-port P" and
+// "--https-port P"). It listens on 127.0.0.1 and [::1] at the HTTP port
+// (default 80) and the HTTPS port (default 443), forwards each accepted
+// connection to the gateway of that user over the broker control socket, and
+// returns nil after ctx ends. It reads nothing from any connection: the
+// gateway tells the two ports apart by the local port of the descriptor. It
+// refuses
 // to run unless it is root and its binary sits in a root-owned location.
 // Diagnostics go to stderr and never contain connection data.
 func RunListenerBroker(ctx context.Context, args []string, stderr io.Writer) error {
@@ -62,7 +67,7 @@ func RunListenerBroker(ctx context.Context, args []string, stderr io.Writer) err
 		executable:   os.Executable,
 		trustedOwner: 0,
 		trustTop:     "/",
-		binds:        []brokerCmdBind{{"tcp4", "127.0.0.1:443"}, {"tcp6", "[::1]:443"}},
+		bindsFor:     brokerCmdBinds,
 		listen:       brokerCmdListen,
 		socketPath:   BrokerSocketPath,
 		stderr:       stderr,
@@ -72,9 +77,9 @@ func RunListenerBroker(ctx context.Context, args []string, stderr io.Writer) err
 func brokerCmdRun(ctx context.Context, args []string, d brokerCmdDeps) error {
 	ruid, euid := d.uids()
 	if ruid != 0 || euid != 0 {
-		return fmt.Errorf("jailoc-listener-broker must run as root (real uid %d, effective uid %d); it binds port 443 for another user", ruid, euid)
+		return fmt.Errorf("jailoc-listener-broker must run as root (real uid %d, effective uid %d); it binds privileged ports for another user", ruid, euid)
 	}
-	uid, err := brokerCmdParseArgs(args)
+	parsed, err := brokerCmdParseArgs(args)
 	if err != nil {
 		return fmt.Errorf("parse arguments: %w", err)
 	}
@@ -90,7 +95,8 @@ func brokerCmdRun(ctx context.Context, args []string, d brokerCmdDeps) error {
 		_, _ = fmt.Fprintf(d.stderr, "jailoc-listener-broker: "+format+"\n", a...)
 	}
 
-	listeners, err := brokerCmdBindAll(d)
+	uid := parsed.uid
+	listeners, err := brokerCmdBindAll(d, parsed)
 	if err != nil {
 		return fmt.Errorf("bind loopback listeners: %w", err)
 	}
@@ -98,7 +104,10 @@ func brokerCmdRun(ctx context.Context, args []string, d brokerCmdDeps) error {
 	if err != nil {
 		return errors.Join(fmt.Errorf("listen on the control socket: %w", err), brokerCmdCloseAll(listeners))
 	}
-	b, err := NewBroker(BrokerConfig{OwnerUID: uid, Listeners: listeners, Control: control, Logf: logf})
+	b, err := NewBroker(BrokerConfig{
+		OwnerUID: uid, Listeners: listeners, Control: control, Logf: logf,
+		HTTPPort: parsed.httpPort, HTTPSPort: parsed.httpsPort,
+	})
 	if err != nil {
 		cerr := control.Close()
 		if cerr != nil {
@@ -117,18 +126,56 @@ func brokerCmdRun(ctx context.Context, args []string, d brokerCmdDeps) error {
 	return nil
 }
 
-// brokerCmdParseArgs accepts exactly "--uid N" (or "--uid=N") with N a
-// non-zero 32-bit UID. Nothing else is configurable.
-func brokerCmdParseArgs(args []string) (uint32, error) {
-	const usage = "usage: jailoc-listener-broker --uid N"
-	var uid uint32
-	seen := 0
+// brokerCmdArgs are the parsed arguments of the command.
+type brokerCmdArgs struct {
+	uid                 uint32
+	httpPort, httpsPort uint16
+}
+
+// brokerCmdBinds is the production set of addresses: both loopback families
+// at each port, the HTTPS port first.
+func brokerCmdBinds(httpPort, httpsPort uint16) []brokerCmdBind {
+	return []brokerCmdBind{
+		{"tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(httpsPort)))},
+		{"tcp6", net.JoinHostPort("::1", strconv.Itoa(int(httpsPort)))},
+		{"tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(httpPort)))},
+		{"tcp6", net.JoinHostPort("::1", strconv.Itoa(int(httpPort)))},
+	}
+}
+
+// brokerCmdParseArgs accepts "--uid N" (or "--uid=N") with N a non-zero
+// 32-bit UID, and optionally "--http-port P" and "--https-port P" with P in
+// 1..65535 (defaults 80 and 443, which must end up different). Nothing else
+// is configurable.
+func brokerCmdParseArgs(args []string) (brokerCmdArgs, error) {
+	const usage = "usage: jailoc-listener-broker --uid N [--http-port P] [--https-port P]; a broker started by a unit that predates --http-port/--https-port needs its unit reinstalled"
+	out := brokerCmdArgs{httpPort: DefaultBrokerHTTPPort, httpsPort: DefaultBrokerHTTPSPort}
+	seen := map[string]int{}
+	once := func(name string) error {
+		seen[name]++
+		if seen[name] > 1 {
+			return fmt.Errorf("--%s was given more than once", name)
+		}
+		return nil
+	}
+	portFlag := func(name string, dst *uint16) func(string) error {
+		return func(v string) error {
+			if err := once(name); err != nil {
+				return err
+			}
+			n, err := strconv.ParseUint(v, 10, 16)
+			if err != nil || n == 0 {
+				return fmt.Errorf("--%s %q is not a decimal port in 1-65535", name, v)
+			}
+			*dst = uint16(n)
+			return nil
+		}
+	}
 	flags := flag.NewFlagSet("jailoc-listener-broker", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Func("uid", "UID of the user whose gateway is served", func(v string) error {
-		seen++
-		if seen > 1 {
-			return errors.New("--uid was given more than once")
+		if err := once("uid"); err != nil {
+			return err
 		}
 		n, err := strconv.ParseUint(v, 10, 31)
 		if err != nil {
@@ -137,19 +184,24 @@ func brokerCmdParseArgs(args []string) (uint32, error) {
 		if n == 0 {
 			return errors.New("--uid 0 is refused: the broker serves an unprivileged user, never root")
 		}
-		uid = uint32(n)
+		out.uid = uint32(n)
 		return nil
 	})
+	flags.Func("http-port", "loopback TCP port of the HTTP listeners (default 80)", portFlag("http-port", &out.httpPort))
+	flags.Func("https-port", "loopback TCP port of the HTTPS listeners (default 443)", portFlag("https-port", &out.httpsPort))
 	if err := flags.Parse(args); err != nil {
-		return 0, fmt.Errorf("invalid arguments (%s): %w", usage, err)
+		return brokerCmdArgs{}, fmt.Errorf("invalid arguments (%s): %w", usage, err)
 	}
 	if flags.NArg() > 0 {
-		return 0, fmt.Errorf("unexpected arguments %q; the only accepted argument is --uid (%s)", flags.Args(), usage)
+		return brokerCmdArgs{}, fmt.Errorf("unexpected arguments %q; the accepted arguments are --uid, --http-port and --https-port (%s)", flags.Args(), usage)
 	}
-	if seen == 0 {
-		return 0, fmt.Errorf("--uid is required (%s)", usage)
+	if seen["uid"] == 0 {
+		return brokerCmdArgs{}, fmt.Errorf("--uid is required (%s)", usage)
 	}
-	return uid, nil
+	if err := ValidateBrokerPorts(int(out.httpPort), int(out.httpsPort)); err != nil {
+		return brokerCmdArgs{}, fmt.Errorf("invalid ports (HTTP default %d, HTTPS default %d): %w", DefaultBrokerHTTPPort, DefaultBrokerHTTPSPort, err)
+	}
+	return out, nil
 }
 
 // brokerCmdCheckSelf refuses to continue unless the running binary and its
@@ -222,12 +274,12 @@ func brokerCmdCheckNode(path string, owner uint32, dir bool) error {
 	return nil
 }
 
-// brokerCmdBindAll opens every address of d.binds. All are required: when one
+// brokerCmdBindAll opens every address of d.bindsFor. All are required: when one
 // fails, the ones opened before are closed and the failing address is
 // named.
-func brokerCmdBindAll(d brokerCmdDeps) ([]*net.TCPListener, error) {
+func brokerCmdBindAll(d brokerCmdDeps, a brokerCmdArgs) ([]*net.TCPListener, error) {
 	var opened []*net.TCPListener
-	for _, bind := range d.binds {
+	for _, bind := range d.bindsFor(a.httpPort, a.httpsPort) {
 		ln, err := d.listen(bind.network, bind.addr)
 		if err != nil {
 			return nil, errors.Join(fmt.Errorf("listen on %s %s: %w", bind.network, bind.addr, err), brokerCmdCloseAll(opened))
