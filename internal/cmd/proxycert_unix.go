@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -55,8 +56,11 @@ func proxyCACertPath() string {
 }
 
 // proxyCA is the trusted root and the intermediate that signs leaves.
+// rootPEM is the canonical PEM of root: the one certificate that was parsed
+// and checked, which is what every trust mechanism must be given.
 type proxyCA struct {
 	root     *x509.Certificate
+	rootPEM  []byte
 	inter    *x509.Certificate
 	interKey *ecdsa.PrivateKey
 	interDER []byte
@@ -105,7 +109,7 @@ func ensureProxyCert(cfg *config.Config, targets []proxyTarget) (tls.Certificate
 
 // ensureProxyCA loads or generates the proxy CA without issuing a leaf
 // certificate. It returns the path of the root certificate, the certificate
-// and its PEM bytes.
+// and the canonical PEM of exactly that certificate.
 func ensureProxyCA(cfg *config.Config) (string, *x509.Certificate, []byte, error) {
 	dir := proxyCADir()
 	if err := checkProxyCADirNotShared(dir, cfg, nil); err != nil {
@@ -126,11 +130,7 @@ func ensureProxyCA(cfg *config.Config) (string, *x509.Certificate, []byte, error
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(filepath.Join(dir, proxyCACert)) //nolint:gosec // G304: jailoc-owned proxy CA path
-		if err != nil {
-			return fmt.Errorf("read proxy root CA: %w", err)
-		}
-		root, rootPEM = ca.root, data
+		root, rootPEM = ca.root, ca.rootPEM
 		return nil
 	})
 	if err != nil {
@@ -392,10 +392,11 @@ func loadOrCreateProxyCA(dir string, now time.Time) (proxyCA, error) {
 	if err := writePrivateFile(interPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: interDER})); err != nil {
 		return proxyCA{}, fmt.Errorf("write proxy intermediate CA certificate: %w", err)
 	}
-	if err := writePrivateFile(rootPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})); err != nil {
+	rootPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})
+	if err := writePrivateFile(rootPath, rootPEM); err != nil {
 		return proxyCA{}, fmt.Errorf("write proxy root CA certificate: %w", err)
 	}
-	return proxyCA{root: root, inter: inter, interKey: interKey, interDER: interDER}, nil
+	return proxyCA{root: root, rootPEM: rootPEM, inter: inter, interKey: interKey, interDER: interDER}, nil
 }
 
 // proxyCATemplate is a CA certificate limited by critical name constraints
@@ -423,18 +424,34 @@ func proxyCATemplate(commonName string, now time.Time, maxPathLen int) (*x509.Ce
 	}, nil
 }
 
-func readProxyCA(rootPath, interPath, interKeyPath string, now time.Time) (proxyCA, error) {
-	rootPEM, err := os.ReadFile(rootPath) //nolint:gosec // G304: jailoc-owned proxy CA path
-	if err != nil {
-		return proxyCA{}, fmt.Errorf("read root CA: %w", err)
+// parseProxyRootPEM parses data as the root CA file: exactly one certificate
+// PEM block and nothing else but surrounding whitespace. Anything more would
+// let a tool that reads the file see a certificate that was never checked. It
+// returns the certificate and the canonical PEM of it.
+func parseProxyRootPEM(data []byte) (*x509.Certificate, []byte, error) {
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) > 0 {
+		return nil, nil, errors.New("invalid root CA certificate PEM")
 	}
-	block, _ := pem.Decode(rootPEM)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return proxyCA{}, errors.New("invalid root CA certificate PEM")
+	canonical := pem.EncodeToMemory(block)
+	if !bytes.Equal(bytes.TrimSpace(data), bytes.TrimSpace(canonical)) {
+		return nil, nil, errors.New("root CA file holds more than one certificate PEM block")
 	}
 	root, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return proxyCA{}, fmt.Errorf("parse root CA: %w", err)
+		return nil, nil, fmt.Errorf("parse root CA: %w", err)
+	}
+	return root, canonical, nil
+}
+
+func readProxyCA(rootPath, interPath, interKeyPath string, now time.Time) (proxyCA, error) {
+	data, err := os.ReadFile(rootPath) //nolint:gosec // G304: jailoc-owned proxy CA path
+	if err != nil {
+		return proxyCA{}, fmt.Errorf("read root CA: %w", err)
+	}
+	root, rootPEM, err := parseProxyRootPEM(data)
+	if err != nil {
+		return proxyCA{}, err
 	}
 	if err := checkProxyCA(root, now); err != nil {
 		return proxyCA{}, fmt.Errorf("root CA: %w", err)
@@ -458,7 +475,7 @@ func readProxyCA(rootPath, interPath, interKeyPath string, now time.Time) (proxy
 	if err := inter.CheckSignatureFrom(root); err != nil {
 		return proxyCA{}, fmt.Errorf("intermediate CA is not signed by the root CA: %w", err)
 	}
-	return proxyCA{root: root, inter: inter, interKey: interKey, interDER: pair.Certificate[0]}, nil
+	return proxyCA{root: root, rootPEM: rootPEM, inter: inter, interKey: interKey, interDER: pair.Certificate[0]}, nil
 }
 
 // proxyCAExcludedIPRanges excludes every IPv4 and IPv6 address, so the

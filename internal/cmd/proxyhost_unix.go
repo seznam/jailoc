@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha1" //nolint:gosec // G505: macOS `security delete-certificate -Z` identifies certificates by their SHA-1
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -50,9 +49,8 @@ type proxyHostDeps struct {
 	uid       func() uint32
 	homeDir   func() (string, error)
 	hostsPath string
-	// brokerBinary returns the listener broker binary to install and a
-	// cleanup function.
-	brokerBinary func() (string, func(), error)
+	// brokerBinary returns the listener broker binary to install.
+	brokerBinary func() ([]byte, error)
 	dirExists    func(string) bool
 	lookPath     func(string) (string, error)
 	// runPrivileged runs script as root with env set in its environment. The
@@ -107,26 +105,37 @@ var defaultProxyHostDeps = proxyHostDeps{
 	prompt:      newStdinPromptIO,
 }
 
-// defaultProxyBrokerBinary returns the embedded listener broker binary
-// extracted into the cache, or the one next to the jailoc executable.
-func defaultProxyBrokerBinary() (string, func(), error) {
-	noop := func() {}
-	path, err := brokerbin.Path(filepath.Join(vmRootDir(), "broker"))
+// defaultProxyBrokerBinary returns the embedded listener broker binary, or
+// the one next to the jailoc executable. The embedded bytes are used as they
+// are: reading them back from an extraction in the cache would let whoever
+// can write there change what is installed as root.
+func defaultProxyBrokerBinary() ([]byte, error) {
+	data, err := brokerbin.Bytes()
 	if err == nil {
-		return path, noop, nil
+		return data, nil
 	}
 	if !errors.Is(err, brokerbin.ErrNotEmbedded) {
-		return "", nil, fmt.Errorf("extract listener broker: %w", err)
+		return nil, fmt.Errorf("embedded listener broker: %w", err)
 	}
-	exe, exeErr := os.Executable()
-	if exeErr != nil {
-		return "", nil, fmt.Errorf("locate jailoc executable: %w", exeErr)
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("locate jailoc executable: %w", err)
 	}
+	return readSiblingBrokerBinary(exe)
+}
+
+// readSiblingBrokerBinary reads the listener broker binary next to the jailoc
+// executable exe.
+func readSiblingBrokerBinary(exe string) ([]byte, error) {
 	sibling := filepath.Join(filepath.Dir(exe), brokerbin.FileName)
-	if fi, statErr := os.Stat(sibling); statErr != nil || !fi.Mode().IsRegular() {
-		return "", nil, fmt.Errorf("this jailoc build has no embedded %s and none was found next to it (%s); use a release build or build it with `go build ./cmd/jailoc-listener-broker`", brokerbin.FileName, sibling)
+	if fi, err := os.Stat(sibling); err != nil || !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("this jailoc build has no embedded %s and none was found next to it (%s); use a release build or build it with `go build ./cmd/jailoc-listener-broker`", brokerbin.FileName, sibling)
 	}
-	return sibling, noop, nil
+	data, err := os.ReadFile(sibling) //nolint:gosec // G304: the broker binary next to the jailoc executable
+	if err != nil {
+		return nil, fmt.Errorf("read listener broker binary: %w", err)
+	}
+	return data, nil
 }
 
 // runProxyPrivileged runs script as root through sudo. The variables are set
@@ -424,6 +433,54 @@ func proxyInstallScript(goos string, withService, withHosts bool, store *proxyho
 	return b.String()
 }
 
+// proxyStopServiceDarwin defines stop_service: boot the LaunchDaemon out and
+// confirm that launchd no longer has it. launchctl print exits with 113 for a
+// service launchd does not know; any other failure leaves the state unknown,
+// which ends the script.
+const proxyStopServiceDarwin = `service_loaded() {
+	rc=0
+	launchctl print "system/$JAILOC_SERVICE_LABEL" >/dev/null 2>&1 || rc=$?
+	case "$rc" in
+		0) return 0 ;;
+		113) return 1 ;;
+	esac
+	echo "jailoc: cannot tell whether $JAILOC_SERVICE_LABEL is loaded (launchctl print exited with $rc); leaving it installed" >&2
+	exit 1
+}
+stop_service() {
+	if service_loaded; then
+		launchctl bootout "system/$JAILOC_SERVICE_LABEL"
+		stop_try=0
+		while service_loaded; do
+			stop_try=$((stop_try + 1))
+			if [ "$stop_try" -ge 50 ]; then
+				echo "jailoc: $JAILOC_SERVICE_LABEL is still loaded after bootout; leaving it installed" >&2
+				exit 1
+			fi
+			sleep 0.1
+		done
+	fi
+}
+`
+
+// proxyStopServiceLinux defines stop_service: disable and stop the unit when
+// its file exists, then confirm that systemd reports it inactive. A systemctl
+// that fails ends the script, since the service may still be running.
+const proxyStopServiceLinux = `stop_service() {
+	if [ -e "$JAILOC_UNIT_DST" ]; then
+		systemctl disable --now "$JAILOC_SERVICE_NAME"
+	fi
+	service_state="$(systemctl show --property=ActiveState --value "$JAILOC_SERVICE_NAME")"
+	case "$service_state" in
+		inactive|failed) ;;
+		*)
+			echo "jailoc: $JAILOC_SERVICE_NAME is $service_state, not stopped; leaving it installed" >&2
+			exit 1
+			;;
+	esac
+}
+`
+
 // proxyUninstallScript is the privileged part of `jailoc proxy uninstall`.
 // withService stops and removes the listener broker service and binary; it is
 // false when the installed service belongs to another user.
@@ -433,12 +490,17 @@ func proxyUninstallScript(goos string, withService, withHosts bool, store *proxy
 	b.WriteString("acquire_host_lock\n")
 	if withService {
 		b.WriteString(`check_prev_file "$JAILOC_UNIT_DST" "$JAILOC_UNIT_PREV_SHA256"` + "\n")
+		// The service must be confirmed stopped, or absent, before its files
+		// go: a failure here ends the script, so the unit, the binary, the
+		// hosts block and the CA stay for the next uninstall.
 		switch goos {
 		case "darwin":
-			b.WriteString(`launchctl bootout "system/$JAILOC_SERVICE_LABEL" >/dev/null 2>&1 || true` + "\n")
+			b.WriteString(proxyStopServiceDarwin)
+			b.WriteString("stop_service\n")
 			b.WriteString(`rm -f "$JAILOC_UNIT_DST"` + "\n")
 		default:
-			b.WriteString(`systemctl disable --now "$JAILOC_SERVICE_NAME" >/dev/null 2>&1 || true` + "\n")
+			b.WriteString(proxyStopServiceLinux)
+			b.WriteString("stop_service\n")
 			b.WriteString(`rm -f "$JAILOC_UNIT_DST"` + "\n")
 			b.WriteString("systemctl daemon-reload\n")
 		}
@@ -744,21 +806,17 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 		return proxyInstallOutcome{}, fmt.Errorf("the installed listener broker service %s belongs to another user; refusing to replace it", unitPath)
 	}
 
-	caPrevSHA256 := ""
+	sysCA := systemCAPlan{store: store}
 	if store != nil {
-		if caPrevSHA256, err = systemCAPrevSHA256(d, store.CertPath, prev, in.rootPEM); err != nil {
+		if sysCA.prevSHA256, sysCA.preexisting, err = planSystemCA(d, store.CertPath, prev, in.rootPEM); err != nil {
 			return proxyInstallOutcome{}, err
 		}
 	}
+	installCA := sysCA.toInstall()
 
-	brokerSrc, cleanup, err := d.brokerBinary()
+	brokerData, err := d.brokerBinary()
 	if err != nil {
 		return proxyInstallOutcome{}, err
-	}
-	defer cleanup()
-	brokerData, err := os.ReadFile(brokerSrc) //nolint:gosec // G304: path from the broker binary seam
-	if err != nil {
-		return proxyInstallOutcome{}, fmt.Errorf("read listener broker binary: %w", err)
 	}
 
 	// Installing the service again restarts the broker and drops the
@@ -813,11 +871,16 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 		}
 		env = append(env, "JAILOC_HOSTS_DST="+d.hostsPath, "JAILOC_HOSTS_PREV_SHA256="+hostsPrevSHA256(hostsCur, hostsExist))
 	}
-	if store != nil {
-		if err := stageEnv("ca.crt", "JAILOC_CA_SRC", "JAILOC_CA_SHA256", in.rootPEM); err != nil {
-			return proxyInstallOutcome{}, err
-		}
-		env = append(env, "JAILOC_CA_DST="+store.CertPath, "JAILOC_CA_PREV_SHA256="+caPrevSHA256)
+	// Every trust mechanism gets this staged copy of the validated
+	// certificate, not the file in the CA directory, which can change after
+	// it was checked.
+	caStaged, caStagedSHA256, err := stageProxyFile(stage, "ca.crt", in.rootPEM)
+	if err != nil {
+		return proxyInstallOutcome{}, err
+	}
+	if installCA != nil {
+		env = append(env, "JAILOC_CA_SRC="+caStaged, "JAILOC_CA_SHA256="+caStagedSHA256,
+			"JAILOC_CA_DST="+installCA.CertPath, "JAILOC_CA_PREV_SHA256="+sysCA.prevSHA256)
 	}
 
 	nssDBs, nssErr := proxyhost.DiscoverNSSDatabases(d.goos, in.home)
@@ -832,7 +895,7 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 		}
 	}
 
-	summary := proxyInstallSummary(d, in.home, helperPath, unitPath, needService, hostsChanged, len(desired), plan, store, nssDBs, certutilErr == nil)
+	summary := proxyInstallSummary(d, in.home, helperPath, unitPath, needService, hostsChanged, len(desired), plan, sysCA, nssDBs, certutilErr == nil)
 	p := d.prompt(yes)
 	ok, err := p.confirm(ctx, "Install host support for jailoc proxy?", summary, true)
 	if err != nil {
@@ -850,8 +913,8 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 			return proxyInstallOutcome{}, err
 		}
 	}
-	if needService || hostsChanged || store != nil {
-		if err := d.runPrivileged(ctx, proxyInstallScript(d.goos, needService, hostsChanged, store), env); err != nil {
+	if needService || hostsChanged || installCA != nil {
+		if err := d.runPrivileged(ctx, proxyInstallScript(d.goos, needService, hostsChanged, installCA), env); err != nil {
 			// The script ran step by step: record what it finished, so that
 			// uninstall can still revert it.
 			partial := prev
@@ -866,11 +929,11 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 			if needService && d.fileHasSHA256(unitPath, sha256Hex(unit)) {
 				partial.ServiceUnitPath = unitPath
 			}
-			if store != nil && d.fileHasSHA256(store.CertPath, sha256Hex(in.rootPEM)) {
-				partial.SystemCACertPath = store.CertPath
+			if installCA != nil && d.fileHasSHA256(installCA.CertPath, sha256Hex(in.rootPEM)) {
+				partial.SystemCACertPath = installCA.CertPath
 				partial.SystemCACertSHA256 = sha256Hex(in.rootPEM)
-				partial.SystemCAUpdateCmd = store.UpdateCmd
-				partial.SystemCARemoveCmd = store.RemoveCmd
+				partial.SystemCAUpdateCmd = installCA.UpdateCmd
+				partial.SystemCARemoveCmd = installCA.RemoveCmd
 			}
 			err = fmt.Errorf("install the privileged part of the proxy host setup: %w", err)
 			if partial.HasAnything() {
@@ -908,11 +971,11 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 		// the old one are pending until the new one replaces it.
 		state.PendingNSSDatabases = slices.Compact(slices.Sorted(slices.Values(slices.Concat(prev.NSSDatabases, prev.PendingNSSDatabases))))
 	}
-	if store != nil {
-		state.SystemCACertPath = store.CertPath
+	if installCA != nil {
+		state.SystemCACertPath = installCA.CertPath
 		state.SystemCACertSHA256 = sha256Hex(in.rootPEM)
-		state.SystemCAUpdateCmd = store.UpdateCmd
-		state.SystemCARemoveCmd = store.RemoveCmd
+		state.SystemCAUpdateCmd = installCA.UpdateCmd
+		state.SystemCARemoveCmd = installCA.RemoveCmd
 	}
 	if err := proxyhost.WriteInstallState(statePath, state); err != nil {
 		return proxyInstallOutcome{}, err
@@ -929,7 +992,7 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 		_, _ = fmt.Fprintf(out, "Updated %s.\n", d.hostsPath)
 	}
 
-	trustErr := trustProxyCA(ctx, d, out, errw, in.home, in.caPath, in.caSHA256, prev, &state, nssDBs, nssErr, store, certutilErr == nil)
+	trustErr := trustProxyCA(ctx, d, out, errw, in.home, in.caPath, caStaged, in.caSHA256, prev, &state, nssDBs, nssErr, sysCA, certutilErr == nil)
 	if err := proxyhost.WriteInstallState(statePath, state); err != nil {
 		return proxyInstallOutcome{}, errors.Join(trustErr, err)
 	}
@@ -951,26 +1014,59 @@ func restartableBrokerProxy(d proxyHostDeps) (*proxyState, error) {
 	return st, nil
 }
 
-// systemCAPrevSHA256 is the value of JAILOC_CA_PREV_SHA256: what the
-// privileged script must still find at the system CA path. A certificate that
-// is neither the one being installed nor one jailoc recorded belongs to
-// another user and is not replaced.
-func systemCAPrevSHA256(d proxyHostDeps, certPath string, prev proxyhost.InstallState, rootPEM []byte) (string, error) {
+// systemCAPlan is what install does about the Linux system trust store.
+type systemCAPlan struct {
+	// store is the detected store, nil when there is none.
+	store *proxyhost.LinuxCAStore
+	// prevSHA256 is JAILOC_CA_PREV_SHA256: what the privileged script must
+	// still find at the system CA path.
+	prevSHA256 string
+	// preexisting reports a certificate at the system CA path that is the
+	// proxy CA but that jailoc did not install. It is neither modified nor
+	// recorded as installed by jailoc.
+	preexisting bool
+}
+
+// toInstall is the store the privileged script installs the CA into, or nil.
+func (p systemCAPlan) toInstall() *proxyhost.LinuxCAStore {
+	if p.preexisting {
+		return nil
+	}
+	return p.store
+}
+
+// recordedSystemCASHA256 is the SHA-256 of the certificate the install state
+// records at certPath, or "" when it records none there.
+func recordedSystemCASHA256(prev proxyhost.InstallState, certPath string) string {
+	if prev.SystemCACertPath != certPath {
+		return ""
+	}
+	if prev.SystemCACertSHA256 == "" && len(prev.CACertPEM) > 0 {
+		return sha256Hex(prev.CACertPEM)
+	}
+	return prev.SystemCACertSHA256
+}
+
+// planSystemCA decides what install does at the system CA path certPath. A
+// certificate the install state records there is replaced. One that is the
+// proxy CA without a record belongs to whoever put it there and is left
+// alone. Any other one is not replaced either.
+func planSystemCA(d proxyHostDeps, certPath string, prev proxyhost.InstallState, rootPEM []byte) (prevSHA256 string, preexisting bool, err error) {
 	existing, err := d.readFile(certPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return "missing", nil
+		return "missing", false, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("read existing system CA %s: %w", certPath, err)
+		return "", false, fmt.Errorf("read existing system CA %s: %w", certPath, err)
 	}
 	sum := sha256Hex(existing)
-	owned := sum == sha256Hex(rootPEM) ||
-		(prev.SystemCACertSHA256 != "" && sum == prev.SystemCACertSHA256) ||
-		(len(prev.CACertPEM) > 0 && sum == sha256Hex(prev.CACertPEM))
-	if !owned {
-		return "", fmt.Errorf("system CA path %s already holds a certificate not installed by this user; refusing to overwrite it", certPath)
+	switch {
+	case sum == recordedSystemCASHA256(prev, certPath):
+		return sum, false, nil
+	case sum == sha256Hex(rootPEM):
+		return "", true, nil
 	}
-	return sum, nil
+	return "", false, fmt.Errorf("system CA path %s already holds a certificate not installed by this user; refusing to overwrite it", certPath)
 }
 
 // pendingCAIdentities are the SHA-1s in the macOS keychain and the SHA-256s
@@ -1008,7 +1104,7 @@ func waitProxyBroker(ctx context.Context, d proxyHostDeps) error {
 	}
 }
 
-func proxyInstallSummary(d proxyHostDeps, home, helperPath, unitPath string, needService, hostsChanged bool, desiredCount int, plan proxyhost.Plan, store *proxyhost.LinuxCAStore, nssDBs []string, haveCertutil bool) string {
+func proxyInstallSummary(d proxyHostDeps, home, helperPath, unitPath string, needService, hostsChanged bool, desiredCount int, plan proxyhost.Plan, sysCA systemCAPlan, nssDBs []string, haveCertutil bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "As root (sudo), jailoc will:\n")
 	if needService {
@@ -1025,7 +1121,7 @@ func proxyInstallSummary(d proxyHostDeps, home, helperPath, unitPath string, nee
 	default:
 		fmt.Fprintf(&b, "  - leave %s as it is (%d proxy host name(s) already in place or none needed)\n", d.hostsPath, desiredCount)
 	}
-	if store != nil {
+	if store := sysCA.toInstall(); store != nil {
 		fmt.Fprintf(&b, "  - trust the proxy CA in the system store (%s, then %s)\n", store.CertPath, strings.Join(store.UpdateCmd, " "))
 	}
 	b.WriteString("As you, jailoc will trust the proxy CA (limited to names under jailoc.local) in:\n")
@@ -1038,7 +1134,10 @@ func proxyInstallSummary(d proxyHostDeps, home, helperPath, unitPath string, nee
 	case len(nssDBs) > 0:
 		fmt.Fprintf(&b, "  - nothing in %d NSS database(s): certutil is not installed, you would import the CA by hand\n", len(nssDBs))
 	}
-	if d.goos == "linux" && store == nil {
+	switch {
+	case sysCA.preexisting:
+		fmt.Fprintf(&b, "  - leave %s as it is: it already holds the proxy CA, but jailoc did not install it\n", sysCA.store.CertPath)
+	case d.goos == "linux" && sysCA.store == nil:
 		b.WriteString("  - nothing in the Linux system store: no supported store found, you would trust the CA by hand\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -1116,10 +1215,12 @@ func retireKeychainCerts(ctx context.Context, d proxyHostDeps, warn func(string,
 }
 
 // trustProxyCA trusts the CA for the current user and records it in state.
+// Every tool imports importPath, the staged copy of the validated certificate;
+// caPath is only what the user is told to import by hand.
 // A failure of the macOS keychain is returned; NSS and system store gaps are
 // reported with manual instructions.
-func trustProxyCA(ctx context.Context, d proxyHostDeps, out, errw io.Writer, home, caPath, caSHA256 string,
-	prev proxyhost.InstallState, state *proxyhost.InstallState, nssDBs []string, nssErr error, store *proxyhost.LinuxCAStore, haveCertutil bool,
+func trustProxyCA(ctx context.Context, d proxyHostDeps, out, errw io.Writer, home, caPath, importPath, caSHA256 string,
+	prev proxyhost.InstallState, state *proxyhost.InstallState, nssDBs []string, nssErr error, sysCA systemCAPlan, haveCertutil bool,
 ) error {
 	var result error
 	warn := func(format string, a ...any) {
@@ -1129,14 +1230,16 @@ func trustProxyCA(ctx context.Context, d proxyHostDeps, out, errw io.Writer, hom
 	case d.goos == "darwin":
 		keychain := filepath.Join(home, "Library", "Keychains", proxyKeychainName)
 		state.PendingKeychainSHA1s = retireKeychainCerts(ctx, d, warn, keychain, prev, caSHA256, pemSHA1(state.CACertPEM))
-		if err := d.runCommand(ctx, "security", "add-trusted-cert", "-r", "trustRoot", "-k", keychain, caPath); err != nil {
+		if err := d.runCommand(ctx, "security", "add-trusted-cert", "-r", "trustRoot", "-k", keychain, importPath); err != nil {
 			result = fmt.Errorf("trust the proxy CA in the login keychain: %w (trust %s by hand in Keychain Access)", err, caPath)
 		} else {
 			state.MacOSKeychainCert = true
 			_, _ = fmt.Fprintln(out, "Trusted the proxy CA in the macOS login keychain.")
 		}
-	case store != nil:
-		_, _ = fmt.Fprintf(out, "Trusted the proxy CA in the system store (%s).\n", store.CertPath)
+	case sysCA.preexisting:
+		_, _ = fmt.Fprintf(out, "The proxy CA is already in the system store (%s); jailoc did not install it and leaves it as it is.\n", sysCA.store.CertPath)
+	case sysCA.store != nil:
+		_, _ = fmt.Fprintf(out, "Trusted the proxy CA in the system store (%s).\n", sysCA.store.CertPath)
 	default:
 		warn("no supported Linux system trust store found; trust %s by hand (for example copy it to your distribution's CA directory and run its update tool)", caPath)
 	}
@@ -1144,16 +1247,21 @@ func trustProxyCA(ctx context.Context, d proxyHostDeps, out, errw io.Writer, hom
 	if nssErr != nil {
 		warn("could not look for Firefox and Chrome certificate databases: %v", nssErr)
 	}
-	// The entry named like ours is replaced only when it is one of ours: the
-	// current CA, the recorded one or one an earlier rotation left behind.
-	owned := map[string]bool{caSHA256: true}
+	// The entry named like ours is touched only in a database the install
+	// state records, and only when its fingerprint is the current CA, the
+	// recorded one or one an earlier rotation left behind. The same entry
+	// in any other database was put there by someone else: it is neither
+	// replaced nor adopted.
+	recordedDBs := slices.Concat(prev.NSSDatabases, prev.PendingNSSDatabases)
+	recordedFPs := map[string]bool{}
 	var stale []string
 	for _, s := range append(slices.Clone(prev.PendingNSSCertSHA256s), prev.CACertSHA256) {
 		if s != "" && s != caSHA256 {
-			owned[s] = true
+			recordedFPs[s] = true
 			stale = append(stale, s)
 		}
 	}
+	var unowned []string
 	// state.NSSDatabases holds the databases that have the current CA (none
 	// right after a rotation); a deleted Firefox profile has no database
 	// left to keep track of.
@@ -1172,7 +1280,12 @@ func trustProxyCA(ctx context.Context, d proxyHostDeps, out, errw io.Writer, hom
 			manual = append(manual, db)
 			continue
 		}
+		inLedger := slices.Contains(recordedDBs, db)
 		if present && len(fingerprints) > 0 && !slices.ContainsFunc(fingerprints, func(s string) bool { return s != caSHA256 }) {
+			if !inLedger {
+				unowned = append(unowned, db)
+				continue
+			}
 			// certutil -L shows the certificate, not its trust flags, which
 			// may be missing or have been removed in the browser.
 			if err := d.runCommand(ctx, "certutil", "-d", spec, "-M", "-t", "C,,", "-n", proxyhost.NSSCertNickname); err != nil {
@@ -1184,7 +1297,7 @@ func trustProxyCA(ctx context.Context, d proxyHostDeps, out, errw io.Writer, hom
 			refreshed[db] = true
 			continue
 		}
-		if slices.ContainsFunc(fingerprints, func(s string) bool { return !owned[s] }) {
+		if slices.ContainsFunc(fingerprints, func(s string) bool { return !inLedger || (s != caSHA256 && !recordedFPs[s]) }) {
 			warn("refusing to replace existing certificate %q in %s because its fingerprint does not match jailoc's recorded CA", proxyhost.NSSCertNickname, db)
 			manual = append(manual, db)
 			foreign = append(foreign, db)
@@ -1197,7 +1310,7 @@ func trustProxyCA(ctx context.Context, d proxyHostDeps, out, errw io.Writer, hom
 				continue
 			}
 		}
-		if err := d.runCommand(ctx, "certutil", "-d", spec, "-A", "-t", "C,,", "-n", proxyhost.NSSCertNickname, "-i", caPath); err != nil {
+		if err := d.runCommand(ctx, "certutil", "-d", spec, "-A", "-t", "C,,", "-n", proxyhost.NSSCertNickname, "-i", importPath); err != nil {
 			warn("could not add the proxy CA to %s: %v", db, err)
 			manual = append(manual, db)
 			continue
@@ -1218,6 +1331,9 @@ func trustProxyCA(ctx context.Context, d proxyHostDeps, out, errw io.Writer, hom
 	}
 	if len(state.NSSDatabases) > 0 {
 		_, _ = fmt.Fprintf(out, "Trusted the proxy CA in %d NSS database(s).\n", len(state.NSSDatabases))
+	}
+	if len(unowned) > 0 {
+		_, _ = fmt.Fprintf(out, "The proxy CA is already in these NSS databases and jailoc did not install it there; leaving them as they are: %s\n", strings.Join(unowned, ", "))
 	}
 	if len(manual) > 0 {
 		warn("import %s into these Firefox/Chrome databases by hand (install certutil from nss-tools/libnss3-tools and run `jailoc proxy install` again, or use the browser's certificate settings): %s", caPath, strings.Join(manual, ", "))
@@ -1436,10 +1552,7 @@ func uninstallProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, err
 // is gone. A certificate that is another one, or whose identity jailoc did not
 // record, belongs to someone else and is left alone: store is then nil.
 func verifySystemCAOwnership(d proxyHostDeps, store *proxyhost.LinuxCAStore, prev proxyhost.InstallState, warn func(string, ...any)) (string, *proxyhost.LinuxCAStore, error) {
-	expected := prev.SystemCACertSHA256
-	if expected == "" && len(prev.CACertPEM) > 0 {
-		expected = sha256Hex(prev.CACertPEM)
-	}
+	expected := recordedSystemCASHA256(prev, store.CertPath)
 	onDisk, err := d.readFile(store.CertPath)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -1624,9 +1737,12 @@ func printProxyHostStatus(ctx context.Context, w io.Writer) {
 	_, _ = fmt.Fprintf(w, "Hosts (%s): %s\n", d.hostsPath, proxyHostsStatus(d))
 }
 
-// proxyCAStatus describes the proxy CA and the stores jailoc verifiably
-// trusted it in: the install state records locations, and after a rotation
-// some of them still hold only the previous certificate.
+// proxyCAStatus describes the proxy CA and where it is trusted, keeping what
+// jailoc checked apart from what it only recorded: install.json says where
+// install added the CA, but the macOS keychain and the NSS databases are not
+// looked into, so those are recorded, unverified trust. The system store is
+// verified by the certificate file there. After a rotation some of the
+// recorded locations still hold only the previous certificate.
 func proxyCAStatus(d proxyHostDeps, home string) string {
 	caPath := proxyCACertPath()
 	short := shortenHome(caPath, home)
@@ -1638,31 +1754,35 @@ func proxyCAStatus(d proxyHostDeps, home string) string {
 	if err != nil {
 		return short + " (install state unreadable: " + err.Error() + ")"
 	}
-	block, _ := pem.Decode(data)
-	if block == nil {
+	root, canonical, err := parseProxyRootPEM(data)
+	if err != nil {
 		return short + " (unreadable)"
 	}
-	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
-		return short + " (unreadable)"
-	}
-	var stores []string
-	if st.MacOSKeychainCert {
-		stores = append(stores, "login keychain")
-	}
+	var verified, recorded []string
 	if st.SystemCACertPath != "" && st.SystemCACertSHA256 != "" &&
-		st.SystemCACertSHA256 == sha256Hex(data) && d.fileHasSHA256(st.SystemCACertPath, st.SystemCACertSHA256) {
-		stores = append(stores, "system store")
+		st.SystemCACertSHA256 == sha256Hex(canonical) && d.fileHasSHA256(st.SystemCACertPath, st.SystemCACertSHA256) {
+		verified = append(verified, "system store")
+	}
+	if st.MacOSKeychainCert {
+		recorded = append(recorded, "login keychain")
 	}
 	if n := len(slices.DeleteFunc(slices.Clone(st.NSSDatabases), func(db string) bool { return !d.dirExists(db) })); n > 0 {
-		stores = append(stores, fmt.Sprintf("%d NSS database(s)", n))
+		recorded = append(recorded, fmt.Sprintf("%d NSS database(s)", n))
 	}
 	switch {
-	case st.CACertSHA256 == "" || len(stores) == 0:
+	case st.CACertSHA256 == "" || len(verified)+len(recorded) == 0:
 		return short + " (not trusted in any store by `jailoc proxy install`; trust it in your browser or run `jailoc proxy install`)"
-	case st.CACertSHA256 != sha256Hex(block.Bytes):
+	case st.CACertSHA256 != sha256Hex(root.Raw):
 		return short + " (changed since install; run `jailoc proxy install` to trust the new CA)"
 	}
-	return fmt.Sprintf("%s (trusted by `jailoc proxy install`: %s)", short, strings.Join(stores, ", "))
+	var parts []string
+	if len(verified) > 0 {
+		parts = append(parts, "verified: "+strings.Join(verified, ", "))
+	}
+	if len(recorded) > 0 {
+		parts = append(parts, "recorded by `jailoc proxy install`, not verified: "+strings.Join(recorded, ", "))
+	}
+	return fmt.Sprintf("%s (%s)", short, strings.Join(parts, "; "))
 }
 
 func proxyHostsStatus(d proxyHostDeps) string {

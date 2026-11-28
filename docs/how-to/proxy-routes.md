@@ -96,6 +96,8 @@ Lines of `/etc/hosts` outside the block stay as they are. The broker service sta
 
 Run `jailoc proxy install` again whenever you add a workspace or a proxy route: it updates the `/etc/hosts` block to the current configuration. `jailoc proxy status` checks the listener broker, the CA certificate and the `/etc/hosts` entries.
 
+jailoc imports the CA from a copy of the one certificate it validated, and refuses a `ca.crt` that holds anything else. A certificate that is already in the Linux system store or in an NSS database, without a record in `install.json` that `jailoc proxy install` added it, stays as it is: jailoc neither changes nor takes it over, and `jailoc proxy uninstall` leaves it in place. `jailoc proxy status` lists a store as `verified` only when it looked at it: the Linux system store, by the certificate file. The macOS keychain and the NSS databases show as `recorded by jailoc proxy install, not verified`, which means `install.json` says install added the CA there.
+
 Once the broker is installed, `jailoc up`, `jailoc restart` and `jailoc proxy` attach to it automatically.
 
 !!! warning "NSS databases need `certutil`"
@@ -221,7 +223,7 @@ jailoc proxy stop
 jailoc proxy uninstall
 ```
 
-`jailoc proxy uninstall` stops the background proxy and removes only what `jailoc proxy install` added: the listener broker service and binary, the `jailoc proxy hosts` block of `/etc/hosts`, and the CA from the system store and the NSS databases. Like the install, it asks for confirmation before making changes; `--yes` (`-y`) skips the prompt. To delete the CA itself, run `rm -rf ~/.local/share/jailoc/proxy` afterwards.
+`jailoc proxy uninstall` stops the background proxy and removes only what `jailoc proxy install` added: the listener broker service and binary, the `jailoc proxy hosts` block of `/etc/hosts`, and the CA from the system store and the NSS databases. Like the install, it asks for confirmation before making changes; `--yes` (`-y`) skips the prompt. It removes the service files, the `/etc/hosts` block and the CA only after the system service manager confirms the service is stopped or not there. When it cannot confirm that, it fails and keeps `install.json` and the files, so you can run it again. To delete the CA itself, run `rm -rf ~/.local/share/jailoc/proxy` afterwards.
 
 For a manual setup, each command below removes only what the manual steps added. Skip the lines for options you didn't use.
 

@@ -1626,3 +1626,53 @@ func TestEnsureProxyCA(t *testing.T) {
 		t.Error("second call replaced the CA")
 	}
 }
+
+func TestEnsureProxyCARejectsExtraPEMData(t *testing.T) {
+	t.Run("data around the one certificate", func(t *testing.T) {
+		cfg, _ := proxyCertTestSetup(t)
+		_, root, validated, err := ensureProxyCA(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		other, _ := testCertPEM(t, "a certificate nobody checked")
+		for name, data := range map[string][]byte{
+			"second block":  append(slices.Clone(validated), other...),
+			"leading block": append(slices.Clone(other), validated...),
+			"leading text":  append([]byte("trust me\n"), validated...),
+			"trailing text": append(slices.Clone(validated), []byte("trust me\n")...),
+		} {
+			if err := os.WriteFile(proxyCACertPath(), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, _, _, err := ensureProxyCA(cfg)
+			if err == nil || !strings.Contains(err.Error(), "more than one certificate PEM block") {
+				t.Errorf("%s: error = %v, want the extra data refused", name, err)
+			}
+		}
+		if err := os.WriteFile(proxyCACertPath(), validated, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, again, _, err := ensureProxyCA(cfg); err != nil || !bytes.Equal(again.Raw, root.Raw) {
+			t.Fatalf("restored CA: %v", err)
+		}
+	})
+
+	t.Run("returned bytes are the validated certificate", func(t *testing.T) {
+		cfg, _ := proxyCertTestSetup(t)
+		_, _, first, err := ensureProxyCA(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Whitespace around the block is not data.
+		if err := os.WriteFile(proxyCACertPath(), append([]byte("\n"), append(slices.Clone(first), '\n', '\n')...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, root, rootPEM, err := ensureProxyCA(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}); !bytes.Equal(rootPEM, want) {
+			t.Errorf("returned PEM is not the canonical encoding of the validated root:\n%s", rootPEM)
+		}
+	})
+}

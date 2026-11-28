@@ -453,7 +453,8 @@ jailoc proxy install [flags]
 - Lists the planned changes and asks once for confirmation before making them.
 - Configures `jailoc up`, `jailoc restart` and `jailoc proxy` to attach to the listener broker by default.
 - Running it again updates the `/etc/hosts` block to the current workspaces and proxy routes, and replaces the trusted CA if `ca.crt` was regenerated.
-- Uses the `jailoc-listener-broker` embedded in release builds, or a `jailoc-listener-broker` binary next to `jailoc`.
+- Uses the `jailoc-listener-broker` embedded in release builds, or a `jailoc-listener-broker` binary next to `jailoc`. The embedded bytes are installed as they are, not read back from a cache copy.
+- Imports `ca.crt` from a copy of the validated certificate and refuses a `ca.crt` with extra PEM data. A matching system store or NSS entry that `install.json` doesn't record is left as it is and not recorded.
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--yes` | `-y` | Accept every confirmation. |
@@ -468,6 +469,8 @@ jailoc proxy uninstall [flags]
 
 - Stops the background proxy, then removes the listener broker service and binary, the jailoc block of `/etc/hosts`, and the CA certificate from the system trust store and the NSS databases.
 - Lists the planned changes and asks once for confirmation before making them.
+- Removes the service files only after launchd or systemd confirms the service is stopped or absent. If it can't, the command fails and keeps `install.json` and the installed files for a retry.
+- Leaves a system store or NSS certificate that `install.json` doesn't record.
 - Keeps the CA directory `~/.local/share/jailoc/proxy`.
 
 | Flag | Short | Description |
@@ -484,6 +487,7 @@ jailoc proxy status
 
 - Shows the running proxy, its listener and its route URLs.
 - Checks the listener broker, the CA certificate and the `/etc/hosts` entries of the configured workspaces and proxy routes.
+- Reports the CA trust as `verified` (the Linux system store, confirmed by its certificate file) or `recorded by jailoc proxy install, not verified` (the macOS keychain and the NSS databases, which `install.json` records but status doesn't look into).
 
 #### `jailoc proxy stop`
 

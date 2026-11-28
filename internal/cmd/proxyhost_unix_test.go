@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seznam/jailoc/internal/brokerbin"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/proxyhost"
 	"github.com/seznam/jailoc/internal/workspace"
@@ -48,6 +49,12 @@ type privCall struct {
 	files  map[string][]byte // by env key (JAILOC_*_SRC)
 }
 
+// caImport is a certificate file a trust tool imported.
+type caImport struct {
+	path string
+	data []byte
+}
+
 // hostHarness replaces currentProxyHostDeps with stubs: nothing runs sudo,
 // launchctl, systemctl, security or certutil, and /etc/hosts is a file in a
 // temporary home.
@@ -59,6 +66,11 @@ type hostHarness struct {
 
 	priv     []privCall
 	commands [][]string
+	// broker is the listener broker binary the install gets.
+	broker []byte
+	// imports are the files the trust tools were told to import, read when
+	// they ran.
+	imports []caImport
 	// files is what the privileged scripts installed, by destination.
 	files map[string][]byte
 	// proxy is the background proxy runningProxy reports.
@@ -105,19 +117,15 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 	if err := os.WriteFile(hostsPath, []byte(hosts), 0o644); err != nil { //nolint:gosec // test hosts file
 		t.Fatal(err)
 	}
-	brokerPath := filepath.Join(home, "jailoc-listener-broker")
-	if err := os.WriteFile(brokerPath, []byte(hostTestBroker), 0o700); err != nil { //nolint:gosec // test stub binary
-		t.Fatal(err)
-	}
 
-	h := &hostHarness{t: t, home: home, hostsPath: hostsPath, goos: goos, stdinIsTTY: true, certutil: true, systemStore: true, files: map[string][]byte{}}
+	h := &hostHarness{t: t, home: home, hostsPath: hostsPath, goos: goos, stdinIsTTY: true, certutil: true, systemStore: true, files: map[string][]byte{}, broker: []byte(hostTestBroker)}
 	old := currentProxyHostDeps
 	currentProxyHostDeps = proxyHostDeps{
 		goos:         goos,
 		uid:          func() uint32 { return hostTestUID },
 		homeDir:      func() (string, error) { return home, nil },
 		hostsPath:    hostsPath,
-		brokerBinary: func() (string, func(), error) { return brokerPath, func() {}, nil },
+		brokerBinary: func() ([]byte, error) { return h.broker, nil },
 		dirExists: func(p string) bool {
 			if p == "/usr/local/share/ca-certificates" {
 				return h.systemStore
@@ -137,6 +145,11 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 		runPrivileged: h.runPrivileged,
 		runCommand: func(_ context.Context, name string, args ...string) error {
 			call := append([]string{name}, args...)
+			if h.recordCAImport(call) {
+				// The tests assert on the CA path; the staged file the tool
+				// really got is in h.imports.
+				call[len(call)-1] = proxyCACertPath()
+			}
 			h.commands = append(h.commands, call)
 			if h.commandErr != nil {
 				return h.commandErr(call)
@@ -170,6 +183,24 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 	}
 	t.Cleanup(func() { currentProxyHostDeps = old })
 	return h
+}
+
+// recordCAImport reports whether call imports a CA file (security
+// add-trusted-cert, certutil -A), the last argument, and records the file.
+func (h *hostHarness) recordCAImport(call []string) bool {
+	isImport := (call[0] == "security" && len(call) > 1 && call[1] == "add-trusted-cert") ||
+		(call[0] == "certutil" && slices.Contains(call, "-A"))
+	if !isImport {
+		return false
+	}
+	path := call[len(call)-1]
+	data, err := os.ReadFile(path) //nolint:gosec // G304: staged file in the jailoc temporary directory
+	if err != nil {
+		h.t.Errorf("%s imports %s, which cannot be read: %v", call[0], path, err)
+		return true
+	}
+	h.imports = append(h.imports, caImport{path: path, data: data})
+	return true
 }
 
 // runPrivileged records the call and applies its effect on the hosts file,
@@ -744,7 +775,7 @@ func TestProxyInstallFailureLeavesNoState(t *testing.T) {
 	})
 	t.Run("no broker binary", func(t *testing.T) {
 		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
-		currentProxyHostDeps.brokerBinary = func() (string, func(), error) { return "", nil, errors.New("no broker in this build") }
+		currentProxyHostDeps.brokerBinary = func() ([]byte, error) { return nil, errors.New("no broker in this build") }
 		if _, err := h.run("install", "--yes"); err == nil || !strings.Contains(err.Error(), "no broker in this build") {
 			t.Fatalf("error = %v", err)
 		}
@@ -965,7 +996,7 @@ func TestProxyStatusReportsHostSetup(t *testing.T) {
 	for _, want := range []string{
 		"Listener broker: running",
 		"CA certificate: ",
-		"trusted by `jailoc proxy install`",
+		"(recorded by `jailoc proxy install`, not verified: login keychain)",
 		"Hosts (" + h.hostsPath + "): all 3 proxy host names present",
 	} {
 		if !strings.Contains(out, want) {
@@ -1576,9 +1607,7 @@ func TestProxyInstallLeavesRunningServiceAlone(t *testing.T) {
 			t.Errorf("an unchanged install restarted the proxy: %v", h.restarted)
 		}
 
-		if err := os.WriteFile(filepath.Join(h.home, "jailoc-listener-broker"), []byte(hostTestBroker+"# v2\n"), 0o700); err != nil { //nolint:gosec // test stub binary
-			t.Fatal(err)
-		}
+		h.broker = []byte(hostTestBroker + "# v2\n")
 		h.priv = nil
 		h.mustRun("install", "--yes")
 		if len(h.priv) != 1 || !strings.Contains(h.priv[0].script, "launchctl kickstart -k") {
@@ -2005,7 +2034,7 @@ func TestProxyStatusNamesTrustStores(t *testing.T) {
 	h.addNSSDatabase(".pki/nssdb")
 	h.mustRun("install", "--yes")
 	out := h.mustRun("status")
-	assertContains(t, out, "(trusted by `jailoc proxy install`: system store, 1 NSS database(s))")
+	assertContains(t, out, "(verified: system store; recorded by `jailoc proxy install`, not verified: 1 NSS database(s))")
 
 	st := h.installState()
 	st.SystemCACertPath, st.NSSDatabases = "", nil
@@ -2024,7 +2053,7 @@ func TestProxyStatusNamesTrustStores(t *testing.T) {
 
 	h2 := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
 	h2.mustRun("install", "--yes")
-	assertContains(t, h2.mustRun("status"), "(trusted by `jailoc proxy install`: login keychain)")
+	assertContains(t, h2.mustRun("status"), "(recorded by `jailoc proxy install`, not verified: login keychain)")
 }
 
 func TestProxyInstallExplainsHowToReconcileHostsBlock(t *testing.T) {
@@ -2646,9 +2675,7 @@ func TestProxyInstallRevalidatesServiceUnit(t *testing.T) {
 	t.Run("installed unit", func(t *testing.T) {
 		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
 		h.mustRun("install", "--yes")
-		if err := os.WriteFile(filepath.Join(h.home, "jailoc-listener-broker"), []byte(hostTestBroker+"# v2\n"), 0o700); err != nil { //nolint:gosec // test stub binary
-			t.Fatal(err)
-		}
+		h.broker = []byte(hostTestBroker + "# v2\n")
 		h.priv = nil
 		h.mustRun("install", "--yes")
 		if len(h.priv) != 1 {
@@ -2728,9 +2755,7 @@ func TestProxyInstallRestartPrintsBannerAndKeepsConfiguration(t *testing.T) {
 		t.Helper()
 		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
 		h.mustRun("install", "--yes")
-		if err := os.WriteFile(filepath.Join(h.home, "jailoc-listener-broker"), []byte(hostTestBroker+"# v2\n"), 0o700); err != nil { //nolint:gosec // test stub binary
-			t.Fatal(err)
-		}
+		h.broker = []byte(hostTestBroker + "# v2\n")
 		h.priv = nil
 		return h
 	}
@@ -2839,14 +2864,14 @@ func TestProxyInstallRotationMovesRefreshedDatabasesOutOfPending(t *testing.T) {
 	if !slices.Equal(st.NSSDatabases, []string{nssDB}) || len(st.PendingNSSDatabases) != 0 || len(st.PendingNSSCertSHA256s) != 0 {
 		t.Errorf("state = NSS %v, pending %v / %v; want the database with the new CA and nothing pending", st.NSSDatabases, st.PendingNSSDatabases, st.PendingNSSCertSHA256s)
 	}
-	assertContains(t, h.mustRunStatus(), "(trusted by `jailoc proxy install`: system store, 1 NSS database(s))")
+	assertContains(t, h.mustRunStatus(), "(verified: system store; recorded by `jailoc proxy install`, not verified: 1 NSS database(s))")
 }
 
 func TestProxyStatusVerifiesSystemStoreAndNSSDatabases(t *testing.T) {
 	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
 	nssDB := h.addNSSDatabase(".pki/nssdb")
 	h.mustRun("install", "--yes")
-	assertContains(t, h.mustRunStatus(), "system store, 1 NSS database(s)")
+	assertContains(t, h.mustRunStatus(), "verified: system store; recorded by `jailoc proxy install`, not verified: 1 NSS database(s)")
 
 	t.Run("system certificate replaced", func(t *testing.T) {
 		st := h.installState()
@@ -2872,4 +2897,386 @@ func TestProxyStatusVerifiesSystemStoreAndNSSDatabases(t *testing.T) {
 func (h *hostHarness) mustRunStatus() string {
 	h.t.Helper()
 	return h.mustRun("status")
+}
+
+// Round 4 hardening: validated CA bytes, embedded broker, confirmed service
+// stop, unowned trust entries and the status contract.
+
+func TestProxyInstallImportsStagedValidatedCA(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			h := useHostHarness(t, goos, hostTestConfig, hostTestOriginal)
+			h.addNSSDatabase(".pki/nssdb")
+			h.mustRun("install", "--yes")
+			validated := h.installState().CACertPEM
+
+			// ca.crt changes after it was validated, while the install runs.
+			h.beforePriv = func() {
+				if err := os.WriteFile(proxyCACertPath(), []byte("tampered"), 0o600); err != nil {
+					t.Error(err)
+				}
+			}
+			h.broker = []byte(hostTestBroker + "# v2\n") // makes darwin run a privileged step too
+			h.imports, h.priv = nil, nil
+			h.mustRun("install", "--yes")
+			if len(h.priv) == 0 {
+				t.Fatal("no privileged step ran, so the CA file was never tampered with")
+			}
+			if len(h.imports) == 0 {
+				t.Fatal("no trust tool imported the CA")
+			}
+			for _, imp := range h.imports {
+				if imp.path == proxyCACertPath() {
+					t.Errorf("a trust tool imported the file in the CA directory, not a staged copy")
+				}
+				if !bytes.Equal(imp.data, validated) {
+					t.Errorf("a trust tool imported %q, want the validated certificate", imp.data)
+				}
+			}
+			if src := h.priv[0].files["JAILOC_CA_SRC"]; goos == "linux" && !bytes.Equal(src, validated) {
+				t.Errorf("system store got %q, want the validated certificate", src)
+			}
+		})
+	}
+}
+
+func TestDefaultProxyBrokerBinaryUsesEmbeddedBytes(t *testing.T) {
+	embedded, err := brokerbin.Bytes()
+	if errors.Is(err, brokerbin.ErrNotEmbedded) {
+		t.Skip("this build embeds no listener broker")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", shortTempDir(t, "bb"))
+	got, err := defaultProxyBrokerBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, embedded) {
+		t.Error("the broker binary is not the embedded one")
+	}
+	if _, err := os.Stat(filepath.Join(vmRootDir(), "broker")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the embedded broker was extracted into the cache and read back (%v)", err)
+	}
+}
+
+func TestReadSiblingBrokerBinary(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "jailoc")
+	if _, err := readSiblingBrokerBinary(exe); err == nil || !strings.Contains(err.Error(), "none was found next to it") {
+		t.Errorf("without a sibling: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, brokerbin.FileName), 0o755); err != nil { //nolint:gosec // G301: directory under test
+		t.Fatal(err)
+	}
+	if _, err := readSiblingBrokerBinary(exe); err == nil {
+		t.Error("a directory next to the executable was accepted")
+	}
+	if err := os.Remove(filepath.Join(dir, brokerbin.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, brokerbin.FileName), []byte(hostTestBroker), 0o700); err != nil { //nolint:gosec // test stub binary
+		t.Fatal(err)
+	}
+	got, err := readSiblingBrokerBinary(exe)
+	if err != nil || string(got) != hostTestBroker {
+		t.Errorf("sibling = %q, %v", got, err)
+	}
+}
+
+func TestProxyUninstallKeepsLedgerAndAssetsWhenServiceNotStopped(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	hostsAfterInstall := h.hosts()
+	before := h.installState()
+	h.privErr = errors.New("jailoc-listener-broker.service is active, not stopped; leaving it installed")
+	h.priv = nil
+
+	if _, err := h.run("uninstall", "--yes"); err == nil || !strings.Contains(err.Error(), "not stopped") {
+		t.Fatalf("error = %v, want the failure of the script", err)
+	}
+	st := h.installState()
+	if !bytes.Equal(st.HostsLedger, before.HostsLedger) || st.HelperPath != before.HelperPath || st.ServiceUnitPath != before.ServiceUnitPath || st.SystemCACertPath != before.SystemCACertPath {
+		t.Errorf("state = %+v, want the ledger and assets kept: %+v", st, before)
+	}
+	if h.hosts() != hostsAfterInstall {
+		t.Error("the hosts block was removed although the service was not confirmed stopped")
+	}
+	for _, p := range []string{call(h, "JAILOC_HELPER_DST"), call(h, "JAILOC_UNIT_DST"), hostTestSystemCA} {
+		if _, ok := h.files[p]; !ok {
+			t.Errorf("%s was removed although the service was not confirmed stopped", p)
+		}
+	}
+}
+
+// call is an environment value of the last privileged call.
+func call(h *hostHarness, key string) string { return h.priv[len(h.priv)-1].env[key] }
+
+// runUninstallScript runs the uninstall script for goos with stub launchctl,
+// systemctl and sleep commands in front of PATH. stubs maps a command to its
+// script body; the stubs log their arguments to the file at $STUB_LOG.
+// stubFiles are empty files created in the stub directory ($STUB_DIR), the
+// state the stubs read.
+func runUninstallScript(t *testing.T, goos string, withUnit bool, stubs, env map[string]string, stubFiles ...string) (out string, files map[string]bool, log string) {
+	t.Helper()
+	stubDir := shortTempDir(t, "st")
+	for _, f := range stubFiles {
+		if err := os.WriteFile(filepath.Join(stubDir, f), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootDir := shortTempDir(t, "ur")
+	_, lock := hostLockDirs(t)
+	unit := filepath.Join(rootDir, "unit")
+	helper := filepath.Join(rootDir, "helper")
+	socket := filepath.Join(rootDir, "sock")
+	logPath := filepath.Join(stubDir, "log")
+	prev := "missing"
+	if withUnit {
+		if err := os.WriteFile(unit, []byte("unit"), 0o644); err != nil { //nolint:gosec // test unit file
+			t.Fatal(err)
+		}
+		prev = sha256Hex([]byte("unit"))
+	}
+	for _, f := range []string{helper} {
+		if err := os.WriteFile(f, []byte("helper"), 0o755); err != nil { //nolint:gosec // test helper file
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(socket, 0o755); err != nil { //nolint:gosec // G301: test socket directory
+		t.Fatal(err)
+	}
+	stubs["sleep"] = "exit 0"
+	for name, body := range stubs {
+		script := "#!/bin/sh\necho \"" + name + " $*\" >> \"$STUB_LOG\"\n" + body + "\n"
+		if err := os.WriteFile(filepath.Join(stubDir, name), []byte(script), 0o755); err != nil { //nolint:gosec // G306: test stub command
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.CommandContext(t.Context(), "sh", "-e", "-c", proxyUninstallScript(goos, true, false, nil)) //nolint:gosec // G204: constant script under test
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"STUB_LOG="+logPath, "STUB_DIR="+stubDir,
+		"JAILOC_HOST_LOCK_DIR="+lock,
+		"JAILOC_UNIT_DST="+unit, "JAILOC_UNIT_PREV_SHA256="+prev, "JAILOC_HELPER_DST="+helper, "JAILOC_SOCKET_DIR="+socket,
+		"JAILOC_SERVICE_LABEL=cz.test.broker", "JAILOC_SERVICE_NAME=test-broker.service",
+	)
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	combined, _ := cmd.CombinedOutput()
+	logData, _ := os.ReadFile(logPath) //nolint:gosec // G304: log file in a test directory
+	files = map[string]bool{}
+	for name, p := range map[string]string{"unit": unit, "helper": helper, "socket": socket} {
+		_, err := os.Stat(p)
+		files[name] = err == nil
+	}
+	return string(combined), files, string(logData)
+}
+
+func TestProxyUninstallScriptConfirmsServiceStoppedLinux(t *testing.T) {
+	systemctl := func(extra string) map[string]string {
+		return map[string]string{"systemctl": `case "$1" in
+disable) exit "${STUB_DISABLE_RC:-0}" ;;
+show) [ -z "$STUB_SHOW_RC" ] || exit "$STUB_SHOW_RC"; echo "${STUB_STATE:-inactive}" ;;
+esac
+` + extra}
+	}
+	t.Run("stopped service is removed", func(t *testing.T) {
+		out, files, log := runUninstallScript(t, "linux", true, systemctl(""), nil)
+		if files["unit"] || files["helper"] || files["socket"] || !strings.Contains(log, "systemctl disable --now test-broker.service") {
+			t.Errorf("files %v, log %q, output %q; want everything removed after a stop", files, log, out)
+		}
+	})
+	t.Run("absent service is confirmed absent", func(t *testing.T) {
+		out, files, log := runUninstallScript(t, "linux", false, systemctl(""), nil)
+		if files["helper"] || strings.Contains(log, "disable") {
+			t.Errorf("files %v, log %q, output %q; want the leftovers removed without disabling a unit that is not there", files, log, out)
+		}
+	})
+	for name, env := range map[string]map[string]string{
+		"disable fails":      {"STUB_DISABLE_RC": "1"},
+		"still active":       {"STUB_STATE": "active"},
+		"state unreadable":   {"STUB_SHOW_RC": "1"},
+		"restarting service": {"STUB_STATE": "activating"},
+	} {
+		t.Run(name+" keeps the files", func(t *testing.T) {
+			out, files, _ := runUninstallScript(t, "linux", true, systemctl(""), env)
+			if !files["unit"] || !files["helper"] || !files["socket"] {
+				t.Errorf("files %v, output %q; want every file kept when the stop is not confirmed", files, out)
+			}
+		})
+	}
+}
+
+func TestProxyUninstallScriptConfirmsServiceStoppedDarwin(t *testing.T) {
+	launchctl := func() map[string]string {
+		return map[string]string{"launchctl": `case "$1" in
+print)
+	[ -z "$STUB_PRINT_RC" ] || exit "$STUB_PRINT_RC"
+	[ -e "$STUB_DIR/loaded" ] || exit 113 ;;
+bootout)
+	[ -z "$STUB_BOOTOUT_RC" ] || exit "$STUB_BOOTOUT_RC"
+	[ -n "$STUB_STAY_LOADED" ] || rm -f "$STUB_DIR/loaded" ;;
+esac`}
+	}
+	t.Run("loaded service is booted out", func(t *testing.T) {
+		out, files, log := runUninstallScript(t, "darwin", true, launchctl(), nil, "loaded")
+		if files["unit"] || files["helper"] || !strings.Contains(log, "launchctl bootout system/cz.test.broker") {
+			t.Errorf("files %v, log %q, output %q", files, log, out)
+		}
+	})
+	t.Run("service launchd does not know is absent", func(t *testing.T) {
+		out, files, log := runUninstallScript(t, "darwin", true, launchctl(), nil)
+		if files["unit"] || files["helper"] || strings.Contains(log, "bootout") {
+			t.Errorf("files %v, log %q, output %q", files, log, out)
+		}
+	})
+	for name, env := range map[string]map[string]string{
+		"bootout fails":          {"STUB_BOOTOUT_RC": "5"},
+		"service stays loaded":   {"STUB_STAY_LOADED": "1"},
+		"launchctl print failed": {"STUB_PRINT_RC": "5"},
+	} {
+		t.Run(name+" keeps the files", func(t *testing.T) {
+			out, files, _ := runUninstallScript(t, "darwin", true, launchctl(), env, "loaded")
+			if !files["unit"] || !files["helper"] || !files["socket"] {
+				t.Errorf("files %v, output %q; want every file kept when the stop is not confirmed", files, out)
+			}
+		})
+	}
+}
+
+func TestProxyInstallLeavesPreexistingSystemCAAlone(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	// A system CA the install state does not record: someone else put the
+	// same certificate there.
+	st := h.installState()
+	existing := slices.Clone(h.files[hostTestSystemCA])
+	st.SystemCACertPath, st.SystemCACertSHA256, st.SystemCAUpdateCmd, st.SystemCARemoveCmd = "", "", nil, nil
+	if err := proxyhost.WriteInstallState(proxyInstallStatePath(), st); err != nil {
+		t.Fatal(err)
+	}
+	h.priv = nil
+
+	out := h.mustRun("install", "--yes")
+	if len(h.priv) != 0 {
+		t.Errorf("the unrecorded system CA reached a privileged step: %v", h.priv[0].script)
+	}
+	if !bytes.Equal(h.files[hostTestSystemCA], existing) {
+		t.Error("the unrecorded system CA was modified")
+	}
+	if got := h.installState(); got.SystemCACertPath != "" || got.SystemCACertSHA256 != "" {
+		t.Errorf("state = %+v, want the unrecorded system CA not adopted", got)
+	}
+	assertContains(t, out, "jailoc did not install it and leaves it as it is")
+	if strings.Contains(h.mustRunStatus(), "verified: system store") {
+		t.Error("status verifies a system CA jailoc does not own")
+	}
+
+	h.priv = nil
+	h.mustRun("uninstall", "--yes")
+	if !bytes.Equal(h.files[hostTestSystemCA], existing) {
+		t.Error("uninstall removed a system CA jailoc did not install")
+	}
+	for _, c := range h.priv {
+		if strings.Contains(c.script, `remove_ca_file "$JAILOC_CA_DST"`) {
+			t.Errorf("uninstall script removes the unrecorded system CA:\n%s", c.script)
+		}
+	}
+}
+
+func TestProxyInstallLeavesUnrecordedNSSEntriesAlone(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	caPEM := h.installState().CACertPEM
+	db := h.addNSSDatabase(".pki/nssdb")
+	h.useNSSInspection(map[string][]byte{db: caPEM})
+	h.commands = nil
+
+	out := h.mustRun("install", "--yes")
+	if h.hasCommand("certutil", "-d", "sql:"+db) && (h.hasCommand("certutil", "-d", "sql:"+db, "-M") || h.hasCommand("certutil", "-d", "sql:"+db, "-A") || h.hasCommand("certutil", "-d", "sql:"+db, "-D")) {
+		t.Errorf("an NSS entry jailoc did not add was modified: %v", h.commands)
+	}
+	if st := h.installState(); slices.Contains(st.NSSDatabases, db) || slices.Contains(st.PendingNSSDatabases, db) {
+		t.Errorf("state = %+v, want the unrecorded database not adopted", st)
+	}
+	assertContains(t, out, "jailoc did not install it there")
+
+	h.commands = nil
+	h.mustRun("uninstall", "--yes")
+	if h.hasCommand("certutil", "-d", "sql:"+db) {
+		t.Errorf("uninstall touched a database it never recorded: %v", h.commands)
+	}
+}
+
+func TestProxyInstallPendingNSSOwnershipIsPerDatabase(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	recordedDB := h.addNSSDatabase(".mozilla/firefox/recorded.default")
+	otherDB := h.addNSSDatabase(".mozilla/firefox/other.default")
+	leftover, leftoverSHA := testCertPEM(t, "jailoc proxy CA before the last rotation")
+	st := h.installState()
+	st.PendingNSSDatabases = []string{recordedDB}
+	st.PendingNSSCertSHA256s = []string{leftoverSHA}
+	if err := proxyhost.WriteInstallState(proxyInstallStatePath(), st); err != nil {
+		t.Fatal(err)
+	}
+	// The same recorded fingerprint sits in a database install never recorded.
+	h.useNSSInspection(map[string][]byte{recordedDB: leftover, otherDB: leftover})
+	h.commands = nil
+
+	out := h.mustRun("install", "--yes")
+	if !h.hasCommand("certutil", "-d", "sql:"+recordedDB, "-D") || !h.hasCommand("certutil", "-d", "sql:"+recordedDB, "-A") {
+		t.Errorf("the recorded old CA in its recorded database was not replaced: %v", h.commands)
+	}
+	if h.hasCommand("certutil", "-d", "sql:"+otherDB, "-D") || h.hasCommand("certutil", "-d", "sql:"+otherDB, "-A") {
+		t.Errorf("a certificate in a database jailoc did not record was replaced: %v", h.commands)
+	}
+	assertContains(t, out, "refusing to replace existing certificate \"jailoc proxy CA\" in "+otherDB)
+	if got := h.installState(); slices.Contains(got.NSSDatabases, otherDB) {
+		t.Errorf("state = %+v, want the unrecorded database not adopted", got)
+	}
+}
+
+func TestProxyStatusSeparatesRecordedFromVerifiedTrust(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	h.addNSSDatabase(".pki/nssdb")
+	h.mustRun("install", "--yes")
+	out := h.mustRunStatus()
+	assertContains(t, out, "verified: system store; recorded by `jailoc proxy install`, not verified: 1 NSS database(s)")
+	if strings.Contains(out, "verified: system store, 1 NSS") || strings.Contains(out, "trusted by") {
+		t.Errorf("recorded NSS trust is presented as verified:\n%s", out)
+	}
+
+	h2 := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+	h2.mustRun("install", "--yes")
+	out = h2.mustRunStatus()
+	assertContains(t, out, "(recorded by `jailoc proxy install`, not verified: login keychain)")
+	if strings.Contains(out, "(verified:") {
+		t.Errorf("the keychain was not looked into but is reported as verified:\n%s", out)
+	}
+
+	// A ca.crt with more than the certificate is not read as the CA.
+	other, _ := testCertPEM(t, "an extra certificate")
+	homeRoot, err := os.OpenRoot(h2.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := homeRoot.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	const caPath = ".local/share/jailoc/proxy/ca.crt"
+	data, err := homeRoot.ReadFile(caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := homeRoot.WriteFile(caPath, append(data, other...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, h2.mustRunStatus(), "(unreadable)")
 }
