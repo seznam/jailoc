@@ -383,10 +383,23 @@ func readSecret(ctx context.Context, wsName string, s workspace.ResolvedSecret, 
 	}
 }
 
+// detachedSecretKey marks a context whose from_command runs have no
+// terminal: see detachedSecretCommands.
+type detachedSecretKey struct{}
+
+// detachedSecretCommands returns ctx for a process without a terminal, such
+// as the network broker: a from_command run under it gets no standard input,
+// its standard error is dropped, so nothing it prints can reach a log, and
+// no waiting notice is printed.
+func detachedSecretCommands(ctx context.Context) context.Context {
+	return context.WithValue(ctx, detachedSecretKey{}, true)
+}
+
 func runSecretCommand(ctx context.Context, wsName string, s workspace.ResolvedSecret) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, secretCommandTimeout)
 	defer cancel()
-	if secretCommandNotice > 0 {
+	detached, _ := ctx.Value(detachedSecretKey{}).(bool)
+	if secretCommandNotice > 0 && !detached {
 		timer := time.AfterFunc(secretCommandNotice, func() {
 			if ctx.Err() == nil {
 				_, _ = color.New(color.FgCyan).Fprintf(os.Stderr, "Waiting for secret %s from_command (workspace %s)...\n", escapeVisible(s.Name), wsName)
@@ -399,8 +412,10 @@ func runSecretCommand(ctx context.Context, wsName string, s workspace.ResolvedSe
 		return strings.HasPrefix(e, "JAILOC_WORKSPACE=")
 	})
 	cmd.Env = append(cmd.Env, "JAILOC_WORKSPACE="+wsName)
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = os.Stderr
+	if !detached {
+		cmd.Stdin = os.Stdin
+		cmd.Stderr = os.Stderr
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("secret %q: from_command %q: %w", s.Name, s.FromCommand, err)
