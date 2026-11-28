@@ -390,6 +390,36 @@ func blockedAnswer(pol *Policy, resp []byte) (string, string, bool) {
 	return "", "", true
 }
 
+type dnsUpstreamCtxKey struct{}
+
+type dnsUpstreamCtx struct {
+	conn  uint64
+	name  string
+	route *upstreamRoute
+}
+
+func (b *Broker) withDNSUpstream(ctx context.Context, conn uint64, name string, route *upstreamRoute) context.Context {
+	if route == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, dnsUpstreamCtxKey{}, dnsUpstreamCtx{conn: conn, name: name, route: route})
+}
+
+func (b *Broker) exchangeDNS(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error) {
+	if u, ok := ctx.Value(dnsUpstreamCtxKey{}).(dnsUpstreamCtx); ok && network == "tcp" && u.route != nil {
+		dctx, cancel := context.WithTimeout(ctx, dnsTimeout)
+		defer cancel()
+		c, err := b.dialEgress(dctx, u.route, u.conn, up, u.name)
+		if err != nil {
+			b.recordUpstreamError(u.conn, up, err)
+			return nil, err
+		}
+		defer func() { _ = c.Close() }()
+		return exchangeConn(c, network, q)
+	}
+	return exchange(ctx, network, up, q)
+}
+
 func exchange(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error) {
 	d := net.Dialer{Timeout: dnsTimeout}
 	c, err := d.DialContext(ctx, network, up.String())
@@ -397,6 +427,10 @@ func exchange(ctx context.Context, network string, up netip.AddrPort, q []byte) 
 		return nil, err
 	}
 	defer func() { _ = c.Close() }()
+	return exchangeConn(c, network, q)
+}
+
+func exchangeConn(c net.Conn, network string, q []byte) ([]byte, error) {
 	_ = c.SetDeadline(time.Now().Add(dnsTimeout))
 	if network == "udp" {
 		if _, err := c.Write(q); err != nil {

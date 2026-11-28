@@ -27,10 +27,23 @@ func (m *multi) Set(s string) error { *m = append(*m, s); return nil }
 // the policy on SIGHUP. The jailoc binary exposes it as the hidden
 // "netbroker" command.
 func Main(args []string) error {
+	return MainWithOptions(args, MainOptions{})
+}
+
+// MainOptions lets the host command resolve auth with its existing TTL cache.
+// The broker receives secret values only in memory, not through policy files.
+type MainOptions struct {
+	ResolveUpstreamAuth func(context.Context, string, UpstreamAuth) ([]byte, error)
+}
+
+// MainWithOptions runs Main with the host's secret resolver.
+func MainWithOptions(args []string, options MainOptions) error {
 	fs := flag.NewFlagSet("netbroker", flag.ContinueOnError)
 	socket := fs.String("socket", "", "unix socket the VMM connects its virtio-net device to (QEMU stream framing)")
 	policyPath := fs.String("policy", "", "JSON policy file; reloaded on SIGHUP, an invalid reload denies all new flows")
 	runtimePath := fs.String("runtime", "", "optional JSON file with published ports and gateway services; reapplied on SIGHUP")
+	upstreamState := fs.String("upstream-state", "", "public upstream status JSON snapshot path")
+	upstreamCA := fs.String("upstream-ca", "", "public merged upstream CA PEM snapshot path")
 	subnet := fs.String("subnet", "192.168.127.0/24", "virtual guest network")
 	gateway := fs.String("gateway", "192.168.127.1", "gateway, DNS and DHCP address served by the broker")
 	guest := fs.String("guest", "192.168.127.2", "address leased to the guest")
@@ -60,6 +73,7 @@ func Main(args []string) error {
 		return fmt.Errorf("-mtu %d: want 576-%d", *mtu, MaxMTU)
 	}
 	cfg := Config{MTU: uint32(*mtu)} //nolint:gosec // G115: checked above
+	cfg.UpstreamState, cfg.UpstreamCA, cfg.ResolveUpstreamAuth = *upstreamState, *upstreamCA, options.ResolveUpstreamAuth
 	if *loopbackRelayPort > 65535 {
 		return fmt.Errorf("-loopback-relay-port %d: out of range", *loopbackRelayPort)
 	}
@@ -144,6 +158,7 @@ func Main(args []string) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
+	defer func() { _ = l.Close() }()
 	defer func() { _ = os.Remove(*socket) }()
 	if err := os.Chmod(*socket, 0o600); err != nil {
 		return fmt.Errorf("chmod socket: %w", err)
@@ -162,8 +177,17 @@ func Main(args []string) error {
 	}
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	reloadDone := make(chan struct{})
+	defer func() { stop(); <-reloadDone }()
 	go func() {
-		for range hup {
+		defer close(reloadDone)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+			}
 			event := map[string]any{"event": "reload"}
 			p, err := loadPolicy(*policyPath)
 			if err != nil {
@@ -171,7 +195,9 @@ func Main(args []string) error {
 				p = DenyAll("invalid reload: " + err.Error())
 				event["policy_error"] = err.Error()
 			}
-			b.SetPolicy(p)
+			for key, value := range b.reloadUpstream(ctx, p) {
+				event[key] = value
+			}
 			if *runtimePath != "" {
 				var errs []string
 				if rt, err := loadRuntime(*runtimePath); err != nil {

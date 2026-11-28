@@ -95,19 +95,25 @@ type Config struct {
 	// Status, when set, receives one line per lifecycle change for a
 	// supervisor: "ready" once the NIC socket is served, then
 	// "nic connected" and "nic disconnected".
-	Status io.Writer
+	Status              io.Writer
+	UpstreamState       string
+	UpstreamCA          string
+	ResolveUpstreamAuth func(context.Context, string, UpstreamAuth) ([]byte, error)
 }
 
 // Broker owns the userspace stack for one guest NIC.
 type Broker struct {
-	cfg     Config
-	stack   *stack.Stack
-	link    *channel.Endpoint
-	policy  atomic.Pointer[Policy]
-	hosts   addrCache
-	names   *dnsCache
-	dialTCP func(string, string) (net.Conn, error)
-	dialUDP func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)
+	cfg           Config
+	stack         *stack.Stack
+	link          *channel.Endpoint
+	policy        atomic.Pointer[Policy]
+	upstream      atomic.Pointer[upstreamRoute]
+	snapshot      atomic.Pointer[policySnapshot]
+	upstreamState *upstreamManager
+	hosts         addrCache
+	names         *dnsCache
+	dialTCP       func(string, string) (net.Conn, error)
+	dialUDP       func(string, *net.UDPAddr, *net.UDPAddr) (*net.UDPConn, error)
 	// exchange sends one DNS query to an upstream resolver.
 	exchange func(ctx context.Context, network string, up netip.AddrPort, q []byte) ([]byte, error)
 
@@ -147,13 +153,13 @@ func New(cfg Config, p *Policy) (*Broker, error) {
 		cfg.Log = io.Discard
 	}
 	b := &Broker{cfg: cfg, log: json.NewEncoder(cfg.Log), names: newDNSCache()}
+	b.upstreamState = &upstreamManager{b: b}
 	b.tcpFlows.max, b.udpFlows.max = maxTCPFlows, maxUDPFlows
 	b.dnsQueries, b.dnsConns = make(chan struct{}, maxDNSQueries), make(chan struct{}, maxDNSConns)
 	b.dialTCP = (&net.Dialer{Timeout: dialTimeout}).Dial
 	b.dialUDP = net.DialUDP
-	b.exchange = exchange
-	b.policy.Store(p)
-
+	b.exchange = b.exchangeDNS
+	b.setSnapshot(p, nil)
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, arp.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
@@ -201,9 +207,31 @@ func headerIPv4Any() tcpip.Subnet {
 	return sn
 }
 
+type policySnapshot struct {
+	policy   *Policy
+	upstream *upstreamRoute
+}
+
+func (b *Broker) setSnapshot(p *Policy, r *upstreamRoute) {
+	b.policy.Store(p)
+	b.upstream.Store(r)
+	b.snapshot.Store(&policySnapshot{policy: p, upstream: r})
+}
+
+func (b *Broker) currentSnapshot() (*Policy, *upstreamRoute) {
+	if s := b.snapshot.Load(); s != nil {
+		return s.policy, s.upstream
+	}
+	return b.policy.Load(), b.upstream.Load()
+}
+
 // SetPolicy atomically replaces the policy for new flows.
 func (b *Broker) SetPolicy(p *Policy) {
-	b.policy.Store(p)
+	if b.upstreamState != nil {
+		b.upstreamState.mu.Lock()
+		defer b.upstreamState.mu.Unlock()
+	}
+	b.setSnapshot(p, b.upstream.Load())
 	b.record(map[string]any{"event": "policy", "source": p.source, "deny_all": p.denyAll})
 }
 
@@ -224,12 +252,6 @@ func (b *Broker) env(p *Policy, dst netip.Addr) Env {
 		Names:     names,
 		Untrusted: untrusted,
 	}
-}
-
-func (b *Broker) decide(p *Policy, proto string, src, dst netip.AddrPort, conn uint64) Decision {
-	d := Decide(p, b.env(p, dst.Addr()), proto, dst)
-	b.recordFlow(conn, proto, src, dst, d)
-	return d
 }
 
 func (b *Broker) recordFlow(conn uint64, proto string, src, dst netip.AddrPort, d Decision) {
@@ -279,6 +301,11 @@ func (b *Broker) status(line string) {
 // Run starts the gateway services and ingress forwards, then serves guest
 // NIC connections from l until ctx ends.
 func (b *Broker) Run(ctx context.Context, l net.Listener) error {
+	defer func() { _ = l.Close() }()
+	defer b.stopUpstream()
+	if err := b.startUpstream(ctx); err != nil {
+		return err
+	}
 	if err := b.startDNS(ctx); err != nil {
 		return err
 	}

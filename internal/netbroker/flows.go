@@ -63,7 +63,7 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
 	conn := b.connSeq.Add(1)
-	p := b.policy.Load()
+	p, upstream := b.currentSnapshot()
 	env := b.env(p, dst.Addr())
 	d := Decide(p, env, ProtoTCP, dst)
 	if !d.Allow {
@@ -95,14 +95,22 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		}
 		r.Complete(false)
 		b.recordFlow(conn, ProtoTCP, src, dst, d)
+		dnsNames := upstreamNames("", env)
+		dnsName := ""
+		if len(dnsNames) == 1 {
+			dnsName = dnsNames[0]
+		}
+		if upstream != nil && upstream.isDirect(ProtoTCP, dst, dnsNames) {
+			upstream = nil
+		}
 		go func() {
 			defer b.tcpFlows.release()
 			defer func() { <-b.dnsConns }()
-			b.serveDNSTCP(context.Background(), gonet.NewTCPConn(&wq, ep), dst)
+			b.serveDNSTCP(b.withDNSUpstream(context.Background(), conn, dnsName, upstream), gonet.NewTCPConn(&wq, ep), dst)
 		}()
 		return
 	}
-	if p.needsNameInspection(dst, d.byName) {
+	if p.needsNameInspection(dst, d.byName) || upstream.needsNameInspection(dst, env.Names) {
 		var wq waiter.Queue
 		ep, terr := r.CreateEndpoint(&wq)
 		if terr != nil {
@@ -113,14 +121,21 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		r.Complete(false)
 		go func() {
 			defer b.tcpFlows.release()
-			b.handleInspectedTCP(conn, src, dst, p, env, d, ep, &wq)
+			b.handleInspectedTCP(conn, src, dst, p, env, d, ep, &wq, upstream)
 		}()
 		return
 	}
 	b.recordFlow(conn, ProtoTCP, src, dst, d)
-	out, err := b.dialTCP("tcp", dst.String())
+	route := upstream
+	if route != nil && route.isDirect(ProtoTCP, dst, upstreamNames(d.Name, env)) {
+		route = nil
+	}
+	out, err := b.dialEgress(context.Background(), route, conn, dst, d.Name)
 	if err != nil {
 		b.tcpFlows.release()
+		if route != nil {
+			b.recordUpstreamError(conn, dst, err)
+		}
 		b.record(map[string]any{"event": "dial-error", "proto": ProtoTCP, "dst": dst.String(), "error": err.Error()})
 		r.Complete(true)
 		return
@@ -134,11 +149,43 @@ func (b *Broker) handleTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 	r.Complete(false)
-	guest := &sniffConn{Conn: gonet.NewTCPConn(&wq, ep), report: func(info map[string]any) {
+	rawConn := gonet.NewTCPConn(&wq, ep)
+	guest := net.Conn(&sniffConn{Conn: rawConn, report: func(info map[string]any) {
 		info["event"], info["conn"], info["dst"] = "l7", conn, dst.String()
 		markQuiet(info, d.Quiet)
 		b.record(info)
-	}}
+	}})
+	if upstream != nil {
+		boundPeer := ""
+		guest = &enforceConn{
+			Conn:         guest,
+			allowNoName:  true,
+			allowUpgrade: !p.needsNameInspection(dst, d.byName),
+			check: func(name string) Decision {
+				if ip, err := netip.ParseAddr(name); err == nil && ip.Unmap() != dst.Addr().Unmap() {
+					return Decision{Reason: "sni-mismatch", Name: name}
+				}
+				if boundPeer == "" {
+					if d.Name != "" && name != d.Name && name != dst.Addr().Unmap().String() {
+						return Decision{Reason: "sni-mismatch", Name: name}
+					}
+					if (route == nil) != upstream.isDirect(ProtoTCP, dst, upstreamNames(name, env)) {
+						return Decision{Reason: "sni-mismatch", Name: name}
+					}
+					boundPeer = name
+				} else if name != boundPeer {
+					return Decision{Reason: "sni-mismatch", Name: name}
+				}
+				return b.peerDecision(p, env, dst, name)
+			},
+			closeUpstream: func() { _ = out.Close() },
+			abort: func() {
+				ep.Abort()
+				_ = rawConn.Close()
+				_ = out.Close()
+			},
+		}
+	}
 	go func() {
 		defer b.tcpFlows.release()
 		splice(guest, out)
@@ -151,10 +198,10 @@ const sniffBeforeDialTimeout = 2 * time.Second
 // HTTP/1 request head: what a cleartext prior-knowledge (h2c) flow starts with.
 const h2PrefaceHead = "PRI * HTTP/2.0\r\n\r\n"
 
-func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Policy, env Env, d Decision, ep tcpip.Endpoint, wq *waiter.Queue) {
+func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Policy, env Env, d Decision, ep tcpip.Endpoint, wq *waiter.Queue, upstream *upstreamRoute) {
 	rawConn := gonet.NewTCPConn(wq, ep)
 	timeout := 200 * time.Millisecond
-	if isHTTPOrTLSPort(dst.Port()) {
+	if isHTTPOrTLSPort(dst.Port()) && p.needsNameInspection(dst, d.byName) {
 		timeout = sniffBeforeDialTimeout
 	}
 	replayed, info, incomplete := sniffBeforeDial(rawConn, timeout)
@@ -189,6 +236,10 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	case h2c:
 		// Decided per request; the L4 decision stands.
 	case peerName != "":
+		if ip, err := netip.ParseAddr(peerName); err == nil && ip.Unmap() != dst.Addr().Unmap() {
+			d = Decision{Allow: false, Reason: "sni-mismatch", Name: peerName}
+			break
+		}
 		// Check whether the sniffed SNI/Host belongs to the destination IP in
 		// the DNS cache (unless a CIDR or wildcard rule allows the IP directly).
 		inCache := false
@@ -234,13 +285,16 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		// allowed flow is inspected under the IP, as one without ALPN.
 		d = Decide(dp, env, ProtoTCP, dst)
 		ipInspect = d.Allow
-	case incomplete || info != nil || isHTTPOrTLSPort(dst.Port()):
+	case (incomplete || info != nil || isHTTPOrTLSPort(dst.Port())) && p.needsNameInspection(dst, d.byName):
 		// Timed out waiting for TLS ClientHello / HTTP headers on an HTTP/TLS
 		// port (or after partial TLS/HTTP bytes), or received TLS/HTTP without
 		// an SNI/Host header: fail closed even when a wildcard or CIDR rule
 		// matched at L4, so a guest cannot wait out the 2s deadline and then
 		// send a denied SNI/Host over an unchecked splice.
 		d = Decision{Allow: false, Reason: "sni-required", Name: d.Name}
+	case incomplete && peerName == "" && !badAuthority:
+		// Sniffed only for upstream authority / direct selection and the guest
+		// sent partial non-TLS/HTTP bytes or waited for the server to speak first.
 	case dp != p:
 		// Nothing identified on a non-HTTP port: the earlier decision may
 		// rest on an http allow rule.
@@ -267,23 +321,37 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 		switch {
 		case h2c:
 			f := b.newInspectFlow(p, env, d, httpScope{}, conn, dst, "", false, true)
+			f.setUpstream(upstream)
 			f.serveInspected(replayed)
 			return
 		case peerName != "":
 			if scope := p.httpScope(peerName, dst); !scope.empty() {
 				f := b.newInspectFlow(p, env, d, scope, conn, dst, peerName, info["proto"] == "tls", false)
+				f.setUpstream(upstream)
 				f.serveInspected(replayed)
 				return
 			}
 		case ipInspect:
 			f := b.newInspectFlow(p, env, d, addrScope, conn, dst, dst.Addr().Unmap().String(), info["proto"] == "tls", false)
+			f.setUpstream(upstream)
 			f.byIP = true
 			f.serveInspected(replayed)
 			return
 		}
 	}
-	out, err := b.dialTCP("tcp", dst.String())
+	route := upstream
+	if route != nil && route.isDirect(ProtoTCP, dst, upstreamNames(peerName, env)) {
+		route = nil
+	}
+	name := peerName
+	if name == "" && len(env.Names) == 1 {
+		name = d.Name
+	}
+	out, err := b.dialEgress(context.Background(), route, conn, dst, name)
 	if err != nil {
+		if route != nil {
+			b.recordUpstreamError(conn, dst, err)
+		}
 		b.record(map[string]any{"event": "dial-error", "proto": ProtoTCP, "dst": dst.String(), "error": err.Error()})
 		ep.Abort()
 		_ = rawConn.Close()
@@ -298,14 +366,38 @@ func (b *Broker) handleInspectedTCP(conn uint64, src, dst netip.AddrPort, p *Pol
 	// framing (Content-Length / chunked) before subsequent reads from rawConn.
 	var stream net.Conn = replayed
 	if peerName == "" || info["proto"] == "http" {
+		boundPeer := peerName
 		stream = &enforceConn{
 			Conn: replayed,
 			// Without http rules asking for it, a later request without a name
 			// is as welcome as before they existed. Where an http rule covers
 			// the address, TLS without a name is inspected (TLS offering no HTTP
 			// protocol included), so only a flow nothing identified gets here.
-			allowNoName: httpOnly && addrScope.empty(),
+			allowNoName:  httpOnly && addrScope.empty(),
+			allowUpgrade: !p.needsNameInspection(dst, d.byName),
 			check: func(name string) Decision {
+				if ip, err := netip.ParseAddr(name); err == nil && ip.Unmap() != dst.Addr().Unmap() {
+					return Decision{Reason: "sni-mismatch", Name: name}
+				}
+				if upstream != nil {
+					if boundPeer == "" {
+						// Delayed handshake on a tunnel opened before the guest spoke:
+						// when a single cached name was dialed as the tunnel authority,
+						// the name must match that authority; when the IP literal was
+						// dialed (no cached name or multiple cached names), any
+						// policy-allowed hostname on that IP is accepted as LONG AS it
+						// keeps the same route that opened the socket.
+						if len(env.Names) == 1 && d.Name != "" && name != "" && name != d.Name && name != dst.Addr().Unmap().String() {
+							return Decision{Reason: "sni-mismatch", Name: name}
+						}
+						if (route == nil) != upstream.isDirect(ProtoTCP, dst, upstreamNames(name, env)) {
+							return Decision{Reason: "sni-mismatch", Name: name}
+						}
+						boundPeer = name
+					} else if name != boundPeer {
+						return Decision{Reason: "sni-mismatch", Name: name}
+					}
+				}
 				d := b.peerDecision(dp, env, dst, name)
 				if d.Allow && !p.httpScope(name, dst).empty() {
 					// A host an http rule covers cannot be reached over a
@@ -358,8 +450,15 @@ func (b *Broker) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
 	src, dst := addrPort(id.RemoteAddress, id.RemotePort), addrPort(id.LocalAddress, id.LocalPort)
 	conn := b.connSeq.Add(1)
-	p := b.policy.Load()
-	if !b.decide(p, ProtoUDP, src, dst, conn).Allow {
+	p, route := b.currentSnapshot()
+	env := b.env(p, dst.Addr())
+	d := Decide(p, env, ProtoUDP, dst)
+	if d.Allow && route != nil && !route.isDirect(ProtoUDP, dst, upstreamNames("", env)) {
+		d.Allow = false
+		d.Reason = "upstream-proxy-udp"
+	}
+	b.recordFlow(conn, ProtoUDP, src, dst, d)
+	if !d.Allow {
 		return false
 	}
 	if !b.udpFlows.acquire() {

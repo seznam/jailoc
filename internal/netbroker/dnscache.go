@@ -2,6 +2,7 @@ package netbroker
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -185,6 +186,7 @@ func (c *dnsCache) lookupTrusted(addr netip.Addr, trusted func(chain []string) b
 	if entries != nil && len(entries) == 0 {
 		delete(c.entries, addr)
 	}
+	slices.Sort(names)
 	return names, untrusted
 }
 
