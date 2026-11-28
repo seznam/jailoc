@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -27,7 +28,7 @@ func (g *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	host := externalHostname(r.Host)
+	host := g.externalHostname(r.Host)
 	if host == "" {
 		http.Error(w, "invalid authority", http.StatusBadRequest)
 		return
@@ -37,7 +38,7 @@ func (g *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
 		return
 	}
-	if !sameOriginRequest(r, host) {
+	if !g.sameOriginRequest(r, host) {
 		http.Error(w, "origin forbidden", http.StatusForbidden)
 		return
 	}
@@ -126,20 +127,40 @@ func serveStatic(w http.ResponseWriter, r *http.Request, route Route, upgrade st
 	}
 }
 
-func externalHostname(authority string) string {
+// externalHostname returns the hostname of an HTTPS authority, or "" when the
+// authority is malformed or names a port other than the external HTTPS port.
+// The port may be omitted only when it is 443.
+func (g *Server) externalHostname(authority string) string {
+	return authorityHostname(authority, g.httpsPort, defaultHTTPSPort)
+}
+
+// authorityHostname returns the hostname of authority if it is a valid route
+// hostname with exactly the port, or with no port when port is the implicit
+// one of the scheme. It returns "" otherwise.
+func authorityHostname(authority string, port, implicit int) string {
 	host := authority
 	if strings.ContainsRune(authority, ':') {
-		var port string
+		var got string
 		var err error
-		host, port, err = net.SplitHostPort(authority)
-		if err != nil || port != "443" {
+		host, got, err = net.SplitHostPort(authority)
+		if err != nil || got != strconv.Itoa(port) {
 			return ""
 		}
+	} else if port != implicit {
+		return ""
 	}
 	if !validHostname(host) {
 		return ""
 	}
 	return host
+}
+
+// origin is the exact Origin header value browsers send for host.
+func (g *Server) origin(host string) string {
+	if g.httpsPort == defaultHTTPSPort {
+		return "https://" + host
+	}
+	return "https://" + host + ":" + strconv.Itoa(g.httpsPort)
 }
 
 // unauthenticatedSession returns the shared session of an unauthenticated
@@ -164,9 +185,9 @@ func (g *Server) unauthenticatedSession(host string, route Route) (*session, boo
 	return s, true
 }
 
-func sameOriginRequest(r *http.Request, host string) bool {
+func (g *Server) sameOriginRequest(r *http.Request, host string) bool {
 	origins, present := r.Header["Origin"]
-	exact := len(origins) == 1 && origins[0] == "https://"+host
+	exact := len(origins) == 1 && origins[0] == g.origin(host)
 	if present && !exact {
 		return false
 	}
@@ -175,7 +196,7 @@ func sameOriginRequest(r *http.Request, host string) bool {
 			return false
 		}
 		u, err := url.Parse(referers[0])
-		if err != nil || u.Scheme != "https" || u.User != nil || externalHostname(u.Host) != host {
+		if err != nil || u.Scheme != "https" || u.User != nil || g.externalHostname(u.Host) != host {
 			return false
 		}
 	}
