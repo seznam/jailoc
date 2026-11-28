@@ -4,13 +4,12 @@ package cmd
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/seznam/jailoc/internal/docker"
@@ -33,26 +32,44 @@ func brokerReloadTimeout(running, next vm.Spec) time.Duration {
 	return reloadTimeout
 }
 
-// builderCABundleDigest returns the CA digest recorded in the builder VM spec,
-// combining the workspace's external CA bundle digest with the content digest
-// of the static defaults upstream proxy CA file so rotating the proxy CA at
-// the same path restarts the builder VM.
-func builderCABundleDigest(ca *docker.BuildCA, upstream *netbroker.UpstreamProxy) string {
-	base := ca.Digest()
+// builderUpstreamBuildCA merges the static defaults upstream proxy CA file (if
+// any) into the workspace's external BuildCA for the managed builder VM, using
+// a nonblocking, bounded regular-file read so rotating the proxy CA at the
+// same path restarts the builder VM and Dockerfile HTTPS RUN steps inside the
+// builder VM trust the proxy CA even when ca_bundle = false.
+func builderUpstreamBuildCA(ca *docker.BuildCA, upstream *netbroker.UpstreamProxy) (*docker.BuildCA, error) {
 	if upstream == nil || upstream.CA == "" {
-		return base
+		return ca, nil
 	}
-	data, err := os.ReadFile(upstream.CA) //nolint:gosec // G304: validated host config CA path
-	if err != nil || len(data) == 0 {
-		return base
+	fd, err := syscall.Open(upstream.CA, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open upstream proxy CA %q: %w", upstream.CA, err)
 	}
-	sum := sha256.Sum256(data)
-	upDigest := hex.EncodeToString(sum[:])
-	if base == "" {
-		return upDigest
+	if err := syscall.SetNonblock(fd, false); err != nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("open upstream proxy CA %q: %w", upstream.CA, err)
 	}
-	combined := sha256.Sum256([]byte(base + "\n" + upDigest))
-	return hex.EncodeToString(combined[:])
+	f := os.NewFile(uintptr(fd), upstream.CA)
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat upstream proxy CA %q: %w", upstream.CA, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("upstream proxy CA %q is not a regular file", upstream.CA)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	if err != nil {
+		return nil, fmt.Errorf("read upstream proxy CA %q: %w", upstream.CA, err)
+	}
+	if len(data) > 1<<20 {
+		return nil, fmt.Errorf("upstream proxy CA %q exceeds 1 MiB", upstream.CA)
+	}
+	if err := validateCABundlePEM(data); err != nil {
+		return nil, fmt.Errorf("upstream proxy CA %q: %w", upstream.CA, err)
+	}
+	merged := appendCABundle(ca.PEM(), data)
+	return docker.NewBuildCA(merged)
 }
 
 // withUpstreamProxy adds proxy as the upstream_proxy of the broker policy

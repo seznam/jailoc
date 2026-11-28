@@ -241,7 +241,11 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	if err != nil {
 		return "", err
 	}
-	caPath, err := writeBuilderCABundle(dir, ca)
+	builderCA, err := builderUpstreamBuildCA(ca, upstream)
+	if err != nil {
+		return "", err
+	}
+	caPath, err := writeBuilderCABundle(dir, builderCA)
 	if err != nil {
 		return "", err
 	}
@@ -262,7 +266,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		// pulls behind a TLS-intercepting proxy work in the shared builder
 		// too. The digest restarts it when the bundle changes at the same path.
 		CABundle:       caPath,
-		CABundleDigest: builderCABundleDigest(ca, upstream),
+		CABundleDigest: builderCA.Digest(),
 		UpstreamProxy:  upstream != nil,
 	}
 	if ws.IsolatedBuild {
@@ -290,7 +294,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	return withBuilderMaintenance(ctx, func(ctx context.Context, phase string) {
 		maintainBuilderDaemon(ctx, spec.DiskSize, phase, os.Stdout, os.Stderr)
 	}, func() (string, error) {
-		return importWorkspaceImage(ctx, cfg, ws, ca)
+		return importWorkspaceImage(ctx, cfg, ws, builderCA)
 	})
 }
 

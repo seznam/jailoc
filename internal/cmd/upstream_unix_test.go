@@ -6,18 +6,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-	"time"
-
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
 )
 
 func upstreamTestWorkspace() *workspace.Resolved {
@@ -320,32 +320,57 @@ func TestVMFailureIncludesBrokerStartupLog(t *testing.T) {
 	}
 }
 
-func TestBuilderCABundleDigestRotatesOnUpstreamCA(t *testing.T) {
+func TestBuilderUpstreamBuildCARotatesAndValidates(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	caPath := filepath.Join(dir, "proxy-ca.pem")
-	if err := os.WriteFile(caPath, []byte("cert-v1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	baseCA, err := docker.NewBuildCA([]byte("base-cert\n"))
+	proxyCA1 := writeTestCABundle(t, caPath, "proxy-1")
+	basePEM := writeTestCABundle(t, filepath.Join(dir, "base.pem"), "base").data
+	baseCA, err := docker.NewBuildCA(basePEM)
 	if err != nil {
 		t.Fatal(err)
 	}
 	up := &netbroker.UpstreamProxy{Workspace: "builder", URL: "http://proxy.example:3128", CA: caPath}
 
-	d1 := builderCABundleDigest(baseCA, up)
-	if d1 == "" || d1 == baseCA.Digest() {
-		t.Fatalf("builderCABundleDigest with upstream CA = %q, base = %q", d1, baseCA.Digest())
-	}
-	dOnlyUp := builderCABundleDigest(nil, up)
-	if dOnlyUp == "" || dOnlyUp == d1 {
-		t.Fatalf("builderCABundleDigest without base CA = %q, with base = %q", dOnlyUp, d1)
-	}
-	if err := os.WriteFile(caPath, []byte("cert-v2\n"), 0o600); err != nil {
+	merged1, err := builderUpstreamBuildCA(baseCA, up)
+	if err != nil {
 		t.Fatal(err)
 	}
-	d2 := builderCABundleDigest(baseCA, up)
-	if d2 == "" || d2 == d1 {
-		t.Fatalf("builderCABundleDigest after rotating upstream CA = %q, before = %q", d2, d1)
+	if merged1.Digest() == "" || merged1.Digest() == baseCA.Digest() {
+		t.Fatalf("merged1.Digest() = %q, base = %q", merged1.Digest(), baseCA.Digest())
+	}
+	if !bytes.Contains(merged1.PEM(), bytes.TrimSpace(basePEM)) || !bytes.Contains(merged1.PEM(), bytes.TrimSpace(proxyCA1.data)) {
+		t.Fatalf("merged1.PEM() missing base or proxy CA")
+	}
+	onlyUp, err := builderUpstreamBuildCA(nil, up)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onlyUp == nil || onlyUp.Digest() == "" || onlyUp.Digest() == merged1.Digest() || !bytes.Contains(onlyUp.PEM(), bytes.TrimSpace(proxyCA1.data)) {
+		t.Fatalf("onlyUp = %+v, merged1 = %q", onlyUp, merged1.Digest())
+	}
+
+	// Rotate proxy CA at the same path: digest and PEM must update.
+	writeTestCABundle(t, caPath, "proxy-2")
+	merged2, err := builderUpstreamBuildCA(baseCA, up)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged2.Digest() == "" || merged2.Digest() == merged1.Digest() {
+		t.Fatalf("merged2.Digest() after rotation = %q, before = %q", merged2.Digest(), merged1.Digest())
+	}
+
+	// FIFO path without a writer must fail immediately without blocking.
+	fifoPath := filepath.Join(dir, "ca.fifo")
+	if err := syscall.Mkfifo(fifoPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fifoStart := time.Now()
+	_, err = builderUpstreamBuildCA(baseCA, &netbroker.UpstreamProxy{Workspace: "builder", URL: "http://proxy.example:3128", CA: fifoPath})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("builderUpstreamBuildCA(FIFO) = %v, want not a regular file error", err)
+	}
+	if elapsed := time.Since(fifoStart); elapsed > time.Second {
+		t.Fatalf("builderUpstreamBuildCA(FIFO) took %v, expected nonblocking open", elapsed)
 	}
 }
