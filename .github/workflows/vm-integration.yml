@@ -13,12 +13,16 @@ on:
       - scripts/vm-runtime/**
       - cmd/jailoc/**
       - cmd/jailoc-guest/**
+      - cmd/jailoc-listener-broker/**
       - internal/cmd/**
       - internal/config/**
       - internal/docker/**
       - internal/embed/**
       - internal/guest/**
       - internal/guestbin/**
+      - internal/brokerbin/**
+      - internal/proxy/**
+      - internal/proxyhost/**
       - internal/netbroker/**
       - internal/brokerproc/**
       - internal/vm/**
@@ -33,12 +37,16 @@ on:
       - scripts/vm-runtime/**
       - cmd/jailoc/**
       - cmd/jailoc-guest/**
+      - cmd/jailoc-listener-broker/**
       - internal/cmd/**
       - internal/config/**
       - internal/docker/**
       - internal/embed/**
       - internal/guest/**
       - internal/guestbin/**
+      - internal/brokerbin/**
+      - internal/proxy/**
+      - internal/proxyhost/**
       - internal/netbroker/**
       - internal/brokerproc/**
       - internal/vm/**

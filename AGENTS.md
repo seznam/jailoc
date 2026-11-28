@@ -16,8 +16,9 @@
 cmd/jailoc/main.go          Entry point → cmd.Execute(version, commit, date)
 cmd/jailoc-guest/           VM init + SSH server inside the guest (embedded via internal/guestbin)
 cmd/jailoc-netbroker/       Host-side network broker process, one per workspace VM
+cmd/jailoc-listener-broker/ Root-owned listener on 127.0.0.1:443 and [::1]:443 for the HTTPS proxy (embedded via internal/brokerbin, installed by `jailoc proxy install`)
 internal/
-  cmd/                       Cobra CLI: root (attach/new/continue sessions) + add, config, down, list, logs, migrate, reload, restart, sessions, status, up
+  cmd/                       Cobra CLI: root (attach/new/continue sessions) + add, config, down, list, logs, migrate, proxy, reload, restart, sessions, status, up
   agent/                     Built-in coding agent harnesses (opencode1, opencode2, claude, copilot, omo, agy; opencode = alias of opencode2): npm package or GitHub release binary, session flags, env, persisted dirs, default mounts
   config/                    TOML config parsing, validation (rejects v1 settings), mutation (~/.config/jailoc/config.toml), default config content
   workspace/                 Workspace name → resolved paths, allowed hosts/networks, CWD matching
@@ -26,6 +27,7 @@ internal/
   vm/                        go-microvm/libkrun VM lifecycle, embedded runtime unpacking, image export into rootfs
   guest/                     jailoc-guest: init, SSH sessions, secrets, Docker in the VM
   guestbin/                  go:generate-embedded jailoc-guest binaries
+  brokerbin/                 go:generate-embedded jailoc-listener-broker binaries
   netbroker/                 gVisor userspace network stack + IPv4/IPv6 egress policy + filtered DNS
   brokerproc/                Starts a jailoc-netbroker process for one workspace
   vmnet/, logging/, update/  Supporting packages
@@ -124,7 +126,7 @@ GitHub Actions workflows:
 - **Security** (`.github/workflows/security.yml`): push/PR to main and weekly — CodeQL (Go, JS/TS, Actions) and govulncheck, both reporting to GitHub code scanning (govulncheck findings don't fail the job)
 - **VM Integration** (`.github/workflows/vm-integration.yml`): PRs/pushes to main touching VM code — boots real workspace VMs on an x64 Linux runner with KVM
 - **VM runtime** (`.github/workflows/vm-runtime.yml`): reusable workflow called by the release, re-release and prerelease workflows, plus PRs touching `scripts/vm-runtime/` — builds runtime artifacts for darwin/arm64, linux/amd64, linux/arm64 (libkrun with a musl guest init), the libkrunfw GPL source tarball and runtime license notices (artifacts uploaded only for releases)
-- **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + draft GitHub Release, builds the VM runtimes into `internal/vm/runtimebin/` and notices/source into `build/vm-runtime/`, then GoReleaser runs `go generate ./internal/guestbin`, generates `THIRD_PARTY_NOTICES` and uploads binaries (darwin/arm64, linux/amd64, linux/arm64, `CGO_ENABLED=0`) plus `jailoc_<version>_vm-runtime-source.tar` and syft SPDX SBOMs to the draft; the job attests build provenance of all checksummed assets and only then publishes the release (immutable once published); a separate `homebrew-tap` job then pushes the cask rendered by GoReleaser to `seznam/homebrew-tap` (`HOMEBREW_TAP_DEPLOY_KEY` deploy-key secret in the `homebrew-tap` environment; skipped for pre-releases)
+- **Release** (`.github/workflows/release-please.yml`): runs on push to main — Release Please opens a Release PR; on merge, creates `v*` tag + draft GitHub Release, builds the VM runtimes into `internal/vm/runtimebin/` and notices/source into `build/vm-runtime/`, then GoReleaser runs `go generate ./internal/guestbin ./internal/brokerbin`, generates `THIRD_PARTY_NOTICES` and uploads binaries (darwin/arm64, linux/amd64, linux/arm64, `CGO_ENABLED=0`) plus `jailoc_<version>_vm-runtime-source.tar` and syft SPDX SBOMs to the draft; the job attests build provenance of all checksummed assets and only then publishes the release (immutable once published); a separate `homebrew-tap` job then pushes the cask rendered by GoReleaser to `seznam/homebrew-tap` (`HOMEBREW_TAP_DEPLOY_KEY` deploy-key secret in the `homebrew-tap` environment; skipped for pre-releases)
 - **Nix** (`.github/workflows/nix.yml`): push/PR to main — `nix fmt` check and `nix flake check --all-systems`, plus `nix build .#jailoc` on an x86_64 Linux runner
 - **Nix vendorHash** (`.github/workflows/nix-vendor-hash.yml`): `go.mod`/`go.sum` pushes to main, Dependabot PRs, manual — recomputes `vendorHash` in `nix/jailoc.nix` in a cache-free read-only job and commits it from a separate write job
 - **Re-release** (`.github/workflows/release.yml`): manual `workflow_dispatch` fallback — re-runs GoReleaser, attestation, publishing and the tap update for an existing tag whose release is still a draft (published releases are immutable)

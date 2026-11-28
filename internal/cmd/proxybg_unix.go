@@ -24,6 +24,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/proxy"
+	"github.com/seznam/jailoc/internal/proxyhost"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -103,6 +104,12 @@ func writeProxySavedOptions(opts proxyOptions) error {
 
 func loadProxySavedOptions() proxyOptions {
 	data, err := os.ReadFile(proxyOptionsFile()) //nolint:gosec // G304: jailoc-owned state path
+	if errors.Is(err, os.ErrNotExist) && (proxyServiceInstalled() || proxyBrokerAnswers()) {
+		// A host set up with `jailoc proxy install` needs no saved options,
+		// and a broker that is down right now is still the installed one.
+		// A broker started by hand has no install state, so it is probed.
+		return proxyOptions{listenerBroker: true}
+	}
 	if err != nil {
 		return proxyOptions{listen: proxyDefaultListen}
 	}
@@ -118,6 +125,23 @@ func loadProxySavedOptions() proxyOptions {
 		listen:         listen,
 		listenerBroker: saved.ListenerBroker,
 	}
+}
+
+// proxyServiceInstalled reports whether `jailoc proxy install` recorded the
+// listener broker service. It reads the install state only: it does not ask
+// the broker, which may be stopped or restarting.
+func proxyServiceInstalled() bool {
+	st, err := proxyhost.ReadInstallState(proxyInstallStatePath())
+	return err == nil && (st.HelperPath != "" || st.ServiceUnitPath != "")
+}
+
+// proxyBrokerAnswers reports whether the listener broker of the running user
+// answers on its control socket.
+func proxyBrokerAnswers() bool {
+	t := proxyBrokerHost()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return proxyhost.ProbeBroker(ctx, t.socketPath, t.brokerUID, t.addr) == nil
 }
 
 func acquireProxyLock() (func(), error) {
@@ -733,19 +757,20 @@ func hasProxyCode(hosts []string, codes map[string]string) bool {
 func newProxyStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "status",
-		Short:        "Show the status of the background proxy",
+		Short:        "Show the status of the background proxy and of the host setup",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			st := runningProxy()
-			if st == nil {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Proxy is not running")
-				return nil
+			out := cmd.OutOrStdout()
+			if st := runningProxy(); st == nil {
+				_, _ = fmt.Fprintln(out, "Proxy is not running")
+			} else {
+				if resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "status"}); err == nil && !resp.Stopped {
+					st = &resp.State
+				}
+				printSyncedProxy(out, *st, nil, nil)
 			}
-			if resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "status"}); err == nil && !resp.Stopped {
-				st = &resp.State
-			}
-			printSyncedProxy(cmd.OutOrStdout(), *st, nil, nil)
+			printProxyHostStatus(cmd.Context(), out)
 			return nil
 		},
 	}
@@ -790,12 +815,29 @@ func autoManageProxyOnUp(ctx context.Context, ws *workspace.Resolved, out, errw 
 				return
 			}
 			printSyncedProxy(out, resp.State, resp.Codes, []string{ws.Name})
+			warnMissingProxyHosts(errw, ws)
 			return
 		}
 	}
 	if err := startBackgroundProxy(ctx, []string{ws.Name}, loadProxySavedOptions(), out); err != nil {
 		_, _ = color.New(color.FgYellow).Fprintf(errw, "WARNING: could not start background proxy (%v); run `jailoc proxy %s`\n", err, ws.Name)
+		return
 	}
+	warnMissingProxyHosts(errw, ws)
+}
+
+// warnMissingProxyHosts warns on errw when /etc/hosts lacks a host name of
+// ws. An unreadable hosts file is not worth a warning.
+func warnMissingProxyHosts(errw io.Writer, ws *workspace.Resolved) {
+	data, err := os.ReadFile(proxyHostsFilePath()) //nolint:gosec // G304: the system hosts file
+	if err != nil {
+		return
+	}
+	missing, err := proxyhost.CheckHostsContent(data, workspaceProxyHostNames(ws))
+	if err != nil || len(missing) == 0 {
+		return
+	}
+	_, _ = color.New(color.FgYellow).Fprintf(errw, "WARNING: /etc/hosts is missing proxy hostnames (%s); run 'jailoc proxy install' to update /etc/hosts\n", strings.Join(missing, ", "))
 }
 
 // pruneBackgroundProxy drops the routes of stopped workspaces, or of

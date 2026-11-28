@@ -176,6 +176,8 @@ func TestNewValidation(t *testing.T) {
 		{name: "no routes", cfg: Config{Cert: cert}},
 		{name: "no cert", cfg: Config{Routes: []Route{{Host: hostA, Dial: dial}}}},
 		{name: "nil dial", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA}}}},
+		{name: "static body", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, StaticBody: "OK"}}}, valid: true},
+		{name: "dial and static body", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, StaticBody: "OK"}}}},
 		{name: "duplicate", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial}, {Host: hostA, Dial: dial}}}},
 		{name: "start path", cfg: Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, StartPath: "/vnc.html?autoconnect=1", Auth: true}}}, valid: true},
 		{name: "cert mismatch", cfg: Config{Cert: cert, Routes: []Route{{Host: "other.ws.jailoc.local", Dial: dial}}}},

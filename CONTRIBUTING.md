@@ -14,11 +14,11 @@ By participating in this project you agree to follow the [Code of Conduct](CODE_
 ```bash
 git clone https://github.com/seznam/jailoc
 cd jailoc
-go generate ./internal/guestbin
+go generate ./internal/guestbin ./internal/brokerbin
 go build ./cmd/jailoc
 ```
 
-`go generate ./internal/guestbin` builds `jailoc-guest`, the VM init, and embeds it into `jailoc`. Without it the binary builds but can't start workspaces. Source builds don't include the VM runtime either; see [Build from source](https://seznam.github.io/jailoc/how-to/installation/#build-from-source) for how to provide it.
+`go generate ./internal/guestbin ./internal/brokerbin` builds `jailoc-guest`, the VM init, and `jailoc-listener-broker`, the root-owned listener that `jailoc proxy install` sets up, and embeds both into `jailoc`. Without `guestbin` the binary builds but can't start workspaces; without `brokerbin` it can't install the listener broker. Source builds don't include the VM runtime either; see [Build from source](https://seznam.github.io/jailoc/how-to/installation/#build-from-source) for how to provide it.
 
 ## Testing
 

@@ -93,11 +93,37 @@ func (g *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, start, http.StatusSeeOther)
 		return
 	}
+	if route.StaticBody != "" {
+		serveStatic(w, r, route, upgrade)
+		return
+	}
 	ctx, cancel := context.WithCancel(r.Context())
 	stop := context.AfterFunc(s.ctx, cancel)
 	defer stop()
 	defer cancel()
 	g.reverseProxy(route, s).ServeHTTP(&sessionWriter{ResponseWriter: w, owner: s}, r.WithContext(ctx))
+}
+
+// serveStatic answers a route that has no upstream. Only GET and HEAD of the
+// bare root are served; everything else is refused.
+func serveStatic(w http.ResponseWriter, r *http.Request, route Route, upgrade string) {
+	if upgrade != "" {
+		http.Error(w, "upgrade not supported", http.StatusBadRequest)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write([]byte(route.StaticBody)) // the client may have gone away; there is nothing to recover
+	}
 }
 
 func externalHostname(authority string) string {

@@ -50,7 +50,7 @@ jobs:
           build-mode: ${{ matrix.build-mode }}
       - if: matrix.build-mode == 'manual'
         run: |
-          go generate ./internal/guestbin
+          go generate ./internal/guestbin ./internal/brokerbin
           go build ./...
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
