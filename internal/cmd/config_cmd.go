@@ -3,9 +3,11 @@ package cmd
 import (
 	"cmp"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/fatih/color"
@@ -85,7 +87,7 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	_, _ = cyan.Fprintf(os.Stdout, "  CA Bundle: %s\n", caBundleLabel(ws.CABundle))
 	_, _ = cyan.Fprintf(os.Stdout, "  Enable Docker: %t\n", ws.EnableDocker)
 	_, _ = cyan.Fprintf(os.Stdout, "  Proxy:\n")
-	printProxyRoutes(ws.Name, ws.Proxy, "    ")
+	printProxyRoutes(ws.Name, ws.Proxy, ws.ProxyPorts.HTTPS, "    ")
 	_, _ = cyan.Fprintf(os.Stdout, "  Protect Git: %t\n", ws.ProtectGit)
 	_, _ = cyan.Fprintf(os.Stdout, "  Isolated Build: %t\n", ws.IsolatedBuild)
 	_, _ = cyan.Fprintf(os.Stdout, "  Notifications: %s\n", ws.Notifications)
@@ -267,19 +269,32 @@ func printHostPortTargets(ports []config.HostPortTarget, indent string) {
 // at https://<route>.<workspace>.jailoc.local.
 const proxyHostSuffix = "jailoc.local"
 
-func printProxyRoutes(name string, routes []workspace.ProxyRoute, indent string) {
+func printProxyRoutes(name string, routes []workspace.ProxyRoute, httpsPort int, indent string) {
 	if len(routes) == 0 {
 		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
 		return
 	}
 	for _, r := range routes {
+		url := strings.TrimSuffix(proxyURL(r.Name+"."+name+"."+proxyHostSuffix, httpsPort), "/")
 		if r.Auth {
-			_, _ = fmt.Fprintf(os.Stdout, "%s- https://%s.%s.%s -> %d (auth)\n", indent, r.Name, name, proxyHostSuffix, r.Port)
+			_, _ = fmt.Fprintf(os.Stdout, "%s- %s -> %d (auth)\n", indent, url, r.Port)
 		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "%s- https://%s.%s.%s -> %d\n", indent, r.Name, name, proxyHostSuffix, r.Port)
+			_, _ = fmt.Fprintf(os.Stdout, "%s- %s -> %d\n", indent, url, r.Port)
 		}
 	}
 }
+
+// proxyOrigin is the origin the proxy accepts for host: the port is left out
+// when it is the default HTTPS port (or unknown), as browsers do.
+func proxyOrigin(host string, httpsPort int) string {
+	if httpsPort == 0 || httpsPort == config.DefaultProxyHTTPSPort {
+		return "https://" + host
+	}
+	return "https://" + net.JoinHostPort(host, strconv.Itoa(httpsPort))
+}
+
+// proxyURL is the address of the root page of host.
+func proxyURL(host string, httpsPort int) string { return proxyOrigin(host, httpsPort) + "/" }
 
 func printConfigWarnings(cfg *config.Config) {
 	for _, k := range cfg.UnknownKeys() {

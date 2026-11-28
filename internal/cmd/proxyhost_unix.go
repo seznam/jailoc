@@ -61,7 +61,9 @@ type proxyHostDeps struct {
 	// runCommandOutput runs a command as the current user and returns its
 	// combined output. Tests that only stub runCommand leave it nil.
 	runCommandOutput func(ctx context.Context, name string, args ...string) ([]byte, error)
-	probeBroker      func(ctx context.Context) error
+	// probeBroker checks that the listener broker answers and serves the
+	// HTTP and HTTPS ports of ports.
+	probeBroker func(ctx context.Context, ports config.ProxyPorts) error
 	// readFile reads an installed system file: the listener broker binary
 	// and its service unit.
 	readFile func(string) ([]byte, error)
@@ -97,9 +99,9 @@ var defaultProxyHostDeps = proxyHostDeps{
 	checkDestDir:     func(p string) error { return proxyhost.CheckTrustedDestDir(p, 0, "/") },
 	runningProxy:     runningProxy,
 	restartProxy:     restartBrokerProxy,
-	probeBroker: func(ctx context.Context) error {
-		t := proxyBrokerHost()
-		return proxyhost.ProbeBroker(ctx, t.socketPath, t.brokerUID, t.addr)
+	probeBroker: func(ctx context.Context, ports config.ProxyPorts) error {
+		t := proxyBrokerHost(ports)
+		return proxyhost.ProbeBrokerPair(ctx, t.socketPath, t.brokerUID, t.httpAddr, t.httpsAddr)
 	},
 	interactive: func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }, //nolint:gosec // G115: file descriptors fit in int
 	prompt:      newStdinPromptIO,
@@ -566,11 +568,12 @@ func newProxyInstallCmd() *cobra.Command {
 		Short: "Set up the host for the proxy: listener broker, /etc/hosts and CA trust",
 		Long: "Set up the host so that https://<route>.<workspace>.jailoc.local works in a browser without a port.\n\n" +
 			"After one confirmation, install uses sudo to install jailoc-listener-broker as a root service that holds\n" +
-			"127.0.0.1:443 and [::1]:443 for your user (a LaunchDaemon on macOS, a systemd unit on Linux), and to add a\n" +
+			"127.0.0.1 and [::1] on the [proxy] http_port and https_port (80 and 443 by default) for your user (a LaunchDaemon on macOS, a systemd unit on Linux), and to add a\n" +
 			"marked block with the proxy host names to /etc/hosts. It then trusts the jailoc proxy CA, which is limited to\n" +
 			"names under jailoc.local, in the macOS login keychain, the Linux system store and the NSS databases of Firefox\n" +
 			"and Chrome that it finds. What it changed is recorded in ~/.local/share/jailoc/proxy/install.json, so that\n" +
-			"`jailoc proxy uninstall` reverts exactly that. Run it again after adding proxy routes to update /etc/hosts.\n" +
+			"`jailoc proxy uninstall` reverts exactly that. Run it again after adding proxy routes to update /etc/hosts,\n" +
+			"and after changing http_port or https_port, which the listener broker service only reads when it is installed.\n" +
 			"Run it as your own user, not as root.",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
@@ -644,11 +647,13 @@ func hostsPrevSHA256(hostsCur []byte, exists bool) string {
 
 // serviceOwnedByUID reports whether the service unit at unitPath is
 // installed, and whether it runs the listener broker for uid: either it is
-// byte for byte what jailoc would install for uid, or its command line names
-// uid. prevSHA256 is what the privileged script must still find at unitPath
-// ("missing" for no unit). A unit that cannot be read is not shown to be
+// byte for byte what jailoc would install for uid with the optional ports
+// (the HTTP port, then the HTTPS port), or its command line names uid exactly,
+// with the port arguments of an installed unit or none, as units written
+// before the ports were configurable. prevSHA256 is what the privileged
+// script must still find at unitPath ("missing" for no unit). A unit that cannot be read is not shown to be
 // absent, so any error but a missing file fails closed.
-func serviceOwnedByUID(d proxyHostDeps, unitPath, helperPath string, uid uint32) (present, owned bool, prevSHA256 string, err error) {
+func serviceOwnedByUID(d proxyHostDeps, unitPath, helperPath string, uid uint32, optionalPorts ...int) (present, owned bool, prevSHA256 string, err error) {
 	onDisk, err := d.readFile(unitPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, false, "missing", nil
@@ -660,11 +665,11 @@ func serviceOwnedByUID(d proxyHostDeps, unitPath, helperPath string, uid uint32)
 	var uidArg *regexp.Regexp
 	uidStr := strconv.FormatUint(uint64(uid), 10)
 	if d.goos == "darwin" {
-		expected, err = proxyhost.RenderLaunchDaemonPlist(helperPath, uid)
-		uidArg = regexp.MustCompile(`<string>--uid</string>\s*<string>` + uidStr + `</string>`)
+		expected, err = proxyhost.RenderLaunchDaemonPlist(helperPath, uid, optionalPorts...)
+		uidArg = regexp.MustCompile(`<string>--uid</string>\s*<string>` + uidStr + `</string>\s*(?:<string>--http-port</string>\s*<string>\d+</string>\s*<string>--https-port</string>\s*<string>\d+</string>\s*)?</array>`)
 	} else {
-		expected, err = proxyhost.RenderSystemdUnit(helperPath, uid)
-		uidArg = regexp.MustCompile(`(?m)^ExecStart=.* --uid ` + uidStr + `\s*$`)
+		expected, err = proxyhost.RenderSystemdUnit(helperPath, uid, optionalPorts...)
+		uidArg = regexp.MustCompile(`(?m)^ExecStart=.* --uid ` + uidStr + `(?: --http-port \d+ --https-port \d+)?\s*$`)
 	}
 	if err != nil {
 		return false, false, "", fmt.Errorf("render the service unit for uid %d: %w", uid, err)
@@ -738,7 +743,7 @@ func runProxyInstall(cmd *cobra.Command, yes bool) error {
 			_, _ = fmt.Fprintln(out, "Stopped the background proxy; the next `jailoc up` or `jailoc proxy` attaches to the listener broker.")
 		}
 	}
-	if err := waitProxyBroker(ctx, d); err != nil {
+	if err := waitProxyBroker(ctx, d, cfg.Proxy.Ports()); err != nil {
 		_, _ = color.New(color.FgYellow).Fprintf(errw, "WARNING: the listener broker does not answer yet (%v); check `jailoc proxy status`\n", err)
 	} else {
 		_, _ = fmt.Fprintln(out, "Listener broker is running. Start a workspace with proxy routes, then open https://<workspace>.jailoc.local/.")
@@ -779,11 +784,12 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 	}
 	hostsChanged := !bytes.Equal(plan.Content, hostsCur)
 
+	ports := in.cfg.Proxy.Ports()
 	var unit []byte
 	if d.goos == "darwin" {
-		unit, err = proxyhost.RenderLaunchDaemonPlist(helperPath, uid)
+		unit, err = proxyhost.RenderLaunchDaemonPlist(helperPath, uid, ports.HTTP, ports.HTTPS)
 	} else {
-		unit, err = proxyhost.RenderSystemdUnit(helperPath, uid)
+		unit, err = proxyhost.RenderSystemdUnit(helperPath, uid, ports.HTTP, ports.HTTPS)
 	}
 	if err != nil {
 		return proxyInstallOutcome{}, err
@@ -798,7 +804,7 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 
 	// The service is shared by every user of the host: replacing the one that
 	// runs for another user would disconnect that user's proxy.
-	unitPresent, unitOwned, unitPrevSHA256, err := serviceOwnedByUID(d, unitPath, helperPath, uid)
+	unitPresent, unitOwned, unitPrevSHA256, err := serviceOwnedByUID(d, unitPath, helperPath, uid, ports.HTTP, ports.HTTPS)
 	if err != nil {
 		return proxyInstallOutcome{}, err
 	}
@@ -824,7 +830,7 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 	// running one is left alone.
 	needService := !d.fileHasSHA256(helperPath, sha256Hex(brokerData)) ||
 		!d.fileHasSHA256(unitPath, sha256Hex(unit)) ||
-		d.probeBroker(ctx) != nil
+		d.probeBroker(ctx, ports) != nil
 	if needService {
 		for _, dst := range []string{helperPath, unitPath} {
 			if err := d.checkDestDir(dst); err != nil {
@@ -895,7 +901,7 @@ func installProxyHost(ctx context.Context, d proxyHostDeps, yes bool, out, errw 
 		}
 	}
 
-	summary := proxyInstallSummary(d, in.home, helperPath, unitPath, needService, hostsChanged, len(desired), plan, sysCA, nssDBs, certutilErr == nil)
+	summary := proxyInstallSummary(d, in.home, helperPath, unitPath, ports, needService, hostsChanged, len(desired), plan, sysCA, nssDBs, certutilErr == nil)
 	p := d.prompt(yes)
 	ok, err := p.confirm(ctx, "Install host support for jailoc proxy?", summary, true)
 	if err != nil {
@@ -1086,10 +1092,10 @@ func pendingCAIdentities(prev proxyhost.InstallState, caSHA256 string, rootPEM [
 	return slices.Compact(slices.Sorted(slices.Values(keychainSHA1s))), slices.Compact(slices.Sorted(slices.Values(nssSHA256s)))
 }
 
-func waitProxyBroker(ctx context.Context, d proxyHostDeps) error {
+func waitProxyBroker(ctx context.Context, d proxyHostDeps, ports config.ProxyPorts) error {
 	deadline := time.Now().Add(proxyBrokerWait)
 	for {
-		err := d.probeBroker(ctx)
+		err := d.probeBroker(ctx, ports)
 		if err == nil {
 			return nil
 		}
@@ -1104,11 +1110,11 @@ func waitProxyBroker(ctx context.Context, d proxyHostDeps) error {
 	}
 }
 
-func proxyInstallSummary(d proxyHostDeps, home, helperPath, unitPath string, needService, hostsChanged bool, desiredCount int, plan proxyhost.Plan, sysCA systemCAPlan, nssDBs []string, haveCertutil bool) string {
+func proxyInstallSummary(d proxyHostDeps, home, helperPath, unitPath string, ports config.ProxyPorts, needService, hostsChanged bool, desiredCount int, plan proxyhost.Plan, sysCA systemCAPlan, nssDBs []string, haveCertutil bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "As root (sudo), jailoc will:\n")
 	if needService {
-		fmt.Fprintf(&b, "  - install the listener broker %s (127.0.0.1:443 and [::1]:443 for uid %d)\n", helperPath, d.uid())
+		fmt.Fprintf(&b, "  - install the listener broker %s (127.0.0.1 and [::1] on HTTP port %d and HTTPS port %d for uid %d)\n", helperPath, ports.HTTP, ports.HTTPS, d.uid())
 		fmt.Fprintf(&b, "  - install and start its service %s\n", unitPath)
 	} else {
 		fmt.Fprintf(&b, "  - leave the running listener broker %s and its service %s as they are (already up to date)\n", helperPath, unitPath)
@@ -1727,10 +1733,13 @@ func printProxyHostStatus(ctx context.Context, w io.Writer) {
 
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := d.probeBroker(probeCtx); err != nil {
-		_, _ = fmt.Fprintln(w, "Listener broker: not running (run `jailoc proxy install`)")
+	ports, err := loadProxyPorts()
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "Listener broker: unknown (%v)\n", err)
+	} else if err := d.probeBroker(probeCtx, ports); err != nil {
+		_, _ = fmt.Fprintf(w, "Listener broker: not running or not serving HTTP port %d and HTTPS port %d (run `jailoc proxy install`): %v\n", ports.HTTP, ports.HTTPS, err)
 	} else {
-		_, _ = fmt.Fprintln(w, "Listener broker: running (127.0.0.1:443)")
+		_, _ = fmt.Fprintf(w, "Listener broker: running (127.0.0.1 HTTP port %d, HTTPS port %d)\n", ports.HTTP, ports.HTTPS)
 	}
 
 	_, _ = fmt.Fprintf(w, "CA certificate: %s\n", proxyCAStatus(d, home))

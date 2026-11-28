@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -81,11 +82,20 @@ func TestProxyHostAndOrigin(t *testing.T) {
 	if got, want := proxyHost("desktop", "dev"), "desktop.dev.jailoc.local"; got != want {
 		t.Errorf("proxyHost = %q, want %q", got, want)
 	}
-	if got, want := proxyOrigin("a.dev.jailoc.local"), "https://a.dev.jailoc.local"; got != want {
-		t.Errorf("origin = %q, want %q", got, want)
-	}
-	if got, want := proxyURL("a.dev.jailoc.local"), "https://a.dev.jailoc.local/"; got != want {
-		t.Errorf("url = %q, want %q", got, want)
+	for _, tt := range []struct {
+		port        int
+		origin, url string
+	}{
+		{443, "https://a.dev.jailoc.local", "https://a.dev.jailoc.local/"},
+		{0, "https://a.dev.jailoc.local", "https://a.dev.jailoc.local/"},
+		{8443, "https://a.dev.jailoc.local:8443", "https://a.dev.jailoc.local:8443/"},
+	} {
+		if got := proxyOrigin("a.dev.jailoc.local", tt.port); got != tt.origin {
+			t.Errorf("origin(%d) = %q, want %q", tt.port, got, tt.origin)
+		}
+		if got := proxyURL("a.dev.jailoc.local", tt.port); got != tt.url {
+			t.Errorf("url(%d) = %q, want %q", tt.port, got, tt.url)
+		}
 	}
 }
 
@@ -516,13 +526,20 @@ func TestPrintProxyBanner(t *testing.T) {
 	}
 	codes := map[string]string{"app.dev.jailoc.local": "CODE-APP", "desktop.dev.jailoc.local": "CODE-DESK"}
 	var out bytes.Buffer
-	printProxyBanner(&out, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8443}, targets, codes)
+	loopback := net.IPv4(127, 0, 0, 1)
+	ep := proxyEndpoints{
+		httpsAddr: &net.TCPAddr{IP: loopback, Port: 7043}, httpAddr: &net.TCPAddr{IP: loopback, Port: 7080},
+		httpPort: 80, httpsPort: 443,
+	}
+	printProxyBanner(&out, ep, targets, codes)
 	got := out.String()
 	for _, want := range []string{
 		"https://app.dev.jailoc.local/",
 		"https://desktop.dev.jailoc.local/",
 		"only valid for https://app.dev.jailoc.local)",
-		"forward 127.0.0.1:443 to 127.0.0.1:8443",
+		"forward 127.0.0.1:443 to 127.0.0.1:7043",
+		"forward 127.0.0.1:80 to 127.0.0.1:7080",
+		"HTTP redirect listening on 127.0.0.1:7080",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output lacks %q:\n%s", want, got)
@@ -531,13 +548,36 @@ func TestPrintProxyBanner(t *testing.T) {
 	if strings.Count(got, "CODE-APP") != 1 || strings.Count(got, "CODE-DESK") != 1 {
 		t.Errorf("each code must be printed exactly once:\n%s", got)
 	}
-	if strings.Contains(got, "?") || strings.Contains(got, ":8443/") {
-		t.Errorf("URLs carry no query and no port:\n%s", got)
+	if strings.Contains(got, "?") || strings.Contains(got, ":7043/") {
+		t.Errorf("URLs carry no query and no standalone port:\n%s", got)
 	}
+
 	out.Reset()
-	printProxyBanner(&out, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}, targets, codes)
+	ep = proxyEndpoints{
+		httpsAddr: &net.TCPAddr{IP: loopback, Port: 443}, httpAddr: &net.TCPAddr{IP: loopback, Port: 80},
+		httpPort: 80, httpsPort: 443,
+	}
+	printProxyBanner(&out, ep, targets, codes)
 	if strings.Contains(out.String(), "forward") {
-		t.Errorf("port 443 needs no forward:\n%s", out.String())
+		t.Errorf("the browser ports need no forward:\n%s", out.String())
+	}
+
+	// A configured browser port is part of every URL and of the login origin,
+	// whatever the local listener port is.
+	out.Reset()
+	ep = proxyEndpoints{
+		httpsAddr: &net.TCPAddr{IP: loopback, Port: 8443}, httpAddr: &net.TCPAddr{IP: loopback, Port: 8080},
+		httpPort: 8080, httpsPort: 8443,
+	}
+	printProxyBanner(&out, ep, targets, codes)
+	got = out.String()
+	for _, want := range []string{"https://app.dev.jailoc.local:8443/", "only valid for https://app.dev.jailoc.local:8443)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "forward") {
+		t.Errorf("listeners on the browser ports need no forward:\n%s", got)
 	}
 }
 
@@ -566,7 +606,7 @@ func TestProxyCommandArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"proxy [workspace...]", "--foreground", "--listen", "limited to names under jailoc.local", proxyDefaultListen} {
+	for _, want := range []string{"proxy [workspace...]", "--foreground", "--listen", "limited to names under jailoc.local", "standalone_https_port"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}
@@ -664,14 +704,19 @@ type proxyRun struct {
 	err    error         // its result, valid after done is closed
 	cancel context.CancelFunc
 	addr   string
-	code   string
-	host   string
-	client *http.Client
+	// httpAddr is the local address of the plain HTTP redirect.
+	httpAddr string
+	// cfgPrefix is the [proxy] table the run's configuration starts with.
+	cfgPrefix string
+	code      string
+	host      string
+	client    *http.Client
 }
 
 var (
-	proxyAddrRe = regexp.MustCompile(`Proxy listening on (127\.0\.0\.1:\d+)`)
-	proxyCodeRe = regexp.MustCompile(`login code (\S+) \(only valid for`)
+	proxyAddrRe     = regexp.MustCompile(`Proxy listening on (127\.0\.0\.1:\d+)`)
+	proxyHTTPAddrRe = regexp.MustCompile(`HTTP redirect listening on (127\.0\.0\.1:\d+)`)
+	proxyCodeRe     = regexp.MustCompile(`login code (\S+) \(only valid for`)
 )
 
 // startProxyRun runs `jailoc proxy` for the proxy route app of workspace
@@ -706,6 +751,17 @@ func shortTempDir(t *testing.T, pattern string) string {
 	return dir
 }
 
+// freeLoopbackPort returns a loopback TCP port that was free a moment ago.
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
 // startProxyRunArgs is startProxyRunFor with the command line args. The
 // client trusts the automatic proxy CA.
 func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string, g guest.Config, args ...string) (*proxyRun, string) {
@@ -713,6 +769,13 @@ func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string,
 	home := shortTempDir(t, "jp")
 	t.Setenv("HOME", home)
 	cfgPath := filepath.Join(home, "config.toml")
+	// The default standalone redirect port could be taken on the test host.
+	// A test that configures the [proxy] table itself picks its own ports.
+	cfgPrefix := ""
+	if !strings.Contains(cfgTOML, "[proxy]") {
+		cfgPrefix = fmt.Sprintf("[proxy]\nstandalone_http_port = %d\n\n", freeLoopbackPort(t))
+	}
+	cfgTOML = cfgPrefix + cfgTOML
 	if err := os.WriteFile(cfgPath, []byte(cfgTOML), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -724,7 +787,7 @@ func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string,
 	fakeProxyRelay(t, stateDir, handler)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	run := &proxyRun{out: &syncBuffer{}, errOut: &syncBuffer{}, done: make(chan struct{}), cancel: cancel, host: host}
+	run := &proxyRun{out: &syncBuffer{}, errOut: &syncBuffer{}, done: make(chan struct{}), cancel: cancel, host: host, cfgPrefix: cfgPrefix}
 	cmd := newProxyCmd()
 	cmd.SetOut(run.out)
 	cmd.SetErr(run.errOut)
@@ -744,9 +807,9 @@ func startProxyRunArgs(t *testing.T, handler http.Handler, cfgTOML, host string,
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		a, c := proxyAddrRe.FindStringSubmatch(run.out.String()), proxyCodeRe.FindStringSubmatch(run.out.String())
-		if a != nil && c != nil {
-			run.addr, run.code = a[1], c[1]
+		a, h, c := proxyAddrRe.FindStringSubmatch(run.out.String()), proxyHTTPAddrRe.FindStringSubmatch(run.out.String()), proxyCodeRe.FindStringSubmatch(run.out.String())
+		if a != nil && h != nil && c != nil {
+			run.addr, run.httpAddr, run.code = a[1], h[1], c[1]
 			break
 		}
 		select {
@@ -860,7 +923,7 @@ func TestProxyStopsOnContextCancel(t *testing.T) {
 func useProxyBrokerHost(t *testing.T, target proxyBrokerTarget) {
 	t.Helper()
 	old := proxyBrokerHost
-	proxyBrokerHost = func() proxyBrokerTarget { return target }
+	proxyBrokerHost = func(config.ProxyPorts) proxyBrokerTarget { return target }
 	t.Cleanup(func() { proxyBrokerHost = old })
 }
 
@@ -869,25 +932,37 @@ func testUID() uint32 {
 }
 
 // startTestListenerBroker runs an in-process listener broker for the current
-// user on an ephemeral loopback port and a socket in a private directory.
+// user on two ephemeral loopback ports, one for HTTP and one for HTTPS, and a
+// socket in a private directory.
 func startTestListenerBroker(t *testing.T) proxyBrokerTarget {
 	t.Helper()
 	if os.Getuid() == 0 {
 		t.Skip("the test needs an unprivileged user")
 	}
 	sock := filepath.Join(shortTempDir(t, "jb"), "b.sock")
-	tcp, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	httpLn, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	httpsLn, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		_ = httpLn.Close()
+		t.Fatal(err)
+	}
+	httpAddr, httpsAddr := httpLn.Addr().(*net.TCPAddr), httpsLn.Addr().(*net.TCPAddr)
 	control, err := proxyhost.ListenBrokerSocket(sock, testUID())
 	if err != nil {
-		_ = tcp.Close()
+		_ = httpLn.Close()
+		_ = httpsLn.Close()
 		t.Fatal(err)
 	}
-	b, err := proxyhost.NewBroker(proxyhost.BrokerConfig{OwnerUID: testUID(), Listeners: []*net.TCPListener{tcp}, Control: control, Logf: t.Logf})
+	b, err := proxyhost.NewBroker(proxyhost.BrokerConfig{
+		OwnerUID: testUID(), Listeners: []*net.TCPListener{httpLn, httpsLn}, Control: control, Logf: t.Logf,
+		HTTPPort: uint16(httpAddr.Port), HTTPSPort: uint16(httpsAddr.Port), //nolint:gosec // G115: ports fit in 16 bits
+	})
 	if err != nil {
-		_ = tcp.Close()
+		_ = httpLn.Close()
+		_ = httpsLn.Close()
 		_ = control.Close()
 		t.Fatal(err)
 	}
@@ -900,7 +975,7 @@ func startTestListenerBroker(t *testing.T) proxyBrokerTarget {
 			t.Errorf("broker Serve: %v", err)
 		}
 	})
-	return proxyBrokerTarget{uid: testUID(), socketPath: sock, brokerUID: testUID(), addr: tcp.Addr().(*net.TCPAddr)}
+	return proxyBrokerTarget{uid: testUID(), socketPath: sock, brokerUID: testUID(), httpAddr: httpAddr, httpsAddr: httpsAddr}
 }
 
 func runProxyArgs(t *testing.T, args ...string) (string, error) {
@@ -915,8 +990,8 @@ func runProxyArgs(t *testing.T, args ...string) (string, error) {
 }
 
 func TestProxyListenerBrokerRefusesListen(t *testing.T) {
-	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
-	for _, listen := range []string{"127.0.0.1:8443", "127.0.0.1:443", proxyDefaultListen} {
+	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock"})
+	for _, listen := range []string{"127.0.0.1:8443", "127.0.0.1:443", "127.0.0.1:7043"} {
 		_, err := runProxyArgs(t, "--listener-broker", "--listen", listen)
 		if err == nil || !strings.Contains(err.Error(), "--listener-broker") || !strings.Contains(err.Error(), "--listen") {
 			t.Errorf("--listen %s: error = %v, want a refusal naming both flags", listen, err)
@@ -925,7 +1000,7 @@ func TestProxyListenerBrokerRefusesListen(t *testing.T) {
 }
 
 func TestProxyListenerBrokerRefusesRoot(t *testing.T) {
-	useProxyBrokerHost(t, proxyBrokerTarget{uid: 0, socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
+	useProxyBrokerHost(t, proxyBrokerTarget{uid: 0, socketPath: "/nonexistent/b.sock"})
 	_, err := runProxyArgs(t, "--listener-broker")
 	if err == nil || !strings.Contains(err.Error(), "root") || !strings.Contains(err.Error(), "--listener-broker") {
 		t.Fatalf("error = %v, want a refusal to run as root", err)
@@ -944,23 +1019,24 @@ func TestProxyListenerBrokerHelp(t *testing.T) {
 
 func TestProxyListenerBrokerProductionTarget(t *testing.T) {
 	t.Parallel()
-	got := defaultProxyBrokerHost()
+	got := defaultProxyBrokerHost(config.ProxyPorts{HTTP: 8080, HTTPS: 8443})
 	if got.uid != testUID() || got.brokerUID != 0 || got.socketPath != proxyhost.BrokerSocketPath(testUID()) {
 		t.Errorf("target = %+v, want this user, a root broker and its socket path", got)
 	}
-	if got.addr == nil || got.addr.String() != "127.0.0.1:443" {
-		t.Errorf("addr = %v, want 127.0.0.1:443", got.addr)
+	if got.httpsAddr == nil || got.httpsAddr.String() != "127.0.0.1:8443" || got.httpAddr == nil || got.httpAddr.String() != "127.0.0.1:8080" {
+		t.Errorf("addrs = %v and %v, want the configured browser ports on 127.0.0.1", got.httpAddr, got.httpsAddr)
 	}
 }
 
 func TestAttachProxyBrokerErrors(t *testing.T) {
 	t.Run("missing broker", func(t *testing.T) {
 		dir := shortTempDir(t, "jb")
-		target := proxyBrokerTarget{uid: testUID(), socketPath: filepath.Join(dir, "none.sock"), brokerUID: testUID(), addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}}
+		target := proxyBrokerTarget{uid: testUID(), socketPath: filepath.Join(dir, "none.sock"), brokerUID: testUID(), httpAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 80}, httpsAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}}
 		useProxyBrokerHost(t, target)
-		ln, err := attachProxyBroker(t.Context())
+		ln, httpLn, err := attachProxyBroker(t.Context(), config.ProxyPorts{})
 		if err == nil {
 			_ = ln.Close()
+			_ = httpLn.Close()
 			t.Fatal("attach without a broker succeeded")
 		}
 		for _, want := range []string{"listener broker is not running", "jailoc-listener-broker"} {
@@ -980,10 +1056,11 @@ func TestAttachProxyBrokerErrors(t *testing.T) {
 		if err := l.Close(); err != nil {
 			t.Fatal(err)
 		}
-		useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: sock, brokerUID: testUID(), addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}})
-		ln, err := attachProxyBroker(t.Context())
+		useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: sock, brokerUID: testUID(), httpAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 80}, httpsAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}})
+		ln, httpLn, err := attachProxyBroker(t.Context(), config.ProxyPorts{})
 		if err == nil {
 			_ = ln.Close()
+			_ = httpLn.Close()
 			t.Fatal("attach to a stale socket succeeded")
 		}
 		if !strings.Contains(err.Error(), "listener broker is not running") {
@@ -993,27 +1070,43 @@ func TestAttachProxyBrokerErrors(t *testing.T) {
 	t.Run("busy", func(t *testing.T) {
 		target := startTestListenerBroker(t)
 		useProxyBrokerHost(t, target)
-		first, err := attachProxyBroker(t.Context())
+		first, firstHTTP, err := attachProxyBroker(t.Context(), config.ProxyPorts{})
 		if err != nil {
 			t.Fatalf("first attach: %v", err)
 		}
-		t.Cleanup(func() { _ = first.Close() })
-		ln, err := attachProxyBroker(t.Context())
+		t.Cleanup(func() { _ = first.Close(); _ = firstHTTP.Close() })
+		ln, httpLn, err := attachProxyBroker(t.Context(), config.ProxyPorts{})
 		if err == nil {
 			_ = ln.Close()
+			_ = httpLn.Close()
 			t.Fatal("second attach succeeded")
 		}
 		if !strings.Contains(err.Error(), "another proxy is attached") {
 			t.Errorf("error = %q, want the busy message", err)
 		}
 	})
+	t.Run("broker with other ports", func(t *testing.T) {
+		target := startTestListenerBroker(t)
+		target.httpsAddr = &net.TCPAddr{IP: target.httpsAddr.IP, Port: target.httpsAddr.Port + 1}
+		useProxyBrokerHost(t, target)
+		ln, httpLn, err := attachProxyBroker(t.Context(), config.ProxyPorts{})
+		if err == nil {
+			_ = ln.Close()
+			_ = httpLn.Close()
+			t.Fatal("attach to a broker that serves other ports succeeded")
+		}
+		if !strings.Contains(err.Error(), "jailoc proxy install") {
+			t.Errorf("error = %q, want the hint to install again", err)
+		}
+	})
 	t.Run("broker of another user", func(t *testing.T) {
 		target := startTestListenerBroker(t)
 		target.brokerUID = testUID() + 1
 		useProxyBrokerHost(t, target)
-		ln, err := attachProxyBroker(t.Context())
+		ln, httpLn, err := attachProxyBroker(t.Context(), config.ProxyPorts{})
 		if err == nil {
 			_ = ln.Close()
+			_ = httpLn.Close()
 			t.Fatal("attach to a broker of the wrong user succeeded")
 		}
 	})
@@ -1025,12 +1118,15 @@ func TestProxyListenerBrokerServesThroughBroker(t *testing.T) {
 	run, _ := startProxyRunArgs(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "through the broker")
 	}), "[workspaces.e2e.proxy]\napp = { port = 3000, auth = true }\n", "app.e2e.jailoc.local", relayGuest(3000), "--foreground", "--listener-broker")
-	if run.addr != target.addr.String() {
-		t.Errorf("proxy reports %s, want the broker address %s", run.addr, target.addr)
+	if run.addr != target.httpsAddr.String() {
+		t.Errorf("proxy reports %s, want the broker address %s", run.addr, target.httpsAddr)
 	}
 	out := run.out.String()
 	if strings.Contains(out, "https://app.e2e.jailoc.local:") {
 		t.Errorf("URLs must carry no port:\n%s", out)
+	}
+	if want := "HTTP redirect listening on " + target.httpAddr.String(); !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
 	}
 	// The connection below reaches the proxy only through the broker: the
 	// proxy opened no listener of its own.
@@ -1042,7 +1138,7 @@ func TestProxyListenerBrokerServesThroughBroker(t *testing.T) {
 	}
 
 	// A second proxy is refused while this one is attached.
-	if _, err := attachProxyBroker(t.Context()); err == nil || !strings.Contains(err.Error(), "another proxy is attached") {
+	if _, _, err := attachProxyBroker(t.Context(), config.ProxyPorts{}); err == nil || !strings.Contains(err.Error(), "another proxy is attached") {
 		t.Errorf("second attach error = %v, want the busy message", err)
 	}
 
@@ -1058,9 +1154,10 @@ func TestProxyListenerBrokerServesThroughBroker(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		ln, err := attachProxyBroker(t.Context())
+		ln, httpLn, err := attachProxyBroker(t.Context(), config.ProxyPorts{})
 		if err == nil {
 			_ = ln.Close()
+			_ = httpLn.Close()
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1344,7 +1441,7 @@ func TestProxyPruneKeepsRoutesAndSyncRejectsOtherConfig(t *testing.T) {
 
 	// A port change waits for `jailoc restart`; a prune must keep the
 	// running routes instead of dropping the workspace.
-	if err := os.WriteFile(config.ConfigPath(), []byte("[workspaces.e2e.proxy]\napp = { port = 3001, auth = true }\n"), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(), []byte(run.cfgPrefix+"[workspaces.e2e.proxy]\napp = { port = 3001, auth = true }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	resp, err = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "prune"})
@@ -1354,7 +1451,7 @@ func TestProxyPruneKeepsRoutesAndSyncRejectsOtherConfig(t *testing.T) {
 
 	// Turning auth off in the config must not be applied by a prune, which
 	// only drops stopped workspaces.
-	if err := os.WriteFile(config.ConfigPath(), []byte("[workspaces.e2e.proxy]\napp = { port = 3000, auth = false }\n"), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(), []byte(run.cfgPrefix+"[workspaces.e2e.proxy]\napp = { port = 3000, auth = false }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	resp, err = sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "prune"})

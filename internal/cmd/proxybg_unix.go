@@ -37,14 +37,70 @@ const (
 // proxyState is recorded in ~/.cache/jailoc-vm/proxy/state.json while a
 // proxy process is serving.
 type proxyState struct {
-	PID            int                 `json:"pid"`
-	Listen         string              `json:"listen"`
-	ListenerBroker bool                `json:"listener_broker,omitempty"`
-	CACert         string              `json:"ca_cert,omitempty"`
-	Config         string              `json:"config,omitempty"`
-	ControlSocket  string              `json:"control_socket"`
-	StartedAt      time.Time           `json:"started_at"`
-	Workspaces     map[string][]string `json:"workspaces"`
+	PID int `json:"pid"`
+	// Listen is the local HTTPS address, RedirectListen the local address of
+	// the plain HTTP redirect. A state from before the redirect has none.
+	Listen         string `json:"listen"`
+	RedirectListen string `json:"redirect_listen,omitempty"`
+	// ListenOverride is true when --listen chose Listen.
+	ListenOverride bool `json:"listen_override,omitempty"`
+	ListenerBroker bool `json:"listener_broker,omitempty"`
+	// The ports are the [proxy] ports the proxy started with: the browser
+	// authority ports and the standalone ports it binds. A state from before
+	// they were configurable has none, and served 443.
+	HTTPPort            int                 `json:"http_port,omitempty"`
+	HTTPSPort           int                 `json:"https_port,omitempty"`
+	StandaloneHTTPPort  int                 `json:"standalone_http_port,omitempty"`
+	StandaloneHTTPSPort int                 `json:"standalone_https_port,omitempty"`
+	CACert              string              `json:"ca_cert,omitempty"`
+	Config              string              `json:"config,omitempty"`
+	ControlSocket       string              `json:"control_socket"`
+	StartedAt           time.Time           `json:"started_at"`
+	Workspaces          map[string][]string `json:"workspaces"`
+}
+
+// httpsPort is the port of the HTTPS authority the proxy serves.
+func (st proxyState) httpsPort() int {
+	if st.HTTPSPort == 0 {
+		return config.DefaultProxyHTTPSPort
+	}
+	return st.HTTPSPort
+}
+
+// portChanges names the [proxy] settings that differ between the ports the
+// proxy started with and want, which a running proxy cannot adopt: it keeps
+// the authority ports of its routes and the addresses it bound until it is
+// restarted. A proxy from before the ports were configurable served the
+// default authority and is compared on that only. Standalone ports count only
+// for what the proxy bound: nothing with the listener broker, and no HTTPS
+// port when --listen chose it.
+func (st proxyState) portChanges(want config.ProxyPorts) []string {
+	var changed []string
+	if st.HTTPSPort == 0 {
+		if want.HTTP != config.DefaultProxyHTTPPort {
+			changed = append(changed, "http_port")
+		}
+		if want.HTTPS != config.DefaultProxyHTTPSPort {
+			changed = append(changed, "https_port")
+		}
+		return changed
+	}
+	if st.HTTPPort != want.HTTP {
+		changed = append(changed, "http_port")
+	}
+	if st.HTTPSPort != want.HTTPS {
+		changed = append(changed, "https_port")
+	}
+	if st.ListenerBroker {
+		return changed
+	}
+	if st.StandaloneHTTPPort != want.StandaloneHTTP {
+		changed = append(changed, "standalone_http_port")
+	}
+	if !st.ListenOverride && st.StandaloneHTTPSPort != want.StandaloneHTTPS {
+		changed = append(changed, "standalone_https_port")
+	}
+	return changed
 }
 
 type proxyControlRequest struct {
@@ -111,18 +167,14 @@ func loadProxySavedOptions() proxyOptions {
 		return proxyOptions{listenerBroker: true}
 	}
 	if err != nil {
-		return proxyOptions{listen: proxyDefaultListen}
+		return proxyOptions{}
 	}
 	var saved proxySavedOptions
 	if err := json.Unmarshal(data, &saved); err != nil {
-		return proxyOptions{listen: proxyDefaultListen}
-	}
-	listen := saved.Listen
-	if listen == "" && !saved.ListenerBroker {
-		listen = proxyDefaultListen
+		return proxyOptions{}
 	}
 	return proxyOptions{
-		listen:         listen,
+		listen:         saved.Listen,
 		listenerBroker: saved.ListenerBroker,
 	}
 }
@@ -138,10 +190,14 @@ func proxyServiceInstalled() bool {
 // proxyBrokerAnswers reports whether the listener broker of the running user
 // answers on its control socket.
 func proxyBrokerAnswers() bool {
-	t := proxyBrokerHost()
+	ports, err := loadProxyPorts()
+	if err != nil {
+		return false
+	}
+	t := proxyBrokerHost(ports)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	return proxyhost.ProbeBroker(ctx, t.socketPath, t.brokerUID, t.addr) == nil
+	return proxyhost.ProbeBroker(ctx, t.socketPath, t.brokerUID, t.httpsAddr) == nil
 }
 
 func acquireProxyLock() (func(), error) {
@@ -232,8 +288,11 @@ type proxyManager struct {
 	runCtx    context.Context
 	cancelRun context.CancelCauseFunc
 	opts      proxyOptions
+	ports     config.ProxyPorts
 	listen    string
-	caCert    string
+	// redirectListen is the local address of the HTTP redirect.
+	redirectListen string
+	caCert         string
 	// configPath is the configuration file this proxy loads on every sync.
 	configPath string
 	sockPath   string
@@ -256,14 +315,20 @@ func (m *proxyManager) stateLocked() proxyState {
 		ws[name] = hosts
 	}
 	return proxyState{
-		PID:            os.Getpid(),
-		Listen:         m.listen,
-		ListenerBroker: m.opts.listenerBroker,
-		CACert:         m.caCert,
-		Config:         m.configPath,
-		ControlSocket:  m.sockPath,
-		StartedAt:      m.startedAt,
-		Workspaces:     ws,
+		PID:                 os.Getpid(),
+		Listen:              m.listen,
+		RedirectListen:      m.redirectListen,
+		ListenOverride:      m.opts.listen != "" && !m.opts.listenerBroker,
+		ListenerBroker:      m.opts.listenerBroker,
+		HTTPPort:            m.ports.HTTP,
+		HTTPSPort:           m.ports.HTTPS,
+		StandaloneHTTPPort:  m.ports.StandaloneHTTP,
+		StandaloneHTTPSPort: m.ports.StandaloneHTTPS,
+		CACert:              m.caCert,
+		Config:              m.configPath,
+		ControlSocket:       m.sockPath,
+		StartedAt:           m.startedAt,
+		Workspaces:          ws,
 	}
 }
 
@@ -316,6 +381,12 @@ func (m *proxyManager) sync(req proxyControlRequest) proxyControlResponse {
 	cfg, err := config.Load()
 	if err != nil {
 		return proxyControlResponse{Error: fmt.Sprintf("load config: %v", err)}
+	}
+	// A running proxy keeps the ports and addresses it started with, so a
+	// changed one is refused before anything else changes: the routes would
+	// otherwise be refreshed under the old scope.
+	if changed := m.stateLocked().portChanges(cfg.Proxy.Ports()); len(changed) > 0 {
+		return proxyControlResponse{Error: proxyPortsChangedError(changed).Error()}
 	}
 	reqNames := req.Workspaces
 	var notes bytes.Buffer
@@ -430,7 +501,7 @@ func (m *proxyManager) applyLocked(cfg *config.Config, notes string) proxyContro
 		return proxyControlResponse{Error: err.Error()}
 	}
 	m.caCert = caPath
-	codes, err := m.gw.Update(proxy.Config{Cert: cert, Routes: routes})
+	codes, err := m.gw.Update(proxy.Config{Cert: cert, Routes: routes, HTTPPort: m.ports.HTTP, HTTPSPort: m.ports.HTTPS})
 	if err != nil {
 		return proxyControlResponse{Error: err.Error()}
 	}
@@ -537,30 +608,48 @@ func sendProxyControl(sockPath string, req proxyControlRequest) (proxyControlRes
 	return resp, nil
 }
 
+// proxyPortsChangedError tells that a running proxy cannot adopt the changed
+// [proxy] settings.
+func proxyPortsChangedError(changed []string) error {
+	return fmt.Errorf("the running proxy was started with other [proxy] ports (%s changed); run `jailoc proxy` to restart it", strings.Join(changed, ", "))
+}
+
 func runBackgroundProxy(cmd *cobra.Command, names []string, opts proxyOptions) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var listen string
-	if opts.listenerBroker {
-		if err := checkProxyBrokerOptions(cmd); err != nil {
-			return fmt.Errorf("proxy options: %w", err)
-		}
-	} else {
-		var err error
-		if listen, err = parseProxyListen(opts.listen); err != nil {
-			return err
-		}
+	if err := checkProxyOptions(cmd, opts); err != nil {
+		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	ports := cfg.Proxy.Ports()
+	listen, err := proxyListenAddr(opts, ports)
+	if err != nil {
+		return err
 	}
 
 	if st := runningProxy(); st != nil {
 		if st.Config != "" && st.Config != proxyConfigPath() {
 			return fmt.Errorf("the background proxy serves workspaces of %s, not %s; stop it with `jailoc proxy stop` first", st.Config, proxyConfigPath())
 		}
+		portChanges := st.portChanges(ports)
 		listenChanged := (cmd.Flags().Changed("listen") && st.Listen != listen) ||
 			(cmd.Flags().Changed("listener-broker") && st.ListenerBroker != opts.listenerBroker)
-		if listenChanged {
+		if len(portChanges) > 0 || listenChanged {
+			// Restarting ends the sessions of the running proxy, so a
+			// broker that would refuse the new one is found out first.
+			if opts.listenerBroker {
+				if err := probeProxyBroker(ctx, ports); err != nil {
+					return err
+				}
+			}
+			if len(portChanges) > 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Restarting the background proxy: %s changed\n", strings.Join(portChanges, ", "))
+			}
 			_ = stopBackgroundProxy()
 		} else {
 			resp, err := sendProxyControl(st.ControlSocket, proxyControlRequest{Action: "sync", Workspaces: names, Config: proxyConfigPath()})
@@ -578,10 +667,6 @@ func runBackgroundProxy(cmd *cobra.Command, names []string, opts proxyOptions) e
 		}
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
 	if _, err := selectProxyTargets(cfg, names, io.Discard); err != nil {
 		return err
 	}
@@ -725,6 +810,9 @@ func removeProxyState(st *proxyState) error {
 
 func printSyncedProxy(w io.Writer, st proxyState, codes map[string]string, filter []string) {
 	_, _ = fmt.Fprintf(w, "Proxy running on %s (pid %d, loopback only)\n", st.Listen, st.PID)
+	if st.RedirectListen != "" {
+		_, _ = fmt.Fprintf(w, "HTTP redirect running on %s\n", st.RedirectListen)
+	}
 	if st.CACert != "" {
 		home, _ := os.UserHomeDir()
 		_, _ = fmt.Fprintf(w, "CA certificate: %s\n", shortenHome(st.CACert, home))
@@ -742,9 +830,9 @@ func printSyncedProxy(w io.Writer, st proxyState, codes map[string]string, filte
 		_, _ = fmt.Fprintf(w, "Workspace %s:\n", ws)
 		for _, host := range st.Workspaces[ws] {
 			if code, ok := codes[host]; ok && code != "" {
-				_, _ = fmt.Fprintf(w, "  https://%s/  login code %s (only valid for https://%s)\n", host, code, host)
+				_, _ = fmt.Fprintf(w, "  %s  login code %s (only valid for %s)\n", proxyURL(host, st.httpsPort()), code, proxyOrigin(host, st.httpsPort()))
 			} else {
-				_, _ = fmt.Fprintf(w, "  https://%s/  (active; existing session preserved)\n", host)
+				_, _ = fmt.Fprintf(w, "  %s  (active; existing session preserved)\n", proxyURL(host, st.httpsPort()))
 			}
 		}
 	}
@@ -859,11 +947,15 @@ func proxyStatusLabel(ws *workspace.Resolved) string {
 	if len(ws.Proxy) == 0 {
 		return ""
 	}
+	st := runningProxy()
+	httpsPort := ws.ProxyPorts.HTTPS
+	if st != nil {
+		httpsPort = st.httpsPort()
+	}
 	urls := make([]string, 0, len(ws.Proxy))
 	for _, r := range ws.Proxy {
-		urls = append(urls, fmt.Sprintf("https://%s -> %d", proxyHost(r.Name, ws.Name), r.Port))
+		urls = append(urls, fmt.Sprintf("%s -> %d", strings.TrimSuffix(proxyURL(proxyHost(r.Name, ws.Name), httpsPort), "/"), r.Port))
 	}
-	st := runningProxy()
 	if st != nil {
 		if _, ok := st.Workspaces[ws.Name]; ok {
 			return fmt.Sprintf("running on %s (pid %d); %s", st.Listen, st.PID, strings.Join(urls, ", "))
