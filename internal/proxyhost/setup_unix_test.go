@@ -10,7 +10,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestHelperBinaryAndServiceUnitPath(t *testing.T) {
@@ -798,11 +801,17 @@ func TestProbeBroker(t *testing.T) {
 		t.Parallel()
 		ctx := brkContext(t)
 		h := brkStart(t, BrokerConfig{OwnerUID: brkUID()})
-		if err := ProbeBroker(ctx, h.path, brkUID(), h.addrs[0]); err != nil {
-			t.Fatalf("ProbeBroker() error = %v", err)
+		for range 20 {
+			if err := ProbeBroker(ctx, h.path, brkUID(), h.addrs[0]); err != nil {
+				t.Fatalf("ProbeBroker() error = %v", err)
+			}
 		}
-		// The probe detaches again, so a real gateway can attach.
-		gw := brkAttach(t, ctx, h, h.addrs[0])
+		// The probe never held the gateway slot, so the next attach is not
+		// busy even without a retry.
+		gw, err := AttachBroker(ctx, h.path, brkUID(), h.addrs[0])
+		if err != nil {
+			t.Fatalf("AttachBroker right after probing = %v, want an attached gateway", err)
+		}
 		brkServe(t, gw, "A")
 		brkWantServed(t, h.addrs[0], "A")
 	})
@@ -816,10 +825,12 @@ func TestProbeBroker(t *testing.T) {
 			t.Fatalf("AttachBroker: %v", err)
 		}
 		brkServe(t, gw, "A")
-		if err := ProbeBroker(ctx, h.path, brkUID(), h.addrs[0]); err != nil {
-			t.Fatalf("ProbeBroker() with an attached gateway error = %v, want nil", err)
+		for range 20 {
+			if err := ProbeBroker(ctx, h.path, brkUID(), h.addrs[0]); err != nil {
+				t.Fatalf("ProbeBroker() with an attached gateway error = %v, want nil", err)
+			}
 		}
-		// The probe must not disturb the attached gateway.
+		// The probes must not disturb the attached gateway.
 		brkWantServed(t, h.addrs[0], "A")
 	})
 
@@ -892,4 +903,115 @@ func TestProbeBroker(t *testing.T) {
 			t.Fatal("ProbeBroker() error = nil with a canceled context")
 		}
 	})
+}
+
+// probeFakeEndpoint listens on path and runs serve for each connection. It
+// returns a counter of accepted connections.
+func probeFakeEndpoint(t *testing.T, path string, serve func(c *net.UnixConn)) *atomic.Int32 {
+	t.Helper()
+	ul, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatalf("ListenUnix: %v", err)
+	}
+	var accepted atomic.Int32
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			c, err := ul.AcceptUnix()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			wg.Go(func() {
+				defer c.Close() //nolint:errcheck // test fake.
+				serve(c)
+			})
+		}
+	})
+	t.Cleanup(func() {
+		brkClose(t, "fake endpoint", ul)
+		wg.Wait()
+	})
+	return &accepted
+}
+
+func TestProbeBrokerNeverTouchesGatewaySocket(t *testing.T) {
+	t.Parallel()
+	ctx := brkContext(t)
+	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}
+
+	t.Run("broker without health endpoint", func(t *testing.T) {
+		t.Parallel()
+		// A broker that predates the health endpoint attaches every client
+		// that connects, so the probe must refuse it without connecting.
+		path := filepath.Join(brkDir(t), "b.sock")
+		accepted := probeFakeEndpoint(t, path, func(c *net.UnixConn) {
+			_, _ = c.Write([]byte{brokerStatusAttached}) // test fake: the client is gone if this fails.
+		})
+		err := ProbeBroker(ctx, path, brkUID(), addr)
+		if err == nil {
+			t.Fatal("ProbeBroker() error = nil for a broker without a health endpoint")
+		}
+		if !strings.Contains(err.Error(), "health endpoint") {
+			t.Errorf("ProbeBroker() = %v, want the error to name the missing health endpoint", err)
+		}
+		if n := accepted.Load(); n != 0 {
+			t.Errorf("ProbeBroker() connected to the gateway socket %d times, want 0", n)
+		}
+	})
+
+	t.Run("health endpoint never answers", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(brkDir(t), "b.sock")
+		release := make(chan struct{})
+		probeFakeEndpoint(t, brokerHealthPath(path), func(*net.UnixConn) { <-release })
+		// Registered after the endpoint, so it runs first and frees the handler.
+		t.Cleanup(func() { close(release) })
+		start := time.Now()
+		if err := ProbeBroker(t.Context(), path, brkUID(), addr); err == nil {
+			t.Fatal("ProbeBroker() error = nil for a silent health endpoint")
+		}
+		if elapsed := time.Since(start); elapsed > brokerHealthTimeout+3*time.Second {
+			t.Errorf("ProbeBroker() took %s, want it bounded by %s", elapsed, brokerHealthTimeout)
+		}
+	})
+
+	t.Run("health endpoint answers with another status", func(t *testing.T) {
+		t.Parallel()
+		for _, status := range []byte{brokerStatusAttached, brokerStatusBusy, 'x'} {
+			path := filepath.Join(brkDir(t), "b.sock")
+			probeFakeEndpoint(t, brokerHealthPath(path), func(c *net.UnixConn) {
+				_, _ = c.Write([]byte{status}) // test fake: the client is gone if this fails.
+			})
+			if err := ProbeBroker(ctx, path, brkUID(), addr); err == nil {
+				t.Errorf("ProbeBroker() error = nil for health status %q", status)
+			}
+		}
+	})
+
+	t.Run("health endpoint of another UID", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(brkDir(t), "b.sock")
+		probeFakeEndpoint(t, brokerHealthPath(path), func(c *net.UnixConn) {
+			_, _ = c.Write([]byte{brokerStatusReady}) // test fake: the client is gone if this fails.
+		})
+		err := ProbeBroker(ctx, path, brkUID()+1, addr)
+		if err == nil || !strings.Contains(err.Error(), "uid") {
+			t.Errorf("ProbeBroker() = %v, want a UID refusal", err)
+		}
+	})
+}
+
+func TestBrokerHealthEndpointRemovedWithBroker(t *testing.T) {
+	t.Parallel()
+	h := brkStart(t, BrokerConfig{OwnerUID: brkUID()})
+	if _, err := os.Lstat(brokerHealthPath(h.path)); err != nil {
+		t.Fatalf("health endpoint while serving: %v", err)
+	}
+	if err := h.stop(); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if _, err := os.Lstat(brokerHealthPath(h.path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("health endpoint after Serve: %v; want it removed", err)
+	}
 }

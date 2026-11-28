@@ -40,9 +40,19 @@ import (
 // Ownership of incoming connections lasts exactly as long as the gateway's
 // Unix connection, so no process identity is tracked. The broker never reads
 // HTTP or TLS.
+//
+// A second Unix socket, the health endpoint next to the control socket, lets
+// a client check that the broker runs and serves its UID without taking the
+// gateway slot: the broker checks the peer UID, writes one brokerStatusReady
+// byte and closes. It is a separate socket because the control protocol
+// attaches the first connection of the owner at once, before reading
+// anything, so no first byte could tell a probe from a gateway. A broker
+// that predates the endpoint cannot be probed without attaching, so the probe
+// refuses it; restart or reinstall the broker to get the endpoint.
 const (
 	brokerStatusAttached byte = 'A'
 	brokerStatusBusy     byte = 'B'
+	brokerStatusReady    byte = 'R'
 	brokerFrameConn      byte = 'c'
 	brokerFrameAck       byte = 'k'
 
@@ -53,7 +63,12 @@ const (
 	brokerSocketRoot   = "/var/run/jailoc-proxy"
 	brokerSocketName   = "broker.sock"
 	brokerProbeTimeout = 500 * time.Millisecond
-	brokerMaxBackoff   = time.Second
+	// brokerHealthSuffix is appended to the control socket path to name the
+	// health endpoint.
+	brokerHealthSuffix = ".health"
+	// brokerHealthTimeout bounds one health probe, dial included.
+	brokerHealthTimeout = 2 * time.Second
+	brokerMaxBackoff    = time.Second
 )
 
 // ErrBrokerBusy reports that the listener broker already serves another
@@ -69,7 +84,9 @@ type BrokerConfig struct {
 	// them when Serve returns.
 	Listeners []*net.TCPListener
 	// Control is the Unix socket gateways attach to, usually from
-	// ListenBrokerSocket. The broker closes it when Serve returns.
+	// ListenBrokerSocket. The broker closes it when Serve returns. NewBroker
+	// binds the health endpoint next to it (see ProbeBroker), so Control must
+	// be bound to a filesystem path.
 	Control *net.UnixListener
 	// MaxInFlight bounds descriptors queued or sent but not yet acknowledged.
 	// When it is reached the accept loops wait and new clients stay in the
@@ -92,6 +109,7 @@ type Broker struct {
 	owner        uint32
 	listeners    []*net.TCPListener
 	control      *net.UnixListener
+	health       *net.UnixListener
 	maxInFlight  int
 	stallTimeout time.Duration
 	sendTimeout  time.Duration
@@ -108,7 +126,9 @@ type Broker struct {
 
 // NewBroker validates cfg. Every listener must be a TCP socket listening on
 // a loopback address. The broker takes ownership of the listeners and the
-// control socket only once Serve runs.
+// control socket only once Serve runs. NewBroker itself binds the health
+// endpoint, so that it exists as soon as the control socket does; Serve
+// closes and removes it, so a Broker that was built must be served.
 func NewBroker(cfg BrokerConfig) (*Broker, error) {
 	if len(cfg.Listeners) == 0 {
 		return nil, errors.New("new listener broker: at least one listener is required")
@@ -130,10 +150,15 @@ func NewBroker(cfg BrokerConfig) (*Broker, error) {
 			return nil, fmt.Errorf("new listener broker: listener %d: %w", i, err)
 		}
 	}
+	health, err := listenBrokerHealth(cfg.Control, cfg.OwnerUID)
+	if err != nil {
+		return nil, fmt.Errorf("new listener broker: %w", err)
+	}
 	b := &Broker{
 		owner:        cfg.OwnerUID,
 		listeners:    append([]*net.TCPListener(nil), cfg.Listeners...),
 		control:      cfg.Control,
+		health:       health,
 		maxInFlight:  cfg.MaxInFlight,
 		stallTimeout: cfg.StallTimeout,
 		sendTimeout:  cfg.SendTimeout,
@@ -175,9 +200,9 @@ func validateBrokerListener(ln *net.TCPListener) error {
 }
 
 // Serve accepts gateways and TCP connections until ctx is done. On return
-// the listeners, the control socket and any attached gateway are closed and
-// every goroutine of the broker has exited. It returns nil after ctx ends
-// and an error only when called more than once.
+// the listeners, the control socket, the health endpoint and any attached
+// gateway are closed and every goroutine of the broker has exited. It returns
+// nil after ctx ends and an error only when called more than once.
 func (b *Broker) Serve(ctx context.Context) error {
 	b.mu.Lock()
 	if b.served {
@@ -187,7 +212,8 @@ func (b *Broker) Serve(ctx context.Context) error {
 	b.served = true
 	b.mu.Unlock()
 
-	b.wg.Go(func() { b.acceptGateways(ctx) })
+	b.wg.Go(func() { b.acceptUnix(ctx, b.control, "gateway", b.attach) })
+	b.wg.Go(func() { b.acceptUnix(ctx, b.health, "health probe", b.answerHealth) })
 	for _, ln := range b.listeners {
 		b.wg.Go(func() { b.acceptConns(ctx, ln) })
 	}
@@ -212,29 +238,70 @@ func (b *Broker) shutdown() {
 	if err := b.control.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		b.logf("listener broker: close control socket: %v", err)
 	}
+	if err := b.health.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		b.logf("listener broker: close health endpoint: %v", err)
+	}
 	if g != nil {
 		b.detach(g, errors.New("broker stopped"))
 	}
 }
 
-// acceptGateways serves the control socket until it is closed.
-func (b *Broker) acceptGateways(ctx context.Context) {
+// listenBrokerHealth creates the health endpoint next to the control socket
+// with the same directory checks, mode and owner.
+func listenBrokerHealth(control *net.UnixListener, owner uint32) (*net.UnixListener, error) {
+	addr, ok := control.Addr().(*net.UnixAddr)
+	if !ok || addr.Name == "" || addr.Name[0] == '@' {
+		return nil, fmt.Errorf("control socket %v is not bound to a filesystem path, so it has no health endpoint", control.Addr())
+	}
+	ul, err := ListenBrokerSocket(brokerHealthPath(addr.Name), owner)
+	if err != nil {
+		return nil, fmt.Errorf("listen on the health endpoint: %w", err)
+	}
+	return ul, nil
+}
+
+// brokerHealthPath is the health endpoint of the broker whose control socket
+// is at controlPath.
+func brokerHealthPath(controlPath string) string {
+	return controlPath + brokerHealthSuffix
+}
+
+// acceptUnix serves ln until it is closed, running handle for each
+// connection. what names the kind of client in diagnostics.
+func (b *Broker) acceptUnix(ctx context.Context, ln *net.UnixListener, what string, handle func(*net.UnixConn)) {
 	var backoff time.Duration
 	for {
-		uc, err := b.control.AcceptUnix()
+		uc, err := ln.AcceptUnix()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
 			backoff = nextBackoff(backoff)
-			b.logf("listener broker: accept gateway: %v; retrying in %s", err, backoff)
+			b.logf("listener broker: accept %s: %v; retrying in %s", what, err, backoff)
 			if !sleepContext(ctx, backoff) {
 				return
 			}
 			continue
 		}
 		backoff = 0
-		b.wg.Go(func() { b.attach(uc) })
+		b.wg.Go(func() { handle(uc) })
+	}
+}
+
+// answerHealth tells a probe of the owner that the broker serves, without
+// touching the gateway slot. It checks the peer UID before writing anything.
+func (b *Broker) answerHealth(uc *net.UnixConn) {
+	defer b.closeControlConn(uc)
+	if err := verifyUnixPeer(uc, b.owner); err != nil {
+		b.logf("listener broker: refused health probe: %v", err)
+		return
+	}
+	if err := uc.SetWriteDeadline(time.Now().Add(b.sendTimeout)); err != nil {
+		b.logf("listener broker: set health status deadline: %v", err)
+		return
+	}
+	if _, err := uc.Write([]byte{brokerStatusReady}); err != nil {
+		b.logf("listener broker: send health status: %v", err)
 	}
 }
 
@@ -837,23 +904,9 @@ func brokerListenAddr(addr *net.TCPAddr) (netip.AddrPort, error) {
 
 // attachStatus verifies the broker's UID and then reads its status.
 func attachStatus(ctx context.Context, uc *net.UnixConn, brokerUID uint32) error {
-	if err := verifyUnixPeer(uc, brokerUID); err != nil {
-		return fmt.Errorf("verify broker: %w", err)
-	}
-	release, err := bindDeadline(ctx, uc)
+	status, err := readBrokerStatus(ctx, uc, brokerUID)
 	if err != nil {
-		return fmt.Errorf("read status: %w", err)
-	}
-	status, fds, err := readBrokerFrame(uc)
-	if cerr := release(); cerr != nil {
-		err = errors.Join(err, closeFDs(fds), cerr)
-		fds = nil
-	}
-	if err != nil {
-		return fmt.Errorf("read status: %w", exchangeErr(ctx, err))
-	}
-	if len(fds) != 0 {
-		return errors.Join(fmt.Errorf("status carried %d descriptors, want none", len(fds)), closeFDs(fds))
+		return err
 	}
 	switch status {
 	case brokerStatusAttached:
@@ -863,6 +916,67 @@ func attachStatus(ctx context.Context, uc *net.UnixConn, brokerUID uint32) error
 	default:
 		return fmt.Errorf("unexpected broker status %q", status)
 	}
+}
+
+// readBrokerStatus verifies the broker's UID and reads its one status byte,
+// which must not carry descriptors.
+func readBrokerStatus(ctx context.Context, uc *net.UnixConn, brokerUID uint32) (byte, error) {
+	if err := verifyUnixPeer(uc, brokerUID); err != nil {
+		return 0, fmt.Errorf("verify broker: %w", err)
+	}
+	release, err := bindDeadline(ctx, uc)
+	if err != nil {
+		return 0, fmt.Errorf("read status: %w", err)
+	}
+	status, fds, err := readBrokerFrame(uc)
+	if cerr := release(); cerr != nil {
+		err = errors.Join(err, closeFDs(fds), cerr)
+		fds = nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read status: %w", exchangeErr(ctx, err))
+	}
+	if len(fds) != 0 {
+		return 0, errors.Join(fmt.Errorf("status carried %d descriptors, want none", len(fds)), closeFDs(fds))
+	}
+	return status, nil
+}
+
+// checkBrokerHealth asks the health endpoint of the broker whose control
+// socket is at path whether it serves, without connecting to the control
+// socket and so without taking the gateway slot. It checks that the broker
+// runs as brokerUID before reading, and bounds the whole exchange by
+// brokerHealthTimeout and ctx.
+func checkBrokerHealth(ctx context.Context, path string, brokerUID uint32) error {
+	ctx, cancel := context.WithTimeout(ctx, brokerHealthTimeout)
+	defer cancel()
+	health := brokerHealthPath(path)
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "unix", health)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// Lstat, never a connection: an older broker would attach it.
+			if fi, serr := os.Lstat(path); serr == nil && fi.Mode().Type() == fs.ModeSocket {
+				return fmt.Errorf("broker at %s has no health endpoint %s: it is starting or predates the endpoint, restart or reinstall jailoc-listener-broker: %w", path, health, err)
+			}
+		}
+		return fmt.Errorf("dial health endpoint: %w", err)
+	}
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return errors.Join(fmt.Errorf("health endpoint %s: dialed %T, want a Unix connection", health, c), closeConnErr(c))
+	}
+	status, err := readBrokerStatus(ctx, uc, brokerUID)
+	if cerr := closeConnErr(uc); cerr != nil {
+		err = errors.Join(err, cerr)
+	}
+	if err != nil {
+		return fmt.Errorf("health endpoint %s: %w", health, err)
+	}
+	if status != brokerStatusReady {
+		return fmt.Errorf("health endpoint %s: unexpected status %q", health, status)
+	}
+	return nil
 }
 
 // readBrokerFrame reads one frame byte and its descriptors. A single-byte

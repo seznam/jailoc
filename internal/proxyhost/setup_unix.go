@@ -402,18 +402,17 @@ func hasAnyFile(dir string, names ...string) bool {
 }
 
 // ProbeBroker reports whether a listener broker owned by brokerUID answers on
-// socketPath. A broker already serving another gateway counts as running:
-// attachStatus verifies the peer UID before it reads the busy status.
+// the health endpoint next to socketPath. It never connects to socketPath, so
+// it cannot take the gateway slot, whether or not another gateway is
+// attached. addr is validated like the one of AttachBroker. A broker that
+// predates the health endpoint is refused, not attached to: restart or
+// reinstall it.
 func ProbeBroker(ctx context.Context, socketPath string, brokerUID uint32, addr *net.TCPAddr) error {
-	ln, err := AttachBroker(ctx, socketPath, brokerUID, addr)
-	if err == nil {
-		if cerr := ln.Close(); cerr != nil {
-			return fmt.Errorf("probe listener broker: detach: %w", cerr)
-		}
-		return nil
+	if _, err := brokerListenAddr(addr); err != nil {
+		return fmt.Errorf("probe listener broker: %w", err)
 	}
-	if errors.Is(err, ErrBrokerBusy) {
-		return nil
+	if err := checkBrokerHealth(ctx, socketPath, brokerUID); err != nil {
+		return fmt.Errorf("probe listener broker: %w", err)
 	}
-	return fmt.Errorf("probe listener broker: %w", err)
+	return nil
 }
