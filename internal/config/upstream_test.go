@@ -197,6 +197,16 @@ func TestValidateUpstreamProxy(t *testing.T) {
 			wantErr: "username",
 		},
 		{
+			name:    "auth username with colon",
+			p:       &UpstreamProxy{URL: "http://proxy.example", Auth: &UpstreamAuth{Username: "bad:user", FromEnv: "PW"}},
+			wantErr: "username",
+		},
+		{
+			name:    "auth username with newline",
+			p:       &UpstreamProxy{URL: "http://proxy.example", Auth: &UpstreamAuth{Username: "bad\nuser", FromEnv: "PW"}},
+			wantErr: "username",
+		},
+		{
 			name:    "auth no source",
 			p:       &UpstreamProxy{URL: "http://proxy.example", Auth: &UpstreamAuth{Username: "u"}},
 			wantErr: "exactly one",

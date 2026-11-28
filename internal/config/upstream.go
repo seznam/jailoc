@@ -201,6 +201,9 @@ func validateUpstreamAuth(p *UpstreamProxy) error {
 	if strings.TrimSpace(p.Auth.Username) == "" {
 		return fmt.Errorf("\"username\" must not be empty")
 	}
+	if strings.ContainsAny(p.Auth.Username, ":\r\n\x00") {
+		return fmt.Errorf("\"username\" must not contain \":\", CR, LF, or NUL")
+	}
 	return validateSecret("upstream-proxy-auth", p.Auth.secret(), destFile, "upstream_proxy")
 }
 
