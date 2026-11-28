@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -68,6 +69,11 @@ func ServiceUnitPath(goos string) string {
 	}
 }
 
+// maxServiceUID is the largest UID the broker accepts: brokerCmdParseArgs
+// parses --uid as a 31-bit value, so a unit naming a larger UID would install
+// and then fail at every start.
+const maxServiceUID = math.MaxInt32
+
 // validateServiceArgs checks the inputs shared by the service renderers.
 // Control characters cannot appear in either format.
 func validateServiceArgs(helperPath string, uid uint32) error {
@@ -79,6 +85,9 @@ func validateServiceArgs(helperPath string, uid uint32) error {
 	}
 	if uid == 0 {
 		return errors.New("uid must be greater than zero")
+	}
+	if uid > maxServiceUID {
+		return fmt.Errorf("uid %d exceeds %d, the largest UID the broker accepts", uid, maxServiceUID)
 	}
 	return nil
 }
