@@ -114,6 +114,21 @@ Extract the archive and place `jailoc` (and `jl`, if you want the alias) on your
 !!! note "Gatekeeper on macOS"
     The binary isn't signed or notarized by Apple, so Gatekeeper can block a `jailoc` downloaded with a browser. Remove the quarantine attribute, as the Homebrew cask does: `xattr -d com.apple.quarantine jailoc`.
 
+### Update a pre-built binary
+
+Check which release would be installed, then install it:
+
+```bash
+jailoc self-update --check
+jailoc self-update
+```
+
+By default, `jailoc self-update` installs the highest stable release published at least 24 hours ago. Use `--version <tag>` for a specific release, including a prerelease or an older one, and `--no-cooldown` for the most recent stable release regardless of age. `--force` skips the development-build and Homebrew guards; it does not skip verification and does not apply to Nix installations. Homebrew installations update with `brew upgrade --cask jailoc`, Nix installations through Nix. See the [`jailoc self-update` reference](../reference/cli.md#jailoc-self-update) for the verification steps and flags.
+
+When `gh` is installed, the update runs `gh attestation verify` on the release attestation, and any failure, including a `gh` too old to support it, stops the installation. Without `gh`, the command warns that the attestation rests on what the GitHub API reports and that signatures were not verified locally.
+
+Running workspace VMs keep the old guest, network broker and supervisor until you run `jailoc restart <workspace>`.
+
 ## Build from source
 
 `go install github.com/seznam/jailoc/cmd/jailoc@...` produces a binary without `jailoc-guest`, the VM init, and cannot start workspaces. Build from a checkout instead, embedding the guest binary with `go generate`:

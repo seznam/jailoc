@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,21 +14,27 @@ import (
 )
 
 const (
-	DefaultReleaseURL = "https://api.github.com/repos/seznam/jailoc/releases/latest"
+	// DefaultReleaseURL is the GitHub releases list endpoint.
+	DefaultReleaseURL = "https://api.github.com/repos/seznam/jailoc/releases"
 	cacheTTL          = 24 * time.Hour
 	httpTimeout       = 10 * time.Second
-	bodyLimit         = int64(1 << 20)
-	releasePageURL    = "https://github.com/seznam/jailoc/releases/latest"
+	releaseTagPageURL = "https://github.com/seznam/jailoc/releases/tag/"
 )
 
 type state struct {
-	CheckedAt     time.Time `json:"checked_at"`
-	LatestVersion string    `json:"latest_version"`
+	CheckedAt time.Time `json:"checked_at"`
+	// LatestVersion is the eligible release at fetch time; kept for older readers.
+	LatestVersion string `json:"latest_version"`
+	// Candidates are the fetched releases; the 24h cooldown is re-evaluated from them on every use.
+	Candidates []releaseCandidate `json:"candidates,omitempty"`
 }
 
+// Result describes an available update. Latest is the highest stable release
+// that passed the cooldown; Pending is a newer stable release still cooling down, if any.
 type Result struct {
 	Current string
 	Latest  string
+	Pending string
 }
 
 func shouldCheck(version string) bool {
@@ -51,12 +56,12 @@ func shouldCheck(version string) bool {
 func loadState(path string) (state, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is internal cache file path provided by caller
 	if err != nil {
-		return state{}, err
+		return state{}, fmt.Errorf("read state file %q: %w", path, err)
 	}
 
 	var s state
 	if err := json.Unmarshal(data, &s); err != nil {
-		return state{}, err
+		return state{}, fmt.Errorf("decode state file %q: %w", path, err)
 	}
 
 	return s, nil
@@ -104,48 +109,39 @@ func defaultStatePath() string {
 	return filepath.Join(base, ".cache", "jailoc", "update-state.json")
 }
 
-func checkLatest(ctx context.Context, releaseURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseURL, nil)
+// releaseCandidates returns cached release candidates while the cache is younger than cacheTTL,
+// otherwise refetches the releases list and refreshes the cache. Only the HTTP result is
+// cached; callers evaluate the cooldown with selectRelease against their own clock.
+// A cache with no candidates (including the legacy format) or a checked_at in the future is a miss.
+func releaseCandidates(ctx context.Context, releaseURL, statePath string, now time.Time) ([]releaseCandidate, error) {
+	s, _ := loadState(statePath) // missing or corrupt cache is a miss
+
+	if len(s.Candidates) > 0 && !s.CheckedAt.IsZero() && !s.CheckedAt.After(now) && now.Sub(s.CheckedAt) < cacheTTL {
+		return append([]releaseCandidate(nil), s.Candidates...), nil
+	}
+
+	releases, err := fetchReleases(ctx, releaseURL)
 	if err != nil {
-		return "", fmt.Errorf("create release request for %s: %w", releaseURL, err)
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "jailoc-update-checker")
+		// Record the failure only when there is a cache to reuse, so an empty
+		// cache does not suppress retries for the full TTL.
+		if len(s.Candidates) > 0 {
+			_ = saveState(statePath, state{CheckedAt: now, LatestVersion: s.LatestVersion, Candidates: s.Candidates})
+		}
 
-	client := &http.Client{Timeout: httpTimeout}
-
-	resp, err := client.Do(req) //nolint:gosec // releaseURL is caller-provided and defaults to constant GitHub API endpoint
-	if err != nil {
-		return "", fmt.Errorf("execute release request to %s: %w", releaseURL, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("fetch latest release from %s: unexpected status %d", releaseURL, resp.StatusCode)
+		return nil, fmt.Errorf("refresh release candidates: %w", err)
 	}
 
-	lr := io.LimitReader(resp.Body, bodyLimit+1)
-	data, err := io.ReadAll(lr)
-	if err != nil {
-		return "", fmt.Errorf("read release body from %s: %w", releaseURL, err)
+	candidates := candidatesFromReleases(releases)
+
+	latest := ""
+	if eligible, _ := selectRelease(candidates, now, false); eligible != nil {
+		latest = eligible.Tag
 	}
 
-	if int64(len(data)) > bodyLimit {
-		return "", fmt.Errorf("release response from %s exceeds 1MiB limit", releaseURL)
-	}
+	// The cache is best effort: a failed save must not hide the fetched releases.
+	_ = saveState(statePath, state{CheckedAt: now, LatestVersion: latest, Candidates: candidates})
 
-	var payload struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", fmt.Errorf("decode release response from %s: %w", releaseURL, err)
-	}
-
-	if payload.TagName == "" {
-		return "", fmt.Errorf("decode release response from %s: missing tag_name", releaseURL)
-	}
-
-	return payload.TagName, nil
+	return candidates, nil
 }
 
 func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-chan *Result {
@@ -166,53 +162,38 @@ func checkAsync(ctx context.Context, version, releaseURL, statePath string) <-ch
 			}
 		}()
 
-		s, _ := loadState(statePath)
-
-		latest := s.LatestVersion
-		fetched := false
-		if s.LatestVersion == "" || s.CheckedAt.IsZero() || time.Until(s.CheckedAt) > 0 || time.Since(s.CheckedAt) >= cacheTTL {
-			result, err := checkLatest(ctx, releaseURL)
-			if err != nil {
-				// Save state on failure only when there is a cached version to reuse,
-				// so an empty cache does not suppress retries for the full TTL.
-				if s.LatestVersion != "" {
-					_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: s.LatestVersion})
-				}
-				ch <- nil
-				return
-			}
-
-			latest = result
-			fetched = true
-		}
-
 		currentV, err := goversion.NewVersion(version)
+		if err != nil || currentV.Prerelease() != "" {
+			ch <- nil
+			return
+		}
+
+		now := time.Now()
+
+		candidates, err := releaseCandidates(ctx, releaseURL, statePath, now)
 		if err != nil {
 			ch <- nil
 			return
 		}
 
-		latestV, err := goversion.NewVersion(latest)
-		if err != nil {
+		eligible, pending := selectRelease(candidates, now, false)
+		if eligible == nil {
 			ch <- nil
 			return
 		}
 
-		if fetched {
-			_ = saveState(statePath, state{CheckedAt: time.Now(), LatestVersion: latest})
-		}
-
-		if currentV.Prerelease() != "" || latestV.Prerelease() != "" {
+		latestV, err := goversion.NewVersion(eligible.Tag)
+		if err != nil || !currentV.LessThan(latestV) {
 			ch <- nil
 			return
 		}
 
-		if currentV.LessThan(latestV) {
-			ch <- &Result{Current: version, Latest: latest}
-			return
+		res := &Result{Current: version, Latest: eligible.Tag}
+		if pending != nil {
+			res.Pending = pending.Tag
 		}
 
-		ch <- nil
+		ch <- res
 	}()
 
 	return ch
@@ -225,7 +206,7 @@ func CheckAsync(ctx context.Context, version string) <-chan *Result {
 func FormatNotice(current, latest string) string {
 	currentColored := color.New(color.FgYellow).Sprint(current)
 	latestColored := color.New(color.FgGreen).Sprint(latest)
-	urlColored := color.New(color.FgCyan).Sprint(releasePageURL)
+	urlColored := color.New(color.FgCyan).Sprint(releaseTagPageURL + url.PathEscape(latest))
 
 	return fmt.Sprintf(
 		"\nA new release of jailoc is available: %s → %s\n%s\n",

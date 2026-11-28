@@ -184,3 +184,30 @@ func TestExecuteUpdateCheck(t *testing.T) {
 		t.Fatalf("Execute returned unexpected error: %v", err)
 	}
 }
+
+func TestIsSelfUpdateInvocation(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"no args", nil, false},
+		{"path arg", []string{"/tmp"}, false},
+		{"other command", []string{"list"}, false},
+		{"self-update", []string{"self-update"}, true},
+		{"self-update check", []string{"self-update", "--check"}, true},
+		{"self-update version value", []string{"self-update", "--version", "v1.2.3"}, true},
+		{"root flag before", []string{"--no-color", "self-update"}, true},
+		{"root flag with value before", []string{"-w", "foo", "self-update"}, true},
+		{"config value before", []string{"--config", "/x/c.toml", "self-update", "--force"}, true},
+		{"root version flag", []string{"--version"}, false},
+		{"self-update as flag value", []string{"--attach", "self-update"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSelfUpdateInvocation(rootCmd, tt.args); got != tt.want {
+				t.Errorf("isSelfUpdateInvocation(%q) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}

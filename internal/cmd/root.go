@@ -209,6 +209,13 @@ func readLineCtx(ctx context.Context) (string, error) {
 	}
 }
 
+// isSelfUpdateInvocation reports whether args resolve to the self-update
+// command, so the passive update notifier does not duplicate its output.
+func isSelfUpdateInvocation(root *cobra.Command, args []string) bool {
+	target, _, err := root.Find(args)
+	return err == nil && target != nil && target.Name() == selfUpdateName
+}
+
 // Execute is the entrypoint for the CLI. Version info is passed from main via ldflags.
 func Execute(version, commit, date string) error {
 	appVersion = version
@@ -221,9 +228,10 @@ func Execute(version, commit, date string) error {
 	rootCmd.SetContext(ctx)
 
 	// Fire non-blocking update check only when stderr is a terminal —
-	// skip the HTTP call entirely in non-interactive environments.
+	// skip the HTTP call entirely in non-interactive environments. The
+	// self-update command reports update status itself, so skip it there too.
 	var updateResult <-chan *update.Result
-	if term.IsTerminal(int(os.Stderr.Fd())) { //nolint:gosec // Fd() fits int on all supported 64-bit platforms
+	if !isSelfUpdateInvocation(rootCmd, os.Args[1:]) && term.IsTerminal(int(os.Stderr.Fd())) { //nolint:gosec // Fd() fits int on all supported 64-bit platforms
 		updateResult = update.CheckAsync(ctx, version)
 	}
 	defer func() {

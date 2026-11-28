@@ -513,6 +513,52 @@ For configuration changes, data transfer and migration troubleshooting, see [Upg
 
 ---
 
+### `jailoc self-update`
+
+Replace the running `jailoc` binary with a release from GitHub.
+
+```text
+jailoc self-update [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--check` | Report the release that would be installed and the installation type. Installs nothing. |
+| `--version <tag>` | Install the given release tag, including a prerelease or an older release. Bypasses the 24-hour cooldown. |
+| `--no-cooldown` | Install the most recent stable release even if it was published less than 24 hours ago. |
+| `--force` | Skip the development-build and Homebrew guards. Does not skip verification and does not override the Nix guard. |
+
+Without flags, `jailoc self-update` installs the highest stable release that was published at least 24 hours ago. When a newer stable release is still inside the 24-hour window, the command prints a notice and does not install it. The cooldown delays adoption of a new release; it is not evidence that the release is safe.
+
+**Installation guards.** The command resolves the path of the running executable with symlinks evaluated (the `jl` alias resolves to `jailoc`), and acts on the resolved file:
+
+| Installation | Behavior |
+|--------------|----------|
+| Path under `/nix/store` | Never written, not even with `--force`. Update through Nix. |
+| Homebrew | Refused; run `brew upgrade --cask jailoc`. `--force` skips the guard. |
+| Development build (`dev` or `(devel)`) | Refused; pass `--force` or `--version`. |
+
+`--check` reports these installations without writing the executable. It can still write the update-check state file.
+
+**Verification.** Before installing, the command:
+
+1. Requires the archive's SHA-256 in `checksums.txt` to match the asset digest that the GitHub API reports.
+2. Looks up that digest's attestation through the GitHub API and requires the exact subject and release workflow metadata to match.
+3. Downloads the archive with a size limit and checks its SHA-256 before decompressing it.
+4. Runs `gh attestation verify` when `gh` is installed. This checks the signature, timestamp, repository and release workflow cryptographically. Any failure stops installation, including an unsupported `gh` version. Without `gh`, the command warns that the signature was not verified locally.
+5. Extracts only the exact `jailoc` file after the preceding checks pass.
+
+The attestation metadata from the GitHub API is what GitHub reports over HTTPS. It is not an independent cryptographic verification; without `gh`, the install relies on trust in GitHub and the TLS connection.
+
+**Replacement.** The new binary is written to a temporary file next to the executable with mode `0755`, synced to disk, and, on macOS, stripped of the `com.apple.quarantine` attribute. It then replaces the executable by rename, which gives the path a fresh inode. The `jl` alias is not rewritten.
+
+!!! note "Running workspaces"
+    Running workspace VMs keep using the guest, network broker and supervisor of the old version until you run `jailoc restart <workspace>`.
+
+`jailoc self-update` never runs automatically, and the update notifier does not run during it.
+
+---
+
 ### `jailoc completion`
 
 Generate a shell completion script.
@@ -525,17 +571,19 @@ jailoc completion bash|fish|powershell|zsh
 
 ## Update Checks
 
-jailoc checks GitHub Releases for newer versions on every command run. The check runs asynchronously in the background and does not block command execution.
+jailoc checks GitHub Releases for newer versions when a command runs. The check runs in the background and does not block the command.
 
-- **Frequency**: cached for 24 hours.
-- **Output**: when a newer version is available, a notice is printed to stderr. If stderr is not a TTY, the notice is suppressed, but the check still updates the cache.
+- **Cache**: the HTTP response is cached for 24 hours. The cache stores the candidate releases with their publication timestamps, and jailoc evaluates the cooldown locally on each run. A state file in an older format is discarded and fetched again.
+- **Notice**: when a stable release at least 24 hours old is newer than the running version, a notice is printed to stderr. A newer release inside the 24-hour window produces no update notice, and a later run reports it once it ages out. The check runs only when stderr is a TTY; otherwise it is skipped entirely and nothing is printed.
 - **Color**: respects `--no-color`.
+- **Install**: the notice does not install anything; run [`jailoc self-update`](#jailoc-self-update).
 
 Update checks are skipped when:
 
 - the build version is `dev` or `(devel)` (local `go build` without release ldflags),
 - the `CI` environment variable is set to any non-empty value,
-- the `JAILOC_NO_UPDATE_NOTIFIER` environment variable is set to any non-empty value.
+- the `JAILOC_NO_UPDATE_NOTIFIER` environment variable is set to any non-empty value,
+- the command is `jailoc self-update`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
