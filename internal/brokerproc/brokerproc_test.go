@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -11,7 +12,10 @@ import (
 	"time"
 )
 
-const helperEnv = "JAILOC_BROKERPROC_HELPER"
+const (
+	helperEnv = "JAILOC_BROKERPROC_HELPER"
+	markerEnv = "JAILOC_BROKERPROC_MARKER"
+)
 
 // TestMain turns the test binary into a fake broker when helperEnv is set.
 func TestMain(m *testing.M) {
@@ -36,6 +40,24 @@ func fakeBroker(mode string) int {
 		signal.Ignore(syscall.SIGTERM)
 		say("ready")
 		time.Sleep(time.Minute)
+		return 0
+	case "slow-term":
+		// Never ready; on SIGTERM it needs a while to clean up, then
+		// records the clean exit.
+		<-term
+		time.Sleep(1500 * time.Millisecond)
+		if marker := os.Getenv(markerEnv); marker != "" {
+			_ = os.WriteFile(filepath.Clean(marker), nil, 0o600) //nolint:gosec // G703: test helper writes the caller's temp marker
+		}
+		return 0
+	case "upstream-ca":
+		say("upstream ca changed")
+		say("upstream ca changed")
+		say("upstream ca changed")
+		say("ready")
+		time.Sleep(300 * time.Millisecond)
+		say("upstream ca changed")
+		<-term
 		return 0
 	}
 	say("ready")
@@ -189,5 +211,59 @@ func TestSupervise(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStartStopGraceOnReadyTimeout(t *testing.T) {
+	tests := []struct {
+		name      string
+		grace     time.Duration
+		wantClean bool
+	}{
+		{name: "default grace kills a slow broker", wantClean: false},
+		{name: "longer grace lets it exit cleanly", grace: 5 * time.Second, wantClean: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exe, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(t.TempDir(), "clean-exit")
+			t.Setenv(helperEnv, "slow-term")
+			t.Setenv(markerEnv, marker)
+			_, err = Start(context.Background(), Options{Binary: exe, ReadyTimeout: 200 * time.Millisecond, StopGrace: tt.grace})
+			if err == nil || !strings.Contains(err.Error(), "not ready after") {
+				t.Fatalf("Start error = %v, want not ready", err)
+			}
+			_, statErr := os.Stat(marker)
+			if clean := statErr == nil; clean != tt.wantClean {
+				t.Fatalf("clean exit = %v, want %v", clean, tt.wantClean)
+			}
+		})
+	}
+}
+
+func TestUpstreamCAChangedCoalesces(t *testing.T) {
+	p, err := start(t, "upstream-ca", 2*time.Second)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Events written before "ready" are delivered by the time Start returns,
+	// coalesced into one.
+	select {
+	case <-p.UpstreamCAChanged():
+	default:
+		t.Fatal("no upstream CA event after the broker became ready")
+	}
+	select {
+	case <-p.UpstreamCAChanged():
+		t.Fatal("startup events were not coalesced")
+	default:
+	}
+	select {
+	case <-p.UpstreamCAChanged():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no upstream CA event after recovery")
 	}
 }
