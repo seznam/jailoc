@@ -65,6 +65,8 @@ func printWorkspaceConfig(cfg *config.Config, ws *workspace.Resolved) {
 	printStringList("    Internal zones", ws.InternalZones, "      ")
 	_, _ = cyan.Fprintf(os.Stdout, "    Rules:\n")
 	printNetworkRules(ws.NetworkRules, "      ")
+	_, _ = cyan.Fprintf(os.Stdout, "    Upstream Proxy:\n")
+	printUpstreamProxy(ws.UpstreamProxy, "      ")
 	_, _ = cyan.Fprintf(os.Stdout, "  Ports:\n")
 	printPortForwards(ws.Ports, "    ")
 	_, _ = cyan.Fprintf(os.Stdout, "  Host Ports:\n")
@@ -290,6 +292,9 @@ func printConfigWarnings(cfg *config.Config) {
 	if len(warnings) > 0 {
 		_, _ = color.New(color.FgYellow).Fprintln(os.Stderr, "Run `jailoc migrate` to update deprecated settings in config.toml.")
 	}
+	for _, w := range workspace.ConfigWarnings(cfg) {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
 }
 
 func printNetworkRules(rules []config.NetworkRule, indent string) {
@@ -352,6 +357,40 @@ func printResolvedSecrets(resolved []workspace.ResolvedSecret, indent string) {
 	}
 	for _, secret := range resolved {
 		_, _ = fmt.Fprintf(os.Stdout, "%s- %s\n", indent, secretReference(secret))
+	}
+}
+
+// printUpstreamProxy prints the upstream proxy of a workspace with its
+// password source as a reference, like secretReference: the variable name,
+// path or command, never the value.
+func printUpstreamProxy(p *config.UpstreamProxy, indent string) {
+	if p == nil {
+		_, _ = color.New(color.FgHiBlack).Fprintf(os.Stdout, "%s(none)\n", indent)
+		return
+	}
+	if p.URL != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "%sURL: %s\n", indent, p.URL)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "%sCommand: %q\n", indent, p.Command)
+	}
+	if p.CA != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "%sCA: %s\n", indent, p.CA)
+	}
+	printStringList(indent+"Direct", p.Direct, indent+"  ")
+	if a := p.Auth; a != nil {
+		ref := ""
+		switch {
+		case a.FromEnv != "":
+			ref = "from_env " + a.FromEnv
+		case a.FromFile != "":
+			ref = "from_file " + a.FromFile
+		default:
+			ref = fmt.Sprintf("from_command %q", a.FromCommand)
+			if a.TTL != "" {
+				ref += ", ttl " + a.TTL
+			}
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "%sAuth: %s (%s)\n", indent, a.Username, ref)
 	}
 }
 

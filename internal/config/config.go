@@ -559,6 +559,9 @@ type Network struct {
 	// get their built-in endpoints. No omitempty, so an empty list is written
 	// back.
 	AgentEndpoints []string `toml:"agent_endpoints"`
+	// UpstreamProxy sends allowed egress through an HTTP proxy. A workspace
+	// table replaces the whole defaults table.
+	UpstreamProxy *UpstreamProxy `toml:"upstream_proxy,omitempty"`
 	// Legacy fields migrated in memory with a deprecation warning.
 	FilteredDNS     *bool    `toml:"filtered_dns,omitempty"`
 	DNSUpstream     string   `toml:"dns_upstream,omitempty"`
@@ -631,6 +634,10 @@ func ConfigPath() string {
 	if p := customPath(); p != "" {
 		return p
 	}
+	return defaultConfigPath()
+}
+
+func defaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "~/.config/jailoc/config.toml"
@@ -694,10 +701,9 @@ func loadFrom(path string, defaultPath bool) (*Config, error) {
 		return nil, fmt.Errorf("decode config at %q: %w", path, err)
 	}
 
-	if err := Validate(cfg); err != nil {
+	if err := validate(cfg, path); err != nil {
 		return nil, fmt.Errorf("validate config at %q: %w", path, err)
 	}
-
 	return cfg, nil
 }
 
@@ -708,7 +714,6 @@ func decode(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse TOML %q: %w", path, err)
 	}
 	cfg.unknown = unknownKeys(md.Undecoded())
-
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = map[string]Workspace{}
 	}
@@ -1109,6 +1114,10 @@ func rawMode(spec, source, target string) string {
 // guest-internal directory or a protected host path (see
 // forbiddenMountHostPaths), including the home directory and the host root.
 func ValidateWorkspacePath(p string) error {
+	return validateWorkspacePathWithConfig(p, "")
+}
+
+func validateWorkspacePathWithConfig(p string, extraCfgPaths ...string) error {
 	// Relative paths resolve against the working directory, as
 	// workspace.Resolve does, so they can't bypass the checks below.
 	if abs, err := filepath.Abs(p); err == nil {
@@ -1119,16 +1128,16 @@ func ValidateWorkspacePath(p string) error {
 			return fmt.Errorf("path %q conflicts with container-internal directory %q", p, prefix)
 		}
 	}
-	return validateSharedHostPath(p, "", "path")
+	return validateSharedHostPath(p, "", "path", extraCfgPaths...)
 }
 
-func validateMountHostPath(host string, context string) error {
-	return validateSharedHostPath(host, context, "mount host path")
+func validateMountHostPath(host, context string, extraCfgPaths ...string) error {
+	return validateSharedHostPath(host, context, "mount host path", extraCfgPaths...)
 }
 
 // validateSharedHostPath rejects a host directory shared with the VM (a mount
 // source or a workspace path) that is, contains or links to a protected path.
-func validateSharedHostPath(host, context, kind string) error {
+func validateSharedHostPath(host, context, kind string, extraCfgPaths ...string) error {
 	if host == "" {
 		return nil
 	}
@@ -1183,6 +1192,36 @@ func validateSharedHostPath(host, context, kind string) error {
 			why += "; " + forbidden.hint
 		}
 		return withContext(context, fmt.Errorf("%s %s is forbidden because %s", kind, shown, why))
+	}
+	cfgFiles := append([]string{customPath(), defaultConfigPath()}, extraCfgPaths...)
+	for _, cfgFile := range cfgFiles {
+		if cfgFile == "" {
+			continue
+		}
+		if expandedCfg, err := ExpandPath(cfgFile); err == nil {
+			cfgFile = expandedCfg
+		}
+		if absCfg, err := filepath.Abs(cfgFile); err == nil {
+			cfgFile = absCfg
+		}
+		cleanCfg := filepath.Clean(cfgFile)
+		shown := fmt.Sprintf("%q", cleanHost)
+		inside, contains := mountOverlap(cleanHost, cleanCfg, true)
+		if !inside && !contains {
+			if realCfg, err := filepath.EvalSymlinks(cleanCfg); err == nil {
+				targetHost := cleanHost
+				if realHost != "" {
+					targetHost = realHost
+					shown = fmt.Sprintf("%q (resolves to %q)", cleanHost, realHost)
+				}
+				inside, contains = mountOverlap(targetHost, realCfg, true)
+			} else if info, lerr := os.Lstat(cleanCfg); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+				return withContext(context, fmt.Errorf("configuration file %q is a symbolic link that cannot be resolved: %w", cleanCfg, err))
+			}
+		}
+		if inside || contains {
+			return withContext(context, fmt.Errorf("%s %s is forbidden because it contains %s, which holds the jailoc configuration; keep directories shared with a workspace outside the configuration directory", kind, shown, cleanCfg))
+		}
 	}
 
 	return nil
@@ -1283,6 +1322,10 @@ func mergeMounts(keepRemovals bool, layers ...[]string) ([]string, error) {
 }
 
 func Validate(cfg *Config) error {
+	return validate(cfg)
+}
+
+func validate(cfg *Config, extraCfgPaths ...string) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
@@ -1305,7 +1348,7 @@ func Validate(cfg *Config) error {
 		}
 	}
 
-	if err := validateAgent(cfg.Defaults.Agent, cfg.Defaults.Agents, nil); err != nil {
+	if err := validateAgent(cfg.Defaults.Agent, cfg.Defaults.Agents, nil, extraCfgPaths...); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
 	if err := validateBackend(cfg.Defaults.Backend); err != nil {
@@ -1372,6 +1415,10 @@ func Validate(cfg *Config) error {
 		return err
 	}
 
+	if err := expandUpstreamProxyPaths(cfg.Defaults.Network.Get().UpstreamProxy); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
+
 	for i, spec := range cfg.Defaults.Mounts {
 		m, err := ParseMount(spec)
 		if err != nil {
@@ -1395,7 +1442,7 @@ func Validate(cfg *Config) error {
 			}
 		}
 
-		if err := validateMountHostPath(m.Host, "defaults"); err != nil {
+		if err := validateMountHostPath(m.Host, "defaults", extraCfgPaths...); err != nil {
 			return err
 		}
 
@@ -1403,7 +1450,7 @@ func Validate(cfg *Config) error {
 	}
 
 	for i, spec := range cfg.Defaults.Snapshots {
-		normalized, err := normalizeSnapshot(spec, "defaults")
+		normalized, err := normalizeSnapshot(spec, "defaults", extraCfgPaths...)
 		if err != nil {
 			return err
 		}
@@ -1461,6 +1508,9 @@ func Validate(cfg *Config) error {
 	if err := validateInternalZones(dn.InternalZones, "defaults"); err != nil {
 		return err
 	}
+	if err := validateUpstreamProxyScope(dn.UpstreamProxy, "defaults"); err != nil {
+		return err
+	}
 	names := make([]string, 0, len(cfg.Workspaces))
 	for name := range cfg.Workspaces {
 		names = append(names, name)
@@ -1482,7 +1532,7 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("workspace %q has empty path value %q", name, p)
 			}
 
-			if err := ValidateWorkspacePath(p); err != nil {
+			if err := validateWorkspacePathWithConfig(p, extraCfgPaths...); err != nil {
 				return fmt.Errorf("workspace %q: %w", name, err)
 			}
 		}
@@ -1493,10 +1543,9 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("workspace %q: %w", name, err)
 			}
 
-			if err := validateMountHostPath(m.Host, fmt.Sprintf("workspace %q", name)); err != nil {
+			if err := validateMountHostPath(m.Host, fmt.Sprintf("workspace %q", name), extraCfgPaths...); err != nil {
 				return err
 			}
-
 			cleanedContainer := filepath.Clean(m.Container)
 			if !strings.HasPrefix(cleanedContainer, "/") {
 				return fmt.Errorf("workspace %q: mount container path %q must be absolute (start with /)", name, cleanedContainer)
@@ -1581,17 +1630,20 @@ func Validate(cfg *Config) error {
 		if err := validateInternalZones(wn.InternalZones, wsContext); err != nil {
 			return err
 		}
+		if err := validateUpstreamProxyScope(wn.UpstreamProxy, wsContext); err != nil {
+			return err
+		}
 		if ws.ExposePort != nil {
 			return fmt.Errorf("workspace %q: %w", name, v1Setting("expose_port"))
 		}
-		if err := validateAgent(ws.Agent, ws.Agents, cfg.Defaults.Agents); err != nil {
+		if err := validateAgent(ws.Agent, ws.Agents, cfg.Defaults.Agents, extraCfgPaths...); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		if err := validateBackend(ws.Backend); err != nil {
 			return fmt.Errorf("workspace %q: %w", name, err)
 		}
 		for i, spec := range ws.Snapshots {
-			normalized, err := normalizeSnapshot(spec, fmt.Sprintf("workspace %q", name))
+			normalized, err := normalizeSnapshot(spec, fmt.Sprintf("workspace %q", name), extraCfgPaths...)
 			if err != nil {
 				return err
 			}
@@ -1619,7 +1671,7 @@ func Validate(cfg *Config) error {
 // normalizeSnapshot validates a snapshots entry "host:container" (":ro"
 // accepted, ":rw" rejected because snapshots are read-only) or a removal entry
 // ":container", and returns it as "host:container:ro" with expanded paths.
-func normalizeSnapshot(spec, context string) (string, error) {
+func normalizeSnapshot(spec, context string, extraCfgPaths ...string) (string, error) {
 	if strings.HasSuffix(spec, ":rw") {
 		return "", fmt.Errorf("%s: snapshot %q: snapshots are read-only; remove \":rw\" or use mounts", context, spec)
 	}
@@ -1627,7 +1679,7 @@ func normalizeSnapshot(spec, context string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: snapshot %q: %w", context, spec, err)
 	}
-	if err := validateMountHostPath(m.Host, context); err != nil {
+	if err := validateMountHostPath(m.Host, context, extraCfgPaths...); err != nil {
 		return "", err
 	}
 	host, err := ExpandPath(m.Host)
@@ -1666,7 +1718,7 @@ var (
 // agents or in inherited (the defaults' tables of a workspace), names a
 // built-in agent. name must be a built-in agent or a custom agent defined
 // in either.
-func validateAgent(name string, agents, inherited map[string]AgentSettings) error {
+func validateAgent(name string, agents, inherited map[string]AgentSettings, extraCfgPaths ...string) error {
 	builtins := strings.Join(agent.Names(), ", ")
 	for _, key := range slices.Sorted(maps.Keys(agents)) {
 		s := agents[key]
@@ -1694,7 +1746,7 @@ func validateAgent(name string, agents, inherited map[string]AgentSettings) erro
 				return fmt.Errorf("agents.%s: invalid profile name %q: must match [a-z0-9-]+", key, name)
 			}
 		}
-		if err := validateAgentMounts(s.Mounts); err != nil {
+		if err := validateAgentMounts(s.Mounts, extraCfgPaths...); err != nil {
 			return fmt.Errorf("agents.%s: %w", key, err)
 		}
 	}
@@ -1715,13 +1767,13 @@ func validateAgent(name string, agents, inherited map[string]AgentSettings) erro
 
 // validateAgentMounts checks the mounts of an agents table like workspace
 // mounts: ":/guest" entries remove an inherited mount.
-func validateAgentMounts(mounts []string) error {
+func validateAgentMounts(mounts []string, extraCfgPaths ...string) error {
 	for _, spec := range mounts {
 		m, err := ParseMount(spec)
 		if err != nil {
 			return fmt.Errorf("mounts: %w", err)
 		}
-		if err := validateMountHostPath(m.Host, "mounts"); err != nil {
+		if err := validateMountHostPath(m.Host, "mounts", extraCfgPaths...); err != nil {
 			return err
 		}
 		container := filepath.Clean(m.Container)
@@ -1902,6 +1954,10 @@ func expandPaths(ws *Workspace) error {
 	}
 
 	if err := expandSecretsBlockFiles(&ws.Secrets); err != nil {
+		return err
+	}
+
+	if err := expandUpstreamProxyPaths(ws.Network.Get().UpstreamProxy); err != nil {
 		return err
 	}
 

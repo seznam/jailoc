@@ -83,11 +83,24 @@ func reloadVMLocked(ctx context.Context, ws *workspace.Resolved, purgeCache bool
 	next.SSHAgent = want.SSHAgent
 	next.GPGAgent = want.GPGAgent
 	next.HostServices = want.HostServices
+	next.UpstreamProxy = want.UpstreamProxy
+	next.CABundle = want.CABundle
 	g := reloadedGuest(*running.Guest, *want.Guest, binds, proxyReloadable(running))
 	next.Guest = &g
 
-	if err := reloadBroker(next, st.BrokerPID); err != nil {
+	ev, err := reloadBroker(next, st.BrokerPID, brokerReloadTimeout(running, next))
+	if err != nil {
 		return fmt.Errorf("reload network broker of workspace %q: %w", ws.Name, err)
+	}
+	if w := upstreamReloadWarning(ev); w != "" {
+		_, _ = color.New(color.FgYellow).Fprintf(os.Stderr, "WARNING: workspace %s: %s\n", ws.Name, w)
+	}
+	// The guest reloads its CA bundle below; compose it from the CA the
+	// broker now publishes, which a failed upstream reload left unchanged.
+	if next.UpstreamProxy {
+		if err := vm.ComposeGuestCABundle(stateDir, next.CABundle); err != nil {
+			return fmt.Errorf("reload workspace %q: compose guest CA bundle: %w", ws.Name, err)
+		}
 	}
 	if err := reloadGuest(stateDir, g, tmpReloadTTL(running, want.Guest.Tmp), reloadProxyPorts(running, g)); err != nil {
 		return fmt.Errorf("reload workspace %q: %w", ws.Name, err)
@@ -249,12 +262,17 @@ const (
 	// policyVersionQuiet is the broker policy version that introduced rules
 	// with quiet set.
 	policyVersionQuiet = 3
+	// policyVersionUpstream is the broker policy version that introduced
+	// the upstream proxy.
+	policyVersionUpstream = 4
 )
 
 // requiredBrokerPolicy is the oldest broker policy version that can enforce
 // the workspace's rules.
 func requiredBrokerPolicy(ws *workspace.Resolved) int {
 	switch {
+	case ws.UpstreamProxy != nil:
+		return policyVersionUpstream
 	case ws.HasQuietRules():
 		return policyVersionQuiet
 	case ws.InspectsHTTP():
@@ -272,9 +290,11 @@ func requiredBrokerPolicy(ws *workspace.Resolved) int {
 // with older semantics, such as letting any allowed name resolve to private
 // addresses. Only http rules (policy version 2) and rules with log = false
 // (policy version 3) need a newer broker, so upgrading jailoc does not force
-// a restart of workspaces without them.
+// a restart of workspaces without them. The upstream proxy (policy version
+// 4) needs a current broker with or without rules: an older one would ignore
+// it and send egress directly.
 func reloadPolicy(ctx context.Context, ws *workspace.Resolved, running vm.Spec) ([]byte, error) {
-	rules := len(ws.NetworkRules) > 0 || ws.DNSUpstream != "" || len(ws.InternalZones) > 0
+	rules := len(ws.NetworkRules) > 0 || ws.DNSUpstream != "" || len(ws.InternalZones) > 0 || ws.UpstreamProxy != nil
 	need := requiredBrokerPolicy(ws)
 	if rules && (running.GuestProtocol < 3 || running.BrokerPolicy < need) {
 		return nil, fmt.Errorf("workspace %q runs a network broker from an older jailoc version; run `jailoc restart %s` to apply the new network rules", ws.Name, ws.Name)
@@ -421,10 +441,12 @@ func joinList(items []string) string {
 }
 
 // reloadBroker writes the policy and runtime files of spec, signals the
-// broker and waits until it reports the reload in its log.
-func reloadBroker(spec vm.Spec, pid int) error {
+// broker and waits up to timeout until it reports the reload in its log. It
+// returns the reload event; an upstream proxy the broker could not apply is
+// reported in it, not as an error, since the rest of the reload applies.
+func reloadBroker(spec vm.Spec, pid int, timeout time.Duration) (brokerReload, error) {
 	if pid <= 0 {
-		return fmt.Errorf("broker pid unknown")
+		return brokerReload{}, fmt.Errorf("broker pid unknown")
 	}
 	logPath := filepath.Join(spec.StateDir, "broker.jsonl")
 	// Keep the current log open: if the broker rotates it before writing the
@@ -438,34 +460,38 @@ func reloadBroker(spec vm.Spec, pid int) error {
 		}
 	}
 	if err := vm.WritePolicy(spec); err != nil {
-		return err
+		return brokerReload{}, err
 	}
 	if err := vm.WriteBrokerRuntime(spec); err != nil {
-		return err
+		return brokerReload{}, err
 	}
 	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-		return fmt.Errorf("signal broker: %w", err)
+		return brokerReload{}, fmt.Errorf("signal broker: %w", err)
 	}
-	deadline := time.Now().Add(reloadTimeout)
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if ev, ok := brokerReloadEvent(before, offset, logPath); ok {
 			if ev.PolicyError != "" {
-				return fmt.Errorf("invalid policy, the broker now denies all new connections: %s", ev.PolicyError)
+				return ev, fmt.Errorf("invalid policy, the broker now denies all new connections: %s", ev.PolicyError)
 			}
 			if len(ev.RuntimeErrors) > 0 {
-				return fmt.Errorf("published ports and host ports: %s", joinList(ev.RuntimeErrors))
+				return ev, fmt.Errorf("published ports and host ports: %s", joinList(ev.RuntimeErrors))
 			}
-			return nil
+			return ev, nil
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return fmt.Errorf("broker did not confirm the reload within %s", reloadTimeout)
+	return brokerReload{}, fmt.Errorf("broker did not confirm the reload within %s", timeout)
 }
 
 type brokerReload struct {
 	Event         string   `json:"event"`
 	PolicyError   string   `json:"policy_error"`
 	RuntimeErrors []string `json:"runtime_errors"`
+	// UpstreamError is set when the broker could not apply the upstream
+	// proxy; UpstreamGeneration is the generation of the route it keeps.
+	UpstreamError      string  `json:"upstream_error"`
+	UpstreamGeneration *uint64 `json:"upstream_generation"`
 }
 
 // brokerReloadEvent returns the first reload event written to the log after
@@ -502,6 +528,7 @@ func scanReloadEvent(r io.Reader) (brokerReload, bool) {
 			return ev, true
 		}
 	}
+	_ = sc.Err() // incomplete lines are ignored until the next poll
 	return brokerReload{}, false
 }
 
@@ -510,6 +537,11 @@ func scanReloadEvent(r io.Reader) (brokerReload, bool) {
 // tmpTTL, when set, replaces the /tmp expiry; proxyPorts, when set, replaces
 // the proxy relay allowlist.
 func reloadGuest(stateDir string, g guest.Config, tmpTTL *time.Duration, proxyPorts *[]uint16) error {
+	return reloadGuestContext(context.Background(), stateDir, g, tmpTTL, proxyPorts)
+}
+
+// reloadGuestContext is reloadGuest that stops waiting when ctx ends.
+func reloadGuestContext(ctx context.Context, stateDir string, g guest.Config, tmpTTL *time.Duration, proxyPorts *[]uint16) error {
 	req := guest.Reload{Seq: time.Now().UnixNano(), CABundle: g.CABundle, SSHAgent: g.SSHAgent, GPGAgent: g.GPGAgent, HostPorts: g.HostPorts, Snapshots: g.Snapshots, TimeZone: g.TimeZone, TmpTTL: tmpTTL, ProxyPorts: proxyPorts}
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -520,6 +552,9 @@ func reloadGuest(stateDir string, g guest.Config, tmpTTL *time.Duration, proxyPo
 	}
 	deadline := time.Now().Add(reloadTimeout)
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("wait for the guest reload: %w", err)
+		}
 		var done guest.ReloadDone
 		if b, err := vm.ReadControl(stateDir, guest.ReloadDoneFile); err == nil && json.Unmarshal(b, &done) == nil && done.Seq == req.Seq {
 			if done.Error != "" {

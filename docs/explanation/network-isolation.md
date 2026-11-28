@@ -1,6 +1,6 @@
 # Network Isolation
 
-A workspace VM has one network interface, and the only thing on the other end is the workspace's network broker on the host. The broker runs a userspace TCP/IP stack (gVisor). It terminates every guest connection itself and opens a real host socket only after the destination passes the workspace policy. Nothing in the guest can change that policy, not even root, because it isn't enforced in the guest.
+A workspace VM has one network interface, and the only thing on the other end is the workspace's network broker on the host. The broker runs a userspace TCP/IP stack (gVisor). It terminates every guest connection itself and opens a real host socket only after the destination passes the workspace policy; with an [upstream proxy](#upstream-proxy) that socket leads to the proxy. Nothing in the guest can change that policy, not even root, because it isn't enforced in the guest.
 
 When the broker isn't running the guest has no network at all, and the supervisor stops the VM if the broker exits.
 
@@ -143,7 +143,7 @@ Whoever holds the CA key can sign certificates for any name that the guest trust
 
 ### Upstream verification
 
-The broker verifies the upstream certificate against the host's system roots plus the file named by `ca_bundle` when it is a path. A server whose certificate fails verification gets no request: the client receives `502`, and `jailoc traffic` shows the error with a hint. The broker does not chain through an upstream proxy ([#398](https://github.com/seznam/jailoc/issues/398)).
+The broker verifies the upstream certificate against the host's system roots plus the file named by `ca_bundle` when it is a path. With an [upstream proxy](#upstream-proxy) the certificate it checks is the origin's, through the tunnel, against the same roots plus the proxy's `ca`. A server whose certificate fails verification gets no request: the client receives `502`, and `jailoc traffic` shows the error with a hint.
 
 ### Protocol detection
 
@@ -178,6 +178,19 @@ So trust in private answers is set per DNS zone, not per rule. `internal_zones` 
 - A zone opens nothing by itself: its names still need an `allow` rule, and `deny` rules still win.
 
 See [Internal zones](../reference/configuration.md#internal-zones).
+
+With an upstream proxy this protection ends at the broker; see [Upstream proxy](#upstream-proxy).
+
+## Upstream proxy
+
+With [`network.upstream_proxy`](../reference/configuration.md#defaultsnetworkupstream_proxy) the broker sends each allowed TCP flow to an HTTP proxy with `CONNECT` instead of dialing the destination. The policy order is unchanged: the broker's rules, including `deny`, run first, and only then does the route decide between the proxy and a direct dial for the names and addresses listed in `direct`. A flow the policy denied can't be opened through `direct`. The proxy address is reachable by the broker whatever its range, which is transport only and allows the guest nothing there.
+
+The `CONNECT` target is the trusted hostname when the broker has one (from its DNS cache, or the SNI or `Host` of a flow it inspects) and the IP address otherwise, so a proxy with host-based rules sees the name. UDP that isn't in `direct` is denied, apart from the DNS and SNTP the broker serves itself, and QUIC falls back to TCP. A proxy that is unreachable or answers other than `2xx` fails the flow closed.
+
+!!! warning "The proxy enforces the final destination"
+    Sending a hostname means the proxy resolves it again. jailoc can't pin the remote address the tunnel ends at, so it can't check it either. The private and reserved range denial, `internal_zones` and the DNS rebinding protection above decide on what the guest and the broker's DNS saw, not on where the proxy connects. The proxy is trusted to refuse private and internal final addresses, and the policy is only as strict as the proxy.
+
+Each `CONNECT` names the workspace (`X-Jailoc-Workspace`) and the flow (`X-Jailoc-Flow`, the connection ID in `jailoc traffic`), and the guest can't forge them. Basic credentials and the headers of a helper stay in the broker's memory, and only the name of the source of a secret, never its value, reaches the policy, the VM specification or the guest. The proxy's `ca` is trusted by the broker for inspected flows and by the guest, also with `ca_bundle = false`, because a re-signing proxy ends the guest's TLS on flows that pass through.
 
 ## Enforcement details
 

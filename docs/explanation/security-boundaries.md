@@ -7,11 +7,12 @@ jailoc treats everything inside a workspace VM as hostile: the coding agent, eve
 | Party | Trust | Why |
 |-------|-------|-----|
 | The host user running `jailoc` | Trusted | Owns the configuration, the shares and every host process jailoc starts |
-| `config.toml`, `env_file`s and the files it references | Trusted | Decides what the VM may reach; `from_command` secrets and `[vm] runner` run as the host user |
+| `config.toml`, `env_file`s and the files it references | Trusted | Decides what the VM may reach; `from_command` secrets, `upstream_proxy` helpers and `[vm] runner` run as the host user |
 | jailoc, `jailoc-guest` and the embedded VM runtime | Trusted | Release builds are attested; `jailoc-guest` is embedded in jailoc and always matches its version |
 | Workspace images and Dockerfiles, including URL presets | Trusted to build, untrusted at run time | Build steps run with the builder's privileges; at run time the image is part of the guest |
 | Everything inside a workspace VM | Untrusted | The agent processes untrusted content and can become root in the guest |
 | Network destinations, DNS answers | Untrusted | DNS answers never open the network policy on their own |
+| The upstream proxy, when configured | Trusted | Resolves the hostnames the broker sends it and enforces the private and internal address restrictions for the final destination |
 
 ## The boundaries
 
@@ -60,7 +61,7 @@ The host trusts nothing it reads back from the guest.
 
 ### Guest and network
 
-The network broker runs on the host, so nothing in the guest can change its policy. It terminates every guest connection in a userspace TCP/IP stack and opens a host socket only for destinations the policy allows: public addresses are allowed, private and reserved ranges are denied unless `allowed_networks` or a resolved `allowed_hosts` address opens them, and loopback, multicast, cloud metadata endpoints and special IPv6 ranges stay denied regardless. The guest has no network when the broker isn't running, and the VM stops when the broker exits. Containers from the in-VM Docker daemon go through the same broker. See [Network Isolation](network-isolation.md).
+The network broker runs on the host, so nothing in the guest can change its policy. It terminates every guest connection in a userspace TCP/IP stack and opens a host socket only for destinations the policy allows: public addresses are allowed, private and reserved ranges are denied unless `allowed_networks` or a resolved `allowed_hosts` address opens them, and loopback, multicast, cloud metadata endpoints and special IPv6 ranges stay denied regardless. With an [upstream proxy](#upstream-proxy) this holds for the destination the broker sees; the proxy decides about the final address. The guest has no network when the broker isn't running, and the VM stops when the broker exits. Containers from the in-VM Docker daemon go through the same broker. See [Network Isolation](network-isolation.md).
 
 #### TLS inspection
 
@@ -71,6 +72,18 @@ With rules that have an `http` table, the broker also terminates TLS for the hos
 - WebSocket frames after an upgrade aren't inspected.
 
 See [TLS inspection](network-isolation.md#tls-inspection).
+
+#### Upstream proxy
+
+With `network.upstream_proxy` the broker tunnels allowed TCP flows to an HTTP proxy with `CONNECT <name>:<port>`. The broker's rules still run first and a denied flow can't be opened through `direct`.
+
+- **The proxy is trusted for the final address.** It resolves the name again, and jailoc can't pin or verify the remote IP of the tunnel. The private-range denial and DNS rebinding checks cover what the broker sees, not where the proxy connects, so a proxy that connects to any address a name resolves to can reach internal networks.
+- **A `command` helper runs as the host user** inside the broker. The configuration is read only from the host `config.toml`; nothing the guest or a repository can write sets it.
+- **Credentials stay in broker memory.** The policy and the VM specification hold at most the name of a secret source, and the guest holds nothing. Header and credential values are never logged.
+- **The proxy's `ca` is trusted by the guest,** also with `ca_bundle = false`, so a re-signing proxy can read the traffic of passed-through flows.
+- **A private proxy address** is reachable by the broker as transport only; it doesn't open that address or its range to the guest.
+
+See [Upstream proxy](network-isolation.md#upstream-proxy).
 
 ### Workspace and workspace
 
@@ -128,6 +141,7 @@ Every way data or control crosses from the host into a workspace is opt-in or fi
 | CA bundle | Host to guest | Trust the forwarded certificates, in the VM and in the images jailoc builds | `ca_bundle` |
 | Proxy CA | Host to browser | Not a jailoc channel: a CA that jailoc generates and you trust by hand, for the proxy's certificate | manual, see [HTTPS proxy](#https-proxy) |
 | Inspection CA | Host to guest | Trust certificates the broker signs for hosts matched by `http` rules, which lets the broker read their traffic | `network.rules` with `http` |
+| Upstream proxy | Broker to proxy | Receive every allowed non-`direct` TCP flow with its destination name, the workspace name and a flow ID; with a re-signing proxy and its `ca`, read the traffic | `network.upstream_proxy` |
 | Network egress | Guest to network | Reach public addresses and allowed private ones | `allowed_hosts`, `allowed_networks`, `network` |
 | SSH session | Host to guest | Accept sessions only from jailoc, which authenticates with a per-workspace key and pins the guest host key generated at each start | fixed |
 | Session notifications | Guest to host | Make jailoc show its fixed notification, `jailoc / <workspace>` with `The agent finished.` or `The agent needs your input.`, at most every 3 seconds and only while the terminal reports it is unfocused; never choose its text | `notifications` |

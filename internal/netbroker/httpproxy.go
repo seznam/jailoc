@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -165,6 +166,8 @@ type inspectFlow struct {
 	p        *Policy
 	env      Env
 	insp     *inspector
+	route    *upstreamRoute
+	roots    *x509.CertPool
 	scope    httpScope
 	conn     uint64
 	dst      netip.AddrPort
@@ -188,6 +191,7 @@ type inspectFlow struct {
 	mu       sync.Mutex
 	closed   bool
 	upstream map[*upstreamConn]struct{}
+	conns    flowLimit
 }
 
 // upstreamConn is an upstream connection the flow tracks until it is closed,
@@ -203,6 +207,7 @@ func (c *upstreamConn) Close() error {
 		c.f.mu.Lock()
 		delete(c.f.upstream, c)
 		c.f.mu.Unlock()
+		c.f.conns.release()
 	})
 	return c.Conn.Close()
 }
@@ -225,8 +230,9 @@ func (b *Broker) newInspectFlow(p *Policy, env Env, d Decision, scope httpScope,
 	f := &inspectFlow{
 		b: b, p: p, env: env, insp: p.inspect, scope: scope, conn: conn, dst: dst,
 		peerName: canonicalHost(peerName), scheme: "http", flowRule: d.Rule, flowQuiet: d.Quiet, h2c: h2c,
-		upstream: map[*upstreamConn]struct{}{},
+		upstream: map[*upstreamConn]struct{}{}, conns: flowLimit{max: maxUpstreamConns},
 	}
+	f.setUpstream(b.upstream.Load())
 	if tlsFlow {
 		f.scheme = "https"
 	}
@@ -240,10 +246,19 @@ func (b *Broker) newInspectFlow(p *Policy, env Env, d Decision, scope httpScope,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = f.scheme
 			pr.Out.URL.Host = f.dst.String()
-			if f.peerName != "" {
+			if f.h2c {
+				if info := reqInfoOf(pr.In.Context()); info.host != "" {
+					pr.Out.URL.Host = net.JoinHostPort(info.host, strconv.Itoa(int(f.dst.Port())))
+				}
+			} else if f.peerName != "" {
 				pr.Out.URL.Host = net.JoinHostPort(f.peerName, strconv.Itoa(int(f.dst.Port())))
 			}
 			pr.Out.Host = pr.In.Host
+			for key := range pr.Out.Header {
+				if strings.HasPrefix(strings.ToLower(key), "x-jailoc-") {
+					pr.Out.Header.Del(key)
+				}
+			}
 		},
 		Transport: roundTripperFunc(f.roundTrip),
 		// Flush every write: streaming and server-sent event responses.
@@ -252,6 +267,20 @@ func (b *Broker) newInspectFlow(p *Policy, env Env, d Decision, scope httpScope,
 		ErrorHandler:   f.proxyError,
 	}
 	return f
+}
+
+func (f *inspectFlow) setUpstream(route *upstreamRoute) {
+	if !f.h2c && route != nil && route.isDirect(ProtoTCP, f.dst, upstreamNames(f.peerName, f.env)) {
+		route = nil
+	}
+	f.route = route
+	if f.insp == nil {
+		return
+	}
+	f.roots = f.insp.upstream
+	if route != nil {
+		f.roots = route.roots(f.roots)
+	}
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -298,13 +327,28 @@ func (f *inspectFlow) dialTCP(ctx context.Context) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("dial %s: %w", f.dst, err)
 	}
-	c, err := f.b.dialTCP("tcp", f.dst.String())
+	if !f.conns.acquire() {
+		return nil, fmt.Errorf("dial %s: upstream connection limit reached", f.dst)
+	}
+	route := f.route
+	name := f.peerName
+	if f.h2c {
+		name = reqInfoOf(ctx).host
+		if route != nil && route.isDirect(ProtoTCP, f.dst, upstreamNames(name, f.env)) {
+			route = nil
+		}
+	} else if name == "" && len(f.env.Names) == 1 {
+		name = f.env.Names[0]
+	}
+	c, err := f.b.dialEgress(ctx, route, f.conn, f.dst, name)
 	if err != nil {
+		f.conns.release()
 		return nil, fmt.Errorf("dial %s: %w", f.dst, err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
+		f.conns.release()
 		_ = c.Close()
 		return nil, fmt.Errorf("dial %s: flow closed", f.dst)
 	}
@@ -322,7 +366,7 @@ func (f *inspectFlow) dialTLS(ctx context.Context, protos []string) (net.Conn, e
 	}
 	tc := tls.Client(raw, &tls.Config{
 		ServerName: f.peerName,
-		RootCAs:    f.insp.upstream,
+		RootCAs:    f.roots,
 		NextProtos: protos,
 		MinVersion: tls.VersionTLS12,
 	})
@@ -597,6 +641,9 @@ func (f *inspectFlow) proxyError(w http.ResponseWriter, r *http.Request, err err
 	ev := f.upstreamErrorEvent(reqInfoOf(r.Context()), err)
 	f.b.record(ev)
 	body := "bad gateway: upstream unreachable\n"
+	if errors.Is(err, errUpstreamRefused) {
+		body = "bad gateway: " + err.Error() + "\n"
+	}
 	if isCertError(err) {
 		body = "bad gateway: upstream certificate failed verification\n"
 	}
@@ -622,6 +669,9 @@ func (f *inspectFlow) upstreamErrorEvent(info *reqInfo, err error) map[string]an
 		ev = map[string]any{"event": "inspect-error", "conn": f.conn, "dst": f.dst.String(), "name": f.peerName}
 	}
 	ev["error"] = err.Error()
+	if errors.Is(err, errUpstreamUnreachable) {
+		ev["hint"] = "upstream proxy unreachable; no direct fallback; check the proxy endpoint"
+	}
 	if isCertError(err) {
 		ev["hint"] = hintUpstreamCert
 	}

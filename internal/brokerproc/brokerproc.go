@@ -24,6 +24,9 @@ type Options struct {
 	Args []string
 	// ReadyTimeout bounds the wait for the broker's "ready" line.
 	ReadyTimeout time.Duration
+	// StopGrace is how long a broker that failed to become ready gets to
+	// exit after SIGTERM before it is killed; zero means one second.
+	StopGrace time.Duration
 	// Stdout and Stderr receive the broker's output; nil discards it.
 	Stdout, Stderr io.Writer
 }
@@ -36,6 +39,8 @@ type Process struct {
 	nicUp   chan struct{}
 	nicDown chan struct{}
 	done    chan struct{}
+	// upstreamCA holds at most one pending "upstream ca changed" event.
+	upstreamCA chan struct{}
 
 	once    map[string]*sync.Once
 	waitErr error
@@ -65,7 +70,9 @@ func Start(ctx context.Context, o Options) (*Process, error) {
 		nicUp:   make(chan struct{}),
 		nicDown: make(chan struct{}),
 		done:    make(chan struct{}),
-		once:    map[string]*sync.Once{"ready": {}, "nic connected": {}, "nic disconnected": {}},
+		// One slot coalesces bursts: a consumer reads the CA file anew.
+		upstreamCA: make(chan struct{}, 1),
+		once:       map[string]*sync.Once{"ready": {}, "nic connected": {}, "nic disconnected": {}},
 	}
 	go p.readStatus(r)
 	go func() {
@@ -73,6 +80,10 @@ func Start(ctx context.Context, o Options) (*Process, error) {
 		close(p.done)
 	}()
 
+	grace := o.StopGrace
+	if grace <= 0 {
+		grace = time.Second
+	}
 	timer := time.NewTimer(o.ReadyTimeout)
 	defer timer.Stop()
 	select {
@@ -81,10 +92,10 @@ func Start(ctx context.Context, o Options) (*Process, error) {
 	case <-p.done:
 		return nil, fmt.Errorf("broker exited before ready: %w", exitErr(p.waitErr))
 	case <-timer.C:
-		_ = p.Stop(time.Second)
+		_ = p.Stop(grace)
 		return nil, fmt.Errorf("broker not ready after %s", o.ReadyTimeout)
 	case <-ctx.Done():
-		_ = p.Stop(time.Second)
+		_ = p.Stop(grace)
 		return nil, fmt.Errorf("wait for broker: %w", ctx.Err())
 	}
 }
@@ -101,11 +112,29 @@ func (p *Process) readStatus(r io.ReadCloser) {
 	chans := map[string]chan struct{}{"ready": p.ready, "nic connected": p.nicUp, "nic disconnected": p.nicDown}
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
+		if sc.Text() == upstreamCAChanged {
+			select {
+			case p.upstreamCA <- struct{}{}:
+			default: // an event is already pending
+			}
+			continue
+		}
 		if ch, ok := chans[sc.Text()]; ok {
 			p.once[sc.Text()].Do(func() { close(ch) })
 		}
 	}
+	_ = sc.Err() // status pipe closes when the broker exits
 }
+
+// upstreamCAChanged is the status line of a broker that published a new
+// public CA of its upstream proxy.
+const upstreamCAChanged = "upstream ca changed"
+
+// UpstreamCAChanged receives one event whenever the broker reports a new
+// public upstream proxy CA. Events are coalesced, so a receiver reads the
+// CA file afresh. Events the broker reports before "ready" are pending when
+// Start returns.
+func (p *Process) UpstreamCAChanged() <-chan struct{} { return p.upstreamCA }
 
 // PID returns the broker's process ID.
 func (p *Process) PID() int { return p.cmd.Process.Pid }

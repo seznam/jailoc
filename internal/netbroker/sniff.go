@@ -493,6 +493,9 @@ type enforceConn struct {
 	// allowNoName lets a TLS ClientHello or HTTP request without a name pass
 	// instead of failing with sni-required.
 	allowNoName bool
+	// allowUpgrade lets a flow that policy name inspection does not guard
+	// switch protocols after a 101 Switching Protocols response.
+	allowUpgrade bool
 	// closeUpstream closes the upstream side before the guest gets a deny
 	// reply; abort closes both sides and resets the guest.
 	closeUpstream func()
@@ -500,9 +503,11 @@ type enforceConn struct {
 
 	mu        sync.Mutex
 	buf       []byte
+	respBuf   []byte
 	reads     int
 	doneTLS   bool
 	inHTTP    bool
+	upgrading bool
 	bodyBytes int64
 	chunked   bool
 	chunkRem  int64  // -1 when reading chunk size line; >= 0 when reading chunk data + \r\n
@@ -544,6 +549,41 @@ func (c *enforceConn) deny() {
 }
 
 func (c *enforceConn) Write(p []byte) (int, error) {
+	var failUpgrade bool
+	c.mu.Lock()
+	if c.upgrading && !c.doneTLS {
+		c.respBuf = append(c.respBuf, p...)
+		for c.upgrading && !c.doneTLS {
+			idx := bytes.Index(c.respBuf, []byte("\r\n\r\n"))
+			if idx < 0 {
+				if len(c.respBuf) > sniffMax {
+					c.respBuf = nil
+					failUpgrade = true
+				}
+				break
+			}
+			line, _, _ := strings.Cut(string(c.respBuf[:idx]), "\r\n")
+			f := strings.Fields(line)
+			if len(f) < 2 {
+				c.respBuf = nil
+				failUpgrade = true
+				break
+			}
+			switch {
+			case f[1] == "101":
+				c.doneTLS, c.buf, c.respBuf = true, nil, nil
+			case len(f[1]) == 3 && f[1][0] == '1' && f[1][1] >= '0' && f[1][1] <= '9' && f[1][2] >= '0' && f[1][2] <= '9':
+				c.respBuf = c.respBuf[idx+4:]
+			default:
+				c.upgrading, c.respBuf = false, nil
+			}
+		}
+	}
+	c.mu.Unlock()
+	if failUpgrade {
+		c.deny()
+		return 0, errPolicyDenied
+	}
 	c.wmu.Lock()
 	if c.denied {
 		c.wmu.Unlock()
@@ -589,6 +629,9 @@ func (c *enforceConn) inspect(data []byte) bool {
 	defer c.mu.Unlock()
 	if c.doneTLS {
 		return true
+	}
+	if c.upgrading {
+		return false
 	}
 	c.reads++
 	c.buf = append(c.buf, data...)
@@ -671,8 +714,15 @@ func (c *enforceConn) inspect(data []byte) bool {
 			return false
 		}
 		bodyLen, chunked, upgraded, ok := parseHTTPFraming(string(block[:idx]))
-		if !ok || upgraded {
+		if !ok {
 			return false
+		}
+		if upgraded {
+			if !c.allowUpgrade || bodyLen > 0 || chunked || len(c.buf) > idx+4 {
+				return false
+			}
+			c.upgrading, c.buf = true, nil
+			return true
 		}
 		c.bodyBytes = bodyLen
 		c.chunked = chunked

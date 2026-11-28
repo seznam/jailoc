@@ -227,6 +227,12 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		}
 		label = "image builder VM for workspace " + ws.Name
 	}
+	// The builder VM reaches registries through the static defaults proxy
+	// only; the host Docker daemon above is not affected.
+	upstream := builderUpstreamPolicyProxy(cfg)
+	if policy, err = withUpstreamProxy(policy, upstream); err != nil {
+		return "", err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("locate jailoc executable: %w", err)
@@ -235,7 +241,11 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	if err != nil {
 		return "", err
 	}
-	caPath, err := writeBuilderCABundle(dir, ca)
+	builderCA, err := builderUpstreamBuildCA(ca, upstream)
+	if err != nil {
+		return "", err
+	}
+	caPath, err := writeBuilderCABundle(dir, builderCA)
 	if err != nil {
 		return "", err
 	}
@@ -256,7 +266,8 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		// pulls behind a TLS-intercepting proxy work in the shared builder
 		// too. The digest restarts it when the bundle changes at the same path.
 		CABundle:       caPath,
-		CABundleDigest: ca.Digest(),
+		CABundleDigest: builderCA.Digest(),
+		UpstreamProxy:  upstream != nil,
 	}
 	if ws.IsolatedBuild {
 		spec.Workspace = ws.Name + "-builder"
@@ -283,7 +294,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 	return withBuilderMaintenance(ctx, func(ctx context.Context, phase string) {
 		maintainBuilderDaemon(ctx, spec.DiskSize, phase, os.Stdout, os.Stderr)
 	}, func() (string, error) {
-		return importWorkspaceImage(ctx, cfg, ws, ca)
+		return importWorkspaceImage(ctx, cfg, ws, builderCA)
 	})
 }
 
@@ -734,6 +745,15 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 	if _, err := os.Stat(filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)); err == nil {
 		g.CABundle = filepath.Join(guestConfigDir, caBundleFilename)
 	}
+	// With the upstream proxy the guest trusts the bundle the VM composes
+	// from the host bundle and the proxy's CA once the broker is ready, even
+	// when there is no host bundle: the proxy's CA is known only then.
+	upstream := ws.UpstreamProxy != nil
+	var caBase string
+	if upstream {
+		g.CABundle = vm.GuestUpstreamBundle
+		caBase = workspaceCABundle(ws)
+	}
 	agent := vmSSHAgent(ws)
 	g.SSHAgent = agent != ""
 	gpgAgent := vmGPGAgent(ctx, ws)
@@ -769,6 +789,8 @@ func workspaceSpec(ctx context.Context, ws *workspace.Resolved, rt vmRuntimeFile
 		GPGAgent:      gpgAgent,
 		HostServices:  hostServices,
 		BuildCA:       buildCAState(ca),
+		UpstreamProxy: upstream,
+		CABundle:      caBase,
 	}
 	if ws.TmpStorage == config.TmpStorageDisk {
 		spec.TmpDiskSize = ws.TmpSizeBytes
@@ -827,6 +849,15 @@ func vmHostServices(ws *workspace.Resolved) []vm.HostService {
 		out = append(out, s)
 	}
 	return out
+}
+
+// workspaceCABundle is the materialized CA bundle of the workspace, or "".
+func workspaceCABundle(ws *workspace.Resolved) string {
+	path := filepath.Join(config.ConfigDir(), "workspaces", ws.Name, caBundleFilename)
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 // secretsPayload reads the workspace environment and secret values on the
@@ -1047,6 +1078,9 @@ func statusVM(ctx context.Context, ws *workspace.Resolved) error {
 	fmt.Printf("Tmp:       %s\n", tmpStatus(ctx, stateDir, *spec))
 	if label := proxyStatusLabel(ws); label != "" {
 		fmt.Printf("Proxy:     %s\n", label)
+	}
+	if spec.UpstreamProxy {
+		printUpstreamStatus(os.Stdout, stateDir)
 	}
 	sessionsCtx, cancel := context.WithTimeout(ctx, listSessionsTimeout)
 	defer cancel()

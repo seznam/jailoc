@@ -37,6 +37,10 @@ func caTransport(caPath string) (*http.Transport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read CA bundle: %w", err)
 	}
+	return caTransportFromPEM(pem, caPath)
+}
+
+func caTransportFromPEM(pem []byte, label string) (*http.Transport, error) {
 	pool, err := x509.SystemCertPool()
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
@@ -44,7 +48,7 @@ func caTransport(caPath string) (*http.Transport, error) {
 		pool = pool.Clone()
 	}
 	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("CA bundle %q contains no certificates", caPath)
+		return nil, fmt.Errorf("CA bundle %q contains no certificates", label)
 	}
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
@@ -53,6 +57,14 @@ func caTransport(caPath string) (*http.Transport, error) {
 	tr := base.Clone()
 	tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	return tr, nil
+}
+
+func caImageFetcherFromPEM(pem []byte, label string) (image.ImageFetcher, error) {
+	tr, err := caTransportFromPEM(pem, label)
+	if err != nil {
+		return nil, err
+	}
+	return image.NewFallbackFetcher(image.DaemonFetcher{}, caRemoteFetcher{transport: tr}), nil
 }
 
 // caRemoteFetcher pulls images from registries over its own transport.

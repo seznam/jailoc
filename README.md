@@ -20,7 +20,7 @@ Each workspace boots its own VM with its own kernel. Your project directories ar
 ## Why jailoc
 
 - 📁 **Only the files you share**: the agent sees the directories you share and read-only snapshots of files you list. Your SSH keys, browser profiles and other projects aren't in the VM.
-- 🌐 **Egress by rule**: destinations no allow rule matches are denied, apart from the coding agent's own endpoints. Private and reserved IPv4 and IPv6 ranges stay closed unless a rule opens them, so the agent can't wander into your internal network.
+- 🌐 **Egress by rule**: destinations no allow rule matches are denied, apart from the coding agent's own endpoints. Private and reserved IPv4 and IPv6 ranges stay closed unless a rule opens them, so the agent can't wander into your internal network. With an [upstream proxy](https://seznam.github.io/jailoc/reference/configuration/#defaultsnetworkupstream_proxy), the proxy you trust enforces this for the final address.
 - 🐳 **Docker stays inside**: with `enable_docker = true` the Docker daemon runs in the workspace VM. No host socket mounting.
 - **Your agent, your workflow**: jailoc provides the isolated computer, not the development process. Your instructions, tools, Git workflow and ticket system stay yours. See [A boundary, not a workflow](https://seznam.github.io/jailoc/explanation/overview/#a-boundary-not-a-workflow).
 - ⚡ **One command to start**: `jailoc` unpacks its embedded VM runtime, builds the image, boots the VM and attaches you to the agent.

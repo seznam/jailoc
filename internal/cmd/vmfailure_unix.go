@@ -55,6 +55,10 @@ func vmFailure(stateDir, logPath string) string {
 	base := stateErr
 	if base == "" {
 		base = supervisorLogFailure(logPath)
+	} else if strings.Contains(stateErr, "broker exited before ready") || strings.Contains(stateErr, "broker not ready after") {
+		if logTail := supervisorLogFailure(logPath); logTail != "" && !strings.HasPrefix(logTail, "see ") && !strings.Contains(base, logTail) {
+			base += " (" + logTail + ")"
+		}
 	}
 	if len(diag.startup) == 0 {
 		return base
