@@ -23,7 +23,8 @@ import (
 // Version 1: internal_zones; private DNS answers outside them are dropped.
 // Version 2: http rules and TLS inspection.
 // Version 3: per-rule quiet, which marks the events a rule decides.
-const PolicyVersion = 3
+// Version 4: source-only upstream_proxy routing and broker helper lifecycle.
+const PolicyVersion = 4
 
 // Protocol names used in policy exceptions and decisions.
 const (
@@ -274,7 +275,8 @@ type Policy struct {
 	inspect *inspector
 	// plainView is p without its http allow rules, nil when there are none.
 	// It decides flows that are not HTTP, which http rules must not open.
-	plainView *Policy
+	plainView     *Policy
+	upstreamProxy *UpstreamProxy
 }
 
 type policyFile struct {
@@ -296,7 +298,8 @@ type policyFile struct {
 	InternalZones []string `json:"internal_zones"`
 	// Inspect holds the CA that signs the certificates the broker shows the
 	// guest for hosts with http rules. Required when any rule has http.
-	Inspect *inspectFile `json:"inspect,omitempty"`
+	Inspect       *inspectFile   `json:"inspect,omitempty"`
+	UpstreamProxy *UpstreamProxy `json:"upstream_proxy,omitempty"`
 }
 
 // ParsePolicy validates a JSON policy. Unknown fields are rejected so a typo
@@ -309,6 +312,12 @@ func ParsePolicy(data []byte, source string) (*Policy, error) {
 		return nil, fmt.Errorf("parse policy %s: %w", source, err)
 	}
 	p := &Policy{source: source, ipv6: f.IPv6, rulesMode: f.Allow != nil || f.Deny != nil || f.DNS != ""}
+	if f.UpstreamProxy != nil {
+		if err := f.UpstreamProxy.validate(); err != nil {
+			return nil, fmt.Errorf("policy %s: %w", source, err)
+		}
+		p.upstreamProxy = f.UpstreamProxy
+	}
 	for _, e := range f.Exceptions {
 		if err := e.compile(); err != nil {
 			return nil, fmt.Errorf("policy %s: %w", source, err)

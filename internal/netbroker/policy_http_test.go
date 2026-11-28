@@ -75,8 +75,8 @@ func TestParsePolicyHTTP(t *testing.T) {
 
 func TestPolicyVersion(t *testing.T) {
 	t.Parallel()
-	if PolicyVersion != 3 {
-		t.Fatalf("PolicyVersion = %d, want 3", PolicyVersion)
+	if PolicyVersion != 4 {
+		t.Fatalf("PolicyVersion = %d, want 4", PolicyVersion)
 	}
 }
 
