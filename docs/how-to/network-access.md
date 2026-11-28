@@ -235,6 +235,52 @@ ports = [3128]
 !!! note
     Image builds get the host's proxy variables as build arguments automatically. Only sessions need the `env` entries.
 
+## Chain egress through an upstream proxy
+
+To send every allowed TCP flow through a proxy on the host side instead of dialing it from the broker, add an `upstream_proxy` table. The broker keeps deciding with your rules first; the proxy only receives flows they allowed.
+
+!!! warning
+    The proxy gets the hostname (`CONNECT registry.npmjs.org:443`) and resolves it itself, so jailoc can't pin the address the tunnel ends at. The proxy is trusted to refuse private and internal final addresses; the broker's private-range denial and `internal_zones` don't apply past it. Use a proxy that enforces this.
+
+Static proxy, with Basic auth and one host dialed directly:
+
+```toml
+[defaults.network.upstream_proxy]
+url    = "http://proxy.example.com:3128"
+ca     = "~/certs/proxy-ca.pem"   # only for a proxy that re-signs TLS
+direct = ["git.example.com:22"]  # allowed by a rule, dialed without the proxy
+
+[defaults.network.upstream_proxy.auth]
+username     = "jdoe"
+from_command = "pass show proxy"
+ttl          = "8h"
+```
+
+Proxy per workspace, from a host helper that runs in the broker when the workspace starts:
+
+```toml
+[defaults.network.upstream_proxy]
+command = 'my-egress-helper resolve --project "$JAILOC_WORKSPACE"'
+```
+
+The helper prints JSON with `version` and `url` and optional `ca`, `direct` and `headers`; see the [helper contract](../reference/configuration.md#helper-contract). A helper failure at start stops the VM from booting and jailoc prints its stderr. Turn the proxy off for one workspace:
+
+```toml
+[workspaces.offline-lab.network.upstream_proxy]
+enabled = false
+```
+
+Then run `jailoc reload api`. Notes:
+
+- A workspace `upstream_proxy` table replaces the defaults table entirely.
+- DNS and SNTP stay local; other UDP is denied unless `direct` lists it, and QUIC falls back to TCP.
+- Don't add the proxy's address to `network.rules`: the broker reaches it by itself, without opening that address to the guest.
+- With `from_env` auth, the variable is read when `jailoc up` starts the broker; change it, then run `jailoc restart`.
+- The `ca` file is also added to the guest trust store, also with `ca_bundle = false`. Running processes may need a restart to see it.
+- Image builds with the host Docker daemon don't use the proxy.
+
+See [`[defaults.network.upstream_proxy]`](../reference/configuration.md#defaultsnetworkupstream_proxy) for every field.
+
 ## Allow local-network hosts on macOS
 
 On macOS, reaching hosts on your local network needs the macOS Local Network permission for the process that runs jailoc (usually your terminal). Without it, connections to those addresses fail with `no route to host` even when they're allowed.

@@ -152,6 +152,7 @@ jailoc reload [workspace] [flags]
 **Updated live**
 
 - Network policy: `allowed_hosts`, `allowed_networks`, `network.filtered_dns`, `network.dns_upstream`, `network.dns_blocked_zones`, and turning `network.ipv6` off (turning it on needs `jailoc restart`)
+- Upstream proxy: `network.upstream_proxy`; a `command` helper runs again with `JAILOC_UPSTREAM_EVENT=reload`, and a failed run keeps the previous result (see [`upstream_proxy`](configuration.md#defaultsnetworkupstream_proxy))
 - Published `ports`
 - SSH agent: `ssh_auth_sock`, with the socket read again from `$SSH_AUTH_SOCK`
 - GPG agent: `gpg_agent`, with the socket looked up again with `gpgconf` and the public keys imported again
@@ -202,6 +203,7 @@ jailoc status [workspace] [flags]
 - The storage mode, configured size, cleanup TTL, and used, free and total capacity of `/tmp` (`Tmp` warns when `/tmp` is 90% full or more, and shows `unknown` when the guest can't be reached).
 - Where the agent's persistent home directories live: the named [profile](configuration.md#agent-profiles), `workspace`, or `none` for `profile = false`.
 - The number of agent sessions.
+- With `network.upstream_proxy`: the state of the proxy and its last error.
 - Whether the VM runs the current configuration:
     - `jailoc restart` is needed when a setting that needs a new VM changed (`cpu`, `memory`, `tmp_storage`, `tmp_size`, `agent`, `profile`, `enable_docker`, `protect_git`, `proxy` routes of a VM started by a jailoc release that predates live proxy reloads, or a jailoc upgrade that changed the guest protocol).
     - `jailoc reload` is needed when the configuration file changed after the VM started or was last reloaded.

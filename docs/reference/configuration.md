@@ -258,6 +258,7 @@ Network settings of the workspace VM and its network broker. `[workspaces.<name>
 | `rules` | table[] | `[]` | Allow and deny egress rules (`[[<scope>.network.rules]]`). Combined across `[defaults]` and the workspace; `deny` always wins over `allow`. |
 | `internal_zones` | string[] | `[]` | DNS zones whose names may resolve to private addresses. Combined across `[defaults]` and the workspace. See [Internal zones](#internal-zones). |
 | `agent_endpoints` | string[] | (unset) | Hosts of the [`agent` rule](#ruleagent) for OpenCode and OmO workspaces: the model and auth endpoints the agent may reach. Unset or `[]`: no `agent` rule for them. A set workspace list replaces the defaults list. Ignored for Claude Code, Copilot CLI and Antigravity. |
+| `upstream_proxy` | table | (none) | Chain allowed TCP egress through an HTTP proxy with `CONNECT`. See [`[defaults.network.upstream_proxy]`](#defaultsnetworkupstream_proxy). A set workspace table replaces the defaults table as a whole. |
 
 `ipv6` details:
 
@@ -474,7 +475,7 @@ Protocol detection decides per connection whether HTTP is served.
 **Upstream certificate and proxies**:
 
 - The broker verifies the upstream certificate against the host's system roots plus the file named by [`ca_bundle`](#ca_bundle) when it is a path. A failure ends the request with `502`.
-- The broker does not use `HTTP_PROXY` or another upstream proxy.
+- The broker does not use `HTTP_PROXY`. It chains through a proxy only when [`upstream_proxy`](#defaultsnetworkupstream_proxy) is configured.
 
 !!! note
     Inspection adds the workspace's inspection CA to the guest trust stores, also with `ca_bundle = false`. See [TLS inspection](../explanation/network-isolation.md#tls-inspection).
@@ -569,6 +570,122 @@ allow = ["gitlab.internal.example.com"]   # 10.20.5.10: opened
 [[workspaces.api.network.rules]]
 name = "saas"
 allow = ["*.vercel.app"]                   # a private answer is dropped
+```
+
+### `[defaults.network.upstream_proxy]`
+
+Sends the TCP flows the network rules allow through an HTTP proxy with `CONNECT`, for example a corporate proxy or a host proxy that applies its own policy per workspace. The table is read only from the host `config.toml` and applies only to the VM backend. `[workspaces.<name>.network.upstream_proxy]` takes the same fields.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | (none) | `http://host[:port]` (port `80` by default, no path, userinfo, query or fragment) or `unix:///absolute/path`. Other schemes and relative socket paths are rejected, and the socket path is at most 103 bytes. Cannot be combined with `command`. |
+| `command` | string | (none) | Host helper that returns the proxy per workspace; see [Helper contract](#helper-contract). Cannot be combined with `url` or `auth`. |
+| `ca` | string | (none) | Absolute or `~` path to a PEM file with extra roots for a proxy that re-signs TLS. Merged with the helper's `ca`. |
+| `direct` | string[] | `[]` | Allowed flows that bypass the proxy; see [Routing](#routing). Merged with the helper's `direct`. |
+| `enabled` | bool | `true` | `false` in a workspace table turns the upstream proxy off for that workspace. |
+| `auth` | table | (none) | Basic credentials for a `url` proxy. |
+
+One of `url` or `command` is required unless `enabled = false`. A workspace's `upstream_proxy` table replaces the defaults table as a whole, so a `url` of one scope never mixes with a `command` of the other.
+
+**`[<scope>.network.upstream_proxy.auth]`**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `username` | string | Basic auth user name. Required. |
+| `from_env` | string | Host environment variable with the password. |
+| `from_file` | string | Host file with the password. |
+| `from_command` | string | Host command whose standard output is the password. |
+| `ttl` | string | Duration for which `from_command` output is cached in the host system keychain. Only with `from_command`. |
+
+- `auth` is valid only with a static `url`, and `username` must not be empty.
+- Exactly one of `from_env`, `from_file` and `from_command` is required. The sources work as in [`secrets`](#secrets).
+- The configuration may name the source, but the password value never enters the broker policy, the VM specification or the guest. The broker keeps the credentials, and the headers a helper returns, in memory only.
+- `from_env` is read from the environment of the `jailoc up` that starts the broker, and the broker keeps it. A value changed in your shell later takes effect after `jailoc restart`.
+
+#### Routing
+
+The network rules decide first, with `deny` winning. `direct` only picks the route of a flow they allowed; a denied flow cannot be opened through `direct`.
+
+- `direct` entries use the syntax of `allow` entries: hostnames, `*.wildcard` names, `"*"`, IP addresses and CIDRs, each with an optional `:port` (`[fd00::1]:443` for IPv6). An entry that no `allow` rule matches is reported when the configuration loads.
+- jailoc adds nothing to `direct` itself, so the coding agent's endpoints go through the proxy unless you list them.
+- Everything else applies on both routes before the connection leaves the broker: `http` rules, TLS inspection, and logging (for the final destination after a `CONNECT` by name, see [Trust, CA and builds](#trust-ca-and-builds)).
+
+| Flow | Action |
+|------|--------|
+| TCP, allowed, in `direct` | Direct dial. |
+| TCP, allowed, not in `direct` | `CONNECT <name>:<port>`, one tunnel per flow. The name is the hostname the matching rule found in the DNS cache, or the TLS SNI or HTTP `Host` of a flow the broker inspects; without a known name it is `CONNECT <ip>:<port>`. |
+| UDP, not in `direct` | Denied. The broker still answers DNS and SNTP itself, and QUIC falls back to TCP. |
+| Proxy answers other than `2xx` | An inspected flow gets `502` with the proxy's status line, a passed-through flow is reset. The traffic log records the status. |
+| Proxy unreachable | The flow fails closed, with a hint in the traffic log. |
+
+Inbound paths (`ports`, the OAuth callback, the loopback relay, `host_ports`) don't use the proxy. There is no automatic `direct` route for model hosts.
+
+The proxy address is reachable by the broker even in a private range or on a Unix socket. That is transport only: it does not allow the guest to connect to that address or range.
+
+#### `CONNECT` headers
+
+Every `CONNECT` carries, with no way to turn them off:
+
+- `X-Jailoc-Workspace`: the workspace name (`builder` for the builder VM).
+- `X-Jailoc-Flow`: the numeric connection ID of the flow in `jailoc traffic` and `broker.jsonl`.
+
+Then come the helper's `headers` or the Basic `Proxy-Authorization` from `auth`. The broker builds the request; the guest cannot add to it or change it, and none of these headers reach the origin in the requests of an inspected flow. Header values are never logged, only names.
+
+#### Helper contract
+
+`command` runs inside the broker, under `/bin/sh -c`, without a TTY, with a 10 second timeout, stdin from `/dev/null` and stdout capped at 64 KiB. It inherits your environment, with these `JAILOC_*` variables set over any existing ones:
+
+| Variable | Value |
+|----------|-------|
+| `JAILOC_WORKSPACE` | Workspace name. |
+| `JAILOC_UPSTREAM_EVENT` | `start`, `reload` or `stop`. |
+| `JAILOC_UPSTREAM_VERSION` | `1`. |
+
+The helper gets no project path or working directory. For `start` and `reload` it prints one JSON object:
+
+```json
+{
+  "version": 1,
+  "url": "unix:///run/user/1000/helper/myproj.sock",
+  "ca": "/home/me/.config/helper/ca.pem",
+  "direct": ["api.model-provider.example:443"],
+  "headers": { "Proxy-Authorization": "Bearer <per-session token>" }
+}
+```
+
+- `version` and `url` are required; `ca`, `direct` and `headers` are optional. Unknown fields are ignored and an unknown `version` is refused. Invalid output fails closed.
+- `headers` names must be HTTP tokens and must not start with `X-Jailoc-` or override a framing header such as `Host` or `Content-Length`. Values must not contain CR or LF.
+- `ca` and `direct` are merged with the same keys of the configuration.
+- A helper cannot prompt. One that needs you, for example to sign in, exits non-zero and says on stderr what to do.
+
+| Event | When | On failure |
+|-------|------|------------|
+| `start` | Broker start, before the VM boots. | The VM does not boot, and jailoc prints the helper's stderr. |
+| `reload` | `jailoc reload` or broker `SIGHUP`. | The previous result stays in effect, and a traffic log event carries the stderr. |
+| `start`, again | The proxy is unreachable. | Retried one at a time with backoff from 1 s to 30 s. |
+| `stop` | The VM stops. | Best effort: stdout is ignored and a non-zero exit is only logged. A crash can skip it, so the proxy should expire idle endpoints itself. |
+
+#### Trust, CA and builds
+
+!!! warning "The upstream proxy enforces the final destination"
+    The broker applies the rules to the name or address the guest asked for. With `CONNECT <name>:<port>` the proxy resolves the name again, and jailoc cannot pin or check the address the tunnel ends at. The proxy is therefore trusted to refuse private, reserved and internal final addresses; `internal_zones`, the private-range denial and the DNS rebinding checks do not reach past it. Use a proxy that enforces this, and treat a `command` helper as code with your host privileges.
+
+- The public certificate in `ca` is trusted by the broker for the upstream side of flows it inspects, and is added to the guest's system trust store, also with `ca_bundle = false`. Processes that already loaded the store, such as the guest Docker daemon, may need a restart.
+- The builder VM of `isolated_build` and the shared builder VM use only a static `url` from `[defaults]`; they never run `command`. Image builds with the host Docker daemon are not changed.
+
+```toml
+[defaults.network.upstream_proxy]
+url    = "http://proxy.example.com:3128"
+ca     = "~/certs/proxy-ca.pem"
+direct = ["git.example.com:22"]
+
+[defaults.network.upstream_proxy.auth]
+username     = "jdoe"
+from_command = "pass show proxy"
+ttl          = "8h"
+
+[workspaces.offline-lab.network.upstream_proxy]
+enabled = false
 ```
 
 ### Example
@@ -1102,6 +1219,7 @@ A variable set by the workspace's `env`, `env_file` or an env secret takes prece
 
 - When any network rule has an [`http` table](#http-rules), the workspace's inspection CA certificate is appended to the bundle, also with `ca_bundle = false` (the bundle then holds only that certificate), so the guest trusts it and the variables above are set.
 - A `ca_bundle` path is also the extra trust anchor for the broker's upstream certificate checks.
+- The `ca` of [`upstream_proxy`](#defaultsnetworkupstream_proxy) is added to the same bundle and the guest trust store, also with `ca_bundle = false`.
 
 #### Image builds with a CA bundle
 
@@ -1434,6 +1552,8 @@ See the [secrets how-to](../how-to/secrets.md).
 - `agents.<name>.mounts` merges instead (see [Agent mounts](#agent-mounts)), and `profile` is not inherited from the derived-from agent.
 
 **DNS settings**: an empty workspace `network.dns_upstream` and an omitted `network.dns_blocked_zones` inherit the defaults; a set `dns_blocked_zones` replaces the default list. A set workspace `network.agent_endpoints`, including `[]`, replaces the defaults list.
+
+**`network.upstream_proxy`**: a set workspace table replaces the defaults table as a whole; its fields are never merged with the defaults. `enabled = false` in a workspace turns the proxy off for it.
 
 ---
 
