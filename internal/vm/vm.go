@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -151,12 +152,24 @@ type Spec struct {
 	// relays to a workspace VM's gateway (host_ports).
 	HostServices []HostService `json:"host_services,omitempty"`
 	// CABundle is a host PEM file the builder's Docker daemon trusts in
-	// addition to the image's CA certificates.
+	// addition to the image's CA certificates. For a workspace VM with
+	// UpstreamProxy it is the base of the composed GuestUpstreamBundle.
 	CABundle string `json:"ca_bundle,omitempty"`
 	// CABundleDigest is the SHA-256 hex digest of CABundle for builder VMs, so a content change at the same path restarts the builder.
 	CABundleDigest string `json:"ca_bundle_digest,omitempty"`
 	// BuildCA records the external CA bundle state ("none" or "sha256:<hex>") the workspace image was built with, or "" when jailoc did not build the image.
 	BuildCA string `json:"build_ca,omitempty"`
+	// UpstreamProxy routes the VM's egress through an upstream proxy that
+	// the broker reaches with host-side credentials. The broker publishes
+	// the proxy's public CA in UpstreamCAFile; a workspace VM trusts it
+	// through GuestUpstreamBundle, the builder through its boot bundle.
+	UpstreamProxy bool `json:"upstream_proxy,omitempty"`
+	// ReloadUpstreamCA composes GuestUpstreamBundle from the current spec
+	// (ComposeGuestCABundle) and makes the running guest reload its CA
+	// bundle. The supervisor of a workspace VM calls it whenever the broker
+	// reports a new upstream CA after the guest is ready, and cancels ctx
+	// when the VM stops; it must return once ctx ends. Builders ignore it.
+	ReloadUpstreamCA func(ctx context.Context) error `json:"-"`
 	// Log receives lifecycle messages and the broker's output.
 	Log io.Writer `json:"-"`
 }
@@ -368,18 +381,26 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	if err := WriteBrokerRuntime(spec); err != nil {
 		return err
 	}
+	if err := resetUpstreamFiles(spec.StateDir); err != nil {
+		return err
+	}
 	bp, err := startBroker(ctx, spec, policyPath)
 	if err != nil {
 		return err
 	}
 	st.BrokerPID = bp.PID()
 	logf("broker ready pid=%d after %s", bp.PID(), step())
+	startupGrace := brokerStartupGrace(spec)
+	if err := prepareUpstreamBoot(spec, bp.UpstreamCAChanged()); err != nil {
+		_ = bp.Stop(startupGrace)
+		return err
+	}
 
 	redactor := newConsoleRedactor(nil)
 	if workspace {
 		stopConsoleSock, err := startConsoleSecretServer(spec.StateDir, redactor)
 		if err != nil {
-			_ = bp.Stop(5 * time.Second)
+			_ = bp.Stop(startupGrace)
 			return err
 		}
 		defer stopConsoleSock()
@@ -390,13 +411,13 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		opts = workspaceOptions(spec, guestFiles, imgDir, img.Env, redactor)
 	} else {
 		if opts, err = builderOptions(spec, redactor); err != nil {
-			_ = bp.Stop(5 * time.Second)
+			_ = bp.Stop(startupGrace)
 			return err
 		}
 	}
 	vm, err := microvm.Run(ctx, imageRef(spec), opts...)
 	if err != nil {
-		_ = bp.Stop(5 * time.Second)
+		_ = bp.Stop(startupGrace)
 		return fmt.Errorf("start vm: %w", err)
 	}
 	logf("vm started after %s", step())
@@ -404,7 +425,7 @@ func Run(ctx context.Context, spec Spec) (err error) {
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = vm.Stop(sctx)
-		_ = bp.Stop(5 * time.Second)
+		_ = bp.Stop(startupGrace)
 	}
 	handle := vmHandle{vm: vm, stateDir: spec.StateDir, nicDown: bp.NICDown()}
 	// Fail startup as soon as the VM, its broker or its NIC is lost; the
@@ -434,7 +455,16 @@ func Run(ctx context.Context, spec Spec) (err error) {
 	}
 	logf("%s ready after %s", spec.Kind, step())
 
+	// CA changes the broker reports from now on reach the running guest;
+	// the reload loop ends with the supervision.
+	wctx, stopReloads := context.WithCancel(ctx)
+	var reloads sync.WaitGroup
+	if workspace && spec.ReloadUpstreamCA != nil {
+		reloads.Go(func() { watchUpstreamCA(wctx, bp.UpstreamCAChanged(), spec.ReloadUpstreamCA, logf) })
+	}
 	out := brokerproc.Supervise(ctx, bp, handle, 500*time.Millisecond, stopGrace)
+	stopReloads()
+	reloads.Wait()
 	logf("supervise %s", out.Reason)
 	if out.Reason == "shutdown" {
 		return nil
@@ -481,6 +511,10 @@ func brokerArgs(spec Spec, policyPath string) []string {
 		"-subnet", Subnet, "-gateway", Gateway, "-guest", GuestIP,
 		"-log", TrafficLog(spec.StateDir),
 		"-mtu", strconv.Itoa(guest.MTU),
+		// The policy decides whether the upstream proxy is used; the files
+		// are fixed at boot so a reload can turn it on.
+		"-upstream-state", UpstreamStatusFile(spec.StateDir),
+		"-upstream-ca", UpstreamCAFile(spec.StateDir),
 	)
 	if spec.Kind == KindWorkspace {
 		args = append(args,
@@ -503,10 +537,16 @@ func startBroker(ctx context.Context, spec Spec, policyPath string) (*brokerproc
 		return nil, errors.New("no broker command")
 	}
 	args := brokerArgs(spec, policyPath)
-	bp, err := brokerproc.Start(ctx, brokerproc.Options{
-		Binary: spec.Broker[0], Args: args, ReadyTimeout: 10 * time.Second,
+	o := brokerproc.Options{
+		Binary: spec.Broker[0], Args: args, ReadyTimeout: brokerReadyTimeout(spec),
 		Stdout: spec.Log, Stderr: spec.Log,
-	})
+	}
+	if spec.UpstreamProxy {
+		// A broker that does not become ready may be running the
+		// credential helper; give it time to stop the helper.
+		o.StopGrace = brokerStartupGrace(spec)
+	}
+	bp, err := brokerproc.Start(ctx, o)
 	if err != nil {
 		return nil, fmt.Errorf("start network broker: %w", err)
 	}
@@ -577,6 +617,10 @@ func builderOptions(spec Spec, redactor *consoleRedactor) ([]microvm.Option, err
 	// the guest init; it is the only state-dir content the guest sees.
 	mounts = append(mounts, microvm.VirtioFSMount{Tag: "jailocctl", HostPath: controlDir(spec.StateDir), SimplifiedOwnership: simplifiedOwnership})
 	fmt.Fprintf(&table, "%s\t%s\t%s\n", "jailocctl", "rw", controlDir(spec.StateDir))
+	pem, err := builderCABundle(spec)
+	if err != nil {
+		return nil, err
+	}
 	opts := append(commonOptions(spec, redactor),
 		microvm.WithDisks(microvm.Disk{ID: "docker", HostPath: diskPath(spec.StateDir)}),
 		microvm.WithVirtioFS(mounts...),
@@ -588,11 +632,7 @@ func builderOptions(spec Spec, redactor *consoleRedactor) ([]microvm.Option, err
 			if err := os.WriteFile(filepath.Join(rootfs, "jailoc-init.sh"), []byte(script), 0o755); err != nil { //nolint:gosec // G306: guest init must be executable
 				return fmt.Errorf("write guest init: %w", err)
 			}
-			if spec.CABundle != "" {
-				pem, err := os.ReadFile(spec.CABundle)
-				if err != nil {
-					return fmt.Errorf("read CA bundle: %w", err)
-				}
+			if pem != nil {
 				if err := os.WriteFile(filepath.Join(rootfs, "jailoc-ca.pem"), pem, 0o644); err != nil { //nolint:gosec // G306: public certificates
 					return fmt.Errorf("write CA bundle: %w", err)
 				}
@@ -600,8 +640,12 @@ func builderOptions(spec Spec, redactor *consoleRedactor) ([]microvm.Option, err
 			return nil
 		}),
 	)
-	if spec.CABundle != "" {
-		fetcher, err := caImageFetcher(spec.CABundle)
+	if pem != nil {
+		label := spec.CABundle
+		if label == "" {
+			label = UpstreamCAFile(spec.StateDir)
+		}
+		fetcher, err := caImageFetcherFromPEM(pem, label)
 		if err != nil {
 			return nil, fmt.Errorf("builder image fetcher: %w", err)
 		}

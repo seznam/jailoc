@@ -465,4 +465,31 @@ func TestBuilderOptionsCABundle(t *testing.T) {
 	if _, err := builderOptions(missing, nil); err == nil {
 		t.Error("builderOptions with an unreadable CA bundle: error = nil, want error")
 	}
+
+	upstreamOnly := Spec{
+		Kind:          KindBuilder,
+		Workspace:     "builder",
+		StateDir:      t.TempDir(),
+		UpstreamProxy: true,
+	}
+	caBytes, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is in t.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(UpstreamCAFile(upstreamOnly.StateDir), caBytes, 0o600); err != nil { //nolint:gosec // G703: StateDir is t.TempDir()
+		t.Fatal(err)
+	}
+	gotUpstream, err := builderOptions(upstreamOnly, nil)
+	if err != nil {
+		t.Fatalf("builderOptions with upstream proxy CA: %v", err)
+	}
+	if len(gotUpstream) != len(plain)+1 {
+		t.Errorf("options with upstream proxy CA = %d, want %d (one image fetcher more)", len(gotUpstream), len(plain)+1)
+	}
+
+	upstreamMissingBase := upstreamOnly
+	upstreamMissingBase.CABundle = filepath.Join(t.TempDir(), "missing-base.pem")
+	if _, err := builderOptions(upstreamMissingBase, nil); err == nil {
+		t.Error("builderOptions with upstream proxy and missing base CA bundle: error = nil, want error")
+	}
 }
