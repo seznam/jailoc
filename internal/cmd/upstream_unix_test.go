@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/seznam/jailoc/internal/config"
+	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/guest"
 	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
@@ -316,5 +317,35 @@ func TestVMFailureIncludesBrokerStartupLog(t *testing.T) {
 	got := vmFailure(dir, logPath)
 	if !strings.Contains(got, "run my-helper login first") {
 		t.Fatalf("vmFailure = %q, want broker startup log included", got)
+	}
+}
+
+func TestBuilderCABundleDigestRotatesOnUpstreamCA(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "proxy-ca.pem")
+	if err := os.WriteFile(caPath, []byte("cert-v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseCA, err := docker.NewBuildCA([]byte("base-cert\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	up := &netbroker.UpstreamProxy{Workspace: "builder", URL: "http://proxy.example:3128", CA: caPath}
+
+	d1 := builderCABundleDigest(baseCA, up)
+	if d1 == "" || d1 == baseCA.Digest() {
+		t.Fatalf("builderCABundleDigest with upstream CA = %q, base = %q", d1, baseCA.Digest())
+	}
+	dOnlyUp := builderCABundleDigest(nil, up)
+	if dOnlyUp == "" || dOnlyUp == d1 {
+		t.Fatalf("builderCABundleDigest without base CA = %q, with base = %q", dOnlyUp, d1)
+	}
+	if err := os.WriteFile(caPath, []byte("cert-v2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d2 := builderCABundleDigest(baseCA, up)
+	if d2 == "" || d2 == d1 {
+		t.Fatalf("builderCABundleDigest after rotating upstream CA = %q, before = %q", d2, d1)
 	}
 }

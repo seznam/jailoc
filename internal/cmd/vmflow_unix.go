@@ -262,7 +262,7 @@ func buildWorkspaceImage(ctx context.Context, cfg *config.Config, ws *workspace.
 		// pulls behind a TLS-intercepting proxy work in the shared builder
 		// too. The digest restarts it when the bundle changes at the same path.
 		CABundle:       caPath,
-		CABundleDigest: ca.Digest(),
+		CABundleDigest: builderCABundleDigest(ca, upstream),
 		UpstreamProxy:  upstream != nil,
 	}
 	if ws.IsolatedBuild {

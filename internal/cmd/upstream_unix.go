@@ -4,6 +4,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/seznam/jailoc/internal/docker"
 	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
 )
@@ -28,6 +31,28 @@ func brokerReloadTimeout(running, next vm.Spec) time.Duration {
 		return upstreamReloadTimeout
 	}
 	return reloadTimeout
+}
+
+// builderCABundleDigest returns the CA digest recorded in the builder VM spec,
+// combining the workspace's external CA bundle digest with the content digest
+// of the static defaults upstream proxy CA file so rotating the proxy CA at
+// the same path restarts the builder VM.
+func builderCABundleDigest(ca *docker.BuildCA, upstream *netbroker.UpstreamProxy) string {
+	base := ca.Digest()
+	if upstream == nil || upstream.CA == "" {
+		return base
+	}
+	data, err := os.ReadFile(upstream.CA) //nolint:gosec // G304: validated host config CA path
+	if err != nil || len(data) == 0 {
+		return base
+	}
+	sum := sha256.Sum256(data)
+	upDigest := hex.EncodeToString(sum[:])
+	if base == "" {
+		return upDigest
+	}
+	combined := sha256.Sum256([]byte(base + "\n" + upDigest))
+	return hex.EncodeToString(combined[:])
 }
 
 // withUpstreamProxy adds proxy as the upstream_proxy of the broker policy
