@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -54,9 +55,16 @@ type testServer struct {
 	pool   *x509.CertPool
 	cancel context.CancelFunc
 	done   chan error
+	// port is the ":port" suffix of the external HTTPS authority, empty for 443.
+	port string
 }
 
 func startServer(t *testing.T, handler http.Handler, setup func(*Server)) *testServer {
+	t.Helper()
+	return startServerWithPorts(t, handler, 0, 0, setup)
+}
+
+func startServerWithPorts(t *testing.T, handler http.Handler, httpPort, httpsPort int, setup func(*Server)) *testServer {
 	t.Helper()
 	up := httptest.NewServer(handler)
 	t.Cleanup(up.Close)
@@ -64,7 +72,7 @@ func startServer(t *testing.T, handler http.Handler, setup func(*Server)) *testS
 	dial := func(ctx context.Context) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", up.Listener.Addr().String())
 	}
-	g, codes, err := New(Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, Auth: true}, {Host: hostB, Dial: dial, Auth: true}}})
+	g, codes, err := New(Config{Cert: cert, Routes: []Route{{Host: hostA, Dial: dial, Auth: true}, {Host: hostB, Dial: dial, Auth: true}}, HTTPPort: httpPort, HTTPSPort: httpsPort})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +85,9 @@ func startServer(t *testing.T, handler http.Handler, setup func(*Server)) *testS
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	x := &testServer{g: g, codes: codes, addr: ln.Addr().String(), pool: pool, cancel: cancel, done: make(chan error, 1)}
+	if httpsPort != 0 && httpsPort != 443 {
+		x.port = ":" + strconv.Itoa(httpsPort)
+	}
 	go func() { x.done <- g.Serve(ctx, ln) }()
 	t.Cleanup(func() {
 		cancel()
@@ -136,7 +147,8 @@ func login(t *testing.T, x *testServer, host, code string, status int) *http.Res
 		t.Fatal(err)
 	}
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.Header.Set("Origin", "https://"+host)
+	r.Host = host + x.port
+	r.Header.Set("Origin", "https://"+host+x.port)
 	return request(t, x.client(t, host), r, status)
 }
 

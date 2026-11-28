@@ -94,10 +94,13 @@ type brkHarness struct {
 // filled in; the caller sets OwnerUID and limits.
 func brkStart(t *testing.T, cfg BrokerConfig, networks ...string) *brkHarness {
 	t.Helper()
-	if len(networks) == 0 {
+	if len(networks) == 0 && len(cfg.Listeners) == 0 {
 		networks = []string{"tcp4"}
 	}
 	h := &brkHarness{path: filepath.Join(brkDir(t), "b.sock"), done: make(chan error, 1)}
+	for _, ln := range cfg.Listeners {
+		h.addrs = append(h.addrs, ln.Addr().(*net.TCPAddr))
+	}
 	for _, network := range networks {
 		ln := brkLoopback(t, network)
 		cfg.Listeners = append(cfg.Listeners, ln)

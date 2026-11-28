@@ -22,7 +22,7 @@ Every `config.toml` field with its type, default, validation rule and merge beha
 
 ## Top-level fields
 
-Besides the tables `[vm]`, `[base]`, `[defaults]` and `[workspaces.<name>]`, the configuration has one setting at the root level. Put it before the first table.
+Besides the tables `[vm]`, `[base]`, `[proxy]`, `[defaults]` and `[workspaces.<name>]`, the configuration has one setting at the root level. Put it before the first table.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -138,6 +138,32 @@ dockerfile = "https://example.com/Dockerfiles/custom"
 ```toml
 [base]
 ubuntu_mirror = "http://de.archive.ubuntu.com/ubuntu"
+```
+
+---
+
+<a id="proxy-ports"></a>
+
+## `[proxy]`
+
+Host ports of the HTTPS proxy for [`proxy` routes](#proxy). All keys are optional; the table is global and not set per workspace.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `http_port` | integer | `80` | Port browsers use for plain HTTP, and the loopback port the listener broker binds for the HTTP redirect. |
+| `https_port` | integer | `443` | Port browsers use for HTTPS, and the loopback port the listener broker binds. A value other than 443 appears in every route URL. |
+| `standalone_http_port` | integer | `7080` | Loopback port of the HTTP redirect listener of a proxy that runs without the listener broker. |
+| `standalone_https_port` | integer | `7043` | Loopback port of the HTTPS listener of a proxy that runs without the listener broker. `jailoc proxy --listen` overrides it. |
+
+- Each port is 1 to 65535. `http_port` and `https_port` must differ, and so must `standalone_http_port` and `standalone_https_port`. The two pairs are alternatives, so they may share port numbers.
+- `http_port` and `https_port` are the ports in the URLs. With the installed listener broker, they are also its listening ports. Without it, you forward them to the standalone ports; see [set up the host manually](../how-to/proxy-routes.md#set-up-the-host-manually).
+- `jailoc proxy install` writes `http_port` and `https_port` into the broker service. After changing them, run `jailoc proxy install` again and restart the proxy (`jailoc proxy stop`, then `jailoc proxy`). A changed standalone port needs only a proxy restart. The proxy fixes its ports for its lifetime, and refuses a broker that serves other ports.
+- The broker hands each accepted connection to the proxy over a Unix socket; there is no TCP hop between them.
+
+```toml
+[proxy]
+https_port = 8443
+http_port = 8080
 ```
 
 ---
@@ -723,7 +749,7 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `paths` | string[] | `[]` | Host directories shared into the VM over virtio-fs at their original absolute paths. See [`paths`](#paths). |
 | `dockerfile` | string | (none) | Local path (`/...`, `~/...`) or HTTP(S) URL to an overlay Dockerfile built on top of the base image. |
 | `build_context` | string | (none) | Build context of the overlay build. |
-| `proxy` | table | `{}` | HTTPS proxy routes: route name to guest port (or `{ port, auth }`), served at `https://<name>.<workspace>.jailoc.local`. See [`proxy`](#proxy). |
+| `proxy` | table | `{}` | HTTPS proxy routes: route name to guest port (or `{ port, auth, redirect }`), served at `https://<name>.<workspace>.jailoc.local`. See [`proxy`](#proxy). |
 
 - `paths`: the first path is the working directory; with no paths, the working directory is `/home/agent`.
 - `dockerfile`: build failure is fatal. Maximum file size for HTTP sources: 1 MiB.
@@ -1254,14 +1280,19 @@ When `ca_bundle` selects an external bundle (a custom path, or a file picked by 
 ```toml
 [defaults.proxy]
 auth = false
+redirect = true
 
 [workspaces.demo.proxy]
 app = 3000
 admin = { port = 8080, auth = true }
+legacy = { port = 9000, redirect = false }
 ```
 
-- Each entry in `[workspaces.<name>.proxy]` is either `<route> = <port>` or `<route> = { port = <port>, auth = <bool> }`.
+- Each entry in `[workspaces.<name>.proxy]` is either `<route> = <port>` or `<route> = { port = <port>, auth = <bool>, redirect = <bool> }`.
 - `auth` (default `false`) gates the route behind a one-time login code and a `__Host-jailoc` session cookie. It can be set per route, at `[workspaces.<name>.proxy]`, or in `[defaults.proxy]`.
+- `redirect` (default `true`) answers a plain-HTTP `GET` or `HEAD` to the route's host on `http_port` with `307` to its HTTPS URL (the path and query are kept, and a nonstandard `https_port` is included). `redirect = false` makes plain HTTP to the route answer `421`. It resolves like `auth`: route, then `[workspaces.<name>.proxy]`, then `[defaults.proxy]`, then `true`. A route can still be named `redirect`; only a boolean value is the setting.
+- The redirect never reaches a route's login or the guest app. Other methods get `405`.
+- The HTTP and HTTPS ports are set globally in [`[proxy]`](#proxy-ports).
 
 Validation:
 
@@ -1269,9 +1300,9 @@ Validation:
 - `proxy` ports are 1 to 65535. Port 6081 is rejected, and so is a port that `host_ports` or `ports` also lists as a guest port (the effective `ports`, after merging with `[defaults]`). A `ports` entry whose host side matches a `proxy` port is fine; only the guest side counts.
 - With any `proxy` route, the workspace name must be a DNS label (the pattern for workspace names allows more).
 - `ports` and `host_ports` can't use guest port 6081 in any workspace, with or without `proxy` routes: it is reserved for the proxy relay.
-- A proxy route is not a published port: nothing listens on the host except the local HTTPS proxy.
+- A proxy route is not a published port: nothing listens on the host except the local proxy listeners (HTTPS and the HTTP redirect).
 
-`jailoc reload` applies every change to `proxy` routes: adding, renaming or removing a route, changing its port or `auth`, and going from no routes to some or back. The guest relay allowlist is replaced live and connections through a removed route's port are closed; other sessions keep running. The proxy refuses a running VM whose routes don't match the configuration until it is reloaded. `jailoc up`, `jailoc restart` and `jailoc reload` start or update the background proxy, and `jailoc down` removes the workspace's routes from it.
+`jailoc reload` applies every change to `proxy` routes: adding, renaming or removing a route, changing its port, `auth` or `redirect`, and going from no routes to some or back. The guest relay allowlist is replaced live and connections through a removed route's port are closed; other sessions keep running. The proxy refuses a running VM whose routes don't match the configuration until it is reloaded. `jailoc up`, `jailoc restart` and `jailoc reload` start or update the background proxy, and `jailoc down` removes the workspace's routes from it.
 
 A VM started by a jailoc release whose guest protocol predates live proxy reloads applies route changes only after `jailoc restart`. Such a VM also keeps the guest ports of its `proxy` routes reserved until it restarts, even after the configuration drops `proxy`; `jailoc reload` rejects a `host_ports` or `ports` entry that uses one of them and asks for `jailoc restart`. A VM started before the proxy feature has no relay and needs `jailoc restart` for any route.
 

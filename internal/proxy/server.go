@@ -37,13 +37,29 @@ type Route struct {
 	Generation string
 	// StaticBody, when non-empty and Dial is nil, is served directly as a 200 text/plain; charset=utf-8 response to GET and HEAD requests on "/", and 404 on other paths.
 	StaticBody string
+	// DisableRedirect opts the route out of the plain-HTTP redirect served by
+	// ServeHTTPRedirect. The zero value keeps the redirect enabled.
+	DisableRedirect bool
 }
+
+const (
+	defaultHTTPPort  = 80
+	defaultHTTPSPort = 443
+)
 
 // Config supplies an already trusted certificate and the exact hostname allowlist.
 // The caller owns certificate issuance, DNS, trust installation and the dialers.
+//
+// HTTPPort and HTTPSPort are the ports of the external authority browsers
+// use, not the ports of the local listeners: a forwarder may map any local port
+// to them. Zero selects 80 and 443; an explicit 443 or 80 is the same as zero.
+// They are process-lifetime settings: Update accepts only the ports New was
+// given, so a caller must pass the same values on every call.
 type Config struct {
-	Cert   tls.Certificate
-	Routes []Route
+	Cert      tls.Certificate
+	Routes    []Route
+	HTTPPort  int
+	HTTPSPort int
 }
 
 // Server is an authenticating HTTPS reverse proxy.
@@ -55,6 +71,9 @@ type Server struct {
 	sessions   map[[32]byte]*session
 	unauth     map[string]*session
 	started    bool
+	redirected bool
+	httpPort   int
+	httpsPort  int
 	base       context.Context
 	now        func() time.Time
 	sessionTTL time.Duration
@@ -68,7 +87,8 @@ type loginCode struct {
 
 // New returns one unpredictable, single-use, ten-minute login code per host.
 // Codes are submitted in a POST body, never in a URL. Routes are copied and may
-// be updated with Update; a Server may be served only once.
+// be updated with Update; a Server may be served only once, and may also serve
+// its HTTP redirect listener once.
 func New(cfg Config) (*Server, map[string]string, error) {
 	g := &Server{
 		routes: make(map[string]Route), codes: make(map[string]*loginCode),
@@ -93,6 +113,10 @@ func (g *Server) Update(cfg Config) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxy certificate: %w", err)
 	}
+	httpPort, httpsPort, err := effectivePorts(cfg)
+	if err != nil {
+		return nil, err
+	}
 	nextRoutes := make(map[string]Route, len(cfg.Routes))
 	for _, route := range cfg.Routes {
 		if !validHostname(route.Host) || (route.Dial != nil) == (route.StaticBody != "") {
@@ -111,6 +135,14 @@ func (g *Server) Update(cfg Config) (map[string]string, error) {
 	}
 
 	g.mu.Lock()
+	// The ports are written once, by the first Update from New, and never
+	// again, so handlers read them without the lock.
+	if g.httpsPort == 0 {
+		g.httpPort, g.httpsPort = httpPort, httpsPort
+	} else if g.httpPort != httpPort || g.httpsPort != httpsPort {
+		g.mu.Unlock()
+		return nil, fmt.Errorf("proxy ports are fixed at %d (HTTP) and %d (HTTPS), got %d and %d", g.httpPort, g.httpsPort, httpPort, httpsPort)
+	}
 	now := g.now()
 	codes := make(map[string]string)
 	for host, route := range nextRoutes {
@@ -169,8 +201,30 @@ func (g *Server) route(host string) (Route, bool) {
 	return r, ok
 }
 
+// effectivePorts resolves the zero values of cfg to the default ports and
+// rejects ports that are out of range or equal.
+func effectivePorts(cfg Config) (httpPort, httpsPort int, err error) {
+	httpPort, httpsPort = cfg.HTTPPort, cfg.HTTPSPort
+	if httpPort == 0 {
+		httpPort = defaultHTTPPort
+	}
+	if httpsPort == 0 {
+		httpsPort = defaultHTTPSPort
+	}
+	for name, port := range map[string]int{"HTTP": httpPort, "HTTPS": httpsPort} {
+		if port < 1 || port > 65535 {
+			return 0, 0, fmt.Errorf("proxy %s port %d is out of range", name, port)
+		}
+	}
+	if httpPort == httpsPort {
+		return 0, 0, fmt.Errorf("proxy HTTP and HTTPS ports are both %d", httpPort)
+	}
+	return httpPort, httpsPort, nil
+}
+
 // Serve takes ownership of a TCP listener bound to a loopback IP. The listener
-// may use any local port, but the external HTTPS authority must use port 443.
+// may use any local port, but the external HTTPS authority must use
+// Config.HTTPSPort (443 by default).
 // Cancellation revokes all sessions and closes HTTP and upgraded connections.
 func (g *Server) Serve(ctx context.Context, ln net.Listener) error {
 	addr, ok := ln.Addr().(*net.TCPAddr)

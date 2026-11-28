@@ -4,6 +4,7 @@ package proxyhost
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -88,6 +89,12 @@ type BrokerConfig struct {
 	// binds the health endpoint next to it (see ProbeBroker), so Control must
 	// be bound to a filesystem path.
 	Control *net.UnixListener
+	// HTTPPort and HTTPSPort are the two local ports the listeners serve.
+	// The broker only reports them on its health endpoint, for
+	// ProbeBrokerPair; it never uses them to treat connections differently.
+	// Both zero means unreported (ProbeBrokerPair then refuses the broker);
+	// otherwise both must be valid and distinct.
+	HTTPPort, HTTPSPort uint16
 	// MaxInFlight bounds descriptors queued or sent but not yet acknowledged.
 	// When it is reached the accept loops wait and new clients stay in the
 	// kernel listen backlog.
@@ -110,6 +117,8 @@ type Broker struct {
 	listeners    []*net.TCPListener
 	control      *net.UnixListener
 	health       *net.UnixListener
+	httpPort     uint16
+	httpsPort    uint16
 	maxInFlight  int
 	stallTimeout time.Duration
 	sendTimeout  time.Duration
@@ -150,6 +159,9 @@ func NewBroker(cfg BrokerConfig) (*Broker, error) {
 			return nil, fmt.Errorf("new listener broker: listener %d: %w", i, err)
 		}
 	}
+	if err := validateBrokerPortConfig(cfg); err != nil {
+		return nil, fmt.Errorf("new listener broker: %w", err)
+	}
 	health, err := listenBrokerHealth(cfg.Control, cfg.OwnerUID)
 	if err != nil {
 		return nil, fmt.Errorf("new listener broker: %w", err)
@@ -159,6 +171,8 @@ func NewBroker(cfg BrokerConfig) (*Broker, error) {
 		listeners:    append([]*net.TCPListener(nil), cfg.Listeners...),
 		control:      cfg.Control,
 		health:       health,
+		httpPort:     cfg.HTTPPort,
+		httpsPort:    cfg.HTTPSPort,
 		maxInFlight:  cfg.MaxInFlight,
 		stallTimeout: cfg.StallTimeout,
 		sendTimeout:  cfg.SendTimeout,
@@ -177,6 +191,15 @@ func NewBroker(cfg BrokerConfig) (*Broker, error) {
 		b.logf = func(string, ...any) {}
 	}
 	return b, nil
+}
+
+// validateBrokerPortConfig checks the reported ports of cfg. Unreported
+// ports (both zero) need no check.
+func validateBrokerPortConfig(cfg BrokerConfig) error {
+	if cfg.HTTPPort == 0 && cfg.HTTPSPort == 0 {
+		return nil
+	}
+	return ValidateBrokerPorts(int(cfg.HTTPPort), int(cfg.HTTPSPort))
 }
 
 func validateBrokerListener(ln *net.TCPListener) error {
@@ -300,7 +323,12 @@ func (b *Broker) answerHealth(uc *net.UnixConn) {
 		b.logf("listener broker: set health status deadline: %v", err)
 		return
 	}
-	if _, err := uc.Write([]byte{brokerStatusReady}); err != nil {
+	// The ports follow the ready byte in the same write; a probe that only
+	// wants the ready byte reads one byte and closes.
+	reply := []byte{brokerStatusReady, 0, 0, 0, 0}
+	binary.BigEndian.PutUint16(reply[1:], b.httpPort)
+	binary.BigEndian.PutUint16(reply[3:], b.httpsPort)
+	if _, err := uc.Write(reply); err != nil {
 		b.logf("listener broker: send health status: %v", err)
 	}
 }
@@ -844,41 +872,6 @@ func removeStaleSocket(path string) error {
 	return nil
 }
 
-// AttachBroker attaches to the listener broker at path as its gateway. It
-// checks that the broker runs as brokerUID before reading its status, and
-// returns an error wrapping ErrBrokerBusy when another gateway is attached.
-// The returned listener reports addr, which must be a loopback address with
-// a port, and yields only validated *net.TCPConn connections. Closing it
-// detaches from the broker.
-func AttachBroker(ctx context.Context, path string, brokerUID uint32, addr *net.TCPAddr) (net.Listener, error) {
-	laddr, err := brokerListenAddr(addr)
-	if err != nil {
-		return nil, fmt.Errorf("attach listener broker: %w", err)
-	}
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", path)
-	if err != nil {
-		return nil, fmt.Errorf("attach listener broker: %w", err)
-	}
-	uc, ok := c.(*net.UnixConn)
-	if !ok {
-		return nil, errors.Join(fmt.Errorf("attach listener broker %s: dialed %T, want a Unix connection", path, c), closeConnErr(c))
-	}
-	if err := attachStatus(ctx, uc, brokerUID); err != nil {
-		return nil, errors.Join(fmt.Errorf("attach listener broker %s: %w", path, err), closeConnErr(uc))
-	}
-	l := &brokerListener{
-		uc:       uc,
-		addr:     laddr,
-		conns:    make(chan *net.TCPConn),
-		closed:   make(chan struct{}),
-		failed:   make(chan struct{}),
-		loopDone: make(chan struct{}),
-	}
-	go l.receive()
-	return l, nil
-}
-
 func closeConnErr(c net.Conn) error {
 	if err := c.Close(); err != nil {
 		return fmt.Errorf("close broker connection: %w", err)
@@ -942,12 +935,21 @@ func readBrokerStatus(ctx context.Context, uc *net.UnixConn, brokerUID uint32) (
 	return status, nil
 }
 
+// brokerPorts are the ports a broker reports on its health endpoint. A
+// broker that predates the report, or was built without ports, leaves
+// reported false.
+type brokerPorts struct {
+	http, https uint16
+	reported    bool
+}
+
 // checkBrokerHealth asks the health endpoint of the broker whose control
 // socket is at path whether it serves, without connecting to the control
 // socket and so without taking the gateway slot. It checks that the broker
 // runs as brokerUID before reading, and bounds the whole exchange by
-// brokerHealthTimeout and ctx.
-func checkBrokerHealth(ctx context.Context, path string, brokerUID uint32) error {
+// brokerHealthTimeout and ctx. With wantPorts it also reads the ports the
+// broker reports after the ready byte.
+func checkBrokerHealth(ctx context.Context, path string, brokerUID uint32, wantPorts bool) (brokerPorts, error) {
 	ctx, cancel := context.WithTimeout(ctx, brokerHealthTimeout)
 	defer cancel()
 	health := brokerHealthPath(path)
@@ -957,26 +959,54 @@ func checkBrokerHealth(ctx context.Context, path string, brokerUID uint32) error
 		if errors.Is(err, fs.ErrNotExist) {
 			// Lstat, never a connection: an older broker would attach it.
 			if fi, serr := os.Lstat(path); serr == nil && fi.Mode().Type() == fs.ModeSocket {
-				return fmt.Errorf("broker at %s has no health endpoint %s: it is starting or predates the endpoint, restart or reinstall jailoc-listener-broker: %w", path, health, err)
+				return brokerPorts{}, fmt.Errorf("broker at %s has no health endpoint %s: it is starting or predates the endpoint, restart or reinstall jailoc-listener-broker: %w", path, health, err)
 			}
 		}
-		return fmt.Errorf("dial health endpoint: %w", err)
+		return brokerPorts{}, fmt.Errorf("dial health endpoint: %w", err)
 	}
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
-		return errors.Join(fmt.Errorf("health endpoint %s: dialed %T, want a Unix connection", health, c), closeConnErr(c))
+		return brokerPorts{}, errors.Join(fmt.Errorf("health endpoint %s: dialed %T, want a Unix connection", health, c), closeConnErr(c))
 	}
 	status, err := readBrokerStatus(ctx, uc, brokerUID)
+	var ports brokerPorts
+	if err == nil && status == brokerStatusReady && wantPorts {
+		ports, err = readBrokerPorts(ctx, uc)
+	}
 	if cerr := closeConnErr(uc); cerr != nil {
 		err = errors.Join(err, cerr)
 	}
 	if err != nil {
-		return fmt.Errorf("health endpoint %s: %w", health, err)
+		return brokerPorts{}, fmt.Errorf("health endpoint %s: %w", health, err)
 	}
 	if status != brokerStatusReady {
-		return fmt.Errorf("health endpoint %s: unexpected status %q", health, status)
+		return brokerPorts{}, fmt.Errorf("health endpoint %s: unexpected status %q", health, status)
 	}
-	return nil
+	return ports, nil
+}
+
+// readBrokerPorts reads the four port bytes that follow the ready byte of a
+// health reply. A broker that predates them closes after the ready byte,
+// which is not an error but an unreported result.
+func readBrokerPorts(ctx context.Context, uc *net.UnixConn) (brokerPorts, error) {
+	release, err := bindDeadline(ctx, uc)
+	if err != nil {
+		return brokerPorts{}, fmt.Errorf("read ports: %w", err)
+	}
+	var buf [4]byte
+	_, err = io.ReadFull(uc, buf[:])
+	if cerr := release(); cerr != nil {
+		return brokerPorts{}, errors.Join(err, cerr)
+	}
+	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return brokerPorts{}, nil
+		}
+		return brokerPorts{}, fmt.Errorf("read ports: %w", exchangeErr(ctx, err))
+	}
+	p := brokerPorts{http: binary.BigEndian.Uint16(buf[:2]), https: binary.BigEndian.Uint16(buf[2:])}
+	p.reported = p.http != 0 && p.https != 0
+	return p, nil
 }
 
 // readBrokerFrame reads one frame byte and its descriptors. A single-byte
@@ -1004,110 +1034,6 @@ func readBrokerFrame(uc *net.UnixConn) (byte, []int, error) {
 		return reject(perr)
 	}
 	return b[0], fds, nil
-}
-
-// brokerListener is the gateway side: a net.Listener fed by the broker.
-type brokerListener struct {
-	uc   *net.UnixConn
-	addr netip.AddrPort
-
-	conns     chan *net.TCPConn
-	closed    chan struct{}
-	closeOnce sync.Once
-	closeErr  error
-	failed    chan struct{} // closed after err is set
-	err       error
-	loopDone  chan struct{}
-}
-
-func (l *brokerListener) receive() {
-	defer close(l.loopDone)
-	l.err = l.receiveLoop()
-	close(l.failed)
-	// Give the slot back to the broker at once. An error means Close has
-	// already closed the connection.
-	_ = l.uc.Close()
-}
-
-// receiveLoop hands each received connection to Accept and acknowledges it
-// once Accept has taken it, so a gateway that stops accepting stops
-// acknowledging and the broker applies backpressure.
-func (l *brokerListener) receiveLoop() error {
-	for {
-		frame, fds, err := readBrokerFrame(l.uc)
-		if err != nil {
-			select {
-			case <-l.closed:
-				return fmt.Errorf("broker listener: %w", net.ErrClosed)
-			default:
-			}
-			return fmt.Errorf("receive broker connection: %w", err)
-		}
-		if frame != brokerFrameConn {
-			return errors.Join(fmt.Errorf("receive broker connection: unexpected broker frame %q", frame), closeFDs(fds))
-		}
-		if len(fds) != 1 {
-			return errors.Join(fmt.Errorf("receive broker connection: connection frame carried %d descriptors, want exactly one descriptor", len(fds)), closeFDs(fds))
-		}
-		c, err := brokerConnFromFD(fds[0])
-		if err != nil {
-			return fmt.Errorf("receive broker connection: %w", err)
-		}
-		select {
-		case l.conns <- c:
-		case <-l.closed:
-			if cerr := c.Close(); cerr != nil {
-				return errors.Join(fmt.Errorf("broker listener: %w", net.ErrClosed), fmt.Errorf("close connection: %w", cerr))
-			}
-			return fmt.Errorf("broker listener: %w", net.ErrClosed)
-		}
-		if err := l.uc.SetWriteDeadline(time.Now().Add(fdExchangeTimeout)); err != nil {
-			return fmt.Errorf("acknowledge broker connection: %w", err)
-		}
-		if _, err := l.uc.Write([]byte{brokerFrameAck}); err != nil {
-			return fmt.Errorf("acknowledge broker connection: %w", err)
-		}
-	}
-}
-
-// Accept returns the next connection received from the broker.
-func (l *brokerListener) Accept() (net.Conn, error) {
-	select {
-	case <-l.closed:
-		return nil, fmt.Errorf("accept broker connection: %w", net.ErrClosed)
-	default:
-	}
-	select {
-	case c := <-l.conns:
-		return c, nil
-	case <-l.closed:
-		return nil, fmt.Errorf("accept broker connection: %w", net.ErrClosed)
-	case <-l.failed:
-		return nil, fmt.Errorf("accept broker connection: %w", l.err)
-	}
-}
-
-// Close detaches from the broker and waits for the receive loop to end.
-// Calling it again returns nil.
-func (l *brokerListener) Close() error {
-	first := false
-	l.closeOnce.Do(func() {
-		first = true
-		close(l.closed)
-		if err := l.uc.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			l.closeErr = fmt.Errorf("close broker listener: %w", err)
-		}
-		<-l.loopDone
-	})
-	if !first {
-		return nil
-	}
-	return l.closeErr
-}
-
-// Addr returns the loopback address passed to AttachBroker.
-func (l *brokerListener) Addr() net.Addr {
-	return net.TCPAddrFromAddrPort(l.addr)
 }
 
 // brokerConnFromFD validates fd and converts it into a connection. It

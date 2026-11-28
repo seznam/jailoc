@@ -156,7 +156,7 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 			}
 			return nil
 		},
-		probeBroker: func(context.Context) error { return h.brokerAnswer },
+		probeBroker: func(context.Context, config.ProxyPorts) error { return h.brokerAnswer },
 		readFile: func(p string) ([]byte, error) {
 			if err, ok := h.readErrs[p]; ok {
 				return nil, err
@@ -544,7 +544,7 @@ func TestProxyInstallLinux(t *testing.T) {
 	if call.env["JAILOC_HELPER_DST"] != "/usr/local/libexec/jailoc-listener-broker" || call.env["JAILOC_UNIT_DST"] != "/etc/systemd/system/jailoc-listener-broker.service" {
 		t.Errorf("destinations = %q, %q", call.env["JAILOC_HELPER_DST"], call.env["JAILOC_UNIT_DST"])
 	}
-	if !strings.Contains(string(call.files["JAILOC_UNIT_SRC"]), "ExecStart=/usr/local/libexec/jailoc-listener-broker --uid 501\n") {
+	if !strings.Contains(string(call.files["JAILOC_UNIT_SRC"]), "ExecStart=/usr/local/libexec/jailoc-listener-broker --uid 501 --http-port 80 --https-port 443\n") {
 		t.Errorf("unit = %s", call.files["JAILOC_UNIT_SRC"])
 	}
 	caPEM, err := os.ReadFile(proxyCACertPath())
@@ -646,7 +646,7 @@ func TestProxyInstallReplacesSavedOptions(t *testing.T) {
 	h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
 	// A saved non-broker options file stands for the earlier setup; install
 	// replaces it.
-	if err := writeProxySavedOptions(proxyOptions{listen: proxyDefaultListen}); err != nil {
+	if err := writeProxySavedOptions(proxyOptions{listen: "127.0.0.1:8443"}); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := h.run("install", "--yes"); err != nil {
@@ -1095,8 +1095,8 @@ func TestWarnMissingProxyHosts(t *testing.T) {
 
 func TestLoadProxySavedOptionsUsesInstalledBroker(t *testing.T) {
 	t.Setenv("HOME", shortTempDir(t, "po"))
-	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
-	if got := loadProxySavedOptions(); got.listenerBroker || got.listen != proxyDefaultListen {
+	useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock"})
+	if got := loadProxySavedOptions(); got.listenerBroker || got.listen != "" {
 		t.Errorf("without options.json or broker = %+v, want the default listen", got)
 	}
 
@@ -1122,12 +1122,12 @@ func TestLoadProxySavedOptionsKeepsInstalledServiceWhenBrokerDown(t *testing.T) 
 	}{
 		{"recorded service, broker down", proxyhost.InstallState{HelperPath: "/h", ServiceUnitPath: "/u"}, nil, proxyOptions{listenerBroker: true}},
 		{"recorded helper only, broker down", proxyhost.InstallState{HelperPath: "/h"}, nil, proxyOptions{listenerBroker: true}},
-		{"install state without a service, broker down", proxyhost.InstallState{HostsLedger: []byte("x")}, nil, proxyOptions{listen: proxyDefaultListen}},
+		{"install state without a service, broker down", proxyhost.InstallState{HostsLedger: []byte("x")}, nil, proxyOptions{}},
 		{"recorded service, explicit saved listen", proxyhost.InstallState{HelperPath: "/h", ServiceUnitPath: "/u"}, &proxyOptions{listen: "127.0.0.1:9000"}, proxyOptions{listen: "127.0.0.1:9000"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("HOME", shortTempDir(t, "po"))
-			useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock", addr: proxyBrokerAddr})
+			useProxyBrokerHost(t, proxyBrokerTarget{uid: testUID(), socketPath: "/nonexistent/b.sock"})
 			if err := proxyhost.WriteInstallState(proxyInstallStatePath(), tt.state); err != nil {
 				t.Fatal(err)
 			}

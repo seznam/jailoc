@@ -2166,7 +2166,7 @@ func TestResolveProxy(t *testing.T) {
 			name: "proxy sorted by name, auth false by default",
 			ws:   config.Workspace{Proxy: config.ProxyMap(map[string]int{"zeta": 1, "app": 3000, "mid": 8080})},
 			wantProxy: []workspace.ProxyRoute{
-				{Name: "app", Port: 3000}, {Name: "mid", Port: 8080}, {Name: "zeta", Port: 1},
+				{Name: "app", Port: 3000, Redirect: true}, {Name: "mid", Port: 8080, Redirect: true}, {Name: "zeta", Port: 1, Redirect: true},
 			},
 		},
 		{
@@ -2181,8 +2181,35 @@ func TestResolveProxy(t *testing.T) {
 				},
 			},
 			wantProxy: []workspace.ProxyRoute{
-				{Name: "app", Port: 3000, Auth: true},
-				{Name: "public", Port: 8080, Auth: false},
+				{Name: "app", Port: 3000, Auth: true, Redirect: true},
+				{Name: "public", Port: 8080, Auth: false, Redirect: true},
+			},
+		},
+		{
+			name:     "redirect inherits defaults, workspace overrides defaults, route overrides workspace",
+			defProxy: &config.ProxyDefaults{Redirect: new(false)},
+			ws: config.Workspace{
+				Proxy: &config.ProxyTable{
+					Routes: map[string]config.ProxyRoute{"app": {Port: 3000}, "on": {Port: 8080, Redirect: new(true)}},
+				},
+			},
+			wantProxy: []workspace.ProxyRoute{
+				{Name: "app", Port: 3000},
+				{Name: "on", Port: 8080, Redirect: true},
+			},
+		},
+		{
+			name:     "workspace redirect overrides defaults",
+			defProxy: &config.ProxyDefaults{Redirect: new(true)},
+			ws: config.Workspace{
+				Proxy: &config.ProxyTable{
+					Redirect: new(false),
+					Routes:   map[string]config.ProxyRoute{"app": {Port: 3000}, "on": {Port: 8080, Redirect: new(true)}},
+				},
+			},
+			wantProxy: []workspace.ProxyRoute{
+				{Name: "app", Port: 3000},
+				{Name: "on", Port: 8080, Redirect: true},
 			},
 		},
 	}
@@ -2205,6 +2232,43 @@ func TestResolveProxy(t *testing.T) {
 			}
 			if !slices.Equal(got.Proxy, tt.wantProxy) {
 				t.Errorf("Proxy = %+v, want %+v", got.Proxy, tt.wantProxy)
+			}
+		})
+	}
+}
+
+func TestResolveProxyPorts(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		proxy config.ProxyConfig
+		want  config.ProxyPorts
+	}{
+		{name: "zero config uses defaults", want: config.ProxyPorts{HTTP: 80, HTTPS: 443, StandaloneHTTP: 7080, StandaloneHTTPS: 7043}},
+		{
+			name:  "configured ports",
+			proxy: config.ProxyConfig{HTTPPort: new(8080), HTTPSPort: new(8443), StandaloneHTTPPort: new(9080), StandaloneHTTPSPort: new(9443)},
+			want:  config.ProxyPorts{HTTP: 8080, HTTPS: 8443, StandaloneHTTP: 9080, StandaloneHTTPS: 9443},
+		},
+		{
+			name:  "partly configured",
+			proxy: config.ProxyConfig{HTTPSPort: new(8443)},
+			want:  config.ProxyPorts{HTTP: 80, HTTPS: 8443, StandaloneHTTP: 7080, StandaloneHTTPS: 7043},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{
+				Proxy:      tt.proxy,
+				Workspaces: map[string]config.Workspace{"w": {}},
+			}
+			got, err := workspace.Resolve(cfg, "w")
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if got.ProxyPorts != tt.want {
+				t.Errorf("ProxyPorts = %+v, want %+v", got.ProxyPorts, tt.want)
 			}
 		})
 	}

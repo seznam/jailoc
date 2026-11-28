@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	// proxyDefaultListen is where `jailoc proxy` listens by default.
-	proxyDefaultListen = "127.0.0.1:8443"
+	// proxyLoopbackHost is the address a standalone proxy binds by default.
+	proxyLoopbackHost = "127.0.0.1"
 	// proxyDomain is the DNS suffix of every route host:
 	// <route>.<workspace>.jailoc.local.
 	proxyDomain = "jailoc.local"
@@ -55,25 +55,43 @@ type proxyOptions struct {
 
 // proxyBrokerTarget is the listener broker `jailoc proxy
 // --listener-broker` attaches to: the proxy user's UID, the control socket,
-// the UID the broker must run as and the address it listens on.
+// the UID the broker must run as and the HTTP and HTTPS addresses it listens
+// on.
 type proxyBrokerTarget struct {
-	uid        uint32
-	socketPath string
-	brokerUID  uint32
-	addr       *net.TCPAddr
+	uid                 uint32
+	socketPath          string
+	brokerUID           uint32
+	httpAddr, httpsAddr *net.TCPAddr
 }
 
-// proxyBrokerAddr is the address the privileged broker listens on for the
-// proxy.
-var proxyBrokerAddr = &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}
-
-// proxyBrokerHost resolves the listener broker of the running user. Tests
-// replace it, which makes them non-parallel.
+// proxyBrokerHost resolves the listener broker of the running user for the
+// configured browser ports. Tests replace it, which makes them non-parallel.
 var proxyBrokerHost = defaultProxyBrokerHost
 
-func defaultProxyBrokerHost() proxyBrokerTarget {
+func defaultProxyBrokerHost(ports config.ProxyPorts) proxyBrokerTarget {
 	uid := uint32(os.Getuid()) //nolint:gosec // UIDs are 32-bit on Linux and Darwin.
-	return proxyBrokerTarget{uid: uid, socketPath: proxyhost.BrokerSocketPath(uid), brokerUID: 0, addr: proxyBrokerAddr}
+	ip := net.IPv4(127, 0, 0, 1)
+	return proxyBrokerTarget{
+		uid: uid, socketPath: proxyhost.BrokerSocketPath(uid), brokerUID: 0,
+		httpAddr:  &net.TCPAddr{IP: ip, Port: ports.HTTP},
+		httpsAddr: &net.TCPAddr{IP: ip, Port: ports.HTTPS},
+	}
+}
+
+// loadProxyPorts returns the configured proxy ports, the defaults when there
+// is no configuration file.
+func loadProxyPorts() (config.ProxyPorts, error) {
+	cfg, err := loadProxyHostConfig()
+	if err != nil {
+		return config.ProxyPorts{}, err
+	}
+	return cfg.Proxy.Ports(), nil
+}
+
+// proxyStandaloneListen is where a standalone proxy serves HTTPS locally
+// without --listen.
+func proxyStandaloneListen(ports config.ProxyPorts) string {
+	return net.JoinHostPort(proxyLoopbackHost, strconv.Itoa(ports.StandaloneHTTPS))
 }
 
 func init() {
@@ -87,24 +105,27 @@ func newProxyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "proxy [workspace...]",
 		Short: "Serve the proxy routes of running workspaces over HTTPS (see also: proxy install, uninstall, status, stop)",
-		Long: "Serve the proxy routes of running workspaces over HTTPS on a loopback address.\n\n" +
-			"Subcommands: `jailoc proxy install` sets up the host once (privileged listener broker on port 443, /etc/hosts entries,\n" +
+		Long: "Serve the proxy routes of running workspaces over HTTPS, and redirect plain HTTP to HTTPS, on loopback addresses.\n\n" +
+			"Subcommands: `jailoc proxy install` sets up the host once (privileged listener broker on the [proxy] http_port and https_port, 80 and 443 by default, /etc/hosts entries,\n" +
 			"CA trust), `jailoc proxy uninstall` reverts it, `jailoc proxy status` shows the proxy and the host setup, and\n" +
 			"`jailoc proxy stop` stops the background proxy.\n\n" +
 			"By default the proxy runs in the background (`--foreground` keeps it in the foreground).\n" +
 			"When the background proxy is already running, `jailoc proxy` keeps existing browser sessions and prints the active routes.\n\n" +
-			"Each route is https://<route>.<workspace>.jailoc.local; https://<workspace>.jailoc.local answers \"OK\" and shows the host setup works; routes with auth = true are protected by a one-time login code, printed once when the route is added.\n" +
+			"Each route is https://<route>.<workspace>.jailoc.local (with :<https_port> unless that is 443); https://<workspace>.jailoc.local answers \"OK\" and shows the host setup works; routes with auth = true are protected by a one-time login code, printed once when the route is added.\n" +
+			"Plain http:// requests to a route host on http_port are redirected to its https:// URL unless the route sets redirect = false; the redirect never reaches a route's login or app.\n" +
 			"jailoc generates and reuses a local CA and leaf certificate in ~/.local/share/jailoc/proxy; the CA is limited to names under jailoc.local.\n" +
 			"The proxy starts no VM, opens no browser and changes no host setting: make the names resolve to the listen address\n" +
 			"(for example with /etc/hosts entries) and trust ~/.local/share/jailoc/proxy/ca.crt in your browser.\n" +
-			"The proxy does not listen on privileged ports itself: browsers use port 443 for these URLs, so a --listen port\n" +
-			"other than 443 needs a forward from 443 to it that you set up.\n\n" +
+			"The proxy does not listen on privileged ports itself. Without the listener broker it binds [proxy] standalone_https_port\n" +
+			"(7043 by default) for HTTPS, or the --listen address, and standalone_http_port (7080) for the redirect. Browsers use https_port and\n" +
+			"http_port for the URLs, so unless those are the ports it binds, you set up the forwards to it yourself.\n" +
+			"Changing the [proxy] ports needs `jailoc proxy install` again for the listener broker and a proxy restart (`jailoc proxy` does it).\n\n" +
 			"Without workspace arguments the proxy serves every running workspace that has routes. Naming a workspace that is\n" +
 			"not running, has no routes, or whose running VM does not match its configuration is an error.\n" +
 			"A proxy serves the VM boots it started with: when a VM stops or is replaced, its routes close.\n\n" +
 			"With --listener-broker the proxy does not open a listener: it attaches to jailoc-listener-broker, a separate\n" +
-			"root-owned program that holds 127.0.0.1:443 and [::1]:443 for your user and passes each connection to the proxy, so\n" +
-			"the URLs need no forward and no port. Run it as root with --uid <your uid>; only one proxy can attach at a time.\n" +
+			"root-owned program that holds 127.0.0.1 and [::1] on http_port and https_port for your user and passes each connection to the proxy, so\n" +
+			"the URLs need no forward and, with the default ports, no port. Run it as root with --uid <your uid>; only one proxy can attach at a time.\n" +
 			"The flag cannot be combined with --listen, and the proxy refuses to run as root.",
 		Args:         cobra.ArbitraryArgs,
 		SilenceUsage: true,
@@ -113,8 +134,8 @@ func newProxyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&opts.foreground, "foreground", "f", false, "run the proxy in the foreground instead of the background")
-	cmd.Flags().StringVar(&opts.listen, "listen", proxyDefaultListen, "loopback address to listen on, host:port (port 0 picks a free port)")
-	cmd.Flags().BoolVar(&opts.listenerBroker, "listener-broker", false, "serve through jailoc-listener-broker on 127.0.0.1:443 instead of opening a listener")
+	cmd.Flags().StringVar(&opts.listen, "listen", "", "loopback address to serve HTTPS on locally, host:port (default 127.0.0.1:<standalone_https_port>, port 0 picks a free port)")
+	cmd.Flags().BoolVar(&opts.listenerBroker, "listener-broker", false, "serve through jailoc-listener-broker on 127.0.0.1 http_port and https_port instead of opening listeners")
 	cmd.AddCommand(newProxyInstallCmd(), newProxyUninstallCmd(), newProxyStatusCmd(), newProxyStopCmd())
 	return cmd
 }
@@ -137,20 +158,17 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var listen string
-	if opts.listenerBroker {
-		if err := checkProxyBrokerOptions(cmd); err != nil {
-			return fmt.Errorf("proxy options: %w", err)
-		}
-	} else {
-		var err error
-		if listen, err = parseProxyListen(opts.listen); err != nil {
-			return err
-		}
+	if err := checkProxyOptions(cmd, opts); err != nil {
+		return err
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+	ports := cfg.Proxy.Ports()
+	listen, err := proxyListenAddr(opts, ports)
+	if err != nil {
+		return err
 	}
 	var notes bytes.Buffer
 	targets, err := selectProxyTargets(cfg, names, &notes)
@@ -178,6 +196,7 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 		runCtx:     runCtx,
 		cancelRun:  cancelRun,
 		opts:       opts,
+		ports:      ports,
 		caCert:     caPath,
 		configPath: proxyConfigPath(),
 		startedAt:  time.Now(),
@@ -195,17 +214,19 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 		routes = append(routes, inst.routes()...)
 	}
 	mgr.mu.Unlock()
-	gw, codes, err := proxy.New(proxy.Config{Cert: cert, Routes: routes})
+	gw, codes, err := proxy.New(proxy.Config{Cert: cert, Routes: routes, HTTPPort: ports.HTTP, HTTPSPort: ports.HTTPS})
 	if err != nil {
 		return fmt.Errorf("start proxy: %w", err)
 	}
 	mgr.gw = gw
-	ln, err := listenProxy(runCtx, opts, listen)
+	httpsLn, httpLn, err := listenProxy(runCtx, opts, ports, listen)
 	if err != nil {
 		return fmt.Errorf("open proxy listener: %w", err)
 	}
-	defer func() { _ = ln.Close() }()
-	mgr.listen = ln.Addr().String()
+	defer func() { _ = httpsLn.Close() }()
+	defer func() { _ = httpLn.Close() }()
+	mgr.listen = httpsLn.Addr().String()
+	mgr.redirectListen = httpLn.Addr().String()
 
 	ctrlLn, sockPath, cleanupCtrl, err := openProxyControlListener()
 	if err != nil {
@@ -226,20 +247,21 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	go mgr.serveControl(ctrlLn)
 
 	bannerOut := cmd.OutOrStdout()
+	ep := proxyEndpoints{httpsAddr: httpsLn.Addr(), httpAddr: httpLn.Addr(), httpPort: ports.HTTP, httpsPort: ports.HTTPS}
 	startupPipe := startupBannerWriter()
 	if startupPipe != nil {
 		var buf bytes.Buffer
 		if notes.Len() > 0 {
 			_, _ = buf.Write(notes.Bytes())
 		}
-		printProxyBannerWithCA(&buf, ln.Addr(), caPath, targets, codes)
+		printProxyBannerWithCA(&buf, ep, caPath, targets, codes)
 		_, _ = startupPipe.Write(buf.Bytes())
 		_ = startupPipe.Close()
 	} else {
-		printProxyBannerWithCA(bannerOut, ln.Addr(), caPath, targets, codes)
+		printProxyBannerWithCA(bannerOut, ep, caPath, targets, codes)
 	}
 
-	err = gw.Serve(runCtx, ln)
+	err = serveProxy(runCtx, cancelRun, gw, httpsLn, httpLn)
 	cancelRun(nil)
 	cleanupCtrl()
 	watchers.Wait()
@@ -256,17 +278,79 @@ func runProxy(cmd *cobra.Command, args []string, opts proxyOptions) error {
 	return nil
 }
 
-// listenProxy opens the listener the proxy serves on: its own on listen,
-// or the one fed by the listener broker.
-func listenProxy(ctx context.Context, opts proxyOptions, listen string) (net.Listener, error) {
+// checkProxyOptions validates the listen options before anything is read or
+// started.
+func checkProxyOptions(cmd *cobra.Command, opts proxyOptions) error {
 	if opts.listenerBroker {
-		return attachProxyBroker(ctx)
+		if err := checkProxyBrokerOptions(cmd); err != nil {
+			return fmt.Errorf("proxy options: %w", err)
+		}
+		return nil
 	}
-	ln, err := net.Listen("tcp", listen)
+	if opts.listen != "" {
+		if _, err := parseProxyListen(opts.listen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// proxyListenAddr is the local HTTPS address a standalone proxy binds: the
+// --listen value, else 127.0.0.1 on standalone_https_port. A proxy that
+// serves through the listener broker has none.
+func proxyListenAddr(opts proxyOptions, ports config.ProxyPorts) (string, error) {
+	switch {
+	case opts.listenerBroker:
+		return "", nil
+	case opts.listen == "":
+		return parseProxyListen(proxyStandaloneListen(ports))
+	}
+	return parseProxyListen(opts.listen)
+}
+
+// listenProxy opens the two listeners the proxy serves on: HTTPS and the
+// plain HTTP redirect. Standalone, they are its own, HTTPS on listen and HTTP
+// on the same address with standalone_http_port; with the listener broker
+// they are the pair the broker feeds. It opens both or neither.
+func listenProxy(ctx context.Context, opts proxyOptions, ports config.ProxyPorts, listen string) (httpsLn, httpLn net.Listener, err error) {
+	if opts.listenerBroker {
+		return attachProxyBroker(ctx, ports)
+	}
+	var lc net.ListenConfig
+	httpsLn, err = lc.Listen(ctx, "tcp", listen)
 	if err != nil {
-		return nil, fmt.Errorf("listen on %s: %w", listen, err)
+		return nil, nil, fmt.Errorf("listen on %s: %w", listen, err)
 	}
-	return ln, nil
+	tcp, ok := httpsLn.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = httpsLn.Close()
+		return nil, nil, fmt.Errorf("listen on %s: address %v is not a TCP address", listen, httpsLn.Addr())
+	}
+	httpAddr := &net.TCPAddr{IP: tcp.IP, Port: ports.StandaloneHTTP}
+	httpLn, err = lc.Listen(ctx, "tcp", httpAddr.String())
+	if err != nil {
+		_ = httpsLn.Close()
+		return nil, nil, fmt.Errorf("listen on %s for the HTTP redirect: %w", httpAddr, err)
+	}
+	return httpsLn, httpLn, nil
+}
+
+// serveProxy serves the HTTPS and the HTTP redirect listener under one
+// lifetime: whichever ends first ends ctx, and with it the other. A failing
+// redirect listener fails the proxy.
+func serveProxy(ctx context.Context, cancel context.CancelCauseFunc, gw *proxy.Server, httpsLn, httpLn net.Listener) error {
+	redirectDone := make(chan error, 1)
+	go func() {
+		err := gw.ServeHTTPRedirect(ctx, httpLn)
+		cancel(err)
+		redirectDone <- err
+	}()
+	err := gw.Serve(ctx, httpsLn)
+	cancel(nil)
+	if redirectErr := <-redirectDone; err == nil {
+		err = redirectErr
+	}
+	return err
 }
 
 // checkProxyBrokerOptions refuses --listener-broker together with an
@@ -274,29 +358,48 @@ func listenProxy(ctx context.Context, opts proxyOptions, listen string) (net.Lis
 // part, the proxy that parses HTTP and TLS must not be.
 func checkProxyBrokerOptions(cmd *cobra.Command) error {
 	if cmd.Flags().Changed("listen") {
-		return errors.New("--listener-broker serves on 127.0.0.1:443 through the broker; do not combine it with --listen")
+		return errors.New("--listener-broker serves through the broker's ports; do not combine it with --listen")
 	}
-	if proxyBrokerHost().uid == 0 {
+	if proxyBrokerHost(config.ProxyPorts{}).uid == 0 { // the UID does not depend on the ports
 		return errors.New("--listener-broker: refusing to run the proxy as root; run it as your own user (only jailoc-listener-broker runs as root)")
 	}
 	return nil
 }
 
-// attachProxyBroker attaches to the listener broker of the running user.
-// The returned listener reports the broker's address, so printed URLs have
-// no port.
-func attachProxyBroker(ctx context.Context) (net.Listener, error) {
-	t := proxyBrokerHost()
-	ln, err := proxyhost.AttachBroker(ctx, t.socketPath, t.brokerUID, t.addr)
-	switch {
-	case err == nil:
-		return ln, nil
-	case errors.Is(err, proxyhost.ErrBrokerBusy):
-		return nil, errors.New("another proxy is attached to the listener broker; stop it first, only one proxy can serve port 443 at a time")
-	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ECONNREFUSED):
-		return nil, fmt.Errorf("the listener broker is not running for this user (no answer on %s); a root user must start jailoc-listener-broker --uid %d", t.socketPath, t.uid)
+// attachProxyBroker attaches to the listener broker of the running user. It
+// returns the HTTPS and the HTTP listener. They report the broker's addresses,
+// so printed URLs carry only a non-default port.
+func attachProxyBroker(ctx context.Context, ports config.ProxyPorts) (httpsLn, httpLn net.Listener, err error) {
+	if err := probeProxyBroker(ctx, ports); err != nil {
+		return nil, nil, err
 	}
-	return nil, fmt.Errorf("attach to the listener broker: %w", err)
+	t := proxyBrokerHost(ports)
+	httpLn, httpsLn, err = proxyhost.AttachBrokerPair(ctx, t.socketPath, t.brokerUID, t.httpAddr, t.httpsAddr)
+	if err != nil {
+		return nil, nil, proxyBrokerError(t, err)
+	}
+	return httpsLn, httpLn, nil
+}
+
+// probeProxyBroker checks that the listener broker of the running user
+// answers and serves exactly the configured ports.
+func probeProxyBroker(ctx context.Context, ports config.ProxyPorts) error {
+	t := proxyBrokerHost(ports)
+	if err := proxyhost.ProbeBrokerPair(ctx, t.socketPath, t.brokerUID, t.httpAddr, t.httpsAddr); err != nil {
+		return proxyBrokerError(t, err)
+	}
+	return nil
+}
+
+// proxyBrokerError explains a failure to reach the listener broker of t.
+func proxyBrokerError(t proxyBrokerTarget, err error) error {
+	switch {
+	case errors.Is(err, proxyhost.ErrBrokerBusy):
+		return fmt.Errorf("another proxy is attached to the listener broker; stop it first, only one proxy can serve ports %d and %d at a time", t.httpAddr.Port, t.httpsAddr.Port)
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ECONNREFUSED):
+		return fmt.Errorf("the listener broker is not running for this user (no answer on %s); a root user must start jailoc-listener-broker --uid %d", t.socketPath, t.uid)
+	}
+	return fmt.Errorf("attach to the listener broker (after changing the [proxy] ports, run `jailoc proxy install`): %w", err)
 }
 
 // parseProxyListen validates a --listen value: a loopback IP address and a
@@ -305,7 +408,7 @@ func attachProxyBroker(ctx context.Context) (net.Listener, error) {
 func parseProxyListen(s string) (string, error) {
 	host, port, err := net.SplitHostPort(s)
 	if err != nil {
-		return "", fmt.Errorf("--listen %q: want host:port such as %s: %w", s, proxyDefaultListen, err)
+		return "", fmt.Errorf("--listen %q: want host:port such as %s: %w", s, proxyStandaloneListen(config.ProxyPorts{StandaloneHTTPS: config.DefaultProxyStandaloneHTTPSPort}), err)
 	}
 	ip, err := netip.ParseAddr(host)
 	if err != nil {
@@ -416,31 +519,43 @@ func proxyChanges(ws *workspace.Resolved, g *guest.Config) []string {
 	return nil
 }
 
-// printProxyBanner prints each route's URL and its login code once, on w.
-// Codes are only printed here; they appear in no log and no URL. The proxy
-// accepts requests for https://<host> only, which browsers send to port 443,
-// so a listen address on another port needs a forward from 443.
-func printProxyBanner(w io.Writer, addr net.Addr, targets []proxyTarget, codes map[string]string) {
-	printProxyBannerWithCA(w, addr, "", targets, codes)
+// proxyEndpoints is where a proxy listens and which ports browsers use: the
+// two are the same only with the listener broker, or when the user forwards
+// the browser ports to the local ones.
+type proxyEndpoints struct {
+	httpsAddr, httpAddr net.Addr
+	httpPort, httpsPort int
 }
 
-func printProxyBannerWithCA(w io.Writer, addr net.Addr, caPath string, targets []proxyTarget, codes map[string]string) {
-	_, _ = fmt.Fprintf(w, "Proxy listening on %s (loopback only)\n", addr)
+// printProxyBanner prints each route's URL and its login code once, on w.
+// Codes are only printed here; they appear in no log and no URL. The proxy
+// accepts requests for the https_port authority only, so a listen address on
+// another port needs a forward from the browser port.
+func printProxyBanner(w io.Writer, ep proxyEndpoints, targets []proxyTarget, codes map[string]string) {
+	printProxyBannerWithCA(w, ep, "", targets, codes)
+}
+
+func printProxyBannerWithCA(w io.Writer, ep proxyEndpoints, caPath string, targets []proxyTarget, codes map[string]string) {
+	_, _ = fmt.Fprintf(w, "Proxy listening on %s (loopback only)\n", ep.httpsAddr)
+	_, _ = fmt.Fprintf(w, "HTTP redirect listening on %s (loopback only)\n", ep.httpAddr)
 	if caPath != "" {
 		home, _ := os.UserHomeDir()
 		_, _ = fmt.Fprintf(w, "CA certificate: %s\n", shortenHome(caPath, home))
 	}
-	if addrPort(addr) != 443 {
-		_, _ = fmt.Fprintf(w, "Browsers use port 443 for these URLs: forward 127.0.0.1:443 to %s, and resolve the host names to 127.0.0.1\n", addr)
+	if addrPort(ep.httpsAddr) != ep.httpsPort {
+		_, _ = fmt.Fprintf(w, "Browsers use port %d for these URLs: forward 127.0.0.1:%d to %s, and resolve the host names to 127.0.0.1\n", ep.httpsPort, ep.httpsPort, ep.httpsAddr)
+	}
+	if addrPort(ep.httpAddr) != ep.httpPort {
+		_, _ = fmt.Fprintf(w, "Plain http:// URLs use port %d: forward 127.0.0.1:%d to %s to get redirected to https://\n", ep.httpPort, ep.httpPort, ep.httpAddr)
 	}
 	for _, t := range targets {
 		_, _ = fmt.Fprintf(w, "Workspace %s:\n", t.ws.Name)
 		for _, r := range t.ws.Proxy {
 			host := proxyHost(r.Name, t.ws.Name)
 			if code := codes[host]; code != "" {
-				_, _ = fmt.Fprintf(w, "  %-10s %s\n             login code %s (only valid for %s)\n", r.Name, proxyURL(host), code, proxyOrigin(host))
+				_, _ = fmt.Fprintf(w, "  %-10s %s\n             login code %s (only valid for %s)\n", r.Name, proxyURL(host, ep.httpsPort), code, proxyOrigin(host, ep.httpsPort))
 			} else {
-				_, _ = fmt.Fprintf(w, "  %-10s %s\n", r.Name, proxyURL(host))
+				_, _ = fmt.Fprintf(w, "  %-10s %s\n", r.Name, proxyURL(host, ep.httpsPort))
 			}
 		}
 	}
@@ -453,13 +568,6 @@ func addrPort(addr net.Addr) int {
 	}
 	return 0
 }
-
-// proxyOrigin is the origin the proxy accepts for host: without a port,
-// as the proxy routes are served on 443.
-func proxyOrigin(host string) string { return "https://" + host }
-
-// proxyURL is the address of the root page of host.
-func proxyURL(host string) string { return proxyOrigin(host) + "/" }
 
 var errVMNotRunning = errors.New("the VM is not running")
 
@@ -535,7 +643,7 @@ func (i *proxyInstance) routesFor(proxyRoutes []workspace.ProxyRoute) []proxy.Ro
 	out := make([]proxy.Route, 0, len(proxyRoutes)+1)
 	for _, r := range proxyRoutes {
 		route := &proxyRoute{inst: i, port: uint16(r.Port), ctx: i.ctx} //nolint:gosec // G115: validated to 1-65535
-		out = append(out, proxy.Route{Host: proxyHost(r.Name, i.target.ws.Name), Dial: route.dialContext, Auth: r.Auth, Generation: i.gen})
+		out = append(out, proxy.Route{Host: proxyHost(r.Name, i.target.ws.Name), Dial: route.dialContext, Auth: r.Auth, DisableRedirect: !r.Redirect, Generation: i.gen})
 	}
 	if len(proxyRoutes) > 0 {
 		out = append(out, proxy.Route{Host: proxyWorkspaceHost(i.target.ws.Name), StaticBody: "OK", Generation: i.gen})

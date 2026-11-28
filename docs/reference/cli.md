@@ -418,7 +418,7 @@ The URL is a credential: jailoc keeps it only in memory and doesn't log it or st
 
 ### `jailoc proxy`
 
-Serve the `proxy` routes of running workspaces over HTTPS on a loopback address, and set up the host for them.
+Serve the `proxy` routes of running workspaces over HTTPS, and redirect plain HTTP to HTTPS, on loopback addresses. Also sets up the host for them.
 
 ```text
 jailoc proxy [workspace...] [flags]
@@ -431,30 +431,32 @@ jailoc proxy stop
 - Without workspace arguments, the proxy serves every running workspace that has `proxy` routes. Naming a workspace that is not running, has no routes, or whose running VM does not match its configuration is an error.
 - By default the proxy runs in the background. When it already runs, the command keeps existing browser sessions and prints the active routes.
 - It starts no VM, opens no browser and changes no host setting. Host setup is [`jailoc proxy install`](#jailoc-proxy-install).
-- Each route is served at `https://<route>.<workspace>.jailoc.local`. The workspace itself answers `GET` and `HEAD` of `/` at `https://<workspace>.jailoc.local/` with `200 OK` and the body `OK`.
+- Each route is served at `https://<route>.<workspace>.jailoc.local`, with `:<https_port>` appended when [`https_port`](configuration.md#proxy-ports) isn't 443. A plain-HTTP `GET` or `HEAD` to the route's host on `http_port` is redirected (`307`) to that URL unless the route sets `redirect = false`. The workspace itself answers `GET` and `HEAD` of `/` at `https://<workspace>.jailoc.local/` with `200 OK` and the body `OK`.
 - The proxy refuses to run as root.
+- The proxy never listens on privileged ports itself. With the listener broker it serves the broker's `http_port` and `https_port` (80 and 443 by default). Without it, it binds `127.0.0.1` on `standalone_https_port` (7043) for HTTPS and `standalone_http_port` (7080) for the redirect, and you forward the browser ports to them; see [set up the host manually](../how-to/proxy-routes.md#set-up-the-host-manually).
+- The ports are set in [`[proxy]`](configuration.md#proxy-ports). After changing `http_port` or `https_port`, run `jailoc proxy install` again; after any port change, restart the proxy with `jailoc proxy stop` and `jailoc proxy`.
 - `jailoc up`, `jailoc restart`, `jailoc reload` and `jailoc down` start, update and stop the background proxy for the workspaces they handle. See the [proxy routes how-to](../how-to/proxy-routes.md).
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--foreground` | `-f` | `false` | Run the proxy in the foreground instead of the background. |
-| `--listen ADDR` | | `127.0.0.1:8443` | Loopback address to listen on, `host:port`. Port `0` picks a free port. A port other than 443 needs a forward from 443 to it. Can't be combined with `--listener-broker`. |
-| `--listener-broker` | | `false` | Serve through `jailoc-listener-broker` on `127.0.0.1:443` and `[::1]:443` instead of opening a listener. Only one proxy can attach to the broker at a time. |
+| `--listen ADDR` | | `127.0.0.1:<standalone_https_port>` | Loopback address of the standalone HTTPS listener, `host:port`. Port `0` picks a free port. The HTTP redirect listener binds the same IP on `standalone_http_port`. The browser ports need forwards to these ports. Can't be combined with `--listener-broker`. |
+| `--listener-broker` | | `false` | Serve through `jailoc-listener-broker` on `127.0.0.1` and `[::1]` at `http_port` and `https_port` instead of opening listeners. Only one proxy can attach to the broker at a time. |
 
 #### `jailoc proxy install`
 
-Set up the host once so browsers reach the proxy routes over HTTPS on port 443.
+Set up the host once so browsers reach the proxy routes over HTTPS on `https_port` (443 by default) and plain HTTP on `http_port` (80 by default).
 
 ```text
 jailoc proxy install [flags]
 ```
 
-- Installs the `jailoc-listener-broker` embedded in jailoc as a root-owned service on `127.0.0.1:443` and `[::1]:443`. On macOS the binary is `/Library/PrivilegedHelperTools/jailoc-listener-broker`, run by the `cz.seznam.jailoc.listener-broker` LaunchDaemon. On Linux it is `/usr/local/libexec/jailoc-listener-broker`, run by the `jailoc-listener-broker.service` systemd unit.
+- Installs the `jailoc-listener-broker` embedded in jailoc as a root-owned service on `127.0.0.1` and `[::1]` at `http_port` and `https_port` (80 and 443 by default). The broker hands each connection to the proxy over a Unix socket, with no TCP hop. On macOS the binary is `/Library/PrivilegedHelperTools/jailoc-listener-broker`, run by the `cz.seznam.jailoc.listener-broker` LaunchDaemon. On Linux it is `/usr/local/libexec/jailoc-listener-broker`, run by the `jailoc-listener-broker.service` systemd unit.
 - Syncs `/etc/hosts` so `<workspace>.jailoc.local` and `<route>.<workspace>.jailoc.local` resolve to loopback. jailoc owns only the block between `# BEGIN jailoc proxy hosts` and `# END jailoc proxy hosts`.
 - Trusts the proxy CA certificate `ca.crt` in the system trust store (the keychain on macOS; the Debian, Fedora or Arch store on Linux) and in the NSS databases of Chrome, Chromium and Firefox. NSS databases need `certutil` on `PATH`; without it, import `ca.crt` into Firefox by hand.
 - Lists the planned changes and asks once for confirmation before making them.
 - Configures `jailoc up`, `jailoc restart` and `jailoc proxy` to attach to the listener broker by default.
-- Running it again updates the `/etc/hosts` block to the current workspaces and proxy routes, and replaces the trusted CA if `ca.crt` was regenerated.
+- Running it again updates the `/etc/hosts` block to the current workspaces and proxy routes, rewrites the broker service for the current `http_port` and `https_port`, and replaces the trusted CA if `ca.crt` was regenerated. Run it after changing either port.
 - Uses the `jailoc-listener-broker` embedded in release builds, or a `jailoc-listener-broker` binary next to `jailoc`. The embedded bytes are installed as they are, not read back from a cache copy.
 - Imports `ca.crt` from a copy of the validated certificate and refuses a `ca.crt` with extra PEM data. A matching system store or NSS entry that `install.json` doesn't record is left as it is and not recorded.
 | Flag | Short | Description |

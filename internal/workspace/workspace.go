@@ -67,6 +67,9 @@ type Resolved struct {
 	EnableDocker bool
 	// Proxy are the HTTPS proxy routes of the workspace sorted by name.
 	Proxy []ProxyRoute
+	// ProxyPorts are the effective host ports of the proxy listeners from the
+	// global [proxy] table; they are the same for every workspace.
+	ProxyPorts config.ProxyPorts
 	// Notifications is how attached sessions notify about the agent, one of
 	// the config.Notifications* values.
 	Notifications string
@@ -106,10 +109,12 @@ type Resolved struct {
 
 // ProxyRoute serves guest port Port at https://<Name>.<workspace>.jailoc.local.
 // Auth gates the route behind a one-time login code and session cookie when true.
+// Redirect makes the plain HTTP listener redirect the route to HTTPS when true.
 type ProxyRoute struct {
-	Name string
-	Port int
-	Auth bool
+	Name     string
+	Port     int
+	Auth     bool
+	Redirect bool
 }
 
 type SecretKind int
@@ -252,6 +257,7 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 		r.EnableDocker = false
 	}
 	r.Proxy = resolveProxy(cfg.Defaults.Proxy.Get(), ws.Proxy.Get())
+	r.ProxyPorts = cfg.Proxy.Ports()
 	r.Ports = config.MergePorts(cfg.Defaults.Ports, ws.Ports)
 	r.HostPorts = config.MergeHostPorts(cfg.Defaults.HostPorts, ws.HostPorts)
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
@@ -666,16 +672,21 @@ func stringWithDefault(defaultVal *string, override *string, fallback string) st
 
 // resolveProxy returns the proxy routes sorted by name, resolving each route's
 // Auth from the route override, the workspace proxy.auth, [defaults.proxy].auth,
-// or false.
+// or false, and its Redirect the same way with true as the final default.
 func resolveProxy(def config.ProxyDefaults, tbl config.ProxyTable) []ProxyRoute {
 	defaultAuth := boolPtrWithDefault(def.Auth, tbl.Auth, false)
+	defaultRedirect := boolPtrWithDefault(def.Redirect, tbl.Redirect, true)
 	routes := make([]ProxyRoute, 0, len(tbl.Routes))
 	for name, r := range tbl.Routes {
 		auth := defaultAuth
 		if r.Auth != nil {
 			auth = *r.Auth
 		}
-		routes = append(routes, ProxyRoute{Name: name, Port: r.Port, Auth: auth})
+		redirect := defaultRedirect
+		if r.Redirect != nil {
+			redirect = *r.Redirect
+		}
+		routes = append(routes, ProxyRoute{Name: name, Port: r.Port, Auth: auth, Redirect: redirect})
 	}
 	slices.SortFunc(routes, func(a, b ProxyRoute) int { return cmp.Compare(a.Name, b.Name) })
 	return routes
