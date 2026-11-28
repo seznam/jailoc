@@ -2,9 +2,9 @@
 
 *Release 2.11*
 
-When your agent starts a web app inside a jailoc workspace, you want to open it in your usual browser without moving the app out of the VM. The workspace proxy already gave each app its own HTTPS hostname. Getting the browser there was the awkward part: you had to edit `/etc/hosts`, trust a local CA by hand, and redirect port 443 with `pf` or `nftables`.
+When your agent starts a web app inside a jailoc workspace, you can open it in your usual browser without moving the app out of the VM. The jailoc 2.11 workspace proxy gives each configured app its own local HTTPS hostname.
 
-In jailoc 2.11, [`jailoc proxy install`](https://github.com/seznam/jailoc/pull/498) replaces those steps with one opt-in command. It shows what it will change before asking for confirmation and uses `sudo` for the privileged steps. Starting a workspace alone still doesn't change your host's name resolution, trust stores or firewall.
+Set up the host with [`jailoc proxy install`](https://github.com/seznam/jailoc/pull/498). It shows what it will change before asking for confirmation and uses `sudo` for the privileged steps. Starting a workspace alone doesn't change your host's name resolution, trust stores or firewall.
 
 ## From a guest port to a browser tab
 
@@ -46,8 +46,6 @@ curl https://demo.jailoc.local/
 
 `jailoc proxy status` checks the background proxy, broker reachability, CA trust and missing host entries. The bare URL returns `200 OK` with the body `OK` without contacting a guest service. If that works but `https://web.demo.jailoc.local` doesn't, check the app and its configured guest port next.
 
-## Switching from a manual setup
-
-If you already set up the proxy by hand, use the [manual cleanup steps](../how-to/proxy-routes.md#clean-up) before switching, especially if a firewall redirect still intercepts port 443. The installer doesn't manage rules or trust entries you added separately. Existing route definitions can stay as they are.
+## Undo the host setup
 
 If you stop using the automated setup, `jailoc proxy uninstall` asks for confirmation, then removes the listener service, the managed hosts entries and the trust changes it made. The [proxy routes guide](../how-to/proxy-routes.md) covers browser-specific setup, troubleshooting and the manual alternative.
