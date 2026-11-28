@@ -559,6 +559,9 @@ type Network struct {
 	// get their built-in endpoints. No omitempty, so an empty list is written
 	// back.
 	AgentEndpoints []string `toml:"agent_endpoints"`
+	// UpstreamProxy sends allowed egress through an HTTP proxy. A workspace
+	// table replaces the whole defaults table.
+	UpstreamProxy *UpstreamProxy `toml:"upstream_proxy,omitempty"`
 	// Legacy fields migrated in memory with a deprecation warning.
 	FilteredDNS     *bool    `toml:"filtered_dns,omitempty"`
 	DNSUpstream     string   `toml:"dns_upstream,omitempty"`
@@ -631,6 +634,10 @@ func ConfigPath() string {
 	if p := customPath(); p != "" {
 		return p
 	}
+	return defaultConfigPath()
+}
+
+func defaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "~/.config/jailoc/config.toml"
@@ -1184,6 +1191,27 @@ func validateSharedHostPath(host, context, kind string) error {
 		}
 		return withContext(context, fmt.Errorf("%s %s is forbidden because %s", kind, shown, why))
 	}
+	for _, cfgFile := range []string{customPath(), defaultConfigPath()} {
+		if cfgFile == "" {
+			continue
+		}
+		cleanCfg := filepath.Clean(cfgFile)
+		shown := fmt.Sprintf("%q", cleanHost)
+		inside, contains := mountOverlap(cleanHost, cleanCfg, true)
+		if !inside && !contains {
+			if realCfg, err := filepath.EvalSymlinks(cleanCfg); err == nil {
+				targetHost := cleanHost
+				if realHost != "" {
+					targetHost = realHost
+					shown = fmt.Sprintf("%q (resolves to %q)", cleanHost, realHost)
+				}
+				inside, contains = mountOverlap(targetHost, realCfg, true)
+			}
+		}
+		if inside || contains {
+			return withContext(context, fmt.Errorf("%s %s is forbidden because it contains %s, which holds the jailoc configuration; keep directories shared with a workspace outside the configuration directory", kind, shown, cleanCfg))
+		}
+	}
 
 	return nil
 }
@@ -1372,6 +1400,10 @@ func Validate(cfg *Config) error {
 		return err
 	}
 
+	if err := expandUpstreamProxyPaths(cfg.Defaults.Network.Get().UpstreamProxy); err != nil {
+		return fmt.Errorf("defaults: %w", err)
+	}
+
 	for i, spec := range cfg.Defaults.Mounts {
 		m, err := ParseMount(spec)
 		if err != nil {
@@ -1459,6 +1491,9 @@ func Validate(cfg *Config) error {
 		return err
 	}
 	if err := validateInternalZones(dn.InternalZones, "defaults"); err != nil {
+		return err
+	}
+	if err := validateUpstreamProxyScope(dn.UpstreamProxy, "defaults"); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(cfg.Workspaces))
@@ -1579,6 +1614,9 @@ func Validate(cfg *Config) error {
 			return err
 		}
 		if err := validateInternalZones(wn.InternalZones, wsContext); err != nil {
+			return err
+		}
+		if err := validateUpstreamProxyScope(wn.UpstreamProxy, wsContext); err != nil {
 			return err
 		}
 		if ws.ExposePort != nil {
@@ -1902,6 +1940,10 @@ func expandPaths(ws *Workspace) error {
 	}
 
 	if err := expandSecretsBlockFiles(&ws.Secrets); err != nil {
+		return err
+	}
+
+	if err := expandUpstreamProxyPaths(ws.Network.Get().UpstreamProxy); err != nil {
 		return err
 	}
 
