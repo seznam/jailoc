@@ -140,11 +140,11 @@ CA_DIR=~/.local/share/jailoc/proxy
 
     Firefox keeps its own store: import `ca.crt` as described in the warning above.
 
-2. Point the names at `127.0.0.1`. List every route in `/etc/hosts` and add a name after each new route. Check first that no line of yours already carries the marker:
+2. Point the names at `127.0.0.1`. List the bare workspace name and every route name in `/etc/hosts`. Add a name after each new route. Check first that no line of yours already carries the marker:
 
     ```bash
     grep -c '# jailoc-proxy' /etc/hosts    # 0 expected
-    echo '127.0.0.1 foo.demo.jailoc.local # jailoc-proxy' | sudo tee -a /etc/hosts
+    echo '127.0.0.1 demo.jailoc.local foo.demo.jailoc.local # jailoc-proxy' | sudo tee -a /etc/hosts
     ```
 
     A per-link `resolvectl` route on the loopback interface doesn't work on Linux, because `systemd-resolved` ignores the loopback interface when it routes DNS queries.
