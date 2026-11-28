@@ -292,6 +292,7 @@ func (b *Broker) dialEgress(ctx context.Context, r *upstreamRoute, conn uint64, 
 		return b.dialTCP("tcp", dst.String())
 	}
 	if r.mode == "blocked" {
+		b.upstreamFailed(r)
 		return nil, fmt.Errorf("%w: no successful upstream helper result", errUpstreamUnreachable)
 	}
 	d := net.Dialer{Timeout: dialTimeout}

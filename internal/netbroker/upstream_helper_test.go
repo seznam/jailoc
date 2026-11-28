@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -634,5 +636,79 @@ func TestUpstreamPolicyReloadErrorPreservesHelperStateAndRetries(t *testing.T) {
 	}
 	if d := Decide(pol, Env{}, ProtoTCP, netip.MustParseAddrPort("93.184.216.34:443")); d.Allow {
 		t.Fatalf("expected new flow to be denied under invalid reload, got %+v", d)
+	}
+}
+
+func TestUpstreamReloadBlockedCommandRecoversAndRejectsFIFOCA(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// 1. A FIFO CA path without a writer must fail immediately without blocking.
+	fifoPath := filepath.Join(dir, "ca.fifo")
+	if err := syscall.Mkfifo(fifoPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fifoStart := time.Now()
+	_, fifoErr := readUpstreamCAs([]string{fifoPath})
+	if fifoErr == nil || !strings.Contains(fifoErr.Error(), "not a regular file") {
+		t.Fatalf("readUpstreamCAs(FIFO) = %v, want not a regular file error", fifoErr)
+	}
+	if elapsed := time.Since(fifoStart); elapsed > time.Second {
+		t.Fatalf("readUpstreamCAs(FIFO) took %v, expected non-blocking open", elapsed)
+	}
+
+	// 2. A command proxy newly enabled on reload whose helper initially fails installs a blocked route and recovers when a dial triggers upstreamFailed.
+	p0, err := ParsePolicy([]byte(`{"allow":[{"cidrs":["93.184.216.34/32"]}]}`), "p0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := New(Config{
+		Subnet:        netip.MustParsePrefix("192.168.127.0/24"),
+		Gateway:       netip.MustParseAddr("192.168.127.1"),
+		GuestIP:       netip.MustParseAddr("192.168.127.2"),
+		UpstreamState: filepath.Join(dir, "status.json"),
+		UpstreamCA:    filepath.Join(dir, "ca.pem"),
+	}, p0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.stack.Close)
+	b.upstreamState.backoffMin = 30 * time.Millisecond
+	if err := b.startUpstream(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.stopUpstream)
+
+	readyMarker := filepath.Join(dir, "ready")
+	cmd := `if [ "$JAILOC_UPSTREAM_EVENT" = stop ]; then exit 0; fi; if [ -f ` + readyMarker + ` ]; then printf '{"version":1,"url":"http://127.0.0.1:3128"}'; else printf 'not ready yet' >&2; exit 1; fi`
+	u, _ := json.Marshal(UpstreamProxy{Workspace: "test", Command: cmd})
+	p1, err := ParsePolicy([]byte(`{"allow":[{"cidrs":["93.184.216.34/32"]}],"upstream_proxy":`+string(u)+`}`), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := b.reloadUpstream(t.Context(), p1)
+	if ev["upstream_error"] == nil {
+		t.Fatalf("expected reload error when helper fails initially, got %v", ev)
+	}
+	_, blockedRoute := b.currentSnapshot()
+	if blockedRoute == nil || blockedRoute.mode != "blocked" {
+		t.Fatalf("expected blocked route after failed enable reload, got %+v", blockedRoute)
+	}
+	if err := os.WriteFile(readyMarker, []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Dialing against the blocked route fails closed and kicks off recovery.
+	if _, err := b.dialEgress(t.Context(), blockedRoute, 1, netip.MustParseAddrPort("93.184.216.34:443"), ""); !errors.Is(err, errUpstreamUnreachable) {
+		t.Fatalf("dialEgress(blocked) = %v, want errUpstreamUnreachable", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if r := b.upstream.Load(); r != nil && r.mode == "command" && r.url == "http://127.0.0.1:3128" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r := b.upstream.Load(); r == nil || r.mode != "command" || r.url != "http://127.0.0.1:3128" {
+		t.Fatalf("blocked command route did not recover: %+v", r)
 	}
 }

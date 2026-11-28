@@ -177,9 +177,9 @@ func readUpstreamCAs(paths []string) ([]byte, error) {
 		if path == "" {
 			continue
 		}
-		f, err := os.Open(path) //nolint:gosec // G304: host-configured or helper-returned CA path
+		f, err := openUpstreamCAFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("open upstream ca: %w", err)
+			return nil, err
 		}
 		data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
 		_ = f.Close()
@@ -421,8 +421,8 @@ func (b *Broker) upstreamFailed(r *upstreamRoute) {
 	if b.upstream.Load() != r || m.ctx == nil || m.ctx.Err() != nil {
 		return
 	}
-	if r.mode != "command" {
-		if m.status.State != "unreachable" {
+	if r.mode != "command" && (r.mode != "blocked" || m.config == nil || m.config.Command == "") {
+		if m.status.State != "unreachable" && r.mode != "blocked" {
 			m.failure("unreachable", errUpstreamUnreachable, "")
 		}
 		return
