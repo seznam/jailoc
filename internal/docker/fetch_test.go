@@ -62,6 +62,32 @@ func TestDetectSourceType(t *testing.T) {
 	}
 }
 
+func TestIsLocalDockerfile(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		input   string
+		want    bool
+		wantErr bool
+	}{
+		{"/tmp/Dockerfile", true, false},
+		{"~/Dockerfile", true, false},
+		{"https://example.com/Dockerfile", false, false},
+		{"relative/path", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+			got, err := IsLocalDockerfile(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("IsLocalDockerfile(%q) error = %v, want error %v", tc.input, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Fatalf("IsLocalDockerfile(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestReadLocalDockerfile(t *testing.T) {
 	t.Parallel()
 	content := []byte("FROM ubuntu:22.04\nRUN apt-get update\n")

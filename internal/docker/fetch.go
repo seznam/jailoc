@@ -34,6 +34,16 @@ func detectSourceType(value string) (sourceType, error) {
 	return 0, fmt.Errorf("unsupported dockerfile source %q: must be an absolute local path, a ~/path, or an HTTP(S) URL", value)
 }
 
+// IsLocalDockerfile reports whether source names a local Dockerfile rather
+// than an HTTP(S) URL, by the rules the image build loads it with.
+func IsLocalDockerfile(source string) (bool, error) {
+	st, err := detectSourceType(source)
+	if err != nil {
+		return false, err
+	}
+	return st == sourceLocal, nil
+}
+
 func readLocalDockerfile(path string) ([]byte, error) {
 	limit := int64(1 << 20)
 
