@@ -1,5 +1,110 @@
 # Changelog
 
+## [2.11.0](https://github.com/seznam/jailoc/compare/v2.10.1...v2.11.0) (2026-11-28)
+
+
+### Features
+
+* **auth:** automatically open captured OAuth URLs in the host browser ([b879ecc](https://github.com/seznam/jailoc/commit/b879ecc2ea5054bc82951fa037e5ac50fc89dfad))
+* **auth:** automatically open captured OAuth URLs on the host ([fbad317](https://github.com/seznam/jailoc/commit/fbad3177091fbda7b3a6736c13faf7129a248503))
+* **brokerproc:** propagate upstream ca changed status notifications ([4a0ea40](https://github.com/seznam/jailoc/commit/4a0ea40aaf8592a52cf9dee96cdba0f592c80f47))
+* **browser:** launch host OAuth URLs without killing foreground openers ([03253cf](https://github.com/seznam/jailoc/commit/03253cfcc3fd7e3a3ec5b8805de7ebbb8b0947d7))
+* **cli:** add the manual self-update command ([95bc901](https://github.com/seznam/jailoc/commit/95bc901936e9f32a6ef1cc4062d9a1c8f9215a23))
+* **cmd:** add explicit host authorization link handoff ([0b43f74](https://github.com/seznam/jailoc/commit/0b43f746101c2354de1abb138a364c20c8c8e578))
+* **cmd:** integrate upstream proxy with up, reload, status and config ([9b1f521](https://github.com/seznam/jailoc/commit/9b1f521fb9dfd0421cacf497b2fb87aca93e8ac7))
+* **cmd:** resolve workspace build inputs and detect read-write shares exposing them ([d879ec3](https://github.com/seznam/jailoc/commit/d879ec3916d43c75b730fee85806b453c4dedbf1))
+* **cmd:** resolve workspace build inputs and detect read-write shares exposing them ([d4b7428](https://github.com/seznam/jailoc/commit/d4b74285ef1773b65b7c578029087ef0f3206686))
+* **cmd:** route CA-enabled builds to builder VM and track reload state ([208999b](https://github.com/seznam/jailoc/commit/208999b6087080dbe92e556cf7d4f68fe069e217))
+* **cmd:** wire broker upstream auth resolver and policy encoding ([29e18e0](https://github.com/seznam/jailoc/commit/29e18e08d9dfa364176e813fe096da26ad492ef8))
+* **config:** parse and validate network.upstream_proxy ([1bf319d](https://github.com/seznam/jailoc/commit/1bf319def5ce0650aa8e73cc178f41451f583470))
+* **docker:** add BuildCA snapshot and host fetch TLS root support ([9c19b1e](https://github.com/seznam/jailoc/commit/9c19b1e4cc8739c296afb3f96bab09e4d90fa7e1))
+* **docker:** forward ca_bundle transparently into image builds ([e670e41](https://github.com/seznam/jailoc/commit/e670e4135d92c01d2ed932a8dd8c86f55e8932e4))
+* **docker:** inject CA trust into Debian/Ubuntu Dockerfile stages ([32c5a00](https://github.com/seznam/jailoc/commit/32c5a00d589353d694f11ec65eb0d4a93e715047))
+* **docker:** report whether a Dockerfile source is local ([6e992ea](https://github.com/seznam/jailoc/commit/6e992ea3fe09f1f39faa76e31b16c40cd5140047))
+* **guest:** hand captured authorization URLs to the broker ([0ce0d0a](https://github.com/seznam/jailoc/commit/0ce0d0a3539861e8205224ba99f899220c8550cc))
+* **netbroker:** add upstream proxy CONNECT dialer and helper lifecycle ([953bb12](https://github.com/seznam/jailoc/commit/953bb12111d075eba5e9d19defaf8cb14ac456b8))
+* **netbroker:** chain egress through an upstream proxy ([6532cc0](https://github.com/seznam/jailoc/commit/6532cc04ef33184635adf7870ebd437b75bf9417))
+* **netbroker:** expose pending OAuth links through a private socket ([610ee1e](https://github.com/seznam/jailoc/commit/610ee1e09c043914cb353a9585aea54923c9b551))
+* **netbroker:** route allowed flows through upstream proxy and direct rules ([c3a7514](https://github.com/seznam/jailoc/commit/c3a751409f68d7c44da4a1167ccda74f25887ed8))
+* **proxy:** apply proxy route changes on reload ([b9f8d99](https://github.com/seznam/jailoc/commit/b9f8d998860207be31119231a3b6b5f3ada7b024))
+* **proxy:** automate host DNS, CA trust and listener broker setup ([0f633bc](https://github.com/seznam/jailoc/commit/0f633bc3b49076d8a6d58b259cf7dfb1a49c5e3e))
+* **proxy:** automate host DNS, CA trust and listener broker setup ([6ba2ccf](https://github.com/seznam/jailoc/commit/6ba2ccf1294941a6d37d77b034bcf33075d27473))
+* **update:** add manual self-update with release verification ([87ccec6](https://github.com/seznam/jailoc/commit/87ccec6c4492856138cd0ba2aa21cfe9a9004a59))
+* **update:** apply a release cooldown to update checks ([cd4f047](https://github.com/seznam/jailoc/commit/cd4f047b4d9e6fd2341eb9b2df6fc9111c13e840))
+* **update:** replace release executables atomically ([f26374b](https://github.com/seznam/jailoc/commit/f26374bd1072b71ae2cc79250048714572b59ee2))
+* **update:** verify GitHub releases before installing ([2900851](https://github.com/seznam/jailoc/commit/2900851b0b81a3bcc8a2ffb4ddd79835ddecc209))
+* **vm:** compose guest and builder CA bundles with upstream proxy CA ([5a1eb05](https://github.com/seznam/jailoc/commit/5a1eb059c581c05c011c8378cad43b640d330ad5))
+* **vm:** trust builder CA bundle for image fetches and daemon ([804ee6e](https://github.com/seznam/jailoc/commit/804ee6e87751921447a5a57a32b4392ebc158dc3))
+* **workspace:** resolve upstream_proxy and warn on unmatched direct targets ([9c22a58](https://github.com/seznam/jailoc/commit/9c22a584140fea0e9f7177c9af3b846568868712))
+
+
+### Bug Fixes
+
+* **agent:** declare Claude Code sandbox environment ([cb1e136](https://github.com/seznam/jailoc/commit/cb1e1364426a64e5671b379c63f33d5a4bcdaf7b))
+* **auth:** preserve foreground browsers during recovery ([1fe03f6](https://github.com/seznam/jailoc/commit/1fe03f60473f0446bb99d8e5e9131c7b16685b30))
+* **cmd:** detect build input aliases and replaceable share directories ([b46c4b1](https://github.com/seznam/jailoc/commit/b46c4b144925a7b4fe503990835e7670294ae6b8))
+* **cmd:** gate CA builder routing on image builds ([e7a6f31](https://github.com/seznam/jailoc/commit/e7a6f310fb141a2714246d457d042b1e2c7cd326))
+* **cmd:** include static upstream CA digest in builder VM spec ([44bf7c3](https://github.com/seznam/jailoc/commit/44bf7c3070a71b8b2f1f1b684c754bf984eca6b0))
+* **cmd:** merge validated upstream proxy CA into managed builder BuildCA ([990cd09](https://github.com/seznam/jailoc/commit/990cd091c702b3aee607b0d064b6e7f3cf14920a))
+* **cmd:** preserve build input paths and dangling symlink targets ([363ab13](https://github.com/seznam/jailoc/commit/363ab13bb296fb95dab10fff8fe2af9b1791e8b9))
+* **cmd:** reuse one CA bundle snapshot across guest materialization and BuildCA ([9cfe320](https://github.com/seznam/jailoc/commit/9cfe320dffd7c18c9e0cde1b475322845eaceadd))
+* **config:** reject dangling config symlinks during workspace share validation ([ebedd9d](https://github.com/seznam/jailoc/commit/ebedd9d8b30d3b1ab281038f84250caddef9e33e))
+* **config:** reject invalid characters in upstream_proxy auth username ([c0717fe](https://github.com/seznam/jailoc/commit/c0717fe3ad36b649f8e114c26325ac4314fce358))
+* **config:** validate workspace shares against loaded config path ([fcb5f08](https://github.com/seznam/jailoc/commit/fcb5f08b53eb1a98e2d50341949fd533a1222577))
+* **docker:** allow forward stage references, preserve direct bundle roots and check secret size on build ([a2bed1e](https://github.com/seznam/jailoc/commit/a2bed1ef51d3a6097e6cad20e94e96fedc9597be))
+* **docker:** clean fallback CA bundle, require dockerfile 1.3 and ignore unset ARGs ([44fb1e0](https://github.com/seznam/jailoc/commit/44fb1e05b99037809168c623e5cefe6a66fc8201))
+* **docker:** expand ARG CA overrides against inherited ENV with ENV precedence ([2b25d30](https://github.com/seznam/jailoc/commit/2b25d3080858109ace9fff3b8f0f5289e000d22a))
+* **docker:** preserve descendant ARG CA overrides and remove probe volumes ([43328e9](https://github.com/seznam/jailoc/commit/43328e9971cdf5b64b3e04d49724291c5c88d8b8))
+* **docker:** supply initial CA defaults before late ARG declarations ([fbf740a](https://github.com/seznam/jailoc/commit/fbf740a96d3f8b8de957e439147a2ced651ff498))
+* **guest:** redact escaped quotes in OAuth shell arguments ([cf90570](https://github.com/seznam/jailoc/commit/cf90570514e3e44587f5838dddccc61a4ef34c8f))
+* **guest:** redact OAuth authorization queries from exec logs ([8080626](https://github.com/seznam/jailoc/commit/8080626a4ad43dc40399c7de3b3425c9533432db))
+* **guest:** redact OAuth URLs before masking secret values ([3b8acec](https://github.com/seznam/jailoc/commit/3b8acec32cc9f8983a66c3d9e36f9a9dc31f7ef8))
+* **netbroker:** exclude untrusted DNS associations from upstreamNames ([e2aa80e](https://github.com/seznam/jailoc/commit/e2aa80eb7156addd9fc8ae47789bb2b7bd2f4fc0))
+* **netbroker:** open upstream CA nonblocking and recover blocked command routes ([b5e3776](https://github.com/seznam/jailoc/commit/b5e3776ebc07b96b6af5341a0cbae76bf69e14f9))
+* **netbroker:** reject canceled requests before browser launch ([10882f8](https://github.com/seznam/jailoc/commit/10882f817c72e1f3ccc4156efd425aff596f4b46))
+* **netbroker:** reject encoded controls in authorization hosts ([a8ea88c](https://github.com/seznam/jailoc/commit/a8ea88cafc3b7a2580a8b5b51af9a7c80bd96142))
+* **proxy:** harden host setup ownership, recovery and CA trust tracking ([72d9afe](https://github.com/seznam/jailoc/commit/72d9afe6c9ef85dd1b0bc499debffb0332965332))
+* **proxy:** probe listener broker without claiming the gateway slot ([8e4c696](https://github.com/seznam/jailoc/commit/8e4c696e9c25cc81572be039d82d79e6b5ded759))
+* **proxy:** reject unsupported listener broker UIDs ([0cbbfa5](https://github.com/seznam/jailoc/commit/0cbbfa5d49624fed7fb515ac724b0222f67c4071))
+* **proxy:** retain installed broker mode while unavailable ([5f38ebc](https://github.com/seznam/jailoc/commit/5f38ebcf77f7c93c0363c9abf0555ce3ab9d5632))
+* **proxy:** serialize host setup and preserve restart and trust state ([3db16cd](https://github.com/seznam/jailoc/commit/3db16cdb6be9e9da95784d4019dd407ff9a1d3d9))
+* **proxy:** validate host setup inputs and preserve existing trust ([790507b](https://github.com/seznam/jailoc/commit/790507bc7ae4d308fb1ed861486423489a93dce3))
+* **proxy:** verify system CA and service ownership and harden CA rotation ([74e03a5](https://github.com/seznam/jailoc/commit/74e03a52bb5c6d4045cd888e2fe3081700fecf26))
+* **update:** accept archives at the entry limit ([a5a0ece](https://github.com/seznam/jailoc/commit/a5a0eced8d3b95d539a2af8544e395ca5f8d3eba))
+* **update:** prevent stale concurrent replacements ([16de62e](https://github.com/seznam/jailoc/commit/16de62e50ff57ccc79c12438d4442aa00517582f))
+
+
+### Code Refactoring
+
+* **guest:** share CA bundle environment variable list ([669b2bd](https://github.com/seznam/jailoc/commit/669b2bdcb6b848bddc62c30927b58c02178ff7ea))
+
+
+### Documentation
+
+* **agents:** explain Claude sandbox environment ([a852bda](https://github.com/seznam/jailoc/commit/a852bdad491c30ffc3498c5ed85a00be2f5e4ed8))
+* **auth:** describe automatic browser opening and recovery ([44e9e9d](https://github.com/seznam/jailoc/commit/44e9e9d1448152ec777071ab62ef05de2a376b63))
+* **blog:** explain workspace HTTPS setup in jailoc 2.11 ([e8579c0](https://github.com/seznam/jailoc/commit/e8579c09319a8aaab633912dcc0f391d0dab7a6d))
+* **blog:** explain workspace HTTPS setup in jailoc 2.11 ([f676637](https://github.com/seznam/jailoc/commit/f676637e99ca5920039eca19eec40badfdf46bd3))
+* **blog:** introduce the workspace proxy without upgrade framing ([698bafd](https://github.com/seznam/jailoc/commit/698bafd8762b78436baa3cfe3ff7a9e4c536b31d))
+* document transparent ca_bundle forwarding for image builds ([fa77a67](https://github.com/seznam/jailoc/commit/fa77a67f10aa82090e940efebbd2ed89e75ce8e7))
+* **home:** highlight agent and workflow choice ([e661d26](https://github.com/seznam/jailoc/commit/e661d26670c316b5824178ce357851cd7b62f50d))
+* **network:** document upstream_proxy configuration and CLI output ([86546a5](https://github.com/seznam/jailoc/commit/86546a5a87772067b847c849de650386ccef96df))
+* **positioning:** clarify harness and workflow neutrality ([41ed6d8](https://github.com/seznam/jailoc/commit/41ed6d8f8549d08ea85909c2a9289883fa3a0a16))
+* **positioning:** clarify the agent and workflow boundary ([ef41ebd](https://github.com/seznam/jailoc/commit/ef41ebd05c0b6eed09ab60d9e540a5096ac75a77))
+* **proxy:** include the workspace hostname in manual setup ([90530a4](https://github.com/seznam/jailoc/commit/90530a40c663f9a21fef17f88d13a3e42aa7e7f3))
+* **security:** describe upstream proxy routing and trust boundary ([0eac3a8](https://github.com/seznam/jailoc/commit/0eac3a8e2582b57e369df757b6aacc20dcb2cdad))
+* **security:** scope OAuth callback isolation guarantees ([b5b2ea1](https://github.com/seznam/jailoc/commit/b5b2ea1cfdb3ef504626e04c6915e7eb40abb0b2))
+* **update:** describe self-update and its trust boundary ([f5addd6](https://github.com/seznam/jailoc/commit/f5addd61a77bbb6ed069b24d3ad4cb8e4f2f54ed))
+
+
+### Tests
+
+* **cmd:** keep missing OAuth socket paths short on macOS ([aaa0d7b](https://github.com/seznam/jailoc/commit/aaa0d7bfeeb303b2086db2f80d3bd36bf71bfb80))
+* **docker:** fix composite literal and ARG line in CA override tests ([e536caf](https://github.com/seznam/jailoc/commit/e536caf6232effc5f56f88c615560e4a491aeb83))
+* **docker:** fix FROM line in late-ARG integration test ([e83dd21](https://github.com/seznam/jailoc/commit/e83dd211dd0cbb46e9d21aaf0838de8f684ed417))
+* **proxy:** resolve /tmp symlink on macOS in directory-chain test ([855d4a7](https://github.com/seznam/jailoc/commit/855d4a7331c6e40206092e5328375d5f3b2df43b))
+* **vmintegration:** cover builder VM private-CA fetches and CA rotation ([8aefbea](https://github.com/seznam/jailoc/commit/8aefbea6bcc96ba5c21ee73a47c2722e2cac0ba1))
+
 ## [2.10.1](https://github.com/seznam/jailoc/compare/v2.10.0...v2.10.1) (2026-11-25)
 
 
