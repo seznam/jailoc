@@ -92,7 +92,8 @@ func selfUpdate(ctx context.Context, current string, opts Options, d deps) (Repo
 		explicit = tag
 	}
 
-	if err := inspectInstall(&rep, current, opts, explicit != "", d); err != nil {
+	initial, err := inspectInstall(&rep, current, opts, explicit != "", d)
+	if err != nil {
 		return rep, err
 	}
 
@@ -102,7 +103,6 @@ func selfUpdate(ctx context.Context, current string, opts Options, d deps) (Repo
 		rep.Target = tag
 	} else {
 		var done bool
-		var err error
 		if tag, done, err = selectDefault(ctx, &rep, current, opts, d); err != nil || done {
 			return rep, err
 		}
@@ -125,27 +125,28 @@ func selfUpdate(ctx context.Context, current string, opts Options, d deps) (Repo
 		return rep, nil
 	}
 
-	return install(ctx, rep, tag, explicit != "", opts, d)
+	return install(ctx, rep, initial, tag, explicit != "", opts, d)
 }
 
 // inspectInstall resolves the executable and applies the install guards. They are fatal
 // before any network access, except for a check, which records the reason in the report.
-func inspectInstall(rep *Report, current string, opts Options, explicit bool, d deps) error {
-	path, err := resolveExecutable(d.executable)
+// The returned FileInfo identifies the executable at inspection time.
+func inspectInstall(rep *Report, current string, opts Options, explicit bool, d deps) (os.FileInfo, error) {
+	path, info, err := resolveExecutable(d.executable)
 	if err == nil {
 		rep.Path = path
 		err = checkInstallGuards(path, current, opts.Force, explicit)
 	}
 	if err == nil {
-		return nil
+		return info, nil
 	}
 	if opts.Check {
 		rep.Installation = err.Error()
 
-		return nil
+		return nil, nil
 	}
 
-	return err
+	return nil, err
 }
 
 // selectDefault picks the highest eligible release from the cached candidates. done is true
@@ -240,7 +241,7 @@ func findAsset(rel githubRelease, name string) (githubAsset, error) {
 	return found[0], nil
 }
 
-func install(ctx context.Context, rep Report, tag string, explicit bool, opts Options, d deps) (Report, error) {
+func install(ctx context.Context, rep Report, initial os.FileInfo, tag string, explicit bool, opts Options, d deps) (Report, error) {
 	rel, err := exactRelease(ctx, d, tag, explicit, opts.NoCooldown)
 	if err != nil {
 		return rep, err
@@ -282,7 +283,7 @@ func install(ctx context.Context, rep Report, tag string, explicit bool, opts Op
 		warnings = append(warnings, verified.Warning)
 	}
 
-	if err := d.replace(ctx, rep.Path, tmp); err != nil {
+	if err := replaceIfUnchanged(ctx, d.replace, rep.Path, initial, tmp); err != nil {
 		if !errors.Is(err, ErrInstalledSyncFailed) {
 			if rmErr := os.Remove(tmp); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 				err = errors.Join(err, rmErr)

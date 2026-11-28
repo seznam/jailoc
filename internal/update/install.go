@@ -37,33 +37,38 @@ const (
 // directory sync failed, so the install is complete but not yet durable.
 var ErrInstalledSyncFailed = errors.New("executable installed but directory sync failed")
 
+// errExecutableChanged marks an install attempt whose target was replaced
+// after the update started, typically by a concurrent updater.
+var errExecutableChanged = errors.New("executable changed since the update started")
+
 // resolveExecutable returns the absolute, symlink-free path of the running
-// executable and verifies it is a regular file.
-func resolveExecutable(executable func() (string, error)) (string, error) {
+// executable, verifies it is a regular file and returns its identity at that
+// moment.
+func resolveExecutable(executable func() (string, error)) (string, os.FileInfo, error) {
 	path, err := executable()
 	if err != nil {
-		return "", fmt.Errorf("locate current executable: %w", err)
+		return "", nil, fmt.Errorf("locate current executable: %w", err)
 	}
 
 	path, err = filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("make executable path %q absolute: %w", path, err)
+		return "", nil, fmt.Errorf("make executable path %q absolute: %w", path, err)
 	}
 
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve symlinks of executable %q: %w", path, err)
+		return "", nil, fmt.Errorf("resolve symlinks of executable %q: %w", path, err)
 	}
 
 	info, err := os.Lstat(resolved)
 	if err != nil {
-		return "", fmt.Errorf("stat executable %q: %w", resolved, err)
+		return "", nil, fmt.Errorf("stat executable %q: %w", resolved, err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("executable %q is not a regular file", resolved)
+		return "", nil, fmt.Errorf("executable %q is not a regular file", resolved)
 	}
 
-	return resolved, nil
+	return resolved, info, nil
 }
 
 // checkInstallGuards refuses to self-update installs that another tool owns or
@@ -248,6 +253,24 @@ func createTemp(destDir string) (*os.File, error) {
 	}
 
 	return tmp, nil
+}
+
+// replaceIfUnchanged runs replace for target while holding the install lock of
+// its directory, but only if target is still the file identified by want. A
+// concurrent updater that already installed a newer executable is never
+// overwritten: the caller gets errExecutableChanged and keeps ownership of tmp.
+func replaceIfUnchanged(ctx context.Context, replace func(ctx context.Context, target, tmp string) error, target string, want os.FileInfo, tmp string) error {
+	return withInstallLock(ctx, filepath.Dir(target), func() error {
+		got, err := os.Lstat(target)
+		if err != nil {
+			return fmt.Errorf("stat executable %q: %w", target, err)
+		}
+		if !got.Mode().IsRegular() || !os.SameFile(want, got) {
+			return fmt.Errorf("%w: %q was replaced meanwhile, run the update again", errExecutableChanged, target)
+		}
+
+		return replace(ctx, target, tmp)
+	})
 }
 
 // replaceExecutable atomically replaces target with the extracted binary tmp.

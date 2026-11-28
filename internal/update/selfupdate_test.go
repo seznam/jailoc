@@ -592,6 +592,47 @@ func TestSelfUpdateInstallFailuresLeaveExecutable(t *testing.T) {
 	})
 }
 
+func TestSelfUpdateStaleExecutableKeepsNewerReplacement(t *testing.T) {
+	t.Parallel()
+
+	const newerBinary = "NEWER-BINARY"
+
+	f := newSUFixture(t, &fakeAPI{list: standardList()})
+	fetch := f.deps.fetchArchive
+	f.deps.fetchArchive = func(ctx context.Context, rel githubRelease, asset githubAsset, dir string) (*os.File, verifyResult, error) {
+		file, verified, err := fetch(ctx, rel, asset, dir)
+		if err != nil {
+			return nil, verifyResult{}, err
+		}
+
+		// Another updater finishes while this one is still downloading.
+		other := filepath.Join(filepath.Dir(f.exe), ".other-updater")
+		if err := os.WriteFile(other, []byte(newerBinary), 0o755); err != nil { //nolint:gosec // the test executable must be executable
+			t.Fatal(err)
+		}
+		if err := os.Rename(other, f.exe); err != nil {
+			t.Fatal(err)
+		}
+
+		return file, verified, nil
+	}
+	if err := os.WriteFile(f.state, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := selfUpdate(context.Background(), "v1.0.0", Options{}, f.deps)
+	if !errors.Is(err, errExecutableChanged) || !strings.Contains(err.Error(), "run the update again") || rep.Installed {
+		t.Fatalf("selfUpdate() = %+v, %v; want a retryable stale executable error", rep, err)
+	}
+	if got := f.binary(t); got != newerBinary {
+		t.Errorf("executable = %q, want the newer replacement %q preserved", got, newerBinary)
+	}
+	if _, statErr := os.Stat(f.state); statErr != nil {
+		t.Errorf("state removed although nothing was installed: %v", statErr)
+	}
+	f.assertNoTemps(t)
+}
+
 func TestSelfUpdateInstalledWithWarnings(t *testing.T) {
 	t.Parallel()
 

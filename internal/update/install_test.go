@@ -123,7 +123,7 @@ func TestResolveExecutable(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got, err := resolveExecutable(func() (string, error) { return alias, nil })
+		got, _, err := resolveExecutable(func() (string, error) { return alias, nil })
 		if err != nil {
 			t.Fatalf("resolveExecutable: %v", err)
 		}
@@ -134,7 +134,7 @@ func TestResolveExecutable(t *testing.T) {
 
 	t.Run("executable lookup error", func(t *testing.T) {
 		t.Parallel()
-		_, err := resolveExecutable(func() (string, error) { return "", errors.New("boom") })
+		_, _, err := resolveExecutable(func() (string, error) { return "", errors.New("boom") })
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -144,7 +144,7 @@ func TestResolveExecutable(t *testing.T) {
 	t.Run("missing path", func(t *testing.T) {
 		t.Parallel()
 		missing := filepath.Join(t.TempDir(), "missing")
-		if _, err := resolveExecutable(func() (string, error) { return missing, nil }); err == nil {
+		if _, _, err := resolveExecutable(func() (string, error) { return missing, nil }); err == nil {
 			t.Fatal("expected error")
 		}
 	})
@@ -152,7 +152,7 @@ func TestResolveExecutable(t *testing.T) {
 	t.Run("directory is not regular", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		_, err := resolveExecutable(func() (string, error) { return dir, nil })
+		_, _, err := resolveExecutable(func() (string, error) { return dir, nil })
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -476,7 +476,7 @@ func TestReplaceExecutable(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		resolved, err := resolveExecutable(func() (string, error) { return alias, nil })
+		resolved, _, err := resolveExecutable(func() (string, error) { return alias, nil })
 		if err != nil {
 			t.Fatal(err)
 		}
