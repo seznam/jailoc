@@ -1215,6 +1215,8 @@ func validateSharedHostPath(host, context, kind string, extraCfgPaths ...string)
 					shown = fmt.Sprintf("%q (resolves to %q)", cleanHost, realHost)
 				}
 				inside, contains = mountOverlap(targetHost, realCfg, true)
+			} else if info, lerr := os.Lstat(cleanCfg); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+				return withContext(context, fmt.Errorf("configuration file %q is a symbolic link that cannot be resolved: %w", cleanCfg, err))
 			}
 		}
 		if inside || contains {

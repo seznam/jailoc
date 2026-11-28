@@ -450,4 +450,15 @@ paths = [`+`"`+directProj+`"`+`]
 	if err == nil || !strings.Contains(err.Error(), "holds the jailoc configuration") {
 		t.Fatalf("LoadFrom() with symlinked config targeting shared workspace path = %v, want forbidden error", err)
 	}
+
+	// A dangling default config symlink pointing into a writable workspace
+	// share must also be rejected even when a separate --config is active.
+	if err := os.Symlink(filepath.Join(proj, "future-config.toml"), defPath); err != nil {
+		t.Fatal(err)
+	}
+	SetPath(otherCfg)
+	_, err = Load()
+	if err == nil || !strings.Contains(err.Error(), "symbolic link that cannot be resolved") {
+		t.Fatalf("Load() with dangling default config symlink = %v, want unresolved symlink error", err)
+	}
 }
