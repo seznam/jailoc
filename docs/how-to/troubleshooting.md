@@ -275,6 +275,30 @@ grep -Ei "image|pull|build|dockerfile" ~/.cache/jailoc/jailoc.log
 
 See the [Image resolution reference](../reference/image-resolution.md).
 
+## Workspace refuses to start because of build inputs in read-write shares
+
+**Symptom:** `jailoc up`, `jailoc restart` or the auto-start of `jailoc` fails before anything is built or booted, with one line per conflict and a closing hint:
+
+```text
+workspace "p": Dockerfile /home/u/p/Dockerfile of workspace "p" lies in the read-write share /home/u/p of workspace "p"
+keep build inputs out of read-write shares: share directories without them, mount them read-only, or use a prebuilt image
+```
+
+**Cause:** a read-write share (`paths`, read-write `mounts`, profile state shares, the VM's guest data directory and boot root) of this workspace or of a running or starting workspace contains, equals or lies inside a local Dockerfile or `build_context` of an image build, or the build input's path runs through a symbolic link inside the share or a directory inside it that a later `..` leaves. A Dockerfile or build context file with other hard links on the device of a read-write share is refused too. Read-write shares of this workspace that expose the build inputs of any other configured workspace are refused as well, running or not. When a running workspace is named, the error also tells you to stop it with `jailoc down <workspace>`.
+
+**Fix:** use one of these, then run `jailoc up` or `jailoc restart` again:
+
+- move the Dockerfile and the files it `COPY`s outside every workspace's read-write `paths` and `mounts`, for example `~/.config/jailoc/images/myproject/`, and point `dockerfile` and `build_context` there;
+- mount the directory read-only (`host:container:ro`);
+- use a URL `dockerfile` without `build_context`, or a prebuilt `image`;
+- stop the running workspace named in the error with `jailoc down <workspace>`.
+
+`jailoc reload` and `jailoc up` on a running workspace print a `WARNING` instead when the running VM's read-write shares expose build inputs; the affected builds are refused until the shares change and the workspace is restarted. Check the exposed files before the next build: removing the share does not undo what the guest changed.
+
+`workspace "p" is being started by another jailoc process` means a second `jailoc up` or `jailoc restart` of the same workspace runs; wait for the first one.
+
+A build context with more than 500,000 entries is refused; set a smaller `build_context`. See [Keep build inputs out of read-write shares](custom-images.md#keep-build-inputs-out-of-read-write-shares) and [Build inputs and read-write shares](../reference/image-resolution.md#build-inputs-and-read-write-shares).
+
 ## Builder VM disk is full
 
 **Symptom:** a build in a builder VM fails with `no space left on device`, or `jailoc up` fails while the builder VM starts, naming the builder's console log.

@@ -118,6 +118,38 @@ After step 4 or 5, a workspace `dockerfile` is built on top of the agent layer (
 - With an external `ca_bundle` selected, every image jailoc builds (base, Docker and agent layers, workspace overlay) and every stage of your Dockerfiles gets the bundle's trust; see [Image builds with a CA bundle](configuration.md#image-builds-with-a-ca-bundle). Images used as is (steps 1 and 3) are not built. The bundle's digest is part of the tags of the images jailoc builds, of jailoc's build decisions and of the build's cache keys, so a changed bundle, including one edited in place, or `ca_bundle = false` rebuilds the affected images.
 - Overlay build context: `build_context` when set; otherwise the Dockerfile's parent directory for a local path, or an empty temporary directory for a URL.
 - Images from steps 1 and 3 are pulled for `linux/<host architecture>` when the daemon does not have them.
+- The generated overlay Dockerfile is written only into the context archive sent to Docker, never into the build context directory.
+
+### Build inputs and read-write shares
+
+Build inputs are the local host paths an image build reads:
+
+- the local `[base] dockerfile`, only when the base cascade is used (no workspace `image` and no `defaults.image`);
+- the local workspace `dockerfile`;
+- the whole `build_context` of the overlay build. Without `build_context`, a local Dockerfile's parent directory is the context; a URL Dockerfile without `build_context` reads nothing local.
+
+A workspace `image`, or `defaults.image` without a workspace `dockerfile`, builds nothing and has no build inputs. `build_context` without a `dockerfile` is unused. `.dockerignore` does not exempt anything: jailoc sends the whole context. A context with more than 500,000 entries is refused; set a smaller `build_context`.
+
+`jailoc up` of a stopped workspace, `jailoc restart` and the auto-start of `jailoc` refuse to start the workspace, before building or booting anything, when a read-write share contains a build input, equals it, lies inside a build context, or the input's path runs through a symbolic link inside the share or through a directory inside it that a later `..` leaves, which the guest could replace with a link. Read-write shares are the workspace `paths`, read-write `mounts`, profile state shares, the VM's guest data directory and the root file system it boots from, of the workspace itself, of every workspace VM that runs or another jailoc process is starting, and of a VM process the workspace left from an earlier start until the new start stops it. A Dockerfile, or any regular file in a build context, with other hard links on the device of a read-write share is refused too, because its other names could be in the share.
+
+Paths are resolved the way the build opens them: symbolic links are followed before a later `..`, a dangling link counts by its target, and a missing input counts by where it would be. A path that goes up with `..` from a component that does not exist is refused. Directories are also compared by identity, so another spelling of a share on a case-insensitive file system, or a bind mount of the share itself, counts as the same directory. A host bind mount of a directory inside a share, and a file system mounted inside a share, are not detected; jailoc relies on the host's mount layout, which the guest cannot change.
+
+A workspace whose read-write shares expose the build inputs of any other configured workspace, running or not, is refused too: its guest could change them before that workspace's next build. The build inputs of a workspace that runs or is starting count as well, also when another configuration file defines it. A read-write share whose own path runs through a symbolic link, or a directory left by `..`, inside a read-write share of another running or starting workspace is refused in both start orders: that guest could repoint the path after the check. A second start of the same workspace while one is in progress fails, and so does `jailoc down --purge` of it, or of a workspace whose VM processes still run.
+
+Read-only shares (`mounts` with `:ro`) of build inputs are allowed. jailoc never converts a share to read-only, and there is no opt-out.
+
+The error lists every conflict and ends with the fix:
+
+```text
+workspace "p": Dockerfile /home/u/p/Dockerfile of workspace "p" lies in the read-write share /home/u/p of workspace "p"
+keep build inputs out of read-write shares: share directories without them, mount them read-only, or use a prebuilt image
+```
+
+When a running workspace is involved, the error adds that you stop it with `jailoc down <workspace>`.
+
+`jailoc reload` and `jailoc up` on a running workspace never rebuild and cannot change shares. When the running VM's read-write shares expose any configured workspace's build inputs, they print a `WARNING`, and the affected builds are refused until the shares change and the workspace is restarted. Removing the share does not undo changes the guest already made: check the exposed files before the next build.
+
+See [Keep build inputs out of read-write shares](../how-to/custom-images.md#keep-build-inputs-out-of-read-write-shares) for layouts.
 
 ## Converting for the VM
 

@@ -54,7 +54,7 @@ dockerfile = "~/dockerfiles/base.Dockerfile"
 ```
 
 !!! warning
-    If the file doesn't exist, the download fails or exceeds 1 MiB, or the build fails, `jailoc up` aborts. There's no fallback to the embedded image.
+    If the file doesn't exist, the download fails or exceeds 1 MiB, or the build fails, `jailoc up` aborts. There's no fallback to the embedded image. A local file must stay out of read-write shares; see [Keep build inputs out of read-write shares](#keep-build-inputs-out-of-read-write-shares).
 
 ## Add a workspace layer
 
@@ -63,7 +63,7 @@ Set `dockerfile` on the workspace. jailoc builds it on top of the resolved base,
 ```toml
 [workspaces.myproject]
 paths = ["~/projects/myproject"]
-dockerfile = "~/projects/myproject/overlay.Dockerfile"
+dockerfile = "~/.config/jailoc/images/myproject/overlay.Dockerfile"
 ```
 
 The Dockerfile must start with `ARG BASE` and `FROM ${BASE}`:
@@ -86,9 +86,31 @@ For a local `dockerfile`, the build context defaults to its parent directory. Se
 ```toml
 [workspaces.myproject]
 paths = ["~/projects/myproject"]
-dockerfile = "~/projects/myproject/docker/overlay.Dockerfile"
-build_context = "~/projects/myproject"
+dockerfile = "~/.config/jailoc/images/myproject/Dockerfile"
+build_context = "~/.config/jailoc/images/myproject"
 ```
+
+The context is the directory `build_context` points to, whole; `.dockerignore` does not narrow what jailoc checks. A context with more than 500,000 entries is refused, so point `build_context` at a smaller directory.
+
+## Keep build inputs out of read-write shares
+
+The local Dockerfiles and the whole build context are build inputs. jailoc refuses to start a workspace when a read-write share (`paths`, read-write `mounts`, profile state shares) of that workspace or of a running workspace exposes one, and when its own read-write shares expose the build inputs of any other configured workspace. There is no opt-out. A project root that is a workspace path cannot be the build context.
+
+Keep the Dockerfile and the files it `COPY`s in a directory outside every workspace's read-write `paths` and `mounts`:
+
+```toml
+[workspaces.myproject]
+paths = ["~/projects/myproject"]
+dockerfile = "~/.config/jailoc/images/myproject/Dockerfile"
+```
+
+Alternatives:
+
+- mount the directory read-only (`~/projects/myproject/docker:/home/agent/docker:ro`), which is allowed;
+- use a URL `dockerfile` without `build_context`, which reads nothing local;
+- use a prebuilt [`image`](#use-a-pre-built-image).
+
+When the check fails, see [Fix a refused start because of build inputs](troubleshooting.md#workspace-refuses-to-start-because-of-build-inputs-in-read-write-shares).
 
 ## Choose where images are built
 
@@ -144,6 +166,8 @@ Images are built only at `jailoc up` of a stopped workspace and at `jailoc resta
 ```bash
 jailoc restart myproject
 ```
+
+`jailoc reload` and `jailoc up` on a running workspace never rebuild. When the running VM's read-write shares expose build inputs they print a `WARNING`, and the affected builds are refused until you change the shares and restart the workspace. See [Keep build inputs out of read-write shares](#keep-build-inputs-out-of-read-write-shares).
 
 ## Write a good overlay Dockerfile
 

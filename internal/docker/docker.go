@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"archive/tar"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	archive "github.com/moby/go-archive"
@@ -314,22 +317,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved, 
 	}
 	defer cleanupCtx()
 
-	tmpDockerfile, err := os.CreateTemp(buildContextDir, "jailoc-overlay-*.Dockerfile")
-	if err != nil {
-		return "", fmt.Errorf("write temporary workspace Dockerfile in %q: %w", buildContextDir, err)
-	}
-	tmpDockerfilePath := tmpDockerfile.Name()
-	defer func() { _ = os.Remove(tmpDockerfilePath) }()
-
-	if _, err := tmpDockerfile.Write(dockerfileContent); err != nil {
-		_ = tmpDockerfile.Close()
-		return "", fmt.Errorf("write temporary workspace Dockerfile %q: %w", tmpDockerfilePath, err)
-	}
-	if err := tmpDockerfile.Close(); err != nil {
-		return "", fmt.Errorf("close temporary workspace Dockerfile %q: %w", tmpDockerfilePath, err)
-	}
-
-	buildCtx, err := archive.TarWithOptions(buildContextDir, &archive.TarOptions{})
+	buildCtx, dockerfileName, err := overlayBuildContext(buildContextDir, dockerfileContent)
 	if err != nil {
 		return "", fmt.Errorf("create build context tar for workspace %q from %q: %w", ws.Name, buildContextDir, err)
 	}
@@ -340,7 +328,7 @@ func BuildOverlayImage(ctx context.Context, base string, ws workspace.Resolved, 
 		Tags:       []string{overlayTag},
 		BuildArgs:  overlayBuildArgs,
 		Labels:     buildLabels(),
-		Dockerfile: filepath.Base(tmpDockerfilePath),
+		Dockerfile: dockerfileName,
 		Remove:     true,
 	}, ca)
 	if err != nil {
@@ -581,6 +569,33 @@ func injectBaseArg(content []byte) []byte {
 	result = append(result, argLine...)
 	result = append(result, content[i:]...)
 	return result
+}
+
+// overlayBuildContext returns the build context tar of dir with dockerfile
+// added at its root under a random name, which it also returns. The
+// Dockerfile goes only into the tar stream: writing it into dir would put a
+// file jailoc builds from into a directory a workspace may see.
+func overlayBuildContext(dir string, dockerfile []byte) (io.ReadCloser, string, error) {
+	// The archive of a missing directory is empty, that of a file holds the
+	// file; neither is a build context.
+	if info, err := os.Stat(dir); err != nil {
+		return nil, "", fmt.Errorf("build context: %w", err)
+	} else if !info.IsDir() {
+		return nil, "", fmt.Errorf("build context %s is not a directory", dir)
+	}
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return nil, "", fmt.Errorf("generate Dockerfile name: %w", err)
+	}
+	name := fmt.Sprintf("jailoc-overlay-%x.Dockerfile", suffix)
+	stream, err := archive.TarWithOptions(dir, &archive.TarOptions{})
+	if err != nil {
+		return nil, "", err
+	}
+	add := func(_ string, _ *tar.Header, _ io.Reader) (*tar.Header, []byte, error) {
+		return &tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg, ModTime: time.Now()}, dockerfile, nil
+	}
+	return archive.ReplaceFileTarWrapper(stream, map[string]archive.TarModifierFunc{name: add}), name, nil
 }
 
 func resolveOverlayBuildContext(ws workspace.Resolved) (dir string, cleanup func(), err error) {

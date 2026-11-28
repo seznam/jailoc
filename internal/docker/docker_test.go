@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -520,5 +522,72 @@ func TestOptionalBuildCAVariadicEntryPoints(t *testing.T) {
 	}
 	if _, err := BuildDockerImage(ctx, "base", "", ca, ca); err == nil || !strings.Contains(err.Error(), "at most one") {
 		t.Errorf("BuildDockerImage with two CAs = %v, want error", err)
+	}
+}
+
+func TestOverlayBuildContext(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, content := range map[string]string{"app.txt": "app\n", "sub/lib.txt": "lib\n"} {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dockerfile := []byte("ARG BASE\nFROM ${BASE}\nCOPY app.txt /\n")
+	stream, name, err := overlayBuildContext(dir, dockerfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close() }()
+	if !strings.HasPrefix(name, "jailoc-overlay-") || !strings.HasSuffix(name, ".Dockerfile") || strings.Contains(name, "/") {
+		t.Errorf("overlayBuildContext() Dockerfile name = %q, want jailoc-overlay-*.Dockerfile at the context root", name)
+	}
+	files := map[string]string{}
+	tr := tar.NewReader(stream)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[hdr.Name] = string(data)
+	}
+	want := map[string]string{"app.txt": "app\n", "sub/lib.txt": "lib\n", name: string(dockerfile)}
+	for n, content := range want {
+		if got, ok := files[n]; !ok || got != content {
+			t.Errorf("context entry %q = %q (present %v), want %q", n, got, ok, content)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("context directory has %d entries after the build context was made, want 2: the Dockerfile must not be written into it", len(entries))
+	}
+}
+
+func TestOverlayBuildContextRejectsMissingOrFileContext(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, ctx := range []string{filepath.Join(dir, "missing"), file} {
+		if stream, _, err := overlayBuildContext(ctx, []byte("FROM scratch\n")); err == nil {
+			_ = stream.Close()
+			t.Errorf("overlayBuildContext(%q) = nil error, want a build context that is not a directory rejected", ctx)
+		}
 	}
 }

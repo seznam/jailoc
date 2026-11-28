@@ -87,6 +87,8 @@ jailoc up [workspace] [flags]
 4. Boots them as the root file system of the workspace VM behind the host-side network broker.
 5. Delivers `env` and secrets to the guest.
 
+Before building or booting anything, `jailoc up` of a stopped workspace (also the auto-start of `jailoc`) refuses to start when a read-write share of the workspace or of a running workspace VM exposes a build input, or when its read-write shares expose the build inputs of another configured workspace. See [Build inputs and read-write shares](image-resolution.md#build-inputs-and-read-write-shares).
+
 When the VM already runs, `jailoc up` does what [`jailoc reload`](#jailoc-reload) does.
 
 | Flag | Short | Description |
@@ -109,7 +111,7 @@ jailoc down [workspace] [flags]
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--all` | `-A` | Stop every configured workspace. Combined with `--purge`, purges every workspace. |
-| `--purge` | | Also delete the workspace state listed below. |
+| `--purge` | | Also delete the workspace state listed below. Fails while another jailoc process starts the workspace or its VM processes still run. |
 
 **`--purge` deletes**
 
@@ -134,6 +136,7 @@ jailoc restart [workspace] [flags]
 
 - Equivalent to `jailoc down` followed by `jailoc up`: rebuilds the workspace image and ends running sessions. A rebuild applies a changed or disabled `ca_bundle` to the image's trust.
 - If the workspace is not running, starts it.
+- Refuses to start, before building or booting anything, when a read-write share exposes a build input (see [`jailoc up`](#jailoc-up)).
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -167,6 +170,8 @@ jailoc reload [workspace] [flags]
 
 - `paths` and `mounts`, including `agents.<name>.mounts`
 - the agent's `profile`
+
+`jailoc reload` never rebuilds and cannot change shares. When the running VM's read-write shares expose the build inputs of any configured workspace, it prints a `WARNING`; the affected builds are refused until the shares change and the workspace is restarted. See [Build inputs and read-write shares](image-resolution.md#build-inputs-and-read-write-shares).
 - `cpu`, `memory`
 - `enable_docker`, the set of guest ports the `proxy` routes use (renaming a route, changing `auth`, or adding one on a port already in the set is applied by `jailoc reload`), `protect_git`
 - `tmp_storage`, `tmp_size`

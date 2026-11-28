@@ -116,6 +116,7 @@ Global base image settings. Controls the base image used when no workspace or de
 
 - When set, it takes priority over the embedded Dockerfile.
 - Build failure is fatal.
+- A local file is a build input when the base cascade is used (no workspace `image` and no `defaults.image`); it must stay out of read-write shares. See [Build inputs and read-write shares](image-resolution.md#build-inputs-and-read-write-shares).
 - Maximum file size for HTTP sources: 1 MiB.
 
 `ubuntu_mirror` details:
@@ -609,8 +610,8 @@ Each workspace is a TOML table under `[workspaces]`, keyed by name. Names must m
 | `proxy` | table | `{}` | HTTPS proxy routes: route name to guest port (or `{ port, auth }`), served at `https://<name>.<workspace>.jailoc.local`. See [`proxy`](#proxy). |
 
 - `paths`: the first path is the working directory; with no paths, the working directory is `/home/agent`.
-- `dockerfile`: build failure is fatal. Maximum file size for HTTP sources: 1 MiB.
-- `build_context`: when empty, the Dockerfile's parent directory (local path) or a temporary directory (URL).
+- `dockerfile`: build failure is fatal. Maximum file size for HTTP sources: 1 MiB. A local Dockerfile is a build input and must stay out of read-write shares; see [Build inputs and read-write shares](image-resolution.md#build-inputs-and-read-write-shares).
+- `build_context`: when empty, the Dockerfile's parent directory (local path) or a temporary directory (URL; a URL Dockerfile without `build_context` reads nothing local). The whole directory is a build input and must stay out of read-write shares. Unused without `dockerfile`; `.dockerignore` does not exempt anything.
 
 ### Overriding fields
 
@@ -651,7 +652,7 @@ paths = ["~/projects/my-project", "~/shared/libs"]
 allowed_hosts = ["api.example.com"]
 snapshots = ["~/.npmrc:/home/agent/.npmrc"]
 ports = [3000, "8080:80"]
-dockerfile = "~/projects/my-project/overlay.Dockerfile"
+dockerfile = "~/.config/jailoc/images/my-project/Dockerfile"
 ```
 
 ---
@@ -1324,6 +1325,7 @@ A detected native command does not guarantee a visible notification: macOS notif
 
 - `image` cannot be combined with `dockerfile` or `build_context`, and must not be whitespace-only.
 - `dockerfile` accepts absolute paths, `~` paths and `http`/`https` URLs with a non-empty host (`http:///path` is rejected). Relative paths and other schemes are rejected.
+- Build inputs (the local `[base] dockerfile` when the base cascade is used, the local workspace `dockerfile` and the whole `build_context`) must stay out of read-write shares: a workspace does not start when a read-write share of it or of a running workspace exposes one, and does not start when its read-write shares expose the build inputs of any other configured workspace. See [Build inputs and read-write shares](image-resolution.md#build-inputs-and-read-write-shares).
 
 ### `agent` and `agents`
 

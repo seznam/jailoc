@@ -56,7 +56,7 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if st, err := runningVM(stateDir); err != nil {
 		return err
 	} else if st != nil {
-		if err := reloadVM(ctx, ws, false); err != nil {
+		if err := reloadVM(ctx, cfg, ws, false); err != nil {
 			return err
 		}
 		autoManageProxyOnUp(ctx, ws, os.Stdout, os.Stderr)
@@ -95,6 +95,13 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 	if err != nil {
 		return err
 	}
+	// Before the build reads its inputs; repeated under the admission lock
+	// at boot. The start lock is held until the VM runs or the start fails.
+	releaseStart, err := admitVM(ctx, cfg, ws, shares)
+	if err != nil {
+		return err
+	}
+	defer releaseStart()
 	if err := claimProfile(ws); err != nil {
 		return fmt.Errorf("workspace %q: %w", ws.Name, err)
 	}
@@ -163,8 +170,19 @@ func runUpVM(ctx context.Context, cfg *config.Config, ws *workspace.Resolved) (e
 		return fmt.Errorf("reset secrets marker: %w", err)
 	}
 	start = time.Now()
-	if _, err := startSupervisor(ctx, spec, "VM for workspace "+ws.Name); err != nil {
-		return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
+	// The lock is held until the VM runs, when other processes see its
+	// shares. A VM that started during the build without seeing this start
+	// fails it here.
+	if err := withAdmissionLock(ctx, func() error {
+		if err := checkVMAdmission(cfg, ws, shares, vmRootDir()); err != nil {
+			return err
+		}
+		if _, err := startSupervisor(ctx, spec, "VM for workspace "+ws.Name); err != nil {
+			return fmt.Errorf("start vm for workspace %q: %w", ws.Name, err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	logStep("start workspace VM", start)
 	if err := archiveLegacyHome(stateDir, ws.Name); err != nil {
@@ -971,6 +989,13 @@ func shellJoin(args []string) string {
 // home directories and isolated builder.
 func downVM(ctx context.Context, ws *workspace.Resolved, purge bool) error {
 	stateDir := vmStateDir(ws.Name)
+	if purge {
+		release, err := lockPurge(stateDir, ws.Name)
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	st, err := runningVM(stateDir)
 	if err != nil {
 		return err
@@ -994,6 +1019,9 @@ func downVM(ctx context.Context, ws *workspace.Resolved, purge bool) error {
 		return err
 	}
 	if purge {
+		if err := checkVMGone(stateDir, ws.Name); err != nil {
+			return err
+		}
 		purgeErr := purgeWorkspaceSecretCache(ctx, ws)
 		purgeWorkspaceAgentStateVersions(stateDir)
 		if err := vm.RemoveTree(stateDir); err != nil {

@@ -205,7 +205,7 @@ To provide the agent from your own overlay Dockerfile, for example a build of yo
 [workspaces.my-project-claude]
 paths = ["~/projects/my-project"]
 agent = "claude"
-dockerfile = "~/projects/my-project/agent.Dockerfile"
+dockerfile = "~/.config/jailoc/images/my-project/agent.Dockerfile"
 
 [workspaces.my-project-claude.agents.claude]
 install = false

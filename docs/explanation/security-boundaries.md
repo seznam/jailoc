@@ -109,6 +109,10 @@ Build a Dockerfile you don't trust only in a builder VM.
 
 A forwarded `ca_bundle` is baked into the image layers, so the images trust that CA for as long as they exist. The VM runtime keeps the image's own roots, so removing the bundle or `jailoc reload` doesn't revoke it, and a later layer can't remove it from the layers below; only a rebuild with `jailoc restart` produces an image without it. Image builds with a forwarded bundle always run in a builder VM, never on the host daemon, so jailoc changes no trust of the host Docker daemon or of the host. The bundle holds only the external certificates you configure, not the workspace inspection CA.
 
+A guest that could write to a Dockerfile or build context could plant `RUN` steps or files that execute in the next build, on the host daemon or in a builder VM. jailoc therefore refuses to start a workspace when a read-write share of it or of a running workspace exposes a build input (a local Dockerfile or a build context, symlinks resolved), or when its own read-write shares expose the build inputs of any other configured workspace, running or not. Read-only shares of build inputs are allowed; jailoc never converts a share to read-only, and there is no opt-out. [Build inputs and read-write shares](../reference/image-resolution.md#build-inputs-and-read-write-shares) has the exact rules.
+
+The check rejects configured guest write access to build inputs. It does not protect against host processes changing them, and it does not make files immutable. It knows the workspaces of the configuration in use and those that run or are starting; a workspace that only another configuration file defines is unknown while it is stopped. A guest that already changed a build input before the share was removed leaves the change in place, so check exposed files before the next build. Host bind mounts of directories inside a share and file systems mounted inside a share are not detected. A build context with more than 500,000 entries is refused.
+
 ## Channels across the boundaries
 
 Every way data or control crosses from the host into a workspace is opt-in or fixed by jailoc:
