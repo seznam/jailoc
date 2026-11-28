@@ -62,8 +62,13 @@ type hostHarness struct {
 	// files is what the privileged scripts installed, by destination.
 	files map[string][]byte
 	// proxy is the background proxy runningProxy reports.
-	proxy      *proxyState
-	restarted  [][]string
+	proxy     *proxyState
+	restarted [][]string
+	// restartBanner is what the restarted proxy prints to the writer it gets.
+	restartBanner string
+	// readErrs makes readFile fail for a path, like a file the user cannot
+	// read.
+	readErrs   map[string]error
 	destChecks []string
 
 	privErr error
@@ -140,6 +145,9 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 		},
 		probeBroker: func(context.Context) error { return h.brokerAnswer },
 		readFile: func(p string) ([]byte, error) {
+			if err, ok := h.readErrs[p]; ok {
+				return nil, err
+			}
 			if data, ok := h.files[p]; ok {
 				return data, nil
 			}
@@ -150,8 +158,9 @@ func useHostHarness(t *testing.T, goos, cfgTOML, hosts string) *hostHarness {
 			return h.destErr
 		},
 		runningProxy: func() *proxyState { return h.proxy },
-		restartProxy: func(_ context.Context, names []string) error {
+		restartProxy: func(_ context.Context, names []string, out io.Writer) error {
 			h.restarted = append(h.restarted, names)
+			_, _ = io.WriteString(out, h.restartBanner)
 			return nil
 		},
 		interactive: func() bool { return h.stdinIsTTY },
@@ -201,6 +210,11 @@ func (h *hostHarness) runPrivileged(_ context.Context, script string, env []stri
 // applyPrivileged does what the privileged script does to the files the
 // tests look at: the hosts file, the service files and the system CA.
 func (h *hostHarness) applyPrivileged(call privCall) error {
+	if prev, ok := call.env["JAILOC_UNIT_PREV_SHA256"]; ok {
+		if err := h.checkUnitPrev(call.env["JAILOC_UNIT_DST"], prev); err != nil {
+			return err
+		}
+	}
 	if src, ok := call.files["JAILOC_HOSTS_SRC"]; ok {
 		if dst := call.env["JAILOC_HOSTS_DST"]; dst != h.hostsPath {
 			h.t.Errorf("JAILOC_HOSTS_DST = %q, want %q", dst, h.hostsPath)
@@ -242,6 +256,19 @@ func (h *hostHarness) applyPrivileged(call privCall) error {
 	if strings.Contains(call.script, `rm -f "$JAILOC_HELPER_DST"`) {
 		delete(h.files, call.env["JAILOC_HELPER_DST"])
 		delete(h.files, call.env["JAILOC_UNIT_DST"])
+	}
+	return nil
+}
+
+// checkUnitPrev is what check_prev_file verifies before the service is
+// touched: want is the SHA-256 the unit at dst must still have, or "missing".
+func (h *hostHarness) checkUnitPrev(dst, want string) error {
+	cur, ok := h.files[dst]
+	switch {
+	case want == "missing" && ok:
+		return fmt.Errorf("%s appeared while waiting for confirmation", dst)
+	case want != "missing" && (!ok || sha256Hex(cur) != want):
+		return fmt.Errorf("%s changed while waiting for confirmation", dst)
 	}
 	return nil
 }
@@ -1282,9 +1309,19 @@ func TestServiceOwnedByUID(t *testing.T) {
 					}
 					return tc.onDisk(t), nil
 				}}
-				present, owned := serviceOwnedByUID(d, proxyhost.ServiceUnitPath(goos), helper, 501)
+				present, owned, prev, err := serviceOwnedByUID(d, proxyhost.ServiceUnitPath(goos), helper, 501)
+				if err != nil {
+					t.Fatalf("serviceOwnedByUID() error = %v", err)
+				}
 				if present != tc.wantPresent || owned != tc.wantOwned {
 					t.Errorf("serviceOwnedByUID() = (%v, %v), want (%v, %v)", present, owned, tc.wantPresent, tc.wantOwned)
+				}
+				wantPrev := "missing"
+				if tc.onDisk != nil {
+					wantPrev = sha256Hex(tc.onDisk(t))
+				}
+				if prev != wantPrev {
+					t.Errorf("prevSHA256 = %q, want %q", prev, wantPrev)
 				}
 			})
 		}
@@ -1630,8 +1667,9 @@ func TestProxyInstallRotationKeepsOldCAUntilItIsRemoved(t *testing.T) {
 	if !slices.Equal(second.PendingKeychainSHA1s, []string{oldSHA1}) {
 		t.Errorf("pending keychain SHA-1s = %v, want [%s]", second.PendingKeychainSHA1s, oldSHA1)
 	}
-	if !slices.Equal(second.PendingNSSCertSHA256s, []string{first.CACertSHA256}) || !slices.Equal(second.NSSDatabases, []string{ffDB}) {
-		t.Errorf("state = %+v, want the old CA fingerprint kept for NSS", second)
+	if !slices.Equal(second.PendingNSSCertSHA256s, []string{first.CACertSHA256}) || len(second.NSSDatabases) != 0 ||
+		!slices.Equal(second.PendingNSSDatabases, []string{ffDB}) {
+		t.Errorf("state = %+v, want the old CA fingerprint and database kept pending for NSS and no database trusting the new CA", second)
 	}
 
 	// The next install retries both.
@@ -1642,8 +1680,9 @@ func TestProxyInstallRotationKeepsOldCAUntilItIsRemoved(t *testing.T) {
 		t.Errorf("the old CA was not deleted again: %v", h.commands)
 	}
 	third := h.installState()
-	if len(third.PendingKeychainSHA1s) != 0 || len(third.PendingNSSCertSHA256s) != 0 {
-		t.Errorf("pending entries remain after cleanup: %+v", third)
+	if len(third.PendingKeychainSHA1s) != 0 || len(third.PendingNSSCertSHA256s) != 0 || len(third.PendingNSSDatabases) != 0 ||
+		!slices.Equal(third.NSSDatabases, []string{ffDB}) {
+		t.Errorf("pending entries remain after cleanup or the database lost the new CA: %+v", third)
 	}
 }
 
@@ -2299,7 +2338,7 @@ func TestProxyInstallPersistsOldCAIdentitiesBeforeRotating(t *testing.T) {
 		t.Fatal("the CA was not rotated")
 	}
 	if !slices.Equal(second.PendingKeychainSHA1s, []string{oldSHA1}) || !slices.Equal(second.PendingNSSCertSHA256s, []string{first.CACertSHA256}) ||
-		!slices.Equal(second.NSSDatabases, []string{ffDB}) {
+		len(second.NSSDatabases) != 0 || !slices.Equal(second.PendingNSSDatabases, []string{ffDB}) {
 		t.Fatalf("state = %+v, want the old CA kept as pending", second)
 	}
 
@@ -2312,7 +2351,7 @@ func TestProxyInstallPersistsOldCAIdentitiesBeforeRotating(t *testing.T) {
 	if !h.hasCommand("security", "delete-certificate", "-Z", oldSHA1) {
 		t.Errorf("the old CA was not deleted: %v", h.commands)
 	}
-	if third := h.installState(); len(third.PendingKeychainSHA1s) != 0 || len(third.PendingNSSCertSHA256s) != 0 {
+	if third := h.installState(); len(third.PendingKeychainSHA1s) != 0 || len(third.PendingNSSCertSHA256s) != 0 || len(third.PendingNSSDatabases) != 0 {
 		t.Errorf("pending entries remain after cleanup: %+v", third)
 	}
 }
@@ -2353,4 +2392,484 @@ func TestProxyUninstallSkipsDeletedNSSDatabases(t *testing.T) {
 	if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("install.json still exists (%v)", err)
 	}
+}
+
+// Host-wide lock, service revalidation and fail-closed service reads.
+
+func TestProxyScriptsLockAndRevalidateBeforeMutating(t *testing.T) {
+	t.Parallel()
+	store := &proxyhost.LinuxCAStore{CertPath: "/x/ca.crt", UpdateCmd: []string{"update-ca-certificates"}, RemoveCmd: []string{"update-ca-certificates", "--fresh"}}
+	for _, goos := range []string{"darwin", "linux"} {
+		scripts := map[string]string{
+			"install":   proxyInstallScript(goos, true, true, store),
+			"uninstall": proxyUninstallScript(goos, true, true, store),
+		}
+		for name, full := range scripts {
+			body := strings.TrimPrefix(full, proxyPrivilegedHelpers)
+			lock := strings.Index(body, "acquire_host_lock\n")
+			check := strings.Index(body, `check_prev_file "$JAILOC_UNIT_DST" "$JAILOC_UNIT_PREV_SHA256"`)
+			if lock != 0 || check < 0 || check < lock {
+				t.Errorf("%s/%s: lock at %d, unit check at %d; want the lock first and the unit checked next:\n%s", goos, name, lock, check, body)
+			}
+			for _, mutation := range []string{`install_file 0755`, `launchctl`, `systemctl`, `rm -f`, `write_hosts "$`, `remove_ca_file "$`} {
+				if i := strings.Index(body, mutation); i >= 0 && i < check {
+					t.Errorf("%s/%s: %q runs before the unit is revalidated", goos, name, mutation)
+				}
+			}
+		}
+		if !strings.Contains(scripts["install"], `"$JAILOC_UNIT_SHA256" "$JAILOC_UNIT_PREV_SHA256"`) {
+			t.Errorf("%s: the unit is installed without its previous hash", goos)
+		}
+	}
+	for name, script := range map[string]string{
+		"install":   proxyInstallScript("linux", false, true, nil),
+		"uninstall": proxyUninstallScript("linux", false, true, nil),
+	} {
+		if strings.Contains(script, "check_prev_file \"$") {
+			t.Errorf("%s without a service checks the service unit", name)
+		}
+		if !strings.Contains(script, "\nacquire_host_lock\n") {
+			t.Errorf("%s without a service does not take the host lock", name)
+		}
+	}
+}
+
+func hostLockDirs(t *testing.T) (parent, lock string) {
+	t.Helper()
+	parent = shortTempDir(t, "hl")
+	if err := os.Chmod(parent, 0o755); err != nil { //nolint:gosec // G302: the mode the root-owned lock directory has
+		t.Fatal(err)
+	}
+	return parent, filepath.Join(parent, ".lock")
+}
+
+func TestProxyPrivilegedAcquireHostLock(t *testing.T) {
+	t.Run("holds the lock until the script exits", func(t *testing.T) {
+		_, lock := hostLockDirs(t)
+		out, err := runHelperScript(t, `acquire_host_lock
+[ -d "$JAILOC_HOST_LOCK_DIR" ] || { echo "no lock held"; exit 1; }
+echo done`, map[string]string{"JAILOC_HOST_LOCK_DIR": lock})
+		if err != nil || !strings.Contains(out, "done") {
+			t.Fatalf("err = %v, output %q", err, out)
+		}
+		if _, err := os.Stat(lock); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the lock outlived the script (%v)", err)
+		}
+	})
+	t.Run("releases the lock when the script fails", func(t *testing.T) {
+		_, lock := hostLockDirs(t)
+		_, err := runHelperScript(t, "acquire_host_lock\nfalse", map[string]string{"JAILOC_HOST_LOCK_DIR": lock})
+		if err == nil {
+			t.Fatal("want the failure of the script")
+		}
+		if _, err := os.Stat(lock); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the lock outlived the failed script (%v)", err)
+		}
+	})
+	t.Run("fails closed when another run holds the lock", func(t *testing.T) {
+		_, lock := hostLockDirs(t)
+		if err := os.Mkdir(lock, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runHelperScript(t, "acquire_host_lock\necho got it", map[string]string{"JAILOC_HOST_LOCK_DIR": lock, "JAILOC_HOST_LOCK_TRIES": "3"})
+		if err == nil || !strings.Contains(out, "another jailoc proxy setup holds") || strings.Contains(out, "got it") {
+			t.Fatalf("err = %v, output %q", err, out)
+		}
+		if _, err := os.Stat(lock); err != nil {
+			t.Errorf("the lock of the other run was removed: %v", err)
+		}
+	})
+	t.Run("refuses an untrusted lock parent", func(t *testing.T) {
+		parent, lock := hostLockDirs(t)
+		if err := os.Chmod(parent, 0o775); err != nil { //nolint:gosec // G302: the mode under test
+			t.Fatal(err)
+		}
+		out, err := runHelperScript(t, "acquire_host_lock", map[string]string{"JAILOC_HOST_LOCK_DIR": lock})
+		if err == nil || !strings.Contains(out, "is writable by group or others") {
+			t.Errorf("group writable parent: err = %v, output %q", err, out)
+		}
+
+		real, _ := hostLockDirs(t)
+		link := filepath.Join(shortTempDir(t, "hl"), "link")
+		if err := os.Symlink(real, link); err != nil {
+			t.Fatal(err)
+		}
+		out, err = runHelperScript(t, "acquire_host_lock", map[string]string{"JAILOC_HOST_LOCK_DIR": filepath.Join(link, ".lock")})
+		if err == nil || !strings.Contains(out, "is a symlink") {
+			t.Errorf("symlinked parent: err = %v, output %q", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(real, ".lock")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a lock was created below an untrusted parent (%v)", err)
+		}
+	})
+}
+
+func TestProxyPrivilegedCheckPrevFile(t *testing.T) {
+	const content = "[Unit]\n"
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T, dst string)
+		prev    string
+		wantErr string
+	}{
+		{"missing and absent", func(*testing.T, string) {}, "missing", ""},
+		{"missing but present", func(t *testing.T, dst string) {
+			if err := os.WriteFile(dst, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, "missing", "appeared while waiting for confirmation"},
+		{"missing but dangling symlink", func(t *testing.T, dst string) {
+			if err := os.Symlink(dst+".nowhere", dst); err != nil {
+				t.Fatal(err)
+			}
+		}, "missing", "appeared while waiting for confirmation"},
+		{"unchanged", func(t *testing.T, dst string) {
+			if err := os.WriteFile(dst, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, sha256Hex([]byte(content)), ""},
+		{"changed", func(t *testing.T, dst string) {
+			if err := os.WriteFile(dst, []byte("other\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, sha256Hex([]byte(content)), "changed while waiting for confirmation"},
+		{"removed", func(*testing.T, string) {}, sha256Hex([]byte(content)), "changed while waiting for confirmation"},
+		{"symlink to the planned content", func(t *testing.T, dst string) {
+			if err := os.WriteFile(dst+".real", []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(dst+".real", dst); err != nil {
+				t.Fatal(err)
+			}
+		}, sha256Hex([]byte(content)), "changed while waiting for confirmation"},
+		{"directory", func(t *testing.T, dst string) {
+			if err := os.Mkdir(dst, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, sha256Hex([]byte(content)), "changed while waiting for confirmation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := filepath.Join(shortTempDir(t, "pf"), "unit")
+			tc.setup(t, dst)
+			out, err := runHelperScript(t, `check_prev_file "$JAILOC_TEST_DST" "$JAILOC_TEST_PREV"`, map[string]string{"JAILOC_TEST_DST": dst, "JAILOC_TEST_PREV": tc.prev})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("err = %v, output %q", err, out)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(out, tc.wantErr) {
+				t.Fatalf("err = %v, output %q, want %q", err, out, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestProxyPrivilegedWriteHostsRefusesDanglingSymlinkWhenMissing(t *testing.T) {
+	dir := shortTempDir(t, "wh")
+	src, dst := filepath.Join(dir, "src"), filepath.Join(dir, "hosts")
+	if err := os.WriteFile(src, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), dst); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runHelperScript(t, `write_hosts "$JAILOC_HOSTS_SRC" "$JAILOC_HOSTS_SHA256" "$JAILOC_HOSTS_DST"`, map[string]string{
+		"JAILOC_HOSTS_SRC": src, "JAILOC_HOSTS_SHA256": sha256Hex([]byte("x\n")), "JAILOC_HOSTS_DST": dst, "JAILOC_HOSTS_PREV_SHA256": "missing",
+	})
+	if err == nil || !strings.Contains(out, "was created while waiting for confirmation") {
+		t.Fatalf("err = %v, output %q", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nowhere")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the dangling symlink was written through (%v)", err)
+	}
+}
+
+func TestServiceOwnedByUIDFailsClosedOnReadErrors(t *testing.T) {
+	t.Parallel()
+	for _, goos := range []string{"darwin", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			t.Parallel()
+			d := proxyHostDeps{goos: goos, readFile: func(string) ([]byte, error) { return nil, os.ErrPermission }}
+			present, owned, prev, err := serviceOwnedByUID(d, proxyhost.ServiceUnitPath(goos), proxyhost.HelperBinaryPath(goos), 501)
+			if err == nil || !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), proxyhost.ServiceUnitPath(goos)) {
+				t.Fatalf("error = %v, want a wrapped permission error naming the unit", err)
+			}
+			if present || owned || prev != "" {
+				t.Errorf("serviceOwnedByUID() = (%v, %v, %q), want nothing recorded", present, owned, prev)
+			}
+		})
+	}
+}
+
+func TestProxySetupRefusesUnreadableService(t *testing.T) {
+	t.Run("install", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		unitPath := proxyhost.ServiceUnitPath("linux")
+		h.readErrs = map[string]error{unitPath: os.ErrPermission}
+		_, err := h.run("install", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "read service unit "+unitPath) {
+			t.Fatalf("error = %v", err)
+		}
+		if len(h.priv) != 0 || h.hosts() != hostTestOriginal {
+			t.Errorf("an unreadable service reached the privileged step: %d call(s)", len(h.priv))
+		}
+	})
+	t.Run("uninstall with an old ledger", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		h.priv = nil
+		unitPath := proxyhost.ServiceUnitPath("linux")
+		h.readErrs = map[string]error{unitPath: os.ErrPermission}
+		_, err := h.run("uninstall", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "read service unit "+unitPath) {
+			t.Fatalf("error = %v", err)
+		}
+		if len(h.priv) != 0 {
+			t.Error("an unreadable service reached the privileged step")
+		}
+		if _, ok := h.files[unitPath]; !ok {
+			t.Error("the unreadable service was deleted")
+		}
+	})
+}
+
+func TestProxyInstallRevalidatesServiceUnit(t *testing.T) {
+	unitPath := proxyhost.ServiceUnitPath("linux")
+	t.Run("absent unit", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		if got := h.priv[0].env["JAILOC_UNIT_PREV_SHA256"]; got != "missing" {
+			t.Errorf("JAILOC_UNIT_PREV_SHA256 = %q, want missing", got)
+		}
+	})
+	t.Run("installed unit", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		if err := os.WriteFile(filepath.Join(h.home, "jailoc-listener-broker"), []byte(hostTestBroker+"# v2\n"), 0o700); err != nil { //nolint:gosec // test stub binary
+			t.Fatal(err)
+		}
+		h.priv = nil
+		h.mustRun("install", "--yes")
+		if len(h.priv) != 1 {
+			t.Fatalf("privileged calls = %d, want 1", len(h.priv))
+		}
+		if got, want := h.priv[0].env["JAILOC_UNIT_PREV_SHA256"], sha256Hex(h.files[unitPath]); got != want {
+			t.Errorf("JAILOC_UNIT_PREV_SHA256 = %q, want the hash of the installed unit %q", got, want)
+		}
+	})
+	t.Run("unit appears while waiting", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		foreign, err := proxyhost.RenderSystemdUnit(proxyhost.HelperBinaryPath("linux"), 777)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.beforePriv = func() { h.files[unitPath] = foreign }
+		_, err = h.run("install", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "appeared while waiting for confirmation") {
+			t.Fatalf("error = %v", err)
+		}
+		if !bytes.Equal(h.files[unitPath], foreign) {
+			t.Error("the unit of another user was replaced")
+		}
+		if _, ok := h.files[proxyhost.HelperBinaryPath("linux")]; ok {
+			t.Error("the helper was installed next to the unit of another user")
+		}
+	})
+}
+
+func TestProxyUninstallRevalidatesServiceUnit(t *testing.T) {
+	unitPath := proxyhost.ServiceUnitPath("linux")
+	t.Run("unit as planned", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		want := sha256Hex(h.files[unitPath])
+		h.priv = nil
+		h.mustRun("uninstall", "--yes")
+		if got := h.priv[0].env["JAILOC_UNIT_PREV_SHA256"]; got != want {
+			t.Errorf("JAILOC_UNIT_PREV_SHA256 = %q, want %q", got, want)
+		}
+	})
+	t.Run("unit already gone", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		delete(h.files, unitPath)
+		h.priv = nil
+		h.mustRun("uninstall", "--yes")
+		if got := h.priv[0].env["JAILOC_UNIT_PREV_SHA256"]; got != "missing" {
+			t.Errorf("JAILOC_UNIT_PREV_SHA256 = %q, want missing", got)
+		}
+	})
+	t.Run("unit replaced while waiting", func(t *testing.T) {
+		h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		foreign, err := proxyhost.RenderSystemdUnit(proxyhost.HelperBinaryPath("linux"), 777)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.beforePriv = func() { h.files[unitPath] = foreign }
+		_, err = h.run("uninstall", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "changed while waiting for confirmation") {
+			t.Fatalf("error = %v", err)
+		}
+		if !bytes.Equal(h.files[unitPath], foreign) {
+			t.Error("the unit of another user was removed")
+		}
+		if _, ok := h.files[proxyhost.HelperBinaryPath("linux")]; !ok {
+			t.Error("the helper of another user was removed")
+		}
+	})
+}
+
+// Restarting the attached proxy.
+
+func TestProxyInstallRestartPrintsBannerAndKeepsConfiguration(t *testing.T) {
+	newHarness := func(t *testing.T) *hostHarness {
+		t.Helper()
+		h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+		h.mustRun("install", "--yes")
+		if err := os.WriteFile(filepath.Join(h.home, "jailoc-listener-broker"), []byte(hostTestBroker+"# v2\n"), 0o700); err != nil { //nolint:gosec // test stub binary
+			t.Fatal(err)
+		}
+		h.priv = nil
+		return h
+	}
+	t.Run("the startup banner reaches the user", func(t *testing.T) {
+		h := newHarness(t)
+		h.proxy = &proxyState{ListenerBroker: true, Config: proxyConfigPath(), Workspaces: map[string][]string{"app": nil}}
+		h.restartBanner = "Login code for app: 123456\n"
+		out := h.mustRun("install", "--yes")
+		assertContains(t, out, "Login code for app: 123456")
+		assertContains(t, out, "Attached the background proxy to the restarted listener broker.")
+	})
+	t.Run("a proxy of another configuration is refused before anything changes", func(t *testing.T) {
+		h := newHarness(t)
+		h.proxy = &proxyState{ListenerBroker: true, Config: "/elsewhere/config.toml", Workspaces: map[string][]string{"app": nil}}
+		_, err := h.run("install", "--yes")
+		if err == nil || !strings.Contains(err.Error(), "/elsewhere/config.toml") || !strings.Contains(err.Error(), "jailoc proxy stop") {
+			t.Fatalf("error = %v", err)
+		}
+		if len(h.priv) != 0 || len(h.restarted) != 0 {
+			t.Errorf("the broker was restarted (%d privileged call(s), %v restarted proxies)", len(h.priv), h.restarted)
+		}
+	})
+	t.Run("a proxy of another configuration is left alone when the broker stays", func(t *testing.T) {
+		h := newHarness(t)
+		h.mustRun("install", "--yes")
+		h.proxy = &proxyState{ListenerBroker: true, Config: "/elsewhere/config.toml", Workspaces: map[string][]string{"app": nil}}
+		h.mustRun("install", "--yes")
+		if len(h.restarted) != 0 {
+			t.Errorf("an unchanged install restarted the proxy: %v", h.restarted)
+		}
+	})
+}
+
+// CA rotation must not report the new CA as trusted where only the old one is.
+
+func TestProxyInstallRotationFailureDoesNotKeepKeychainFlag(t *testing.T) {
+	h := useHostHarness(t, "darwin", hostTestConfig, hostTestOriginal)
+	h.mustRun("install", "--yes")
+	if !h.installState().MacOSKeychainCert {
+		t.Fatal("the first install did not trust the keychain")
+	}
+	h.rotateCA()
+	h.commandErr = func(args []string) error {
+		if args[0] == "security" && args[1] == "add-trusted-cert" {
+			return errors.New("user canceled")
+		}
+		return nil
+	}
+	if _, err := h.run("install", "--yes"); err == nil {
+		t.Fatal("want the keychain failure")
+	}
+	st := h.installState()
+	if st.MacOSKeychainCert {
+		t.Errorf("the keychain flag of the previous CA was kept for the new one: %+v", st)
+	}
+	out := h.mustRunStatus()
+	assertContains(t, out, "not trusted in any store")
+}
+
+func TestProxyInstallRotationRecordsOnlyVerifiedTrust(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	nssDB := h.addNSSDatabase(".pki/nssdb")
+	h.mustRun("install", "--yes")
+	first := h.installState()
+	if first.SystemCACertPath == "" || !slices.Equal(first.NSSDatabases, []string{nssDB}) {
+		t.Fatalf("first install state = %+v", first)
+	}
+
+	// The trust updates of the rotation are unavailable.
+	h.rotateCA()
+	h.systemStore, h.certutil = false, false
+	h.mustRun("install", "--yes")
+	second := h.installState()
+	if second.CACertSHA256 == first.CACertSHA256 {
+		t.Fatal("the CA was not rotated")
+	}
+	if len(second.NSSDatabases) != 0 || !slices.Equal(second.PendingNSSDatabases, []string{nssDB}) ||
+		!slices.Equal(second.PendingNSSCertSHA256s, []string{first.CACertSHA256}) {
+		t.Errorf("NSS state = %v, pending %v / %v; want no database with the new CA and %s pending with the old one",
+			second.NSSDatabases, second.PendingNSSDatabases, second.PendingNSSCertSHA256s, nssDB)
+	}
+	if second.SystemCACertPath == "" || second.SystemCACertSHA256 != first.SystemCACertSHA256 {
+		t.Errorf("the recorded system CA location is lost: %+v", second)
+	}
+	assertContains(t, h.mustRunStatus(), "not trusted in any store")
+
+	// Uninstall removes the old CA from the pending database as well.
+	h.certutil = true
+	h.commands = nil
+	h.mustRun("uninstall", "--yes")
+	if !h.hasCommand("certutil", "-d", "sql:"+nssDB, "-D") {
+		t.Errorf("the pending database was not cleaned: %v", h.commands)
+	}
+	if _, err := os.Stat(proxyInstallStatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("install.json still exists (%v)", err)
+	}
+}
+
+func TestProxyInstallRotationMovesRefreshedDatabasesOutOfPending(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	nssDB := h.addNSSDatabase(".pki/nssdb")
+	h.mustRun("install", "--yes")
+	h.rotateCA()
+	h.mustRun("install", "--yes")
+	st := h.installState()
+	if !slices.Equal(st.NSSDatabases, []string{nssDB}) || len(st.PendingNSSDatabases) != 0 || len(st.PendingNSSCertSHA256s) != 0 {
+		t.Errorf("state = NSS %v, pending %v / %v; want the database with the new CA and nothing pending", st.NSSDatabases, st.PendingNSSDatabases, st.PendingNSSCertSHA256s)
+	}
+	assertContains(t, h.mustRunStatus(), "(trusted by `jailoc proxy install`: system store, 1 NSS database(s))")
+}
+
+func TestProxyStatusVerifiesSystemStoreAndNSSDatabases(t *testing.T) {
+	h := useHostHarness(t, "linux", hostTestConfig, hostTestOriginal)
+	nssDB := h.addNSSDatabase(".pki/nssdb")
+	h.mustRun("install", "--yes")
+	assertContains(t, h.mustRunStatus(), "system store, 1 NSS database(s)")
+
+	t.Run("system certificate replaced", func(t *testing.T) {
+		st := h.installState()
+		h.files[st.SystemCACertPath] = []byte("another certificate")
+		out := h.mustRunStatus()
+		if strings.Contains(out, "system store") {
+			t.Errorf("a replaced system certificate is reported as trusted:\n%s", out)
+		}
+		assertContains(t, out, "1 NSS database(s)")
+	})
+	t.Run("NSS database deleted", func(t *testing.T) {
+		if err := os.RemoveAll(nssDB); err != nil {
+			t.Fatal(err)
+		}
+		out := h.mustRunStatus()
+		if strings.Contains(out, "NSS database") {
+			t.Errorf("a deleted database is reported as trusted:\n%s", out)
+		}
+		assertContains(t, out, "not trusted in any store")
+	})
+}
+
+func (h *hostHarness) mustRunStatus() string {
+	h.t.Helper()
+	return h.mustRun("status")
 }

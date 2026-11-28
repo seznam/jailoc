@@ -206,6 +206,7 @@ func TestInstallStateRoundTrip(t *testing.T) {
 
 		PendingKeychainSHA1s:  []string{strings.Repeat("AB", 20)},
 		PendingNSSCertSHA256s: []string{strings.Repeat("cd", 32)},
+		PendingNSSDatabases:   []string{"/home/u/.mozilla/firefox/old.default"},
 	}
 	tests := []struct {
 		name string
@@ -216,6 +217,7 @@ func TestInstallStateRoundTrip(t *testing.T) {
 		{"ledger only", InstallState{HostsLedger: []byte("x\r\ny")}},
 		{"keychain only", InstallState{MacOSKeychainCert: true}},
 		{"pending only", InstallState{PendingKeychainSHA1s: []string{"AA"}, PendingNSSCertSHA256s: []string{"bb"}}},
+		{"pending NSS databases only", InstallState{PendingNSSDatabases: []string{"/home/u/.pki/nssdb"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -257,6 +259,7 @@ func TestInstallStateHasAnything(t *testing.T) {
 		"service unit":     {ServiceUnitPath: "/x"},
 		"pending keychain": {PendingKeychainSHA1s: []string{"AA"}},
 		"pending NSS":      {PendingNSSCertSHA256s: []string{"aa"}},
+		"pending NSS DBs":  {PendingNSSDatabases: []string{"/x"}},
 	} {
 		if !st.HasAnything() {
 			t.Errorf("%s: HasAnything() = false", name)

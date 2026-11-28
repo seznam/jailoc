@@ -166,6 +166,10 @@ type InstallState struct {
 	// PendingNSSCertSHA256s are the SHA-256s of earlier proxy CAs that may
 	// still be in NSS databases under NSSCertNickname.
 	PendingNSSCertSHA256s []string `json:"pending_nss_cert_sha256s,omitempty"`
+	// PendingNSSDatabases are the NSS databases that may still hold an
+	// earlier proxy CA after a rotation; NSSDatabases lists only those
+	// where the current CA is installed.
+	PendingNSSDatabases []string `json:"pending_nss_databases,omitempty"`
 }
 
 // HasAnything reports whether st records any change to revert.
@@ -182,7 +186,8 @@ func (st InstallState) HasAnything() bool {
 		st.HelperPath != "" ||
 		st.ServiceUnitPath != "" ||
 		len(st.PendingKeychainSHA1s) > 0 ||
-		len(st.PendingNSSCertSHA256s) > 0
+		len(st.PendingNSSCertSHA256s) > 0 ||
+		len(st.PendingNSSDatabases) > 0
 }
 
 // ReadInstallState reads the install state at path. A missing file yields
