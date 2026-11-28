@@ -406,6 +406,7 @@ type Config struct {
 	DetachKeys   string               `toml:"detach_keys,omitempty"`
 	Base         BaseConfig           `toml:"base,omitempty"`
 	VM           VMConfig             `toml:"vm,omitempty"`
+	Proxy        ProxyConfig          `toml:"proxy,omitempty"`
 	Defaults     Defaults             `toml:"defaults,omitempty"`
 	Workspaces   map[string]Workspace `toml:"workspaces"`
 
@@ -1374,6 +1375,10 @@ func validate(cfg *Config, extraCfgPaths ...string) error {
 			return fmt.Errorf("vm: path %q must be absolute", *p)
 		}
 		*p = expanded
+	}
+
+	if err := cfg.Proxy.validate(); err != nil {
+		return err
 	}
 
 	if err := validateDockerfileSource(cfg.Base.Dockerfile, "base dockerfile"); err != nil {
