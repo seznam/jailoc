@@ -71,6 +71,8 @@ All guest traffic, IPv4 and opt-in IPv6 (`network.ipv6`), goes through the host-
 
 Because the policy runs on the host, guest root can't change it, and containers started by an in-VM Docker daemon (`enable_docker`) are subject to it as well. With `network.filtered_dns`, internal zones don't resolve and the guest can't use another resolver.
 
+With an [upstream proxy](network-isolation.md#upstream-proxy) the ranges above are enforced by the broker on the destination the guest asked for, and by the proxy on the final address. The broker sends the hostname and the proxy resolves it again, so jailoc can't pin the address the tunnel ends at; the proxy is trusted to refuse private and internal addresses.
+
 !!! warning "Public egress stays open"
 
     Public internet egress stays open, since the agent needs it to work. Data can still leave through it: the broker keeps a manipulated agent away from internal infrastructure, it doesn't stop exfiltration to the internet.
@@ -86,6 +88,17 @@ Rules with an `http` table narrow egress to chosen methods and paths, for exampl
 - WebSocket frames aren't inspected after the upgrade.
 
 See [TLS inspection](network-isolation.md#tls-inspection).
+
+#### Chaining through an upstream proxy
+
+`network.upstream_proxy` routes allowed TCP flows through an HTTP proxy, for example a corporate proxy or a host proxy with its own policy.
+
+- The broker's rules decide first and a denied flow stays denied. The proxy can only narrow what the broker allowed.
+- The proxy is part of the trusted computing base for private data access: its restrictions on final IP and private networks replace the broker's for the part of the path after the `CONNECT`. A proxy that connects wherever a name resolves reopens DNS rebinding.
+- A re-signing proxy and its `ca` that the guest trusts can read the traffic of the hosts it handles.
+- A `command` helper runs on the host with your privileges and is read only from `config.toml`.
+
+See [Upstream proxy](network-isolation.md#upstream-proxy).
 
 ### Limiting private data access
 
