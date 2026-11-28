@@ -801,6 +801,26 @@ func TestUpstreamDirectRequiresVerifiedDNSAssociation(t *testing.T) {
 	if body != "proxied" || directHits.Load() != 0 || len(p.seen()) != 1 {
 		t.Fatalf("unverified Host bypassed proxy via direct: body=%q directHits=%d proxySeen=%d", body, directHits.Load(), len(p.seen()))
 	}
+
+	// Untrusted DNS associations (e.g. after an internal_zones removal) must
+	// also be excluded in both branches of upstreamNames.
+	env := Env{
+		Names:     []string{"direct.example.com"},
+		Untrusted: map[string]bool{"direct.example.com": true},
+	}
+	if got := upstreamNames("direct.example.com", env); got != nil {
+		t.Fatalf("upstreamNames(explicit untrusted) = %v, want nil", got)
+	}
+	if got := upstreamNames("", env); got != nil {
+		t.Fatalf("upstreamNames(single untrusted) = %v, want nil", got)
+	}
+	envMixed := Env{
+		Names:     []string{"untrusted.example.com", "trusted.example.com"},
+		Untrusted: map[string]bool{"untrusted.example.com": true},
+	}
+	if got := upstreamNames("", envMixed); !slices.Equal(got, []string{"trusted.example.com"}) {
+		t.Fatalf("upstreamNames(mixed trusted/untrusted) = %v, want [trusted.example.com]", got)
+	}
 }
 
 func TestUpstreamSharedIPMultipleCachedNamesSniffsBeforeRoute(t *testing.T) {

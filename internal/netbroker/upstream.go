@@ -231,13 +231,19 @@ func (r *upstreamRoute) isDirect(proto string, dst netip.AddrPort, names []strin
 
 func upstreamNames(name string, env Env) []string {
 	if name != "" {
-		if validUpstreamName(name) && slices.Contains(env.Names, name) {
+		if validUpstreamName(name) && slices.Contains(env.Names, name) && !env.Untrusted[name] {
 			return []string{name}
 		}
 		return nil
 	}
-	if len(env.Names) == 1 {
-		return env.Names
+	var trusted []string
+	for _, n := range env.Names {
+		if !env.Untrusted[n] {
+			trusted = append(trusted, n)
+		}
+	}
+	if len(trusted) == 1 {
+		return trusted
 	}
 	return nil
 }
