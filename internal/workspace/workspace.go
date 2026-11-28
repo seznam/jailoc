@@ -94,6 +94,14 @@ type Resolved struct {
 	// of legacy allowed_hosts, normalized.
 	InternalZones []string
 	CABundle      config.CABundle
+	// UpstreamProxy is the HTTP proxy the broker sends allowed egress through:
+	// the workspace's network.upstream_proxy table, else the defaults' table.
+	// Nil when none is configured or the chosen table is disabled. It is a
+	// copy of the configuration and holds credential sources, never values.
+	UpstreamProxy *config.UpstreamProxy
+	// UpstreamDirectWarnings are warnings about upstream_proxy.direct entries
+	// that no allow rule of NetworkRules can match.
+	UpstreamDirectWarnings []string
 }
 
 // ProxyRoute serves guest port Port at https://<Name>.<workspace>.jailoc.local.
@@ -249,6 +257,10 @@ func Resolve(cfg *config.Config, name string) (*Resolved, error) {
 	r.AllowedHosts = mergeUnique(cfg.Defaults.AllowedHosts, ws.AllowedHosts)
 	r.AllowedNetworks = mergeUnique(cfg.Defaults.AllowedNetworks, ws.AllowedNetworks)
 	r.NetworkRules = resolveNetworkRules(cfg, ws, r.AllowedHosts, r.AllowedNetworks, r.DNSBlockedZones, h)
+	r.UpstreamProxy = resolveUpstreamProxy(cfg.Defaults.Network.Get().UpstreamProxy, ws.Network.Get().UpstreamProxy)
+	if r.UpstreamProxy != nil {
+		r.UpstreamDirectWarnings = upstreamDirectWarnings(name, r.UpstreamProxy, r.NetworkRules)
+	}
 	r.InternalZones = resolveInternalZones(cfg.Defaults.Network.Get().InternalZones, ws.Network.Get().InternalZones, r.AllowedHosts)
 	snapshots, err := config.MergeSnapshots(cfg.Defaults.Snapshots, ws.Snapshots)
 	if err != nil {
