@@ -25,6 +25,7 @@ import (
 	"github.com/seznam/jailoc/internal/agent"
 	"github.com/seznam/jailoc/internal/config"
 	"github.com/seznam/jailoc/internal/guestbin"
+	"github.com/seznam/jailoc/internal/netbroker"
 	"github.com/seznam/jailoc/internal/vm"
 	"github.com/seznam/jailoc/internal/workspace"
 	"github.com/spf13/cobra"
@@ -48,6 +49,9 @@ var vmSuperviseCmd = &cobra.Command{
 			return fmt.Errorf("read vm spec: %w", err)
 		}
 		spec.Log = os.Stderr
+		if spec.Kind == vm.KindWorkspace {
+			spec.ReloadUpstreamCA = upstreamCAReloader(spec.StateDir, spec.Workspace)
+		}
 		return vm.Run(cmd.Context(), *spec)
 	},
 }
@@ -135,6 +139,7 @@ func startSupervisor(ctx context.Context, spec vm.Spec, label string) (*vm.State
 	_, _ = color.New(color.FgCyan).Printf("Starting %s...\n", label)
 	sup := exec.Command(exe, "vm-supervise", spec.StateDir) //nolint:gosec // G204: re-executes jailoc itself
 	sup.Stdout, sup.Stderr = logFile, logFile
+	sup.Env = supervisorEnv(os.Environ(), configFlag)
 	sup.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := sup.Start(); err != nil {
 		return nil, fmt.Errorf("start vm supervisor: %w", err)
@@ -169,6 +174,19 @@ func startSupervisor(ctx context.Context, spec vm.Spec, label string) (*vm.State
 			}
 		}
 	}
+}
+
+// supervisorEnv is the environment of a VM supervisor started with environ
+// by a jailoc run with --config flagPath. The flag reaches the supervisor and
+// its network broker as PathEnv, so the broker caches the upstream proxy
+// password under the same configuration as the reload and down that purge
+// it.
+func supervisorEnv(environ []string, flagPath string) []string {
+	if flagPath == "" {
+		return environ
+	}
+	env := slices.DeleteFunc(slices.Clone(environ), func(e string) bool { return strings.HasPrefix(e, config.PathEnv+"=") })
+	return append(env, config.PathEnv+"="+config.ConfigPath())
 }
 
 // stopSupervisor stops the VM supervisor of stateDir and waits for it.
@@ -811,13 +829,21 @@ func buildVMPolicy(ctx context.Context, ws *workspace.Resolved, builder bool) ([
 		}
 	}
 
+	// The builder never gets the workspace's proxy, which may run a
+	// workspace helper; buildWorkspaceImage adds the builder's own.
+	var upstream *netbroker.UpstreamProxy
+	if !builder {
+		upstream = upstreamPolicyProxy(ws.Name, ws.UpstreamProxy)
+	}
+
 	policy := struct {
-		DNS           string     `json:"dns,omitempty"`
-		Deny          []vmRule   `json:"deny"`
-		Allow         []vmRule   `json:"allow"`
-		InternalZones []string   `json:"internal_zones,omitempty"`
-		IPv6          bool       `json:"ipv6,omitempty"`
-		Inspect       *vmInspect `json:"inspect,omitempty"`
+		DNS           string                   `json:"dns,omitempty"`
+		Deny          []vmRule                 `json:"deny"`
+		Allow         []vmRule                 `json:"allow"`
+		InternalZones []string                 `json:"internal_zones,omitempty"`
+		IPv6          bool                     `json:"ipv6,omitempty"`
+		Inspect       *vmInspect               `json:"inspect,omitempty"`
+		UpstreamProxy *netbroker.UpstreamProxy `json:"upstream_proxy,omitempty"`
 	}{
 		DNS:           ws.DNSUpstream,
 		Deny:          deny,
@@ -825,6 +851,7 @@ func buildVMPolicy(ctx context.Context, ws *workspace.Resolved, builder bool) ([
 		InternalZones: ws.InternalZones,
 		IPv6:          ws.IPv6,
 		Inspect:       inspect,
+		UpstreamProxy: upstream,
 	}
 	data, err := json.Marshal(policy)
 	if err != nil {
