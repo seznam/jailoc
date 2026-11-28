@@ -101,6 +101,7 @@ nav:
     - Resource Use: explanation/resource-use.md
     - Alternatives: explanation/alternatives.md
   - Blog:
+    - "jailoc 2.11: open workspace web apps over HTTPS": blog/jailoc-2-11.md
     - "jailoc 2.7: control the request, not just the host": blog/jailoc-2-7.md
     - "Read-only agent configs: your instructions inside the VM, your host untouched": blog/agent-config.md
     - "Taming agent egress: default-deny network rules in jailoc 2.4": blog/network-rules.md
