@@ -419,4 +419,25 @@ paths = [`+`"`+proj+`"`+`]
 	if err == nil || !strings.Contains(err.Error(), "holds the jailoc configuration") {
 		t.Fatalf("Load() with default config symlinked into shared workspace path = %v, want forbidden error", err)
 	}
+
+	// LoadFrom(path) without SetPath must also reject a workspace share overlapping path or its symlink target.
+	_ = os.Remove(defPath)
+	directProj := filepath.Join(home, "direct-proj")
+	directCfg := filepath.Join(directProj, "config.toml")
+	writeFile(t, directCfg, `[workspaces.api]
+paths = [`+`"`+directProj+`"`+`]
+`)
+	_, err = LoadFrom(directCfg)
+	if err == nil || !strings.Contains(err.Error(), "holds the jailoc configuration") {
+		t.Fatalf("LoadFrom() with workspace path containing loaded config = %v, want forbidden error", err)
+	}
+
+	symlinkCfg := filepath.Join(home, "symlinked-config.toml")
+	if err := os.Symlink(directCfg, symlinkCfg); err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadFrom(symlinkCfg)
+	if err == nil || !strings.Contains(err.Error(), "holds the jailoc configuration") {
+		t.Fatalf("LoadFrom() with symlinked config targeting shared workspace path = %v, want forbidden error", err)
+	}
 }
